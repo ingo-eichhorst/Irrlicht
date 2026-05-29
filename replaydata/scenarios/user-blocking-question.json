@@ -1,0 +1,530 @@
+{
+  "id": "2.17",
+  "name": "user-blocking-question",
+  "section": "Turn shape",
+  "feature": "User-blocking tool call (question)",
+  "description": "Agent's reply ends in a question mark, signalling it's waiting for user input. Validates the trailing-? path through the state classifier (session.IsWaitingForUserInput → state_classifier.go decision 2a). The recipe deliberately stops at the waiting episode and does not answer the question — locking down the entry into waiting. The coalesced-flush second-scenario variant (#150) is covered by unit tests around ShouldSynthesizeCollapsedWaiting.",
+  "requires": [
+    "headless_mode"
+  ],
+  "verify": {
+    "has_waiting_state": true,
+    "final_state": "waiting"
+  },
+  "agents": {
+    "aider": {
+      "recording_dir": "aider/scenarios/user-blocking-question",
+      "artifacts": {
+        "events": "aider/scenarios/user-blocking-question/events.jsonl",
+        "transcript_md": "aider/scenarios/user-blocking-question/transcript.md",
+        "manifest": "aider/scenarios/user-blocking-question/manifest.json"
+      },
+      "metadata": {
+        "agent_supports": "partial",
+        "daemon_capability": "incapable",
+        "driver_capability": "ready",
+        "pass_rate": "6/6 phases passed",
+        "agent_cli_version": "0.86.2",
+        "daemon_version": "0.4.7+96f085b",
+        "confidence": 0.82,
+        "notes": "agent_supports: partial\ndaemon_capability: incapable\ndriver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "user-blocking-question",
+          "agent": "aider",
+          "assessed_at": "2026-05-25T00:00:00Z",
+          "agent_supports": "partial",
+          "daemon_capability": "incapable",
+          "driver_capability": "ready",
+          "confidence": 0.82,
+          "body": "## Verdict\n\nagent_supports: partial\ndaemon_capability: incapable\ndriver_capability: ready\n\n## Scenario\n\nThe canonical primitive THIS cell exercises is `tool_calls` + AskUserQuestion (or adapter equivalent): the agent pauses mid-turn to ask the user a question via a **dedicated structured question tool call**, the dashboard enters `waiting` and stays there until the user replies. User-observable signal: `ready → working → waiting`, then after the reply `waiting → working → ready`, with the `waiting` episode visible. The load-bearing word is *structured tool call* — this cell maps the AskUserQuestion-tool primitive, NOT the natural-language trailing-`?` text path (that path is the sibling cell `agent-question-pending`, assessed yes/full/ready). The scenario's own recipe preconditions make the split explicit: \"aider has NO structured AskUserQuestion tool — the user-blocking-question/aider coverage cell is the verdict for that STRUCTURED-tool primitive and does NOT describe [the trailing-? text] cell.\"\n\n## agent_supports: partial\n\nAider has **no structured AskUserQuestion-equivalent tool call**. A scan of aider 0.86.2's source confirms the only question surfaces are:\n\n- `Commands.cmd_ask` (`/ask`) — a *chat-mode switch* (ask the LLM about the code without it editing files), not a tool the model invokes to gate on the user.\n- `InputOutput.confirm_ask` / `prompt_ask` — interactive y/n / free-text prompts at the TUI layer (file-add confirmations, URL offers), not a model-driven structured question.\n\nThe capabilities profile agrees: the Primitive-exercised anchor key `tool_calls` is `true` (aider does call Edit/Bash tools), but `structured_output_jsonl: false` and there is no dedicated question-tool primitive. So the *dedicated structured question tool* in the scenario's primitive does not exist — hence `partial` rather than `yes`. What aider DOES do behaviorally (end a turn with natural-language question prose and stop) is the essence of the user-blocking pause, but it is expressed as prose, not a structured tool call — which is exactly why the verdict is `partial` and why the observable path it would trip belongs to the sibling text-classifier cell, not this structured-tool cell.\n\n## daemon_capability: incapable\n\nFor the STRUCTURED-tool primitive this cell maps, the behavior leaves **no trace** in the watched Source. Aider is `FilesUnderCWD{.aider.chat.history.md, RawLineParser}` — a markdown transcript, not JSONL. The parser (`parser.go`) can emit exactly: `user_message` (`#### `), `assistant_message` (per `\u003e Tokens:` model-call line), `tool_result` synthesized ONLY for Edit (`\u003e Applied edit to`) and Bash (`\u003e Running`), and `turn_done` (LLM-error blockquote or 1500ms IdleFlush). There is no branch that can emit a structured question event, and — decisively — aider writes no AskUserQuestion marker into the markdown for the parser to key on. No tool-open/tool-result pair brackets a question; the `toolCall` synthesizer fires only on edit/shell blockquotes. With no trace in the Source, no parser change could surface this primitive's structured `working → waiting → working` tool-gate — so the verdict is `incapable` (architecture: accept), not `bug` (which would require a trace the daemon mis-handles).\n\nThis is honest, not defensive: the recipe's working→waiting CAN be observed via the trailing-`?` text classifier (`IsWaitingForUserInput` on `LastAssistantText`, state_classifier decision 2a, pinned by `TestParser_TrailingQuestionMark_PreservedForWaitingClassification`) — but that is the SIBLING cell's primitive. Mapping it onto THIS structured-tool cell would mis-credit a different mechanism. For the AskUserQuestion-tool primitive specifically, the daemon is `incapable`.\n\n## driver_capability: ready\n\nThe interactive driver (`scripts/drive-aider-interactive.sh`) implements every step the recipe needs — `send`, `wait_turn`, `sleep`. No gapped primitive (restart/reset/resume/sigkill/keys/fork) is required. The recording is deferred only for an out-of-band reason (no provider auth in the onboarding environment), which is not a driver-grammar gap. So `driver_capability: ready`.\n\n## Matrix\n\nThe coverage cell already reads `partial` / `daemon_capability: incapable` / `driver_capability: ready` — this re-assessment ratifies it. The drift is only in this artifact, which still carried the old single-axis `irrlicht_observes: yes` (a claim that borrowed the sibling text-path mechanism). Rewriting to the two-axis schema removes that conflation: for the structured-tool primitive, `daemon_capability: incapable`.",
+          "caveats": [
+            "feature-invisible-but-spec-compliant: the user-blocking pause is real and would be observable as a natural-language question, but aider expresses it as trailing-? prose, NOT a structured AskUserQuestion tool call — there is no tool-open/tool-result pair around the question for the parser to key on. The observable trailing-? path is the SIBLING cell agent-question-pending (yes/full/ready), not this structured-tool cell.",
+            "Recording is deferred for an out-of-band reason: in the onboarding environment aider has no provider auth (headless aider hangs ~5min on the OpenRouter OAuth flow). This is not a driver-grammar gap — driver_capability stays ready.",
+            "Were a recording attempted via the trailing-? prose path, the working→waiting transition lands on the synthesized turn_done (IdleFlush ~1500ms, clamped to the ~5s working-refresh tick), not instantaneously — but that path measures the sibling cell's primitive, not this one's structured tool gate."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/aider/parser.go",
+              "note": "FilesUnderCWD markdown RawLineParser; emits user_message/assistant_message/tool_result(Edit,Bash)/turn_done only — no branch emits a structured question event, and no AskUserQuestion marker is written to the markdown for it to key on. Grounds daemon_capability:incapable (no trace in Source)."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/aider/agent.go",
+              "note": "Source = FilesUnderCWD{.aider.chat.history.md, RawLineParser}; no PendingContributor/SubagentCounter — confirms the markdown transport carries no structured tool-call channel."
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/aider/capabilities.json",
+              "note": "Primitive anchor tool_calls:true (Edit/Bash) but structured_output_jsonl:false and no dedicated question-tool primitive — grounds agent_supports:partial for the AskUserQuestion-tool primitive."
+            },
+            {
+              "kind": "file",
+              "ref": "/Users/ingo/.local/share/uv/tools/aider-chat/lib/python3.12/site-packages/aider/commands.py",
+              "note": "cmd_ask (/ask) is a chat-mode switch, not a model-invoked structured question tool (aider 0.86.2)."
+            },
+            {
+              "kind": "file",
+              "ref": "/Users/ingo/.local/share/uv/tools/aider-chat/lib/python3.12/site-packages/aider/io.py",
+              "note": "confirm_ask/prompt_ask are TUI y/n prompts, not a model-driven structured question; ai_output-\u003eappend_chat_history writes assistant reply prose (incl. any question) into .aider.chat.history.md."
+            },
+            {
+              "kind": "url",
+              "ref": "https://aider.chat/docs/usage/modes.html",
+              "note": "Aider docs: /ask, /code, /architect are chat modes — confirms no dedicated structured AskUserQuestion tool."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/aider/parser_test.go",
+              "note": "TestParser_TrailingQuestionMark_PreservedForWaitingClassification pins the trailing-? TEXT path — the mechanism of the SIBLING cell agent-question-pending, NOT this structured-tool cell; cited to show the observable path is text-classifier, not a tool gate."
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": true,
+          "preconditions": [
+            "SCOPE: aider has NO structured AskUserQuestion tool — the user-blocking-question/aider coverage cell (partial/no) is the verdict for that STRUCTURED-tool primitive and does NOT describe this cell. This cell records the adapter-agnostic trailing-? TEXT-classifier path: the assistant ends its reply with a literal '?', and irrlicht enters waiting via session.IsWaitingForUserInput (state_classifier.go decision 2a), not via a tool marker. agent_supports:partial (no structured tool); irrlicht_observes:yes (text path).",
+            "aider CLI on PATH and authenticated against a configured model (aider runs against its provider out-of-band; this cell needs a live model to elicit a real clarifying-question turn). NOTE: in the onboarding environment aider has no provider auth (headless aider hangs ~5min on the OpenRouter OAuth flow), so recording is deferred — the spec is the documented target until auth is available.",
+            "tmux available — the interactive driver runs aider in a tmux REPL so the session stays alive past turn end and the working→waiting episode is observable",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+          ],
+          "setup": [
+            "The interactive driver (drive-aider-interactive.sh) git-inits a fresh per-run cwd, launches `aider --no-auto-commits --yes-always --no-gitignore` in a tmux session, and waits for the repo-map banner line in .aider.chat.history.md before sending the prompt",
+            "aider is FilesUnderCWD{.aider.chat.history.md, RawLineParser} — there is no transcript-UUID rollout session; the whole arc lives on the one proc-\u003cPID\u003e session the daemon's process scanner keys (cf. basic-turn). The transcript materialises lazily on first input, but the proc-\u003cPID\u003e pre-session is observable from launch",
+            "Unlike the headless `aider --message` path (single-shot, the process exits at turn end so the working→waiting episode is lost to a process_exited race — see the basic-turn recipe), the interactive driver keeps the REPL ALIVE after the turn; it is torn down only at script end via `tmux kill-session` (no Ctrl-D / /exit), so the daemon can observe the post-turn waiting dwell",
+            "No reply is sent to the question — after wait_turn + a trailing sleep the session dwells in waiting, then the driver kills the tmux session once, so aider exits and the daemon emits a single process_exited while the session is still waiting"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "I want to add a feature to my project but I'm not sure which file it should go in. Ask me exactly ONE short clarifying question to scope it, ending in a question mark, and then stop and wait for my answer. Output only that one question and nothing else."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 8
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a state_transition to ready for the proc-\u003cPID\u003e session within ~2s of REPL launch (a transient pre-session may also appear; the turn arc lands on the bindable session)",
+            "events.jsonl contains a pid_discovered event bound to the session",
+            "events.jsonl contains a state_transition→working on the session when the prompt is sent",
+            "events.jsonl contains a state_transition→waiting on the SAME session when the turn ends (the reply ends in a question mark; the classifier takes the trailing-? text path rather than →ready)",
+            "the session's final live state is waiting and it persists ≥4s — no state_transition to ready appears before the REPL is torn down (the working→waiting settle lands a few seconds late via the ~1500ms IdleFlush clamped to the ~5s working-refresh tick; the 8s trailing sleep covers that latency)",
+            "events.jsonl contains exactly one process_exited on the session at REPL teardown while it is still waiting (one long-lived session, not a per-turn exit)"
+          ],
+          "settings": {},
+          "timeout_seconds": 120
+        }
+      }
+    },
+    "claudecode": {
+      "recording_dir": "claudecode/scenarios/user-blocking-question",
+      "artifacts": {
+        "events": "claudecode/scenarios/user-blocking-question/events.jsonl",
+        "transcript": "claudecode/scenarios/user-blocking-question/transcript.jsonl",
+        "manifest": "claudecode/scenarios/user-blocking-question/manifest.json",
+        "golden": "claudecode/scenarios/user-blocking-question/transcript.jsonl.replay.json.golden"
+      },
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "pass_rate": "3/3 phases passed",
+        "agent_cli_version": "2.1.143",
+        "daemon_version": "0.4.5+427e6b5",
+        "confidence": 0.95,
+        "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "user-blocking-question",
+          "agent": "claudecode",
+          "assessed_at": "2026-05-17T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.95,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nClaude Code ships the `AskUserQuestion` tool, which is the agent-side mechanism the spec is asking about. When the assistant emits a tool_use block with `name: \"AskUserQuestion\"`, the TUI pauses until the user answers. The parser at `core/adapters/inbound/agents/claudecode/parser.go` records this in two ways: (1) `collectToolUse` appends `{Name: \"AskUserQuestion\"}` to `ev.ToolUses`, and (2) the prompt text is surfaced as `ev.AssistantText` (the question becomes the user-facing waiting header).\n\nirrlicht observes the spec's two variants via the state classifier (`core/application/services/state_classifier.go`):\n\n**Variant 1 — question opens, user replies later.** While `AskUserQuestion` is the open tool, `metrics.NeedsUserAttention()` is true (the user-blocking tool list in `core/pkg/tailer/tailer_config.go` covers AskUserQuestion + ExitPlanMode + question). Rule 1 of `ClassifyState` transitions `working → waiting`. Belt-and-braces, the PreToolUse hook (`hooks.go` toolAskUserQuestion branch) calls `HandlePermissionHook` and flips `PermissionPending=true`, which independently fires rule 0 (`permission prompt open → waiting`) — so even if the JSONL tool_use line is delayed by the buffered TUI writer (#307), the waiting episode is still recorded. When the user replies, the next user message clears the open tool and a fresh assistant message drives `waiting → working → ready`.\n\n**Variant 2 — coalesced flush.** When fswatcher batches the tool_use, tool_result, and the next assistant text into one tailer pass, the open-tool window closes inside that pass. The tailer sets `SawUserBlockingToolClosedThisPass=true`, and `ShouldSynthesizeCollapsedWaiting` (state_classifier.go:126) emits a synthetic `working → waiting` followed by `waiting → working → ready` so the user still sees the waiting episode (issue #150). The session does not stick in waiting because the closing event resolves `HasOpenToolCall=false` and `LastEventType=user` clears the user-blocking gate.",
+          "caveats": [
+            "The PreToolUse hook only fires if the user has run the irrlicht hook installer (`hookinstaller.go`) into their Claude settings.json. Without the hook, irrlicht still catches the AskUserQuestion via the JSONL tool_use line — but with one fswatcher tick of latency. The recipe should not depend on whether the hook is installed; both paths converge on the same observable state arc.",
+            "The PreToolUse-only path can race the JSONL tool_use append on very small AskUserQuestion calls; the synthetic-waiting collapse (#150) plus `PermissionPending` flag are the two seatbelts that keep the waiting episode visible in all timing regimes."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/claudecode/parser.go",
+              "note": "collectToolUse / scanMessageContent — AskUserQuestion tool_use is recorded in ev.ToolUses and its prompt becomes ev.AssistantText."
+            },
+            {
+              "kind": "file",
+              "ref": "core/pkg/tailer/tailer_config.go",
+              "note": "user-blocking tool list (AskUserQuestion, ExitPlanMode, question) — drives NeedsUserAttention()."
+            },
+            {
+              "kind": "file",
+              "ref": "core/application/services/state_classifier.go",
+              "note": "ClassifyState rule 1 (user-blocking tool open → waiting) and ShouldSynthesizeCollapsedWaiting (#150 collapsed-flush synthesis)."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/claudecode/hooks.go",
+              "note": "PreToolUse handler for AskUserQuestion/ExitPlanMode flips PermissionPending (issue #307) so waiting fires even before the JSONL line lands."
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": true,
+          "preconditions": [
+            "claude CLI on PATH and authenticated (subscription or API key)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+            "no other claudecode session uses the same UUID"
+          ],
+          "setup": [
+            "Generate a fresh lowercased session UUID (run-cell.sh does this via uuidgen | tr '[:upper:]' '[:lower:]')",
+            "Create an empty cwd under \u003cstaging\u003e/cwd/ (claude prompts for trust on first encounter — the driver auto-accepts)"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly one short clarifying question, ending in a question mark. No other text."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a presession_created for proc-\u003cPID\u003e within 1000 ms",
+            "events.jsonl contains a transcript_new for the UUID session within 500 ms of the first send",
+            "events.jsonl contains exactly one state_transition to working for the UUID",
+            "events.jsonl contains exactly one state_transition to waiting for the UUID after the assistant's question-mark reply",
+            "events.jsonl contains NO state_transition to ready for the UUID after the waiting transition (recipe terminates while session is in waiting)",
+            "final session state is waiting",
+            "transcript.jsonl contains exactly 1 user line and 1 assistant line, with the assistant text ending in '?'"
+          ],
+          "settings": {},
+          "timeout_seconds": 90
+        }
+      }
+    },
+    "codex": {
+      "recording_dir": "codex/scenarios/user-blocking-question",
+      "artifacts": {
+        "events": "codex/scenarios/user-blocking-question/events.jsonl",
+        "transcript": "codex/scenarios/user-blocking-question/transcript.jsonl",
+        "manifest": "codex/scenarios/user-blocking-question/manifest.json",
+        "golden": "codex/scenarios/user-blocking-question/transcript.jsonl.replay.json.golden"
+      },
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "pass_rate": "9/9 phases passed",
+        "agent_cli_version": "0.130.0",
+        "daemon_version": "0.4.7+2209da4",
+        "confidence": 0.8,
+        "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "user-blocking-question",
+          "agent": "codex",
+          "assessed_at": "2026-05-23T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.8,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Scope\n\nThis cell is the FULL user-blocking-question arc: the agent ends a turn with a clarifying question (working→waiting), the USER then answers, and the agent finishes the turn (waiting→working→ready), all on the same live rollout session. It extends the sibling `agent-question-pending` cell (same coverage_id `user-blocking-question`), which proved only the ENTRY into waiting (working→waiting) and deliberately stopped there. The scenario-meanings.md user-observable signal is explicit: `ready → working → waiting`; after the user replies, `waiting → working → ready`; the waiting episode is visible (no skip-over).\n\nNote: codex has NO structured AskUserQuestion tool (matrix prior). This cell, like its sibling, exercises the adapter-agnostic trailing-`?` text path through the state classifier (session.IsWaitingForUserInput → state_classifier.go decision 2a), not a dedicated question tool. The scenario.json verify block names this path directly.\n\n## agent_supports: yes\n\ncodex can be prompted to end its turn with a single clarifying question (literal `?`). It records the reply as a `response_item`/`message`(assistant) whose `output_text` carries the question, followed by an `event_msg`/`task_complete` turn-finish marker — confirmed against the sibling's recorded rollout. A subsequent user answer is just another turn on the same rollout session: codex resumes working and completes normally, ending the final turn in a non-question terminal reply (→ ready). This is standard multi-turn behaviour already proven by the multi-turn-conversation recording.\n\n## daemon_capability: full; driver_capability: ready (interactive TUI, not headless)\n\nThe codex adapter is `FilesUnderRoot{Dir: ~/.codex/sessions, JSONLineParser}`. The parser maps the assistant message to `assistant_message` (sets `AssistantText`) and `event_msg`/`task_complete` to `turn_done`. At the first turn's `task_complete`, `IsAgentDone()` is true AND `LastAssistantText` ends in `?`, so the classifier takes decision 2a (waiting) rather than 2b (ready). When the user sends the answer, the session goes working again; the final turn ends in a plain reply with no trailing `?`, so the classifier takes 2b (ready). The waiting→working→ready recovery is therefore observable on the SAME session_id.\n\nThe load-bearing constraint (inherited from the sibling) is session liveness: headless `codex exec` is single-shot and exits at turn end (process_exited race, see basic-turn spec), so the multi-turn arc would be lost. The interactive driver (drive-codex-interactive.sh, `codex --no-alt-screen` under tmux) keeps the rollout session ALIVE across both turns; the REPL is torn down only at script end. A trailing sleep after each wait_turn lets each state episode settle.\n\n## Recipe implication\n\nINTERACTIVE `script`: send a prompt that makes codex ask one clarifying question → wait_turn → sleep (settle into waiting) → send the ANSWER → wait_turn → sleep (settle into ready). The first reply must end in `?`; the final reply must NOT, so the terminal state is ready.",
+          "caveats": [
+            "Observable ONLY via the interactive TUI — headless `codex exec` exits at turn end and both the waiting episode and the recovery would be lost to a process_exited race (basic-turn spec documents this). The recipe must be interactive.",
+            "Distinct from the structured AskUserQuestion path: codex has no question tool in its schema (matrix prior), so this is the trailing-`?` text classifier (decision 2a), which is adapter-agnostic.",
+            "The first reply must end in a literal `?` (→ waiting) and the FINAL reply after the user's answer must NOT end in `?` (→ ready). Steer the answer prompt so codex confirms/acts and ends on a statement, otherwise the terminal turn would re-enter waiting instead of ready.",
+            "Extends the sibling agent-question-pending (same coverage_id) which locked down only working→waiting; this cell adds the waiting→working→ready recovery after the user answers."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/codex/scenarios/agent-question-pending/assessment.json",
+              "note": "sibling cell, same coverage_id user-blocking-question: yes/yes for the trailing-? entry into waiting; this cell extends it with the post-answer recovery"
+            },
+            {
+              "kind": "file",
+              "ref": ".claude/skills/ir:onboard-agent/scenario-meanings.md",
+              "note": "user-blocking-question user-observable signal: ready→working→waiting, then after user reply waiting→working→ready; waiting episode visible (no skip-over)"
+            },
+            {
+              "kind": "file",
+              "ref": "core/application/services/state_classifier.go",
+              "note": "decision 2a (IsWaitingForUserInput → waiting) checked before 2b (IsAgentDone → ready)"
+            },
+            {
+              "kind": "file",
+              "ref": "core/domain/session/session.go",
+              "note": "IsWaitingForUserInput via ExtractQuestionSnippet (trailing ?); a non-question terminal reply drops to 2b (ready)"
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/codex/parser.go",
+              "note": "assistant_message sets AssistantText; event_msg/task_complete → turn_done; FilesUnderRoot watch"
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/codex/scenarios/multi-turn-conversation",
+              "note": "proves the interactive codex driver produces real per-turn working↔ready arcs on a single live rollout session — the basis for the waiting→working→ready recovery here"
+            },
+            {
+              "kind": "file",
+              "ref": ".claude/skills/ir:onboard-agent/scripts/drive-codex-interactive.sh",
+              "note": "interactive driver keeps the REPL alive across turns (kill-session only at script end); supports send/wait_turn/sleep — the steps this recipe needs"
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": true,
+          "preconditions": [
+            "codex CLI on PATH and authenticated (~/.codex/config.toml or OPENAI_API_KEY)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+          ],
+          "setup": [
+            "The interactive driver launches `codex --no-alt-screen` in a fresh per-run cwd under \u003cstaging\u003e/cwd/, accepts the trust dialog, and waits for the TUI banner + MCP boot before sending the first prompt",
+            "Unlike the headless `codex exec` path (single-shot, ends in process_exited at turn end — see the basic-turn recipe), the interactive driver keeps the rollout session ALIVE across BOTH turns; the REPL is torn down only when the script ends, so the daemon can observe the full waiting→working→ready recovery on one live session"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "I want to rename a function in my project, but I haven't told you which one. Before doing anything, ask me exactly one short clarifying question — which file and which function — ending in a question mark. Output ONLY that one question and nothing else; do not start editing."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "send",
+              "text": "Rename the function `oldName` to `newName` in src/util.js. Just describe in one or two sentences what you would change — do NOT ask any further questions and end on a plain statement, not a question."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a presession_created (proc-\u003cPID\u003e) event in ready within 1000 ms of agent launch",
+            "events.jsonl contains a transcript_new for the rollout session with a distinct session_id, born ready",
+            "events.jsonl contains a pid_discovered event bound to the rollout session_id",
+            "events.jsonl contains a state_transition→working on the rollout session_id when the first prompt is sent",
+            "events.jsonl contains a state_transition→waiting on the SAME rollout session_id when the first turn ends (the reply ends in a question mark; classifier takes the trailing-? path rather than →ready)",
+            "the waiting episode is visible and persists ≥3s — no state_transition to ready appears before the user answers",
+            "events.jsonl contains a state_transition→working on the SAME rollout session_id when the user sends the answer (waiting→working recovery)",
+            "events.jsonl contains a state_transition→ready on the SAME rollout session_id when the second turn ends with a plain non-question reply (working→ready)",
+            "events.jsonl contains a process_exited on the rollout session at REPL teardown (single live session across both turns, not per-turn exits)"
+          ],
+          "settings": {},
+          "timeout_seconds": 240
+        }
+      }
+    },
+    "opencode": {
+      "artifacts": {},
+      "metadata": {
+        "agent_supports": "no",
+        "daemon_capability": "n/a",
+        "driver_capability": "n/a",
+        "confidence": 0.85,
+        "notes": "agent_supports: no\ndaemon_capability: n/a; driver_capability: n/a"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "user-blocking-question",
+          "agent": "opencode",
+          "assessed_at": "2026-05-26T00:00:00Z",
+          "agent_supports": "no",
+          "daemon_capability": "n/a",
+          "driver_capability": "n/a",
+          "confidence": 0.85,
+          "body": "## Verdict\n\nagent_supports: no\ndaemon_capability: n/a; driver_capability: n/a\n\n## Scenario\n\nThe canonical primitive is an AskUserQuestion-style **structured blocking-question tool**: the agent pauses mid-turn by invoking a dedicated question primitive that puts the session into a distinct, daemon-observable `waiting-for-user` gate, and stays there until the user replies. The scenario locks down the entry into `waiting` via that structured primitive (not via free-text prose).\n\n## agent_supports: no\n\nopencode has **no AskUserQuestion-equivalent structured blocking-question primitive that surfaces a daemon-observable waiting state via the headless path**. The opencode adapter parses opencode's local SQLite `part` rows, and the only part types it recognises are `step-start`, `step-finish`, `text`, and `tool` (`core/adapters/inbound/agents/opencode/parser.go`, `ParseLine` switch). The `step-finish` finish reasons it maps are `stop`, `tool-calls`, `interrupted`, `length`, `error`, and `content-filter` — none of which represents a structured ask-the-user gate. There is no `question` / `ask_user` / `elicit` part type, and no finish reason that means \"blocked on a user answer.\" opencode's TUI may prompt the user interactively (e.g. permission hooks), but that is not a model-invoked structured question tool that the headless/store path exposes as a distinct waiting primitive.\n\nThis is the structured-tool reading of the scenario, and it is why the fresh column reassessment rated `agent_supports: no` (no AskUserQuestion equivalent matched): the dedicated blocking-question primitive the scenario describes does not exist in opencode. Because the primitive itself is absent at the agent layer, `daemon_capability` and `driver_capability` are `n/a` — there is nothing to observe or drive, not merely something irrlicht can't see yet.\n\n## Why this is a STOP / applicable_false cell\n\nWith `agent_supports: no` the cell is definitionally inapplicable for opencode: there is no structured blocking-question turn to elicit, so no spec and no recording. Per the implement-stage #476 routing (`agent_supports ∈ {no}` → STOP), the cell is frozen at `by_adapter.opencode.applicable: false` with a scope note, and the assessment + recipe are committed without a recording.\n\n## Carve-out (the trailing-? text path is a DIFFERENT cell)\n\nDo not confuse this STRUCTURED-tool verdict with the adapter-agnostic trailing-`?` TEXT-classifier path. The opencode metrics reader DOES populate `metrics.LastAssistantText` from `text` parts (`core/adapters/inbound/agents/opencode/metrics.go` lines ~227-246), and irrlicht's agent-agnostic `session.IsWaitingForUserInput()` (decision 2a in `state_classifier.go`) would fire on a trailing `?` there — exactly the path the aider × user-blocking-question cell records (`partial`/`yes`). But that text path is NOT the AskUserQuestion-style structured blocking primitive this scenario's `agent_supports` axis is judging; the primitive is absent regardless. This assessment scopes only the structured-tool primitive, per the dispatcher's frozen column reassessment.\n\n## What would flip this\n\n`agent_supports` would move off `no` only if upstream opencode shipped a dedicated structured ask-the-user / elicit tool that the SQLite `part` schema records as its own part type or finish reason, which the adapter could then map to a distinct waiting gate. No such primitive exists in opencode today.",
+          "caveats": [
+            "scope: this verdict is for the AskUserQuestion-style STRUCTURED blocking-question primitive only. The adapter-agnostic trailing-? TEXT-classifier waiting path (session.IsWaitingForUserInput on LastAssistantText) is a separate concern and is NOT what this cell's agent_supports axis judges — opencode's metrics reader does populate LastAssistantText, but that path does not constitute a structured ask-user tool.",
+            "opencode's TUI permission hooks / interactive prompts are user-facing UI gates, not a model-invoked structured question tool surfaced through the headless/store path; they do not make agent_supports anything other than no for this primitive.",
+            "This is the structured-tool reading frozen by the dispatcher's column reassessment; a future opencode release adding a dedicated ask/elicit part type or finish reason would warrant re-assessment."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/opencode/parser.go",
+              "note": "ParseLine switch handles only step-start / step-finish / text / tool part types; step-finish reasons are stop/tool-calls/interrupted/length/error/content-filter — no question/ask-user/elicit part type or blocking finish reason."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/opencode/metrics.go",
+              "note": "ComputeMetrics sets metrics.LastAssistantText from text parts (lines ~227-246) — feeds the agent-agnostic trailing-? text path, which is a DIFFERENT cell, not a structured AskUserQuestion primitive."
+            },
+            {
+              "kind": "file",
+              "ref": "core/domain/session/session.go",
+              "note": "IsWaitingForUserInput / ExtractQuestionSnippet — agent-agnostic waiting detection on LastAssistantText (trailing ?), not a structured question tool; cited to delimit the carve-out, not to support a yes verdict."
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/opencode/capabilities.json",
+              "note": "Feature set is local TUI + tool_calls + permission_hooks + subagents etc.; no dedicated structured ask-user / question-tool primitive key."
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/aider/scenarios/user-blocking-question/assessment.json",
+              "note": "Contrast: aider records the trailing-? TEXT path as partial/yes. That is the text-classifier cell, distinct from this STRUCTURED-tool agent_supports:no verdict for opencode."
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": false,
+          "notes": "opencode has no AskUserQuestion-equivalent structured blocking-question primitive that surfaces a daemon-observable waiting state via the headless path; the SQLite part schema records only step-start/step-finish/text/tool parts (no question/ask-user/elicit part type or blocking finish reason). agent_supports:no, daemon_capability:n/a. The adapter-agnostic trailing-? TEXT-classifier waiting path is a separate cell, not this structured-tool primitive."
+        }
+      }
+    },
+    "pi": {
+      "recording_dir": "pi/scenarios/agent-question-pending",
+      "artifacts": {
+        "events": "pi/scenarios/agent-question-pending/events.jsonl",
+        "transcript": "pi/scenarios/agent-question-pending/transcript.jsonl",
+        "manifest": "pi/scenarios/agent-question-pending/manifest.json",
+        "golden": "pi/scenarios/agent-question-pending/transcript.jsonl.replay.json.golden"
+      },
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "pass_rate": "5/5 phases passed",
+        "agent_cli_version": "0.70.0",
+        "daemon_version": "0.4.7+730a676",
+        "confidence": 0.85,
+        "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "agent-question-pending",
+          "agent": "pi",
+          "assessed_at": "2026-05-25T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.85,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## What this scenario actually is\n\nThe coverage id is `user-blocking-question`, whose scenario-meanings block describes the *structured-tool* form (\"Agent calls AskUserQuestion and pauses\"). But the canonical `agent-question-pending` entry in `scenarios.json` is explicitly the **trailing-`?` text-classifier path**, not the structured tool: \"Validates the trailing-? path through the state classifier (session.IsWaitingForUserInput → state_classifier.go decision 2a): at turn end the session transitions working→waiting instead of working→ready because the last assistant message ends in `?`. This is the text classifier path, not a structured AskUserQuestion tool.\" The verdict must be judged against the behaviour the scenario exercises — agent emits a question, session enters waiting — not against whether pi ships an AskUserQuestion primitive.\n\nThe prior column reassessment (`.specs/agent-assess-pi.json → user-blocking-question = agent_supports:no`) judged the structured-tool reading: \"pi has no dedicated AskUserQuestion-style structured question tool.\" That observation is correct (see below) but it answers the wrong question for `agent-question-pending`. This single-cell assessment refines it to `yes/yes`.\n\n## Why agent_supports: yes\n\npi (v0.70.0, `@mariozechner/pi-coding-agent`) is an ordinary LLM coding agent that produces free-form assistant text turns. A prompt like the existing recipe — \"Reply with exactly one short clarifying question, ending in a question mark. No other text.\" — yields an assistant turn whose terminal text ends in `?`. The behaviour the scenario asserts (the reply ends in a question mark, signalling the agent is waiting for the user) is intrinsic to any text-producing agent; it needs no structured question tool.\n\nThe pi binary scan confirms the transcript shape: assistant messages carry `stopReason` (`stop` at end-of-turn vs `toolUse` mid-turn) with role `assistant` and text content blocks (matched in `dist/core/export-html/template.js`, `dist/modes/interactive/components/tree-selector.js`). The pi parser_test.go already exercises a text-only `stopReason:stop` turn whose text is a question (\"Hi! What would you like to work on?\"). The Step 2.5 keyword guard found NO `askUserQuestion` / `ask_user` / structured-question primitive — so the *structured-tool* form is genuinely absent, which is why this is the text-classifier path and not the tool-gate path.\n\n## Why daemon_capability: full; driver_capability: ready\n\nThe working→waiting transition is computed entirely from agent-agnostic `SessionMetrics`, and pi feeds it correctly:\n\n1. pi persists each message append-only to its session JSONL (`dist/core/session-manager.js` uses `appendFileSync`), under `~/.pi/agent/sessions/--\u003ccwd\u003e--/*.jsonl`. The pi adapter watches this via `FilesUnderRoot` (`agent.go`, `adapter.go`), so the assistant question line is on disk and readable — it does not vanish on process exit the way a CWD-scoped transcript could.\n2. The pi parser maps an assistant message with `stopReason == \"stop\"` to `EventType: \"turn_done\"` and, in the same branch, sets `ev.AssistantText` from the message text blocks via `extractPiAssistantText` (`parser.go` lines 77-101).\n3. `turn_done` → `SessionMetrics.LastEventType == \"turn_done\"` → `IsAgentDone()` returns true (`session.go` line 483). `AssistantText` flows `parsed.AssistantText` → `tailer.go:886 t.lastAssistantText` → `tailer_metrics.go:387 metrics.LastAssistantText`.\n4. `IsWaitingForUserInput()` runs `ExtractQuestionSnippet(LastAssistantText)`; a literal trailing `?` returns a non-empty snippet → true (`session.go` lines 241-249).\n5. `ClassifyState` decision 2a fires: `working → waiting` with reason \"turn ended with question or cue → waiting\" (`state_classifier.go` lines 48-56). The recipe stops there, so final state is `waiting`, satisfying the scenario's verify block (`has_waiting_state: true`, `final_state: waiting`).\n\nEvery step on this path is shared with claudecode (which is `yes/yes` for the same coverage id) and is driven by transcript content, not by any claudecode- or pi-specific event kind. pi satisfies `requires: [headless_mode]` (capabilities `headless_mode: true`) and additionally ships an interactive TUI mode (`dist/modes/interactive/`, capabilities `tui: true`), so the live-REPL-stays-alive path the scenario notes for codex is also available — the waiting episode is not lost to a process_exited race.\n\n## Primitive / capability note\n\nThe scenario-meanings **Primitive exercised** is `tool_calls + AskUserQuestion (or adapter equivalent)`. For pi the \"adapter equivalent\" is the text-classifier path, which depends on no tool capability. The relevant capabilities.json key is therefore not a question-tool flag (pi has none) but the generic turn/headless surface: `headless_mode: true` is the gating capability the scenario `requires`, and it is satisfied.\n\nThis re-opens implementation for the cell: applicable = yes, proceed to recipe/record (the prompt-mode recipe already exists in scenarios.json).",
+          "caveats": [
+            "The coverage_id scenario-meanings describes the structured AskUserQuestion-tool form; pi has no such tool (Step 2.5 binary scan found no askUserQuestion/ask_user primitive). The `yes` verdict is for the trailing-? text-classifier path that the `agent-question-pending` scenario actually exercises, NOT a structured question tool.",
+            "In headless print-mode pi writes the assistant question turn then exits the process; like the codex note in the scenario description, a recorder must read the persisted assistant line (it remains on disk under FilesUnderRoot) — the waiting state is derived from the transcript, so it survives, but the recording should confirm no process_exited→ready race overwrites the waiting episode. The interactive TUI mode avoids the race entirely by keeping the session alive past turn end.",
+            "The prior column reassessment verdict (agent_supports:no) judged the structured-tool reading and should be updated in the coverage matrix to yes/yes for the agent-question-pending text-classifier path."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": ".claude/skills/ir:onboard-agent/scenarios.json",
+              "note": "agent-question-pending description: explicitly the trailing-? text-classifier path through state_classifier.go decision 2a, NOT a structured AskUserQuestion tool; existing pi prompt-mode recipe present."
+            },
+            {
+              "kind": "file",
+              "ref": "core/application/services/state_classifier.go",
+              "note": "Decision 2a (lines 48-56): IsAgentDone \u0026\u0026 IsWaitingForUserInput → working→waiting. Agent-agnostic; operates on SessionMetrics."
+            },
+            {
+              "kind": "file",
+              "ref": "core/domain/session/session.go",
+              "note": "IsWaitingForUserInput (241-249) calls ExtractQuestionSnippet on LastAssistantText; IsAgentDone (465-500) returns true on LastEventType==turn_done."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/pi/parser.go",
+              "note": "stopReason==stop → EventType turn_done; same branch sets ev.AssistantText via extractPiAssistantText (lines 77-101) — feeds both IsAgentDone and IsWaitingForUserInput."
+            },
+            {
+              "kind": "file",
+              "ref": "core/pkg/tailer/tailer.go",
+              "note": "lines 886-890: parsed.AssistantText → t.lastAssistantText, then surfaced as metrics.LastAssistantText (tailer_metrics.go:387)."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/pi/parser_test.go",
+              "note": "Existing test (~lines 290-305): text-only pi turn stopReason:stop with question text 'Hi! What would you like to work on?' yields LastEventType turn_done."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/pi/agent.go",
+              "note": "Source: FilesUnderRoot over ~/.pi/agent/sessions — append-only transcript persists past process exit, so the assistant question line stays readable."
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/pi/capabilities.json",
+              "note": "headless_mode:true (scenario requires it) and tui:true (interactive REPL stays alive past turn end); permission_hooks/subagents false (irrelevant to the text-classifier path)."
+            },
+            {
+              "kind": "file",
+              "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@mariozechner/pi-coding-agent/dist",
+              "note": "Step 2.5 binary scan of pi v0.70.0 dist: message shape has role:assistant + stopReason(stop/toolUse) + text content (export-html/template.js, tree-selector.js); session-manager.js appendFileSync per message; NO askUserQuestion/ask_user/structured-question primitive — confirms text-classifier path, not structured tool."
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": true,
+          "preconditions": [
+            "pi CLI on PATH and authenticated (pi runs against its configured model out-of-band)",
+            "tmux available — the interactive driver runs pi in a tmux REPL so the session stays alive past turn end and the waiting episode is observable",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+          ],
+          "setup": [
+            "The interactive driver (drive-pi-interactive.sh) launches pi in a fresh per-run cwd inside a tmux session, waits for the REPL prompt, then sends the single prompt",
+            "pi writes one JSONL rollout file per session under ~/.pi/agent/sessions/\u003ccwd-slug\u003e/ on launch (FilesUnderRoot, non-lazy); the driver resolves that file and extracts the UUID from line 1",
+            "Unlike the headless `pi --print` path (single-shot, the process exits at turn end so the waiting episode is lost to a process_exited race — see the basic-turn recipe), the interactive driver keeps the rollout session ALIVE after the turn; the REPL is torn down only when the script ends, so the daemon can observe the post-turn waiting state dwell",
+            "No reply is sent to the question — after wait_turn + a trailing sleep (the session dwells in waiting) the driver kills the tmux session once, so pi exits and the daemon emits a single process_exited for the rollout session while it is still waiting"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "I want to add a feature to my project but I'm not sure which file it should go in. Ask me exactly ONE short clarifying question to scope it, ending in a question mark, and then stop and wait for my answer. Output only that one question and nothing else."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 6
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a transcript_new for the rollout session born ready within ~2s of REPL launch (a transient proc-\u003cPID\u003e pre-session may also appear; the turn arc and pid_discovered land on the UUID-keyed rollout session)",
+            "events.jsonl contains a pid_discovered event bound to the rollout session_id",
+            "events.jsonl contains a state_transition→working on the rollout session_id when the prompt is sent",
+            "events.jsonl contains a state_transition→waiting on the SAME rollout session_id when the turn ends (the reply ends in a question mark; the classifier takes the trailing-? path rather than →ready)",
+            "the rollout session's final live state is waiting and it persists ≥4s — no state_transition to ready appears before the REPL is torn down",
+            "events.jsonl contains exactly one process_exited on the rollout session at REPL teardown while the session is still waiting (one long-lived session, not a per-turn exit)"
+          ],
+          "settings": {},
+          "timeout_seconds": 120,
+          "_prior_prompt_mode": {
+            "note": "Superseded by the script-mode recipe above. The prior headless prompt-mode recipe (`pi --print -p`) could not observe the waiting episode: in print-mode pi answers the question and the process exits immediately at turn end, so a process_exited race overwrites the working→waiting transition before it can dwell. Script mode keeps the REPL alive so the waiting state is observable.",
+            "prompt": "Reply with exactly one short clarifying question, ending in a question mark. No other text.",
+            "settings": {},
+            "timeout_seconds": 90
+          }
+        }
+      }
+    }
+  }
+}

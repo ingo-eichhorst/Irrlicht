@@ -1,0 +1,468 @@
+{
+  "id": "2.1",
+  "name": "basic-turn",
+  "section": "Turn shape",
+  "feature": "Basic turn",
+  "description": "Smallest possible round-trip. Verifies session detection and a clean ready→working→ready cycle.",
+  "requires": [
+    "headless_mode"
+  ],
+  "verify": {
+    "transitions_topology": [
+      "ready",
+      "working",
+      "ready"
+    ],
+    "tool_calls_max": 0,
+    "final_state": "ready"
+  },
+  "agents": {
+    "aider": {
+      "recording_dir": "aider/scenarios/basic-turn",
+      "artifacts": {
+        "events": "aider/scenarios/basic-turn/events.jsonl",
+        "transcript_md": "aider/scenarios/basic-turn/transcript.md",
+        "manifest": "aider/scenarios/basic-turn/manifest.json",
+        "recordings": [
+          "aider/scenarios/basic-turn/recordings/2026-05-25-17-08-21_irrlichd-0.4.7+7708dae"
+        ]
+      },
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "pass_rate": "5/5 phases passed",
+        "agent_cli_version": "0.86.2",
+        "daemon_version": "0.4.7+7708dae",
+        "confidence": 0.85,
+        "notes": "agent_supports: yes\ndaemon_capability: full\ndriver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "basic-turn",
+          "agent": "aider",
+          "assessed_at": "2026-05-25T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.85,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Reasoning\n\n### agent_supports: yes\n\nAider supports a non-interactive, single-shot turn via the `--message`/`-m` flag: it processes one natural-language instruction, applies any edits, and exits — no interactive chat session. See https://aider.chat/docs/scripting.html. This is exactly the `headless_mode` capability the `basic-turn` primitive requires (`replaydata/agents/aider/capabilities.json` → `headless_mode: true`). The canonical recipe drives aider interactively in a tmux REPL (a drift fix: a headless `--message` run exits before the IdleFlush settle fires), but the primitive being exercised — transcript turn-end detection — still anchors on `headless_mode`.\n\nThe `basic-turn` recipe prompt — \"Reply with exactly the word: ok\" — is a pure one-message round-trip with no tool use (`tool_calls_max: 0`), which is the smallest turn aider can run. Aider persists every exchange to `.aider.chat.history.md` in the project CWD (https://aider.chat/docs/faq.html) and prints a `\u003e Tokens: X sent, Y received.` line after each model call (e.g. `Tokens: 7.7k sent, 167 received`), confirmed across the aider docs and HISTORY. So a clean single turn produces a fully-formed transcript with real token usage.\n\n### daemon_capability: full\n\nThe aider adapter is `FilesUnderCWD{Filename: \".aider.chat.history.md\", Parser: RawLineParser}` (`core/adapters/inbound/agents/aider/agent.go`). Walking the two User-observable signals against the parser as it exists today:\n\n1. **`ready → working → ready`** — observed correctly. The `#### ` user-prompt line emits a `user_message` event (`parser.go` `ParseLineRaw`). The SessionDetector force-bounces a ready session to working when fresh activity arrives with a non-empty `LastEventType` (`session_detector_activity.go:343-350`, `ForceReadyToWorkingReason`), so working is entered. Aider's idle TUI prompt never lands in the markdown history, so there is no in-band turn-end marker; the parser synthesizes `turn_done` out-of-band via `IdleFlush` once the transcript has been quiet for `aiderIdleTurnDoneAfter` (1500ms). `turn_done` is the authoritative end-of-turn signal (`session.go` `IsAgentDone`), flipping the session back to ready. The final state is `ready` and the topology is exactly `ready → working → ready`.\n2. **`TotalTokens \u003e 0`** — observed correctly. The `\u003e Tokens:` line is matched by `tokensRE` and routed through `closeModelCall`, which emits an `assistant_message` carrying a `TokenSnapshot{Input, Output, Total}`. `applyTokenSnapshot` (`tailer_metrics.go:119-125`) sets `metrics.TotalTokens = tokens.Total` whenever `Total \u003e 0`. For the recipe's `\u003e Tokens: 771 sent, 1 received.` this yields `TotalTokens = 772`.\n\nBoth spec-required observables (the topology and the non-zero token count, per `scenarios.json → verify`) are emitted correctly by the parser today, so the daemon is `full`. The one wrinkle — the working→ready edge is synthesized from quiescence rather than an in-band marker, and lands with ~5s effective latency (1500ms IdleFlush floor clamped to the SessionDetector's 5s working-refresh poll, documented at `parser.go:42-54`) — affects only TIMING, not state correctness. Latency is not a `verify` assertion, so it is a caveat, not a `bug`: there is no spec-required observable the daemon mis-handles, and the trace fully exists in the watched Source.\n\n### driver_capability: ready\n\nThe interactive driver (`scripts/drive-aider-interactive.sh`) implements `send`, `wait_turn`, `slash`, `interrupt`, and `sleep`. The `basic-turn` recipe is the canonical happy path: one `send` (\"Reply with exactly the word: ok\"), one `wait_turn` (blocks on the next `\u003e Tokens:` line), then an 8s `sleep` to cover the IdleFlush + working-refresh settle before teardown. Every step type the recipe needs is implemented, so the driver is `ready` — no gapped primitive (restart/reset_session/resume/start_session/exit_clean/sigkill/keys/session/fork) is touched by this recipe.",
+          "caveats": [
+            "feature-invisible-but-spec-compliant: aider's idle TUI prompt is never written to .aider.chat.history.md, so there is no in-band turn-end marker. The parser synthesizes turn_done via IdleFlush instead — the state arc is correct, but the end-of-turn is inferred from quiescence rather than observed.",
+            "metric-drift-downstream: the working→ready transition lands with ~5s effective latency (1500ms IdleFlush floor clamped to the SessionDetector's 5s working-refresh poll), so the session shows as working for several seconds after aider has finished. State correctness is unaffected; only the transition timing is delayed.",
+            "The recipe uses the same trailing-sleep settle as the sibling full-lifecycle-toolcall cell (\u003e=8s) so the synthesized working→ready edge lands before the tmux kill-session teardown."
+          ],
+          "sources": [
+            {
+              "kind": "url",
+              "ref": "https://aider.chat/docs/scripting.html",
+              "note": "--message/-m one-shot non-interactive mode: process one instruction, apply edits, exit — the headless_mode capability the primitive requires"
+            },
+            {
+              "kind": "url",
+              "ref": "https://aider.chat/docs/faq.html",
+              "note": "aider writes chat history to .aider.chat.history.md in the project directory"
+            },
+            {
+              "kind": "url",
+              "ref": "https://github.com/Aider-AI/aider/blob/main/HISTORY.md",
+              "note": "aider prints '\u003e Tokens: X sent, Y received.' per model call; total tokens sent/received tracked"
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/aider/agent.go",
+              "note": "Source = FilesUnderCWD{.aider.chat.history.md, RawLineParser} — per-project markdown transcript; no PendingContributor/SubagentCounter"
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/aider/parser.go",
+              "note": "#### → user_message; \u003e Tokens: → assistant_message w/ TokenSnapshot; no in-band turn-end → IdleFlush synthesizes turn_done (1500ms floor at lines 42-54); ~5s effective working→ready latency documented there — proves the latency caveat, not a bug"
+            },
+            {
+              "kind": "file",
+              "ref": "core/pkg/tailer/tailer_metrics.go",
+              "note": "applyTokenSnapshot (lines 119-125): metrics.TotalTokens = tokens.Total when Total \u003e 0 — emits the TotalTokens\u003e0 signal correctly (daemon_capability:full)"
+            },
+            {
+              "kind": "file",
+              "ref": "core/domain/session/session.go",
+              "note": "IsAgentDone: LastEventType == turn_done is the authoritative end-of-turn → flips working to ready"
+            },
+            {
+              "kind": "file",
+              "ref": "core/application/services/session_detector_activity.go",
+              "note": "lines 343-350: force ready→working on fresh activity so ClassifyState can later detect the working→ready edge"
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/aider/parser_test.go",
+              "note": "TestParser_BaselineHello_FullTurn (lines 35-118): uses the exact basic-turn recipe prompt; pins assistant_message+TokenSnapshot on \u003e Tokens: and turn_done from IdleFlush"
+            },
+            {
+              "kind": "file",
+              "ref": ".claude/skills/ir:onboard-agent/scripts/drive-aider-interactive.sh",
+              "note": "driver implements send/wait_turn/slash/interrupt/sleep — basic-turn needs only send + wait_turn + sleep, all present → driver_capability:ready"
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/aider/capabilities.json",
+              "note": "headless_mode: true — the Primitive exercised maps to this capability key (confirmed)"
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": true,
+          "preconditions": [
+            "aider CLI on PATH and authenticated against its configured provider/model (auth is set up out-of-band; the rig's precheck delegates auth to the user)",
+            "tmux available — the interactive driver runs aider in a tmux REPL so it stays alive across the turn",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+          ],
+          "setup": [
+            "The interactive driver (drive-aider-interactive.sh) git-inits a fresh per-run cwd under \u003cstaging\u003e/cwd/, launches `aider --no-auto-commits --yes-always --no-gitignore` in a tmux session, and waits for the `\u003e Repo-map:` banner line in .aider.chat.history.md before sending the prompt",
+            "aider stores its transcript as .aider.chat.history.md in the cwd (FilesUnderCWD), so the daemon keys the whole session by proc-\u003cPID\u003e — there is no separate transcript-UUID rollout session; the turn arc, pid_discovered and teardown all land on that one proc-\u003cPID\u003e row",
+            "WHY interactive, not headless `aider --message` (drift fix, same shape as the sibling full-lifecycle-toolcall + pi cells): aider emits no end-of-turn marker, so working→ready is synthesized by IdleFlush after a ~1.5s quiet window, clamped to the SessionDetector's ~5s working-refresh poll; a headless --message run exits ~2.6s after the working flip — BEFORE that settle fires — so the daemon never observes the terminal working→ready edge and turn_end + teardown can't anchor (the prior 3/5 result). Keeping aider alive in the REPL across one send + wait_turn lets the daemon observe the full ready→working→ready settle cleanly, and the single tmux kill-session teardown then yields one clean process_exited",
+            "wait_turn blocks until a new `\u003e Tokens:` line appears in the transcript (aider's per-round close marker), so the trailing sleep never races a still-running turn; the 8s trailing sleep covers aider's ~1.5s IdleFlush quiet window plus the 5s working-refresh poll (one full idle-flush cycle plus slack) so the working→ready settle is observed before teardown",
+            "The send is a no-tool single turn — aider is asked to reply with exactly one word, so the working span carries no auto-executed tool call (tool_calls_max: 0) and the session never enters waiting (aider has no permission hook)"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 8
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a transcript_new + presession_created for the proc-\u003cPID\u003e session born ready within ~1s of REPL launch",
+            "events.jsonl contains a pid_discovered event bound to the same proc-\u003cPID\u003e session_id",
+            "events.jsonl contains a state_transition→working on the proc-\u003cPID\u003e session_id when the prompt is sent (the single assistant turn)",
+            "events.jsonl contains a state_transition→ready on the same proc-\u003cPID\u003e session_id once aider's turn-end is inferred (the `\u003e Tokens:` line closes the model call and IdleFlush synthesizes turn_done after ~1.5s of quiescence, clamped to the 5s working-refresh poll) — observed within the 8s trailing sleep before teardown",
+            "events.jsonl contains NO state_transition to waiting for the session at any point (no tool call, no permission gate)",
+            "the session's final live state is ready before the driver tears the REPL down",
+            "events.jsonl contains exactly one process_exited on the proc-\u003cPID\u003e session at REPL teardown"
+          ],
+          "settings": {},
+          "timeout_seconds": 300
+        }
+      }
+    },
+    "claudecode": {
+      "recording_dir": "claudecode/scenarios/basic-turn",
+      "artifacts": {
+        "events": "claudecode/scenarios/basic-turn/events.jsonl",
+        "transcript": "claudecode/scenarios/basic-turn/transcript.jsonl",
+        "manifest": "claudecode/scenarios/basic-turn/manifest.json",
+        "golden": "claudecode/scenarios/basic-turn/transcript.jsonl.replay.json.golden",
+        "recordings": [
+          "claudecode/scenarios/basic-turn/recordings/2026-04-24-20-45-41_irrlichd-0.4.5+de926ab"
+        ]
+      },
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "pass_rate": "4/4 phases passed",
+        "agent_cli_version": "2.1.143",
+        "daemon_version": "0.4.5+de926ab",
+        "confidence": 0.95,
+        "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "basic-turn",
+          "agent": "claudecode",
+          "assessed_at": "2026-05-18T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.95,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nThe spec's two Expected: bullets are the foundational lifecycle assertion that every other scenario builds on:\n\n1. **`ready → working → ready`.** Standard turn arc. Observable in irrlicht via `state_transition` events emitted by the claudecode parser: the user-line append in the JSONL transcript drives `ready → working`; the assistant's terminal `stop_reason: end_turn` drives `working → ready`. Both transitions are first-class in `core/adapters/inbound/agents/claudecode/parser.go` and have been load-bearing since the adapter's initial commit.\n2. **`TotalTokens \u003e 0` after the turn.** Observable in the recording's `events.jsonl` via the parser's `extractAnthropicUsageBreakdown` helper, which pulls `input_tokens` / `output_tokens` / `cache_*` from each assistant message's `usage` payload. The spec assertion isn't expressible in the current phase DSL (no metric-form invariant), but the data IS in the recording — committed manifest carries the token totals.\n\nThe recipe is the minimum-cost prompt that exercises this arc end-to-end: `'Reply with exactly the word: ok'`. Single user line, single assistant line with `stop_reason: end_turn`, no tool calls, no waiting state. The 4/4 passing committed recording (`recordings/2026-05-15T07-37_irrlichd-0.4.x/`) demonstrates the spec lands cleanly across re-records.\n\nThis is the canonical baseline cell for every other claudecode scenario — failure here would invalidate dozens of derived recipes.\n\n## What irrlicht does NOT see (and why that's narrow)\n\nThe `TotalTokens \u003e 0` bullet from the spec doesn't have a corresponding phase DSL field; it's verified by reading the recording's metrics directly. Bringing it under the validator would require a `min_total_tokens` invariant or similar — future work for the phase DSL, not a transport gap.",
+          "caveats": [
+            "Assessment backfilled in 2026-05-18 to fill the Stage-1 artifact gap. The recording + spec predate the assessment.json convention (introduced in commit de926ab); the verdict here is consistent with the existing 4/4 pass-rate and the committed recipe in scenarios.json.",
+            "TotalTokens \u003e 0 assertion lives outside the phase DSL; it's structurally verified by the manifest's recorded metrics rather than by expected-validate."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/claudecode/parser.go",
+              "note": "extractAnthropicUsageBreakdown + end_turn → ready classifier path; load-bearing since the adapter's initial commit."
+            },
+            {
+              "kind": "file",
+              "ref": ".specs/agent-scenarios.md",
+              "note": "Feature: Basic turn (L112-119) — two Expected: bullets (state arc + tokens \u003e 0)."
+            },
+            {
+              "kind": "file",
+              "ref": ".claude/skills/ir:onboard-agent/scenarios.json",
+              "note": "by_adapter.claudecode for basic-turn — single-prompt headless recipe."
+            }
+          ]
+        },
+        "recipe": {
+          "prompt": "Reply with exactly the word: ok",
+          "settings": {},
+          "timeout_seconds": 60
+        }
+      }
+    },
+    "codex": {
+      "recording_dir": "codex/scenarios/basic-turn",
+      "artifacts": {
+        "events": "codex/scenarios/basic-turn/events.jsonl",
+        "transcript": "codex/scenarios/basic-turn/transcript.jsonl",
+        "manifest": "codex/scenarios/basic-turn/manifest.json",
+        "golden": "codex/scenarios/basic-turn/transcript.jsonl.replay.json.golden",
+        "recordings": [
+          "codex/scenarios/basic-turn/recordings/2026-05-23-18-54-06_irrlichd-0.4.7+723609a"
+        ]
+      },
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "pass_rate": "6/6 phases passed",
+        "agent_cli_version": "0.130.0",
+        "daemon_version": "0.4.7+723609a",
+        "confidence": 0.9,
+        "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "basic-turn",
+          "agent": "codex",
+          "assessed_at": "2026-05-23T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.9,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\n`basic-turn` is the smallest possible round-trip: one user message, one assistant reply, no tool use, asserting the `ready -\u003e working -\u003e ready` arc with `TotalTokens \u003e 0` after the turn. Its primitive is transcript turn-end detection and it requires `headless_mode`.\n\n**agent_supports: yes.** Codex CLI 0.130.0 runs a single prompt non-interactively via its `exec` headless mode, which is recorded in the codex adapter's `capabilities.json` as `headless_mode: true` and `structured_output_jsonl: true`. The committed codex regression fixture `regression/baseline-hello` is itself a captured headless single-turn round-trip, demonstrating the agent completes a basic turn and writes the JSONL transcript the daemon tails.\n\n**daemon_capability: full; driver_capability: ready.** The codex adapter watches session transcripts via `FilesUnderRoot{Dir: sessionsDir(), Parser: JSONLineParser{...}}` (agent.go) and the JSONL `Parser` (parser.go) translates the `task_complete` event_msg into an `EventType: \"turn_done\"`, so `IsAgentDone()` fires through the primary path and drives the `working -\u003e ready` transition. The same parser extracts per-turn and cumulative token usage from `token_count` events (`last_token_usage` / `total_token_usage`), yielding the non-zero `TotalTokens` the spec asserts. Parser unit tests `TestParser_FullTranscript_EndDetection`, `TestParser_TurnCompleteEmitsTurnDone`, and `TestParser_MultiTurnTokenCount_UsesPerTurnSnapshot` cover exactly this turn-end + token-accounting behavior. The existing coverage matrix already records codex/basic-turn as yes/yes; this assessment ratifies it.\n\nNo carve-outs apply: codex assigns turn boundaries cleanly via `task_complete` (unlike aider, whose idle-flush turn-end carries ~5s latency and is recorded as a `partial` in the matrix).",
+          "caveats": [],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/codex/agent.go",
+              "note": "FilesUnderRoot + JSONLineParser transport; ExactName process match"
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/codex/parser.go",
+              "note": "task_complete -\u003e turn_done so IsAgentDone fires; token usage extraction from token_count events"
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/codex/parser_test.go",
+              "note": "TestParser_FullTranscript_EndDetection, TestParser_TurnCompleteEmitsTurnDone, TestParser_MultiTurnTokenCount_UsesPerTurnSnapshot"
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/codex/capabilities.json",
+              "note": "headless_mode: true, structured_output_jsonl: true, cost_tracking: true"
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/codex/regression/baseline-hello",
+              "note": "committed captured headless single-turn round-trip fixture"
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": true,
+          "preconditions": [
+            "codex CLI on PATH and authenticated (~/.codex/config.toml or OPENAI_API_KEY)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+          ],
+          "setup": [
+            "The interactive driver launches `codex --no-alt-screen` in a fresh per-run cwd under \u003cstaging\u003e/cwd/, accepts the trust dialog, and waits for the TUI banner + MCP boot before sending the prompt",
+            "Each send bumps the expected-turn counter; wait_turn blocks until a new event_msg/task_complete line appears in the rollout, so the trailing sleep never races a still-running turn"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a presession_created (proc-\u003cPID\u003e) event in ready within 1000 ms of agent launch",
+            "events.jsonl contains a transcript_new for the rollout session with a distinct session_id, born ready",
+            "events.jsonl contains a pid_discovered event bound to the rollout session_id",
+            "events.jsonl contains a state_transition→working on the rollout session_id when the prompt is sent (the single assistant turn)",
+            "events.jsonl contains a state_transition→ready on the same rollout session_id once the turn completes (the interactive REPL returns to ready, unlike headless codex exec which exits)",
+            "the rollout session's final live state is ready before the driver tears the REPL down",
+            "events.jsonl contains a process_exited on the rollout session at REPL teardown",
+            "no state_transition to waiting appears for the rollout session at any point"
+          ],
+          "settings": {},
+          "timeout_seconds": 180
+        }
+      }
+    },
+    "opencode": {
+      "recording_dir": "opencode/scenarios/basic-turn",
+      "artifacts": {
+        "events": "opencode/scenarios/basic-turn/events.jsonl",
+        "transcript": "opencode/scenarios/basic-turn/transcript.jsonl",
+        "manifest": "opencode/scenarios/basic-turn/manifest.json",
+        "golden": "opencode/scenarios/basic-turn/transcript.jsonl.replay.json.golden"
+      },
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "pass_rate": "4/4 phases passed",
+        "agent_cli_version": "unknown",
+        "daemon_version": "0.4.7+b2c5981",
+        "confidence": 0.9,
+        "notes": "agent_supports: yes\ndaemon_capability: full\ndriver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "basic-turn",
+          "agent": "opencode",
+          "assessed_at": "2026-05-25T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.9,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Reasoning\n\nbasic-turn asserts the smallest round-trip: a single plain-text user message, one assistant reply, no tool use, producing the `ready → working → ready` arc with `TotalTokens \u003e 0`.\n\nOpenCode supports a true headless turn: `opencode run -- \"\u003cprompt\u003e\"` accepts the prompt directly and blocks until the assistant turn completes. Session state lives in OpenCode's SQLite store (`~/.local/share/opencode/opencode.db`), which the daemon's ProcessOwnedStore source polls for the UUID-keyed `ses_…` session.\n\nThe daemon observes the full turn arc. The opencode parser maps OpenCode's `step-finish` part with `reason=\"stop\"` to a `turn_done` event that closes the turn (parser.go: `case \"stop\": ev.EventType = \"turn_done\"`), driving the session back to `ready`. The committed sibling recording (`long-idle-live-session/events.jsonl`) confirms a single `opencode run` produces exactly the spec arc on one `ses_…` session: `new_state=ready` (new session created) → `working` (force ready→working on first activity) → `ready` (agent finished turn → ready). Token/cost data from step-finish populates a PerTurnContribution, so TotalTokens is non-zero.\n\nThe interactive driver (drive-opencode-interactive.sh) launches a blocking `opencode run` per `send` and chains `--session` for continuity; `wait_turn` is a no-op because the run already blocks. basic-turn is a single plain-text turn (one `send` + `wait_turn` + trailing `sleep`) — well within this grammar, so `driver_capability: ready`.\n\nMODEL note: the column reassessment confirms opencode's default model is a local LM Studio model (`lmstudio/gemma-4-e2b-it-uncensored`); the driver runs `opencode run` with no `--model` flag and uses that default. The model is small and slow (~30–45s/turn), so the recipe budgets generous timeouts.",
+          "caveats": [
+            "OpenCode does not expose CLI-assignable session IDs; the driver discovers the session id by querying SQLite for the most recent row keyed on directory after the first `opencode run` returns.",
+            "The local gemma model is slow (~30–45s per turn); the recipe uses a 180s timeout so a slow turn does not trip a false timeout."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/opencode/parser.go",
+              "note": "parseStepFinish: reason=\"stop\" → EventType \"turn_done\" closes the turn (working→ready); step-finish token/cost data builds a PerTurnContribution for all reasons except mid-turn tool-calls, so TotalTokens \u003e 0."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/opencode/agent.go",
+              "note": "Source variant ProcessOwnedStore (SQLite at ~/.local/share/opencode/opencode.db) with ExactName{Name: \"opencode\"} process matcher; daemon polls the session table for the ses_… session."
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/opencode/scenarios/long-idle-live-session/events.jsonl",
+              "note": "Sibling recording: a single `opencode run` emits state_transition new_state ready→working→ready on one ses_… session — the exact basic-turn arc."
+            },
+            {
+              "kind": "docs",
+              "ref": "https://opencode.ai/docs/cli/",
+              "note": "`opencode run` accepts a prompt directly and runs non-interactively (headless), blocking until the turn completes."
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": true,
+          "preconditions": [
+            "opencode CLI on PATH and authenticated against its default model (run a single message in the opencode TUI to confirm; the default is a local LM Studio model so no remote key is needed)",
+            "irrlichd is recording with the opencode SQLite watcher enabled — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+          ],
+          "setup": [
+            "The interactive driver (drive-opencode-interactive.sh) creates a fresh per-run cwd under \u003cstaging\u003e/cwd/ and launches a blocking `opencode run -- \"\u003cprompt\u003e\"` for the single send (no --model flag, so opencode uses its configured default model); the run blocks until the assistant turn finishes, so wait_turn is a no-op",
+            "OpenCode session state lives in its SQLite store (~/.local/share/opencode/opencode.db), not per-cwd transcript files; the daemon's ProcessOwnedStore source polls the session table and observes the UUID-keyed ses_… session for this cwd. The driver discovers that session id from SQLite after the run returns (opencode does not expose CLI-assignable session IDs)",
+            "The send is a no-tool single turn — opencode is asked to reply with exactly one word, so the working span carries no auto-executed tool call (tool_calls_max: 0) and the session never enters waiting (no permission gate fires)",
+            "The default model is a small, slow local LM Studio model (~30–45s per turn), so the trailing sleep and timeout are generous: a slow turn must not trip a false timeout, and the trailing sleep must outlast the turn_done settle so working→ready is observed"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 6
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a transcript_new (or session_created) for the ses_… session, born ready, within ~2s of agent launch (a transient proc-\u003cPID\u003e pre-session may also appear; the turn arc and pid_discovered land on the ses_… session)",
+            "events.jsonl contains a pid_discovered event bound to the ses_… session_id",
+            "events.jsonl contains a state_transition→working on the ses_… session_id when the prompt is sent (the single assistant turn)",
+            "events.jsonl contains a state_transition→ready on the same ses_… session_id once the turn completes (step-finish reason=stop → turn_done closes the turn)",
+            "no state_transition to waiting appears for the session at any point (no tool call, no permission gate)",
+            "the session's final live state is ready"
+          ],
+          "settings": {},
+          "timeout_seconds": 180
+        }
+      }
+    },
+    "pi": {
+      "recording_dir": "pi/scenarios/basic-turn",
+      "artifacts": {
+        "events": "pi/scenarios/basic-turn/events.jsonl",
+        "transcript": "pi/scenarios/basic-turn/transcript.jsonl",
+        "manifest": "pi/scenarios/basic-turn/manifest.json",
+        "golden": "pi/scenarios/basic-turn/transcript.jsonl.replay.json.golden"
+      },
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "pass_rate": "5/5 phases passed",
+        "agent_cli_version": "0.70.0",
+        "daemon_version": "0.4.7+7b5218c",
+        "confidence": 0.95,
+        "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "basic-turn",
+          "agent": "pi",
+          "assessed_at": "2026-05-25T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.95,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nThe scenario's User-observable signals are (1) the `ready → working → ready` state arc and (2) `TotalTokens \u003e 0` after the turn. Pi supports the smallest possible round-trip natively: a single `pi --print -p \u003cprompt\u003e` invocation runs one assistant turn with no tool use and exits. Pi writes one JSONL session file per invocation under `~/.pi/agent/sessions/\u003ccwd-slug\u003e/\u003cts\u003e_\u003cUUID\u003e.jsonl` immediately on launch (FilesUnderRoot, non-lazy), so the daemon observes a `proc-\u003cPID\u003e` pre-session born ready, then a `transcript_new` + `state_transition`→ready for the UUID-keyed rollout session, then the working→ready flip as the single turn runs and completes, then `process_exited` at headless exit.\n\nThe pi parser identifies the assistant message end as a complete turn boundary: `stopReason=stop` on the final assistant event maps to `turn_done`, settling working→ready. This is the same turn-end detection the sibling session-start cell already exercises for the launch arc; basic-turn adds the working→ready turn on the rollout session. `TotalTokens \u003e 0` is covered by the parser's per-turn token snapshot (not expressible in the phase DSL today; covered by parser unit tests).",
+          "caveats": [
+            "Pi cannot accept a pre-assigned UUID — it generates one itself. The headless driver discovers the UUID from the session header on line 1 of the freshly-created transcript.",
+            "`pi --print` exits after the single turn, so the rollout session's terminal working→ready settle and the process_exited can land close together; the spec anchors turn_end to turn_start (not to session_birth) so the matcher picks the post-turn ready, not the earlier birth ready."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/pi/agent.go",
+              "note": "Identity.Name=pi, Source variant FilesUnderRoot under ~/.pi/agent/sessions/, ExactName{Name: \"pi\"} process matcher."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/pi/parser.go",
+              "note": "stopReason=stop on the final assistant event maps to turn_done (working→ready)."
+            },
+            {
+              "kind": "file",
+              "ref": ".claude/skills/ir:onboard-agent/scripts/drive-pi.sh",
+              "note": "Headless `pi --print -p \u003cprompt\u003e` single-shot driver; resolves the freshly-created transcript and extracts the UUID from line 1."
+            }
+          ]
+        },
+        "recipe": {
+          "prompt": "Reply with exactly the word: ok",
+          "settings": {},
+          "timeout_seconds": 90
+        }
+      }
+    }
+  }
+}

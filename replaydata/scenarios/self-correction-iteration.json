@@ -1,0 +1,540 @@
+{
+  "id": "2.4",
+  "name": "self-correction-iteration",
+  "section": "Turn shape",
+  "feature": "Self-correction iteration",
+  "description": "Claude runs bash 'false' (which fails), inspects the failing tool_result, retries with bash 'echo recovered', then replies 'done'. The whole arc must show a single contiguous working span — no flicker to ready or waiting between the failed attempt and the recovery. Locks down the parser's terminal-stop_reason gate (intermediate tool_use/tool_result pairs do not change state).",
+  "requires": [
+    "headless_mode",
+    "tool_calls"
+  ],
+  "verify": {
+    "transitions_topology": [
+      "ready",
+      "working",
+      "ready"
+    ],
+    "final_state": "ready",
+    "contains_tool_call": true,
+    "has_waiting_state": false
+  },
+  "agents": {
+    "aider": {
+      "recording_dir": "aider/scenarios/self-correction-iteration",
+      "artifacts": {
+        "events": "aider/scenarios/self-correction-iteration/events.jsonl",
+        "transcript_md": "aider/scenarios/self-correction-iteration/transcript.md",
+        "manifest": "aider/scenarios/self-correction-iteration/manifest.json"
+      },
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "pass_rate": "6/6 phases passed",
+        "agent_cli_version": "0.86.2",
+        "daemon_version": "0.4.7+d5c235c",
+        "confidence": 0.8,
+        "notes": "agent_supports: yes\ndaemon_capability: full\ndriver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "self-correction-iteration",
+          "agent": "aider",
+          "assessed_at": "2026-05-25T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.8,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Reasoning\n\n### agent_supports: yes — aider has a within-turn reflection loop\n\nThe scenario asks for an agent that fails a tool call, interprets the failure, and retries with corrected input across multiple cycles *within one turn* (no intervening user prompt). Aider implements exactly this via its reflection loop. `Coder.run_one` (aider/coders/base_coder.py:924) is a `while message:` loop: it calls `send_message`, and if `self.reflected_message` is set it loops again with that failure text as the next model input, up to `max_reflections = 3` (base_coder.py:100, 939-944). Reflections are seeded by auto-lint failures (\"Attempt to fix lint errors?\" → `reflected_message = lint_errors`, base_coder.py:1603-1607) and auto-test failures (\"Attempt to fix test errors?\" → `reflected_message = test_errors`, base_coder.py:1619-1623), and shell-command output is fed back into the conversation as a user/assistant pair (base_coder.py:1609-1614). All of this happens under a SINGLE user prompt: `io.user_input(...)` — which writes the `#### ` history header — is called exactly once per turn, in `run`/`run_stream` BEFORE `run_one` (base_coder.py:860, 879). The reflection iterations inside `run_one` call `send_message` directly and never re-emit a `#### ` header, so the whole fail→retry→recover arc is one logical turn from the transcript's point of view.\n\n### daemon_capability: full — the parser emits the contiguous working span the spec requires\n\nThe canonical user-observable signal is: state stays continuously `working` across all retry cycles, with no flicker to `ready` or `waiting` between attempts, ending in `ready`. The aider adapter is built to emit exactly this. Its `Source` is `FilesUnderCWD{Filename: \".aider.chat.history.md\", RawLineParser}` (agent.go:45-50). The parser opens a turn on the `#### ` line (`turnOpen = true`) and, critically, treats every `\u003e Tokens: …` line as `assistant_message` — NOT `turn_done` — deliberately keeping the turn open across multiple model calls (parser.go:146-188; the doc comment at parser.go:18-23 calls out that multiple `\u003e Tokens:` lines within one `####` are normal). Tool calls land as `\u003e Running \u003ccmd\u003e` → `tool_result(Bash)` and `\u003e Applied edit to` → `tool_result(Edit)` (parser.go:67-70, 119-124, 231-242), and a `tool_result` never changes session state away from `working`. So the topology the spec asserts — one contiguous `working` span spanning N tool-call/result pairs and N model calls, then a single `working → ready` at turn end — is precisely what the parser is built to emit, and the classifier holds `working` across the multi-call reflection run within one `#### ` turn. No spec-required observable is mis-handled: a trace exists in the watched Source and the parser handles it correctly today. Hence `full` (the old `partial` is split here — the only residual concern is a non-spec timing window, captured below as a caveat, not a downgrade).\n\n### driver_capability: ready — recipe needs only send + wait_turn\n\nThe recipe drives one `send` (prompt aider to create `solution.py`), then waits TWICE on `wait_turn` (first `\u003e Tokens:` = initial edit; second = first reflection round), then a trailing `sleep` to absorb the IdleFlush settle. The interactive driver (scripts/drive-aider-interactive.sh) implements `send`, `wait_turn`, and `sleep` — every step type this recipe needs. No gapped primitive (restart/reset_session/resume/start_session/exit_clean/sigkill/keys/session/fork) is exercised. Hence `ready`.\n\n### The residual concern is a non-spec timing window, not a daemon bug\n\nAider's idle TUI prompt never lands in the markdown history, so the parser has NO in-band end-of-turn signal; it synthesizes `turn_done` via `IdleFlush` after the transcript has been quiet for `aiderIdleTurnDoneAfter = 1500ms` (parser.go:54, 208-229). Between two reflection cycles the only thing happening is a model call, and the transcript is silent for the whole duration of that call. If any single inter-reflection model call exceeds ~1.5s of file silence, `IdleFlush` *can* fire a premature `turn_done` (working → ready) and the next `\u003e Tokens:` line in the same logical turn reopens it (ready → working) — a flicker the scenario forbids. This is the matrix note's \"idle-flush splits attempts\" concern. It is NOT a `bug`: the daemon does not mis-handle a spec-required observable — it correctly emits the contiguous span whenever each model call lands inside the window, and the recipe arms the reflection loop deterministically (`--auto-test --test-cmd false`) so the within-turn retry is exercised. The flicker is a probabilistic, latency-dependent artifact of an out-of-band turn-boundary heuristic, which is exactly what a caveat is for. Per the #476 authoring rule (caveats over downgrades; narrow NON-spec gap keeps `full`), it stays `daemon_capability: full` with the timing window noted as a caveat. A fast model finishes each call inside the window and the span is clean.\n\n### Primitive / capability anchor\n\nThe primitive is `tool_calls` + iterative within-turn retry. The capability key is `tool_calls`, which is `true` in replaydata/agents/aider/capabilities.json. The within-turn-retry aspect has no dedicated capability flag — it is a property of the classifier holding `working` across `\u003e Tokens:`/`tool_result` runs, not a declared agent feature, so no capabilities.json correction is warranted.\n\n## Matrix comparison\n\nThe coverage row reads `agent_supports: yes`, `daemon_capability: unknown`, `driver_capability: ready`, note \"aider retries across turns rather than within; idle-flush splits attempts.\" This re-assessment resolves the `unknown` daemon axis to `full` and ratifies `driver_capability: ready`. Two refinements for the maintainer: (1) the source shows aider's reflection loop is genuinely *within* a single turn (one `#### ` header, `run_one`'s `while message:` loop), so the \"retries across turns\" half of the note is imprecise; (2) the idle-flush flicker is a non-spec timing caveat, not a daemon bug — the daemon emits the required contiguous span correctly.",
+          "caveats": [
+            "feature-invisible-but-spec-compliant adjacent: aider has no in-band end-of-turn marker (the idle TUI prompt is not written to the markdown history), so turn boundaries are inferred purely from a 1500ms idle-flush window (parser.go IdleFlush).",
+            "Non-spec timing window: if an inter-reflection model call leaves the transcript silent for longer than aiderIdleTurnDoneAfter (1500ms), IdleFlush can synthesize a premature turn_done (working→ready) and the next reflection's `\u003e Tokens:` line reopens the turn (ready→working). Fast local models that finish each call inside the window avoid this; slow remote models can trip it. This is a probabilistic latency artifact of the out-of-band heuristic, not a mis-handled spec observable — hence a caveat, not daemon_capability: bug."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/aider/parser.go",
+              "note": "FilesUnderCWD markdown parser: `\u003e Tokens:` → assistant_message (turn stays open across multiple model calls, parser.go:18-23,146-188); `\u003e Running`/`Applied edit` → tool_result (never changes state); turn_done only via IdleFlush (aiderIdleTurnDoneAfter=1500ms, parser.go:54,208-229) or LLM-error blockquote — this is why daemon_capability is full (contiguous working span emitted) with the idle-flush window as a caveat"
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/aider/agent.go",
+              "note": "Source = FilesUnderCWD{.aider.chat.history.md, RawLineParser} (agent.go:45-50); per-process Parser instance tracks idle-flush turnOpen state"
+            },
+            {
+              "kind": "file",
+              "ref": "/Users/ingo/.local/share/uv/tools/aider-chat/lib/python3.12/site-packages/aider/coders/base_coder.py",
+              "note": "aider 0.86.2: run_one() while-loop reflection (lines 924-944, max_reflections=3); lint/test failures set reflected_message (1599-1623); io.user_input (the #### header) called once per turn before run_one (run/run_stream, lines 860/879) — confirms the retry arc is one logical turn"
+            },
+            {
+              "kind": "file",
+              "ref": "/Users/ingo/.local/share/uv/tools/aider-chat/lib/python3.12/site-packages/aider/io.py",
+              "note": "user_input() writes the `#### ` prefix to .aider.chat.history.md (lines 775-789); only invoked for the top-level prompt, not for reflected messages — confirms reflections do not re-open a turn in the irrlicht parser"
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/aider/capabilities.json",
+              "note": "tool_calls: true, headless_mode: true (the two `requires` for this scenario); no within-turn-retry feature flag exists (it is a classifier property, so no correction warranted)"
+            },
+            {
+              "kind": "file",
+              "ref": ".claude/skills/ir:onboard-agent/scripts/drive-aider-interactive.sh",
+              "note": "interactive driver implements send + wait_turn + sleep — every step type the recipe needs (one send, two wait_turn, one sleep); no gapped primitive exercised → driver_capability: ready"
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": true,
+          "preconditions": [
+            "aider CLI on PATH and authenticated against its configured provider/model (auth is set up out-of-band; the rig's precheck delegates auth to the user). The live REPL needs a model that actually answers so the failing shell call and its corrective retry really run inside one turn; headless aider with no reachable provider hangs on the model-auth prompt.",
+            "tmux available — the interactive driver runs aider in a tmux REPL so it stays alive across the whole self-correction turn (the working→ready settle is idle-flush-bound and must be observed before teardown)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+            "observes:partial caveat (mirror of the coverage matrix): aider's reflection loop is genuinely WITHIN one turn (one `#### ` header, run_one's `while message:` loop, max_reflections=3), so the topology is one contiguous working span. The only thing that can break the no-flicker target is the 1500ms IdleFlush: if any single inter-reflection model call leaves the transcript silent for \u003e~1.5s, IdleFlush synthesizes a premature turn_done (working→ready) and the next `\u003e Tokens:` line reopens it (ready→working). A fast local model avoids this; a slow remote model can trip it. The root cause is timing, not topology."
+          ],
+          "setup": [
+            "The interactive driver (drive-aider-interactive.sh) git-inits a fresh per-run cwd under \u003cstaging\u003e/cwd/, launches `aider --no-auto-commits --yes-always --no-gitignore` (plus --model if IRRLICHT_AIDER_MODEL is set) inside a tmux session, and waits for the `\u003e Repo-map:` banner line in .aider.chat.history.md before sending the prompt",
+            "aider stores its transcript as .aider.chat.history.md in the cwd (FilesUnderCWD, RawLineParser), so the daemon keys the WHOLE session by proc-\u003cPID\u003e — there is no separate transcript-UUID rollout session and no handoff/reconcile; the turn arc, pid_discovered and teardown all land on that one proc-\u003cPID\u003e row. The transcript is LAZY (materializes on first input), but the proc-\u003cPID\u003e pre-session is observable from launch (that is where the spec's session_birth ‘ready within 1s’ is grounded)",
+            "WHY the retry is one turn: io.user_input() writes the `#### ` history header exactly once per top-level prompt, before Coder.run_one; run_one's reflection loop (max_reflections=3) sets reflected_message and calls send_message directly, never re-emitting a `#### ` header (base_coder.py:860/879/924-944). The loop is driven by --auto-test: after aider applies the edit, the test_cmd runs; a non-zero exit feeds its output back as reflected_message, so aider edits again and re-tests — repeating until the test passes or max_reflections is hit. The parser treats every `\u003e Tokens:` line as assistant_message (NOT turn_done) so the turn stays open across the multiple model calls (parser.go:18-23,146-188), and the `\u003e Running \u003ctest_cmd\u003e`→tool_result markers never change state away from working — so the edit→test-fail→reflect→re-edit arc is one contiguous ready→working→ready span",
+            "HOW the reflection is elicited deterministically: settings.aider_extra_args launches aider with `--auto-test --test-cmd false`. `false` always exits non-zero, so EVERY edit aider makes inside the turn trips a test failure and forces at least one reflection — independent of what gpt-5-nano actually writes. The loop self-limits at max_reflections=3, so the turn always settles to ready; we never depend on the model eventually producing passing code. No permission gate is involved: aider runs under --yes-always with NO permission hook (capabilities.json permission_hooks:false), the edit and the auto-test auto-execute, and the session never enters waiting",
+            "WHY interactive, not headless `aider --message` (drift fix, same shape as the pi/codex siblings): aider emits no end-of-turn marker, so working→ready is synthesized by IdleFlush after a ~1.5s quiet window, clamped to the SessionDetector's ~5s working-refresh poll; a headless --message run can exit promptly after the reply, so the daemon misses the terminal working→ready settle before process_exited and truncates the arc. Keeping aider alive in the REPL across one send + wait_turn lets the daemon observe the full ready→working→ready settle cleanly, and the single tmux kill-session teardown then yields one clean process_exited",
+            "wait_turn blocks until a new `\u003e Tokens:` line appears in the transcript (aider's per-round close marker — one per model call). The recipe waits TWICE: the FIRST wait_turn returns on the initial edit's `\u003e Tokens:`, the SECOND returns on the first reflection round's `\u003e Tokens:` (the auto-test failed and aider re-called the model). This guarantees the within-turn reflection actually completed a model round before teardown — a single wait_turn returns too early (the reflection call is still in flight) and the turn gets truncated with no working→ready settle. The ≥8s (here 20s) trailing sleep then absorbs any remaining reflection rounds (max_reflections caps at 3) plus one full ~1.5s IdleFlush cycle, so the terminal working→ready settle is observed before the single tmux kill-session teardown",
+            "The send asks aider to create a small Python file (an edit aider can reliably perform), which is what arms --auto-test: the post-edit test (`false`) fails, driving the within-turn reflection loop. The prompt deliberately avoids requesting a shell command — aider's reflection loop fires on --auto-lint/--auto-test failures, NOT on a model-invoked shell tool's exit code, so the lint/test path is the only reliable in-turn self-correction trigger"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Create a new file solution.py containing a single Python function add(a, b) that returns a + b. Make the edit now; do not ask me anything."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 20
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a transcript_new + presession_created for the proc-\u003cPID\u003e session born ready within ~1s of REPL launch",
+            "events.jsonl contains a pid_discovered event bound to the same proc-\u003cPID\u003e session_id",
+            "events.jsonl shows exactly one state_transition→working on the proc-\u003cPID\u003e session_id when the prompt is sent, sustained across the edit and its auto-test-driven reflection retries",
+            "transcript.jsonl shows the single working span spanning multiple `\u003e Tokens:` model-call markers (the initial edit plus ≥1 reflection re-edit) — the within-turn self-correction (coarse-grained: aider's tool markers carry no args/result payload)",
+            "events.jsonl contains NO state_transition to ready between the failing auto-test and the corrective re-edit — the session stays continuously working across the reflection loop (the parser holds working across `\u003e Tokens:`/tool_result runs within one `#### ` turn)",
+            "events.jsonl contains NO state_transition to waiting at any point during the working span (the edit and auto-test auto-execute under --yes-always; aider never gates)",
+            "events.jsonl shows exactly one working→ready transition at the single turn end (synthesized by IdleFlush ~1.5s after the last `\u003e Tokens:`, after max_reflections is reached)",
+            "the session's final live state is ready before the driver tears the REPL down",
+            "events.jsonl contains exactly one process_exited on the proc-\u003cPID\u003e session at REPL teardown",
+            "KNOWN TIMING RISK (observes:partial): if any single inter-reflection model call is silent \u003e~1.5s, IdleFlush can fire a premature working→ready then the next `\u003e Tokens:` reopens working→working flicker — flag it as a known timing limitation, do NOT widen the spec to accept it",
+            "Do not assert the auto-test command's output text — assert only the state topology and the multi-call reflection span"
+          ],
+          "settings": {
+            "aider_extra_args": [
+              "--auto-test",
+              "--test-cmd",
+              "false"
+            ]
+          },
+          "timeout_seconds": 300
+        }
+      }
+    },
+    "claudecode": {
+      "recording_dir": "claudecode/scenarios/self-correction-iteration",
+      "artifacts": {
+        "events": "claudecode/scenarios/self-correction-iteration/events.jsonl",
+        "transcript": "claudecode/scenarios/self-correction-iteration/transcript.jsonl",
+        "manifest": "claudecode/scenarios/self-correction-iteration/manifest.json",
+        "golden": "claudecode/scenarios/self-correction-iteration/transcript.jsonl.replay.json.golden"
+      },
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "pass_rate": "4/4 phases passed",
+        "agent_cli_version": "2.1.143",
+        "daemon_version": "0.4.5+71d506b",
+        "confidence": 0.9,
+        "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "self-correction-iteration",
+          "agent": "claudecode",
+          "assessed_at": "2026-05-17T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.9,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nSelf-correction is a first-class Claude Code behaviour. The agent routinely runs `Bash` (e.g. `go test`, `pytest`, `tsc`), inspects a non-zero exit / failing output via the resulting `tool_result` (with `is_error: true` when the tool itself errored, otherwise just a non-success body), and emits another `tool_use` in the next assistant message to retry, edit, or rerun. Multiple retry cycles inside one turn are normal.\n\nThe spec's three Expected bullets:\n\n**Bullet 1 — `ready → working`.** Standard turn arc; satisfied by the `user` message landing in the JSONL transcript and the parser firing the first `state_transition`.\n\n**Bullet 2 — state stays `working` across all retry cycles.** This is the core invariant. The parser only flips state to `ready` on an assistant message whose `stop_reason` is terminal (`end_turn`, `stop_sequence`, `refusal`, `tool_use` — parser.go:286-298). Intermediate assistant messages that emit *new* tool_use blocks have `stop_reason: tool_use` BUT are immediately followed by tool_result user messages within the same turn — the runtime keeps the turn open. The parser's `scanMessageContent` (parser.go:305-329) accumulates these without state churn. A non-zero exit code or failing test output arrives as a `tool_result` block on a `user` message, which on its own does not change state. Hence: no flicker to `ready` between retries; no flicker to `waiting` either (no permission prompt, no AskUserQuestion).\n\n**Bullet 3 — final `working → ready` (or `→ waiting`).** When the final assistant message lands with a terminal stop_reason and NO further pending tool_use, the parser emits `state_transition(working→ready)`. If the agent gives up and asks via AskUserQuestion, the parser routes that to `waiting` via the question detection path (parser.go around line 307 — \"surface it as the waiting-state header when no text block is present\").\n\n## What irrlicht does NOT see (and why that's OK)\n\nThe semantic content of each retry (\"this run failed because X, trying Y\") is not surfaced as a distinct event; only the tool_use/tool_result pairs are recorded. The scenario's Expected bullets are state-level, so this is fine. Tool error vs success is captured via `is_error` on the tool_result but not asserted by the spec.",
+          "caveats": [
+            "Recording must use a deterministic failing-then-passing tool sequence (e.g. a script that fails on first call and succeeds on second) so the retry loop is reproducible. Otherwise the count of retry cycles varies between captures.",
+            "If the test/lint failure trips a `Bash` permission gate (e.g. an unapproved command), the state will legitimately enter `waiting` and the scenario's no-flicker invariant must accommodate that. The recipe should pre-approve the relevant tools."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": ".specs/agent-scenarios.md",
+              "note": "Section 'Feature: Self-correction iteration' (lines 130-136) — three Expected bullets covering the no-flicker invariant."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/claudecode/parser.go",
+              "note": "Terminal stop_reason gate (286-298) keeps state in working through intermediate tool_use→tool_result cycles; scanMessageContent (305-329) tracks tool pairs without state churn."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/claudecode/agent.go",
+              "note": "JSONL source — every retry iteration is one append to the transcript."
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": true,
+          "preconditions": [
+            "claude CLI on PATH and authenticated (subscription or API key)",
+            "irrlichd is recording (--attach against a daemon with --record, or isolated mode)",
+            "Claude Code launched in auto mode (Bash auto-approved) so neither attempt trips a permission gate"
+          ],
+          "setup": [
+            "Driver generates a fresh lowercased session UUID and a fresh cwd under \u003cstaging\u003e/cwd/",
+            "Auto mode is enabled by the driver (Shift+Tab until 'auto mode on' appears in the footer)"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Run bash 'false' first; if it fails, retry with bash 'echo recovered'. Then reply 'done'."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl shows exactly one ready→working transition for the UUID",
+            "events.jsonl contains at least 2 tool_use events for the Bash tool inside the working span (the failing attempt and the recovery)",
+            "events.jsonl contains NO state_transition to ready between the failing tool_result and the recovery tool_use",
+            "events.jsonl contains NO state_transition to waiting at any point during the working span",
+            "events.jsonl shows exactly one working→ready transition at turn end",
+            "final session state is ready"
+          ],
+          "settings": {},
+          "timeout_seconds": 180
+        }
+      }
+    },
+    "codex": {
+      "recording_dir": "codex/scenarios/self-correction-iteration",
+      "artifacts": {
+        "events": "codex/scenarios/self-correction-iteration/events.jsonl",
+        "transcript": "codex/scenarios/self-correction-iteration/transcript.jsonl",
+        "manifest": "codex/scenarios/self-correction-iteration/manifest.json",
+        "golden": "codex/scenarios/self-correction-iteration/transcript.jsonl.replay.json.golden"
+      },
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "pass_rate": "4/4 phases passed",
+        "agent_cli_version": "0.130.0",
+        "daemon_version": "0.4.7+1208720",
+        "confidence": 0.9,
+        "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready\napplicable: yes"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "self-correction-iteration",
+          "agent": "codex",
+          "assessed_at": "2026-05-23T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.9,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\napplicable: yes\n\n## Reasoning\n\n`self-correction-iteration` (scenario-meanings.md): the defining behavior is an agent that runs a tool, sees the result FAIL, interprets the failure, and retries with corrected input — multiple tool-call/result cycles WITHIN one turn — with the session held continuously in `working` and NO flicker to `ready` or `waiting` between attempts. The **Primitive exercised is `tool_calls` + iterative retry within a single turn**; the load-bearing irrlicht primitive is the classifier holding `working` across multi-step retry chains that span multiple tool-call/result pairs without an intervening turn boundary. Explicitly *Not to be confused with* `long-agentic-session-stress` (many separate user-driven turns) or `turn-aborted-by-error` (agent gives up and the provider error closes the turn).\n\n**agent_supports: yes.** Codex CLI 0.130.0 drives shell work through its exec/`function_call` tool and iterates autonomously within a single turn: when a command exits non-zero it reads the error and issues a corrective command before the turn ends. A prompt of the form \"run `cat /nonexistent`; if it fails, instead run `ls` and report\" deterministically produces a failing `function_call` immediately followed by a corrective `function_call` in the same turn, exactly the spec's retry-within-one-turn shape. `capabilities.json` records `tool_calls: true`.\n\n**daemon_capability: full; driver_capability: ready.** The codex parser (parser.go) models tool calls as paired `function_call` (open) / `function_call_output` (close) events. A FAILING command still emits a `function_call_output` (carrying the non-zero/error result) which CLOSES the open call — so `HasOpenToolCall` clears and the classifier never treats a tool failure as a `waiting` gate. The turn settles to `ready` only at the canonical `task_complete` → `turn_done` signal (parser.go lines 155-170), which the codex parser maps explicitly to suppress the assistant_message working→ready→working flicker. Net observable: one `ready → working` at the user prompt, a single contiguous `working` span across the errored function_call_output AND the corrective function_call/output, then one `working → ready` at task_complete. This is precisely the spec's three Expected bullets, and the no-mid-turn-flip invariant is exactly what the codex turn_done/open-call logic guarantees.\n\nThis cell is observationally DISTINCT from the already-covered `codex × auto-executed-tool-call`: that cell captures a single happy-path tool call (ready→working→ready, one open/close), whereas this cell asserts the classifier's continuity across an ERRORED tool result followed by a recovery tool within the same working span — the multi-cycle no-flicker invariant the happy path can't exercise.\n\n## Conclusion\n\nApplicable: yes. codex naturally self-corrects within one turn, and the daemon observes the full arc as a single contiguous `working` span (errored function_call_output never flips to waiting/ready; task_complete settles to ready). Recipe: an interactive prompt that induces a failing-then-corrected exec sequence in one turn (e.g. `cat` a nonexistent file then fall back to `ls`), wait_turn, trailing sleep. Spec asserts user-observable state/topology only (ready→working, intermediate no-flicker working span, working→ready) — no tool error text.",
+          "caveats": [
+            "Assert user-observable state/topology only — do NOT assert the specific exec tool error text, which is model/OS-dependent and not stable across re-records.",
+            "Distinct from the committed `codex × auto-executed-tool-call` cell: that captures a single happy-path open/close tool call; this cell exercises the no-flicker continuity across an errored result plus a recovery tool within the same working span."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": ".claude/skills/ir:onboard-agent/scenario-meanings.md",
+              "note": "self-correction-iteration: agent fails a tool call, retries with corrected input within one turn; state stays working across retries with no flicker; primitive = tool_calls + iterative retry; distinct from long-agentic-session-stress and turn-aborted-by-error"
+            },
+            {
+              "kind": "file",
+              "ref": ".specs/agent-scenarios.md",
+              "note": "Feature: Self-correction iteration — Expected: ready→working; state stays working across all retry cycles (no flicker to ready/waiting); working→ready after final attempt"
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/codex/capabilities.json",
+              "note": "tool_calls: true — codex iterates tool calls autonomously within a turn"
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/codex/parser.go",
+              "note": "function_call/function_call_output modeled as paired open/close; a failing command still emits function_call_output which clears HasOpenToolCall (no waiting); task_complete→turn_done is the only ready settle, suppressing mid-turn flicker"
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/codex/scenarios/auto-executed-tool-call/assessment.json",
+              "note": "neighbouring cell captures the single happy-path tool call; this cell adds the errored-then-recovered multi-cycle continuity the happy path can't exercise"
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": true,
+          "preconditions": [
+            "codex CLI on PATH and authenticated (~/.codex/config.toml or OPENAI_API_KEY)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+          ],
+          "setup": [
+            "The interactive driver launches `codex --no-alt-screen` in a fresh per-run cwd under \u003cstaging\u003e/cwd/, accepts the trust dialog, and waits for the TUI banner + MCP boot before sending the prompt",
+            "No auto-mode step is needed: codex has no permission gate (capabilities.json permission_hooks:false), so its shell/exec tool runs autonomously inside codex's sandbox — unlike the claudecode recipe, which must enable auto mode to keep a Bash call from tripping a gate. Both the failing and the corrective command auto-execute, so neither triggers a waiting transition.",
+            "Each send bumps the expected-turn counter; wait_turn blocks until a new event_msg/task_complete line appears in the rollout, so the trailing sleep never races a still-running turn"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Run the shell command 'cat /nonexistent_file_xyz.txt' using your shell tool. If it fails, do NOT retry that command — instead run 'ls' in the same turn and report the file names it printed. Then reply 'done'."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl shows exactly one ready→working transition for the rollout session_id when the prompt is sent",
+            "transcript.jsonl contains at least two function_call / function_call_output pairs inside the working span — the failing cat (its function_call_output carries a non-zero/error result) and the corrective ls",
+            "events.jsonl contains NO state_transition to ready between the failing function_call_output and the corrective function_call (a failing tool result still closes the open call; the session stays working)",
+            "events.jsonl contains NO state_transition to waiting at any point during the working span (codex auto-executes both commands; no permission gate)",
+            "events.jsonl shows exactly one working→ready transition at task_complete (turn end)",
+            "final session state is ready",
+            "Do not assert the exec tool's error text — it is model/OS-dependent; assert only the state topology and the tool-call pairing"
+          ],
+          "settings": {},
+          "timeout_seconds": 240
+        }
+      }
+    },
+    "opencode": {
+      "recording_dir": "opencode/scenarios/self-correction-iteration",
+      "artifacts": {
+        "events": "opencode/scenarios/self-correction-iteration/events.jsonl",
+        "transcript": "opencode/scenarios/self-correction-iteration/transcript.jsonl",
+        "manifest": "opencode/scenarios/self-correction-iteration/manifest.json",
+        "golden": "opencode/scenarios/self-correction-iteration/transcript.jsonl.replay.json.golden"
+      },
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "pass_rate": "4/4 phases passed",
+        "agent_cli_version": "unknown",
+        "daemon_version": "0.4.7+d74b151",
+        "confidence": 0.8,
+        "notes": "agent_supports: yes\ndaemon_capability: full\ndriver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "self-correction-iteration",
+          "agent": "opencode",
+          "assessed_at": "2026-05-26T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.8,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Reasoning\n\nself-correction-iteration asserts that the agent iterates WITHIN a single turn — it tries something with a tool, observes a problem, and fixes it — so the working span contains MULTIPLE tool-call/result pairs before settling. The user-observable signal is that state stays continuously `working` across all the retry cycles (no flicker to `ready` or `waiting` between attempts) and the turn finally settles to `ready`. This locks down the classifier's terminal-stop_reason gate: intermediate tool_use/tool_result pairs do NOT close the turn. Distinct from long-agentic-session-stress (many separate user-driven turns) and turn-aborted-by-error (the agent gives up and a provider error closes the turn).\n\nOpenCode supports tool calls (capabilities.json tool_calls:true). In headless default (`opencode run`) tools auto-execute inside OpenCode's own sandbox with no interactive permission prompt, so a multi-tool single-turn run produces exactly the ungated, contiguous ready→working→ready arc with no waiting. Session state lives in OpenCode's SQLite store (~/.local/share/opencode/opencode.db); the daemon's ProcessOwnedStore source polls the UUID-keyed ses_… session.\n\nEach tool call lands in the part table as a `tool` part progressing pending → running → completed/error; the opencode parser maps it to function_call (pending/running) and function_call_output (completed/error) events (parser.go parseToolPart), and the turn settles working→ready only when the parser sees a step-finish part with reason=\"stop\" → turn_done (parser.go parseStepFinish). Crucially, a tool-calls step-finish reason keeps the session in working (mid-turn pause), so a sequence of write→read→edit tool parts inside one turn is one sustained working span — exactly the iteration this scenario asserts. The phase DSL has no tool-event form, so the multiple tool calls are asserted via the single sustained working span plus the no-waiting invariant, and verified out-of-band in the SQLite store (≥2 tool parts before turn_done).\n\nMODEL note: opencode's default model is the local LM Studio model lmstudio/gemma-4-e2b-it-uncensored (set in ~/.config/opencode/opencode.json). The driver (drive-opencode-interactive.sh) runs blocking `opencode run` with NO --model flag, so it uses that default. gemma is a small (2B) model that is slow (~30–45s/turn) and may be unreliable at emitting MULTIPLE tool calls in one turn; the recipe uses a crisp create-a-bug-then-read-back-and-fix prompt to force write→read→edit so several tool calls land in one working span. If gemma simply will not iterate / will not emit the tool calls this becomes an infra/MODEL limitation, not an opencode/daemon incapability (capabilities.json tool_calls:true).\n\nThe driver runs a blocking `opencode run` per turn (not a held-open REPL); one send + wait_turn (a no-op) + a ≥4s trailing sleep is within its grammar, so driver_capability: ready. A single send carries the whole multi-tool turn, so the contiguous working span is captured in one `opencode run` subprocess lifetime.",
+          "caveats": [
+            "OpenCode does not expose CLI-assignable session IDs; the driver discovers the ses_… session id by querying SQLite for the most recent row keyed on directory after the first `opencode run` returns.",
+            "The local gemma 2B model is slow (~30–45s per turn) and may be unreliable at emitting MULTIPLE tool calls in one turn; the cell records normally if it iterates (≥2 tool parts), otherwise the limitation is the model, not opencode (capabilities.json tool_calls:true).",
+            "The phase DSL has no tool-event form, so the iteration is asserted via the single sustained working span + the no-waiting invariant; the ≥2 tool parts are verified in the SQLite store / transcript out-of-band at record time."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/opencode/parser.go",
+              "note": "parseToolPart: tool part status pending/running → function_call (ToolUses), completed/error → function_call_output (ToolResultIDs); parseStepFinish: reason=\"stop\" → turn_done settles working→ready, while a tool-calls step-finish reason keeps the session working — so a multi-tool single-turn run is one contiguous working span."
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/opencode/capabilities.json",
+              "note": "tool_calls:true; opencode can invoke tools. Headless default `opencode run` auto-executes tools with no interactive gate, so the iteration never enters waiting."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/opencode/agent.go",
+              "note": "Source variant ProcessOwnedStore (SQLite at ~/.local/share/opencode/opencode.db) with ExactName{Name:\"opencode\"}; daemon polls the session table for the ses_… session."
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/opencode/scenarios/auto-executed-tool-call/expected.jsonl",
+              "note": "Sibling committed opencode spec proving the ProcessOwnedStore ready→working→ready arc with a tool call inside the working span, session_birth anchored UNPINNED to start and the no-waiting invariant — the exact shape this cell extends with MULTIPLE tool calls (the iteration) inside the single working span."
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": true,
+          "preconditions": [
+            "opencode CLI on PATH and authenticated/configured (the default model is set in ~/.config/opencode/opencode.json; auth is out-of-band)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+            "the configured default model must be capable of emitting MULTIPLE tool calls in one turn — if the model will not iterate (write then read then edit) this cell is unrecordable for a MODEL reason (opencode capabilities.json tool_calls:true), not an opencode/daemon incapability"
+          ],
+          "setup": [
+            "The driver (drive-opencode-interactive.sh) launches a blocking `opencode run -- \"\u003cprompt\u003e\"` in a fresh per-run cwd under \u003cstaging\u003e/cwd/ with NO --model flag, so it uses the config default; the whole multi-tool self-correction turn rides ONE `opencode run` subprocess that exits when the turn completes",
+            "No auto-mode / permission step is needed: in headless default `opencode run` auto-executes tools inside opencode's own sandbox with no interactive gate, so every tool call in the iteration runs autonomously and the session never enters waiting — unlike the claudecode recipe, which must enable auto mode to keep a Bash call from tripping a gate",
+            "Session state lives in opencode's SQLite store (~/.local/share/opencode/opencode.db, ProcessOwnedStore), keyed on the UUID ses_… session; the daemon's ProcessOwnedStore source polls the session table. Each tool call lands in the part table as a `tool` part (status pending→running→completed/error) that the parser maps to function_call / function_call_output (parser.go parseToolPart). A tool-calls step-finish reason keeps the session working; only step-finish reason=stop → turn_done settles working→ready — so the write→read→edit sequence is one contiguous working span (parser.go parseStepFinish)",
+            "wait_turn is a no-op because `opencode run` already blocks until the turn ends; the ≥4s trailing sleep gives the daemon's poller one full tick to observe the working→ready settle before the run process exits",
+            "The send is a crisp create-a-deliberate-bug-then-read-it-back-and-fix prompt so the small/slow local default model reliably emits MULTIPLE auto-executed tool calls (write → read → corrective edit/write) inside ONE sustained working span before replying done — this is the iteration the cell captures",
+            "WHY one send, not multiple: the whole self-correction is a SINGLE turn (try → observe problem → fix), so it must ride one `opencode run` to be one contiguous working span; splitting it into back-to-back sends would create separate working→ready arcs (and the known opencode poller nuance coalesces rapid same-session arcs anyway). Verify ≥2 tool parts landed before turn_done in the SQLite store at record time"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Do this all in ONE turn, using your tools, and do not ask me anything: (1) use your write tool to create a file calc.py containing exactly `def add(a, b):\\n    return a - b` — note the body deliberately SUBTRACTS, which is a bug; (2) use your read tool to read calc.py back; (3) notice add() should ADD, and use your edit/write tool to fix the body to `return a + b`. After all three steps reply with exactly: done"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl contains the ses_… session born ready within ~2s of agent launch (a transient proc-\u003cPID\u003e presession may also appear; the turn arc and pid_discovered land on the UUID-keyed ses_… session)",
+            "events.jsonl contains a pid_discovered event bound to the ses_… session_id",
+            "events.jsonl contains a state_transition→working on the ses_… session_id when the iteration prompt is sent, sustained across the write → read → corrective-edit tool calls (one contiguous working span)",
+            "the opencode SQLite store / transcript.jsonl contains at least TWO tool parts (function_call / function_call_output) inside the working span — the buggy write, the read-back, and the corrective edit (the auto-executed, ungated tool calls; opencode has no interactive gate in headless default)",
+            "events.jsonl contains NO state_transition to ready between the buggy write and the corrective edit — the session stays continuously working across the retry cycle (a tool-calls step-finish reason does not close the turn)",
+            "events.jsonl contains NO state_transition to waiting for the ses_… session at any point (every tool call auto-executes; no permission window)",
+            "events.jsonl contains a state_transition→ready on the same ses_… session_id once the corrective edit resolves and the turn completes (step-finish reason=stop → turn_done)",
+            "final session state is ready"
+          ],
+          "settings": {},
+          "timeout_seconds": 300
+        }
+      }
+    },
+    "pi": {
+      "recording_dir": "pi/scenarios/self-correction-iteration",
+      "artifacts": {
+        "events": "pi/scenarios/self-correction-iteration/events.jsonl",
+        "transcript": "pi/scenarios/self-correction-iteration/transcript.jsonl",
+        "manifest": "pi/scenarios/self-correction-iteration/manifest.json",
+        "golden": "pi/scenarios/self-correction-iteration/transcript.jsonl.replay.json.golden"
+      },
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "pass_rate": "5/5 phases passed",
+        "agent_cli_version": "0.70.0",
+        "daemon_version": "0.4.7+9aa9a2e",
+        "confidence": 0.78,
+        "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "self-correction-iteration",
+          "agent": "pi",
+          "assessed_at": "2026-05-25T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.78,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\n`self-correction-iteration` (scenario-meanings.md): within ONE turn the agent runs a tool call that fails, interprets the failure, and retries with corrected input — multiple tool-call/result cycles — and the whole arc must show a single contiguous `working` span with no flicker to `ready` or `waiting` between attempts, settling to `ready` only at the single turn end. Primitive `tool_calls` + iterative retry within a single turn; requires `headless_mode` and `tool_calls`.\n\n**agent_supports: yes.** Pi invokes its shell/read tool autonomously and runs it without an approval gate. A prompt that runs a failing shell command (`cat` of a nonexistent file) and then a corrective command (`ls`) in the same turn produces a real failing toolResult followed by a successful one, all before the turn's final assistant message — exactly the self-correction cycle the scenario names.\n\n**daemon_capability: full; driver_capability: ready.** The pi parser translates `toolCall` / `toolResult` events (including a FAILING toolResult) into the tailer's tool-use / tool-result records WITHOUT closing the turn: for pi, a turn ends only when the final assistant message carries `stopReason=stop`. So within one turn pi may make several tool calls / assistant steps and keep working — only `stopReason=stop` ends the turn. The whole multi-step self-correction is therefore a SINGLE `working → ready` arc: exactly one terminal `working → ready` settle, no intermediate `ready` flap, and (pi has no permission hook) no `waiting` transition. Confirmed against the committed pi tool-call fixtures (auto-executed-tool-call, full-lifecycle-toolcall, same primitive): the transcript carries toolCall + toolResult events and the events arc is `ready → working → ready` with zero `waiting` transitions; the parser sustains `working` across intermediate tool-result lines.\n\n**Confidence 0.78** (not higher): the failing-then-recovery shape depends on the model actually retrying within one turn rather than asking the user or ending the turn early; the recipe pins the behavior with an explicit failing-then-corrective prompt, but exact tool sequencing is model-dependent. The state topology (one sustained working span, no waiting, single process_exited) is robust regardless of how many intermediate tool cycles the model emits.\n\n## Recipe-shape note (SCRIPT / interactive)\n\nRecorded with the INTERACTIVE pi driver (drive-pi-interactive.sh, a tmux REPL) rather than headless `pi --print`. WHY: headless `pi --print` exits the instant it emits the final reply, so the daemon's scanner can miss the terminal working→ready settle before process_exited (concern C6). Keeping pi alive in the REPL across one send + wait_turn lets the daemon observe the settle cleanly; the single tmux teardown then yields one clean process_exited. The prompt forces a failing shell call followed by a corrective call inside the same working span, so a real failing toolResult sits between attempts and exercises the parser's terminal-stop_reason gate. C7 / session-identity: the live REPL emits a transient proc-\u003cPID\u003e pre-session born ready at launch (it bridges the gap until the UUID-keyed rollout transcript appears), so session_birth — which only asserts 'a session appears in ready within 2s of launch' — legitimately matches that pre-session. The turn arc, pid_bind and teardown all pin to the rollout session via the first-working anchor + same_session_as, so the pre-session can never satisfy them. The phase DSL has no tool-event form, so the retry cycle is asserted via the single sustained working span plus the transcript's toolCall/toolResult pairs, not a dedicated phase.",
+          "caveats": [
+            "The multi-step self-correction is a SINGLE working→ready arc: within one turn pi may make several tool calls / assistant steps and keep working — only stopReason=stop on the final assistant message ends the turn. The spec asserts exactly one turn_end ready, no intermediate ready, no waiting.",
+            "Pi has no permission hook, so a failing tool result never produces a waiting transition (unlike a claudecode variant that could gate via a PostToolUse hook); the pi arc is ready→working→ready and the spec asserts a no-waiting invariant.",
+            "Pi cannot accept a pre-assigned UUID — it generates one itself. The interactive driver discovers the UUID from the session header on line 1 of the freshly-created rollout transcript.",
+            "Because the live REPL bridges with a transient proc-\u003cPID\u003e pre-session, the turn phase anchors to recording start with NO session pin so the matcher binds the FIRST working (necessarily the rollout session; the pre-session never goes working); every later phase pins to it via same_session_as.",
+            "Confidence 0.78: whether the model retries within one turn (vs. asking the user or ending early) is model-dependent; the explicit failing-then-corrective prompt pins it, but the exact intermediate tool sequence may vary between runs — only the state topology is asserted."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/pi/agent.go",
+              "note": "Identity.Name=pi, Source variant FilesUnderRoot under ~/.pi/agent/sessions/, ExactName{Name: \"pi\"} process matcher."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/pi/parser.go",
+              "note": "toolCall/toolResult → tool-use/tool-result; intermediate (incl. failing) toolResult does NOT close the turn; only the final assistant event with stopReason=stop maps to turn_done (working→ready). No permission gate → no waiting."
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/pi/scenarios/auto-executed-tool-call/transcript.jsonl",
+              "note": "Sibling cell (tool_calls primitive): carries toolCall + toolResult events; events arc is ready→working→ready with no waiting transition; parser sustains working across tool-result lines."
+            },
+            {
+              "kind": "file",
+              "ref": ".claude/skills/ir:onboard-agent/scenario-meanings.md",
+              "note": "self-correction-iteration: state stays continuously working across all retry cycles within one turn; no flicker to ready or waiting between attempts; final state ready."
+            },
+            {
+              "kind": "file",
+              "ref": ".claude/skills/ir:onboard-agent/scripts/drive-pi-interactive.sh",
+              "note": "Interactive tmux REPL driver; supports send / wait_turn / interrupt / sleep, keeps the rollout alive so the daemon observes the working→ready settle before teardown."
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": true,
+          "preconditions": [
+            "pi CLI on PATH and authenticated (pi runs against its configured model out-of-band)",
+            "tmux available — the interactive driver runs pi in a tmux REPL so it stays alive across the whole self-correction turn",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+          ],
+          "setup": [
+            "The interactive driver (drive-pi-interactive.sh) launches pi in a fresh per-run cwd inside a tmux session, waits for the REPL prompt, then sends the prompt",
+            "pi writes one JSONL rollout file per session under ~/.pi/agent/sessions/\u003ccwd-slug\u003e/ on launch (FilesUnderRoot, non-lazy); the driver resolves that file and extracts the UUID from line 1",
+            "No auto-mode/permission step is needed: pi has no permission gate (toolCall/toolResult parse straight through), so its shell tool runs autonomously — both the failing command and the corrective command auto-execute, so neither triggers a waiting transition",
+            "WHY interactive, not headless: headless `pi --print` exits the instant it emits the final reply, so the daemon can miss the terminal working→ready settle before process_exited (concern C6). Keeping pi alive in the REPL across one send + wait_turn lets the daemon observe the settle cleanly, and the single tmux teardown then yields one clean process_exited",
+            "The send bumps the expected-turn counter; wait_turn blocks until the rollout shows a completed assistant turn, so the trailing sleep never races a still-running retry round-trip"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Run the shell command 'cat /nonexistent_file_xyz.txt' using your bash tool. If it fails, do NOT retry that command — instead run 'ls' in the same turn and report the file names it printed. Then reply with exactly: done"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a transcript_new for the rollout session born ready within ~2s of REPL launch (a transient proc-\u003cPID\u003e pre-session may also appear; the turn arc, pid_discovered and teardown land on the UUID-keyed rollout session)",
+            "events.jsonl contains a pid_discovered event bound to the rollout session_id",
+            "events.jsonl shows exactly one ready→working transition for the rollout session_id when the prompt is sent",
+            "transcript.jsonl contains at least two toolCall / toolResult pairs inside the single working span — the failing cat (its toolResult carries an error result) and the corrective ls (the auto-executed, ungated retry — pi has no permission hook)",
+            "events.jsonl contains NO state_transition to ready between the failing toolResult and the corrective toolCall — the session stays continuously working across the retry (the parser's terminal-stop_reason gate: intermediate tool pairs do not close the turn)",
+            "events.jsonl contains NO state_transition to waiting at any point during the working span (both commands auto-execute; pi never gates)",
+            "events.jsonl shows exactly one working→ready transition at the single turn end (pi's stopReason=stop maps to turn_done)",
+            "the rollout session's final live state is ready before the driver tears the REPL down",
+            "events.jsonl contains exactly one process_exited on the rollout session at REPL teardown",
+            "Do not assert the bash tool's error text — it is model/OS-dependent; assert only the state topology and the tool-call pairing"
+          ],
+          "settings": {},
+          "timeout_seconds": 300
+        }
+      }
+    }
+  }
+}

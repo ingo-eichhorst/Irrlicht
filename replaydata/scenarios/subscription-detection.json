@@ -1,0 +1,142 @@
+{
+  "id": "5.6",
+  "name": "subscription-detection",
+  "section": "Metrics",
+  "feature": "Subscription / billing-model detection",
+  "agents": {
+    "aider": {
+      "artifacts": {},
+      "metadata": {
+        "agent_supports": "no",
+        "daemon_capability": "n/a",
+        "driver_capability": "ready",
+        "confidence": 0.9,
+        "notes": "agent_supports: no\ndaemon_capability: n/a\ndriver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "subscription-detection",
+          "agent": "aider",
+          "assessed_at": "2026-05-25T00:00:00Z",
+          "agent_supports": "no",
+          "daemon_capability": "n/a",
+          "driver_capability": "ready",
+          "confidence": 0.9,
+          "body": "## Verdict\n\nagent_supports: no\ndaemon_capability: n/a\ndriver_capability: ready\n\n## Reasoning\n\nSubscription detection asks whether the agent surfaces a billing-model signal — a subscription plan vs. an API-key/credits path. The two adapters that support it do so because the agent emits the data: Codex carries `plan_type` / `credits` in its `rate_limits` map (`extractCodexRateLimits` in core/adapters/inbound/agents/codex/parser.go), and Claude Code's statusline hook includes a `rate_limits` block for subscription users (statuslineToSnapshot in core/adapters/inbound/agents/claudecode/statusline.go).\n\nAider has no such concept. It is a local CLI that talks to a provider using the user's own API key (or a local model); there is no Aider-managed subscription tier, no plan-type field, and no credits ledger in its output. The aider adapter accordingly has zero rate-limit / plan-type / credits / subscription extraction — `grep -ri 'rate_limit|plan_type|quota|credits|subscription' core/adapters/inbound/agents/aider/` returns nothing.\n\nThe **Primitive exercised** (subscription / billing-model detection) maps to the `cost_tracking` key in replaydata/agents/aider/capabilities.json, which is `false` — Aider's BYO-key model has no billing/subscription state to surface. This is the sibling of `quota-burndown`.\n\n## Two-axis derivation (#476)\n\nBecause `agent_supports: no`, `daemon_capability` is `n/a` per the matrix convention: there is no signal in the transcript and no parser code path that could ever observe one, so there is no observation question to answer.\n\n`driver_capability` is `ready` (frozen): the cell is authored as an assessment only, so the absence of any required driver step is not a gap — the interactive driver is not exercised. The route is `frozen` because the agent lacks the feature, not because of any daemon or driver limitation.\n\n## What irrlicht does NOT see (and why that's OK)\n\nEverything billing-related. The feature does not exist in the agent under test — Aider's BYO-key model has no subscription state to report — so the absence of observation is correct, not a gap.",
+          "caveats": [
+            "agent_supports=no, so this cell is authored as an assessment only — no recording, expected.jsonl, or transcript.jsonl.",
+            "A future Aider release that introduced a hosted/subscription mode emitting plan data would change this verdict."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/aider/",
+              "note": "No rate-limit / plan-type / credits / subscription extraction exists in the aider adapter — nothing to parse a billing-model signal from."
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/aider/capabilities.json",
+              "note": "cost_tracking=false — the Primitive exercised (billing-model detection) capability key is absent for aider; no subscription state exists to observe."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/codex/parser.go",
+              "note": "Contrast: Codex extracts plan_type/credits from rate_limits — the signal subscription-detection asserts, absent in Aider."
+            }
+          ]
+        }
+      }
+    },
+    "claudecode": {
+      "artifacts": {},
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "confidence": 0.9,
+        "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "subscription-detection",
+          "agent": "claudecode",
+          "assessed_at": "2026-05-23T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.9,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nClaude Code emits subscription quota data via the statusline hook (POST /api/v1/hooks/claudecode/statusline). The key billing-model signal is structural: **subscription users get a `rate_limits` block in the hook payload; API-key, Bedrock, and Vertex users do not**.\n\nThe statusline handler in `core/adapters/inbound/agents/claudecode/statusline.go` converts the hook payload to a `session.RateLimitSnapshot` via `statuslineToSnapshot()`. The function returns nil when `rate_limits` is absent (API-key path) or when both `five_hour` and `seven_day` windows are nil. This nil/non-nil distinction is the irrlicht-observable subscription signal for Claude Code — PlanType is not populated from the statusline (the hook payload carries no plan_type field).\n\nFor the subscription variant of this scenario, the recording needs a Pro/Max session. The developer's normal session qualifies. A single turn is sufficient to trigger the statusline hook and produce a non-nil snapshot.\n\nFor the API-key variant, the recording requires a session backed by an API key (not a Pro subscription), so `rate_limits` is absent from the statusline payload. This requires a dedicated test key distinct from the developer's Pro session and is deferred to a separate fixture: `subscription-detection-apikey`.\n\n## What irrlicht does NOT see (and why that's OK)\n\nClaude Code's statusline does not include a `plan_type` string (pro, max, team). The only plan-type signal available is the presence of the `rate_limits` block itself, which distinguishes subscription from API-key. Finer-grained plan type (pro vs max) is not surfaced via the statusline hook today. The scenario therefore validates presence/absence of RateLimitSnapshot, not the value of PlanType.",
+          "caveats": [
+            "Recording the subscription variant requires the developer's normal Claude Code Pro/Max session — no special key needed.",
+            "The API-key variant (RateLimitSnapshot nil) is deferred to a separate scenario ID (subscription-detection-apikey) because it requires a different Claude Code session backed by an API key.",
+            "The statusline hook fires asynchronously on a timer in the Claude Code CLI; the recording script must keep the session alive long enough for at least one statusline tick to arrive after the turn completes. Typically one turn of moderate length is sufficient."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/claudecode/statusline.go:114-136",
+              "note": "statuslineToSnapshot() returns nil when rate_limits is absent or both windows are nil — the nil/non-nil distinction is the subscription signal."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/claudecode/statusline.go:19",
+              "note": "Comment explicitly states: 'API-key users, Bedrock, and Vertex don't get the rate_limits block'."
+            },
+            {
+              "kind": "spec",
+              "ref": ".specs/agent-scenarios.md → Feature: Subscription detection",
+              "note": "Subscription variant: RateLimitSnapshot non-nil with at least one Window entry."
+            }
+          ]
+        }
+      }
+    },
+    "codex": {
+      "artifacts": {},
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "confidence": 0.9,
+        "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "subscription-detection",
+          "agent": "codex",
+          "assessed_at": "2026-05-23T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.9,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nCodex embeds billing-model information directly in the JSONL transcript. Every `event_msg` with `type=\"token_count\"` carries a `rate_limits` map containing:\n- `plan_type` — non-empty string (e.g. \"plus\") for subscription sessions; empty or absent for API-key path.\n- `credits` — a nested map present only on the credits/API-key path, with fields `has_credits`, `unlimited`, `remaining`, and `total`.\n\nThe `extractCodexRateLimits()` function in `core/adapters/inbound/agents/codex/parser.go` reads these fields and populates `tailer.RateLimitSnapshot.PlanType` and `.Credits`. This is later projected to `session.RateLimitSnapshot` at the metrics adapter boundary.\n\nFor the subscription variant: a Codex Plus session emits `plan_type=\"plus\"` on each token_count event. `RateLimitSnapshot.PlanType` is non-empty and `Credits` is nil.\nFor the API-key/credits variant: `plan_type` is absent; `credits.has_credits=true` with remaining/total values. `RateLimitSnapshot.PlanType` is empty and `Credits` is non-nil.\n\nBoth variants are observable from the JSONL transcript alone — no out-of-band hook needed. This makes Codex the cleanest adapter for subscription detection testing.\n\nBugs #361 (split token_count events producing $0 cost) were caught in token-accounting; this scenario specifically validates that PlanType/Credits routing is correct, not just that token math works.",
+          "caveats": [
+            "The subscription variant (plan_type=plus) requires a Codex session backed by an OpenAI Plus subscription.",
+            "The API-key/credits variant requires a prepaid credits account. Both variants can be recorded independently; the subscription variant is recorded here first.",
+            "Schema versioning: v1 Codex transcripts (Oct 2025) do not carry plan_type or credits. The fixture must use a v2+ session (Nov 2025 onward) to exercise the subscription detection path. The parser handles both versions but only v2+ has the billing-model fields."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/codex/parser.go:338-389",
+              "note": "extractCodexRateLimits() reads plan_type and credits from the rate_limits map on token_count events. Schema version dispatch at lines 338-349."
+            },
+            {
+              "kind": "file",
+              "ref": "core/domain/session/rate_limit.go:15-38",
+              "note": "RateLimitSnapshot domain type: PlanType string, Credits *CreditsSnapshot, Windows []RateLimitWindow."
+            },
+            {
+              "kind": "spec",
+              "ref": ".specs/agent-scenarios.md → Feature: Subscription detection",
+              "note": "Subscription variant: PlanType non-empty; API-key variant: Credits non-nil, PlanType empty."
+            }
+          ]
+        }
+      }
+    }
+  }
+}

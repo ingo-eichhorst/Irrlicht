@@ -1,0 +1,205 @@
+{
+  "id": "3.2",
+  "name": "background-subagent",
+  "section": "Subagents",
+  "feature": "Background subagent",
+  "description": "Stub entry — claudecode's Task tool blocks the parent until the subagent reports back, so the scenario's defining shape (parent ready while named child continues working) is not producible from the current claude CLI. Forward-looking for any future claudecode background-task primitive or for adapters (OpenCode run_in_background) that already expose the capability.",
+  "requires": [
+    "headless_mode",
+    "subagents"
+  ],
+  "verify": {
+    "final_state": "ready"
+  },
+  "agents": {
+    "claudecode": {
+      "artifacts": {},
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "confidence": 0.85,
+        "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "background-subagent",
+          "agent": "claudecode",
+          "assessed_at": "2026-05-28T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.85,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n(Re-assessment after the `background-subagent` spec in scenario-meanings.md was changed to a UNIFIED RULE. The prior 2026-05-23 verdict was `yes/partial` against the OLD spec; the spec's user-observable signal has since been REVERSED, and the daemon's existing behavior now satisfies it.)\n\n## What changed: the spec, not the code\n\nThe prior assessment's two `partial`-justifying findings are unchanged as facts — the daemon's behavior is byte-for-byte the same. What flipped is the spec they're judged against.\n\nThe OLD spec said the parent goes `ready` early (while the child keeps running) and `SubagentCount(parent)` EXCLUDES the live background child. Against that spec, the daemon's \"hold the parent in working until children finish\" + \"count every linked child\" was the INVERSE of the two distinguishing signals — hence `partial`.\n\nThe CURRENT spec (scenario-meanings.md#background-subagent) is the reverse:\n\n- **Essence:** \"...the parent finishes its own reply, but the child keeps running detached. The session stays `working` while the background child is alive and only returns to `ready` once it drains.\"\n- **User-observable signal:** \"The parent finishes its own reply but the session stays `working` as long as the background child is alive; `SubagentCount(parent)` includes the live child; the session transitions `→ ready` only after the last background child completes.\"\n\nThis is now EXACTLY what the daemon does. The three signals map 1:1 onto shipped code:\n\n1. **Parent stays `working` while a child is alive.** `reevaluateParent` (session_detector_subagent.go:170) returns early — leaving the parent in `working` — whenever `hasActiveChildren(parentID)` (line 152) finds any child still `working`/`waiting` (line 188-190). The parent's own turn being done (`IsAgentDone`) is necessary but not sufficient. This is precisely signal #1.\n2. **`SubagentCount(parent)` INCLUDES the live child.** `ComputeSubagentSummary` (grouped.go:201) sets `Total = inProcess + len(fileChildren)` and increments `Working`/`Waiting`/`Ready` for every `ParentSessionID`-linked child (lines 221-233). A live background child is counted, satisfying signal #2 (\"includes the live child\"). There is intentionally no background-vs-foreground subtraction — which, under the new spec, is correct rather than a gap.\n3. **`→ ready` only after the last background child completes.** Once `hasActiveChildren` returns false, `reevaluateParent` runs `ClassifyState` and transitions the parent (line 192-204), then `cleanupChildren` (line 219). Signal #3 met.\n\nThe regression test `TestSessionDetector_BackgroundSubagentsNotFastForwarded` (session_detector_test.go:1947) codifies signal #1 directly: \"parent must be held in working because the child is still active.\" Under the old spec this test asserted the inverse of the desired behavior; under the new spec it asserts the desired behavior. No code change is required — the daemon already implements the unified rule.\n\n## agent_supports (unchanged: yes)\n\nThe installed binary is `claude 2.1.150`. The prior `strings $(which claude)` scan stands: `run_in_background: true runs the agent asynchronously; you'll be notified when it completes`, the Direct/Task-agent/Teammate execution taxonomy, a real `SendMessageTool` with `to:` addressing, and `Idle teammates can receive messages`. That is a fire-and-forget background dispatch whose call returns immediately while the parent finishes its reply — the `subagents + background dispatch` primitive the spec's Primitive-exercised field names. irrlicht's own `surviveTurnDone(\"SendMessage\")` (tailer_config.go, commit f15ed63, comment \"the sub-agent runs in the background\") corroborates the upstream primitive.\n\n## irrlicht observability (now: yes)\n\nTransport: the claudecode adapter is `FilesUnderRoot{transcriptsDir()}` (agent.go:36) — the fswatcher discovers a background child's `\u003cparent\u003e/subagents/agent-*.jsonl` transcript independently of the parent's turn arc and links it via `ParentSessionID`. `surviveTurnDone(\"SendMessage\")` keeps the dispatch tool tracked across `turn_done` so the parent isn't prematurely classified done. The `SubagentQuietWindow` (30s, session_detector.go:54) guard in `finishOrphanedChildren` deliberately avoids fast-forwarding a child whose transcript is still being written — preserving the held-`working` state for the duration the spec requires. Child drain within `readyTTL` after completion is handled by orphaned-child promotion + `cleanupChildren`.\n\nAll three user-observable signals are produced by the daemon as it ships today. This is an honest `yes`, not an over-credit: each signal is anchored to a named code site, and the regression test pins the parent-held behavior.\n\n## Capability mapping\n\n**Primitive exercised** = `subagents` + background dispatch. The matching key in capabilities.json is `features.subagents: true` (flat `features` map). Already `true` and correct. There is no separate `background_dispatch` key in the file; adding one is a maintainer call, not part of this assessment.\n\n## Matrix drift\n\nThe committed coverage matrix (agent-scenarios-coverage.json) reads `claudecode: yes / partial`. This re-assessment FLIPS the observability half to `yes`. The maintainer should update the coverage row to `yes / yes` and refresh the note (the prior note's \"per-flow validation incomplete\" / \"parent-not-held semantics\" framing belongs to the old spec). The drift is spec-driven, not a behavior change.",
+          "caveats": [
+            "record_blocked=upstream (2026-05-28): blocked on upstream work in BOTH layers — the claudecode CLI has no primitive to background a subagent (the Task tool blocks the parent; no SendMessage-to-background-child), and irrlicht SubagentCount(parent) does not yet distinguish background from foreground children. Recordable once the CLI exposes a background-subagent primitive AND the adapter separates the counts. (per scenarios.json by_adapter.claudecode)",
+            "The installed binary at assessment time is claude 2.1.150; the SendMessage/run_in_background background-dispatch primitive shipped in 2.1.77 (per the surviveTurnDone comment, commit f15ed63). Verdicts assume a 2.1.77+ binary — an older Claude Code without background dispatch would weaken agent_supports.",
+            "The `yes` rests on the daemon's parent-held model, which does not distinguish background from foreground children — it holds the parent working for ANY active linked child. This is correct for the new unified background-subagent rule, but it means foreground-subagent and background-subagent are observed through the same mechanism; the recording must exercise the genuinely-detached (run_in_background / SendMessage) dispatch to be a faithful background-subagent fixture rather than a foreground one.",
+            "Cloud/hosted long-running agents are a separate scenario (cloud-background-agent) and not this surface."
+          ],
+          "sources": [
+            {
+              "kind": "spec",
+              "ref": ".claude/skills/ir:onboard-agent/scenario-meanings.md#background-subagent",
+              "note": "CURRENT (unified-rule) spec. User-observable signal: parent finishes its reply but session stays working while the background child is alive; SubagentCount(parent) INCLUDES the live child; → ready only after the last background child completes. This is the reverse of the prior spec and now matches the daemon."
+            },
+            {
+              "kind": "file",
+              "ref": "core/application/services/session_detector_subagent.go",
+              "note": "reevaluateParent (line 170) holds the parent in working until hasActiveChildren (line 152) returns false (lines 188-190), then transitions via ClassifyState (line 192-204) and cleans up children (line 219). Satisfies new signals #1 and #3 directly."
+            },
+            {
+              "kind": "file",
+              "ref": "core/domain/session/grouped.go",
+              "note": "ComputeSubagentSummary (line 201) sets Total = inProcess + len(fileChildren) and counts every ParentSessionID-linked child including Working ones (lines 221-233). A live background child is INCLUDED — satisfies new signal #2."
+            },
+            {
+              "kind": "file",
+              "ref": "core/application/services/session_detector_test.go",
+              "note": "TestSessionDetector_BackgroundSubagentsNotFastForwarded (line 1947): 'parent must be held in working because the child is still active' — codifies the parent-held behavior that, under the new unified rule, IS the desired signal #1."
+            },
+            {
+              "kind": "file",
+              "ref": "core/application/services/session_detector.go",
+              "note": "SubagentQuietWindow = 30 * time.Second (line 54); used in finishOrphanedChildren to avoid promoting a still-writing background child, preserving the held-working window the spec requires."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/claudecode/agent.go",
+              "note": "Source = FilesUnderRoot{transcriptsDir()} (line 36); the fswatcher discovers a background child's subagents/agent-*.jsonl transcript and links it by ParentSessionID independently of the parent's turn — discovery and linkage observed."
+            },
+            {
+              "kind": "file",
+              "ref": "core/pkg/tailer/tailer_config.go",
+              "note": "surviveTurnDone() includes SendMessage (commit f15ed63, 2026-04-26) with comment 'Claude Code 2.1.77 replaced Agent({resume}) with SendMessage({to})... the sub-agent runs in the background' — confirms the upstream background-dispatch primitive."
+            },
+            {
+              "kind": "file",
+              "ref": "/Users/ingo/.local/bin/claude",
+              "note": "strings scan of claude 2.1.150: 'run_in_background: true runs the agent asynchronously; you'll be notified when it completes', Direct/Task-agent/Teammate execution taxonomy, SendMessageTool with to: addressing, 'Idle teammates can receive messages'. Confirms the fire-and-forget background-subagent primitive (agent_supports: yes)."
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/claudecode/capabilities.json",
+              "note": "features.subagents: true — the capability key for the 'subagents + background dispatch' primitive; flat features map, already correct."
+            }
+          ],
+          "record_blocked": "upstream"
+        },
+        "recipe": {
+          "applicable": false,
+          "reason": "Task tool blocks the parent; no SendMessage-to-background-child primitive in current claudecode CLI. irrlicht's SubagentCount(parent) also does not currently distinguish background from foreground children — both layers need work upstream before this scenario is recordable."
+        }
+      }
+    },
+    "opencode": {
+      "artifacts": {},
+      "metadata": {
+        "agent_supports": "unknown",
+        "daemon_capability": "n/a",
+        "driver_capability": "n/a",
+        "confidence": 0.8,
+        "notes": "agent_supports: unknown\ndaemon_capability: n/a; driver_capability: n/a"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "background-subagent",
+          "agent": "opencode",
+          "assessed_at": "2026-05-26T00:00:00Z",
+          "agent_supports": "unknown",
+          "daemon_capability": "n/a",
+          "driver_capability": "n/a",
+          "confidence": 0.8,
+          "body": "## Verdict\n\nagent_supports: unknown\ndaemon_capability: n/a; driver_capability: n/a\n\nFresh-column reassessment. STOP at Stage 1 (applicable:false) — no recipe, no recording.\n\n## What this scenario requires\n\nbackground-subagent's defining shape (scenario-meanings.md) is a subagent dispatched to run DETACHED in the BACKGROUND (fire-and-forget) while the parent turn continues: the parent finishes its own reply but the session stays `working` as long as the live background child is alive, `SubagentCount(parent)` INCLUDES that live child, and the parent transitions `→ ready` only after the last background child drains. The distinguishing primitive is an ASYNCHRONOUS / fire-and-forget dispatch whose call returns immediately while a child keeps running concurrently (claudecode's `run_in_background` / `SendMessage({to})`).\n\n## agent_supports: unknown\n\nOpenCode DOES ship a first-class subagent primitive — the `task` tool — and the `opencode/foreground-subagent` cell is recorded `yes/full/ready` against it. But those are FOREGROUND task-tool children the parent AWAITS: the parent's turn stays open across each child's lifetime and the parent's `step-finish reason=stop` only fires after every `task` part has flipped to `completed` (see the foreground-subagent assessment). That is the foreground arc — the parent does NOT finish its own reply early and continue while a detached child runs.\n\nI found no documented fire-and-forget BACKGROUND / async subagent dispatch in OpenCode: no `run_in_background`-style task dispatch that returns immediately while the child runs detached, and no SendMessage-to-background-child / async-teammate primitive analogous to claudecode 2.1.77+. OpenCode's `task` tool is synchronous-await by construction. Whether OpenCode exposes (or will expose) a genuinely detached background-subagent dispatch is undetermined from the available docs/binary surface — hence `unknown` rather than `no`. The foreground case is already covered by opencode/foreground-subagent.\n\n## Why the route is STOP even if a primitive existed\n\nEven granting a hypothetical background-dispatch primitive, the cell would not be recordable with the current tooling: drive-opencode-interactive.sh drives BLOCKING headless `opencode run` subprocesses (handles only send|wait_turn|sleep) and steps run strictly SEQUENTIALLY — each `send` shells out to `opencode run` and waits for the turn to fully complete before the next step. There is no async/queue/observe-mid-turn step, so the driver cannot drive or observe a concurrently-running background child WHILE the parent turn is still in flight. A headless recording would only ever capture back-to-back COMPLETED turns, never the parent-held-while-child-alive window the spec asserts.\n\nPer the #476 routing in implement/SKILL.md precondition 2, `agent_supports ∈ {unknown}` → STOP → applicable:false. by_adapter.opencode is set applicable:false with a scope_note; no recipe, no recording. (The driver gap is noted as a secondary blocker but the primary frozen reason is agent_supports=unknown.)",
+          "caveats": [
+            "OpenCode's `task` tool IS a real subagent primitive (foreground-subagent is recorded yes/full/ready); the unknown verdict is specific to the BACKGROUND/detached/async variant this scenario requires, not to subagents generally.",
+            "If a future OpenCode release ships a fire-and-forget background-dispatch primitive (run_in_background-style task), reassess agent_supports — observability would likely be `full` (opencode is the lone ProcessOwnedStore adapter and the daemon reads parent/child state from SQLite, the same store-read path foreground-subagent proves), but the headless driver would still need a live-REPL / async-observe primitive to record it.",
+            "background-subagent (detached agent session with a session_id) is distinct from background-process (a shell process via run_in_background bash) — opencode/background-process is separately assessed no/incapable."
+          ],
+          "sources": [
+            {
+              "kind": "spec",
+              "ref": ".claude/skills/ir:onboard-agent/scenario-meanings.md#background-subagent",
+              "note": "Defining shape: subagent runs DETACHED in the background while the parent continues; parent stays working until the last background child drains; SubagentCount(parent) includes the live child. Distinguishing primitive = fire-and-forget / async dispatch."
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/opencode/scenarios/foreground-subagent/assessment.json",
+              "note": "opencode's `task` tool spawns FOREGROUND children the parent AWAITS (yes/full/ready) — the parent's step-finish reason=stop fires only after every task part completes. This is the foreground arc, NOT the detached/background dispatch this scenario requires."
+            },
+            {
+              "kind": "file",
+              "ref": ".claude/skills/ir:onboard-agent/scripts/drive-opencode-interactive.sh",
+              "note": "Driver handles only send|wait_turn|sleep; each `send` shells out to BLOCKING `opencode run` and steps run sequentially — no async/queue step to drive or observe a concurrently-running background child mid-turn."
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/opencode/capabilities.json",
+              "note": "features.subagents: true covers the (foreground) task-tool primitive; there is no separate background-dispatch feature key, and no evidence of a detached/async subagent dispatch in opencode."
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/claudecode/scenarios/background-subagent/assessment.json",
+              "note": "Reference for the distinguishing primitive: claudecode 2.1.77+ run_in_background / SendMessage({to}) is a fire-and-forget background dispatch (yes/full/ready). No opencode analogue found — hence opencode agent_supports=unknown."
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": false,
+          "notes": "scope_note: opencode subagents are FOREGROUND task-tool children the parent AWAITS — opencode ships the `task` tool (opencode/foreground-subagent is recorded yes/full/ready) but no documented fire-and-forget BACKGROUND / async subagent dispatch (no run_in_background-style task that returns immediately while a detached child runs, no SendMessage-to-background-child primitive). agent_supports=unknown → STOP at Stage 1 (applicable:false), no recipe, no recording; the foreground case is already covered by opencode/foreground-subagent. Secondary blocker: even granting a hypothetical background primitive, the headless driver (drive-opencode-interactive.sh, send|wait_turn|sleep over BLOCKING sequential `opencode run`) cannot drive or observe a concurrently-running background child mid-turn. See replaydata/agents/opencode/scenarios/background-subagent/assessment.json (unknown / n/a / n/a)."
+        }
+      }
+    },
+    "pi": {
+      "artifacts": {},
+      "metadata": {
+        "agent_supports": "no",
+        "daemon_capability": "n/a",
+        "driver_capability": "n/a",
+        "confidence": 0.95,
+        "notes": "agent_supports: no\ndaemon_capability: n/a; driver_capability: n/a"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "background-subagent",
+          "agent": "pi",
+          "assessed_at": "2026-05-25T00:00:00Z",
+          "agent_supports": "no",
+          "daemon_capability": "n/a",
+          "driver_capability": "n/a",
+          "confidence": 0.95,
+          "body": "## Verdict\n\nagent_supports: no\ndaemon_capability: n/a; driver_capability: n/a\n\n## Reasoning\n\nThe `background-subagent` scenario requires two primitives stacked together: a **subagent** capability (a named child session the parent can spawn) AND a **fire-and-forget background dispatch** so the parent's reply completes while the detached child keeps the parent session held `working` until it drains. Pi has neither.\n\n**No subagent primitive.** Pi's README states plainly that the agent \"ships with powerful defaults but skips features like sub agents and plan mode\" (README L23), and the explicit non-features list says \"**No sub-agents.** There's many ways to do this. Spawn pi instances via tmux, or build your own with extensions, or install a package that does it your way\" (README L452). Subagents are deliberately out of core — they are an extension/package concern, not a built-in. Scanning the installed runtime (`@mariozechner/pi-coding-agent@0.70.0`, the package the `pi` Node wrapper resolves to via `dist/cli.js`), the literal tokens `subagent` / `sub-agent` / `sub_agent` do not appear anywhere in `dist/*.js`. The tool registry pi exposes to the model is bash, edit, read, write, grep, find, ripgrep, fd, ls, tree, fork, compact, model, session, resume, new — there is no `Task`, `SendMessage`, `dispatch`, or `spawn-agent` tool that would create a child session.\n\n**No background-dispatch primitive either.** Even setting subagents aside, the second half of the scenario — fire-and-forget detached dispatch — is also absent. The README is explicit: \"**No background bash.** Use tmux. Full observability, direct interaction\" (README L460). Pi's `bash` tool is synchronous; there is no `run_in_background` flag and no detached-task lifecycle. So there is no path to the scenario's defining shape (parent reply finishes while a named child continues running detached and holds the parent `working`).\n\n**Step 2.5 strings guard.** The `pi` binary on PATH is a Node shebang wrapper (`#!/usr/bin/env node … import { main } from \"./main.js\"`), so `strings $(which pi)` is empty of feature keywords by construction — the logic lives in the resolved npm package. Scanning that package's `dist/` for `subagent|run_in_background|SendMessage|spawnChild|childSession|fire-and-forget` returned no literal subagent/background-dispatch primitive (the only incidental `background` hits are theme/message-type strings in source maps, not a dispatch API). The binary-level scan therefore confirms, rather than contradicts, the docs.\n\n## irrlicht side (n/a)\n\nBecause `agent_supports` is `no`, `irrlicht_observes` is `n/a` — there is no agent behavior to observe. For completeness the transport read confirms there would be nothing to parse even if pi grew the feature today: the pi adapter (`agent.go`) registers `Source: FilesUnderRoot` over `~/.pi/agent/sessions/--\u003ccwd\u003e--/*.jsonl` with the JSONL `Parser` in `parser.go`. That parser handles only `session`, `model_change`, `compaction`, and `message` records (assistant / user / toolResult / bashExecution roles); it emits no parent→child linkage and the adapter implements no `SubagentCounter`, so `SubagentCount(parent)` is structurally always zero. The `subagents` flag in `replaydata/agents/pi/capabilities.json` is `false`, matching the canonical `requires: [headless_mode, subagents]` for this scenario — the `subagents` requirement is unmet.\n\n## Primitive mapping\n\nPrimitive exercised: `subagents` + background dispatch. The matching capability key is `subagents` in `capabilities.json`, which is `false`. Verdict is frozen at the agent layer.",
+          "caveats": [
+            "Pi positions sub-agents as an extension/third-party-package concern, not a core feature; a future pi extension could add a subagent primitive, which would require re-assessing both this and the foreground-subagent cell.",
+            "Even if subagents were added via an extension, the scenario additionally needs fire-and-forget background dispatch — pi explicitly punts background execution to tmux (\"No background bash\"), so the background half would still be unmet by core pi."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@mariozechner/pi-coding-agent/README.md",
+              "note": "L23 'skips features like sub agents and plan mode'; L452 'No sub-agents'; L460 'No background bash. Use tmux.' — pi 0.70.0, authoritative non-feature list"
+            },
+            {
+              "kind": "file",
+              "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@mariozechner/pi-coding-agent/dist/cli.js",
+              "note": "Step 2.5 binary scan: pi wrapper is a Node shebang; resolved dist/*.js contains no literal subagent/sub-agent/sub_agent token and no run_in_background/SendMessage dispatch tool — exposed tools are bash/edit/read/write/grep/find/fork/compact/model/session/resume/new only"
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/pi/parser.go",
+              "note": "Parser emits only session/model_change/compaction/message(assistant,user,toolResult) events; no parent-child linkage, no SubagentCounter — SubagentCount(parent) is structurally 0"
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/pi/capabilities.json",
+              "note": "\"subagents\": false — the unmet capability the scenario requires"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

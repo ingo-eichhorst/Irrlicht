@@ -1,0 +1,103 @@
+{
+  "id": "5.7",
+  "name": "quota-burndown",
+  "section": "Metrics",
+  "feature": "Quota burndown (rate-limit usage)",
+  "agents": {
+    "aider": {
+      "artifacts": {},
+      "metadata": {
+        "agent_supports": "no",
+        "daemon_capability": "n/a",
+        "driver_capability": "ready",
+        "confidence": 0.9,
+        "notes": "agent_supports: no\ndaemon_capability: n/a; driver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "quota-burndown",
+          "agent": "aider",
+          "assessed_at": "2026-05-25T00:00:00Z",
+          "agent_supports": "no",
+          "daemon_capability": "n/a",
+          "driver_capability": "ready",
+          "confidence": 0.9,
+          "body": "## Verdict\n\nagent_supports: no\ndaemon_capability: n/a; driver_capability: ready\n\n## Reasoning\n\nQuota burndown asks whether the agent surfaces a provider-managed rate-limit usage window that rises monotonically as the session consumes its quota. Codex supports it: each `token_count` event carries a `rate_limits` map whose `used` / `UsedPercent` climb across turns (extractCodexRateLimits in core/adapters/inbound/agents/codex/parser.go), and irrlicht stores the latest RateLimitSnapshot per session.\n\nAider has no provider-managed quota window in its output. It is pay-per-token against the user's own API key (or a local model) routed through litellm — there is no Pro/Max-style subscription cap to burn down. capabilities.cost_tracking is false. Any rate limiting happens at the provider boundary and is never reflected as a burndown signal in aider's `.aider.chat.history.md` transcript. The aider adapter has zero rate-limit / quota extraction — a grep for `rate_limit|quota|credits|RateLimitSnapshot|UsedPercent` across core/adapters/inbound/agents/aider/ returns nothing. The parser emits per-model-call assistant_message events from `\u003e Tokens: N sent, M received` lines (token counts + optional per-message cost), but no usage-window state.\n\nBecause the agent surfaces no quota window, agent_supports = no. The two observability axes follow per #476: daemon_capability is `n/a` (the feature doesn't exist at the agent layer, so there is no observation question), and driver_capability is `ready` (the interactive driver — send/slash/wait_turn/interrupt/sleep — needs no extra primitive, since there is nothing to drive or record). This is a frozen cell: no recipe, no recording.\n\nNote: a subscription/quota *cap* is a sibling concern (subscription-detection / token-quota-exhausted). This cell is specifically the in-window monotonic-burndown signal, which aider does not surface.\n\n## What irrlicht does NOT see (and why that's OK)\n\nAny quota / rate-limit progression. Aider does not emit a usage window, so there is nothing to burn down and nothing to miss — the absence of observation is correct, not a daemon gap and not a driver gap.",
+          "caveats": [
+            "agent_supports=no, so this cell is authored as an assessment only — no recording, expected.jsonl, or transcript.jsonl.",
+            "Distinct from token-accounting: aider DOES emit per-turn token counts (`\u003e Tokens:` lines) and optional per-message cost, but quota-burndown is specifically a provider rate-limit usage window, which aider does not surface (cost_tracking capability is false).",
+            "If aider ever ships a subscription tier exposing a rate-limit window in its transcript, re-assess: daemon_capability would move from n/a, pending parser support in the aider adapter."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/aider/parser.go",
+              "note": "Parser emits assistant_message from `\u003e Tokens:` lines (token counts + optional per-message cost) but has no rate-limit / quota / usage-window extraction — grep for rate_limit|quota|credits|RateLimitSnapshot|UsedPercent across the aider adapter returns nothing, so no usage window exists to track burndown against."
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/aider/capabilities.json",
+              "note": "cost_tracking: false — aider is pay-per-token via API key (no Pro/Max-style subscription cap to burn down)."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/codex/parser.go",
+              "note": "Contrast: Codex re-reads the rate_limits snapshot (used/UsedPercent) from each token_count event — the signal quota-burndown asserts, absent in aider's transcript."
+            }
+          ]
+        }
+      }
+    },
+    "codex": {
+      "artifacts": {},
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "confidence": 0.75,
+        "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "quota-burndown",
+          "agent": "codex",
+          "assessed_at": "2026-05-25T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.75,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nCodex emits an updated `rate_limits` map on every `token_count` event. Across turns, `rate_limits.primary.used` and the computed `UsedPercent` should increase monotonically as the session consumes its quota window. `extractCodexRateLimits()` in `core/adapters/inbound/agents/codex/parser.go` re-reads the snapshot fresh from each event, so no caching or coalescing masks the progression.\n\nThe irrlicht side stores the latest `RateLimitSnapshot` per session (the metrics adapter overwrites on each ingestion), so the dashboard always shows the most recent window state — no delta math, just the raw latest snapshot.\n\n**Why partial**: Codex plan-mode quota detection has known gaps (#322, #325). Plan-mode sessions may not emit token_count events consistently, so quota burndown may not be observable for plan-mode turns. Regular (non-plan) turns are covered. The fixture will exercise the non-plan path only; plan-mode is tracked separately.\n\nA multi-turn fixture that approaches but does not cross a quota boundary is the target: we want to see UsedPercent rising without triggering `token-quota-exhausted` state behavior (which is a separate scenario).\n\n## What irrlicht does NOT see (and why that's OK)\n\nirrlicht does not compute a 'remaining forecast' from the rate_limits data. It surfaces UsedPercent and ResetsAt as given by the agent. Forecasting remaining tokens would require knowing the session's total per-window budget, which is not in the Codex transcript. The assertion is therefore on non-decreasing UsedPercent, not on an absolute remaining estimate.",
+          "caveats": [
+            "The fixture requires a multi-turn Codex Plus session that stays within its quota window (does not exhaust it). A session of 3-5 moderate turns typically increments UsedPercent by a few percent, enough to assert the monotonic property.",
+            "Codex plan-mode sessions (#322, #325): plan-mode may suppress token_count events during the planning phase, making quota progression invisible mid-turn. Non-plan turns are sufficient for this fixture.",
+            "If the developer's session is early in a quota window, UsedPercent may be very low (\u003c 1%) and numerically equal across turns due to rounding. Use at least 2 substantial turns to ensure a detectable delta."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/codex/parser.go:378-413",
+              "note": "extractCodexRateLimitWindow() reads primary/secondary window fields including used, limit, and resets_at. UsedPercent is derived from used/limit."
+            },
+            {
+              "kind": "issue",
+              "ref": "#322",
+              "note": "Codex plan-mode quota detection: partial coverage; plan-mode turns may not emit token_count events."
+            },
+            {
+              "kind": "issue",
+              "ref": "#325",
+              "note": "Related plan-mode rate-limit gap; partially addressed but not fully validated end-to-end."
+            },
+            {
+              "kind": "spec",
+              "ref": ".specs/agent-scenarios.md → Feature: Quota burndown",
+              "note": "UsedPercent after turn N ≥ after turn N-1; SampledAt updates on each turn (no stale snapshot replay)."
+            }
+          ]
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,578 @@
+{
+  "id": "1.5",
+  "name": "session-reset",
+  "section": "Session lifecycle",
+  "feature": "Session reset (/clear, /new)",
+  "description": "Claude session runs a no-op turn, then the user invokes /clear. The old session row should disappear from the dashboard and a new session_id should appear in ready. Adapter-specific note: claudecode's /clear creates a new transcript file under the same project slug; the driver's reset_session step auto-detects the new UUID and re-points subsequent turns at it. Coverage notes a known partial caveat (#169 stale PID metadata) — if the daemon retains the old session_id past /clear, this recipe surfaces that as a fail on the old_session_ended phase.",
+  "requires": [
+    "headless_mode"
+  ],
+  "verify": {
+    "transitions_topology": [
+      "ready",
+      "working",
+      "ready",
+      "ready",
+      "working",
+      "ready"
+    ],
+    "final_state": "ready",
+    "tool_calls_max": 0
+  },
+  "agents": {
+    "aider": {
+      "artifacts": {},
+      "metadata": {
+        "agent_supports": "no",
+        "daemon_capability": "n/a",
+        "driver_capability": "n/a",
+        "confidence": 0.92,
+        "notes": "agent_supports: no\ndaemon_capability: n/a\ndriver_capability: n/a"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "session-reset",
+          "agent": "aider",
+          "assessed_at": "2026-05-25T00:00:00Z",
+          "agent_supports": "no",
+          "daemon_capability": "n/a",
+          "driver_capability": "n/a",
+          "confidence": 0.92,
+          "body": "## Verdict\n\nagent_supports: no\ndaemon_capability: n/a\ndriver_capability: n/a\n\n## Scenario\n\n`session-reset` requires the agent's in-process reset command to **end the current session and start a fresh one with a different `session_id`** without relaunching the binary. The user-observable signal is: the old session row disappears and a new row appears with a *different* `session_id` in `ready`. Primitive exercised: `slash_commands` (`capabilities.json` key `slash_commands`, true for aider).\n\n## Reasoning\n\n### aider has reset slash commands, but they clear context — they do not mint a session\n\nThe coverage note's stated reason (\"aider has no /clear analogue\") is factually wrong: aider 0.86.2 ships both `/clear` and `/reset`. But the verdict it lands on (`no`) is still correct, for the reason the `scenarios.json` scope_note already records.\n\n- `Commands.cmd_clear` → `_clear_chat_history()` sets `self.coder.done_messages = []` and `self.coder.cur_messages = []` — in-memory Python lists only.\n- `Commands.cmd_reset` drops added files and clears chat history — also purely in-memory.\n\nNeither command touches the on-disk `.aider.chat.history.md`, and neither creates any new identity. They wipe the LLM context window the next turn is sent, nothing more.\n\n### aider has no `session_id` concept at all\n\nA repo-wide grep of the aider source for `session_id` / `session id` returns zero hits. aider has no per-conversation session identity to change — `session_id_assignment: false` in `capabilities.json`. There is nothing for a reset command to re-mint, so the scenario's defining signal (a *different* `session_id`) is structurally impossible. Compared to the codex `/new` supersession case — where a NEW session row supersedes the old on the same PID — aider's `/reset` produces NO session boundary at all: one PID continues, one append-only transcript continues. There is no two-row event to represent.\n\n### Why this is `agent_supports: no` (axis routing under #476)\n\nThe blocking axis is the AGENT, not the daemon parser or the driver. aider lacks the feature the scenario exercises — a reset that mints a new session identity — so `agent_supports: no`. With the feature absent there is no observation question (`daemon_capability: n/a`) and no recipe to drive (`driver_capability: n/a`). This is NOT a daemon `incapable` (the daemon isn't being asked to observe a real boundary aider produces but can't represent — aider produces no boundary), and NOT a driver `gap:reset_session` (the driver's missing `reset_session` step is moot when there is no session to reset into a new identity). Per the Step 6 routing table, `no` → `n/a` / `n/a` → **frozen**.\n\n### The transport keys identity on the file path, which is invariant\n\nThe adapter is `FilesUnderCWD{Filename: \".aider.chat.history.md\"}`. aider opens this single file in append mode (`open(\"a\")` in `io.py:1131`) for the life of the project — one file per project, written to forever. The daemon's session identity for aider is therefore the transcript file path, and `/clear` / `/reset` do not change it. The parser's only file-level marker, the `# aider chat started` header line, is an explicit no-op (`parser.go` returns `nil` for it).\n\nQuitting and relaunching aider does append a fresh `# aider chat started` banner to the *same* file — that is `session-end` + `session-start` on one identity, the \"Not to be confused with\" case the scenario explicitly excludes, not a session-reset.\n\n## Conclusion\n\nWith no session-id primitive and a single append-only transcript per project, aider cannot produce the old-row-disappears / new-`session_id`-appears signal in-process. `agent_supports: no` ⇒ `daemon_capability: n/a` (nothing to observe) and `driver_capability: n/a` (no recipe to drive). Pipeline frozen; no recipe, no recording.",
+          "caveats": [
+            "Coverage note text is inaccurate: aider DOES have /clear and /reset (aider 0.86.2). The verdict (no) is correct — those commands clear in-memory chat context without minting a session id — but the maintainer should fix the note to say 'reset commands clear chat history but mint no session id; aider has no session_id concept'."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/aider/agent.go",
+              "note": "Source is FilesUnderCWD with Filename .aider.chat.history.md — one transcript per project CWD; identity is the file path."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/aider/parser.go",
+              "note": "Parser emits user_message / assistant_message / tool_result / turn_done; '# aider chat started' header is an explicit no-op (line 88). No session_id handling anywhere."
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/aider/capabilities.json",
+              "note": "session_id_assignment: false, session_resume: false; slash_commands: true (the Primitive-exercised key — present, but reset commands mint no session id)."
+            },
+            {
+              "kind": "file",
+              "ref": "~/.local/share/uv/tools/aider-chat/lib/python3.12/site-packages/aider/commands.py:411-443",
+              "note": "cmd_clear -\u003e _clear_chat_history() resets done_messages/cur_messages in memory; cmd_reset drops files + clears history. Neither touches the transcript file or mints an id. aider 0.86.2."
+            },
+            {
+              "kind": "file",
+              "ref": "~/.local/share/uv/tools/aider-chat/lib/python3.12/site-packages/aider/io.py:1117-1134",
+              "note": "append_chat_history opens chat_history_file in append mode; single per-project file written for the whole run."
+            },
+            {
+              "kind": "file",
+              "ref": "~/.local/share/uv/tools/aider-chat/lib/python3.12/site-packages/aider/args.py:274-287",
+              "note": "default_chat_history_file = \u003cgit_root\u003e/.aider.chat.history.md — one file per project, no per-session variant."
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": false,
+          "scope_note": "Coverage matrix declares aider supports=no for session-reset: aider has /clear (clears chat history) but it does NOT mint a new session id — there is no aider session-id concept. Closing aider creates a fresh `.aider.chat.history.md` on next launch but that's session-end + session-start, not session-reset."
+        }
+      }
+    },
+    "claudecode": {
+      "recording_dir": "claudecode/scenarios/session-reset",
+      "artifacts": {
+        "events": "claudecode/scenarios/session-reset/events.jsonl",
+        "transcript": "claudecode/scenarios/session-reset/transcript.jsonl",
+        "manifest": "claudecode/scenarios/session-reset/manifest.json",
+        "golden": "claudecode/scenarios/session-reset/transcript.jsonl.replay.json.golden",
+        "recordings": [
+          "claudecode/scenarios/session-reset/recordings/2026-05-15-12-58-24_irrlichd-0.4.5+56c4667",
+          "claudecode/scenarios/session-reset/recordings/2026-05-17-01-19-23_irrlichd-0.4.5+9d7e5ba"
+        ]
+      },
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "pass_rate": "9/9 phases passed",
+        "agent_cli_version": "2.1.143",
+        "daemon_version": "0.4.5+9d7e5ba",
+        "confidence": 0.9,
+        "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "session-reset",
+          "agent": "claudecode",
+          "assessed_at": "2026-05-18T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.9,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nClaude Code's `/clear` slash command resets the conversation in-place: claude generates a fresh session UUID, materializes a new transcript file under the same `~/.claude/projects/\u003cslug\u003e/` directory, and the old UUID's transcript is closed. Spec assertions:\n\n1. **New session appears in ready with a NEW session_id.** Observable: the daemon's fswatcher detects the new UUID-keyed JSONL via `transcript_new`, the session_detector emits a fresh `session_birth` with `new_session: true`.\n2. **Old session disappears.** Observable: PIDManager's same-PID cleanup emits `KindTranscriptRemoved` for the prior UUID (fixed in #169, commit 56c4667 — the fix is what made this scenario fully observable; pre-fix the old session would linger as a zombie until the readyTTL sweep).\n3. **Subsequent turns drive the NEW session ready→working→ready normally.** Observable: standard turn arc on the new UUID, asserted via `same_session_as: v2_session_birth` in the phase chain.\n\nThe committed recording is 9/9 phases passing. The phase DSL precisely models the pre-session proc-PID → UUID-1 → /clear → UUID-2 lifecycle, including bounding the visible overlap window (the daemon emits the new session's `transcript_new` BEFORE the old session's `transcript_removed` by ~50ms because cleanup triggers at `pid_discovered` time which arrives after the new transcript appears; the `old_session_ended` phase's `max_delay_ms: 1000` relative to `v2_session_birth` bounds this overlap).\n\nEliminating the 50ms overlap entirely would break the legitimate `multiple-sessions-same-cwd` case (different PIDs in same projectDir), so the spec accepts the small window. This trade-off is documented in expected.jsonl's notes field.\n\n## What irrlicht does NOT see (and why that's narrow)\n\nClaude's `/new` slash command (the second variant the prose spec mentions) is functionally identical to `/clear` at the transport level — same UUID rotation, same transcript_removed for the old, same new_session for the new. The recipe covers `/clear` only; `/new` would re-record identically.",
+          "caveats": [
+            "Assessment backfilled in 2026-05-18 to fill the Stage-1 artifact gap. The recording + spec predate the assessment.json convention (introduced in commit de926ab); the verdict here is consistent with the existing 9/9 pass-rate.",
+            "Issue #169 (PIDManager cleanup emitting transcript_removed) was the load-bearing fix that made this scenario observable; pre-0.4.x daemons would not have passed.",
+            "The /clear → /new alternative form is functionally identical at the transport level but is not separately recorded."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "core/application/services/pid_manager.go",
+              "note": "Same-PID cleanup that emits KindTranscriptRemoved for the rotated-out UUID — the #169 fix."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/claudecode/parser.go",
+              "note": "Session detector emits session_birth with new_session: true on a fresh UUID's first user-line."
+            },
+            {
+              "kind": "file",
+              "ref": ".specs/agent-scenarios.md",
+              "note": "Feature: Session reset (`/clear`, `/new`) L81-88 — three Expected: bullets all observable."
+            },
+            {
+              "kind": "issue",
+              "ref": "ingo-eichhorst/Irrlicht#169",
+              "note": "Pre-fix the old session would linger as a zombie; the fix added the explicit transcript_removed emit."
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": true,
+          "preconditions": [
+            "claude CLI on PATH and authenticated",
+            "irrlichd recording (--attach against --record daemon or isolated mode)"
+          ],
+          "setup": [
+            "Driver generates a fresh UUID for the first session; the reset_session step discovers the second UUID by scanning the project slug dir after /clear lands."
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 2
+            },
+            {
+              "type": "reset_session"
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: fresh"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl shows the FIRST UUID session entering ready, then a working/ready cycle for turn 1",
+            "after /clear, events.jsonl emits transcript_removed (and/or process_exited) for the first UUID — the 'old session disappears' assertion from the spec",
+            "events.jsonl contains a DIFFERENT UUID session appearing in ready after /clear (new session_id, fresh row)",
+            "the second turn's working/ready cycle is on the NEW UUID, not the old one",
+            "final session state is ready",
+            "transcript.jsonl contains exactly 2 user lines and 2 assistant lines (the two transcripts are concatenated by the multi-session curate path)"
+          ],
+          "settings": {},
+          "timeout_seconds": 120
+        }
+      }
+    },
+    "codex": {
+      "recording_dir": "codex/scenarios/session-reset",
+      "artifacts": {
+        "events": "codex/scenarios/session-reset/events.jsonl",
+        "transcript": "codex/scenarios/session-reset/transcript.jsonl",
+        "manifest": "codex/scenarios/session-reset/manifest.json",
+        "golden": "codex/scenarios/session-reset/transcript.jsonl.replay.json.golden",
+        "recordings": [
+          "codex/scenarios/session-reset/recordings/2026-05-23-19-21-40_irrlichd-0.4.7+8296cd0"
+        ]
+      },
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "pass_rate": "8/8 phases passed",
+        "agent_cli_version": "0.130.0",
+        "daemon_version": "0.4.7+9d1ef56.dirty",
+        "confidence": 0.9,
+        "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "session-reset",
+          "agent": "codex",
+          "assessed_at": "2026-05-25T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.9,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## agent_supports: yes\n\nCodex's reset command is `/new`: it starts a fresh conversation that SUPERSEDES the current one, without relaunching the binary. The fresh session's rollout (`~/.codex/sessions/.../rollout-\u003cts\u003e-\u003cuuid2\u003e.jsonl`, a distinct `session_meta.id`) materializes lazily on the first post-reset prompt and contains none of the pre-reset history. (`/clear` produces the same observable supersession and is what the committed recording was driven with; both rotate to a brand-new rollout UUID.)\n\n## daemon_capability: full; driver_capability: ready\n\nReset for codex is supersession: a new session replaces the old one, and that IS the expected, correct behavior. The daemon (codex Source = FilesUnderRoot watching ~/.codex/sessions — agent.go:32) detects the new rollout the instant it appears and emits transcript_new + a state_transition to ready + pid_discovered under a session_id never seen before. That fresh session_id appearing in ready is the complete, user-observable reset signal — exactly the scenario's assertion 'a new session row appears with a different session_id in ready'.\n\nThe committed recording captures the full arc: proc-\u003cPID\u003e pre-session → first rollout (UUID-1) runs a turn → reset → second rollout (UUID-2, fresh session_id) runs a turn. expected.jsonl encodes it as 8 phases and validates 8/8.\n\n## Why there is no old_session_ended phase (and why that is correct)\n\ncodex actually reaches the SAME removal path as claudecode. Both rollouts share one PID (28434 in the recording), so when the post-reset rollout (UUID-2) is PID-discovered the daemon's same-PID cleanup (pid_manager.go:373-399, issue #169 / commit 56c4667 — a non-subagent PID can only belong to one session at a time) immediately deletes UUID-1 and records transcript_removed: seq 1602 at 00:27:12.103, ~7ms after UUID-2's pid_discovered (seq 1601) and ~280ms after v2_session_birth — NOT the readyTTL idle sweep (that path is gated by IsStale(readyTTL) at pid_manager.go:634 and cannot fire this fast).\n\nSo why is there no old_session_ended phase? NOT because codex fails to produce a removal — it produces one, via the same #169 path as claudecode. The removal is simply not anchored to the reset keystroke: codex reset is LAZY, so the new rollout, its PID bind, and the resulting #169 cleanup all land together on the first post-reset prompt (the old rollout FILE meanwhile lingers frozen on disk — only the daemon's session row is removed). expected.jsonl asserts the canonical reset proxy — a fresh session_id appearing in ready (v2_session_birth) — across its 8 phases; the old-session removal is present in events.jsonl (seq 1602) but left unasserted as a scoping choice, not because it is absent. The daemon fully observes the reset — daemon_capability: full; driver_capability: ready.",
+          "caveats": [
+            "Codex's reset command is /new; the committed recording was driven via the reset_session step (which sends /clear) — both produce the same observable: the old rollout freezes and a fresh rollout with a new session_id appears. Switching the driver's reset_session to /new for label fidelity is an optional follow-up that would need a re-record.",
+            "The old session IS removed — via the same #169 same-PID cleanup as claudecode (both rollouts share one PID; transcript_removed for UUID-1 lands ~7ms after the new rollout's pid_discovered, seq 1602). It is just not anchored to the reset keystroke (codex reset is lazy, so removal fires on the first post-reset prompt). No old_session_ended phase is asserted — a fixture scoping choice, since v2_session_birth is the canonical reset proxy — not because codex emits no removal."
+          ],
+          "sources": [
+            {
+              "kind": "url",
+              "ref": "https://developers.openai.com/codex/cli/slash-commands",
+              "note": "Codex CLI slash commands — /new starts a fresh chat (session reset)."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/codex/agent.go",
+              "note": "Agent() constructor sets Source = FilesUnderRoot watching ~/.codex/sessions (agent.go:32) — any new rollout under the root is detected, so a reset-spawned new session is daemon-observable as a fresh session_id."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/codex/pid.go",
+              "note": "DiscoverPID binds the codex PID via transcript-writer; both pre- and post-reset sessions share one PID — the precondition for the #169 same-PID cleanup that removes the old session."
+            },
+            {
+              "kind": "file",
+              "ref": "core/application/services/pid_manager.go",
+              "note": "Lines 373-399: same-PID cleanup (issue #169) — when a new session claims a PID already held by an old session, the old one is deleted and transcript_removed is recorded immediately. This retires codex's UUID-1 ~7ms after the new rollout's pid_discovered (NOT the readyTTL sweep at line 634, gated by IsStale(readyTTL))."
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/codex/scenarios/session-reset/events.jsonl",
+              "note": "Committed recording: two distinct rollout session_ids (UUID-1, UUID-2) + proc-PID pre-session; expected.jsonl validates 8/8."
+            },
+            {
+              "kind": "maintainer",
+              "ref": "Ingo (2026-05-25)",
+              "note": "Reset command is /new; new-replaces-old is expected behavior — absent reset-time removal is not a gap."
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": true,
+          "preconditions": [
+            "codex CLI on PATH and authenticated (~/.codex/config.toml or OPENAI_API_KEY) — verified codex 0.130.0",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+            "PARTIAL observability (per assessment.json): codex /clear does NOT emit a transcript_removed for the old session — the old rollout lingers frozen until process_exited. The 'old session disappears' spec bullet has no codex-side removal event; only the 'new session appears' signal is asserted.",
+            "KNOWN CAPTURE GAP: drive-codex-interactive.sh caches the first rollout and writes a single session.uuid, so curate-lifecycle-fixture.sh filters the fixture to UUID-1 only. The v2_* (post-/clear) phases assert what the daemon observes LIVE; they may be absent from the single-session curated fixture, surfacing as validation drift until the codex driver tracks /clear-spawned sessions (a developer task)."
+          ],
+          "setup": [
+            "Driver launches codex in a fresh per-run cwd under \u003cstaging\u003e/cwd/ (isolates the trust dialog).",
+            "Codex assigns its own session UUID per rollout; there is no --session-id flag. The first prompt materializes rollout-\u003cts\u003e-\u003cuuid1\u003e.jsonl; the first prompt AFTER /clear materializes a second rollout-\u003cts\u003e-\u003cuuid2\u003e.jsonl with a fresh session_id and no UUID-1 history."
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "reset_session"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: fresh"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl shows a proc-\u003cPID\u003e pre-session entering ready, handing off to the FIRST rollout-keyed session in ready",
+            "events.jsonl shows the FIRST rollout session running a working→ready turn (turn 1, 'ok')",
+            "after /clear, the first post-clear prompt spawns a DIFFERENT rollout session_id in ready (new session row, no UUID-1 history) — the 'old session disappears / new session appears' reset, observed live on the dashboard",
+            "the second turn's working→ready cycle is on the NEW rollout session, not the old one",
+            "codex does NOT emit transcript_removed for the old session at /clear time (the old rollout lingers frozen) — the old row stays ready until process_exited; do not assert a removal event",
+            "final live state is ready"
+          ],
+          "settings": {},
+          "timeout_seconds": 180
+        }
+      }
+    },
+    "opencode": {
+      "recording_dir": "opencode/scenarios/session-reset",
+      "artifacts": {
+        "events": "opencode/scenarios/session-reset/events.jsonl",
+        "transcript": "opencode/scenarios/session-reset/transcript.jsonl",
+        "manifest": "opencode/scenarios/session-reset/manifest.json",
+        "golden": "opencode/scenarios/session-reset/transcript.jsonl.replay.json.golden",
+        "recordings": [
+          "opencode/scenarios/session-reset/recordings/2026-05-26-18-21-02_irrlichd-0.4.7+cce6096"
+        ]
+      },
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "pass_rate": "7/7 phases passed",
+        "agent_cli_version": "unknown",
+        "daemon_version": "0.4.7+cce6096",
+        "confidence": 0.9,
+        "notes": "agent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\nroute: record (already RECORDED 2026-05-26; this reassessment ratifies it)"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "session-reset",
+          "agent": "opencode",
+          "assessed_at": "2026-05-26T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.9,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\nroute: record (already RECORDED 2026-05-26; this reassessment ratifies it)\n\n## Scenario\n\nsession-reset: a running session completes a turn, then the user issues an in-process reset (`/new`); the old session row disappears and a fresh `session_id` is born in `ready`, all WITHOUT relaunching the binary. Distinct from session-end + session-start (two separate processes/invocations) and from checkpoint-rewind (which keeps the same `session_id`). Primitive exercised: `slash_commands`.\n\n## Agent supports it (agent_supports: yes)\n\nopencode's interactive TUI ships a `/new` reset command. `strings $(which opencode)` on 1.14.50 surfaces the literal `/new` and `/clear` slash tokens, plus the TUI's new-session machinery (`onNewSession`, `starting new session`, `new sessions unavailable`). In a live TUI the user resets the conversation to a fresh `ses_…` mid-session — exactly this scenario.\n\n## Daemon observes it (daemon_capability: full)\n\nopencode is the lone `ProcessOwnedStore` adapter (`core/adapters/inbound/agents/opencode/agent.go` — `Source: agent.ProcessOwnedStore{Reader: metricsReader{}}`): the daemon reads session state from the SQLite store, so a `/new`-spawned `ses_…` is observed in `ready` like any other session. The committed recording (`events.jsonl`) proves the full reset arc live: a transient `proc-\u003cPID\u003e` pre-session is born ready at launch and hands off to the first `ses_…` (turn 1 working→ready, 'ok'), then `/new` mints a SECOND `ses_…` (`transcript_new` for `ses_19ae7f93…`), the daemon RETIRES the old row (`transcript_removed` for `ses_19ae8f9f…` — the 'old session disappears' signal, which opencode emits and codex's `/clear` does NOT), turn 2 runs working→ready on the new session ('fresh'), then `process_exited`. expected-validate passes 7/7 phases (`v1_session_handoff`, `v1_turn_start/end`, `v2_session_birth`, `v2_turn_start/end`).\n\n## Driver: ready (the `gap:slash-command` is stale)\n\nThis is the load-bearing change from the prior coverage verdict. The matrix still records `driver_capability: gap:slash-command` (tracked #492), but that gap is now CLOSED. `drive-opencode-interactive.sh` carries a `run_live()` path: the top-level router (`if any(.[]; .type == \"reset_session\" or .type == \"slash\")`) sends any reset_session/slash recipe to a live opencode TUI under tmux, which delivers `/new` as a real in-REPL command via `tmux send-keys` (`oc_reset`), detects turn completion by polling the SQLite store for new `step-finish` parts (`oc_wait_turn` / `oc_turn_total`), and enumerates both top-level `ses_…` rows for the run cwd to emit the multi-session contract (`session.uuids` / `transcript.paths`) so curate keeps the pre- AND post-reset sessions. The recipe in `scenarios.json` uses a `reset_session` step, which the driver implements end-to-end.\n\nThe behavior is NOT recordable via the simpler headless paths — confirmed, not assumed: headless `opencode run \"/new\"` stores `/new` as ordinary user prompt text and mints only ONE `ses_…` (no reset), and a 'fresh session' would be session-start, not an in-process reset. So an in-REPL slash primitive IS required — and the driver now HAS it. The driver gap was the only thing missing; it is no longer missing.\n\n## Confidence\n\n0.9: empirically recorded and validated (7/7 expected phases; replay golden present), the driver code implementing the reset_session primitive is in the tree and inspected line-by-line, and the agent's `/new` is confirmed in the 1.14.50 binary strings. The full supersession arc — including the old-session `transcript_removed` — is in events.jsonl.",
+          "caveats": [
+            "The reset minting is lazy: opencode creates the new `ses_…` row on the first prompt AFTER `/new`, not on `/new` itself (the recipe's post-reset send materializes it). This mirrors the initial session and codex's post-/clear rollout, and is why the `v2_session_birth` phase allows up to 30s.",
+            "Live-TUI cell: the driver routes session-reset (and any reset_session/slash recipe) through a tmux-driven opencode TUI because headless `opencode run` cannot deliver in-REPL slash commands. tmux must be on PATH at record time.",
+            "Stronger than codex/pi supersession: opencode DOES emit `transcript_removed` for the retired old session (same-PID cleanup), so the 'old session disappears' bullet is directly observable here, not just inferred from the new session appearing."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": ".claude/skills/ir:onboard-agent/scripts/drive-opencode-interactive.sh",
+              "note": "run_live() path (lines 99-294) + the router at line 355 (any reset_session/slash step → live TUI): tmux send-keys for prompts, /new via oc_reset, step-finish polling for wait_turn, multi-session session.uuids/transcript.paths contract — the reset_session primitive is implemented, closing the prior gap:slash-command"
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/opencode/scenarios/session-reset/events.jsonl",
+              "note": "recorded live arc: proc-23009 pre-session → ses_19ae8f9f handoff (turn 1) → transcript_new ses_19ae7f93 (/new reset) → transcript_removed ses_19ae8f9f (old session retired) → turn 2 on ses_19ae7f93 → process_exited"
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/opencode/scenarios/session-reset/expected.jsonl",
+              "note": "7 phases (v1 handoff/turn, v2 session birth/turn) — manifest records 7/7 phases passed, so daemon_capability:full is measured, not inferred"
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/opencode/agent.go",
+              "note": "Source: agent.ProcessOwnedStore{Reader: metricsReader{}} — opencode is the lone SQLite-store adapter; daemon reads session state from the store, so a /new-spawned ses_… appears in ready"
+            },
+            {
+              "kind": "probe",
+              "ref": "opencode run \"/new\" + opencode TUI under tmux (2026-05-26)",
+              "note": "headless `opencode run \"/new\"` stored /new as user text and minted ONE ses_… (no reset) → an in-REPL slash primitive is genuinely required; the TUI /new mints a second ses_… under the same process on the next prompt (RECORDABLE)"
+            },
+            {
+              "kind": "binary",
+              "ref": "/Users/ingo/.opencode/bin/opencode (1.14.50)",
+              "note": "strings scan surfaces /new and /clear slash tokens plus onNewSession / 'starting new session' TUI machinery → agent_supports:yes"
+            },
+            {
+              "kind": "file",
+              "ref": ".claude/skills/ir:onboard-agent/agent-scenarios-coverage.json",
+              "note": "coverage cell still says driver_capability:gap:slash-command (notes ref #492); it should update to driver_capability:ready — the driver's run_live path closed that gap and the cell is recorded"
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": true,
+          "preconditions": [
+            "opencode on PATH and authenticated (~/.local/share/opencode/auth.json) — verified opencode 1.14.50. The session-reset arc is model-agnostic; the dev env's default is a local LM Studio model, which is fine.",
+            "irrlichd is recording — run-cell.sh isolated mode, or --attach against a daemon started with --record.",
+            "LIVE-TUI cell: drive-opencode-interactive.sh routes any recipe carrying a reset_session step to its tmux TUI path, because headless `opencode run` stores a slash command as literal prompt text (PROBED 2026-05-26: `opencode run \"/new\"` minted ONE ses_… and stored `/new` as a user message). tmux must be on PATH."
+          ],
+          "setup": [
+            "Driver launches the opencode TUI in a fresh per-run cwd under \u003cstaging\u003e/cwd/; opencode keys sessions on the cwd in its SQLite store, isolating this run's rows even alongside other opencode use.",
+            "opencode mints its own ses_… per session. The first prompt materializes ses_1; an in-TUI `/new` clears the conversation and the first prompt AFTER it materializes a fresh ses_2 under the SAME process. The driver enumerates both top-level ses_… rows for the cwd and emits the multi-session contract (session.uuids / transcript.paths), so curate includes the pre- AND post-reset sessions."
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "reset_session"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: fresh"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl shows the FIRST ses_… session entering ready, then a working→ready turn (turn 1, 'ok')",
+            "after /new, the first post-reset prompt mints a DIFFERENT ses_… in ready (new session row, no turn-1 history) — the 'old session disappears / new session appears' reset, observed live; opencode retires the old row via the same-PID cleanup like the codex/pi supersession shape",
+            "the second working→ready cycle is on the NEW ses_… session, not the old one",
+            "final live state is ready"
+          ],
+          "settings": {},
+          "timeout_seconds": 180
+        }
+      }
+    },
+    "pi": {
+      "recording_dir": "pi/scenarios/session-reset",
+      "artifacts": {
+        "events": "pi/scenarios/session-reset/events.jsonl",
+        "transcript": "pi/scenarios/session-reset/transcript.jsonl",
+        "manifest": "pi/scenarios/session-reset/manifest.json",
+        "golden": "pi/scenarios/session-reset/transcript.jsonl.replay.json.golden",
+        "recordings": [
+          "pi/scenarios/session-reset/recordings/2026-05-27-23-52-56_irrlichd-0.4.7+b4e2076"
+        ]
+      },
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "pass_rate": "8/8 phases passed",
+        "agent_cli_version": "0.70.0",
+        "daemon_version": "0.4.7+b4e2076",
+        "confidence": 0.72,
+        "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "session-reset",
+          "agent": "pi",
+          "assessed_at": "2026-05-25T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.72,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\nThis reassessment FLIPPED the prior `applicable: false` cell to yes/yes. The earlier scope_note (\"Pi's TUI does not document a /clear or /new command that resets the in-process session\") was wrong: pi 0.70.0 DOES ship `/new`.\n\n## agent_supports: yes\n\nPi's reset command is `/new` (verified live against pi 0.70.0). In the interactive REPL, `/new` is handled at interactive-mode.js:2037 → `handleClearCommand()` (interactive-mode.js:4360) → `runtimeHost.newSession()` (agent-session-runtime.js:142) → `sessionManager.newSession()` (session-manager.js:484). `newSession()` mints a fresh `createSessionId()` UUID and a new `\u003cts\u003e_\u003cuuid2\u003e.jsonl` session-file path under the same project dir, clears the in-memory entries (parentSession defaults to null — no UUID-1 history), and keeps the SAME process alive (no relaunch). The file flushes lazily on the first post-reset message — the exact codex `/new` supersession shape: the NEW session supersedes the OLD without restarting the binary.\n\nEmpirically confirmed: a standalone driver run (send 'ok' → /new → send 'fresh') produced TWO distinct rollout files under one PID — UUID-1 (`...744Z_019e5cbd...`, the 'ok' turn, frozen after /new) and UUID-2 (`...431Z_019e5cbe...`, header parentSession:null, the 'fresh' turn, no UUID-1 history).\n\n## daemon_capability: full; driver_capability: ready\n\nReset for pi is supersession, and new-replaces-old IS the expected, correct behavior. The daemon (pi Source = FilesUnderRoot watching ~/.pi/agent/sessions — agent.go) detects UUID-2 the instant its file appears and emits transcript_new + a state_transition to ready + pid_discovered under a session_id never seen before. That fresh session_id appearing in ready is the complete user-observable reset signal — exactly the scenario's 'a new session row appears with a different session_id in ready'. Both rollouts share one PID, so when UUID-2 is PID-discovered the same-PID cleanup (#169 — the SAME path as claudecode/codex) removes UUID-1's daemon row ~ms after the new pid_discovered (NOT a readyTTL idle sweep). The old-session removal is thus produced (just not anchored to the reset keystroke — reset is lazy, so it lands on the first post-reset prompt; the old FILE lingers frozen on disk).\n\n## Why this cell is committed as by_adapter.pi.applicable:false despite irrlicht_observes:yes\n\nThe DAEMON observes the reset fully and LIVE. The blocker is purely the FIXTURE-CAPTURE driver: `drive-pi-interactive.sh` lacks the codex-style multi-session machinery (codex's `reset_session` step re-arms resolve_transcript onto the new rollout slot and writes a `session.uuids` PLURAL list so curate-lifecycle-fixture.sh keeps BOTH UUIDs). The pi driver caches `$TRANSCRIPT` once and writes only the singular `session.uuid` (UUID-1). Consequences proven by the dry-run: (1) the second `wait_turn` reads the stale UUID-1 transcript and TIMES OUT (turn count stuck at 1); (2) curate filters the recording to `session.uuid` (UUID-1) + proc-PID + children, so UUID-2's events are dropped — a curated fixture can only ever contain UUID-1 and the v2_* phases would be absent. Extending the pi interactive driver with reset_session/session.uuids capture is a developer task (out of scope for the implement stage, which only authors recipes). Recording is DEFERRED until that lands; expected.jsonl documents the full 8-phase target arc for when it does.",
+          "caveats": [
+            "Pi's reset command is `/new` (interactive-mode.js:2037). It maps to handleClearCommand → newSession, which mints a fresh UUID file under the same PID — the codex supersession pattern. The old rollout file lingers frozen; the daemon removes the old session row via the #169 same-PID cleanup once UUID-2's PID is discovered.",
+            "irrlicht_observes is YES at the daemon level. applicable:false is a CAPTURE-tooling limitation, not an observability gap: drive-pi-interactive.sh has no codex-style reset_session / session.uuids multi-session tracking, so (a) the post-/new wait_turn times out on the stale transcript and (b) curate can only retain UUID-1, dropping UUID-2 from the fixture. The behavior is real and recordable once the driver gains multi-session capture."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "node_modules/@mariozechner/pi-coding-agent/dist/modes/interactive/interactive-mode.js",
+              "note": "Line 2037: `/new` → editor.setText('') + handleClearCommand(). Line 4360: handleClearCommand → runtimeHost.newSession(). Confirms pi 0.70.0 ships a /new reset that keeps the process alive."
+            },
+            {
+              "kind": "file",
+              "ref": "node_modules/@mariozechner/pi-coding-agent/dist/core/session-manager.js",
+              "note": "Line 484 newSession(): mints createSessionId() + a new \u003cts\u003e_\u003cuuid\u003e.jsonl path, clears fileEntries (parentSession null), flushed=false (lazy materialization) — fresh UUID file, same process, no prior history."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/pi/agent.go",
+              "note": "Pi Source = FilesUnderRoot watching ~/.pi/agent/sessions — any new rollout file under the root is daemon-detected, so a /new-spawned UUID-2 surfaces as a fresh session_id in ready."
+            },
+            {
+              "kind": "file",
+              "ref": "core/application/services/pid_manager.go",
+              "note": "Same-PID cleanup (issue #169): when UUID-2 claims the PID already held by UUID-1, the old session row is removed and transcript_removed recorded immediately — the SAME path that retires codex's/claudecode's superseded session, not the readyTTL idle sweep."
+            },
+            {
+              "kind": "file",
+              "ref": ".claude/skills/ir:onboard-agent/scripts/drive-pi-interactive.sh",
+              "note": "Caches $TRANSCRIPT once (resolve_transcript returns early when set) and writes only singular session.uuid — no reset_session step, no session.uuids list. This is the capture gap that forces applicable:false: the post-/new wait_turn times out and curate keeps only UUID-1."
+            },
+            {
+              "kind": "file",
+              "ref": ".claude/skills/ir:onboard-agent/scripts/drive-codex-interactive.sh",
+              "note": "Reference: codex driver's reset_session step + SES_TRANSCRIPT slots + session.uuids plural — the multi-session capture the pi driver would need to record this cell."
+            },
+            {
+              "kind": "maintainer",
+              "ref": "Ingo (2026-05-25) — reassessment",
+              "note": "session-reset flipped to yes/yes (0.72) on the codex /new supersession pattern; deferred to applicable:false because the pi interactive driver lacks codex-style multi-session capture (a developer task), not because the daemon fails to observe the reset."
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": true,
+          "preconditions": [
+            "pi CLI on PATH and authenticated (~/.pi/ credentials) — verified pi 0.70.0, which ships the in-REPL `/new` reset (interactive-mode.js:2037 → handleClearCommand → runtimeHost.newSession → session-manager.js:484 newSession()).",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record.",
+            "FULL observability (per assessment.json yes/yes 0.72): pi /new is the codex supersession shape — newSession() mints a fresh createSessionId() UUID and a new \u003cts\u003e_\u003cuuid2\u003e.jsonl under the same PID (parentSession:null, no UUID-1 history, file flushed lazily on the first post-reset message). The daemon (pi Source = FilesUnderRoot ~/.pi/agent/sessions) detects UUID-2 the instant its file appears: a fresh session_id in ready is the user-observable reset signal. The old UUID-1 row is removed via the #169 same-PID cleanup once UUID-2's PID is discovered (~ms after the new pid_discovered, NOT a readyTTL sweep); the old UUID-1 FILE lingers frozen on disk. No transcript_removed fires at the /new keystroke itself (reset is lazy — UUID-2 materializes on the first post-reset prompt)."
+          ],
+          "setup": [
+            "Driver launches pi in a fresh per-run cwd under \u003cstaging\u003e/cwd/.",
+            "Pi mints its own session UUID per rollout. The first prompt materializes \u003cts\u003e_\u003cuuid1\u003e.jsonl; the reset_session step sends pi's in-REPL `/new` (allocating a new driver slot reusing the same tmux/process), and the first prompt AFTER /new materializes a second \u003cts\u003e_\u003cuuid2\u003e.jsonl with a fresh session_id and no UUID-1 history. The driver re-arms resolve_transcript onto UUID-2 and records BOTH UUIDs into session.uuids / transcript.paths so curate keeps both rollouts."
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "reset_session"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: fresh"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            }
+          ],
+          "verify": [
+            "events.jsonl shows a proc-\u003cPID\u003e pre-session entering ready, handing off to the FIRST rollout-keyed session (UUID-1) in ready",
+            "events.jsonl shows the FIRST rollout session running a working→ready turn (turn 1, 'ok')",
+            "after /new, the first post-reset prompt spawns a DIFFERENT rollout session_id (UUID-2, parentSession:null, no UUID-1 history) in ready — the 'new session appears with a different session_id' reset, observed live on the dashboard",
+            "the second turn's working→ready cycle is on the NEW rollout session (UUID-2), not on stale UUID-1",
+            "the old UUID-1 daemon row is removed via the #169 same-PID cleanup once UUID-2's PID is discovered (the old UUID-1 file lingers frozen on disk); no transcript_removed fires at the /new keystroke itself",
+            "no waiting state appears at any point; final live state is ready"
+          ],
+          "settings": {},
+          "timeout_seconds": 180
+        }
+      }
+    }
+  }
+}

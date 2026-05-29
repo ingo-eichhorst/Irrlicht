@@ -1,0 +1,288 @@
+{
+  "id": "3.4",
+  "name": "subagent-orphan-cleanup",
+  "section": "Subagents",
+  "feature": "Subagent orphan cleanup",
+  "description": "Parent claude session launches a foreground subagent via the Task tool; once the parent_linked event fires and the child sidechain transcript is visible, the recipe SIGKILLs the parent's process group, leaving the child orphaned. The daemon's pid_manager sweep must emit process_exited for both parent and child without a spurious state_transition to working for the orphaned child during cleanup. Regression coverage for issue #321 (zombie-on-restart). The spec describes a 5-child variant; this recipe records the minimal 1-child shape since the no-working-transition invariant is identical for any N≥1.",
+  "requires": [
+    "headless_mode",
+    "subagents"
+  ],
+  "verify": {
+    "final_state": "ready",
+    "parent_linked_min": 1,
+    "subagent_transcripts_min": 1
+  },
+  "agents": {
+    "claudecode": {
+      "recording_dir": "claudecode/scenarios/subagent-orphan-cleanup",
+      "artifacts": {
+        "events": "claudecode/scenarios/subagent-orphan-cleanup/events.jsonl",
+        "transcript": "claudecode/scenarios/subagent-orphan-cleanup/transcript.jsonl",
+        "manifest": "claudecode/scenarios/subagent-orphan-cleanup/manifest.json",
+        "golden": "claudecode/scenarios/subagent-orphan-cleanup/transcript.jsonl.replay.json.golden"
+      },
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "pass_rate": "6/6 phases passed",
+        "agent_cli_version": "2.1.143",
+        "daemon_version": "0.4.5+7e88e6f",
+        "confidence": 0.85,
+        "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "subagent-orphan-cleanup",
+          "agent": "claudecode",
+          "assessed_at": "2026-05-18T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.85,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nThis scenario tests the daemon's restart-sweep behavior: after irrlichd restarts and discovers existing transcripts on disk for a parent + N children, the sweep must reap rows whose PIDs no longer match a running `claude` process, without spuriously transitioning them through `working` during cleanup.\n\nFrom the agent side: Claude Code's subagent transcripts persist on disk under `~/.claude/projects/\u003cslug\u003e/\u003cparent\u003e/subagents/` even after the parent and children processes have died. There is no upstream 'transcript GC' — the files stay until the user deletes them. So the precondition (6 transcripts exist, no processes match) is naturally producible: SIGKILL the parent's process group, then restart irrlichd.\n\nFrom the irrlicht side, the cleanup path is exercised by the `pid_manager` on restart:\n\n1. The fswatcher walks transcripts and discovers all 6 SessionStates with their cached `ParentSessionID` linkage intact.\n2. PID discovery (`DiscoverPID`, pid.go) attempts to bind each session to a live PID via the ~/.claude/sessions/\u003cUUID\u003e.json metadata lookup AND a pgrep against the `claude` ExactName matcher.\n3. With no matching processes, every session is marked as having no live PID. The classifier emits `process_exited` for each, taking them through the ready→removed path WITHOUT a working transition (the parent_linked re-evaluation logic at session_detector_activity.go:444 only fires on activity, not on cleanup).\n4. After readyTTL, all 6 rows disappear. The spec bullet 'all 6 sessions disappear after the restart sweep' is satisfied.\n5. The spec bullet 'state never transitioned to working during cleanup' is an invariant on the cleanup phase — there is no transcript activity (no new lines appended), and the detector's state machine never fabricates a working transition from process discovery alone. Confirmed by reading session_detector_activity.go: state transitions are driven by parsed events (`activity-driven`), not by PID-binding changes.\n\nThe related fix in issue #321 ('zombie-on-restart fixed in 0.4.x') is directly relevant: pre-fix, sessions could linger in `working` after a daemon restart because the cached state from the previous lifetime overrode the cleanup signal. Post-fix, the restart sweep cleanly emits `process_exited` for unmatched PIDs and lets the readyTTL eviction proceed.\n\nObservability: the recording would show 6 `presession_resumed` (or `transcript_replayed`) events at restart, immediately followed by 6 `process_exited` events (one per session), then 6 `transcript_removed` after readyTTL. State band: each row settles at `ready` instantly (no working spike), then disappears.",
+          "caveats": [
+            "Recipe shape: launch parent + 5 subagents, wait until all are linked and visible, SIGKILL the entire `claude` process group, then restart irrlichd with --record pointing at the same recording directory. The recipe needs a way to kill the process group (not just the parent), and a sleep before restart to ensure the kernel has reaped the children. The existing session-end recipe's `sigkill` step type can serve as a template.",
+            "readyTTL timing: the cleanup-to-removal window is bounded by readyTTL (currently ~30s for stale sessions). The phase contract should use duration_at_least_ms for the cleanup observation rather than asserting exact timing.",
+            "Issue #321 (zombie-on-restart) is the canonical regression reference; the cleanup path's no-working-transition invariant is what that fix preserved. Any future change to the restart-replay path should re-run this scenario."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "core/application/services/session_detector_activity.go",
+              "note": "State transitions are activity-driven (parsed events from transcripts), not PID-binding-driven. The cleanup path never fabricates a working transition — line 444 only re-evaluates a parent on actual state changes."
+            },
+            {
+              "kind": "file",
+              "ref": "core/application/services/pid_manager.go",
+              "note": "On daemon restart, parent and child sessions with no matching PID are emitted as process_exited; child re-binding logic (line 282+, line 599+) does NOT promote children to working during cleanup."
+            },
+            {
+              "kind": "issue",
+              "ref": "ingo-eichhorst/Irrlicht#321",
+              "note": "Zombie-on-restart fix in 0.4.x — the regression that established the no-working-transition-during-cleanup invariant this scenario asserts."
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": true,
+          "preconditions": [
+            "claude CLI on PATH and authenticated (subscription or API key)",
+            "irrlichd is recording (--attach against a daemon with --record, or isolated mode)",
+            "the sigkill driver step kills the entire claude process group (not just the parent PID) so the child is left orphaned rather than reaped by its own clean exit",
+            "claude session can spawn at least 1 subagent (default model has Task/Agent tool exposed)"
+          ],
+          "setup": [
+            "Driver generates a fresh lowercased session UUID and a fresh cwd under \u003cstaging\u003e/cwd/",
+            "A README.md is seeded so the subagent has something to read while the parent is alive — the subagent must still be in flight when SIGKILL lands"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Use the Task tool to launch a general-purpose subagent that reads README.md three times in a row and then waits 30 seconds before reporting back. Do not reply to me until the subagent is done."
+            },
+            {
+              "type": "sleep",
+              "seconds": 12
+            },
+            {
+              "type": "sigkill"
+            },
+            {
+              "type": "sleep",
+              "seconds": 20
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a parent_linked event for the child UUID pointing at the parent UUID — the child transcript was discovered before SIGKILL",
+            "events.jsonl contains exactly one process_exited event for the parent UUID",
+            "events.jsonl contains exactly one process_exited event for the child UUID",
+            "no state_transition to working fires for the child UUID after the parent's process_exited (issue #321 regression invariant)",
+            "no state_transition to waiting fires for the child UUID after the parent's process_exited",
+            "after readyTTL, both rows are removed via transcript_removed (cleanup-to-removal window may be ~30s depending on readyTTL)",
+            "transcript.jsonl contains the parent's user line plus at least one assistant tool_use=Agent, and the child sidechain transcript under \u003cparent\u003e/subagents/ is bundled into \u003cfixture\u003e.subagents/"
+          ],
+          "settings": {},
+          "timeout_seconds": 180
+        }
+      }
+    },
+    "opencode": {
+      "recording_dir": "opencode/scenarios/subagent-orphan-cleanup",
+      "artifacts": {
+        "events": "opencode/scenarios/subagent-orphan-cleanup/events.jsonl",
+        "transcript": "opencode/scenarios/subagent-orphan-cleanup/transcript.jsonl",
+        "manifest": "opencode/scenarios/subagent-orphan-cleanup/manifest.json",
+        "golden": "opencode/scenarios/subagent-orphan-cleanup/transcript.jsonl.replay.json.golden"
+      },
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "pass_rate": "6/6 phases passed",
+        "agent_cli_version": "unknown",
+        "daemon_version": "0.4.7+76ca42f",
+        "confidence": 0.85,
+        "notes": "agent_supports: yes\ndaemon_capability: full\ndriver_capability: gap:restart"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "subagent-orphan-cleanup",
+          "agent": "opencode",
+          "assessed_at": "2026-05-27T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.85,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: gap:restart\n\nRe-derived from scratch against opencode CLI v1.14.50, the current opencode watcher.go + PIDManager.CleanupZombies sweep, and the current drive-opencode-interactive.sh (which has GAINED a live-TUI path since the prior assessment). Verdict is unchanged from the prior pass (yes / full / gap:restart), but the reasoning is refined: the gap is now narrower and more precisely named — the live-TUI path supplies the missing long-lived-process substrate, leaving only the absence of a kill/restart STEP TYPE.\n\n## Scenario\n\nsubagent-orphan-cleanup: a parent session launches a foreground subagent, then the parent's process is abruptly killed (or the daemon restarts) WHILE the child is still tracked, leaving the child orphaned. The daemon's startup/zombie sweep must reap BOTH the parent and the orphaned child (process_exited / removal) WITHOUT a spurious state_transition to working (or waiting) for the orphaned child during cleanup. Regression coverage for issue #321 (zombie-on-restart). User-observable signal (scenario-meanings): all orphaned sessions disappear after the restart sweep, and state never transitions to working during cleanup.\n\n## Agent supports it (agent_supports: yes)\n\nopencode ships a first-class subagent primitive: the `task` tool spawns a child session whose `session` row carries `parent_id = \u003cparent_session_id\u003e`. This is proven live by the opencode/foreground-subagent recording (the watcher reads `parent_id` per `session` row at watcher.go:258/294 and emits EventNewSession with ParentSessionID at watcher.go:340-347). capabilities.json confirms `subagents: true` and `headless_mode: true`, matching the scenario's `requires: [headless_mode, subagents]`. So the parent+child shape the orphan scenario needs exists and is observable. agent_supports is yes for the same reason foreground-subagent is yes; the orphaning is created by killing the parent, not by any agent feature opencode lacks.\n\n## daemon observes it (daemon_capability: full)\n\nThe orphan-cleanup invariant rides PIDManager.CleanupZombies (core/application/services/pid_manager.go:226), which is transport-agnostic and process-exit-driven, NOT parser-driven. For opencode's DB-backed sessions the relevant predicate is isStartupZombie branch #3 (pid_manager.go:297-303): a top-level session (parent_id empty) whose TranscriptPath is DB-backed (`?session=`) and whose CWD is owned by NO live opencode process is an orphan. deleteWithChildren (pid_manager.go:308-317) then reaps the parent AND every child matched by ParentSessionID via repo.Delete + broadcast(PushTypeDeleted) — a pure deletion with NO SetState call, so no spurious working/waiting transition fires for the orphaned child (the #321 invariant). The watcher.go comment at lines 374-383 explicitly hands carryover orphans to this DB-backed-orphan branch rather than the in-memory cursor path. No new store part is required to reap the orphaned child — distinct from the opencode turn-aborted-by-error / token-quota-exhausted cells where the gap IS a store part opencode never writes. So daemon_capability is full.\n\n## Why this cell is still NOT recordable today (driver gap: restart)\n\nThe scenario requires killing the parent opencode process group (or restarting the daemon) WHILE the child is still tracked, so the child is left orphaned rather than reaped by its own clean exit. drive-opencode-interactive.sh now has TWO dispatch paths:\n\n- Headless path (lines 359-392): step types `send | wait_turn | sleep`. Each `send` launches a BLOCKING `opencode run` subprocess that exits cleanly at turn end; the driver owns no long-lived process to signal mid-turn.\n- Live-TUI path `run_live` (lines 99-294), routed in only when a step is `reset_session` or `slash` (line 355): step types `send | wait_turn | reset_session | slash | sleep`. This path DOES launch a long-lived `opencode` process under tmux (line 112) and holds it alive across turns — the process-control substrate the prior assessment said was entirely missing.\n\nThe NEW FINDING vs the prior pass: the live-TUI path supplies the long-lived process. What it still lacks is a STEP TYPE that kills it mid-turn. Neither dispatch case-block contains a `sigkill` / `restart` / `kill` step (verified: the only `kill` tokens in the file are tmux teardown at lines 111/115/229 and the SIGINT timeout wrapper at line 313 — none is a recipe-addressable step). The claudecode reference driver, by contrast, ships exactly this primitive: `step_sigkill()` (drive-claudecode-interactive.sh:401-416) resolves the session's PID via `pgrep -f \"claude.*--session-id \u003cuuid\u003e\"` and `kill -9`s it, wired into the dispatch as `sigkill)` (line 560). The opencode live path could mirror this — resolve the tmux-owned opencode PID for the active session and SIGKILL its process group — but no such step exists, so a recipe cannot orphan an in-flight child. The driver also has no way to send out-of-band signals; a mid-turn process-group kill is fundamentally an out-of-band process-control primitive with no send-only equivalent.\n\n## The exact missing primitive\n\n`gap:restart` (equivalently `gap:sigkill`): a recipe step that, mid-turn, kills the parent opencode process group owning the active session (analogous to claudecode `step_sigkill` at drive-claudecode-interactive.sh:401), leaving any live `task` child orphaned for the daemon's CleanupZombies sweep to reap. The live-TUI path is the natural host for it (it already owns the long-lived process via tmux), so this is a focused additive step, not a new driver. This is queued tooling work, tracked by OPEN issue #492 (\"feat(onboard): live-REPL opencode driver to unlock 9 driver_gap scenarios\").\n\n## Not a false gap (and not caught by recipe-lint)\n\nThis is purely a driver/tooling gap, NOT an agent or daemon limitation: opencode the agent supports subagents (proven by foreground-subagent), and the daemon reaps orphaned parent+child cleanly without a working transition (CleanupZombies + deleteWithChildren, transport-agnostic). recipe-lint.sh does NOT catch this: the recipe is left applicable:false with no script, so there is no step-TYPE for the lint to reject — the gap is the ABSENCE of a kill/restart capability, mirroring the opencode user-esc-interrupt (gap:interrupt) and model-switch-midsession (gap:model-select) driver_gaps that recipe-lint likewise cannot flag.\n\n## What would unblock it\n\nAdd a `sigkill`/`restart` step to drive-opencode-interactive.sh's live-TUI dispatch: after sending a prompt that spawns a long-running `task` subagent (e.g. read README.md then `bash sleep 30`) and waiting for parent_linked, resolve the tmux-owned opencode PID for the active session and `kill -9` its process group mid-turn. Once the driver can orphan an in-flight child, the cell becomes recordable: the daemon already reaps the orphaned parent+child via the CleanupZombies sweep with no spurious working transition, so the #321 invariant in expected.jsonl would validate. (Issue #492.)\n\n## Confidence\n\n0.85: both dispatch grammars are read directly from the live driver source (driver as committed today, against opencode CLI v1.14.50), the long-lived-process substrate is confirmed present in run_live, and the kill-step ABSENCE is verified by exhaustive grep. The daemon's transport-agnostic reap (no working transition) is grounded in pid_manager.go's deleteWithChildren (pure delete, no SetState) and the DB-backed-orphan predicate. Not higher only because the unblocked recording itself — a real orphaned-child removal flowing through the cleanup sweep with no working transition on opencode's store transport — has not yet been captured; that is the deferred developer task (#492).",
+          "caveats": [
+            "Reconciled post-record (2026-05-27): restart/sigkill driver primitive ported (commit 3b9df796); cell recorded 6/6 green — driver_capability gap:restart-\u003eready.",
+            "Driver-gap, not an agent or daemon limitation: opencode supports subagents (task tool, proven by opencode/foreground-subagent) and the daemon reaps orphaned parent+child via the transport-agnostic PIDManager.CleanupZombies sweep (deleteWithChildren is a pure repo.Delete + broadcast, no SetState, so no spurious working/waiting transition — the #321 invariant). The blocker is purely the driver's missing kill/restart step.",
+            "NEW since the prior assessment: drive-opencode-interactive.sh now has a live-TUI path (run_live) that launches a long-lived `opencode` process under tmux — the process-control substrate that was previously absent. The remaining gap is narrowed to the missing STEP TYPE: there is still no sigkill/restart step in either dispatch (live path handles send|wait_turn|reset_session|slash|sleep; headless handles send|wait_turn|sleep).",
+            "recipe-lint.sh does NOT catch this gap: the recipe is left applicable:false with no script, so there is no step-TYPE to reject; the missing capability is a mid-turn process-group kill (same shape as the opencode user-esc-interrupt gap:interrupt / model-switch-midsession gap:model-select cells).",
+            "daemon_capability:full rides the process-exit/restart sweep (no store part required for the orphaned child), distinct from the opencode turn-aborted-by-error / token-quota-exhausted cells where the gap is a store part opencode never writes."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": ".claude/skills/ir:onboard-agent/scripts/drive-opencode-interactive.sh",
+              "note": "current driver: live-TUI path run_live (lines 99-294, routed at line 355 only for reset_session/slash) launches a long-lived `opencode` tmux process (line 112) and dispatches send|wait_turn|reset_session|slash|sleep (lines 196-211); headless path dispatches send|wait_turn|sleep (lines 365-373). NO sigkill/restart/kill step type in either — the only kill tokens are tmux teardown (111/115/229) and the SIGINT timeout wrapper (313)"
+            },
+            {
+              "kind": "file",
+              "ref": ".claude/skills/ir:onboard-agent/scripts/drive-claudecode-interactive.sh",
+              "note": "reference for the EXACT missing primitive: step_sigkill() (lines 401-416) resolves the session PID via `pgrep -f claude.*--session-id \u003cuuid\u003e` and `kill -9`s it mid-turn, wired into dispatch as `sigkill)` (line 560). opencode's live path owns the long-lived process but lacks this step"
+            },
+            {
+              "kind": "file",
+              "ref": "core/application/services/pid_manager.go",
+              "note": "CleanupZombies (line 226) startup sweep; isStartupZombie branch #3 (lines 297-303) flags a DB-backed top-level opencode session whose CWD has no live opencode process as an orphan; deleteWithChildren (lines 308-317) reaps parent + ParentSessionID children via repo.Delete + broadcast(PushTypeDeleted) — pure delete, no SetState, so NO spurious working transition for the orphaned child (#321 invariant). Transport-agnostic."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/opencode/watcher.go",
+              "note": "opencode is the ProcessOwnedStore adapter; reads parent_id per session row (lines 258/294) and emits EventNewSession with ParentSessionID (lines 340-347). Comment at 374-383 hands carryover orphans to the DB-backed-orphan branch in PIDManager.CleanupZombies — the cleanup is sweep-driven, not parser-driven, so no store part is needed to reap the orphaned child"
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/opencode/scenarios/foreground-subagent/assessment.json",
+              "note": "proves opencode spawns subagents via the `task` tool with parent_id linkage observed from the SQLite store — agent_supports:yes for the parent+child shape this cell orphans"
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/opencode/capabilities.json",
+              "note": "subagents:true and headless_mode:true confirm the scenario's requires:[headless_mode, subagents] are satisfied by opencode CLI v1.14.50"
+            },
+            {
+              "kind": "url",
+              "ref": "https://github.com/ingo-eichhorst/Irrlicht/issues/492",
+              "note": "OPEN: feat(onboard): live-REPL opencode driver to unlock 9 driver_gap scenarios — tracks the tooling task (add a process-control/kill step to the opencode driver) that unblocks this cell"
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": true,
+          "preconditions": [
+            "opencode CLI on PATH and authenticated against its default model (the dev env default is a local LM Studio model — no remote key needed). Verified opencode 1.14.50.",
+            "irrlichd is recording with the opencode SQLite watcher enabled (run-cell.sh in isolated/coexist mode, or --attach against a daemon started with --record)",
+            "opencode's `task` (subagent) tool is available — capabilities.json declares subagents:true; the built-in `general`/`explore` subagents are on by default",
+            "the sigkill driver step must kill the opencode process the daemon is tracking (the one whose cwd == the run cwd) so the child is left ORPHANED rather than reaped by its own clean exit — drive-opencode-interactive.sh's oc_opencode_pid resolves exactly that PID (cwd match), mirroring the daemon's DiscoverPIDByCWD"
+          ],
+          "setup": [
+            "This cell uses the live-TUI path (run_live): a `sigkill` step routes drive-opencode-interactive.sh into the long-lived tmux opencode process rather than a blocking headless `opencode run` (a blocking run would let the child finish before control returns, so there would be no in-flight child to orphan). The driver launches one `opencode` under tmux, holds it alive across the turn, then kill -9's it mid-turn.",
+            "The prompt asks the child to read README.md then run the shell command `sleep 30` before reporting — the `sleep 30` (not the file read, which may not exist: the pipeline seeds no README) is what keeps the child turn IN FLIGHT (working) when the SIGKILL lands. The spawn itself does not depend on the file (the parent invokes `task` regardless), as opencode/foreground-subagent proved with the same empty cwd.",
+            "OpenCode session state lives in its SQLite store (~/.local/share/opencode/opencode.db); the `task` tool calls Session.create(parentSessionID,…) so the child `session` row carries parent_id = parent.id. The daemon's ProcessOwnedStore watcher polls the table, surfaces the child as transcript_new, and the detector emits parent_linked — opencode's spawn proof (no child .jsonl on disk, unlike claudecode).",
+            "Cleanup is process-exit-driven, NOT parser-driven. The child subagent runs IN-PROCESS, so both the parent ses_ and the child ses_ are bound to the SAME opencode PID (each gets its own pid_discovered for that one PID). When the kill lands, the daemon's PIDManager sees that PID vanish (CheckPIDLiveness → ESRCH) and HandleProcessExit records a process_exited for BOTH PID-bound sessions — the child's on the first liveness tick after the kill, then the parent's on the next. The reap issues NO SetState, so NO spurious state_transition to working/waiting fires during cleanup (issue #321 invariant). OBSERVED ORDERING (this recording): child working at kill time → child process_exited → parent process_exited, with zero state_transitions after the kill. The robustly-observable cleanup signal is therefore BOTH process_exited events plus the #321 negative invariant anchored on the child's process_exited (looking forward through the sweep).",
+            "The default model is a small, slow local LM Studio model: in opencode/foreground-subagent the parent took ~120s after birth to invoke `task` and fire parent_linked. So the sleep-before-sigkill is 150s — long enough for the parent to invoke `task`, the child ses_ row to surface with parent_id set, parent_linked to fire, and the child to enter its `sleep 30` — and the kill then lands while the child is still mid-turn. (Total ~150+kill+20s stays inside timeout_seconds=300; bump the sleep if a future model run shifts parent_linked later.)"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Use the task tool to launch a subagent (the built-in 'explore' agent) that first reads the README.md file in the current directory, then runs the shell command `sleep 30`, then reports the file's first heading. Do not reply to me until that subagent is completely finished."
+            },
+            {
+              "type": "sleep",
+              "seconds": 150
+            },
+            {
+              "type": "sigkill"
+            },
+            {
+              "type": "sleep",
+              "seconds": 20
+            }
+          ],
+          "verify": [
+            "events.jsonl shows the parent ses_… session entering ready, then a single ready→working transition driven by the user prompt",
+            "events.jsonl contains at least 1 parent_linked event whose parent_session_id is the parent ses_… UUID — the child session row (parent_id set) was discovered by the SQLite watcher and bound to the parent BEFORE the kill (opencode's spawn proof; no child .jsonl on disk)",
+            "events.jsonl contains a transcript_new for the child session born after the parent turn started",
+            "events.jsonl contains a process_exited event for the orphaned CHILD ses_… UUID after the kill — the child shares the parent's opencode PID, so the CheckPIDLiveness sweep reaps it on the first tick after the PID vanishes",
+            "events.jsonl contains a process_exited event for the parent ses_… UUID after the child's (the same kill, next liveness tick) — the kill -9 made the daemon observe the watched opencode PID vanish",
+            "no state_transition to working fires for the orphaned child after its process_exited (issue #321 regression invariant — the reap issues no SetState)",
+            "no state_transition to waiting fires for the orphaned child after its process_exited",
+            "no clean child turn_done precedes the reap — the kill, not a graceful exit, ended the child (its last live state was working, mid-turn, at kill time)"
+          ],
+          "settings": {},
+          "timeout_seconds": 300
+        }
+      }
+    },
+    "pi": {
+      "artifacts": {},
+      "metadata": {
+        "agent_supports": "no",
+        "daemon_capability": "n/a",
+        "driver_capability": "n/a",
+        "confidence": 0.9,
+        "notes": "agent_supports: no\ndaemon_capability: n/a; driver_capability: n/a"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "subagent-orphan-cleanup",
+          "agent": "pi",
+          "assessed_at": "2026-05-25T00:00:00Z",
+          "agent_supports": "no",
+          "daemon_capability": "n/a",
+          "driver_capability": "n/a",
+          "confidence": 0.9,
+          "body": "## Verdict\n\nagent_supports: no\ndaemon_capability: n/a; driver_capability: n/a\n\n## Reasoning\n\nThis cell is frozen at the **agent layer**. The scenario's primitive is\n*orphan detection* — the daemon's startup sweep removes session transcripts\nwhose owning PID is gone, without a spurious `working` transition during\ncleanup — but `scenarios.json` declares `requires: [headless_mode, subagents]`\nand frames the recipe explicitly around a **parent/child session tree**: a\nparent launches a foreground subagent via the Task tool, the recipe SIGKILLs\nthe parent's process group, and the invariant under test is that BOTH parent\nand the orphaned *child* are swept (`parent_linked_min: 1`,\n`subagent_transcripts_min: 1`). The whole point is the parent-child orphan\nrelationship.\n\npi has **no subagent primitive at all.** pi 0.70.0's README states this in\nthree places: \"Pi ships with powerful defaults but skips features like sub\nagents and plan mode\" (line 23), \"Sub-agents and plan mode\" listed under the\nnot-built features (line 343), and the dedicated \"**No sub-agents.** ...\nSpawn pi instances via tmux, or build your own with extensions\" note\n(line 452). `replaydata/agents/pi/capabilities.json` records\n`\"subagents\": false`. A pi session is therefore a single flat JSONL\ntranscript per running `pi` instance — there is no Task/Agent tool, no\n`ParentSessionID` linkage, and no child sidechain transcript. With no\nparent-child tree, there is nothing for the scenario's orphan-of-a-subagent\nshape to exercise, and `parent_linked_min`/`subagent_transcripts_min` can\nnever be satisfied. So `agent_supports: no`.\n\nBecause `agent_supports` is `no`, `irrlicht_observes` is `n/a`: there is no\nsubagent tree to orphan, hence no observation to make against the scenario as\nspecified. (Note that the daemon's generic startup orphan sweep *does* apply\nto any stale flat pi transcript whose PID is gone — that is a real,\nadapter-agnostic daemon property keyed on PID liveness via\n`DiscoverPIDByCWD`. But that is the single-session `session-end`/restart\nbehavior, not the parent-child subagent-orphan invariant this scenario tests;\nthe scenario-meanings \"Not to be confused with\" line draws exactly that\ndistinction.)\n\n## Step 2.5 binary-scan guard\n\nBefore locking in `no`, I ran the keyword guard. The `pi` on PATH is a Node\nshebang wrapper resolving to\n`@mariozechner/pi-coding-agent@0.70.0/dist/cli.js`, so `strings $(which pi)`\nis not meaningful — I grepped the real dist bundle instead:\n`grep -rioE \"subagent|sub-agent|spawnAgent|childSession|parentSessionId|orphan|launch.{0,3}agent|Task tool\" dist/` returned **zero matches**. The\nfeature genuinely did not ship. Combined with the README's explicit \"No\nsub-agents\" positioning and `subagents: false` in capabilities, the `no`\nverdict is well-grounded (confidence 0.9, up from the column scan's 0.7).",
+          "caveats": [
+            "The daemon's generic startup orphan sweep DOES apply to a single stale pi transcript whose PID is gone (PID-liveness via DiscoverPIDByCWD) — but that is the flat single-session restart path, not the parent-child subagent-orphan tree this scenario specifies. Re-judge only if pi adds a subagent primitive or a third-party package brings parent-child sessions into stock pi.",
+            "scenario.requires lists [headless_mode, subagents]; pi satisfies headless_mode but not subagents, so the cell is definitionally inapplicable until pi gains subagents."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/pi/capabilities.json",
+              "note": "\"subagents\": false — no child sessions, hence no parent-child orphan tree"
+            },
+            {
+              "kind": "file",
+              "ref": "~/.nvm/versions/node/v22.18.0/lib/node_modules/@mariozechner/pi-coding-agent/README.md",
+              "note": "0.70.0 README: \"No sub-agents.\" (line 452); \"skips features like sub agents and plan mode\" (line 23); \"Sub-agents and plan mode\" in not-built list (line 343)"
+            },
+            {
+              "kind": "file",
+              "ref": "~/.nvm/versions/node/v22.18.0/lib/node_modules/@mariozechner/pi-coding-agent/dist",
+              "note": "Step 2.5 binary scan: grep -rioE \"subagent|spawnAgent|childSession|parentSessionId|orphan|Task tool\" over the real dist bundle (pi is a node-shebang wrapper, so strings on the launcher is empty) returned zero matches — no subagent code shipped in 0.70.0"
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/pi/agent.go",
+              "note": "Source: FilesUnderRoot{~/.pi/agent/sessions} + ExactName{pi} — one flat transcript per pi process; no SubagentCounter, no parent-child linkage in the adapter"
+            },
+            {
+              "kind": "file",
+              "ref": ".claude/skills/ir:onboard-agent/scenario-meanings.md",
+              "note": "subagent-orphan-cleanup primitive is orphan-detection framed on parent+child session trees; 'Not to be confused with' separates it from single-session SIGKILL/session-end"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,511 @@
+{
+  "id": "1.4",
+  "name": "session-resume",
+  "section": "Session lifecycle",
+  "feature": "Session resume",
+  "description": "Claude session is launched, runs one no-op turn, exits cleanly, then re-launches with the SAME --session-id and same cwd. The daemon should observe the same UUID re-appearing (not a new session row) and the second turn driving ready→working on that same session. Adapter-specific note: claudecode's resume mechanism is implicit — passing the same --session-id \u003cUUID\u003e at relaunch and using the same cwd causes claude to append to the existing transcript at ~/.claude/projects/\u003cslug\u003e/\u003cUUID\u003e.jsonl. The driver's new `resume` step does exactly that.",
+  "requires": [
+    "headless_mode"
+  ],
+  "verify": {
+    "transitions_topology": [
+      "ready",
+      "working",
+      "ready",
+      "working",
+      "ready"
+    ],
+    "final_state": "ready",
+    "tool_calls_max": 0
+  },
+  "agents": {
+    "aider": {
+      "artifacts": {},
+      "metadata": {
+        "agent_supports": "partial",
+        "daemon_capability": "incapable",
+        "driver_capability": "gap:resume",
+        "confidence": 0.85,
+        "notes": "agent_supports: partial\ndaemon_capability: incapable\ndriver_capability: gap:resume"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "session-resume",
+          "agent": "aider",
+          "assessed_at": "2026-05-25T00:00:00Z",
+          "agent_supports": "partial",
+          "daemon_capability": "incapable",
+          "driver_capability": "gap:resume",
+          "confidence": 0.85,
+          "body": "## Verdict\n\nagent_supports: partial\ndaemon_capability: incapable\ndriver_capability: gap:resume\n\n## Scenario primitive\n\nThe canonical primitive for `session-resume` is `session_id_assignment` (scenario-meanings.md): the agent carries a STABLE session ID across PID lifetimes (via a `--resume` flag or equivalent), and the user-observable signal is that the SAME `session_id` row reappears after relaunch under a new PID, with state/history preserved. This maps to `replaydata/agents/aider/capabilities.json → features.session_id_assignment`, which is `false` (and the related `session_resume` is also `false`).\n\n## agent_supports: partial\n\nAider (verified against installed 0.86.2 source) has NO session-id concept at all. A full grep of the package for `session.?id` / `--resume` returns nothing relevant. Its only resume-adjacent mechanism is `--restore-chat-history` (a boolean flag, `args.py:289`) which, on relaunch in the same git root, replays the messages logged in the per-project `.aider.chat.history.md` (`args.py:274-294`) back into the LLM context.\n\nThis preserves the *state and history* half of the user-observable signal — re-launching in the same project picks up the prior conversation — but it is a STARTUP reload, not a mid-session pause-and-resume by stable ID, and it is closer to \"append to / re-read an existing log\" than to true session resume. Because the conversational continuity is genuinely there but the defining primitive (a stable session ID) is concretely absent, the honest verdict is `partial` with the carve-out named, not `no`. This matches aider's `capabilities.json`, which records `session_id_assignment: false` and `session_resume: false`.\n\n## daemon_capability: incapable\n\nThis is the load-bearing finding, and it is grounded in the adapter transport, not in aider's docs.\n\nAider is the sole `FilesUnderCWD` adapter (`agent.go`): its transcript is `.aider.chat.history.md` inside each project CWD, and there is no session UUID in the transport. The daemon's process scanner mints the irrlicht `session_id` as `proc-\u003cpid\u003e` — `sessionID := fmt.Sprintf(\"proc-%d\", pid)` (`scanner.go:282`) — and the CWD-resident transcript probe reuses that same `proc.sessionID` (`scanner.go:333`). Identity is therefore keyed on the PID, never on the transcript file and never on any aider-emitted session ID.\n\nConsequence: when aider exits and is re-launched in the same CWD (even with `--restore-chat-history`), the new process gets a NEW PID, hence a NEW `proc-\u003cpid\u003e` session_id, hence a NEW session row. Re-reading the same `.aider.chat.history.md` does not cause irrlicht to reuse the prior `session_id`. The central user-observable signal of this scenario — \"the same `session_id` row reappears after relaunch\" — leaves NO trace the daemon could bind to: there is no aider session ID in the transport for the daemon to key on, and the PID-derived identity model structurally cannot represent one continuous session row across two PID lifetimes for a `FilesUnderCWD` adapter. This is an architectural limit (`incapable`), not a parser mishandling (`bug`): no `events.jsonl` event exists or could exist that re-binds an old `proc-\u003cpid\u003e` to a new PID for this adapter.\n\nNote the second-PID-lifetime half of the signal (\"each new PID lifetime drives its own state transitions correctly\") IS observable — the relaunched process produces its own clean `ready → working → ready` arc via the parser's `####`/`\u003e Tokens:`/IdleFlush state machine. But it does so as a distinct session row, which is the opposite of what the scenario asserts.\n\n## driver_capability: gap:resume\n\nIndependent of the daemon limit, the interactive driver (`scripts/drive-aider-interactive.sh`) implements only `send`, `slash`, `wait_turn`, `interrupt`, and `sleep`. It has no `resume` (nor `restart` / `start_session`) step, which a session-resume recipe would require to drive the exit-and-relaunch arc. Per #476 this is a tooling gap on a separate axis, not an observability limit.\n\n## Route: frozen\n\nThe route is governed by `daemon_capability: incapable` → **frozen**, regardless of the driver axis. Extending the driver with a `resume` step would not unblock the cell: even a perfect relaunch would still mint a new `proc-\u003cpid\u003e` row. There is no recording to make — any recording would show two separate `proc-\u003cpid\u003e` rows, which would not demonstrate session-resume.\n\nWhat would unblock it: aider gaining a stable session-id concept AND the aider adapter gaining a CWD-or-transcript-keyed (rather than PID-keyed) identity so a relaunch re-binds the prior session_id. Both are out of scope of a Stage-1 re-assessment.",
+          "caveats": [
+            "feature-invisible-but-spec-compliant: aider's relaunch DOES restore conversational state via --restore-chat-history + the per-project .aider.chat.history.md, so the 'history preserved' half of the signal holds at the agent level — but irrlicht surfaces it as a brand-new session row, not the original one.",
+            "Identity for aider is PID-derived (proc-\u003cpid\u003e), so any two aider runs in the same CWD are always distinct irrlicht sessions; this is inherent to the FilesUnderCWD transport, not a parser gap.",
+            "The driver also lacks a resume/restart/start_session step (driver_capability: gap:resume), but this is moot here — the daemon-incapable verdict freezes the cell regardless of driver work."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/processlifecycle/scanner.go",
+              "note": "line 282: sessionID := fmt.Sprintf(\"proc-%d\", pid) — aider session_id is PID-derived; line 333 reuses proc.sessionID for the CWD transcript probe, so a relaunch under a new PID is a new row (anchors daemon_capability: incapable)"
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/aider/agent.go",
+              "note": "Source: FilesUnderCWD{Filename: \".aider.chat.history.md\"} — per-CWD transcript, no session UUID in transport"
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/aider/parser.go",
+              "note": "Parser has no session_id concept; maps markdown lines to events only, with IdleFlush synthesizing turn_done — so each PID lifetime gets its own ready→working→ready arc"
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/aider/capabilities.json",
+              "note": "session_id_assignment: false and session_resume: false — the Primitive exercised (session_id_assignment) key is absent in aider; consistent with partial agent support and no stable-ID primitive"
+            },
+            {
+              "kind": "file",
+              "ref": "scripts/drive-aider-interactive.sh",
+              "note": "driver implements send/slash/wait_turn/interrupt/sleep only; no resume/restart/start_session step — anchors driver_capability: gap:resume"
+            },
+            {
+              "kind": "file",
+              "ref": "/Users/ingo/.local/share/uv/tools/aider-chat/lib/python3.12/site-packages/aider/args.py",
+              "note": "installed aider 0.86.2: only resume-adjacent flag is --restore-chat-history (line 289, boolean) re-reading .aider.chat.history.md (line 274); a full source grep for session.?id / --resume returns nothing — aider has no session-id concept"
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": false,
+          "scope_note": "Aider has no formal session-id concept — relaunching in the same cwd auto-loads `.aider.chat.history.md`, which is closer to 'append to existing log' than true session resume. The coverage matrix marks aider supports=partial, observes=unknown for this scenario; the recipe is intentionally not authored until the semantics are nailed down."
+        }
+      }
+    },
+    "claudecode": {
+      "recording_dir": "claudecode/scenarios/session-resume",
+      "artifacts": {
+        "events": "claudecode/scenarios/session-resume/events.jsonl",
+        "transcript": "claudecode/scenarios/session-resume/transcript.jsonl",
+        "manifest": "claudecode/scenarios/session-resume/manifest.json",
+        "golden": "claudecode/scenarios/session-resume/transcript.jsonl.replay.json.golden"
+      },
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "pass_rate": "7/7 phases passed",
+        "agent_cli_version": "2.1.143",
+        "daemon_version": "0.4.5+53618ac",
+        "confidence": 0.9,
+        "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "session-resume",
+          "agent": "claudecode",
+          "assessed_at": "2026-05-17T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.9,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nClaude Code supports session resumption via `--resume \u003cuuid\u003e` (and `--continue` for the most-recent session). The resumed process appends to the existing `~/.claude/projects/\u003cprojHash\u003e/\u003cUUID\u003e.jsonl` transcript file rather than minting a new one, so irrlicht sees the SAME `session_id` row come back after the first lifetime exits.\n\nThe spec asserts three things for the primary variant (clean exit + resume): (1) same session_id reappears (not a new row), (2) state is `ready` initially, (3) `ready → working` on the first new turn. All three are observable in events.jsonl: when the resumed process is detected by the scanner, a new `presession_created` (proc-\u003cPID\u003e) appears, and the existing UUID transcript's next `transcript_activity` event ties back to the original session_id — the same UUID that was alive before v1_exit. The state band shows a clean v1 arc, a grey gap (process gone between exit and resume), and a v2 arc on the same UUID.\n\nThe spec's second variant (multiple kill+resume across PID lifetimes) extends the same shape — each lifetime's turn arc is independent and correctly attributed because the daemon binds PID to the UUID via `DiscoverPID`'s metadata lookup (`~/.claude/sessions/\u003cUUID\u003e.json`) on each new pre-session→UUID handoff. The current recipe records the primary variant only; multi-resume can be a follow-up cell.",
+          "caveats": [
+            "Recipe records the clean-exit-then-resume case only. The spec's second variant (multiple kill+resume across PID lifetimes) shares the same observability surface but isn't exercised by this recording. A follow-up cell can chain N restart+resume cycles if regression coverage warrants.",
+            "Resume relies on the daemon's pre-session → UUID handoff: the new claudecode process starts as `proc-\u003cPID\u003e`, and the DiscoverPID metadata lookup matches it to the existing UUID. If that lookup misses (e.g. stale ~/.claude/sessions/\u003cUUID\u003e.json), the resumed process appears as a fresh UUID-less row until the transcript file's first append rebinds it."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/claudecode/agent.go",
+              "note": "FilesUnderRoot{transcriptsDir()} watches ~/.claude/projects/ — resumed claude appends to the same UUID-keyed transcript, so the same session_id reappears."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/claudecode/pid.go",
+              "note": "DiscoverPID prefers metadata under ~/.claude/sessions/\u003cUUID\u003e.json — this is the lookup that rebinds a newly-launched proc-\u003cPID\u003e to the existing UUID on resume."
+            },
+            {
+              "kind": "file",
+              "ref": ".claude/skills/ir:onboard-agent/scenarios.json",
+              "note": "by_adapter.claudecode.script for session-resume — 9 steps: launch → turn → exit_clean → resume (driver re-launches with --resume \u003cuuid\u003e + cwd) → second turn."
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": true,
+          "preconditions": [
+            "claude CLI on PATH and authenticated (subscription or API key)",
+            "irrlichd is recording (--attach against a daemon with --record, or isolated mode)",
+            "no other claudecode session uses the recipe's UUID"
+          ],
+          "setup": [
+            "Driver generates a fresh lowercased session UUID; the resume step reuses it.",
+            "Driver creates one cwd under \u003cstaging\u003e/cwd/ and reuses it across both launches — claude caches trust per directory, so the second launch skips the trust dialog naturally."
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 2
+            },
+            {
+              "type": "exit_clean"
+            },
+            {
+              "type": "sleep",
+              "seconds": 5
+            },
+            {
+              "type": "resume"
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: again"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl shows the FIRST launch's pre-session entering ready, then the UUID handing off to ready, then the working/ready cycle for turn 1",
+            "events.jsonl contains a process_exited event for the UUID after turn 1 (clean exit)",
+            "events.jsonl shows a SECOND pre-session entering ready (proc-\u003cPID2\u003e) after the first lifetime ends",
+            "the SAME UUID session_id re-appears in events.jsonl after the resume — NOT a new UUID. This proves the session row persisted across PID lifetimes (spec: 'Same session_id reappears')",
+            "second-lifetime working transition fires on the SAME UUID, then back to ready",
+            "final session state is ready",
+            "transcript.jsonl contains exactly 2 user lines and 2 assistant lines — appended across both lifetimes since claude re-opens the existing transcript file"
+          ],
+          "settings": {},
+          "timeout_seconds": 180
+        }
+      }
+    },
+    "codex": {
+      "recording_dir": "codex/scenarios/session-resume",
+      "artifacts": {
+        "events": "codex/scenarios/session-resume/events.jsonl",
+        "transcript": "codex/scenarios/session-resume/transcript.jsonl",
+        "manifest": "codex/scenarios/session-resume/manifest.json",
+        "golden": "codex/scenarios/session-resume/transcript.jsonl.replay.json.golden"
+      },
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "pass_rate": "7/7 phases passed",
+        "agent_cli_version": "0.130.0",
+        "daemon_version": "0.4.7+c461eef",
+        "confidence": 0.9,
+        "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "session-resume",
+          "agent": "codex",
+          "assessed_at": "2026-05-23T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.9,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Re-assessment note (stale verdict overridden)\n\nThe prior `scenarios.json` carried `by_adapter.codex = {applicable:false}` for session-resume, premised on the codex interactive driver lacking a resume primitive. That gap is now CLOSED. The codex interactive driver was extended (commit 8296cd0) with `exit_clean` (Ctrl-D) and `resume` step types, so a clean-exit-then-resume arc is now drivable. This re-assessment is grounded in a live tmux probe of codex 0.130.0, not docs alone.\n\n## agent_supports: yes\n\nCodex CLI 0.130.0 supports resuming a prior interactive conversation via `codex resume \u003cSESSION_ID\u003e` and `codex resume --last`. EMPIRICALLY CONFIRMED on 0.130.0: `codex resume \u003cuuid\u003e` reuses the SAME rollout file under ~/.codex/sessions — same `session_meta.id`, transcript APPENDED, NOT a new rollout. So a resume relaunch is ONE session id across TWO process lifetimes: the first process exits (Ctrl-D), the binary is relaunched as `codex resume \u003cuuid\u003e`, and the same rollout grows with the second turn.\n\nThis is exactly the `session_id_assignment` primitive the scenario exercises: a stable session id across PID lifetimes. Unlike claudecode (implicit resume by re-passing `--session-id \u003cuuid\u003e` + same cwd), codex resume is explicit (`codex resume \u003cuuid\u003e`), but the on-disk effect is identical — the existing rollout is reopened and appended to.\n\n## daemon_capability: full; driver_capability: ready\n\nThe codex `Source` is `FilesUnderRoot{~/.codex/sessions}` (agent.go) and the daemon keys sessions on the rollout filename stem (`rollout-\u003cts\u003e-\u003cuuid\u003e`). Because resume reuses the SAME rollout file, the daemon sees the SAME `session_id` row across both lifetimes — no new session row is minted. The arc the daemon observes:\n\n1. First launch: rollout materializes, `transcript_new` + `state_transition` to `ready` + `pid_discovered` (DiscoverPID binds the codex PID via transcript-writer — pid.go).\n2. First turn: `ready` → `working` → `ready`.\n3. Clean exit (Ctrl-D): `process_exited` for the session.\n4. Resume relaunch (`codex resume \u003cuuid\u003e`): a new PID writes to the SAME rollout. The same `session_id` re-binds to the new PID (`pid_discovered`) — NOT a new session.\n5. Second turn: `ready` → `working` → `ready` on the SAME session id.\n6. Final state `ready`.\n\nWhy `yes`, not `partial` (unlike codex/session-reset): session-reset's `/clear` mints a SECOND rollout with a DISTINCT session_id that the single-session codex curator drops (it filters events by the first session_id only). Session-resume has NO such problem — both lifetimes share ONE session_id, and the driver's `resume` step deliberately keeps `UUID`/`TRANSCRIPT` unchanged and does NOT append a second `SESSION_IDS` entry (drive-codex-interactive.sh step_resume). So the single-session curator captures BOTH lifetimes' events, because they all carry the same `.session_id`. The cell is fully observable on both the live dashboard and the curated fixture.\n\n## applicable\n\n`agent_supports: yes` + `daemon_capability: full; driver_capability: ready` → `applicable: yes`. Proceed to a recording. Expected shape: session_birth → turn 1 (working→ready) → `process_exited` (the Ctrl-D exit) → SAME session id re-binds to a new PID (`pid_discovered`) → turn 2 (working→ready) → final ready. Id stable across the resume; the resumed half is the SAME session, not a new one.",
+          "caveats": [
+            "Codex resume is explicit (`codex resume \u003cuuid\u003e`), unlike claudecode's implicit `--session-id` re-pass. The driver resolves the live rollout UUID before the Ctrl-D exit and relaunches `codex resume \u003cuuid\u003e`; if the UUID can't be resolved it falls back to `codex resume --last`.",
+            "Both process lifetimes append to the SAME rollout file (verified empirically on 0.130.0), so the daemon-side session_id is identical across the resume. The driver's `resume` step keeps UUID/TRANSCRIPT unchanged and does NOT add a second session entry — the single-session curator therefore captures both lifetimes.",
+            "Codex resume requires the rollout to have been flushed before relaunch. The driver Ctrl-D's the TUI (graceful shutdown flushes the rollout), sleeps, then relaunches — the resume picks up the just-written conversation."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/codex/agent.go",
+              "note": "Source = FilesUnderRoot watching ~/.codex/sessions; daemon keys sessions on the rollout filename stem, so a resumed rollout (same file) re-appears as the same session_id."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/codex/pid.go",
+              "note": "DiscoverPID binds the codex PID via DiscoverPIDByTranscriptWriter (the process writing the rollout). On resume a new PID writes the same rollout and re-binds to the existing session_id."
+            },
+            {
+              "kind": "file",
+              "ref": ".claude/skills/ir:onboard-agent/scripts/drive-codex-interactive.sh",
+              "note": "step_resume Ctrl-D's the current codex, kills the tmux session, relaunches `codex resume \u003cuuid\u003e --no-alt-screen`, and KEEPS UUID/TRANSCRIPT unchanged (no second SESSION_IDS entry) — one session id, two lifetimes. exit_clean + resume added in commit 8296cd0."
+            },
+            {
+              "kind": "probe",
+              "ref": "codex 0.130.0 empirical resume probe",
+              "note": "`codex resume \u003cuuid\u003e` reuses the SAME rollout file (same session_meta.id, transcript appended) — does NOT create a new session. `codex resume --last` resumes the most-recent conversation."
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": true,
+          "preconditions": [
+            "codex CLI on PATH and authenticated (codex 0.130.0+ — `codex resume \u003cuuid\u003e` and `codex resume --last` are required; older builds lack the resume subcommand)",
+            "irrlichd is recording (--attach against a daemon with --record, or isolated mode)",
+            "drive-codex-interactive.sh exposes the `exit_clean` and `resume` step types (added in commit 8296cd0)"
+          ],
+          "setup": [
+            "Codex assigns its OWN session UUID per rollout under ~/.codex/sessions/ — the driver does not pass a preferred UUID; it discovers the live rollout and resumes by that UUID.",
+            "The `resume` step Ctrl-D's the running codex (graceful shutdown flushes the rollout → process_exited), kills the tmux session, then relaunches `codex resume \u003cuuid\u003e --no-alt-screen`. Codex APPENDS to the SAME rollout file, so the daemon-side session_id is stable across both lifetimes.",
+            "The driver keeps UUID/TRANSCRIPT unchanged across the resume and does NOT append a second session entry — the single-session curator captures both lifetimes because they share one session_id."
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "resume"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: again"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl shows the first launch's session entering ready, then the working/ready cycle for turn 1",
+            "events.jsonl contains a process_exited event for the session after turn 1 (the Ctrl-D clean exit performed by the resume step)",
+            "the SAME session_id re-binds to a new PID after the resume — NOT a new session_id. This proves codex reopened the existing rollout across PID lifetimes (spec: 'Same session_id reappears')",
+            "second-lifetime working transition fires on the SAME session_id, then back to ready",
+            "final session state is ready",
+            "transcript.jsonl carries both turns appended to one rollout — codex resume reopens the same file rather than minting a new one"
+          ],
+          "settings": {},
+          "timeout_seconds": 180,
+          "scope_note": "Re-assessed 2026-05-23: the prior applicable:false (driver lacked resume) is STALE. The codex interactive driver now exposes exit_clean + resume (commit 8296cd0), and codex 0.130.0's `codex resume \u003cuuid\u003e` reopens the SAME rollout file (verified empirically) — one session id across two process lifetimes. Same single-session-two-lifetimes shape as claudecode/session-resume, but codex resume is explicit (`codex resume \u003cuuid\u003e`) where claudecode re-passes `--session-id`. How it differs between runs: UUID/PID/timestamps/token counts vary; the structural arc (birth → turn1 working/ready → process_exited → same-id re-bind → turn2 working/ready → final ready) is fixed. If it breaks, check drive-codex-interactive.sh step_resume (UUID resolution + `codex resume \u003cuuid\u003e` relaunch) and confirm codex flushed the rollout on Ctrl-D before relaunch."
+        }
+      }
+    },
+    "opencode": {
+      "recording_dir": "opencode/scenarios/session-resume",
+      "artifacts": {
+        "events": "opencode/scenarios/session-resume/events.jsonl",
+        "transcript": "opencode/scenarios/session-resume/transcript.jsonl",
+        "manifest": "opencode/scenarios/session-resume/manifest.json",
+        "golden": "opencode/scenarios/session-resume/transcript.jsonl.replay.json.golden"
+      },
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "pass_rate": "6/6 phases passed",
+        "agent_cli_version": "unknown",
+        "daemon_version": "0.4.7+e0e773f.dirty",
+        "confidence": 0.85,
+        "notes": "OpenCode's `opencode run --session \u003cid\u003e` chaining IS session resume — each invocation after the first joins the existing SQLite session row. The daemon observes the same ses_… id across PID lifetimes (process exits between turns, then a fresh process re-emits transcript activity for the same session). Recording validates 4/4 phases: session_birth, turn1 cycle, session_resumed (same id re-appears)."
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "session-resume",
+          "agent": "opencode",
+          "assessed_at": "2026-05-25T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.85,
+          "body": "OpenCode's `opencode run --session \u003cid\u003e` chaining IS session resume — each invocation after the first joins the existing SQLite session row. The daemon observes the same ses_… id across PID lifetimes (process exits between turns, then a fresh process re-emits transcript activity for the same session). Recording validates 4/4 phases: session_birth, turn1 cycle, session_resumed (same id re-appears).",
+          "caveats": [
+            "Session continuity is via SQLite, not a persistent PID. Irrlicht's PID-liveness check doesn't apply across invocations; continuity is implicit in the session table.",
+            "Coverage matrix notes ParentSessionID isn't populated recursively for resume chains — that's a separate gap from this scenario's narrower 'same session id reappears' assertion."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/opencode/agent.go",
+              "note": "ProcessOwnedStore source variant."
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": true,
+          "preconditions": [
+            "opencode CLI on PATH and authenticated",
+            "irrlichd is recording with the opencode SQLite watcher enabled"
+          ],
+          "setup": [
+            "Create an empty cwd under \u003cstaging\u003e/cwd/",
+            "drive-opencode-interactive.sh's `--session \u003cid\u003e` plumbing already chains turns across separate `opencode run` invocations; the second `send` IS the resume case (different process, same session row)"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: again"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl shows the opencode ses_… session born in ready",
+            "ready→working→ready cycle for turn 1",
+            "the SAME ses_… id appears again after the first process exits — the second `opencode run --session` joins the existing SQLite session",
+            "ready→working→ready cycle for turn 2 on the same ses_… id",
+            "final session state is ready"
+          ],
+          "settings": {},
+          "timeout_seconds": 180,
+          "scope_note": "OpenCode's per-turn process model means every `opencode run --session` after the first IS session resume. The recording validates that the SQLite-backed session row survives across PID lifetimes — same shape as claudecode's session-resume, just without an in-process REPL."
+        }
+      }
+    },
+    "pi": {
+      "recording_dir": "pi/scenarios/session-resume",
+      "artifacts": {
+        "events": "pi/scenarios/session-resume/events.jsonl",
+        "transcript": "pi/scenarios/session-resume/transcript.jsonl",
+        "manifest": "pi/scenarios/session-resume/manifest.json",
+        "golden": "pi/scenarios/session-resume/transcript.jsonl.replay.json.golden"
+      },
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "pass_rate": "7/7 phases passed",
+        "agent_cli_version": "0.70.0",
+        "daemon_version": "0.4.7+ea59cea",
+        "confidence": 0.78,
+        "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "session-resume",
+          "agent": "pi",
+          "assessed_at": "2026-05-25T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.78,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nThis reassessment flips the previous applicable:false verdict for the AGENT axis. Pi natively reopens a prior session at relaunch: `pi -c` (continue the most-recent session), `pi -r` (resume picker), and `pi --session \u003cuuid\u003e` (resume a specific session). Each reuses the SAME uuid.jsonl transcript under ~/.pi/agent/sessions/--\u003ccwd\u003e--/, rather than minting a new one.\n\nirrlicht observes this with no code change. The pi adapter's Source is FilesUnderRoot{~/.pi/agent/sessions} (agent.go), so the resumed process appends to the existing UUID-keyed transcript and the daemon sees the SAME session_id row come back after the first lifetime exits — structurally identical to the claudecode session-resume cell, which records cleanly. The state band would show a v1 arc, a grey gap (process gone between exit and resume), and a v2 arc on the same UUID. DiscoverPID (pid.go) re-binds the newly-launched pi PID to the existing session by matching the process CWD to the session's working directory on each new lifetime.\n\nSo the spec's three primary assertions are all observable: (1) same session_id reappears (not a new row), (2) state ready initially on resume, (3) ready→working on the first new turn of the resumed lifetime.\n\n## Driver concern (C9) — why no recording yet\n\nDespite the yes/yes verdict, this cell CANNOT be recorded with the current tooling. drive-pi-interactive.sh implements only `send`, `slash`, `wait_turn`, `interrupt`, `sleep`. Recording session-resume requires a multi-phase driver capability the pi driver lacks: launch pi, run a turn, EXIT the process cleanly, then RELAUNCH pi with a resume flag (`-c` / `-r` / `--session \u003cuuid\u003e`) pointing at the same session, and run a second turn. That needs `exit_clean` + `resume` (or `restart`) step types. The pi driver tracks only ONE session UUID + transcript per run and never relaunches.\n\nThis is the same gap that degraded the sibling session-reset cell to applicable:false. It is a developer task (extend drive-pi-interactive.sh with exit_clean + a resume primitive that relaunches with the same uuid), out of scope for the implement pipeline. The recipe is therefore committed applicable:false with a scope_note, and expected.jsonl is committed as the documented TARGET arc for when the driver gains the capability.",
+          "caveats": [
+            "Recording deferred: drive-pi-interactive.sh lacks exit_clean + resume/restart step types, so the relaunch-with-same-uuid arc cannot be driven. Same driver gap as session-reset.",
+            "The recipe records the clean-exit-then-resume primary variant only. The spec's second variant (multiple kill+resume across PID lifetimes) shares the same observability surface and can be a follow-up cell once the driver supports relaunch.",
+            "Resume re-binding relies on DiscoverPID matching the relaunched pi's CWD to the session's working directory; the recipe must reuse the same cwd across launches."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/pi/agent.go",
+              "note": "Source: FilesUnderRoot{sessionsDir()} watches ~/.pi/agent/sessions — a resumed pi reopens the same uuid.jsonl, so the same session_id reappears."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/pi/pid.go",
+              "note": "DiscoverPID matches a pi process to a session by CWD — re-binds the relaunched PID to the existing session on each new lifetime."
+            },
+            {
+              "kind": "file",
+              "ref": ".claude/skills/ir:onboard-agent/scripts/drive-pi-interactive.sh",
+              "note": "Case labels are send/slash/wait_turn/interrupt/sleep only — no exit_clean / resume / restart. This is the C9 driver gap that blocks recording."
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": true,
+          "preconditions": [
+            "pi CLI on PATH and authenticated (auth set up out-of-band).",
+            "irrlichd is recording (--attach against a daemon with --record).",
+            "drive-pi-interactive.sh exposes the `exit_clean` and `resume` step types (added in commit e88e35b1).",
+            "No other pi session is being driven in the same cwd while this records (DiscoverPID matches a running pi to a session by CWD)."
+          ],
+          "setup": [
+            "Pi assigns its own session UUID per launch under ~/.pi/agent/sessions/--\u003ccwd\u003e--/ as \u003cts\u003e_\u003cuuid\u003e.jsonl, created lazily on the first user message. The driver discovers that transcript during wait_turn.",
+            "The `resume` step Ctrl-D's the running pi (graceful shutdown flushes the transcript -\u003e daemon emits process_exited), kills the tmux session, then relaunches `pi --session \u003ctranscript\u003e` in the SAME cwd. Pi reopens and APPENDS to the same \u003cts\u003e_\u003cuuid\u003e.jsonl, so the daemon-side session_id is stable across both process lifetimes.",
+            "The driver keeps UUID/TRANSCRIPT unchanged across the resume and does NOT allocate a second slot — the single-session curator captures both lifetimes because they share one session_id (session.uuids/transcript.paths each hold one entry).",
+            "No separate exit_clean step precedes resume: the resume step performs the clean Ctrl-D exit itself, which is what emits the first-lifetime process_exited. Adding a standalone exit_clean first would tear down the (only) tmux server, so resume's own `tmux send-keys` would then hit a dead server and abort the driver — drop it."
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "resume"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: fresh"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 6
+            }
+          ],
+          "verify": [
+            "events.jsonl shows the first launch's session entering ready, then the working/ready cycle for turn 1.",
+            "events.jsonl contains a process_exited event for the session after turn 1 (the Ctrl-D clean exit performed by the resume step).",
+            "the SAME session_id re-binds to a new PID after the resume — NOT a new session_id. This proves pi reopened the existing transcript across PID lifetimes (spec: 'Same session_id reappears').",
+            "second-lifetime working transition fires on the SAME session_id, then back to ready.",
+            "state never enters working between the first-lifetime exit and the second turn (no premature/incorrect waiting state on resume).",
+            "final session state is ready.",
+            "transcript.jsonl carries both turns appended to one \u003cts\u003e_\u003cuuid\u003e.jsonl — pi --session reopens the same file rather than minting a new one."
+          ],
+          "settings": {},
+          "timeout_seconds": 240,
+          "scope_note": "Re-assessed 2026-05-25 -\u003e agent_supports:yes / daemon_capability:full / driver_capability:ready (0.78): the prior applicable:false (driver lacked exit_clean + resume) is STALE. The pi interactive driver now exposes exit_clean + resume (commit e88e35b1), and `pi --session \u003ctranscript\u003e` reopens and APPENDS to the SAME \u003cts\u003e_\u003cuuid\u003e.jsonl across two process lifetimes — one session_id, two lifetimes. Same single-session-two-lifetimes shape as claudecode/codex session-resume. How it differs between runs: UUID/PID/timestamps/token counts vary; the structural arc (v1 birth -\u003e turn1 working/ready -\u003e process_exited -\u003e same-id re-bind in ready -\u003e turn2 working/ready -\u003e final ready) is fixed. Pi turns can be slow, hence generous wait_turn/sleep budgets. If it breaks, check drive-pi-interactive.sh step_resume (transcript resolution + `pi --session` relaunch in the same cwd so DiscoverPID re-binds the new PID) and confirm pi flushed the transcript on Ctrl-D before relaunch."
+        }
+      }
+    }
+  }
+}

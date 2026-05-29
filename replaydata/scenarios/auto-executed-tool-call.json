@@ -1,0 +1,538 @@
+{
+  "id": "2.2",
+  "name": "auto-executed-tool-call",
+  "section": "Turn shape",
+  "feature": "Auto-executed tool call",
+  "description": "Claude executes a single auto-approved Bash tool call ('echo hello') inside one turn, then replies 'done'. Verifies the ready→working→ready arc with a tool_use mid-turn and the spec invariant that state never enters waiting for auto-executed tool calls. Distinct from full-lifecycle-toolcall, which deliberately exercises the PostToolUse hook to surface waiting; this scenario locks down the auto-approved happy path.",
+  "requires": [
+    "headless_mode",
+    "tool_calls"
+  ],
+  "verify": {
+    "transitions_topology": [
+      "ready",
+      "working",
+      "ready"
+    ],
+    "final_state": "ready",
+    "contains_tool_call": true,
+    "has_waiting_state": false
+  },
+  "agents": {
+    "aider": {
+      "recording_dir": "aider/scenarios/auto-executed-tool-call",
+      "artifacts": {
+        "events": "aider/scenarios/auto-executed-tool-call/events.jsonl",
+        "transcript_md": "aider/scenarios/auto-executed-tool-call/transcript.md",
+        "manifest": "aider/scenarios/auto-executed-tool-call/manifest.json"
+      },
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "pass_rate": "5/5 phases passed",
+        "agent_cli_version": "0.86.2",
+        "daemon_version": "0.4.7+fd1343c",
+        "confidence": 0.85,
+        "notes": "agent_supports: yes\ndaemon_capability: full\ndriver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "auto-executed-tool-call",
+          "agent": "aider",
+          "assessed_at": "2026-05-25T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.85,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Scenario meaning\n\nThe `auto-executed-tool-call` cell exercises the Primitive `tool_calls`: the agent invokes one or more tools mid-turn, all auto-resolve without user approval, and the session traces `ready → working → ready` while **never** entering `waiting`. The User-observable signal is exactly that arc plus `contains_tool_call: true` and `has_waiting_state: false`. This is the gate-less happy path — deliberately distinct from `tool-gate-permission-prompt`, `user-blocking-question`, and `auto-classified-permission`, all of which involve a gate aider structurally cannot reproduce.\n\n## agent_supports: yes\n\nAider performs file edits and shell commands as ordinary autonomous turn actions. It generates a search/replace edit block and applies it to the working tree, or runs a shell command, with no per-tool approval. The interactive driver launches `aider --no-auto-commits --yes-always --no-gitignore` in a tmux REPL: `--yes-always` answers every confirmation `yes` so any file-add prompt auto-resolves and the tool executes without user input (aider.chat config/options + usage/modes docs). `capabilities.json` records `tool_calls: true` and `permission_hooks: false`, matching the Primitive exercised — the agent invokes tools and resumes without user approval, and there is no gate to enter.\n\n## daemon_capability: full\n\nThe daemon, as it exists today, emits every observable the canonical signal asserts. Aider's `Source` is `FilesUnderCWD{Filename: .aider.chat.history.md, RawLineParser}` (agent.go); the markdown transcript is parsed line-by-line in parser.go:\n\n- **`ready → working`.** A `#### \u003cprompt\u003e` line opens the turn (`turnOpen = true`) and emits `user_message`; the state classifier's default branch (Rule 4) moves the session to `working`.\n- **Tool call within the working span (`contains_tool_call`).** `appliedEditRE` (`\u003e Applied edit to \u003cfile\u003e`) → `toolCall(\"Edit\")` and `runningRE` (`\u003e Running \u003ccmd\u003e`) → `toolCall(\"Bash\")`. Each emits a discrete `tool_result` event carrying `ToolUses[0]` (synthetic ID + Name) and a matching `ToolResultIDs` entry. So a tool call is provable from `events.jsonl`/`transcript.jsonl`. Covered by `TestParser_ToolCall_AppliedEdit` and `TestParser_ToolCall_RunningShell`.\n- **`working → ready`, never `waiting`.** `toolCall` emits the tool open and close in one `tool_result` (comment: \"Aider runs with --yes-always; tools execute immediately … The state classifier sees a completed tool call without a permission window\"), so `HasOpenToolCall` is false after the pass. The classifier's waiting paths cannot fire: Rule 0 (`PermissionPending`) never sets — aider has no permission hook; Rule 1 (`NeedsUserAttention` / `isUserBlockingTool`) returns true only for `AskUserQuestion`/`ExitPlanMode`/`question`, never for the `Edit`/`Bash` names aider emits; and `ShouldSynthesizeCollapsedWaiting` (session_detector_activity.go) is gated on those same user-blocking tools, so the collapsed-waiting synthesis is not triggered. The turn closes via `IdleFlush` (1500 ms quiet → synthetic `turn_done`), flipping the session back to `ready` (Rule 2b). Thus `has_waiting_state: false` holds by construction.\n\nA trace exists in the watched Source AND the parser/classifier handles it today, so `daemon_capability: full`.\n\n## driver_capability: ready\n\nThe recipe script uses only `send`, `wait_turn`, and `sleep` — all three implemented by `scripts/drive-aider-interactive.sh`. None of the driver's gap primitives (`restart`, `reset_session`, `resume`, `start_session`, `exit_clean`, `sigkill`, `keys`, `session`, `fork`) is needed to drive a single gate-less tool-call turn, so the driver is `ready`.\n\n## Why the matrix said unknown, and why full is the honest verdict\n\nThe coverage row records `daemon_capability: unknown` with the note \"tool calls reduced to '\u003e Applied edit' / '\u003e Running' markdown markers; coarse-grained.\" That granularity statement is accurate — aider's markdown transcript yields one marker line per tool with no arguments or result payload, unlike a structured JSONL agent — but the canonical signal for THIS cell is only \"a tool call is observed inside the working span, and the full ready→working→ready arc completes without waiting.\" Both are fully met. Per the authoring rule (caveats over downgrades), the honest daemon verdict is `full` with the coarse granularity captured as a caveat, not a defensive `bug`/`incapable`. This also ratifies the sibling `full-lifecycle-toolcall` coverage cell for the same primitive.\n\n## Route\n\nrecord — proceed to recipe/record against the gate-less `auto-executed-tool-call` verify (ready→working→ready, contains_tool_call, no waiting), exactly as the codex and pi recipes for this cell already do.",
+          "caveats": [
+            "Coarse-grained tool visibility: aider's markdown transcript yields one marker line per tool (`\u003e Applied edit to \u003cfile\u003e` → Edit, `\u003e Running \u003ccmd\u003e` → Bash). The parser emits a single collapsed `tool_result` per marker with no tool arguments or result payload — sufficient to assert a tool call occurred, but not to inspect what the tool did. Pattern: feature-invisible-but-spec-compliant (the spec asserts a tool call happened, which IS observed).",
+            "Tool-name inference is heuristic: the parser maps `Applied edit` → \"Edit\" and `Running` → \"Bash\" by line prefix. These are synthetic labels, not aider's own tool taxonomy; they are stable for the standard edit/shell paths this scenario exercises.",
+            "Working→ready latency is idle-flush-bound: aider emits no end-of-turn marker, so `working→ready` is synthesized by IdleFlush after a 1500 ms quiet window, gated by the SessionDetector's ~5s staleWorkingRefreshInterval poll. The interactive driver keeps the REPL alive across one send + wait_turn (trailing ≥8s sleep) so the working→ready settle is observed before `process_exited` and the arc is not truncated."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/aider/parser.go",
+              "note": "appliedEditRE/runningRE → toolCall() emits a single tool_result with ToolUses+ToolResultIDs; toolCall comment states tools execute immediately under --yes-always with no permission window; #### opens turn (user_message → working); IdleFlush (1500ms) synthesizes turn_done → ready. Grounds daemon_capability: full."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/aider/parser_test.go",
+              "note": "TestParser_ToolCall_AppliedEdit asserts one Edit ToolUse with matching ToolResultID; TestParser_ToolCall_RunningShell asserts one Bash ToolUse — confirms the tool_result event shape the daemon emits for this cell."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/aider/agent.go",
+              "note": "Source variant FilesUnderCWD{Filename: .aider.chat.history.md, RawLineParser}; CommandPattern '/aider' matcher; per-process Parser instance for idle-flush state. Confirms transport trace exists for daemon_capability: full."
+            },
+            {
+              "kind": "file",
+              "ref": "core/application/services/state_classifier.go",
+              "note": "ClassifyState: Rule 0 PermissionPending and Rule 1 NeedsUserAttention are the only waiting paths; neither fires for aider's non-blocking Edit/Bash tool_result, so the arc is ready→working (Rule 4)→ready (Rule 2b) with no waiting — daemon_capability: full for the no-waiting invariant."
+            },
+            {
+              "kind": "file",
+              "ref": "core/domain/session/session.go",
+              "note": "isUserBlockingTool returns true only for AskUserQuestion/ExitPlanMode/question; aider's synthetic Edit/Bash names are not user-blocking, so NeedsUserAttention is false → no waiting."
+            },
+            {
+              "kind": "file",
+              "ref": "core/application/services/session_detector_activity.go",
+              "note": "ShouldSynthesizeCollapsedWaiting fires only for AskUserQuestion/ExitPlanMode + permissionPending overlays; aider's Edit/Bash tool_result does not trigger it, confirming has_waiting_state: false structurally."
+            },
+            {
+              "kind": "file",
+              "ref": ".claude/skills/ir:onboard-agent/scripts/drive-aider-interactive.sh",
+              "note": "Implements send / slash / wait_turn / interrupt / sleep. The recipe script (send + wait_turn + sleep) uses only implemented step types — no gapped primitive needed → driver_capability: ready."
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/aider/capabilities.json",
+              "note": "tool_calls: true, permission_hooks: false — the Primitive exercised (tool_calls) is supported and there is no gate, so no waiting is possible."
+            },
+            {
+              "kind": "url",
+              "ref": "https://aider.chat/docs/config/options.html",
+              "note": "--yes-always = 'Always say yes to every confirmation'; --no-auto-commits / --no-gitignore are the flags the interactive driver launches with."
+            },
+            {
+              "kind": "url",
+              "ref": "https://aider.chat/docs/usage/modes.html",
+              "note": "Aider applies file edits automatically during a turn via search/replace edit blocks and runs shell commands; tool use is a standard autonomous turn action."
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": true,
+          "preconditions": [
+            "aider CLI on PATH and authenticated against its configured provider/model (auth is set up out-of-band; the rig's precheck delegates auth to the user). Headless aider with no reachable provider hangs on the model-auth prompt; the live REPL needs a model that actually answers the prompt so the file-edit tool call really runs.",
+            "tmux available — the interactive driver runs aider in a tmux REPL so it stays alive across the turn (the working→ready settle is idle-flush-bound and must be observed before teardown)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+          ],
+          "setup": [
+            "The interactive driver (drive-aider-interactive.sh) git-inits a fresh per-run cwd under \u003cstaging\u003e/cwd/, launches `aider --no-auto-commits --yes-always --no-gitignore` (plus --model if IRRLICHT_AIDER_MODEL is set) inside a tmux session, and waits for the `\u003e Repo-map:` banner line in .aider.chat.history.md before sending the prompt",
+            "aider stores its transcript as .aider.chat.history.md in the cwd (FilesUnderCWD, RawLineParser), so the daemon keys the WHOLE session by proc-\u003cPID\u003e — there is no separate transcript-UUID rollout session and no handoff/reconcile; the turn arc, pid_discovered and teardown all land on that one proc-\u003cPID\u003e row. The transcript is LAZY (materializes on first input), but the proc-\u003cPID\u003e pre-session is observable from launch (that is where the spec's session_birth ‘ready within 1s’ is grounded)",
+            "No auto-mode / permission step is needed and there is no gate to enable: aider runs under --yes-always and has NO permission hook (capabilities.json permission_hooks:false), so the file-add confirmation auto-answers and the edit applies straight through with no permission window — unlike the claudecode recipe for this cell, which must enable auto mode to keep a Bash call from tripping a gate. The session therefore never enters waiting (parser.go appliedEditRE collapses the edit into a single tool_result; ShouldSynthesizeCollapsedWaiting never fires for an Edit/Bash marker)",
+            "WHY interactive, not headless `aider --message` (drift fix, same shape as the pi/codex siblings for this coverage_id): aider emits no end-of-turn marker, so working→ready is synthesized by IdleFlush after a ~1.5s quiet window, clamped to the SessionDetector's ~5s working-refresh poll; a headless --message run can exit promptly after the reply, so the daemon misses the terminal working→ready settle before process_exited and truncates the arc. Keeping aider alive in the REPL across one send + wait_turn lets the daemon observe the full ready→working→ready settle cleanly, and the single tmux kill-session teardown then yields one clean process_exited",
+            "wait_turn blocks until a new `\u003e Tokens:` line appears in the transcript (aider's per-round close marker), so the trailing sleep never races a still-running turn; the ≥8s trailing sleep is one full idle-flush cycle plus slack so the working→ready settle is observed before teardown",
+            "The send self-contains the fixture: aider is asked to create hello.txt then reply done, forcing exactly one auto-executed file-edit tool call inside the working span"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Create a new file named hello.txt with exactly the contents: hello\n\nThen on the next line reply with exactly: done"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 8
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a transcript_new + presession_created for the proc-\u003cPID\u003e session born ready within ~1s of REPL launch",
+            "events.jsonl contains a pid_discovered event bound to the same proc-\u003cPID\u003e session_id",
+            "events.jsonl contains exactly one state_transition→working / →ready arc on the proc-\u003cPID\u003e session_id, sustained across the auto-executed file-edit tool call",
+            "transcript.jsonl contains a collapsed tool_result (an Edit ToolUse, parsed from the `\u003e Applied edit to hello.txt` marker) inside the working span — the auto-executed, ungated tool call (coarse-grained: one marker, no args/result payload)",
+            "events.jsonl contains NO state_transition to waiting for the session at any point (the edit auto-executes under --yes-always; aider never gates)",
+            "the session's final live state is ready before the driver tears the REPL down",
+            "events.jsonl contains exactly one process_exited on the proc-\u003cPID\u003e session at REPL teardown"
+          ],
+          "settings": {},
+          "timeout_seconds": 300
+        }
+      }
+    },
+    "claudecode": {
+      "recording_dir": "claudecode/scenarios/auto-executed-tool-call",
+      "artifacts": {
+        "events": "claudecode/scenarios/auto-executed-tool-call/events.jsonl",
+        "transcript": "claudecode/scenarios/auto-executed-tool-call/transcript.jsonl",
+        "manifest": "claudecode/scenarios/auto-executed-tool-call/manifest.json",
+        "golden": "claudecode/scenarios/auto-executed-tool-call/transcript.jsonl.replay.json.golden"
+      },
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "pass_rate": "3/3 phases passed",
+        "agent_cli_version": "2.1.143",
+        "daemon_version": "0.4.5+8ac1f15",
+        "confidence": 0.95,
+        "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "auto-executed-tool-call",
+          "agent": "claudecode",
+          "assessed_at": "2026-05-17T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.95,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nClaude Code is built around auto-executed tool use. Its model emits `tool_use` content blocks for `Bash`, `Read`, `Write`, `Edit`, `Glob`, `Grep`, etc., the runtime executes them against pre-approved permissions, then feeds `tool_result` blocks back into the next assistant turn — all without a user prompt. A prompt like \"read README.md and summarise it\" exercises this path directly.\n\nThe spec's two Expected bullets map cleanly onto irrlicht's claudecode transport:\n\n**Bullet 1 — `ready → working → ready`.** The JSONL transcript appends a `user` message (drives `ready → working`), then one or more `assistant` messages containing `tool_use` blocks, interleaved with `user` messages containing `tool_result` blocks. The parser's `scanMessageContent` (parser.go:305-329) walks these blocks and records `ToolUses` / `ToolResultIDs` on the parsed event, but the session-level state stays `working` for the duration. Once the final assistant message lands with a terminal `stop_reason` (`end_turn`, `stop_sequence`, etc. — parser.go:286-298), state transitions `working → ready`. The daemon emits the two `state_transition` events that satisfy this bullet.\n\n**Bullet 2 — state never entered `waiting`.** `waiting` is reserved for user-blocking signals (permission prompt, AskUserQuestion). An auto-executed tool call with pre-approved permissions emits neither. The recipe's `expect_no_waiting` invariant on the turn phase asserts this directly against the daemon's event stream.\n\n## What irrlicht does NOT see (and why that's OK)\n\nIndividual tool_use / tool_result pairs are parsed and counted but do not appear as state_transitions — by design, intra-turn tool calls must not flicker state. The assessment's bullets only assert state-level observables, which matches what irrlicht emits.",
+          "caveats": [
+            "Tool calls that trigger an interactive permission prompt would push state to `waiting` and belong to a different feature (`Tool gate via permission prompt`). This scenario's recipe must pre-approve the tool set or use only auto-approved tools (Read, Glob, Grep)."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": ".specs/agent-scenarios.md",
+              "note": "Section 'Feature: Auto-executed tool call' (lines 121-127) — two Expected bullets."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/claudecode/parser.go",
+              "note": "scanMessageContent walks tool_use/tool_result blocks (305-329); terminal stop_reason set drives working→ready (286-298)."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/claudecode/agent.go",
+              "note": "Adapter declares JSONLineParser source — turn-end transitions derive from assistant message stop_reason."
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": true,
+          "preconditions": [
+            "claude CLI on PATH and authenticated (subscription or API key)",
+            "irrlichd is recording (--attach against a daemon with --record, or isolated mode)",
+            "Claude Code launched in auto mode or with Bash pre-approved in settings — the recipe must NOT trip a permission gate"
+          ],
+          "setup": [
+            "Driver generates a fresh lowercased session UUID and a fresh cwd under \u003cstaging\u003e/cwd/",
+            "Auto mode is enabled by the driver (Shift+Tab until 'auto mode on' appears in the footer) so the safe Bash call is auto-classified"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Run bash 'echo hello' using the Bash tool, then reply 'done'."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl shows pre-session entering ready, then the UUID handing off to ready",
+            "events.jsonl shows exactly one ready→working transition and one working→ready transition for the UUID",
+            "events.jsonl contains at least one tool_use event for the Bash tool inside the working span",
+            "events.jsonl contains NO state_transition to waiting for the UUID during the entire run (auto-approved → PermissionPending never set)",
+            "final session state is ready",
+            "transcript.jsonl contains 1 user line and at least 2 assistant lines (tool_use + final reply)"
+          ],
+          "settings": {},
+          "timeout_seconds": 180
+        }
+      }
+    },
+    "codex": {
+      "recording_dir": "codex/scenarios/auto-executed-tool-call",
+      "artifacts": {
+        "events": "codex/scenarios/auto-executed-tool-call/events.jsonl",
+        "transcript": "codex/scenarios/auto-executed-tool-call/transcript.jsonl",
+        "manifest": "codex/scenarios/auto-executed-tool-call/manifest.json",
+        "golden": "codex/scenarios/auto-executed-tool-call/transcript.jsonl.replay.json.golden"
+      },
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "pass_rate": "6/6 phases passed",
+        "agent_cli_version": "0.130.0",
+        "daemon_version": "0.4.7+14e1e7a",
+        "confidence": 0.9,
+        "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "auto-executed-tool-call",
+          "agent": "codex",
+          "assessed_at": "2026-05-23T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.9,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\n`auto-executed-tool-call` (scenario-meanings.md): the agent uses one or more tools mid-turn, every call auto-resolves with NO user approval gate, and the turn completes — the user-observable arc is `ready → working → ready` and state NEVER enters `waiting`. Primitive `tool_calls`; requires `headless_mode` and `tool_calls`. This cell focuses on the AUTO-EXECUTED (ungated) nature of the round-trip; the sibling `full-lifecycle-toolcall` (coverage_id auto-executed-tool-call, codex recorded 6/6) already showed a function_call/function_call_output round-trip mid-turn.\n\n**agent_supports: yes.** Codex CLI 0.130.0 runs shell/exec tools autonomously inside its own sandbox with no permission hook — `replaydata/agents/codex/capabilities.json` records `tool_calls: true` and `permission_hooks: false`. A prompt that asks codex to run a quick read-only shell command (e.g. `pwd`) produces a real tool round-trip that auto-resolves without ever blocking on the user.\n\n**daemon_capability: full; driver_capability: ready.** The codex parser (parser.go) translates `function_call` / `function_call_output` transcript events into tool-use / tool-result records and `task_complete` event_msg into `turn_done`, so the daemon keeps the session `working` across the tool call and settles `working → ready` at turn end via the primary `IsAgentDone()` path. With no permission hook, no `waiting` transition is ever emitted — matching the scenario's negative invariant. Sibling interactive cells multi-turn-conversation (10/10) and full-lifecycle-toolcall (6/6) confirm the daemon observes codex's live-REPL working↔ready arcs cleanly.\n\n## Recipe-shape note (interactive, not headless)\n\nRecorded with the INTERACTIVE driver (`send` a tool-using prompt → `wait_turn` → trailing `sleep`), not headless `codex exec`. A single-shot `exec` turn is too short for the daemon to observe the `ready → working` flip (debounce coalesces it — basic-turn headless lands 3/5), and its turn-end surfaces as `process_exited` rather than a `working → ready` settle. The live REPL stays alive across the turn so the daemon observes the full working→ready arc on the rollout session, then `process_exited` only at REPL teardown.",
+          "caveats": [
+            "claudecode's auto-executed-tool-call recipe enables auto mode to keep a safe Bash call from tripping a permission gate; codex has no such gate (permission_hooks:false), so the codex recipe needs no auto-mode step — the shell tool auto-runs inside codex's sandbox and the spec asserts a no-waiting invariant.",
+            "Near-duplicate of the sibling full-lifecycle-toolcall codex recording (same ready→working→ready arc, same no-waiting invariant). Differentiated by intent: this cell uses a read-only `pwd` prompt to spotlight the ungated auto-execution, where the sibling's prose framing leans on the round-trip itself."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/codex/parser.go",
+              "note": "function_call / function_call_output → tool-use/tool-result; task_complete → turn_done so working→ready settles via primary path"
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/codex/capabilities.json",
+              "note": "tool_calls: true, permission_hooks: false — tools auto-resolve in-sandbox, no waiting gate"
+            },
+            {
+              "kind": "file",
+              "ref": ".claude/skills/ir:onboard-agent/scenario-meanings.md",
+              "note": "auto-executed-tool-call canonical flow: ready→working→ready, never enters waiting"
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/codex/scenarios/full-lifecycle-toolcall/expected.jsonl",
+              "note": "sibling codex cell, coverage_id auto-executed-tool-call, recorded 6/6 — interactive recording shape reused here"
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/codex/scenarios/multi-turn-conversation/manifest.json",
+              "note": "interactive codex live-REPL turn arcs validated 10/10 — the recording shape used here"
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": true,
+          "preconditions": [
+            "codex CLI on PATH and authenticated (~/.codex/config.toml or OPENAI_API_KEY)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+          ],
+          "setup": [
+            "The interactive driver launches `codex --no-alt-screen` in a fresh per-run cwd under \u003cstaging\u003e/cwd/, accepts the trust dialog, and waits for the TUI banner + MCP boot before sending the prompt",
+            "No auto-mode step is needed: codex has no permission gate (capabilities.json permission_hooks:false), so the shell tool runs autonomously inside codex's sandbox — unlike the claudecode recipe, which must enable auto mode to keep a Bash call from tripping a gate",
+            "Each send bumps the expected-turn counter; wait_turn blocks until a new event_msg/task_complete line appears in the rollout, so the trailing sleep never races a still-running turn"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Run the shell command 'pwd' using your shell tool, then tell me the directory it printed."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a presession_created (proc-\u003cPID\u003e) event in ready within 1000 ms of agent launch",
+            "events.jsonl contains a transcript_new for the rollout session with a distinct session_id, born ready",
+            "events.jsonl contains a pid_discovered event bound to the rollout session_id",
+            "events.jsonl contains a state_transition→working on the rollout session_id when the tool-using prompt is sent, sustained across the auto-executed shell call",
+            "transcript.jsonl contains a function_call / function_call_output pair for the pwd command (the auto-executed, ungated tool call)",
+            "events.jsonl contains a state_transition→ready on the same rollout session_id once the tool resolves and the turn completes",
+            "events.jsonl contains NO state_transition to waiting for the rollout session at any point (codex has no permission gate; the call auto-executes)",
+            "events.jsonl contains a process_exited on the rollout session at REPL teardown"
+          ],
+          "settings": {},
+          "timeout_seconds": 240
+        }
+      }
+    },
+    "opencode": {
+      "recording_dir": "opencode/scenarios/auto-executed-tool-call",
+      "artifacts": {
+        "events": "opencode/scenarios/auto-executed-tool-call/events.jsonl",
+        "transcript": "opencode/scenarios/auto-executed-tool-call/transcript.jsonl",
+        "manifest": "opencode/scenarios/auto-executed-tool-call/manifest.json",
+        "golden": "opencode/scenarios/auto-executed-tool-call/transcript.jsonl.replay.json.golden"
+      },
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "pass_rate": "4/4 phases passed",
+        "agent_cli_version": "unknown",
+        "daemon_version": "0.4.7+5c1ede3",
+        "confidence": 0.85,
+        "notes": "agent_supports: yes\ndaemon_capability: full\ndriver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "auto-executed-tool-call",
+          "agent": "opencode",
+          "assessed_at": "2026-05-26T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.85,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Reasoning\n\nauto-executed-tool-call asserts the auto-approved happy path: the agent uses one or more tools mid-turn and completes WITHOUT ever blocking on user input — the canonical arc is `ready → working → ready` with a tool_use inside the working span and the invariant that state never enters `waiting`. Distinct from the sibling full-lifecycle-toolcall (same coverage_id), which deliberately surfaces waiting via a permission gate.\n\nOpenCode supports tool calls (capabilities.json tool_calls:true). In headless default (`opencode run`), tools auto-execute inside OpenCode's own sandbox with no interactive permission prompt, so a single tool-using turn produces exactly the ungated ready→working→ready arc. Session state lives in OpenCode's SQLite store (~/.local/share/opencode/opencode.db); the daemon's ProcessOwnedStore source polls the UUID-keyed ses_… session.\n\nThe tool call leaves an observable trace: OpenCode writes a `tool` part to the part table that progresses pending → running → completed/error, and the opencode parser maps it to function_call (pending/running) and function_call_output (completed/error) events (parser.go parseToolPart). The turn settles working→ready when the parser sees a step-finish part with reason=\"stop\" → turn_done (parser.go parseStepFinish). The phase DSL has no tool-event form, so the auto-executed tool call is asserted via the single sustained working span plus the `no state_transition to waiting` invariant, and verified out-of-band in the SQLite store / transcript.\n\nMODEL note: opencode's default model is the local LM Studio model lmstudio/gemma-4-e2b-it-uncensored (set in ~/.config/opencode/opencode.json). The driver (drive-opencode-interactive.sh) runs blocking `opencode run` with NO --model flag, so it uses that default. gemma is a small (2B) model that is slow (~30–45s/turn) and may be unreliable at function calling; the recipe uses a crisp tool-forcing prompt and a generous timeout. If gemma simply will not emit a tool call this becomes an infra/model limitation, not an opencode/daemon incapability.\n\nThe interactive driver launches a blocking `opencode run` per send and chains --session for continuity; wait_turn is a no-op because the run already blocks. A single tool-using turn (one send + wait_turn + trailing sleep) is within this grammar, so driver_capability: ready.",
+          "caveats": [
+            "OpenCode does not expose CLI-assignable session IDs; the driver discovers the ses_… session id by querying SQLite for the most recent row keyed on directory after the first `opencode run` returns.",
+            "The local gemma 2B model is slow (~30–45s per turn) and may be unreliable at function calling; the cell records normally if it emits a tool call, otherwise the limitation is the model, not opencode (capabilities.json tool_calls:true).",
+            "The phase DSL has no tool-event form, so the auto-executed tool call is asserted via the sustained working span + the no-waiting invariant; the tool part itself is verified in the SQLite store / transcript out-of-band."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/opencode/parser.go",
+              "note": "parseToolPart: tool part status pending/running → function_call (ToolUses), completed/error → function_call_output (ToolResultIDs); parseStepFinish: reason=\"stop\" → turn_done settles working→ready. tool-calls reason stays in working (mid-turn pause)."
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/opencode/capabilities.json",
+              "note": "tool_calls:true; opencode can invoke tools. Headless default `opencode run` auto-executes tools with no interactive gate, so the auto-approved arc never enters waiting."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/opencode/agent.go",
+              "note": "Source variant ProcessOwnedStore (SQLite at ~/.local/share/opencode/opencode.db) with ExactName{Name:\"opencode\"}; daemon polls the session table for the ses_… session."
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/opencode/scenarios/turn-end-terminal-text/expected.jsonl",
+              "note": "Sibling committed opencode spec proving the ProcessOwnedStore ready→working→ready arc with session_birth anchored UNPINNED to start (so a transient proc-\u003cPID\u003e presession can't steal identity) and the no-waiting invariant — the exact shape this cell extends with a mid-turn tool call."
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": true,
+          "preconditions": [
+            "opencode CLI on PATH and authenticated/configured (the default model is set in ~/.config/opencode/opencode.json; auth is out-of-band)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+            "the configured default model must be capable of function calling — if the model emits no tool call this cell is unrecordable for a MODEL reason (opencode capabilities.json tool_calls:true), not an opencode/daemon incapability"
+          ],
+          "setup": [
+            "The driver (drive-opencode-interactive.sh) launches a blocking `opencode run -- \"\u003cprompt\u003e\"` in a fresh per-run cwd under \u003cstaging\u003e/cwd/ with NO --model flag, so it uses the config default; each send is its own `opencode run` subprocess that exits when the turn completes",
+            "No auto-mode / permission step is needed: in headless default `opencode run` auto-executes tools inside opencode's own sandbox with no interactive gate, so the tool call runs autonomously and the session never enters waiting — unlike the claudecode recipe, which must enable auto mode to keep a Bash call from tripping a gate",
+            "Session state lives in opencode's SQLite store (~/.local/share/opencode/opencode.db, FilesUnderRoot→ProcessOwnedStore), keyed on the UUID ses_… session; the daemon's ProcessOwnedStore source polls the session table. The tool call lands in the part table as a `tool` part (status pending→running→completed), which the parser maps to function_call / function_call_output (parser.go parseToolPart)",
+            "wait_turn is a no-op because `opencode run` already blocks until the turn ends; the ≥4s trailing sleep gives the daemon's poller one full tick to observe the working→ready settle before the run process exits",
+            "The send is a crisp single-tool-forcing prompt so the small/slow local default model reliably emits exactly one auto-executed write tool call inside the working span, then replies done"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Create a file named hello.txt containing exactly the text: hello — use your write tool. Then reply with exactly: done"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl contains the ses_… session born ready within ~2s of agent launch (a transient proc-\u003cPID\u003e presession may also appear; the turn arc and pid_discovered land on the UUID-keyed ses_… session)",
+            "events.jsonl contains a pid_discovered event bound to the ses_… session_id",
+            "events.jsonl contains a state_transition→working on the ses_… session_id when the tool-using prompt is sent, sustained across the auto-executed write tool call",
+            "the opencode SQLite store / transcript.jsonl contains a tool part (function_call / function_call_output) for the write call — the auto-executed, ungated tool call (opencode has no interactive gate in headless default)",
+            "events.jsonl contains a state_transition→ready on the same ses_… session_id once the tool resolves and the turn completes (step-finish reason=stop → turn_done)",
+            "events.jsonl contains NO state_transition to waiting for the ses_… session at any point (the call auto-executes; no permission window)",
+            "final session state is ready"
+          ],
+          "settings": {},
+          "timeout_seconds": 240
+        }
+      }
+    },
+    "pi": {
+      "recording_dir": "pi/scenarios/auto-executed-tool-call",
+      "artifacts": {
+        "events": "pi/scenarios/auto-executed-tool-call/events.jsonl",
+        "transcript": "pi/scenarios/auto-executed-tool-call/transcript.jsonl",
+        "manifest": "pi/scenarios/auto-executed-tool-call/manifest.json",
+        "golden": "pi/scenarios/auto-executed-tool-call/transcript.jsonl.replay.json.golden"
+      },
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "pass_rate": "5/5 phases passed",
+        "agent_cli_version": "0.70.0",
+        "daemon_version": "0.4.7+a9a0ab4",
+        "confidence": 0.92,
+        "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "auto-executed-tool-call",
+          "agent": "pi",
+          "assessed_at": "2026-05-25T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.92,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\n`auto-executed-tool-call` (scenario-meanings.md): the agent invokes one or more tools mid-turn, every call auto-resolves with no user approval, and the turn completes — the user-observable arc is `ready → working → ready` and state NEVER enters `waiting`. Primitive `tool_calls`; requires `headless_mode` and `tool_calls`. The coverage matrix records pi/auto-executed-tool-call as yes/yes.\n\n**agent_supports: yes.** Pi invokes its read/shell tool autonomously and runs it without an approval gate. A prompt that asks pi to read a file produces a real tool round-trip (toolCall + toolResult) that auto-resolves without ever blocking on the user, then completes the turn.\n\n**daemon_capability: full; driver_capability: ready.** The pi parser translates `toolCall` / `toolResult` message events into the tailer's tool-use / tool-result records and keeps the session `working` across them; the final assistant message's `stopReason=stop` maps to `turn_done`, settling `working → ready` via the primary turn-end path. Pi has no permission hooks, so no `waiting` transition is emitted — matching the scenario's negative invariant. Confirmed against the committed pi regression fixture for the sibling cell (full-lifecycle-toolcall, same coverage_id): the transcript carries toolCall + toolResult events and the events arc is `ready → working → ready` with zero `waiting` transitions.\n\n## Recipe-shape note (SCRIPT / interactive)\n\nRecorded with the INTERACTIVE pi driver (drive-pi-interactive.sh, a tmux REPL) rather than headless `pi --print`. WHY: the sibling headless cell full-lifecycle-toolcall (same coverage_id) drifted 2/5 because `pi --print` exits the moment it emits the final reply, so the daemon's scanner can miss the terminal working→ready settle before process_exited (concern C6). Keeping pi alive in the REPL across one send + wait_turn lets the daemon observe the settle cleanly; the single tmux teardown then yields one clean process_exited. The prompt asks pi to read a file created in setup and report its first line, forcing exactly one auto-executed read tool call inside the working span. C7 / session-identity: the live REPL emits a transient proc-\u003cPID\u003e pre-session born ready at launch (it bridges the gap until the UUID-keyed rollout transcript appears), so session_birth — which only asserts 'a session appears in ready within 2s of launch' — legitimately matches that pre-session. The turn arc, pid_bind and teardown all pin to the rollout session via the first-working anchor + same_session_as, so the pre-session can never satisfy them. The phase DSL has no tool-event form, so the tool call is asserted via the working span it sustains plus the transcript's toolCall/toolResult events, not a dedicated phase.",
+          "caveats": [
+            "claudecode's variant of this scenario can end in waiting via a PostToolUse permission hook (the top-level scenarios.json verify.has_waiting_state is claudecode-shaped); pi has no such hook, so the pi arc is ready→working→ready and the spec asserts a no-waiting invariant rather than has_waiting_state.",
+            "Pi cannot accept a pre-assigned UUID — it generates one itself. The interactive driver discovers the UUID from the session header on line 1 of the freshly-created rollout transcript.",
+            "Because the live REPL bridges with a transient proc-\u003cPID\u003e pre-session, the turn phase anchors to recording start with NO session pin so the matcher binds the FIRST working (necessarily the rollout session; the pre-session never goes working); every later phase pins to it via same_session_as."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/pi/agent.go",
+              "note": "Identity.Name=pi, Source variant FilesUnderRoot under ~/.pi/agent/sessions/, ExactName{Name: \"pi\"} process matcher."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/pi/parser.go",
+              "note": "toolCall/toolResult → tool-use/tool-result; stopReason=stop on the final assistant event maps to turn_done (working→ready). No permission gate → no waiting."
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/pi/scenarios/full-lifecycle-toolcall/transcript.jsonl",
+              "note": "Sibling cell (same coverage_id): carries toolCall + toolResult events; events arc is ready→working→ready with no waiting transition."
+            },
+            {
+              "kind": "file",
+              "ref": ".claude/skills/ir:onboard-agent/scenario-meanings.md",
+              "note": "auto-executed-tool-call canonical flow: ready→working→ready, never enters waiting."
+            },
+            {
+              "kind": "file",
+              "ref": ".claude/skills/ir:onboard-agent/scripts/drive-pi-interactive.sh",
+              "note": "Interactive tmux REPL driver; supports send / wait_turn / interrupt / sleep, keeps the rollout alive so the daemon observes the working→ready settle before teardown."
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": true,
+          "preconditions": [
+            "pi CLI on PATH and authenticated (pi runs against its configured model out-of-band)",
+            "tmux available — the interactive driver runs pi in a tmux REPL so it stays alive across the turn",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+          ],
+          "setup": [
+            "The interactive driver (drive-pi-interactive.sh) launches pi in a fresh per-run cwd inside a tmux session, waits for the REPL prompt, then sends the prompt",
+            "pi writes one JSONL rollout file per session under ~/.pi/agent/sessions/\u003ccwd-slug\u003e/ on launch (FilesUnderRoot, non-lazy); the driver resolves that file and extracts the UUID from line 1",
+            "WHY interactive, not headless: the sibling headless cell full-lifecycle-toolcall (same coverage_id) drifts because `pi --print` exits the instant it emits the final reply, so the daemon can miss the terminal working→ready settle before process_exited (concern C6). Keeping pi alive in the REPL across one send + wait_turn lets the daemon observe the settle cleanly, and the single tmux teardown then yields one clean process_exited",
+            "The send bumps the expected-turn counter; wait_turn blocks until the rollout shows a completed assistant turn, so the trailing sleep never races a still-running tool round-trip"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Run the shell command 'echo hello' using your bash tool, then reply with exactly: done"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a transcript_new for the rollout session born ready within ~2s of REPL launch (a transient proc-\u003cPID\u003e pre-session may also appear; the turn arc, pid_discovered and teardown land on the UUID-keyed rollout session)",
+            "events.jsonl contains a pid_discovered event bound to the rollout session_id",
+            "events.jsonl contains exactly one state_transition→working / →ready arc on the rollout session_id, sustained across the auto-executed bash call",
+            "transcript.jsonl contains a toolCall / toolResult pair for the echo command (the auto-executed, ungated tool call — pi has no permission hook)",
+            "events.jsonl contains NO state_transition to waiting for the rollout session at any point (the call auto-executes; pi never gates)",
+            "the rollout session's final live state is ready before the driver tears the REPL down",
+            "events.jsonl contains exactly one process_exited on the rollout session at REPL teardown"
+          ],
+          "settings": {},
+          "timeout_seconds": 300
+        }
+      }
+    }
+  }
+}
