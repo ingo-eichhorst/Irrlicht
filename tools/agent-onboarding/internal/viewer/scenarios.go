@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"irrlicht/tools/agent-onboarding/internal/shard"
 	"irrlicht/tools/agent-onboarding/internal/validate"
 )
 
@@ -87,9 +88,38 @@ func (s *Server) handleScenarioDetail(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, d)
 }
 
-// loadAssessment reads <scenarioDir>/assessment.json if present. Returns
-// nil on any error — the frontend treats absence as "no assessment yet".
+// loadAssessment returns the cell's Stage-1 assessment. Post-#510 a scenarios/
+// cell's assessment lives in the per-scenario shard (the single source); a
+// regression/ cell keeps its own on-disk assessment.json (regression fixtures
+// are not in the shard catalog). Returns nil when absent or unparseable — the
+// frontend treats absence as "no assessment yet".
+//
+// scenarioDir is …/replaydata/agents/<agent>/<subtree>/<id>; we recover the
+// pieces from it so the call site stays a one-arg call.
 func loadAssessment(scenarioDir string) *AssessmentReport {
+	id := filepath.Base(scenarioDir)
+	subtree := filepath.Base(filepath.Dir(scenarioDir))
+	agent := filepath.Base(filepath.Dir(filepath.Dir(scenarioDir)))
+
+	if subtree != "scenarios" {
+		return loadAssessmentFromDisk(scenarioDir) // regression/ — on disk
+	}
+
+	repoRoot := repoRootFromScenarioDir(scenarioDir)
+	cell, ok := shardCellForFolder(repoRoot, agent, id)
+	if !ok || len(cell.Details.Assessment) == 0 {
+		return nil
+	}
+	var rep AssessmentReport
+	if err := json.Unmarshal(cell.Details.Assessment, &rep); err != nil {
+		return nil
+	}
+	return &rep
+}
+
+// loadAssessmentFromDisk reads <scenarioDir>/assessment.json (the regression/
+// path, where no shard exists). nil on any error.
+func loadAssessmentFromDisk(scenarioDir string) *AssessmentReport {
 	b, err := os.ReadFile(filepath.Join(scenarioDir, "assessment.json"))
 	if err != nil {
 		return nil
@@ -99,6 +129,31 @@ func loadAssessment(scenarioDir string) *AssessmentReport {
 		return nil
 	}
 	return &rep
+}
+
+// repoRootFromScenarioDir recovers the repo root from a scenario dir shaped
+// …/replaydata/agents/<agent>/<subtree>/<id> (five segments up from <id>).
+func repoRootFromScenarioDir(scenarioDir string) string {
+	return filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(scenarioDir)))))
+}
+
+// shardCellForFolder finds the (agent) cell whose recording folder is `folder`.
+// The detail endpoint is keyed by the on-disk recording folder, which may be a
+// recipe-variant name (e.g. agent-question-pending) rather than the catalog id
+// (user-blocking-question), so we match the shard's recording_dir basename
+// first, then fall back to the shard name. ok=false when no shard names the
+// agent at that folder.
+func shardCellForFolder(repoRoot, agent, folder string) (shard.ShardAgent, bool) {
+	for _, sh := range shard.LoadAll(repoRoot) {
+		cell, ok := sh.Agents[agent]
+		if !ok {
+			continue
+		}
+		if filepath.Base(cell.RecordingDir) == folder || sh.Name == folder {
+			return cell, true
+		}
+	}
+	return shard.ShardAgent{}, false
 }
 
 // buildLatestManifest produces a RecordingArchive-shaped manifest for the
@@ -138,35 +193,16 @@ func buildLatestManifest(scenarioDir, agent string, d *ScenarioDetail, repoRoot 
 	return m
 }
 
-// computeRecipeHash mirrors promote-recording.sh's recipe_hash: sha256 of
-// the compact-JSON serialization of scenarios.json's
-// .scenarios[name].by_adapter[agent] block. Empty string on any failure.
+// computeRecipeHash mirrors promote-recording.sh's recipe_hash: sha256 of the
+// compact-JSON recipe block. Post-#510 the recipe lives in the per-scenario
+// shard's agents.<agent>.details.recipe (was scenarios.json by_adapter[agent]).
+// scenarioName is the on-disk recording folder. Empty string on any failure.
 func computeRecipeHash(repoRoot, agent, scenarioName string) string {
-	path := filepath.Join(repoRoot, ".claude", "skills", "ir:onboard-agent", "scenarios.json")
-	b, err := os.ReadFile(path)
-	if err != nil {
+	cell, ok := shardCellForFolder(repoRoot, agent, scenarioName)
+	if !ok {
 		return ""
 	}
-	var doc struct {
-		Scenarios []struct {
-			Name      string                     `json:"name"`
-			ByAdapter map[string]json.RawMessage `json:"by_adapter"`
-		} `json:"scenarios"`
-	}
-	if err := json.Unmarshal(b, &doc); err != nil {
-		return ""
-	}
-	for _, sc := range doc.Scenarios {
-		if sc.Name != scenarioName {
-			continue
-		}
-		raw, ok := sc.ByAdapter[agent]
-		if !ok {
-			return ""
-		}
-		return recipeHashOf(raw)
-	}
-	return ""
+	return recipeHashOf(cell.Details.Recipe)
 }
 
 // recipeHashOf returns the sha256 of the compact-JSON form of a recipe block,
