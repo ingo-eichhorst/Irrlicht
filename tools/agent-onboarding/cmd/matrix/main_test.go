@@ -77,6 +77,28 @@ func TestRunCompleteness(t *testing.T) {
 	}
 }
 
+// TestRunCompletenessAgentsRootDerivesRepoRoot pins the #2 fix: the gate
+// scripts drive this CLI with an absolute --agents-root and NO --repo-root, so
+// the shard reader must derive the repo root from --agents-root rather than
+// defaulting to "." (the caller's CWD) and finding no shards. Regression guard:
+// before the fix this returned exitUsage ("no shards under replaydata/scenarios")
+// whenever run from any CWD that isn't the repo root.
+func TestRunCompletenessAgentsRootDerivesRepoRoot(t *testing.T) {
+	root := fixture(t)
+	// No --repo-root; only the absolute --agents-root the gate scripts pass.
+	// fixture writes shards at <root>/replaydata/scenarios, and
+	// <root>/replaydata/agents → repo root <root>.
+	agentsRoot := filepath.Join(root, "replaydata", "agents")
+	var out, errb bytes.Buffer
+	got := run([]string{"query", "--gate", "completeness", "--agent", "ag", "--agents-root", agentsRoot}, &out, &errb)
+	if got != exitFail {
+		t.Fatalf("exit = %d; want %d (must run the gate, not fail with 'no shards'); stderr: %s", got, exitFail, errb.String())
+	}
+	if !strings.Contains(out.String(), "ok   recd") {
+		t.Errorf("gate did not resolve shards via --agents-root; stdout:\n%s\nstderr:\n%s", out.String(), errb.String())
+	}
+}
+
 func TestRunCells(t *testing.T) {
 	root := fixture(t)
 	var out, errb bytes.Buffer

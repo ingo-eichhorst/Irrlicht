@@ -180,6 +180,7 @@ func ReadOverlay(path string) RollupOverlay {
 		return ov
 	}
 	var doc struct {
+		GeneratedAt   string `json:"generated_at"`
 		Legend        any    `json:"legend"`
 		SourceCatalog string `json:"source_catalog"`
 		Scenarios     []struct {
@@ -192,6 +193,7 @@ func ReadOverlay(path string) RollupOverlay {
 	if json.Unmarshal(b, &doc) != nil {
 		return ov
 	}
+	ov.GeneratedAt = doc.GeneratedAt
 	ov.Legend = doc.Legend
 	ov.SourceCatalog = doc.SourceCatalog
 	ov.Notes = map[string]map[string]string{}

@@ -48,6 +48,19 @@ func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
+// flagSet reports whether a flag was explicitly passed on the command line
+// (as opposed to sitting at its default), so we can tell "no --repo-root" from
+// "--repo-root ." — only the former should let --agents-root derive the root.
+func flagSet(fs *flag.FlagSet, name string) bool {
+	found := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			found = true
+		}
+	})
+	return found
+}
+
 func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, usage)
@@ -84,6 +97,16 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	if cfg.AgentsRoot == "" {
 		cfg.AgentsRoot = filepath.Join(*repoRoot, "replaydata", "agents")
+	}
+	// The shard model reads replaydata/scenarios/ under RepoRoot, but the
+	// gate scripts (completeness-gate.sh) drive this CLI with absolute
+	// --agents-root and no --repo-root — so a default RepoRoot of "." would
+	// look for shards under the caller's CWD and find none. When --agents-root
+	// is given without an explicit --repo-root, derive the repo root from it
+	// (replaydata/agents → repo root) so the shards resolve next to the agents
+	// tree the caller actually pointed at.
+	if *agentsRoot != "" && !flagSet(fs, "repo-root") {
+		cfg.RepoRoot = filepath.Dir(filepath.Dir(*agentsRoot))
 	}
 
 	m, err := matrix.Load(cfg)
