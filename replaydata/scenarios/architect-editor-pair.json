@@ -7,42 +7,59 @@
     "claudecode": {
       "artifacts": {},
       "metadata": {
-        "agent_supports": "no",
-        "daemon_capability": "n/a",
-        "driver_capability": "n/a",
-        "confidence": 0.95,
-        "notes": "agent_supports: no\ndaemon_capability: n/a; driver_capability: n/a"
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "confidence": 0.85,
+        "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready\nInstantiation (b): plan(architect)->implement(editor) mode-pair, one model. Distinct from user-blocking-plan-mode-approval (2.18), which stops at the waiting gate; this captures the post-approval editor phase + cross-phase token accumulation."
       },
       "details": {
         "assessment": {
           "schema_version": 1,
           "scenario_id": "architect-editor-pair",
           "agent": "claudecode",
-          "assessed_at": "2026-05-18T00:00:00Z",
-          "agent_supports": "no",
-          "daemon_capability": "n/a",
-          "driver_capability": "n/a",
-          "confidence": 0.95,
-          "body": "## Verdict\n\nagent_supports: no\ndaemon_capability: n/a; driver_capability: n/a\n\n## Reasoning\n\nThe Architect/Editor model-pair pattern is a feature of Aider (`--architect` mode) and a handful of other adapters that explicitly run two models per turn — one strong reasoning model produces a plan, a cheaper editor model emits the edits. Codex's planning + executor split and Continue's chat+edit are the other listed examples in the spec.\n\nClaude Code has no such feature. The `claude` CLI uses exactly one model per turn (the one selected via `--model`, `/model`, or the default). There is no `--architect` flag, no two-model-per-turn flow, and no event in the JSONL transcript that would carry a second model contribution within one turn. The Task / Agent subagent tool spawns a separate child session with its own transcript and its own model field — that is a different scenario (foreground-subagent), not an in-turn architect/editor pair, because (a) the parent's `ready → working → ready` arc wraps the entire subagent run as one user-visible turn, and (b) the child session is observable as a distinct row.\n\nBecause agent_supports = no, irrlicht_observes is `n/a` per the matrix convention. There is nothing to observe; the parser code has no architect/editor code path; the spec bullets (two model contributions within one turn, session ModelName reflects architect) cannot be exercised because no input transcript will ever contain them.\n\nThis is the clearest 'no' of the seven cells in this batch and aligns with the prompt's quick-reference guidance.\n\n## What irrlicht does NOT see (and why that's OK)\n\nEverything. The feature does not exist in the agent under test, so the absence of observation is correct — not a gap. A future Claude Code release that introduced something like a planner/editor split would change this verdict, but as of the assessed date the answer is unambiguously no.",
+          "assessed_at": "2026-05-29T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.85,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n(Reassessment under the broadened architect-editor-pair meaning. The prior 2026-05-23 verdict `no` was correct ONLY for the narrow Aider-shaped reading — two distinct models within one turn — which Claude Code cannot produce. The scenario meaning now admits a second instantiation, and Claude Code satisfies it.)\n\n## Broadened scenario: two instantiations\n\nThe architect/editor essence is `a planning/architect contribution produces a plan, then an editing/editor contribution applies the edits`. Two instantiations (scenario-meanings.md#architect-editor-pair): (a) two MODELS in one turn (Aider --architect); (b) a plan->implement MODE pair across the approval gate (Claude Code plan mode). This cell is instantiation (b).\n\n## How Claude Code instantiates it (agent_supports: yes)\n\n- **Architect = plan phase.** Claude Code's plan mode (entered via `permissions.defaultMode=plan`, the same primitive user-blocking-plan-mode-approval (2.18) uses) constrains the agent to analyze and PROPOSE a plan. When the plan is ready the agent emits an `ExitPlanMode` tool_use; the TUI shows an approve/reject overlay and the agent pauses. This is the planning/architect contribution.\n- **Editor = implement phase.** When the user APPROVES (selecting \"auto-accept edits\" in the overlay), the agent exits plan mode and applies the edits (real Edit/Write), then the turn completes. This is the editing/editor contribution.\n- One model is used throughout (Claude Code captures one ModelName per requestId); this is the mode-pair instantiation, not the Aider two-model shape, which is exactly what the broadened meaning allows.\n\n## irrlicht observability (daemon_capability: full)\n\nThe full arc `ready -> working -> waiting -> working -> ready` is produced by shipped code — the same machinery 2.18 validates for the ENTRY, extended through the approval continuation:\n\n1. **working (architect/plan phase).** The user prompt drives `ready -> working` (force-on-first-activity).\n2. **waiting (plan-approval gate).** `ExitPlanMode` is in the user-blocking tool set (core/pkg/tailer/tailer_config.go); the PreToolUse hook matches `toolExitPlanMode` (core/adapters/inbound/agents/claudecode/hooks.go) and sets PermissionPending, so ClassifyState routes `working -> waiting` while the open tool keeps `HasOpenToolCall=true` / `IsAgentDone()=false` (no intervening ready).\n3. **working (editor/implement phase).** On approval the tool_result lands, `HasOpenToolCall` clears, and the next assistant message drives `waiting -> working` (state_classifier.go recovery; 2.18's own assessment documents this Variant-1 continuation).\n4. **ready.** The eventual turn_done lands `working -> ready`.\n5. **Token accumulation + ModelName.** The claudecode parser accumulates per-turn token contributions into SessionMetrics.TotalTokens across both phases, and ModelName stays a single consistent value (one model). The editor phase carries a real Edit/Write tool_result.\n\n2.18 asserts ONLY items 1-2 (it terminates in waiting). This cell asserts the full 1-5, i.e. the post-approval editor phase + cross-phase token growth + the real edit. That is the user-observable distinction (not an internal flag), so the two cells do not collapse.\n\n## driver_capability: ready\n\nThe claudecode interactive driver implements send / sleep / wait_turn / keys (and slash/interrupt). The recipe needs only: settings `defaultMode=plan` (+ pre-allow Edit/Write so the editor phase does not hit a SECOND permission gate), a `send` (the task), a `sleep` to reach the waiting gate, a `keys` to APPROVE the ExitPlanMode overlay (exact keystroke discovered at record time, as with the model-switch /model cache-confirm dialog), and `wait_turn` for the implement phase. No absent step type -> driver ready, not a gap.\n\n## Distinctness (must hold)\n\nvs user-blocking-plan-mode-approval (2.18): same plan->ExitPlanMode->waiting entry, but 2.18 has `final_state: waiting` and captures ONLY the gate; this cell continues to `final_state: ready` through the editor/implement phase. vs model-switch-midsession (5.3): that is a user-driven cross-turn model change (two ModelNames); this is one model across a plan/implement mode pair.",
           "caveats": [
-            "Do not confuse Claude Code's Task/Agent subagent tool with architect/editor: subagents are separate sessions with their own transcripts, while architect/editor is two model contributions inside one turn of one session. The spec is explicit that architect/editor lives at L443-450.",
-            "The matrix row for this cell should be marked with agent_supports=no and the recipe step skipped entirely (no recording, no expected.jsonl, no transcript.jsonl)."
+            "This is the MODE-PAIR instantiation (one model: plan phase = architect, implement phase = editor), per the broadened architect-editor-pair meaning. It is NOT the Aider two-models-in-one-turn shape; Claude Code captures one ModelName per requestId.",
+            "Distinct from user-blocking-plan-mode-approval (2.18): 2.18 terminates at the waiting gate (final_state waiting); this cell continues past approval through the editor/implement phase to ready, asserting the post-approval waiting->working->ready continuation + a real edit + cross-phase token accumulation.",
+            "The recipe MUST avoid a second permission gate in the editor phase (pre-allow Edit/Write via settings and/or approve with 'auto-accept edits') — a second waiting episode would muddy the arc.",
+            "The ExitPlanMode approval is driven via a `keys` step; the exact overlay keystroke is discovered live at record time (cf. model-switch-midsession's /model cache-confirm dialog handled with keys 1 + Enter)."
           ],
           "sources": [
             {
               "kind": "file",
+              "ref": "core/pkg/tailer/tailer_config.go",
+              "note": "ExitPlanMode is in the user-blocking tool set — drives working->waiting at the plan-approval gate (architect phase end)."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/claudecode/hooks.go",
+              "note": "PreToolUse handler matches toolExitPlanMode and flips PermissionPending -> waiting (same path 2.18 uses)."
+            },
+            {
+              "kind": "file",
+              "ref": "core/application/services/state_classifier.go",
+              "note": "waiting->working->ready recovery after approval (2.18 Variant-1 continuation) — the editor/implement phase this cell additionally captures."
+            },
+            {
+              "kind": "file",
               "ref": "core/adapters/inbound/agents/claudecode/parser.go",
-              "note": "Parser tracks one Model per requestId/turn via PerTurnContribution.Model — there is no in-turn second-model contribution path. extractClaudeCodeModel returns a single string."
+              "note": "per-turn ModelName + token contribution accumulation into SessionMetrics across both phases (one consistent model)."
             },
             {
-              "kind": "spec",
-              "ref": ".specs/agent-scenarios.md L443-450",
-              "note": "Feature: Architect/Editor model pair — explicitly lists Aider --architect, Codex planning+executor, Continue chat+edit as the supporting agents. Claude Code is not in that list."
+              "kind": "file",
+              "ref": ".claude/skills/ir:onboard-agent/scenario-meanings.md",
+              "note": "architect-editor-pair broadened to admit instantiation (b): plan(architect)->implement(editor) mode-pair; this cell instantiates it."
             },
             {
-              "kind": "doc",
-              "ref": "https://docs.anthropic.com/claude/claude-code",
-              "note": "Claude Code CLI documentation lists --model as the sole model selector; no architect-mode flag exists in the public CLI surface as of the assessed date."
+              "kind": "file",
+              "ref": "replaydata/scenarios/user-blocking-plan-mode-approval.json",
+              "note": "sibling 2.18 cell — same plan-mode entry, but final_state waiting; this cell is the post-approval continuation (distinctness anchor)."
             }
           ]
         }

@@ -568,17 +568,18 @@ Five fields per scenario:
 
 ### architect-editor-pair
 
-- **Essence:** One turn uses two models — a reasoning architect and a cheaper editor — and irrlicht reports both token contributions correctly within the single turn.
-- **User-observable signal:** `ModelName` reflects the architect model (or the adapter's chosen primary); `TotalTokens` accumulates from both models in the same turn; state follows a clean `ready → working → ready` arc with no flicker from the model handoff.
-- **Primitive exercised:** `multi_model_orchestration` — specifically two models used within a single turn boundary (e.g. Aider `--architect`). The irrlicht primitive is accumulating token contributions from multiple model calls within one turn without treating the handoff as a turn boundary.
-- **Not to be confused with:** `model-switch-midsession` — user-driven model change between turns; `provider-failover-midturn` — automatic failover mid-turn, not intentional dual-model orchestration.
-- **Conceptual flow:**
-  1. Agent is in `ready`; user sends a prompt.
-  2. State transitions `ready → working`.
-  3. Architect model plans the response (internal to the turn).
-  4. Editor model emits the actual edits (internal to the turn).
-  5. Dashboard accumulates token counts from both model calls.
-  6. State transitions `working → ready`; `ModelName` reflects the primary model.
+- **Essence:** A unit of work splits into an **architect/planning contribution** that produces a plan, then an **editor/execution contribution** that applies the edits; irrlicht reports the full lifecycle and accumulates token contributions across both. The pattern admits **two instantiations**:
+  - **(a) Two models in one turn** (Aider `--architect` and similar dual-model adapters): a strong reasoning model plans, a cheaper editor model emits the edits, both inside one `ready → working → ready` turn.
+  - **(b) Plan→implement mode-pair across the approval gate** (Claude Code plan mode): the **architect** is the *plan phase* — the agent analyzes and proposes a plan via `ExitPlanMode`, gating the session into `waiting`; the **editor** is the *implement phase* — once the user approves, the agent applies the edits and the turn completes. One model throughout.
+- **User-observable signal:**
+  - (a) `ModelName` reflects the architect (or the adapter's chosen primary); `TotalTokens` accumulates from both models in the same turn; clean `ready → working → ready` arc with no flicker from the model handoff.
+  - (b) the full `ready → working → waiting → working → ready` arc, with `TotalTokens` accumulating across the plan and implement phases, one consistent `ModelName`, and a real edit (`Edit`/`Write`) landing in the implement phase.
+- **Primitive exercised:** `multi_model_orchestration` (instantiation a) OR `plan_mode` + implement (instantiation b). The shared irrlicht primitive is reporting a planning contribution and an editing contribution as one coherent lifecycle, accumulating tokens across both.
+- **Not to be confused with:** `model-switch-midsession` — user-driven model change between independent turns; `provider-failover-midturn` — automatic mid-turn failover; **`user-blocking-plan-mode-approval` (2.18)** — drives the *same* plan→`ExitPlanMode`→`waiting` entry but **terminates at the `waiting` gate** (asserts only entry into the plan-approval pause). `architect-editor-pair` instantiation (b) is distinct because it **continues past approval** through the editor/implement phase to `ready` — asserting the post-approval `waiting → working → ready` continuation, a real edit, and cross-phase token accumulation.
+- **Conceptual flow (a — dual-model, one turn):**
+  1. `ready`; user sends a prompt. 2. `ready → working`. 3. Architect model plans (internal to the turn). 4. Editor model emits the edits (internal to the turn). 5. Tokens accumulate from both calls. 6. `working → ready`; `ModelName` reflects the primary.
+- **Conceptual flow (b — plan→implement mode-pair):**
+  1. `ready`; agent is in plan mode; user sends a task. 2. `ready → working` (architect/plan phase). 3. Agent proposes a plan via `ExitPlanMode` → `working → waiting` (plan-approval gate; no intervening `ready`). 4. User approves → `waiting → working` (editor/implement phase). 5. Agent applies the edits (real `Edit`/`Write`); tokens accumulate across both phases. 6. `working → ready`; one consistent `ModelName`.
 
 ---
 

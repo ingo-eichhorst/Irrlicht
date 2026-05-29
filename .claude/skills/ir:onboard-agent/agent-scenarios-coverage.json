@@ -1435,9 +1435,9 @@
           "notes": "--architect ships two-model pair; markdown parser sees two '\u003e Model:' lines but contribution attribution incomplete"
         },
         "claudecode": {
-          "agent_supports": "no",
-          "daemon_capability": "n/a",
-          "driver_capability": "n/a",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": "single Anthropic model per turn"
         },
         "codex": {
