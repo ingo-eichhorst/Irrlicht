@@ -1,9 +1,20 @@
 # migrate-shards
 
-Reads the **current** on-disk onboarding layout and emits the per-scenario
-"shard" data model (#510) **alongside** it — a P1 dual-write tool. Nothing reads
-the shards yet; this tool only generates them so the new model exists next to
-the old storage.
+One-shot **migration blueprint**: reads the pre-#510 on-disk onboarding layout
+(`scenarios.json` + per-adapter `capabilities.json` + per-cell
+`assessment.json`) and emits the per-scenario "shard" data model
+(`replaydata/scenarios/<name>.json` + `_meta.json`).
+
+It generated the committed shards once (P1). The shards are now the live read
+source — `internal/shard`, `internal/matrix`, and the viewer all read them
+(P2/P3) — so this tool is **no longer part of the runtime read path**. It stays
+in the tree as a documented, idempotent blueprint for the next bulk restructure
+and (until #511 deletes the legacy files) as the regenerator behind `-check`.
+
+> **Note:** once #511 deletes the legacy inputs, this tool can no longer
+> regenerate (its *inputs* are gone) and `-check` will fail by construction —
+> at that point it is purely a historical reference for how the layout→shard
+> transform worked.
 
 ## What it reads (the current layout)
 

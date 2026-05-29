@@ -324,20 +324,17 @@ recording matched the assessment.
 the SAME commit — not left as a cue.** Update the affected axis
 (`daemon_capability` / `agent_supports` / `driver_capability`), bump
 `assessed_at`, and add a caveat citing the recording that proved it. This
-is the BACKFLOW LOOP: when you also mark `by_adapter.<agent>` as
-`applicable:false`, the `scenarios.json` matrix and the `assessment.json`
-verdict must move TOGETHER. Correcting only the matrix (or only the
-prose notes) while the assessment keeps the stale optimistic axes is
-exactly the desync that hid pi/streaming-partial-writes for weeks — the
-viewer reads `assessment.json` and showed it recordable while the matrix
-said `applicable:false`. The `consistency-gate` (run at sweep-end and in
-CI) now FAILS that state: a cell whose assessment still routes RECORD but
-is marked `applicable:false` with no recording and no `record_blocked` is
-a hard error. So if the recording shows the cell genuinely can't be
-recorded for a reason ORTHOGONAL to the three axes (auth/mock missing, a
-flaky driver, unit-test-covered, upstream gap — NOT an axis fact), set
-`assessment.json` `record_blocked` to `infra` / `driver_bug` /
-`unit_test` / `upstream` accordingly instead of lying about the axes.
+is the BACKFLOW LOOP: a recording can refute an optimistic assessment, and
+the verdict must be corrected to match what the recording showed. Under the
+#510 shard model the verdict, recipe, and applicability all live in the one
+shard cell, so there is no separate matrix file to keep in sync — correcting
+the cell corrects everything (this is why the old `scenarios.json` ⟺
+`assessment.json` desync that hid pi/streaming-partial-writes for weeks is now
+impossible). If the recording shows the cell genuinely can't be recorded for a
+reason ORTHOGONAL to the three axes (auth/mock missing, a flaky driver,
+unit-test-covered, upstream gap — NOT an axis fact), set the assessment's
+`record_blocked` to `infra` / `driver_bug` / `unit_test` / `upstream`
+accordingly instead of lying about the axes.
 
 Status meanings:
 

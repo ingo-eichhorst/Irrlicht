@@ -162,10 +162,10 @@ conditions with different owners and different next actions:
 - **`record_blocked`** (OPTIONAL) — the escape hatch for a cell whose three
   axes all say record-now (supports yes/partial, daemon full/bug, driver
   ready) yet still can't be recorded for a reason ORTHOGONAL to the axes.
-  Without it, such a cell can only be marked `applicable:false` in
-  `scenarios.json` prose — invisible to the viewer (which reads the axes) and
-  a contradiction the `consistency-gate` rejects. Set it instead of lying
-  about an axis:
+  Without it, such a cell looks like an un-recorded record-now cell with no
+  explanation — the documented deferral is what distinguishes "blocked for an
+  orthogonal reason" from "just not done yet". Set it instead of lying about an
+  axis:
   - `infra` — auth/mock/environment the recording needs isn't available
     (e.g. aider/token-quota: no provider key + no deterministic quota mock).
   - `unit_test` — the property is covered by an agent-agnostic unit test, not
@@ -214,13 +214,14 @@ forward blindly.** A mechanical migration that rewrites the axis fields
 across MANY assessments (e.g. #480 split `irrlicht_observes` into
 `daemon_capability`/`driver_capability` across 129 files) can silently
 re-bless a verdict that a later recording had already refuted — the new
-`assessed_at` then makes the stale content look fresh. pi/streaming-partial-writes
-desynced this way: the empirical degrade lived in `scenarios.json`, but the
-migration translated the *old* optimistic `full` into the new schema and
-overwrote nothing in `scenarios.json`. Any migration touching verdict fields
-MUST run `scripts/lib/consistency-gate.sh` (and `catalog-drift.sh`) afterward
-and reconcile every contradiction before committing — a migration that leaves
-the gate red has introduced exactly the drift the gate exists to stop.
+`assessed_at` then makes the stale content look fresh. Under the #510 shard
+model a cell's verdict, recipe, and applicability live in one shard, so the
+old `scenarios.json` ⟺ `assessment.json` desync class is gone by construction;
+but a bulk verdict-field migration can still overwrite a refuted axis with a
+stale-optimistic value. Any migration touching verdict fields MUST re-derive
+the rollup (`matrix rollup`) and confirm `matrix rollup --check` /
+`TestRollupInSync` stay green, and re-run the affected cells' recordings rather
+than trusting a translated axis.
 
 ## Steps (single cell)
 

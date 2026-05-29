@@ -66,6 +66,33 @@ There are two web trees, and they are NOT competing copies:
 
 When changing the live dashboard, edit `platforms/web/` only.
 
+## Onboarding fixture matrix (per-scenario shards)
+
+The agent-onboarding coverage matrix — scenario × adapter, browsed by the
+viewer's catalog SPA — is stored as **one self-contained shard per scenario**
+at `replaydata/scenarios/<name>.json` (#510). A shard is the single home for a
+matrix row: its `id` (`<section>.<index>`), `section`/`feature`/`description`,
+and an `agents.<adapter>` map. Each cell splits into a `metadata` overview tier
+(the assessment axes + versions + a note excerpt, enough to color the cell),
+a `details` tier (`assessment`, `recipe`), and `artifacts` refs. Recordings
+themselves never move — `events.jsonl`, `transcript.{jsonl,md}`, `*.golden`,
+`recordings/`, and the spec-grounded `expected.jsonl` stay on disk under
+`replaydata/agents/<adapter>/{scenarios,regression}/<name>/`; the shard points
+at them.
+
+The Go reader is `tools/agent-onboarding/internal/shard` (`LoadAll`, `Load`,
+`LoadMeta`, `Agents`); `internal/matrix` and the viewer both read shards
+through it. `replaydata/scenarios/_meta.json` holds the onboarded-adapter set
+(`min_versions` keys) and per-adapter `transcript_extensions`.
+
+> **Migration status (in progress, #511):** the **Go** side reads shards
+> exclusively, but the **bash recording pipeline** (`run-cell.sh` et al.) still
+> reads the pre-#510 `scenarios.json` + per-adapter `capabilities.json` +
+> per-cell `assessment.json`, so those files are still present. Until #511
+> ports the pipeline and deletes them, edit a cell by editing **both** its
+> shard and the legacy file. `cmd/migrate-shards` regenerated the shards from
+> the legacy layout once; see its README.
+
 ## Key Conventions
 
 - Go code follows hexagonal architecture: `domain/` → `ports/` → `adapters/` → `application/services/`

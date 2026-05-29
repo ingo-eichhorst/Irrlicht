@@ -164,9 +164,6 @@ Not cost-related — these prevent broken runs:
   must carry its full artifact set and map to a recipe; runs in
   `replay-fixtures.sh`. `expected-validate` now ERRORS (not skips) on a
   transcript-without-`events.jsonl` cell.
-- **`catalog-drift`** (`scripts/lib/catalog-drift.sh` + the Go
-  `TestCatalogRollupBijection`/`TestScenarioCatalogNoDrift`) — catalog ⟺
-  rollup ⟺ scenarios bijection; a phantom or invisible cell fails.
 - **`requires_transport`** — a scenario can pin to `line_based` /
   `structured_store`, so transport-mismatched cells auto-mark N/A
   (`oversized-transcript-line` is N/A for opencode's structured store).
@@ -197,7 +194,6 @@ Not cost-related — these prevent broken runs:
                                 (reads each driver's DRIVE_ELICITS constant)
     lib/completeness-gate.sh  — every applicable cell reached a terminal verdict
     lib/cell-integrity.sh     — every recorded cell carries a full artifact set
-    lib/catalog-drift.sh      — catalog ⟺ rollup ⟺ scenarios bijection
     lib/{assert-staging-path,classify-failure,reconcile}.sh
 
 replaydata/agents/
