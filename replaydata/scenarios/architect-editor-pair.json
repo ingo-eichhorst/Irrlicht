@@ -62,8 +62,92 @@
               "note": "sibling 2.18 cell — same plan-mode entry, but final_state waiting; this cell is the post-approval continuation (distinctness anchor)."
             }
           ]
+        },
+        "recipe": {
+          "applicable": true,
+          "preconditions": [
+            "claude CLI on PATH and authenticated (subscription or API key)",
+            "claude --settings honours permissions.defaultMode=plan AND permissions.allow (verified in 2.1.x)",
+            "irrlichd is recording — this cell is recorded in --attach mode against the user's running daemon (claudecode hooks POST to a hardcoded :7837, so coexist/isolated-alt-port modes don't apply)",
+            "no other claudecode session uses the same UUID"
+          ],
+          "setup": [
+            "Generate a fresh lowercased session UUID.",
+            "Create an empty cwd under <staging>/cwd/ (claude prompts for trust on first encounter — the driver auto-accepts).",
+            "The settings blob engages plan mode (permissions.defaultMode=plan, the same primitive 2.18 uses for the architect/plan phase) AND pre-allows Edit+Write (permissions.allow) so the editor/implement phase applies the edits WITHOUT hitting a SECOND permission gate — a second waiting episode would muddy the full arc this cell asserts.",
+            "The ExitPlanMode approval is the load-bearing continuation past 2.18: after the agent emits ExitPlanMode the TUI shows an approve overlay (1. Yes, and auto-accept edits / 2. Yes, manually approve / 3. No, keep planning). The recipe approves by pressing `1` (auto-accept edits) then Enter — choosing auto-accept means the implement phase runs ungated even beyond the pre-allowed Edit/Write. The exact keystroke was settled live at record time (cf. model-switch-midsession's /model cache-confirm dialog, handled with keys 1 + Enter).",
+            "Belt-and-suspenders: BOTH the auto-accept overlay option AND permissions.allow Edit/Write guard against a second waiting gate in the implement phase."
+          ],
+          "script": [
+            {
+              "type": "sleep",
+              "seconds": 2
+            },
+            {
+              "type": "send",
+              "text": "Create a new file calc.py with two functions: add(a, b) that returns a + b, and sub(a, b) that returns a - b. You are in plan mode: FIRST propose your plan via ExitPlanMode (do not read or explore anything — there is nothing here; just propose the plan). After I approve, create the file calc.py with exactly those two functions and nothing else."
+            },
+            {
+              "type": "sleep",
+              "seconds": 45
+            },
+            {
+              "type": "keys",
+              "keys": "1"
+            },
+            {
+              "type": "keys",
+              "keys": "Enter"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 6
+            }
+          ],
+          "verify": [
+            "events.jsonl shows the session appear in ready within ~2s of launch (plan mode engaged via settings).",
+            "events.jsonl shows a state_transition to working on the session when the task prompt lands (architect/plan phase).",
+            "events.jsonl shows a state_transition to waiting on the SAME session once the agent emits the ExitPlanMode tool_use (plan-approval gate), with NO state_transition to ready before the user approves.",
+            "events.jsonl shows a state_transition to working on the SAME session after the user approves (keys 1 + Enter on the ExitPlanMode overlay) — the editor/implement phase recovers waiting→working.",
+            "events.jsonl shows a state_transition to ready on the SAME session when the implement turn finishes (working→ready).",
+            "transcript.jsonl contains an assistant message with an ExitPlanMode tool_use (architect/plan phase) AND, after approval, a real Edit or Write tool_use + tool_result that creates calc.py (editor/implement phase) — a genuine editor contribution, not a stop-at-waiting.",
+            "the file calc.py is actually created in the cwd with add(a,b) and sub(a,b).",
+            "SessionMetrics.TotalTokens after turn_end > at plan_gate (tokens accumulate across the plan and implement phases) — asserted in prose; the events.jsonl phase DSL has no token field.",
+            "ModelName is a single consistent value across both phases (one model — this is the mode-pair instantiation, NOT the Aider two-model shape)."
+          ],
+          "settings": {
+            "permissions": {
+              "defaultMode": "plan",
+              "allow": [
+                "Edit",
+                "Write"
+              ]
+            }
+          },
+          "timeout_seconds": 180,
+          "notes": "Instantiation (b) of architect-editor-pair: Claude Code's plan→implement MODE pair (one model) captured across the approval gate — the FULL arc ready→working→waiting→working→ready. This is the post-approval CONTINUATION of user-blocking-plan-mode-approval (2.18): 2.18 records the SAME plan→ExitPlanMode→waiting entry but TERMINATES at the waiting gate (final_state waiting); this cell continues PAST approval through the editor/implement phase to ready, asserting the waiting→working→ready recovery + a real Edit/Write + cross-phase token accumulation. Stopping at waiting here would be a duplicate of 2.18 = FAILURE. ARCHITECT (plan phase): plan mode is engaged via the settings blob permissions.defaultMode=plan (the same primitive 2.18 uses); the prompt asks for a real file edit (calc.py with add/sub) but instructs the agent to PROPOSE the plan first via ExitPlanMode, which gates the session into waiting. EDITOR (implement phase): the recipe APPROVES the ExitPlanMode overlay with `keys 1` + `keys Enter` — option 1 is 'Yes, and auto-accept edits', so the implement phase runs UNGATED (no second permission prompt → no spurious second waiting episode). Belt-and-suspenders: the settings blob ALSO pre-allows Edit+Write (permissions.allow) so the editor phase is ungated even independent of the auto-accept choice. After approval the agent applies a real Write/Edit creating calc.py and the turn completes →ready (wait_turn + a 6s trailing sleep let the working→ready settle land before the daemon stops observing). APPROVAL KEYSTROKE: settled live at record time as `1` then `Enter` (the overlay's option 1 = auto-accept edits), mirroring how model-switch-midsession answered claude's /model cache-confirm dialog with keys 1 + Enter. WHY a wait_turn for the implement turn (not the plan turn): the plan turn ends in waiting (not a completed turn), so a wait_turn there would block forever; the plan-gate is reached via a fixed 45s sleep instead, and wait_turn covers ONLY the post-approval implement turn which DOES complete. What differs between runs: token counts/cost, UUID/PID/timestamps, the exact plan wording, and the alias→version ModelName mapping (one consistent value, assert presence + single-ness, not a hardcoded string). What must NOT differ: the full ready→working→waiting→working→ready arc on ONE session, a real Edit/Write creating calc.py in the implement phase, no SECOND waiting episode (permission gate) in the implement phase, and TotalTokens growing from plan_gate to turn_end. RECORDED in --attach mode against the dev irrlichd --record on :7837 (claudecode hooks hardcode :7837, so no coexist/isolated-alt-port)."
         }
       }
     }
+  },
+  "description": "Claude Code's plan→implement MODE pair (one model) captured across the approval gate — the FULL lifecycle arc ready→working→waiting→working→ready. Instantiation (b) of architect-editor-pair: the architect is the PLAN phase (plan mode via permissions.defaultMode=plan; the agent proposes a plan via ExitPlanMode → waiting), the editor is the IMPLEMENT phase (the user approves → waiting→working; the agent applies a real Edit/Write and the turn completes → ready). Distinct from user-blocking-plan-mode-approval (2.18), which terminates at the waiting gate; this cell continues PAST approval through the editor/implement phase, asserting the post-approval continuation + a real edit + cross-phase token accumulation. One model throughout (mode-pair, not the Aider two-model shape).",
+  "requires": [
+    "headless_mode",
+    "plan_mode"
+  ],
+  "verify": {
+    "has_waiting_state": true,
+    "final_state": "ready",
+    "transitions_topology": [
+      "ready",
+      "working",
+      "waiting",
+      "working",
+      "ready"
+    ],
+    "tool_calls_min": 1
   }
 }
