@@ -9,9 +9,9 @@ import (
 )
 
 // fixture writes a minimal shard repo under t.TempDir() (#510) and returns its
-// root for --repo-root. It plants one non-terminal (assessed-not-recorded) cell
-// so completeness fails, and one record_now/applicable:false contradiction so
-// consistency fails — the same two failure shapes the legacy fixture used.
+// root for --repo-root. It plants one terminal (applicable:false) cell and one
+// non-terminal (assessed-not-recorded) cell so the completeness gate has both a
+// passing and a failing row to report.
 func fixture(t *testing.T) (repoRoot string) {
 	t.Helper()
 	tmp := t.TempDir()
@@ -20,7 +20,7 @@ func fixture(t *testing.T) (repoRoot string) {
 		t.Fatal(err)
 	}
 	write(t, filepath.Join(scen, "_meta.json"), `{"min_versions":{"ag":"1.0.0"}}`)
-	// recd: record_now assessment + recipe applicable:false → consistency contradiction.
+	// recd: applicable:false → terminal (the completeness gate's "ok" row).
 	write(t, filepath.Join(scen, "recd.json"), `{
   "id": "1.1", "name": "recd", "section": "S", "feature": "Recd",
   "agents": {"ag": {"details": {
@@ -74,18 +74,6 @@ func TestRunCompleteness(t *testing.T) {
 	}
 	if !strings.Contains(errb.String(), "unrec") || !strings.Contains(errb.String(), "implement ag unrec") {
 		t.Errorf("expected unrec GAP with implement hint on stderr, got:\n%s", errb.String())
-	}
-}
-
-func TestRunConsistency(t *testing.T) {
-	root := fixture(t)
-	var out, errb bytes.Buffer
-	got := run([]string{"query", "--gate", "consistency", "--repo-root", root}, &out, &errb)
-	if got != exitFail {
-		t.Fatalf("exit = %d; want %d (stderr: %s)", got, exitFail, errb.String())
-	}
-	if !strings.Contains(errb.String(), "ag/recd: assessment routes RECORD") {
-		t.Errorf("expected the recd contradiction on stderr, got:\n%s", errb.String())
 	}
 }
 

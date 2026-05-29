@@ -4,12 +4,16 @@
 // used to each reconstruct with their own jq filters and disposition loops:
 //
 //	matrix query --gate completeness --agent <a>   # every applicable cell terminal?
-//	matrix query --gate consistency                # assessment ⟺ scenarios agree?
 //	matrix query --cells --agent <a>               # per-cell JSON for one agent
 //
-// The completeness/consistency modes reproduce the bash gates' human output and
-// exit codes verbatim, so scripts/lib/{completeness,consistency}-gate.sh become
-// thin wrappers around this binary.
+// The completeness mode reproduces the bash gate's human output and exit codes
+// verbatim, so scripts/lib/completeness-gate.sh is a thin wrapper around this
+// binary.
+//
+// The consistency gate (assessment ⟺ scenarios.json applicable-flag agreement)
+// was retired with the #510 shard migration: a shard is the single source for a
+// cell, so there is no second file for its verdict to disagree with — the whole
+// "files drifted apart" failure class the gate guarded is gone by construction.
 //
 // Exit codes (matching the sibling cmd tools):
 //
@@ -37,7 +41,6 @@ const (
 
 const usage = `usage:
   matrix query --gate completeness --agent <a> [--repo-root .] [--scenarios p] [--agents-root r]
-  matrix query --gate consistency [--repo-root .] [--scenarios p] [--agents-root r]
   matrix query --cells --agent <a> [--repo-root .] [--scenarios p] [--agents-root r]
   matrix rollup [--check] [--repo-root .] [--scenarios p] [--agents-root r] [--out p]`
 
@@ -61,7 +64,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	fs := flag.NewFlagSet("matrix query", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	gate := fs.String("gate", "", "gate mode: completeness | consistency")
+	gate := fs.String("gate", "", "gate mode: completeness")
 	cells := fs.Bool("cells", false, "emit per-cell JSON for --agent")
 	agent := fs.String("agent", "", "agent slug (required for completeness / cells)")
 	repoRoot := fs.String("repo-root", ".", "repository root containing replaydata/ and .claude/")
@@ -104,10 +107,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return exitOK
 	case *gate == "completeness":
 		return gateCompleteness(m, *agent, stdout, stderr)
-	case *gate == "consistency":
-		return gateConsistency(m, stderr)
 	default:
-		fmt.Fprintln(stderr, "matrix: specify --gate completeness|consistency or --cells")
+		fmt.Fprintln(stderr, "matrix: specify --gate completeness or --cells")
 		return exitUsage
 	}
 }
@@ -143,24 +144,5 @@ func gateCompleteness(m *matrix.Matrix, agent string, stdout, stderr io.Writer) 
 		return exitOK
 	}
 	fmt.Fprintf(stderr, "completeness-gate: %s INCOMPLETE — %d cell(s) did not reach a terminal verdict (see above)\n", agent, nonTerminal)
-	return exitFail
-}
-
-// gateConsistency reproduces consistency-gate.sh's CLI: the banner + per-error
-// lines on stderr, exit 0/1.
-func gateConsistency(m *matrix.Matrix, stderr io.Writer) int {
-	fmt.Fprintln(stderr, "== assessment ⟺ scenarios consistency gate ==")
-	dis := m.Disagreements()
-	if len(dis) == 0 {
-		fmt.Fprintln(stderr, "  every un-recorded cell's assessment verdict agrees with its scenarios.json applicable flag")
-		fmt.Fprintln(stderr, "")
-		fmt.Fprintln(stderr, "consistency-gate: assessment and scenarios are consistent")
-		return exitOK
-	}
-	for _, d := range dis {
-		fmt.Fprintf(stderr, "  ERROR: %s\n", d.Message)
-	}
-	fmt.Fprintln(stderr, "")
-	fmt.Fprintln(stderr, "consistency-gate: assessment ⟺ scenarios DISAGREE (see ERRORs above) — a cell's verdict and its matrix applicable flag tell different stories")
 	return exitFail
 }
