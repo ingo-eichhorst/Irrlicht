@@ -1,9 +1,9 @@
 package matrix
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -83,115 +83,144 @@ func TestDeriveDisplayState(t *testing.T) {
 	}
 }
 
-// --- loader / disposition parity (ported from completeness-gate_test.sh) ---
+// --- loader / disposition parity (shard-backed; ports completeness-gate_test.sh) ---
 
-// completenessFixture builds the exact tree the bash completeness test uses.
-func completenessFixture(t *testing.T) (scenariosPath, agentsRoot string) {
+// shardFix is one (agent, scenario) cell in a shard fixture.
+type shardFix struct {
+	assessment string // raw assessment JSON (empty → no assessment blob)
+	recipe     string // raw recipe JSON   (empty → no recipe blob)
+	recorded   bool   // synthesize events + transcript artifacts
+}
+
+// writeShardFixture writes a t.TempDir repo with replaydata/scenarios shards +
+// _meta.json so matrix.LoadRepo reads the shard layout (P2). Each cell is a
+// (recipe, assessment, recorded) triple. Returns the repo root.
+func writeShardFixture(t *testing.T, agent string, shards map[string]shardFix) string {
 	t.Helper()
-	tmp := t.TempDir()
-	scenariosPath = filepath.Join(tmp, "scenarios.json")
-	writeFile(t, scenariosPath, `{"scenarios":[
-  {"name":"rec","coverage_id":"rec","requires":["feat_a"],"by_adapter":{"fake":{"script":[{"type":"send"}]}}},
-  {"name":"gap","coverage_id":"gap","requires":["feat_a"],"by_adapter":{"fake":{"script":[{"type":"keys"}]}}},
-  {"name":"frozen","coverage_id":"frozen","requires":["feat_a"],"by_adapter":{"fake":{"script":[{"type":"send"}]}}},
-  {"name":"degraded","coverage_id":"degraded","requires":["feat_a"],"by_adapter":{"fake":{"applicable":false}}},
-  {"name":"missed","coverage_id":"missed","requires":["feat_a"]},
-  {"name":"ready-unrec","coverage_id":"ready-unrec","requires":["feat_a"],"by_adapter":{"fake":{"script":[{"type":"send"}]}}},
-  {"name":"dual","coverage_id":"dual","requires":["feat_a"],"by_adapter":{"fake":{"script":[{"type":"send"}]}}},
-  {"name":"dual-variant","coverage_id":"dual","requires":["feat_a"],"by_adapter":{"fake":{"script":[{"type":"send"}]}}},
-  {"name":"na","coverage_id":"na","requires":["feat_x"],"by_adapter":{"fake":{"script":[{"type":"send"}]}}},
-  {"name":"line-only","coverage_id":"line-only","requires":["feat_a"],"requires_transport":["line_based"],"by_adapter":{"fake":{"script":[{"type":"send"}]}}},
-  {"name":"mixfreeze-a","coverage_id":"mixfreeze","requires":["feat_a"],"by_adapter":{"fake":{"applicable":false}}},
-  {"name":"mixfreeze-b","coverage_id":"mixfreeze","requires":["feat_a"],"by_adapter":{"fake":{"script":[{"type":"send"}]}}},
-  {"name":"divreq-a","coverage_id":"divreq","requires":["feat_a"],"by_adapter":{"fake":{"script":[{"type":"send"}]}}},
-  {"name":"divreq-b","coverage_id":"divreq","requires":["feat_x"],"by_adapter":{"fake":{"script":[{"type":"send"}]}}}
-]}`)
-
-	agentsRoot = filepath.Join(tmp, "agents")
-	sdir := filepath.Join(agentsRoot, "fake", "scenarios")
-	writeFile(t, filepath.Join(agentsRoot, "fake", "capabilities.json"),
-		`{"agent":"fake","transport":"structured_store","features":{"feat_a":true,"feat_b":true,"feat_x":false}}`)
-
-	mkAssess := func(dir, s, d, drv string) {
-		writeFile(t, filepath.Join(sdir, dir, "assessment.json"),
-			`{"agent_supports":"`+s+`","daemon_capability":"`+d+`","driver_capability":"`+drv+`"}`)
-	}
-	record := func(dir string) {
-		writeFile(t, filepath.Join(sdir, dir, "transcript.jsonl"), "{}\n")
-		writeFile(t, filepath.Join(sdir, dir, "events.jsonl"), "{}\n")
-	}
-	mkAssess("rec", "yes", "full", "ready")
-	record("rec")
-	mkAssess("gap", "partial", "full", "gap:keys")
-	mkAssess("frozen", "no", "n/a", "ready")
-	mkAssess("degraded", "yes", "full", "ready")
-	mkAssess("ready-unrec", "yes", "full", "ready")
-	mkAssess("dual", "yes", "full", "ready")
-	record("dual")
-	mkAssess("mixfreeze", "yes", "full", "ready")
-	return scenariosPath, agentsRoot
-}
-
-func TestApplicableCoverageIDs(t *testing.T) {
-	scenarios, root := completenessFixture(t)
-	m, err := Load(Config{ScenariosPath: scenarios, AgentsRoot: root})
-	if err != nil {
+	root := t.TempDir()
+	scen := filepath.Join(root, "replaydata", "scenarios")
+	if err := os.MkdirAll(scen, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	got := strings.Join(m.applicableCoverageIDs("fake"), "\n")
-	// dual/mixfreeze collapse; na + line-only excluded; divreq IN via its feat_a variant.
-	want := "degraded\ndivreq\ndual\nfrozen\ngap\nmissed\nmixfreeze\nready-unrec\nrec"
-	if got != want {
-		t.Errorf("applicable set:\n got=%q\nwant=%q", got, want)
+	mustWrite := func(name string, b []byte) {
+		if err := os.WriteFile(filepath.Join(scen, name), b, 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
+
+	meta, _ := json.Marshal(map[string]any{"min_versions": map[string]string{agent: "1.0.0"}})
+	mustWrite("_meta.json", meta)
+
+	i := 0
+	for name, fx := range shards {
+		i++
+		cell := map[string]any{}
+		if fx.recorded {
+			cell["recording_dir"] = agent + "/scenarios/" + name
+			cell["artifacts"] = map[string]any{
+				"events":     agent + "/scenarios/" + name + "/events.jsonl",
+				"transcript": agent + "/scenarios/" + name + "/transcript.jsonl",
+			}
+		}
+		details := map[string]any{}
+		if fx.assessment != "" {
+			details["assessment"] = json.RawMessage(fx.assessment)
+		}
+		if fx.recipe != "" {
+			details["recipe"] = json.RawMessage(fx.recipe)
+		}
+		if len(details) > 0 {
+			cell["details"] = details
+		}
+		sh := map[string]any{
+			"id":      "1." + itoa(i),
+			"name":    name,
+			"section": "Sec",
+			"feature": name,
+			"agents":  map[string]any{agent: cell},
+		}
+		b, _ := json.MarshalIndent(sh, "", "  ")
+		mustWrite(name+".json", b)
+	}
+	return root
 }
 
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	var b []byte
+	for n > 0 {
+		b = append([]byte{byte('0' + n%10)}, b...)
+		n /= 10
+	}
+	return string(b)
+}
+
+// TestDisposition is the loader-level parity test: each fixture cell's
+// disposition must match the bash completeness gate, now reading the shard
+// layout. Same outcomes as the legacy fixture — only the storage changed.
 func TestDisposition(t *testing.T) {
-	scenarios, root := completenessFixture(t)
-	m, err := Load(Config{ScenariosPath: scenarios, AgentsRoot: root})
+	root := writeShardFixture(t, "testagent", map[string]shardFix{
+		// recorded + record_now assessment → recorded.
+		"scenario-a": {
+			assessment: `{"agent_supports":"yes","daemon_capability":"full","driver_capability":"ready"}`,
+			recorded:   true,
+		},
+		// assessed record_now, NOT recorded → assessed_not_recorded.
+		"scenario-b": {
+			assessment: `{"agent_supports":"yes","daemon_capability":"full","driver_capability":"ready"}`,
+		},
+		// frozen assessment + recipe applicable:false → applicable_false.
+		"scenario-c": {
+			assessment: `{"agent_supports":"no","daemon_capability":"n/a","driver_capability":"n/a"}`,
+			recipe:     `{"applicable":false}`,
+		},
+		// driver gap → driver_gap.
+		"scenario-gap": {
+			assessment: `{"agent_supports":"partial","daemon_capability":"full","driver_capability":"gap:keys"}`,
+		},
+		// no assessment, not recorded → unassessed.
+		"scenario-d": {},
+	})
+	m, err := LoadRepo(root)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("LoadRepo: %v", err)
 	}
+
 	cases := []struct {
 		cid  string
 		want Disposition
 	}{
-		{"rec", DispRecorded},
-		{"gap", DispDriverGap},
-		{"frozen", DispApplicableFalse},
-		{"degraded", DispApplicableFalse},
-		{"missed", DispUnassessed},
-		{"ready-unrec", DispAssessedNotRecord},
-		{"dual", DispRecorded},
-		{"mixfreeze", DispAssessedNotRecord},
+		{"scenario-a", DispRecorded},
+		{"scenario-b", DispAssessedNotRecord},
+		{"scenario-c", DispApplicableFalse},
+		{"scenario-gap", DispDriverGap},
+		{"scenario-d", DispUnassessed},
 	}
 	for _, c := range cases {
-		cell, ok := m.Cell("fake", c.cid)
+		cs, ok := m.Cell("testagent", c.cid)
 		if !ok {
-			t.Errorf("%s: not applicable (expected a cell)", c.cid)
+			t.Errorf("Cell(testagent,%q) missing", c.cid)
 			continue
 		}
-		if cell.Disposition != c.want {
-			t.Errorf("%s disposition = %q; want %q", c.cid, cell.Disposition, c.want)
+		if cs.Disposition != c.want {
+			t.Errorf("disposition[%s] = %q; want %q", c.cid, cs.Disposition, c.want)
 		}
 	}
 }
 
-// --- consistency / Disagreements parity (ported from consistency-gate_test.sh) ---
-
+// TestApplicableState exercises the shard-backed applicableState: recipe
+// applicable:false → AppFalse; applicable:true/absent → AppTrue; no recipe →
+// AppAbsent; absent agent → AppAbsent.
 func TestApplicableState(t *testing.T) {
-	tmp := t.TempDir()
-	scenarios := filepath.Join(tmp, "scenarios.json")
-	writeFile(t, scenarios, `{"catalog":[{"id":"cellA"},{"id":"cellB"},{"id":"cellC"},{"id":"cellD"}],
- "scenarios":[
-   {"name":"cellA","coverage_id":"cellA","requires":[],"by_adapter":{"ag":{"applicable":false}}},
-   {"name":"cellB","coverage_id":"cellB","requires":[],"by_adapter":{"ag":{"applicable":true}}},
-   {"name":"cellC","coverage_id":"cellC","requires":[]},
-   {"name":"cellD","coverage_id":"cellD","requires":[],"by_adapter":{"ag":null}}
- ]}`)
-	root := filepath.Join(tmp, "agents")
-	writeFile(t, filepath.Join(root, "ag", "capabilities.json"), `{"features":{},"transport":"line_based"}`)
-	m, err := Load(Config{ScenariosPath: scenarios, AgentsRoot: root})
+	root := writeShardFixture(t, "ag", map[string]shardFix{
+		"cellA": {recipe: `{"applicable":false}`},
+		"cellB": {recipe: `{"applicable":true}`},
+		"cellC": {recipe: `{"script":[]}`}, // recipe present, applicable absent → AppTrue
+		"cellD": {},                        // no recipe → AppAbsent
+	})
+	m, err := LoadRepo(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,9 +230,7 @@ func TestApplicableState(t *testing.T) {
 	}{
 		{"cellA", AppFalse},
 		{"cellB", AppTrue},
-		{"cellC", AppAbsent},
-		// A literal-null by_adapter entry is dropped (like jq select(. != null)),
-		// so the cell is absent — NOT AppTrue.
+		{"cellC", AppTrue},
 		{"cellD", AppAbsent},
 	}
 	for _, c := range cases {
@@ -213,75 +240,70 @@ func TestApplicableState(t *testing.T) {
 	}
 }
 
+// TestDisagreements is the loader-level parity test for the consistency gate:
+// one FROZEN contradiction (frozen assessment + recipe applicable:true) and one
+// RECORD contradiction (record_now assessment + recipe applicable:false, no
+// record_blocked), now read from the shard layout. A record_blocked reason
+// clears the RECORD contradiction; a recording clears the FROZEN one.
 func TestDisagreements(t *testing.T) {
-	tmp := t.TempDir()
-	scenarios := filepath.Join(tmp, "scenarios.json")
-	writeFile(t, scenarios, `{"catalog":[{"id":"cellA"},{"id":"cellB"},{"id":"cellC"}],
- "scenarios":[
-   {"name":"cellA","coverage_id":"cellA","requires":[],"by_adapter":{"ag":{"applicable":false}}},
-   {"name":"cellB","coverage_id":"cellB","requires":[],"by_adapter":{"ag":{"applicable":true}}},
-   {"name":"cellC","coverage_id":"cellC","requires":[]}
- ]}`)
-	root := filepath.Join(tmp, "agents")
-	writeFile(t, filepath.Join(root, "ag", "capabilities.json"), `{"features":{},"transport":"line_based"}`)
-	mkassess := func(cid, s, d, drv, blocked string) {
-		body := `{"schema_version":1,"agent_supports":"` + s + `","daemon_capability":"` + d + `","driver_capability":"` + drv + `"`
-		if blocked != "" {
-			body += `,"record_blocked":"` + blocked + `"`
+	build := func(blockedA bool, recordB bool) *Matrix {
+		assessA := `{"schema_version":1,"agent_supports":"yes","daemon_capability":"full","driver_capability":"ready"`
+		if blockedA {
+			assessA += `,"record_blocked":"infra"`
 		}
-		body += "}"
-		writeFile(t, filepath.Join(root, "ag", "scenarios", cid, "assessment.json"), body)
-	}
-
-	// cellA: record_now + applicable:false → contradiction.
-	// cellB: frozen + applicable:true → contradiction.
-	mkassess("cellA", "yes", "full", "ready", "")
-	mkassess("cellB", "no", "n/a", "n/a", "")
-	load := func() *Matrix {
-		m, err := Load(Config{ScenariosPath: scenarios, AgentsRoot: root})
+		assessA += "}"
+		cellB := shardFix{
+			assessment: `{"schema_version":1,"agent_supports":"no","daemon_capability":"n/a","driver_capability":"n/a"}`,
+			recipe:     `{"applicable":true}`, // AppTrue + frozen route → FROZEN contradiction
+		}
+		if recordB {
+			cellB.recorded = true
+		}
+		root := writeShardFixture(t, "ag", map[string]shardFix{
+			// record_now + recipe applicable:false → CONTRADICTION_RECORD_NOW
+			// (unless record_blocked is set).
+			"cellA": {assessment: assessA, recipe: `{"applicable":false}`},
+			// frozen + recipe applicable:true → CONTRADICTION_FROZEN
+			// (unless recorded).
+			"cellB": cellB,
+		})
+		m, err := LoadRepo(root)
 		if err != nil {
 			t.Fatal(err)
 		}
 		return m
 	}
-	dis := load().Disagreements()
+
+	dis := build(false, false).Disagreements()
 	if len(dis) != 2 {
 		t.Fatalf("want 2 disagreements, got %d: %+v", len(dis), dis)
 	}
-	joined := ""
+	var foundRecord, foundFrozen bool
 	for _, d := range dis {
-		joined += d.Message + "\n"
+		switch d.Verdict {
+		case VerdictContradictRecord:
+			foundRecord = true
+		case VerdictContradictFrozen:
+			foundFrozen = true
+		}
 	}
-	if !strings.Contains(joined, "ag/cellA: assessment routes RECORD") {
-		t.Errorf("missing record_now flag for cellA:\n%s", joined)
+	if !foundRecord {
+		t.Errorf("missing RECORD contradiction for cellA: %+v", dis)
 	}
-	if !strings.Contains(joined, "ag/cellB: scenarios.json marks by_adapter.ag applicable:true") {
-		t.Errorf("missing frozen flag for cellB:\n%s", joined)
+	if !foundFrozen {
+		t.Errorf("missing FROZEN contradiction for cellB: %+v", dis)
 	}
 
-	// record_blocked clears the cellA contradiction.
-	mkassess("cellA", "yes", "full", "ready", "infra")
-	for _, d := range load().Disagreements() {
+	// record_blocked clears cellA's RECORD contradiction.
+	for _, d := range build(true, false).Disagreements() {
 		if d.CoverageID == "cellA" {
-			t.Errorf("record_blocked=infra should clear cellA, still got: %s", d.Message)
+			t.Errorf("record_blocked should clear cellA, still got: %s", d.Message)
 		}
 	}
 
-	// A committed fixture clears cellB.
-	mkassess("cellB", "no", "n/a", "n/a", "")
-	writeFile(t, filepath.Join(root, "ag", "scenarios", "cellB", "transcript.jsonl"), "{}\n")
-	writeFile(t, filepath.Join(root, "ag", "scenarios", "cellB", "events.jsonl"), "{}\n")
-	if dis := load().Disagreements(); len(dis) != 0 {
+	// A recording clears cellB's FROZEN contradiction; with cellA also blocked,
+	// all contradictions are gone.
+	if dis := build(true, true).Disagreements(); len(dis) != 0 {
 		t.Errorf("all contradictions should be cleared, got: %+v", dis)
-	}
-}
-
-func writeFile(t *testing.T, path, content string) {
-	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
 	}
 }

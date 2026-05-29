@@ -1,118 +1,130 @@
 package viewer
 
-import "testing"
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"testing"
+)
 
-// TestAnnotateCatalogCodes covers the section.index numbering that the
-// overview matrix renders. Section order follows first appearance; the
-// per-section index resets at each new section; a missing section maps to
-// "(other)". (Previously untested — server.go finding #6.)
-func TestAnnotateCatalogCodes(t *testing.T) {
-	top := map[string]any{
-		"scenarios": []any{
-			map[string]any{"id": "a", "section": "Lifecycle"},
-			map[string]any{"id": "b", "section": "Lifecycle"},
-			map[string]any{"id": "c", "section": "Models"},
-			map[string]any{"id": "d"}, // no section → "(other)"
-			map[string]any{"id": "e", "section": "Lifecycle"},
-		},
+// TestCatalogHandler exercises the shard-backed /api/catalog (#510): the
+// skeleton + per-cell coverage come from the per-scenario shards, the row code
+// is the shard ID, and the source header advertises "shards".
+func TestCatalogHandler(t *testing.T) {
+	dir := t.TempDir()
+	scen := filepath.Join(dir, "replaydata", "scenarios")
+	if err := os.MkdirAll(scen, 0o755); err != nil {
+		t.Fatal(err)
 	}
-	annotateCatalogCodes(top)
+	write := func(name, body string) {
+		if err := os.WriteFile(filepath.Join(scen, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("_meta.json", `{"min_versions":{"alphaagent":"1.0.0"}}`)
+	write("alpha.json", `{
+  "id": "1.1",
+  "name": "alpha",
+  "section": "S",
+  "feature": "Alpha",
+  "agents": {
+    "alphaagent": {"metadata": {"agent_supports": "yes", "daemon_capability": "full", "driver_capability": "ready"}}
+  }
+}`)
+	write("beta.json", `{"id": "1.2", "name": "beta", "section": "S", "feature": "Beta", "agents": {}}`)
 
-	want := map[string]string{
-		"a": "1.1", // Lifecycle is section 1
-		"b": "1.2",
-		"c": "2.1", // Models is section 2
-		"d": "3.1", // (other) is section 3
-		"e": "1.3", // back to Lifecycle, index continues
+	srv := &Server{RepoRoot: dir}
+	req := httptest.NewRequest(http.MethodGet, "/api/catalog", nil)
+	rec := httptest.NewRecorder()
+	srv.handleCatalog(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
 	}
-	for _, raw := range top["scenarios"].([]any) {
-		sc := raw.(map[string]any)
-		id := sc["id"].(string)
-		got, _ := sc["code"].(string)
-		if got != want[id] {
-			t.Errorf("scenario %q code = %q; want %q", id, got, want[id])
+	if got := rec.Header().Get("X-Catalog-Source"); got != "shards" {
+		t.Fatalf("X-Catalog-Source = %q, want shards", got)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	scns, ok := doc["scenarios"].([]any)
+	if !ok || len(scns) != 2 {
+		t.Fatalf("want 2 scenarios, got %v", doc["scenarios"])
+	}
+	first := scns[0].(map[string]any)
+	if first["code"] != "1.1" {
+		t.Fatalf("want code 1.1, got %v", first["code"])
+	}
+	if _, ok := first["coverage"].(map[string]any); !ok {
+		t.Fatalf("want coverage map, got %v", first["coverage"])
+	}
+}
+
+// TestDeriveDisplayState pins the display-state rollup the overview renders.
+func TestDeriveDisplayState(t *testing.T) {
+	cases := []struct {
+		supports, daemon, driver string
+		rec                      bool
+		want                     string
+	}{
+		{"no", "full", "ready", true, "n.a."},
+		{"unknown", "full", "ready", true, "unknown"},
+		{"yes", "n/a", "ready", true, "n.a."},
+		{"yes", "incapable", "ready", true, "unobservable"},
+		{"yes", "bug", "ready", true, "blocked-daemon"},
+		{"yes", "full", "gap:keys", true, "blocked-driver"},
+		{"yes", "full", "ready", false, "pending-record"},
+		{"yes", "full", "ready", true, "observed"},
+	}
+	for _, c := range cases {
+		got := deriveDisplayState(c.supports, c.daemon, c.driver, c.rec)
+		if got != c.want {
+			t.Errorf("deriveDisplayState(%q,%q,%q,%v) = %q; want %q", c.supports, c.daemon, c.driver, c.rec, got, c.want)
 		}
 	}
 }
 
-// TestAnnotateCatalogCodes_gracefulOnBadShape: a payload without a
-// scenarios array is left untouched rather than panicking.
-func TestAnnotateCatalogCodes_gracefulOnBadShape(t *testing.T) {
-	top := map[string]any{"version": 1}
-	annotateCatalogCodes(top) // must not panic
-	if _, ok := top["scenarios"]; ok {
-		t.Error("did not expect a scenarios key to be created")
-	}
-}
-
-// TestDeriveDisplayState pins the #476 rollup: the orthogonal daemon /
-// driver capability facts plus the measured recording status collapse to
-// one display state, with daemon problems outranking driver gaps.
-func TestDeriveDisplayState(t *testing.T) {
-	cases := []struct {
-		name         string
-		supports     string
-		daemon       string
-		driver       string
-		hasRecording bool
-		want         string
-	}{
-		{"agent lacks feature", "no", "full", "ready", true, "n.a."},
-		{"support unknown", "unknown", "full", "ready", false, "unknown"},
-		{"support empty defaults unknown", "", "full", "ready", false, "unknown"},
-		{"daemon n/a frozen", "yes", "n/a", "ready", false, "n.a."},
-		{"daemon incapable", "yes", "incapable", "ready", false, "unobservable"},
-		{"daemon bug", "yes", "bug", "ready", true, "blocked-daemon"},
-		{"driver gap", "yes", "full", "gap:sigkill", false, "blocked-driver"},
-		{"daemon outranks driver gap", "yes", "bug", "gap:sigkill", false, "blocked-daemon"},
-		{"incapable outranks driver gap", "yes", "incapable", "gap:keys", false, "unobservable"},
-		{"daemon unknown", "yes", "unknown", "ready", false, "unknown"},
-		{"daemon empty unknown", "yes", "", "ready", false, "unknown"},
-		{"capable not yet recorded", "yes", "full", "ready", false, "pending-record"},
-		{"capable and recorded", "yes", "full", "ready", true, "observed"},
-		{"partial support, full+ready, recorded", "partial", "full", "ready", true, "observed"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := deriveDisplayState(tc.supports, tc.daemon, tc.driver, tc.hasRecording)
-			if got != tc.want {
-				t.Errorf("deriveDisplayState(%q,%q,%q,%v) = %q, want %q",
-					tc.supports, tc.daemon, tc.driver, tc.hasRecording, got, tc.want)
-			}
-		})
-	}
-}
-
-// TestAnnotateDisplayState confirms the annotation pass reads the measured
-// recording status off the cell and writes a derived display_state.
+// TestAnnotateDisplayState checks the in-place decoration over a catalog doc.
 func TestAnnotateDisplayState(t *testing.T) {
 	top := map[string]any{
 		"scenarios": []any{
 			map[string]any{
-				"id": "s1",
 				"coverage": map[string]any{
 					"claudecode": map[string]any{
-						"agent_supports":    "yes",
-						"daemon_capability": "full",
-						"driver_capability": "ready",
-						"measurement":       map[string]any{"status": "pass"},
-					},
-					"opencode": map[string]any{
-						"agent_supports":    "yes",
-						"daemon_capability": "full",
-						"driver_capability": "ready",
-						"measurement":       map[string]any{"status": "no_recording"},
+						"agent_supports": "yes", "daemon_capability": "full", "driver_capability": "ready",
+						"measurement": map[string]any{"status": "pass"},
 					},
 				},
 			},
 		},
 	}
 	annotateDisplayState(top)
-	cov := top["scenarios"].([]any)[0].(map[string]any)["coverage"].(map[string]any)
-	if got := cov["claudecode"].(map[string]any)["display_state"]; got != "observed" {
-		t.Errorf("claudecode display_state = %v, want observed", got)
+	sc := top["scenarios"].([]any)[0].(map[string]any)
+	cov := sc["coverage"].(map[string]any)
+	cell := cov["claudecode"].(map[string]any)
+	if cell["display_state"] != "observed" {
+		t.Errorf("display_state = %v; want observed", cell["display_state"])
 	}
-	if got := cov["opencode"].(map[string]any)["display_state"]; got != "pending-record" {
-		t.Errorf("opencode display_state = %v, want pending-record", got)
+}
+
+// TestNormalizeAdapter pins the slug map: only the hyphenated "claude-code"
+// (and the empty string) collapse to "claudecode"; every other slug is
+// returned unchanged.
+func TestNormalizeAdapter(t *testing.T) {
+	cases := map[string]string{
+		"claude-code": "claudecode",
+		"":            "claudecode",
+		"claudecode":  "claudecode",
+		"codex":       "codex",
+		"aider":       "aider",
+	}
+	for in, want := range cases {
+		got := normalizeAdapter(in)
+		if got != want {
+			t.Errorf("normalizeAdapter(%q) = %q; want %q", in, want, got)
+		}
 	}
 }

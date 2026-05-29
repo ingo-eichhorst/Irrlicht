@@ -1,4 +1,10 @@
-package viewer
+// Package shard is the per-scenario "shard" data model (#510): one unified
+// object per matrix row at replaydata/scenarios/<name>.json, plus a global
+// replaydata/scenarios/_meta.json. It lives in its own package (rather than
+// under internal/viewer) so BOTH the viewer AND the matrix model can import it
+// — viewer imports matrix, so the shared shard types can live in neither and
+// must sit in a third package both depend on.
+package shard
 
 import (
 	"encoding/json"
@@ -75,16 +81,23 @@ type ShardDetails struct {
 	Recipe       json.RawMessage   `json:"recipe,omitempty"`
 }
 
-// shardsDir is the directory holding the scenario shards.
-func shardsDir(repoRoot string) string {
+// Meta is the global replaydata/scenarios/_meta.json: the onboarded-adapter
+// column set (min_versions) plus each adapter's transcript file extension.
+type Meta struct {
+	MinVersions          map[string]string `json:"min_versions"`
+	TranscriptExtensions map[string]string `json:"transcript_extensions"`
+}
+
+// Dir is the directory holding the scenario shards.
+func Dir(repoRoot string) string {
 	return filepath.Join(repoRoot, "replaydata", "scenarios")
 }
 
-// loadShards reads every replaydata/scenarios/<name>.json shard (skipping the
+// LoadAll reads every replaydata/scenarios/<name>.json shard (skipping the
 // global _meta.json), sorted by stable id (section, then index). A malformed
 // shard is skipped rather than failing the whole load.
-func loadShards(repoRoot string) []Shard {
-	dir := shardsDir(repoRoot)
+func LoadAll(repoRoot string) []Shard {
+	dir := Dir(repoRoot)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil
@@ -108,11 +121,11 @@ func loadShards(repoRoot string) []Shard {
 	return out
 }
 
-// loadShard reads a single shard by name (the filename IS the name) without
+// Load reads a single shard by name (the filename IS the name) without
 // scanning the whole catalog. Returns ok=false when absent or malformed.
-func loadShard(repoRoot, name string) (Shard, bool) {
+func Load(repoRoot, name string) (Shard, bool) {
 	var s Shard
-	b, err := os.ReadFile(filepath.Join(shardsDir(repoRoot), name+".json"))
+	b, err := os.ReadFile(filepath.Join(Dir(repoRoot), name+".json"))
 	if err != nil {
 		return s, false
 	}
@@ -120,6 +133,33 @@ func loadShard(repoRoot, name string) (Shard, bool) {
 		return s, false
 	}
 	return s, true
+}
+
+// LoadMeta reads replaydata/scenarios/_meta.json. Returns an empty Meta on any
+// error (missing dir, unreadable file, malformed JSON) — callers tolerate an
+// empty column set and fall back to other sources.
+func LoadMeta(repoRoot string) Meta {
+	var m Meta
+	b, err := os.ReadFile(filepath.Join(Dir(repoRoot), "_meta.json"))
+	if err != nil {
+		return m
+	}
+	if json.Unmarshal(b, &m) != nil {
+		return Meta{}
+	}
+	return m
+}
+
+// Agents returns the SORTED keys of LoadMeta().MinVersions — the onboarded
+// adapter column set. Empty when _meta.json is absent or malformed.
+func Agents(repoRoot string) []string {
+	mv := LoadMeta(repoRoot).MinVersions
+	out := make([]string, 0, len(mv))
+	for a := range mv {
+		out = append(out, a)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // lessShardID orders "section.index" ids numerically (so "2.10" sorts after

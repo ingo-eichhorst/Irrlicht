@@ -54,13 +54,24 @@ type RollupCoverageCell struct {
 	Notes            string `json:"notes"`
 }
 
-// RollupOverlay carries the human-owned fields preserved across regeneration:
-// per-(scenarioID, agent) notes, the legend block, and source_catalog. Any may
-// be zero — BuildRollup fills sensible defaults.
+// RollupOverlay carries the human-owned / stable fields preserved across
+// regeneration: per-(scenarioID, agent) notes, the legend block, source_catalog,
+// and generated_at. Any may be zero — BuildRollup fills sensible defaults.
+//
+// GeneratedAt is carried forward (#510 P2): the shard model stores ONE
+// assessment per cell — the migrator-chosen canonical variant — whose
+// assessed_at can differ from the legacy candidate-dir-first resolution that
+// originally stamped this field (e.g. aider/basic-turn: the shard keeps the
+// recording folder's 2026-05-25 assessment, while the legacy rollup stamped the
+// basic-turn folder's 2026-05-23). The axes are identical either way; only the
+// timestamp diverges. Preserving the committed generated_at keeps the rollup a
+// byte-stable fixpoint across the storage migration. A first-time generation
+// (empty overlay) still derives it from the max assessed_at.
 type RollupOverlay struct {
 	Notes         map[string]map[string]string // scenarioID → agent → notes
 	Legend        any
 	SourceCatalog string
+	GeneratedAt   string
 }
 
 // BuildRollup derives the coverage rollup from the loaded assessments. Axes
@@ -110,18 +121,30 @@ func (m *Matrix) BuildRollup(overlay RollupOverlay) RollupDoc {
 			Coverage: cov,
 		})
 	}
-	doc.GeneratedAt = maxAssessedAt
+	// Prefer the carried-forward generated_at (stable fixpoint across the shard
+	// migration; see RollupOverlay.GeneratedAt). Fall back to the derived max for
+	// a first-time generation with no prior file.
+	if overlay.GeneratedAt != "" {
+		doc.GeneratedAt = overlay.GeneratedAt
+	} else {
+		doc.GeneratedAt = maxAssessedAt
+	}
 	return doc
 }
 
-// rollupAxes resolves one (agent, catalog-id) cell's axes for the rollup,
-// reading the assessment (via the candidate dirs, so a recipe-variant folder is
-// found) and falling back to the unassessed default. Works for any catalog id,
-// applicable or not — the rollup covers every catalog row × every agent.
+// rollupAxes resolves one (agent, catalog-id) cell's axes for the rollup from
+// the loaded shard (m.shards, keyed by coverage_id), falling back to the
+// unassessed default. The shard carries the canonical per-cell assessment the
+// migrator chose, so this reproduces the legacy candidate-dir resolution
+// byte-for-byte. Works for any catalog id, applicable or not — the rollup covers
+// every catalog row × every agent.
 func (m *Matrix) rollupAxes(agent, coverageID string) (supports, daemon, driver, assessedAt string) {
-	_, hasAssess, rep := m.recordedAndAssessment(agent, coverageID)
-	if hasAssess && rep != nil {
-		return rep.AgentSupports, rep.DaemonCapability, rep.DriverCapability, rep.AssessedAt
+	if sh, ok := m.shards[coverageID]; ok {
+		if c, ok := sh.Agents[agent]; ok {
+			if _, rep := cellAssessment(c); rep != nil {
+				return rep.AgentSupports, rep.DaemonCapability, rep.DriverCapability, rep.AssessedAt
+			}
+		}
 	}
 	return "unknown", "unknown", "ready", ""
 }

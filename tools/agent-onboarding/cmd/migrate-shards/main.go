@@ -44,7 +44,7 @@ import (
 	"strconv"
 	"strings"
 
-	"irrlicht/tools/agent-onboarding/internal/viewer"
+	"irrlicht/tools/agent-onboarding/internal/shard"
 )
 
 // ---- input shapes (mirrors internal/matrix/matrix.go's raw* types) ----------
@@ -158,15 +158,15 @@ func generate(repoRoot string) (map[string][]byte, error) {
 // buildShard maps ONE catalog row onto a Shard. Row metadata comes from the
 // catalog entry + a representative recipe variant; each agent column is a
 // ShardAgent cell resolved independently for recipe, artifacts, and assessment.
-func buildShard(repoRoot string, cat rawCatalog, code string, scenarios []rawScenario, agents []string) viewer.Shard {
+func buildShard(repoRoot string, cat rawCatalog, code string, scenarios []rawScenario, agents []string) shard.Shard {
 	rep := representativeVariant(cat.ID, scenarios)
 
-	shard := viewer.Shard{
+	shard := shard.Shard{
 		ID:      code,
 		Name:    cat.ID,
 		Section: cat.Section,
 		Feature: cat.Feature,
-		Agents:  map[string]viewer.ShardAgent{},
+		Agents:  map[string]shard.ShardAgent{},
 	}
 	if rep != nil {
 		shard.Description = rep.Desc
@@ -187,7 +187,7 @@ func buildShard(repoRoot string, cat rawCatalog, code string, scenarios []rawSce
 // buildCell resolves a single (scenario, agent) cell. Returns ok=false when the
 // agent has NOTHING to say — no recipe, no recording, and no assessment — so we
 // omit the column entirely (an "absent" cell).
-func buildCell(repoRoot, cid string, dirs []string, scenarios []rawScenario, agent string) (viewer.ShardAgent, bool) {
+func buildCell(repoRoot, cid string, dirs []string, scenarios []rawScenario, agent string) (shard.ShardAgent, bool) {
 	agentScenDir := filepath.Join(repoRoot, "replaydata", "agents", agent, "scenarios")
 
 	// ARTIFACTS + RECORDING_DIR: the first candidate folder that actually holds
@@ -196,21 +196,22 @@ func buildCell(repoRoot, cid string, dirs []string, scenarios []rawScenario, age
 	// variant folder.
 	recFolder, artifacts := resolveArtifacts(agentScenDir, agent, dirs)
 
-	// ASSESSMENT: prefer the recording folder; otherwise the first candidate
-	// folder with a parseable assessment.json (mirrors recordedAndAssessment).
-	assessRaw, parsed := resolveAssessment(agentScenDir, recFolder, dirs)
+	// ASSESSMENT: "catalog-id folder wins" — the cell's assessment is the one
+	// in the <cid> folder when present (this is the value the viewer displays
+	// per-cell), then the recording folder, then any remaining candidate dir.
+	assessRaw, parsed := resolveAssessment(agentScenDir, cid, recFolder, dirs)
 
 	// RECIPE: the by_adapter[agent] block of the variant that best fits this
 	// cell — preferring the variant whose name IS the recording folder.
 	recipe := resolveRecipe(scenarios, cid, agent, recFolder)
 
 	if recFolder == "" && assessRaw == nil && recipe == nil {
-		return viewer.ShardAgent{}, false
+		return shard.ShardAgent{}, false
 	}
 
-	cell := viewer.ShardAgent{
+	cell := shard.ShardAgent{
 		Artifacts: artifacts,
-		Details: viewer.ShardDetails{
+		Details: shard.ShardDetails{
 			Assessment: assessRaw,
 			Recipe:     recipe,
 			// Expected / ExpectedMeta intentionally left empty — expected.jsonl
@@ -245,7 +246,7 @@ func buildCell(repoRoot, cid string, dirs []string, scenarios []rawScenario, age
 // resolveArtifacts finds the first candidate folder holding a recording and
 // returns the folder name plus its on-disk artifacts (paths relative to
 // replaydata/agents/). Empty folder name means no recording for this agent.
-func resolveArtifacts(agentScenDir, agent string, dirs []string) (string, viewer.ShardArtifacts) {
+func resolveArtifacts(agentScenDir, agent string, dirs []string) (string, shard.ShardArtifacts) {
 	for _, d := range dirs {
 		cellDir := filepath.Join(agentScenDir, d)
 		// agentScenDir is .../replaydata/agents/<agent>/scenarios — the prefix
@@ -258,7 +259,7 @@ func resolveArtifacts(agentScenDir, agent string, dirs []string) (string, viewer
 			continue
 		}
 
-		art := viewer.ShardArtifacts{}
+		art := shard.ShardArtifacts{}
 		if hasEvents {
 			art.Events = rel + "/events.jsonl"
 		}
@@ -273,7 +274,7 @@ func resolveArtifacts(agentScenDir, agent string, dirs []string) (string, viewer
 		art.Recordings = findRecordings(cellDir, rel)
 		return d, art
 	}
-	return "", viewer.ShardArtifacts{}
+	return "", shard.ShardArtifacts{}
 }
 
 // findTranscript returns the relative transcript paths (jsonl, md) present in a
@@ -327,11 +328,14 @@ func findRecordings(cellDir, rel string) []string {
 	return out
 }
 
-// resolveAssessment reads assessment.json from the recording folder first, then
-// falls back to the first candidate folder that has a parseable one. Returns
-// the compacted raw JSON (for Details.Assessment) and the parsed overview
-// fields (for Metadata). Both nil when no assessment exists.
-func resolveAssessment(agentScenDir, recFolder string, dirs []string) (json.RawMessage, *rawAssessment) {
+// resolveAssessment reads the cell's assessment.json under a "catalog-id folder
+// wins" rule: the <cid> folder first (the value the viewer displays per cell),
+// then the recording folder, then any remaining candidate dir. Returns the
+// compacted raw JSON (for Details.Assessment) and the parsed overview fields
+// (for Metadata). Both nil when no assessment exists. An empty-after-compact
+// blob (a zero-byte assessment.json — several exist on disk) counts as no
+// assessment, matching the matrix model's intent.
+func resolveAssessment(agentScenDir, cid, recFolder string, dirs []string) (json.RawMessage, *rawAssessment) {
 	try := func(folder string) (json.RawMessage, *rawAssessment, bool) {
 		if folder == "" {
 			return nil, nil, false
@@ -340,21 +344,26 @@ func resolveAssessment(agentScenDir, recFolder string, dirs []string) (json.RawM
 		if err != nil {
 			return nil, nil, false
 		}
+		raw := compactRaw(b)
+		if raw == nil {
+			return nil, nil, false
+		}
 		var a rawAssessment
 		if json.Unmarshal(b, &a) != nil {
 			return nil, nil, false
 		}
-		return compactRaw(b), &a, true
+		return raw, &a, true
 	}
 
-	if raw, parsed, ok := try(recFolder); ok {
-		return raw, parsed
-	}
-	for _, d := range dirs {
-		if d == recFolder {
+	// Preference order: cid folder, then recording folder, then the rest —
+	// de-duplicated so each folder is tried at most once.
+	seen := map[string]bool{}
+	for _, folder := range append([]string{cid, recFolder}, dirs...) {
+		if folder == "" || seen[folder] {
 			continue
 		}
-		if raw, parsed, ok := try(d); ok {
+		seen[folder] = true
+		if raw, parsed, ok := try(folder); ok {
 			return raw, parsed
 		}
 	}
@@ -544,7 +553,7 @@ func readManifest(path string) *rawManifest {
 // marshalShard renders a shard deterministically: 2-space indent + trailing
 // newline. Field order is the struct declaration order; the Agents map is
 // emitted sorted by key (Go's encoding/json sorts map keys).
-func marshalShard(s viewer.Shard) ([]byte, error) {
+func marshalShard(s shard.Shard) ([]byte, error) {
 	b, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
 		return nil, err

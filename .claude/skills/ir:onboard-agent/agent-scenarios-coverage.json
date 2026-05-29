@@ -911,8 +911,8 @@
       "feature": "User-blocking tool call (question)",
       "coverage": {
         "aider": {
-          "agent_supports": "yes",
-          "daemon_capability": "full",
+          "agent_supports": "partial",
+          "daemon_capability": "incapable",
           "driver_capability": "ready",
           "notes": "aider can ask via /ask interactively but no JSONL-style tool marker; not detected"
         },
@@ -935,9 +935,9 @@
           "notes": "no AskUserQuestion-style structured blocking-question primitive that surfaces a daemon-observable waiting state (SQLite part schema = step-start/step-finish/text/tool only)"
         },
         "pi": {
-          "agent_supports": "yes",
-          "daemon_capability": "full",
-          "driver_capability": "ready",
+          "agent_supports": "no",
+          "daemon_capability": "n/a",
+          "driver_capability": "n/a",
           "notes": ""
         }
       }

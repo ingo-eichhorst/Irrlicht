@@ -3,10 +3,10 @@ package matrix
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
-	"slices"
 	"sort"
+
+	"irrlicht/tools/agent-onboarding/internal/shard"
 )
 
 // AssessmentReport is the persisted artifact of one Stage-1 assessment, one
@@ -71,20 +71,24 @@ type Disagreement struct {
 }
 
 // Config locates the inputs. Empty fields fall back to repo-relative defaults
-// via LoadRepo. AgentsRoot is .../replaydata/agents.
+// via LoadRepo. AgentsRoot is .../replaydata/agents. As of P2 the model is
+// shard-backed: RepoRoot (or, when empty, the parent of AgentsRoot) is the
+// authoritative source — every cell comes from replaydata/scenarios/<name>.json
+// and the onboarded-adapter column set from replaydata/scenarios/_meta.json.
+// ScenariosPath/AgentsRoot are kept for back-compat (callers still set them) but
+// are no longer the data source.
 type Config struct {
 	ScenariosPath string
 	AgentsRoot    string
+	RepoRoot      string
 }
 
 // Matrix is the loaded, normalized model. Construct via Load / LoadRepo.
 type Matrix struct {
-	catalog   []catalogEntry
-	scenarios []scenarioVariant
-	agents    []string                        // sorted, agents with a capabilities.json
-	caps      map[string]capabilities         // agent → capabilities
-	cells     map[string]map[string]CellState // agent → coverage_id → cell (applicable cells only)
-	cfg       Config
+	catalog []catalogEntry
+	agents  []string                        // sorted onboarded adapters (shard _meta.min_versions keys)
+	shards  map[string]shard.Shard          // coverage_id (shard.Name) → shard
+	cells   map[string]map[string]CellState // agent → coverage_id → cell (cells present in the shard only)
 }
 
 type catalogEntry struct {
@@ -93,229 +97,193 @@ type catalogEntry struct {
 	Feature string `json:"feature"`
 }
 
-type scenarioVariant struct {
-	Name              string   `json:"name"`
-	CoverageID        string   `json:"coverage_id"`
-	Requires          []string `json:"requires"`
-	RequiresTransport []string `json:"requires_transport"`
-	// Pointer values so a literal-null entry (`"by_adapter":{"x":null}`)
-	// unmarshals to nil and is dropped, matching the bash gates'
-	// `.by_adapter[$a] | select(. != null)`.
-	ByAdapter map[string]*adapterEntry `json:"by_adapter"`
-}
-
-type adapterEntry struct {
+// shardRecipe is the slim view of a cell's Details.Recipe the matrix needs:
+// the applicable flag, used to reconstruct ApplicableState per cell.
+type shardRecipe struct {
 	// Applicable is a pointer so we can tell "absent" (nil → recordable) from
-	// an explicit false. Mirrors jq's `.applicable == false` test.
+	// an explicit false — mirrors the old per-variant by_adapter rule.
 	Applicable *bool `json:"applicable"`
 }
 
-type capabilities struct {
-	Agent     string         `json:"agent"`
-	Transport string         `json:"transport"`
-	Features  map[string]any `json:"features"`
-}
-
-// LoadRepo loads the matrix from a repo root, using the canonical paths:
-// scenarios.json under .claude/skills/ir:onboard-agent/ and recordings under
-// replaydata/agents/.
+// LoadRepo loads the matrix from a repo root. Data comes from the per-scenario
+// shards under replaydata/scenarios/ (#510); ScenariosPath/AgentsRoot are still
+// populated for back-compat but no longer read.
 func LoadRepo(repoRoot string) (*Matrix, error) {
 	return Load(Config{
 		ScenariosPath: filepath.Join(repoRoot, ".claude", "skills", "ir:onboard-agent", "scenarios.json"),
 		AgentsRoot:    filepath.Join(repoRoot, "replaydata", "agents"),
+		RepoRoot:      repoRoot,
 	})
 }
 
-// Load reads scenarios.json plus every agent's capabilities.json under
-// AgentsRoot and assembles the per-cell state for all applicable cells.
+// Load assembles the matrix from the per-scenario shards. The column set is
+// shard.Agents (the _meta.min_versions keys); each shard is one matrix row; a
+// cell exists iff the shard names the agent. Every cell's axes / recording /
+// applicable state are reconstructed from the shard's per-agent block.
 func Load(cfg Config) (*Matrix, error) {
-	b, err := os.ReadFile(cfg.ScenariosPath)
-	if err != nil {
-		return nil, fmt.Errorf("read scenarios.json: %w", err)
+	repoRoot := cfg.RepoRoot
+	if repoRoot == "" {
+		// AgentsRoot = …/replaydata/agents → repoRoot = …
+		repoRoot = filepath.Dir(filepath.Dir(cfg.AgentsRoot))
 	}
-	var doc struct {
-		Catalog   []catalogEntry    `json:"catalog"`
-		Scenarios []scenarioVariant `json:"scenarios"`
-	}
-	if err := json.Unmarshal(b, &doc); err != nil {
-		return nil, fmt.Errorf("parse scenarios.json: %w", err)
+
+	shards := shard.LoadAll(repoRoot)
+	if len(shards) == 0 {
+		return nil, fmt.Errorf("no shards under %s", shard.Dir(repoRoot))
 	}
 
 	m := &Matrix{
-		catalog:   doc.Catalog,
-		scenarios: doc.Scenarios,
-		caps:      map[string]capabilities{},
-		cells:     map[string]map[string]CellState{},
-		cfg:       cfg,
+		agents: shard.Agents(repoRoot),
+		shards: make(map[string]shard.Shard, len(shards)),
+		cells:  map[string]map[string]CellState{},
+	}
+	for _, sh := range shards {
+		m.shards[sh.Name] = sh
 	}
 
-	entries, err := os.ReadDir(cfg.AgentsRoot)
-	if err != nil {
-		return nil, fmt.Errorf("read agents root: %w", err)
-	}
-	for _, e := range entries {
-		if !e.IsDir() {
+	// catalog: one row per IN-CATALOG shard, in shard (section.index) order.
+	// LoadAll already sorts by stable id. Out-of-catalog shards carry a sentinel
+	// section id (>= 99, the migrator's marker for rows absent from the source
+	// catalog) and are excluded so the derived rollup matches the committed file
+	// row-for-row.
+	for _, sh := range shards {
+		if !inCatalog(sh.ID) {
 			continue
 		}
-		agent := e.Name()
-		capsPath := filepath.Join(cfg.AgentsRoot, agent, "capabilities.json")
-		cb, err := os.ReadFile(capsPath)
-		if err != nil {
-			continue // no capabilities.json → not an onboarded agent column
-		}
-		var c capabilities
-		if json.Unmarshal(cb, &c) != nil {
-			continue
-		}
-		m.caps[agent] = c
-		m.agents = append(m.agents, agent)
+		m.catalog = append(m.catalog, catalogEntry{ID: sh.Name, Section: sh.Section, Feature: sh.Feature})
 	}
-	sort.Strings(m.agents)
 
 	for _, agent := range m.agents {
 		m.cells[agent] = map[string]CellState{}
-		for _, cid := range m.applicableCoverageIDs(agent) {
-			m.cells[agent][cid] = m.buildCell(agent, cid)
+		for _, sh := range shards {
+			if _, ok := sh.Agents[agent]; !ok {
+				continue // no cell for this (agent, scenario)
+			}
+			m.cells[agent][sh.Name] = m.buildCell(agent, sh.Name)
 		}
 	}
 	return m, nil
 }
 
-// HasAgent reports whether the agent has a capabilities.json under AgentsRoot.
+// inCatalog reports whether a shard id "<section>.<index>" denotes a real
+// catalog row. The migrator assigns out-of-catalog shards a sentinel section
+// (>= 99); those rows exist as shards but are NOT catalog rows (they never
+// appeared in the committed rollup), so the matrix excludes them from m.catalog.
+func inCatalog(id string) bool {
+	sec, _, ok := splitShardSection(id)
+	if !ok {
+		return true // malformed → keep (defensive; real ids are well-formed)
+	}
+	return sec < 99
+}
+
+// splitShardSection parses the leading "<section>." of a shard id.
+func splitShardSection(id string) (section int, rest string, ok bool) {
+	dot := -1
+	for i := 0; i < len(id); i++ {
+		if id[i] == '.' {
+			dot = i
+			break
+		}
+	}
+	if dot <= 0 {
+		return 0, "", false
+	}
+	n := 0
+	for i := 0; i < dot; i++ {
+		c := id[i]
+		if c < '0' || c > '9' {
+			return 0, "", false
+		}
+		n = n*10 + int(c-'0')
+	}
+	return n, id[dot+1:], true
+}
+
+// HasAgent reports whether the agent is an onboarded column (present in the
+// shard _meta.min_versions set).
 func (m *Matrix) HasAgent(agent string) bool {
-	_, ok := m.caps[agent]
-	return ok
+	for _, a := range m.agents {
+		if a == agent {
+			return true
+		}
+	}
+	return false
 }
 
 // Agents returns the sorted list of onboarded agents.
 func (m *Matrix) Agents() []string { return append([]string(nil), m.agents...) }
 
-// variantApplicable mirrors cg_applicable_coverage_ids' per-variant rule: every
-// `requires` feature must be boolean true in the agent's capabilities (false /
-// "unknown" both block), and when requires_transport is set the agent's
-// transport must be listed.
-func variantApplicable(v scenarioVariant, c capabilities) bool {
-	for _, k := range v.Requires {
-		if b, ok := c.Features[k].(bool); !ok || !b {
-			return false
-		}
-	}
-	if len(v.RequiresTransport) > 0 && !slices.Contains(v.RequiresTransport, c.Transport) {
-		return false
-	}
-	return true
+// cellRecorded mirrors the old recordedAndAssessment's "recorded" leg
+// (events.jsonl + a transcript) using the shard cell's Artifacts refs instead
+// of scanning the on-disk candidate dirs.
+func cellRecorded(c shard.ShardAgent) bool {
+	return c.Artifacts.Events != "" && (c.Artifacts.Transcript != "" || c.Artifacts.TranscriptMD != "")
 }
 
-// applicableCoverageIDs ports cg_applicable_coverage_ids: a coverage_id is
-// applicable iff ANY of its recipe variants is applicable. Sorted-unique,
-// empty coverage_ids dropped.
-func (m *Matrix) applicableCoverageIDs(agent string) []string {
-	c, ok := m.caps[agent]
-	if !ok {
-		return nil
+// cellAssessment parses the shard cell's Details.Assessment. hasAssessFile is
+// true when the blob is present AND parseable into an AssessmentReport — the
+// shard-backed equivalent of finding a parseable assessment.json. rep is nil
+// when the blob is empty or malformed.
+func cellAssessment(c shard.ShardAgent) (hasAssessFile bool, rep *AssessmentReport) {
+	if len(c.Details.Assessment) == 0 {
+		return false, nil
 	}
-	applic := map[string]bool{}
-	for _, v := range m.scenarios {
-		if v.CoverageID == "" {
-			continue
-		}
-		if variantApplicable(v, c) {
-			applic[v.CoverageID] = true
-		} else if _, seen := applic[v.CoverageID]; !seen {
-			applic[v.CoverageID] = false
-		}
+	hasAssessFile = true
+	var r AssessmentReport
+	if json.Unmarshal(c.Details.Assessment, &r) == nil {
+		rep = &r
 	}
-	var out []string
-	for cid, ok := range applic {
-		if ok {
-			out = append(out, cid)
-		}
-	}
-	sort.Strings(out)
-	return out
+	return hasAssessFile, rep
 }
 
-// candidateDirs ports cg_candidate_dirs: the coverage_id itself plus every
-// recipe variant `name` mapping to it. Sorted-unique.
-func (m *Matrix) candidateDirs(cid string) []string {
-	set := map[string]bool{cid: true}
-	for _, v := range m.scenarios {
-		if v.CoverageID == cid && v.Name != "" {
-			set[v.Name] = true
-		}
-	}
-	out := make([]string, 0, len(set))
-	for d := range set {
-		out = append(out, d)
-	}
-	sort.Strings(out)
-	return out
-}
-
-// applicableState ports cs_applicable_state for one (agent, coverage_id).
+// applicableState reconstructs cs_applicable_state for one (agent, coverage_id)
+// from the single chosen cell's recipe. The migrator picked the canonical
+// variant per cell, so a per-cell read reproduces the old multi-variant rollup
+// (the consistency gate confirms zero disagreements):
+//
+//	recipe absent                 → AppAbsent
+//	recipe.applicable == false    → AppFalse
+//	recipe.applicable absent/true → AppTrue
 func (m *Matrix) applicableState(agent, cid string) ApplicableState {
-	var vals []*bool
-	for _, v := range m.scenarios {
-		if v.CoverageID != cid {
-			continue
-		}
-		// A nil entry is a literal JSON null — dropped, like jq's select(. != null).
-		if e, ok := v.ByAdapter[agent]; ok && e != nil {
-			vals = append(vals, e.Applicable)
-		}
-	}
-	if len(vals) == 0 {
+	sh, ok := m.shards[cid]
+	if !ok {
 		return AppAbsent
 	}
-	allFalse := true
-	for _, a := range vals {
-		// nil (absent) or true both count as recordable → not "all false".
-		if !(a != nil && !*a) {
-			allFalse = false
-			break
-		}
+	c, ok := sh.Agents[agent]
+	if !ok {
+		return AppAbsent
 	}
-	if allFalse {
+	if len(c.Details.Recipe) == 0 {
+		return AppAbsent
+	}
+	var r shardRecipe
+	if json.Unmarshal(c.Details.Recipe, &r) != nil {
+		return AppTrue
+	}
+	if r.Applicable != nil && !*r.Applicable {
 		return AppFalse
 	}
 	return AppTrue
 }
 
-// cellDir is the on-disk path for one (agent, recording folder).
-func (m *Matrix) cellDir(agent, dir string) string {
-	return filepath.Join(m.cfg.AgentsRoot, agent, "scenarios", dir)
-}
-
-// recordedAndAssessment scans the candidate dirs once: recorded iff any dir has
-// (transcript.jsonl|transcript.md) + events.jsonl; assessment is the first dir
-// with a parseable assessment.json. Mirrors cg_disposition steps 1-2 / cs_errors.
-func (m *Matrix) recordedAndAssessment(agent, cid string) (recorded bool, hasAssessFile bool, rep *AssessmentReport) {
-	for _, d := range m.candidateDirs(cid) {
-		if d == "" {
-			continue
-		}
-		dir := m.cellDir(agent, d)
-		hasEvents := fileExists(filepath.Join(dir, "events.jsonl"))
-		hasTranscript := fileExists(filepath.Join(dir, "transcript.jsonl")) || fileExists(filepath.Join(dir, "transcript.md"))
-		if hasEvents && hasTranscript {
-			recorded = true
-		}
-		if !hasAssessFile {
-			if ab, err := os.ReadFile(filepath.Join(dir, "assessment.json")); err == nil {
-				hasAssessFile = true
-				var r AssessmentReport
-				if json.Unmarshal(ab, &r) == nil {
-					rep = &r
-				}
-			}
-		}
+// repAxes returns the three axis strings from a parsed assessment, or all-empty
+// when the blob was present-but-malformed (rep nil) — so a keyless assessment
+// routes record_now exactly as the bash else-branch did.
+func repAxes(rep *AssessmentReport) (supports, daemon, driver string) {
+	if rep == nil {
+		return "", "", ""
 	}
-	return recorded, hasAssessFile, rep
+	return rep.AgentSupports, rep.DaemonCapability, rep.DriverCapability
 }
 
-// buildCell assembles the full CellState for an applicable (agent, coverage_id).
+// buildCell assembles the full CellState for one (agent, coverage_id) cell that
+// the shard names. Axes come from the cell's assessment; recorded / applicable
+// are reconstructed from the cell's Artifacts / Recipe.
 func (m *Matrix) buildCell(agent, cid string) CellState {
-	recorded, hasAssessFile, rep := m.recordedAndAssessment(agent, cid)
+	c := m.shards[cid].Agents[agent]
+	recorded := cellRecorded(c)
+	hasAssessFile, rep := cellAssessment(c)
 	appl := m.applicableState(agent, cid)
 
 	cs := CellState{
@@ -327,21 +295,30 @@ func (m *Matrix) buildCell(agent, cid string) CellState {
 		Assessment:      rep,
 	}
 
-	var supports, daemon, driver string
+	// Disposition / Route use the parsed-assessment axes exactly as the legacy
+	// model did: empty when the assessment is absent or present-but-malformed
+	// (rep nil). A keyless/malformed-but-present assessment therefore routes
+	// record_now, matching bash's jq-on-keyless else-branch.
+	supports, daemon, driver := repAxes(rep)
 	if rep != nil {
-		supports, daemon, driver = rep.AgentSupports, rep.DaemonCapability, rep.DriverCapability
 		cs.BlockedReason = rep.RecordBlocked
 	}
 
 	cs.Disposition = m.disposition(agent, cid, recorded, hasAssessFile, supports, daemon, driver)
-	// Route mirrors cs_route: only meaningful when an assessment file is
-	// present (cs_errors skips cells with no assessment, and a malformed file
-	// parses to a nil report → empty axes → still routes record_now, matching
-	// bash's jq-on-keyless behaviour).
 	if hasAssessFile {
 		cs.Route = computeRoute(supports, daemon, driver)
 	}
-	cs.DisplayState = DeriveDisplayState(supports, daemon, driver, recorded)
+
+	// DisplayState: axes from the assessment, else the overview Metadata block
+	// (the viewer's overview tier) so a cell with no parsed assessment still
+	// renders a non-empty verdict rather than collapsing to "unknown".
+	dsSupports, dsDaemon, dsDriver := supports, daemon, driver
+	if rep == nil {
+		dsSupports = c.Metadata.AgentSupports
+		dsDaemon = c.Metadata.DaemonCapability
+		dsDriver = c.Metadata.DriverCapability
+	}
+	cs.DisplayState = DeriveDisplayState(dsSupports, dsDaemon, dsDriver, recorded)
 	return cs
 }
 
@@ -437,9 +414,4 @@ func (m *Matrix) Disagreements() []Disagreement {
 		}
 	}
 	return out
-}
-
-func fileExists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
 }

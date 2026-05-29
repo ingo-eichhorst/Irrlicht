@@ -72,6 +72,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	cfg := matrix.Config{
+		RepoRoot:      *repoRoot,
 		ScenariosPath: *scenarios,
 		AgentsRoot:    *agentsRoot,
 	}

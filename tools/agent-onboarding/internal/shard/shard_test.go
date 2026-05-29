@@ -1,4 +1,4 @@
-package viewer
+package shard
 
 import (
 	"encoding/json"
@@ -73,15 +73,15 @@ func TestLessShardID(t *testing.T) {
 		a, b string
 		want bool
 	}{
-		{"2.9", "2.10", true},   // numeric: 9 before 10
-		{"2.10", "2.9", false},  // and not the reverse
-		{"1.1", "2.1", true},    // section first
-		{"2.1", "1.1", false},   //
-		{"3.2", "3.2", false},   // equal → not less
-		{"1.5", "1.5", false},   //
-		{"foo", "bar", false},   // malformed → lexical ("foo" > "bar")
-		{"bar", "foo", true},    // malformed → lexical
-		{"2.1", "abc", true},    // one malformed → lexical; '2'(0x32) < 'a'(0x61)
+		{"2.9", "2.10", true},  // numeric: 9 before 10
+		{"2.10", "2.9", false}, // and not the reverse
+		{"1.1", "2.1", true},   // section first
+		{"2.1", "1.1", false},  //
+		{"3.2", "3.2", false},  // equal → not less
+		{"1.5", "1.5", false},  //
+		{"foo", "bar", false},  // malformed → lexical ("foo" > "bar")
+		{"bar", "foo", true},   // malformed → lexical
+		{"2.1", "abc", true},   // one malformed → lexical; '2'(0x32) < 'a'(0x61)
 	}
 	for _, c := range cases {
 		if got := lessShardID(c.a, c.b); got != c.want {
@@ -99,11 +99,11 @@ func TestSplitID(t *testing.T) {
 		{"2.10", 2, 10, true},
 		{"1.1", 1, 1, true},
 		{"12.34", 12, 34, true},
-		{"2", 0, 0, false},       // no dot
-		{"a.b", 0, 0, false},     // non-numeric
-		{"2.", 0, 0, false},      // empty index
-		{".3", 0, 0, false},      // empty section
-		{"2.3.4", 0, 0, false},   // SplitN(2) → "2","3.4"; "3.4" not an int
+		{"2", 0, 0, false},     // no dot
+		{"a.b", 0, 0, false},   // non-numeric
+		{"2.", 0, 0, false},    // empty index
+		{".3", 0, 0, false},    // empty section
+		{"2.3.4", 0, 0, false}, // SplitN(2) → "2","3.4"; "3.4" not an int
 	}
 	for _, c := range cases {
 		s, i, ok := splitID(c.id)
@@ -113,7 +113,7 @@ func TestSplitID(t *testing.T) {
 	}
 }
 
-func TestLoadShardsSkipsMetaAndSortsByID(t *testing.T) {
+func TestLoadAllSkipsMetaAndSortsByID(t *testing.T) {
 	dir := t.TempDir()
 	scen := filepath.Join(dir, "replaydata", "scenarios")
 	if err := os.MkdirAll(scen, 0o755); err != nil {
@@ -138,29 +138,87 @@ func TestLoadShardsSkipsMetaAndSortsByID(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got := loadShards(dir)
+	got := LoadAll(dir)
 	if len(got) != 2 {
-		t.Fatalf("loadShards returned %d shards, want 2: %+v", len(got), got)
+		t.Fatalf("LoadAll returned %d shards, want 2: %+v", len(got), got)
 	}
 	if got[0].ID != "2.9" || got[1].ID != "2.10" {
 		t.Fatalf("sort order wrong: got [%s, %s], want [2.9, 2.10]", got[0].ID, got[1].ID)
 	}
 
-	// loadShard reads a single shard by name (filename minus .json).
-	s, ok := loadShard(dir, "nine")
+	// Load reads a single shard by name (filename minus .json).
+	s, ok := Load(dir, "nine")
 	if !ok || s.ID != "2.9" {
-		t.Fatalf("loadShard(nine) = (%+v, %v), want id 2.9", s, ok)
+		t.Fatalf("Load(nine) = (%+v, %v), want id 2.9", s, ok)
 	}
-	if _, ok := loadShard(dir, "missing"); ok {
-		t.Fatal("loadShard(missing) should report ok=false")
+	if _, ok := Load(dir, "missing"); ok {
+		t.Fatal("Load(missing) should report ok=false")
 	}
-	if _, ok := loadShard(dir, "broken"); ok {
-		t.Fatal("loadShard(broken) should report ok=false on malformed JSON")
+	if _, ok := Load(dir, "broken"); ok {
+		t.Fatal("Load(broken) should report ok=false on malformed JSON")
 	}
 }
 
-func TestLoadShardsMissingDir(t *testing.T) {
-	if got := loadShards(filepath.Join(t.TempDir(), "nope")); got != nil {
-		t.Fatalf("loadShards on missing dir = %+v, want nil", got)
+func TestLoadAllMissingDir(t *testing.T) {
+	if got := LoadAll(filepath.Join(t.TempDir(), "nope")); got != nil {
+		t.Fatalf("LoadAll on missing dir = %+v, want nil", got)
+	}
+}
+
+func TestLoadMeta(t *testing.T) {
+	dir := t.TempDir()
+	scen := filepath.Join(dir, "replaydata", "scenarios")
+	if err := os.MkdirAll(scen, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Missing file → empty Meta, never an error.
+	if m := LoadMeta(dir); m.MinVersions != nil || m.TranscriptExtensions != nil {
+		t.Fatalf("LoadMeta on missing file = %+v, want empty", m)
+	}
+
+	body := `{"min_versions":{"aider":"0.86.0","claudecode":"2.0.0"},` +
+		`"transcript_extensions":{"aider":"md","claudecode":"jsonl"}}`
+	if err := os.WriteFile(filepath.Join(scen, "_meta.json"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m := LoadMeta(dir)
+	if m.MinVersions["aider"] != "0.86.0" || m.MinVersions["claudecode"] != "2.0.0" {
+		t.Fatalf("min_versions wrong: %+v", m.MinVersions)
+	}
+	if m.TranscriptExtensions["aider"] != "md" || m.TranscriptExtensions["claudecode"] != "jsonl" {
+		t.Fatalf("transcript_extensions wrong: %+v", m.TranscriptExtensions)
+	}
+
+	// Malformed → empty Meta.
+	if err := os.WriteFile(filepath.Join(scen, "_meta.json"), []byte(`{not json`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if m := LoadMeta(dir); m.MinVersions != nil {
+		t.Fatalf("LoadMeta on malformed = %+v, want empty", m)
+	}
+}
+
+func TestAgents(t *testing.T) {
+	dir := t.TempDir()
+	scen := filepath.Join(dir, "replaydata", "scenarios")
+	if err := os.MkdirAll(scen, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Empty/missing _meta → empty column set.
+	if got := Agents(dir); len(got) != 0 {
+		t.Fatalf("Agents on missing _meta = %+v, want empty", got)
+	}
+
+	// Keys returned SORTED regardless of JSON order.
+	body := `{"min_versions":{"pi":"0.70.0","aider":"0.86.0","codex":"0.50.0"}}`
+	if err := os.WriteFile(filepath.Join(scen, "_meta.json"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := Agents(dir)
+	want := []string{"aider", "codex", "pi"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Agents = %v, want %v", got, want)
 	}
 }
