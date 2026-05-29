@@ -107,32 +107,48 @@
           "schema_version": 1,
           "scenario_id": "subscription-detection",
           "agent": "codex",
-          "assessed_at": "2026-05-23T00:00:00Z",
+          "assessed_at": "2026-05-29T00:00:00Z",
           "agent_supports": "yes",
           "daemon_capability": "full",
           "driver_capability": "ready",
           "confidence": 0.9,
-          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nCodex embeds billing-model information directly in the JSONL transcript. Every `event_msg` with `type=\"token_count\"` carries a `rate_limits` map containing:\n- `plan_type` — non-empty string (e.g. \"plus\") for subscription sessions; empty or absent for API-key path.\n- `credits` — a nested map present only on the credits/API-key path, with fields `has_credits`, `unlimited`, `remaining`, and `total`.\n\nThe `extractCodexRateLimits()` function in `core/adapters/inbound/agents/codex/parser.go` reads these fields and populates `tailer.RateLimitSnapshot.PlanType` and `.Credits`. This is later projected to `session.RateLimitSnapshot` at the metrics adapter boundary.\n\nFor the subscription variant: a Codex Plus session emits `plan_type=\"plus\"` on each token_count event. `RateLimitSnapshot.PlanType` is non-empty and `Credits` is nil.\nFor the API-key/credits variant: `plan_type` is absent; `credits.has_credits=true` with remaining/total values. `RateLimitSnapshot.PlanType` is empty and `Credits` is non-nil.\n\nBoth variants are observable from the JSONL transcript alone — no out-of-band hook needed. This makes Codex the cleanest adapter for subscription detection testing.\n\nBugs #361 (split token_count events producing $0 cost) were caught in token-accounting; this scenario specifically validates that PlanType/Credits routing is correct, not just that token math works.",
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nThe user-observable signal for this scenario is whether the daemon surfaces a subscription / billing-model reading for the session — a plan tier (subscription path) vs. a prepaid-credits / API-key path. Codex carries this signal natively in its JSONL transcript, so no out-of-band hook is needed (unlike Claude Code's statusline path).\n\n**Agent emits it (confirmed from real recordings, not just docs/parser):** every `event_msg` with `payload.type=\"token_count\"` carries a `rate_limits` map. Recorded codex transcripts already on disk (e.g. `replaydata/agents/codex/scenarios/basic-turn/transcript.jsonl`) contain lines like `\"rate_limits\":{\"limit_id\":\"codex\",\"primary\":{\"used_percent\":15.0,\"window_minutes\":300,\"resets_at\":...},\"secondary\":{...},\"credits\":null,\"plan_type\":\"plus\"}`. So `plan_type` is genuinely emitted on the Plus subscription path with `credits=null` — this is the live subscription-variant signal, settling the emission question that would otherwise leave the verdict provisional. Official OpenAI docs confirm Codex billing is tied to a ChatGPT plan (Free/Plus/Pro/Business/Enterprise) with a 5-hour rolling window and a purchasable credits path — matching the `plan_type` + `primary`/`secondary` windows + `credits` shape exactly.\n\n**Daemon observes it (full path, not parser-only):** `extractCodexRateLimits()` in `core/adapters/inbound/agents/codex/parser.go:355` reads `plan_type` (→ `PlanType`), `credits` (→ `CreditsSnapshot{HasCredits, Unlimited, Balance}`), and the `primary`/`secondary` windows, and is wired into the token_count event path at parser.go:99-104 (`ev.RateLimit = extractCodexRateLimits(...)`). Codex's `Source` is `FilesUnderRoot` (agent.go:32) — the JSONL transcript the daemon already tails — so the signal reaches the watched Source. The metrics adapter then projects `tailer.RateLimitSnapshot` → `session.RateLimitSnapshot` via `tailerRateLimitToDomain()` (`core/adapters/outbound/metrics/adapter.go:168-170,303`), preserving `PlanType`/`Credits`, and stores it on `SessionState.Metrics.RateLimit` (surfaced to the API/UI). That end-to-end path makes this a settled `full`, not a provisional read of `parser.go`.\n\nFor the subscription variant recorded here: a Codex Plus session emits `plan_type=\"plus\"` with `credits=null` on each token_count event → `RateLimitSnapshot.PlanType` non-empty, `Credits` nil. The complementary API-key/credits variant (`plan_type` empty, `credits` populated) is a distinct fixture requiring a prepaid-credits account and is out of scope for this cell.\n\n**Driver:** the recipe needs only the basic single-turn primitive — launch codex, send one prompt, let the turn complete so at least one `token_count` event lands. `drive-codex-interactive.sh` already supports this (it is the same primitive that produced `basic-turn`'s recording, which carries the `plan_type:\"plus\"` evidence above). No special step type is required → `ready`.\n\nThe **Primitive exercised** (subscription / billing-model detection) maps to the `cost_tracking` capability key in `replaydata/scenarios/_meta.json` capability_vocab.",
           "caveats": [
-            "The subscription variant (plan_type=plus) requires a Codex session backed by an OpenAI Plus subscription.",
-            "The API-key/credits variant requires a prepaid credits account. Both variants can be recorded independently; the subscription variant is recorded here first.",
-            "Schema versioning: v1 Codex transcripts (Oct 2025) do not carry plan_type or credits. The fixture must use a v2+ session (Nov 2025 onward) to exercise the subscription detection path. The parser handles both versions but only v2+ has the billing-model fields."
+            "The subscription variant (plan_type=plus) requires a Codex session backed by an OpenAI ChatGPT subscription (Plus/Pro/etc.). The maintainer's normal Codex auth qualifies — no special key.",
+            "The API-key/credits variant (PlanType empty, Credits non-nil) is a separate fixture requiring a prepaid-credits account and is not recorded by this cell.",
+            "Schema versioning: pre-v2 Codex transcripts (~Oct 2025) do not carry plan_type or credits. The fixture must use a v2+ session (Nov 2025 onward); the parser tolerates all observed schema versions but only v2+ emits the billing-model fields.",
+            "The statusline-style /status command shows the same limits interactively, but the recording asserts only what reaches events.jsonl — the rate_limit metric event derived from the token_count payload."
           ],
           "sources": [
             {
               "kind": "file",
-              "ref": "core/adapters/inbound/agents/codex/parser.go:338-389",
-              "note": "extractCodexRateLimits() reads plan_type and credits from the rate_limits map on token_count events. Schema version dispatch at lines 338-349."
+              "ref": "core/adapters/inbound/agents/codex/parser.go:355-394",
+              "note": "extractCodexRateLimits() reads plan_type → PlanType and credits → CreditsSnapshot{HasCredits,Unlimited,Balance} from the rate_limits map; returns nil only when windows+plan_type+credits are all empty."
             },
             {
               "kind": "file",
-              "ref": "core/domain/session/rate_limit.go:15-38",
-              "note": "RateLimitSnapshot domain type: PlanType string, Credits *CreditsSnapshot, Windows []RateLimitWindow."
+              "ref": "core/adapters/inbound/agents/codex/parser.go:99-104",
+              "note": "Wiring: event_msg with payload.type=token_count sets ev.RateLimit = extractCodexRateLimits(...) — the daemon emits a rate_limit snapshot on every API turn."
             },
             {
-              "kind": "spec",
-              "ref": ".specs/agent-scenarios.md → Feature: Subscription detection",
-              "note": "Subscription variant: PlanType non-empty; API-key variant: Credits non-nil, PlanType empty."
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/codex/agent.go:32",
+              "note": "Codex Source is FilesUnderRoot (JSONL under ~/.codex/sessions) — the file the daemon already tails, so the rate_limits signal reaches the watched Source."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/outbound/metrics/adapter.go:168-170,303",
+              "note": "tailerRateLimitToDomain() projects the snapshot (PlanType, Credits, Windows) to session.RateLimitSnapshot stored on SessionState.Metrics.RateLimit — surfaced to API/UI."
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/codex/scenarios/basic-turn/transcript.jsonl",
+              "note": "Real recorded transcript proving emission: token_count events carry rate_limits.plan_type=\"plus\" with credits=null — the live subscription-variant signal."
+            },
+            {
+              "kind": "url",
+              "ref": "https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan",
+              "note": "Official: Codex billing is tied to a ChatGPT plan (Free/Plus/Pro/Business/Enterprise) with a 5-hour rolling window and a credits path — matches the plan_type + windows + credits shape the parser reads."
             }
           ]
         }
