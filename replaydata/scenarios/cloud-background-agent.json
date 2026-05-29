@@ -1,0 +1,302 @@
+{
+  "id": "1.7",
+  "name": "cloud-background-agent",
+  "section": "Session lifecycle",
+  "feature": "Cloud / background agent (remote process)",
+  "description": "Stub entry — claudecode is a local CLI with no first-party cloud variant, so this scenario is not recordable for that adapter. Forward-looking for Cursor Cloud / Codex Cloud / Copilot Cloud / Devin adapters when they exist.",
+  "requires": [
+    "headless_mode"
+  ],
+  "verify": {},
+  "agents": {
+    "aider": {
+      "artifacts": {},
+      "metadata": {
+        "agent_supports": "no",
+        "daemon_capability": "n/a",
+        "driver_capability": "ready",
+        "confidence": 0.9,
+        "notes": "agent_supports: no\ndaemon_capability: n/a\ndriver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "cloud-background-agent",
+          "agent": "aider",
+          "assessed_at": "2026-05-25T00:00:00Z",
+          "agent_supports": "no",
+          "daemon_capability": "n/a",
+          "driver_capability": "ready",
+          "confidence": 0.9,
+          "body": "## Verdict\n\nagent_supports: no\ndaemon_capability: n/a\ndriver_capability: ready\n\n## Reasoning\n\nAider is a purely local tool: \"AI pair programming in your terminal.\" Version 0.86.2 ships no cloud, remote, server, daemon, or background-agent execution mode where the agent runs on remote infrastructure with no local process. The scenario requires \"an adapter that does NOT rely on FilesUnderRoot or FilesUnderCWD\" and a session that appears with PID = 0 / absent — aider can satisfy neither because it has no remote-execution surface to begin with.\n\nEvidence the feature is absent:\n\n- `aider --help` (0.86.2) exposes no `--cloud`, `--remote`, `--server`, `--daemon`, or hosted-variant flag. Every `api`-related flag is LLM-provider configuration (`--openai-api-key`, `--anthropic-api-key`, `--api-key PROVIDER=KEY`, `--timeout`), not a remote-agent feed.\n- A keyword scan of the installed package (`.../site-packages/aider`) for `cloud_agent|remote_run|sidecar|webhook|headless` matched only `website/docs/usage/notifications.md`, and that hit is the \"Remote Notifications\" section (push notifications via Apprise) — not remote execution.\n- `aider/gui.py` is a local Streamlit app (`import streamlit as st`, runs on localhost); it is a local browser frontend over a local Coder process, not a cloud-hosted agent.\n- The official docs describe only local install paths (pip/uv/docker) and dev environments (GitHub Codespaces, Replit). Those environments host the *user's* machine — aider still runs there as a local process with a local CWD and PID — so they are not a first-party cloud-agent feed.\n\nBecause `agent_supports` is `no`, the daemon-observation question is moot: `daemon_capability: n/a`. For completeness on the transport: even if a cloud variant existed, the aider adapter could not observe it as specified. `core/adapters/inbound/agents/aider/agent.go` uses `Source: agent.FilesUnderCWD{Filename: \".aider.chat.history.md\"}` and matches the process by command line (`/aider`) + CWD via `DiscoverPID` (`pid.go`). Both axes require a local OS process with a local working directory; a PID-less, file-less cloud run has neither. `capabilities.json` correctly carries no `cloud_agent` key — the Primitive exercised (remote-process transport via API feed / sidecar / webhook) maps to a `cloud_agent` key that does not exist for aider.\n\n`driver_capability: ready` because the interactive driver (`scripts/drive-aider-interactive.sh`) is not the blocker — the agent simply lacks the feature. No driver step type is missing for a scenario that cannot exist; per #476 a frozen no-feature cell parks the driver axis at `ready`, not at a `gap`.\n\n## What would flip the verdict\n\nThe upstream aider project would need to ship a hosted / remote-execution product (a cloud run with a server-side session feed). Only then would `agent_supports` move off `no`. Observing it would additionally require a new non-file Source variant (RemoteAPI/sidecar) in the adapter model — the aider Source today is `FilesUnderCWD`, which can only watch a local transcript — so `daemon_capability` would then become `incapable` until such a transport landed (the same structural gap noted for claudecode × cloud-background-agent).\n\n## Matrix\n\nCurrent coverage row is agent_supports: no, daemon_capability: n/a, driver_capability: n/a. This assessment ratifies agent_supports + daemon_capability; it refines the driver axis from n/a to ready per the #476 frozen-no-feature convention (the driver is not the blocker).",
+          "caveats": [
+            "GitHub Codespaces and Replit run aider as a local process inside a remote dev container; that is the user's environment, not a first-party cloud-agent feed, and aider there still has a local PID + local transcript.",
+            "If aider ever shipped a hosted/remote variant, daemon_capability would become incapable (not n/a): the FilesUnderCWD Source watches only a local transcript, so a PID-less, file-less cloud run would leave no trace under the watch."
+          ],
+          "sources": [
+            {
+              "kind": "url",
+              "ref": "https://aider.chat/docs/usage.html",
+              "note": "Official docs: 'AI pair programming in your terminal'; no cloud/remote/server/daemon mode — confirmed via fetch 2026-05-25"
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/aider/agent.go",
+              "note": "Adapter Source is FilesUnderCWD (.aider.chat.history.md) + CommandPattern /aider — local process only; no non-file Source for a remote feed"
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/aider/pid.go",
+              "note": "DiscoverPID matches a local /aider process by CWD + command line; no remote transport"
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/aider/capabilities.json",
+              "note": "No cloud_agent capability key — the Primitive-exercised key for this scenario is absent; aider is a local CLI/TUI"
+            },
+            {
+              "kind": "file",
+              "ref": ".local/share/uv/tools/aider-chat/lib/python3.12/site-packages/aider",
+              "note": "Package keyword scan for cloud/remote/sidecar/webhook matched only the docs 'Remote Notifications' (Apprise) section; gui.py is a local Streamlit app"
+            }
+          ]
+        }
+      }
+    },
+    "claudecode": {
+      "artifacts": {},
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "incapable",
+        "driver_capability": "ready",
+        "confidence": 0.85,
+        "notes": "agent_supports: yes\ndaemon_capability: incapable; driver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "cloud-background-agent",
+          "agent": "claudecode",
+          "assessed_at": "2026-05-17T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "incapable",
+          "driver_capability": "ready",
+          "confidence": 0.85,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: incapable; driver_capability: ready\n\n## Reasoning\n\nClaude Code shipped multiple first-party cloud / background variants in 2025-2026 — the prior verdict of \"local CLI only; no first-party cloud variant\" no longer holds:\n\n- Claude Code on the web (claude.ai/code) runs tasks on Anthropic-managed cloud infrastructure; sessions persist across browser close.\n- Routines (launched ~2026-04) execute on Anthropic cloud on schedule, GitHub events, or via a per-routine HTTP endpoint POST /v1/claude_code/routines/{id}/fire.\n- The anthropics/claude-code-action GitHub Action runs the full Claude Code runtime inside a GHA runner.\n- --remote and --teleport flags move sessions between local terminal and cloud.\n\nFor irrlicht, none of these are observable today:\n\n- Cloud sessions don't write to ~/.claude/projects/ (cloud routines docs: \"Access to local files: No (fresh clone)\").\n- The /fire endpoint is fire-only — its OAuth token grants no read access. There's no documented streaming or polling endpoint for routine session state.\n- The existing claudecode adapter at core/adapters/inbound/agents/claudecode/agent.go uses FilesUnderRoot{~/.claude/projects, JSONL} + pgrep-based PID discovery. It can't see cloud-only sessions: no local file, no local PID.\n- --teleport pulls a cloud session into the local tree, at which point the existing adapter sees it — but by then the session has a local PID, which violates the scenario's \"no bound local PID\" expectation.\n\nGHA is the only cloud variant with a public observability surface today (via gh api workflow_run polling + webhook events). A future claudecodecloud adapter with a new RemoteAPI source variant could deliver partial coverage at ~2-3 days of work. Routines and web sessions are blocked on Anthropic shipping a session read API or webhook.\n\n## What would flip irrlicht_observes to yes\n\nAt least one of:\n- GET /v1/claude_code/sessions/{id} — current state, token spend, last activity\n- GET /v1/claude_code/sessions/{id}/events — SSE or long-poll for transitions\n- POST /v1/claude_code/webhooks — push notifications on session state changes\n\nPlus a read-scoped OAuth token (sk-ant-oat01-* is fire-only today).",
+          "sources": [
+            {
+              "kind": "url",
+              "ref": "https://code.claude.com/docs/en/claude-code-on-the-web",
+              "note": "Cloud-hosted web client; sessions run on Anthropic infrastructure"
+            },
+            {
+              "kind": "url",
+              "ref": "https://code.claude.com/docs/en/routines",
+              "note": "Routines run on Anthropic cloud; /fire endpoint is fire-only behind experimental-cc-routine-2026-04-01 beta header"
+            },
+            {
+              "kind": "url",
+              "ref": "https://code.claude.com/docs/en/scheduled-tasks",
+              "note": "Comparison table: cloud routines have \"No (fresh clone)\" access to local files"
+            },
+            {
+              "kind": "url",
+              "ref": "https://github.com/anthropics/claude-code-action",
+              "note": "First-party GHA action runs the runtime inside a GitHub Actions runner"
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/claudecode/agent.go",
+              "note": "Existing adapter is FilesUnderRoot + pgrep — local only"
+            },
+            {
+              "kind": "file",
+              "ref": "AGENTS.md",
+              "note": "Adapter model: Source is a sealed sum (FilesUnderRoot / FilesUnderCWD / ProcessOwnedStore) — no remote-API variant today"
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": false,
+          "notes": "agent_supports=no per coverage matrix — claudecode is local-only. Translator stops here; no recipe."
+        }
+      }
+    },
+    "codex": {
+      "artifacts": {},
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "incapable",
+        "driver_capability": "ready",
+        "confidence": 0.88,
+        "notes": "agent_supports: yes\ndaemon_capability: incapable; driver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "cloud-background-agent",
+          "agent": "codex",
+          "assessed_at": "2026-05-23T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "incapable",
+          "driver_capability": "ready",
+          "confidence": 0.88,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: incapable; driver_capability: ready\n\n## Reasoning\n\nCodex CLI 0.130.0 ships an experimental `codex cloud` subcommand whose own help text reads: \"[EXPERIMENTAL] Browse tasks from Codex Cloud and apply changes locally.\" It exposes `exec` (submit a new Codex Cloud task without launching the TUI), `status`, `list`, `apply`, and `diff`. `codex cloud exec` requires `--env \u003cENV_ID\u003e` (a remote environment identifier) and runs the agent on a git branch (`--branch`, defaults to current) inside Codex Cloud — i.e. on OpenAI-managed remote infrastructure, not on the local machine. So the agent absolutely supports a cloud/remote background agent: `agent_supports: yes`.\n\nFor irrlicht's LOCAL daemon, none of this is observable today, for the same transport reason as the claudecode anchor cell:\n\n- The codex adapter is `FilesUnderRoot{Dir: ~/.codex/sessions, Parser: JSONL}` (`core/adapters/inbound/agents/codex/agent.go`), watching append-only `rollout-*.jsonl` transcripts under `~/.codex/sessions/YYYY/MM/DD/` (`adapter.go` `defaultRootDir = .codex/sessions`). A Codex Cloud task executes remotely and writes its rollout/transcript in the cloud environment — it does NOT create a local `rollout-*.jsonl` for the daemon's fswatcher to tail. The local `~/.codex/sessions/` tree only holds locally-run TUI/headless sessions.\n- Process binding can't help either: the codex adapter matches with `ExactName{codex}` via `pgrep -x codex` (`agent.go` Process.Match). `codex cloud exec` submits the task and returns; while the agent runs it lives on remote infra, so there is no long-lived local `codex` process for `DiscoverPID` to bind a PID to. The read-only `list`/`status`/`diff` invocations are short-lived API queries, and `apply` merely writes a remote diff into the working tree — none of these is a watched session.\n- irrlicht has no remote-feed transport. The adapter `Source` is a sealed sum of `FilesUnderRoot` / `FilesUnderCWD` / `ProcessOwnedStore` (AGENTS.md) — there is no RemoteAPI / webhook / SSE variant. Even though `codex cloud list`/`status` could in principle poll the Codex Cloud API for task state, the daemon has no adapter wiring to consume such a feed.\n\nNet: the scenario's user-observable signals (session appears with PID = 0 / absent, state transitions mirror the remote run, session disappears when the remote run completes) cannot be produced — there is no local file and no local PID for the daemon to derive a session from. `daemon_capability: incapable; driver_capability: ready` ⇒ `applicable: n/a`.\n\nThis ratifies the existing coverage-matrix verdict (`codex: agent_supports yes / irrlicht_observes no — \"Codex Cloud exists; irrlicht has no API-based watcher\"`) and mirrors the canonical `claudecode × cloud-background-agent` anchor (yes/no): the agent has the feature, irrlicht has no transport for it.\n\n## What would flip irrlicht_observes to yes\n\nA new adapter `Source` variant (e.g. RemoteAPI) plus a Codex Cloud read surface the daemon could poll or subscribe to:\n- a documented `codex cloud status`/`list` JSON feed the daemon could poll for per-task state + token spend, or\n- a Codex Cloud webhook/SSE stream pushing task state transitions,\nwired into a new codex-cloud adapter that emits PID-0 / no-PID sessions. None of that exists today.",
+          "caveats": [
+            "feature-invisible-but-spec-compliant: Codex Cloud is a real, shipping (experimental) feature; the gap is purely at irrlicht's adapter/transport layer, not in the agent.",
+            "codex cloud apply writes remote diffs into the local working tree, but that is a file mutation, not an observable session — it never appears under ~/.codex/sessions/ as a rollout the daemon tails."
+          ],
+          "sources": [
+            {
+              "kind": "cli",
+              "ref": "codex cloud --help (codex-cli 0.130.0)",
+              "note": "'[EXPERIMENTAL] Browse tasks from Codex Cloud and apply changes locally'; subcommands exec/status/list/apply/diff"
+            },
+            {
+              "kind": "cli",
+              "ref": "codex cloud exec --help (codex-cli 0.130.0)",
+              "note": "Submit a new Codex Cloud task without launching the TUI; requires --env \u003cENV_ID\u003e, runs on a git --branch in Codex Cloud (remote infra)"
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/codex/agent.go",
+              "note": "Source = FilesUnderRoot{~/.codex/sessions, JSONL}; Process.Match = ExactName{codex} via pgrep -x — local file + local PID only"
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/codex/adapter.go",
+              "note": "defaultRootDir = .codex/sessions; ProcessName = codex — the daemon watches local rollout-*.jsonl, no remote feed"
+            },
+            {
+              "kind": "file",
+              "ref": "AGENTS.md",
+              "note": "Adapter Source is a sealed sum (FilesUnderRoot / FilesUnderCWD / ProcessOwnedStore) — no remote-API/webhook variant exists"
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/claudecode/scenarios/cloud-background-agent/assessment.json",
+              "note": "Canonical anchor: agent has cloud feature, irrlicht has no transport (yes/no)"
+            }
+          ]
+        }
+      }
+    },
+    "opencode": {
+      "artifacts": {},
+      "metadata": {
+        "agent_supports": "no",
+        "daemon_capability": "n/a",
+        "driver_capability": "n/a",
+        "confidence": 0.9,
+        "notes": "agent_supports: no\ndaemon_capability: n/a; driver_capability: n/a"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "cloud-background-agent",
+          "agent": "opencode",
+          "assessed_at": "2026-05-26T00:00:00Z",
+          "agent_supports": "no",
+          "daemon_capability": "n/a",
+          "driver_capability": "n/a",
+          "confidence": 0.9,
+          "body": "## Verdict\n\nagent_supports: no\ndaemon_capability: n/a; driver_capability: n/a\n\n## Reasoning\n\nThis scenario asks for an agent running in a cloud VM / container with **no local PID**, tracked by irrlicht via an API feed, sidecar, or webhook — the session shows PID = 0 / absent, mirrors the remote run's progress, and disappears when the remote run finishes. The canonical capability is `cloud_agent`, which explicitly *requires an adapter that does NOT rely on `FilesUnderRoot`, `FilesUnderCWD`, or a local `ProcessOwnedStore`*.\n\nopencode has no such variant. It is a **local terminal coding agent**: each session is owned by a local `opencode` process and its state lives in a local SQLite store, keyed to that process's working directory. There is no hosted/remote run mode whose progress could be fed to irrlicht with no local process behind it.\n\nThis is the inverse of the claudecode `cloud-background-agent` cell. There the agent *does* have cloud variants (Claude Code on the web, Routines, the GHA action), so `agent_supports: yes` and the blocker is purely irrlicht's missing remote transport. For opencode the blocker is one layer earlier — the agent itself has no cloud/remote run to observe — so `agent_supports: no` and `daemon_capability` / `driver_capability` are `n/a` (there is nothing to observe, not merely something irrlicht can't see yet).\n\n## Adapter transport\n\nThe opencode adapter is the project's only `ProcessOwnedStore` adapter: `Source: agent.ProcessOwnedStore` reading the local SQLite database at `~/.local/share/opencode/opencode.db` via a `MetricsReader` (`core/adapters/inbound/agents/opencode/agent.go`, `adapter.go`, `metrics.go`), and `Process.Match: agent.ExactName{Name: \"opencode\"}` (pgrep -x \"opencode\"). Session metrics are queried by `SELECT … FROM session WHERE id = ?`, with the `directory` column carrying the local CWD. Both axes therefore require a local OS process with a local working directory: a PID-less, store-less cloud run has neither, so the adapter could not observe it even structurally. (AGENTS.md: the `Source` sealed sum is `FilesUnderRoot` / `FilesUnderCWD` / `ProcessOwnedStore` — there is no remote-API / sidecar member today.)\n\n## Capabilities\n\n`replaydata/agents/opencode/capabilities.json` carries no `cloud_agent`, remote-run, background-agent, or hosted-session feature key. Its feature set is a local TUI + `headless_mode` + `mcp_servers` + `subagents` etc. — all local-process modes. (The scenario's `requires` key in scenarios.json is `headless_mode`, but the scenario-meanings primitive is `cloud_agent`, which opencode does not declare — so the cell is definitionally inapplicable for opencode.)\n\n## What would flip this\n\n`agent_supports` would move to `yes` only if upstream opencode shipped a hosted/cloud run mode (a remote runner with an API/webhook control plane and no local process). `daemon_capability` would then still require a new non-file, non-store `Source` variant (RemoteAPI/sidecar) plus an opencode cloud adapter. Neither exists today — the same structural gap noted for claudecode × cloud-background-agent.",
+          "caveats": [
+            "opencode's ProcessOwnedStore SQLite path is still a LOCAL store owned by a local opencode process — do not mistake the structured-store transport for a remote/PID-less control-plane feed.",
+            "Scenario requires-key in scenarios.json is `headless_mode`, but the scenario-meanings primitive is `cloud_agent`; opencode capabilities.json declares no `cloud_agent` / remote-transport key, so the cell is definitionally inapplicable for opencode (maintainer note, not a downgrade)."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/opencode/agent.go",
+              "note": "Source: agent.ProcessOwnedStore (SQLite via MetricsReader) + Process.Match agent.ExactName{Name: \"opencode\"} — requires a local store + local PID; PathForPID panics until the resolver is wired (local-only)."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/opencode/adapter.go",
+              "note": "AdapterName/ProcessName = \"opencode\"; dbRelPath = .local/share/opencode/opencode.db — single LOCAL SQLite store, polled; no remote transport."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/opencode/metrics.go",
+              "note": "ComputeMetrics opens the local opencode.db and queries `SELECT directory FROM session WHERE id = ?`; LastCWD comes from the session.directory column — keyed to a local working directory, no PID-less / remote path."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/opencode/pid.go",
+              "note": "PID discovery maps a local cwd to a local opencode PID via pgrep -x; no remote/PID-less discovery path."
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/opencode/capabilities.json",
+              "note": "No cloud_agent / remote-run / background-agent / hosted-session feature key; feature set is local TUI + headless_mode + mcp_servers + subagents etc. — all local-process modes."
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": false,
+          "notes": "agent_supports=no per fresh reassessment — opencode has no cloud/hosted background-agent concept; sessions are a LOCAL ProcessOwnedStore (SQLite at ~/.local/share/opencode/opencode.db) keyed to a local opencode process + cwd, so there is nothing PID-less/remote for irrlicht to observe. No recipe; pipeline frozen at Stage 1."
+        }
+      }
+    },
+    "pi": {
+      "artifacts": {},
+      "metadata": {
+        "agent_supports": "no",
+        "daemon_capability": "n/a",
+        "driver_capability": "n/a",
+        "confidence": 0.9,
+        "notes": "agent_supports: no\ndaemon_capability: n/a; driver_capability: n/a"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "cloud-background-agent",
+          "agent": "pi",
+          "assessed_at": "2026-05-25T00:00:00Z",
+          "agent_supports": "no",
+          "daemon_capability": "n/a",
+          "driver_capability": "n/a",
+          "confidence": 0.9,
+          "body": "## Verdict\n\nagent_supports: no\ndaemon_capability: n/a; driver_capability: n/a\n\n## Reasoning\n\nThis scenario asks for an agent running in a cloud VM / container with **no local PID**, tracked by irrlicht via an API feed, sidecar, or webhook — the session shows PID = 0 / absent, mirrors the remote run's progress, and disappears when the remote run finishes. The canonical capability is `cloud_agent` and it explicitly *requires an adapter that does NOT rely on `FilesUnderRoot` or `FilesUnderCWD`*.\n\npi has no such variant. It is a minimal **local terminal coding harness** (README: \"Pi is a minimal terminal coding harness\"). Its design philosophy actively declines the detached/background surface this scenario needs: \"**No background bash.** Use tmux. Full observability, direct interaction.\" Detached or parallel work is delegated to the user's own tmux, not to any first-party cloud runner. pi runs in four modes — interactive, print/JSON, RPC for process integration, and an embeddable SDK — but **all four are local process modes** (stdio RPC, in-process SDK); none is a hosted/remote-VM run with a PID-less control-plane feed.\n\nThis is the inverse of the claudecode `cloud-background-agent` cell: there the agent *does* have cloud variants (Claude Code on the web, Routines, the GHA action), so `agent_supports: yes` and the blocker is purely irrlicht's missing transport (`daemon_capability: n/a; driver_capability: n/a`). For pi the blocker is one layer earlier — the agent itself has no cloud/remote run to observe — so `agent_supports: no` and `irrlicht_observes` is `n/a` (there is nothing to observe, not merely something irrlicht can't see yet).\n\n## Binary + bundle confirmation (Step 2.5 guard)\n\nBefore writing `no`, scanned the shipped artifact, not just `--help`:\n\n- `which pi` resolves to `@mariozechner/pi-coding-agent/dist/cli.js` (v0.70.0, a Node bundle — `strings` on the wrapper is the script itself).\n- `grep -rioE \"cloud[- ]?agent|remote[- ]?agent|cloud[- ]?vm|--sandbox|devbox|webhook|sidecar|background[- ]?agent|cloud[- ]?session|hosted[- ]?run\"` across the entire 7.9 MB `dist/` bundle returned **zero matches**.\n- `pi --help | grep -iE \"cloud|remote|sandbox|vm|background|headless|server|hosted|webhook\"` returned **zero matches** — pi's flags are model/session/tools/thinking oriented.\n\nThe empty scan is authoritative for \"no cloud/remote transport shipped in 0.70.0,\" so the `no` is honest rather than a `--help`-only assumption.\n\n## Adapter transport\n\nThe pi adapter is `Source: FilesUnderRoot{Dir: ~/.pi/agent/sessions}` + `Process.Match: ExactName{pi}` with `DiscoverPID -\u003e DiscoverPIDByCWD(\"pi\", cwd, ...)` (`pgrep -x \"pi\"`). It is structurally a local-PID + local-transcript watcher — exactly the `FilesUnderRoot` family the scenario says cannot serve a PID-less remote run. Even if a future hosted pi appeared, this adapter could not see it without a new remote-API `Source` variant (AGENTS.md: the `Source` sealed sum is FilesUnderRoot / FilesUnderCWD / ProcessOwnedStore — no remote-API member today).\n\n## What would flip this\n\n`agent_supports` would move to `yes` only if upstream pi shipped a hosted/cloud run mode (a remote runner with an API/webhook control plane). `irrlicht_observes` would then still need a new non-file `Source` variant + a pi cloud adapter. Neither exists today.",
+          "caveats": [
+            "pi's RPC and SDK modes integrate pi into other processes but are still local (stdio / in-process), not a PID-less remote feed — do not mistake them for a cloud transport.",
+            "Scenario requires-key in scenarios.json is `headless_mode`, but the scenario-meanings primitive is `cloud_agent`; neither `cloud_agent` nor a remote-transport key is defined in pi capabilities.json, so the cell is definitionally inapplicable for pi (maintainer note, not a downgrade)."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/pi/agent.go",
+              "note": "Source: FilesUnderRoot + Process.Match ExactName{pi} — requires a local transcript + local PID"
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/pi/adapter.go",
+              "note": "ProcessName=pi (pgrep -x); transcripts under ~/.pi/agent/sessions/--\u003ccwd\u003e--/\u003cts\u003e_\u003cuuid\u003e.jsonl — local files only"
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/pi/pid.go",
+              "note": "DiscoverPID -\u003e DiscoverPIDByCWD: maps cwd to a local pi PID; no remote/PID-less discovery path"
+            },
+            {
+              "kind": "url",
+              "ref": "https://www.npmjs.com/package/@mariozechner/pi-coding-agent",
+              "note": "pi v0.70.0 README: 'minimal terminal coding harness'; 'No background bash. Use tmux. Full observability, direct interaction.' — local terminal agent, no cloud variant"
+            },
+            {
+              "kind": "file",
+              "ref": "$(which pi) dist bundle scan",
+              "note": "grep across 7.9MB dist/ for cloud|remote|cloud-vm|sandbox|devbox|webhook|sidecar|background-agent|hosted-run returned zero matches; pi --help has no cloud/remote/headless-server flag (Step 2.5 empty-scan citation)"
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/pi/capabilities.json",
+              "note": "No cloud_agent / remote-transport key; pi feature set is local TUI + headless print/RPC/SDK"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

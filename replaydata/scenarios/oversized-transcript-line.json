@@ -1,0 +1,439 @@
+{
+  "id": "2.16",
+  "name": "oversized-transcript-line",
+  "section": "Turn shape",
+  "feature": "Oversized transcript line",
+  "description": "Claude is prompted to emit a single very long sentence (≥5000 words, no embedded newlines) so the transcript flushes one large JSONL line. Recording may be brittle: 5000 words is moderate (~30 KB) — well under irrlicht's 64 MB tailer cap (issue #270) and also under bufio.Scanner's old 2 MB limit, so the test is a sanity-check rather than a true cap-stress. The spec asserts only the visible state arc (ready→working→ready); the absence of a parser stall is INFERRED from the arc completing. Per assessment.json caveats, manufacturing a truly oversized (\u003e2 MB) line from a real claude CLI is awkward — a follow-up cell can hand-craft a synthetic \u003e2 MB line into the live transcript file if deeper cap-stress coverage is needed.",
+  "requires": [
+    "headless_mode"
+  ],
+  "verify": {
+    "transitions_topology": [
+      "ready",
+      "working",
+      "ready"
+    ],
+    "final_state": "ready",
+    "tool_calls_max": 0
+  },
+  "agents": {
+    "aider": {
+      "recording_dir": "aider/scenarios/oversized-transcript-line",
+      "artifacts": {
+        "events": "aider/scenarios/oversized-transcript-line/events.jsonl",
+        "transcript_md": "aider/scenarios/oversized-transcript-line/transcript.md",
+        "manifest": "aider/scenarios/oversized-transcript-line/manifest.json"
+      },
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "pass_rate": "5/5 phases passed",
+        "agent_cli_version": "0.86.2",
+        "daemon_version": "0.4.7+261b8e7",
+        "confidence": 0.8,
+        "notes": "agent_supports: yes\ndaemon_capability: full\ndriver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "oversized-transcript-line",
+          "agent": "aider",
+          "assessed_at": "2026-05-25T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.8,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Reasoning\n\nThe scenario's primitive is parser/tailer robustness, not an agent feature — the scenario meaning states plainly 'No special agent capability required.' From aider's side there is nothing to 'support': aider appends assistant prose and `\u003e …` status blockquotes to `.aider.chat.history.md` (markdown, written per-project in CWD), terminating each line with `\\n`. Whatever length a line happens to be, aider just flushes it. So agent_supports is trivially yes. (In practice aider's markdown wraps and tool output lands as multi-line blockquotes, so aider does not naturally emit a single multi-MB line — the oversized line is a synthetic stress, see caveat.)\n\nThe spec's only observable is the state arc `ready → working → ready` with no parser stall leaving the session stuck in `working`.\n\n**daemon_capability: full.** The oversized-line protection is SHARED tailer infrastructure, not adapter-specific. In `core/pkg/tailer/tailer.go` the read loop (`TailAndProcess`) builds a `bufio.NewReaderSize(file, 64*1024)` (line 482) and calls `readLineCapped(reader, maxTranscriptLineSize)` at line 488 — BEFORE the `isRawLine` branch at line 515 that routes the trimmed line into aider's `ParseLineRaw`. So aider's `RawLineParser` path is gated by exactly the same cap as the JSONL path (NOT `bufio.Scanner`, whose old ~2 MB cap would have wedged). `maxTranscriptLineSize` is 64 MB (line 22); lines beyond that are logged ('skipping oversized line at offset N', line 496) and the offset is advanced past them so processing continues, and an `errPartialAtEOF` path (line 489) re-reads a partially-written giant line once more bytes arrive. This resolves the matrix's prior `daemon_capability: unknown` / 'RawLineParser; behavior on very long lines unvalidated' note — the RawLineParser route is protected identically to JSONL, so a trace exists in the watched Source AND the parser handles it today: `full`, not `bug`/`incapable`.\n\nFor aider specifically the canonical recipe's ~30 KB line (5000 words) is far under the 64 MB cap, so the line is read whole and handed to `ParseLineRaw`, which buffers a giant prose line into `assistantBuffer` and resolves the turn via the usual `\u003e Tokens:` / IdleFlush path — `ready → working → ready` completes. Even a hand-crafted \u003e64 MB line only triggers the skip-and-advance branch, which still leaves the arc intact. `core/pkg/tailer/large_line_test.go` pins the regression (oversized line does not block the tailer; subsequent lines still parse), and `TestReadLineCapped_OversizedLineSkipped` / `_PartialAtEOF` / `_PartialOversizedAtEOF` exercise the cap, partial-at-EOF, and oversized-partial-at-EOF paths directly.\n\n**driver_capability: ready.** The recipe drives a single `send` (the long-sentence prompt), `wait_turn` (block on the next `\u003e Tokens:` close marker), and a trailing `sleep` for the idle-flush settle — all three are implemented in `scripts/drive-aider-interactive.sh`. Eliciting a large single line needs only `send`, which is present; no gapped primitive (restart/reset_session/resume/sigkill/keys/…) is on the recipe path.\n\nNet: any line under 64 MB is parsed normally, any line over it is skipped with a log line — either way the turn arc completes and irrlicht observes the full `ready → working → ready` topology with a driver that has every step the recipe needs.",
+          "caveats": [
+            "Aider does not naturally emit a single oversized line (markdown prose wraps; tool output is multi-line `\u003e` blockquotes), so the recipe must synthesize the oversized line — e.g. prompt aider for one very long unwrapped sentence, or append hand-crafted bytes into the live `.aider.chat.history.md`. The shared tailer path is exercised either way.",
+            "Lines above the 64 MB cap are dropped from the parser's point of view (the offset still advances, but the line's content is lost). The spec asserts only the state arc, not the content, so this is fine for the cell; it is operator-visible in the daemon log only.",
+            "Aider has no in-band end-of-turn marker, so the working→ready transition for an oversized-line turn still relies on the 1500ms IdleFlush (effectively ~5s with the SessionDetector refresh tick); the arc completes, just not instantaneously after the line lands."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "core/pkg/tailer/tailer.go",
+              "note": "TailAndProcess builds bufio.NewReaderSize(file, 64KB) (line 482) and calls readLineCapped(reader, maxTranscriptLineSize) at line 488 BEFORE the isRawLine branch at line 515 — aider's RawLineParser path is gated by the same oversized-line cap as JSONL. maxTranscriptLineSize=64MB (line 22); oversized lines logged ('skipping oversized line', line 496) and skipped past, not stalled. Anchors daemon_capability: full (parser handles the trace today)."
+            },
+            {
+              "kind": "file",
+              "ref": "core/pkg/tailer/large_line_test.go",
+              "note": "Regression test for #270 — oversized line does not block the tailer; subsequent lines still parse. TestReadLineCapped_OversizedLineSkipped / _PartialAtEOF / _PartialOversizedAtEOF exercise the cap directly."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/aider/agent.go",
+              "note": "Aider uses FilesUnderCWD + RawLineParser (markdown .aider.chat.history.md), so it routes through the shared tailer read loop just like every other adapter."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/aider/parser.go",
+              "note": "ParseLineRaw buffers a whole line into assistantBuffer; turn resolves via `\u003e Tokens:` assistant_message + IdleFlush turn_done, driving working→ready. No per-line size handling — that lives in the tailer."
+            },
+            {
+              "kind": "issue",
+              "ref": "ingo-eichhorst/Irrlicht#270",
+              "note": "Oversized line wedge fixed by switching the tailer from bufio.Scanner to bufio.Reader + readLineCapped — adapter-agnostic, so it covers aider's RawLineParser path."
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": true,
+          "preconditions": [
+            "aider CLI on PATH and authenticated against its configured provider/model (auth is set up out-of-band; the rig's precheck delegates auth to the user). NOTE: aider had NO auth in the environment this recipe was authored in (no provider key; headless aider hangs on the model-auth prompt), so the recording is DEFERRED — this is the documented target; record once a live model is reachable.",
+            "tmux available — the interactive driver runs aider in a tmux REPL so it stays alive across the large-reply turn and the daemon can observe the working→ready settle before teardown",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+          ],
+          "setup": [
+            "The interactive driver (drive-aider-interactive.sh) git-inits a fresh per-run cwd under \u003cstaging\u003e/cwd/, launches `aider --no-auto-commits --yes-always --no-gitignore` in a tmux session, and waits for the `\u003e Repo-map:` banner line in .aider.chat.history.md before sending the prompt",
+            "aider is FilesUnderCWD{.aider.chat.history.md, RawLineParser} — there is no transcript-UUID rollout session; the daemon keys the whole session by proc-\u003cPID\u003e (the process scanner), so the turn arc, pid_discovered and teardown all land on that one proc-\u003cPID\u003e row (cf. the full-lifecycle-toolcall recipe)",
+            "WHY this exercises the oversized-line path: the prompt asks aider for ONE very long single-line sentence (≥5000 words, no embedded newlines), so aider appends one large `\u003e …`/prose line to .aider.chat.history.md. The shared tailer reads it via readLineCapped(64MB cap, issue #270) BEFORE the isRawLine branch hands the trimmed line to aider's ParseLineRaw — i.e. aider's RawLineParser path is gated by the SAME oversized-line cap as the JSONL adapters. A ~30 KB line is far under the 64 MB cap, so it is buffered whole into assistantBuffer and the turn resolves via the usual `\u003e Tokens:`/IdleFlush close. This is a sanity-check that the arc completes on a large single line, NOT a true \u003e64 MB cap-stress (a live aider CLI cannot be coerced into a multi-megabyte single line — markdown prose wraps and tool output is multi-line `\u003e` blockquotes); the genuine \u003e64 MB cap behavior is pinned agent-agnostically by core/pkg/tailer/large_line_test.go",
+            "WHY interactive, not headless `aider --message`: aider emits no end-of-turn marker, so working→ready is synthesized by IdleFlush after a ~1500ms quiet window, clamped to the SessionDetector's ~5s working-refresh poll; a headless --message run can exit promptly after the reply, so the daemon misses the terminal working→ready settle before process_exited and truncates the arc. Keeping aider alive in the REPL across one send + wait_turn lets the daemon observe the full ready→working→ready settle, and the single tmux kill-session teardown then yields one clean process_exited",
+            "wait_turn blocks until a new `\u003e Tokens:` line appears in the transcript (aider's per-round close marker), so the trailing sleep never races a still-running turn; the ≥8s trailing sleep is one full idle-flush cycle plus slack so the working→ready settle is observed before teardown"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Write a single very long sentence on one line. Make it at least 5000 words. Do not use newlines anywhere in the sentence."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 8
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a transcript_new + presession_created for the proc-\u003cPID\u003e session born ready within ~2s of REPL launch",
+            "events.jsonl contains a pid_discovered event bound to the same proc-\u003cPID\u003e session_id",
+            "events.jsonl shows exactly one ready→working transition for the proc-\u003cPID\u003e session as the large-reply turn begins",
+            "events.jsonl shows exactly one working→ready transition at turn end — completion of the arc is the parser-resilience proof: if the tailer had wedged on the oversized single line this transition would never fire (the genuine \u003e64 MB cap behavior is pinned by core/pkg/tailer/large_line_test.go, issue #270; this live recording is a sanity-check on a large single line)",
+            "irrlichd logs do NOT contain a 'skipping oversized line' warning for the cwd transcript (a 5000-word line is well under the 64 MB cap)",
+            "events.jsonl contains NO state_transition to waiting for the session at any point (a one-sentence reply has no trailing question mark, so the classifier takes the →ready path)",
+            "the session's final live state is ready before the driver tears the REPL down",
+            "events.jsonl contains exactly one process_exited on the proc-\u003cPID\u003e session at REPL teardown",
+            "transcript.jsonl contains 1 user line and at least 1 assistant line; the large assistant reply is appended as a single long line with no embedded newlines"
+          ],
+          "settings": {},
+          "timeout_seconds": 300
+        }
+      }
+    },
+    "claudecode": {
+      "recording_dir": "claudecode/scenarios/oversized-transcript-line",
+      "artifacts": {
+        "events": "claudecode/scenarios/oversized-transcript-line/events.jsonl",
+        "transcript": "claudecode/scenarios/oversized-transcript-line/transcript.jsonl",
+        "manifest": "claudecode/scenarios/oversized-transcript-line/manifest.json",
+        "golden": "claudecode/scenarios/oversized-transcript-line/transcript.jsonl.replay.json.golden"
+      },
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "pass_rate": "3/3 phases passed",
+        "agent_cli_version": "2.1.143",
+        "daemon_version": "0.4.5+ee2fdf3",
+        "confidence": 0.85,
+        "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "oversized-transcript-line",
+          "agent": "claudecode",
+          "assessed_at": "2026-05-17T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.85,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nClaude Code can naturally produce huge JSONL lines — a single tool_result block can contain MBs of stdout, a base64 artifact, or a large aggregated diff. From the agent's side there is nothing to 'support': the transcript flusher writes whatever the tool returned, terminated by `\\n`. So agent_supports is trivially yes.\n\nThe spec's observable is parser resilience: the session must arc `ready → working → ready` and NOT stick in `working` because the parser stalled on a giant line.\n\nirrlicht's tailer was explicitly hardened for this (issue #270). `core/pkg/tailer/tailer.go` uses `bufio.NewReaderSize(file, 64*1024)` plus a custom `readLineCapped` rather than `bufio.Scanner` — Scanner's hard ~2 MB cap would have wedged on big tool outputs. The cap `maxTranscriptLineSize` is 64 MB; lines beyond that are logged ('skipping oversized line at offset N') and the file offset is advanced past them so processing continues with the next line. There is also an `errPartialAtEOF` path so a partially-written giant line is re-read once more bytes arrive.\n\nFor the claudecode JSON path specifically: huge tool_result content lives inside `message.content[].content` strings. Those are surfaced as `ev.ToolResultIDs` / `ev.IsError` at parse time, and only `ExtractContentChars` / `ExtractAssistantText` touch large strings — both are bounded scans over the decoded map. The subsequent assistant text + turn_done will then drive the working→ready transition normally. So `core/pkg/tailer/large_line_test.go` already pins the regression (it asserts that a line above the old Scanner cap doesn't block the tailer, and that subsequent lines still parse).\n\nNet: oversized line either fits under 64 MB (parsed normally) or is skipped with a log line; either way the turn arc completes.",
+          "caveats": [
+            "Lines above the 64 MB cap are dropped silently from the parser's point of view — they still advance the file offset, but their content (tool result, etc.) is lost. The spec only asserts the state arc, not the content, so this is fine for the cell; it's a known operator-visible-log-only behaviour.",
+            "Reliably manufacturing a \u003e2 MB JSONL line from a real `claude` CLI driver is awkward — the recipe likely synthesizes the oversized line by appending hand-crafted bytes into the live transcript file rather than coaxing Claude to emit one. Either approach exercises the same tailer path."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "core/pkg/tailer/tailer.go",
+              "note": "bufio.NewReaderSize + readLineCapped + maxTranscriptLineSize=64MB; oversized lines logged and skipped past, not stalled (see comment block referencing #270)."
+            },
+            {
+              "kind": "file",
+              "ref": "core/pkg/tailer/large_line_test.go",
+              "note": "Regression test for #270 — asserts that a JSONL line above bufio.Scanner's old 2 MB cap does not block the tailer and that subsequent lines parse."
+            },
+            {
+              "kind": "issue",
+              "ref": "ingo-eichhorst/Irrlicht#270",
+              "note": "Oversized JSONL line wedge fixed by switching tailer from bufio.Scanner to bufio.Reader + readLineCapped."
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": true,
+          "preconditions": [
+            "claude CLI on PATH and authenticated (subscription or API key)",
+            "irrlichd is recording (--attach against a daemon with --record, or isolated mode)"
+          ],
+          "setup": [
+            "Driver generates a fresh lowercased session UUID and a fresh cwd under \u003cstaging\u003e/cwd/"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Write a single very long sentence on one line. Make it at least 5000 words. Do not use newlines except at the end."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 5
+            }
+          ],
+          "verify": [
+            "events.jsonl shows the UUID session entering ready after launch",
+            "events.jsonl shows exactly one ready→working transition for the UUID",
+            "events.jsonl shows exactly one working→ready transition at turn end (completion of the arc is the parser-resilience proof; if the tailer wedged on the long line this transition would never fire)",
+            "irrlichd logs do NOT contain a 'skipping oversized line' warning for the UUID's transcript (a 5000-word line is well under the 64 MB cap)",
+            "final session state is ready",
+            "transcript.jsonl contains 1 user line and at least 1 assistant line; the assistant line is a single long JSONL row with no embedded newlines in message.content"
+          ],
+          "settings": {},
+          "timeout_seconds": 300
+        }
+      }
+    },
+    "codex": {
+      "artifacts": {},
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "confidence": 0.85,
+        "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "oversized-transcript-line",
+          "agent": "codex",
+          "assessed_at": "2026-05-28T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.85,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nThe scenario's Primitive exercised is explicit: \"Parser robustness — transcript tailer and line parser correctly handle lines exceeding normal size (\u003e2 MB). No special agent capability required.\" So there is nothing codex-specific to support: codex writes an append-only JSONL transcript under its sessions dir (`Source: FilesUnderRoot{Dir: sessionsDir(), Parser: JSONLineParser}` in `core/adapters/inbound/agents/codex/agent.go`), one record per `\\n`-terminated line. A single large command/tool output naturally produces one big JSONL row, so agent_supports is trivially yes.\n\nThe observable is parser resilience: the session must arc `ready → working → ready` and NOT stick in `working` because the tailer stalled on a giant line. This is a property of irrlicht's SHARED tailer, not of any adapter. `core/pkg/tailer/tailer.go` reads lines via `bufio.NewReaderSize` + a custom `readLineCapped` (NOT `bufio.Scanner`, whose old ~2 MB cap would wedge), with `maxTranscriptLineSize = 64 * 1024 * 1024` (64 MB, issue #270). Lines beyond the cap are logged ('skipping oversized line at offset N') and the offset is advanced past them so processing continues with the next line; there is also an `errPartialAtEOF` re-read path for a partially-written giant line. Codex's `JSONLineParser` runs on top of this same tailer, so codex inherits the exact same robustness as claudecode — the cap path is parser-agnostic.\n\nBecause codex goes through the identical shared-tailer code path, the regression is already pinned by `core/pkg/tailer/large_line_test.go` (a 3 MB tool-result line does not block downstream `turn_done`; the direct skip path is exercised by `TestReadLineCapped_OversizedLineSkipped`). That test is agent-agnostic and is the authoritative coverage for the \u003e2 MB / 64 MB cap.\n\nNet for the cell: an oversized codex line either fits under 64 MB (parsed normally, arc completes) or is skipped with a log line (offset advances, next line parses); either way the `ready → working → ready` arc completes. The verdict is yes/yes — but see caveats: a LIVE codex recipe cannot deterministically manufacture a \u003e64 MB (or even \u003e2 MB) single line, so a recording would only be a ~30 KB sanity-check, not true cap-stress.",
+          "caveats": [
+            "record_blocked=unit_test (2026-05-28): a \u003e64 MB single JSONL line cannot be deterministically driven from a live codex session — this is a shared-tailer robustness property, not a codex behavior. Authoritative coverage is the agent-agnostic core/pkg/tailer/large_line_test.go (64 MB cap, #270); we do not fabricate a 64 MB line into a fixture. (per scenarios.json by_adapter.codex)",
+            "A live codex session cannot be deterministically driven to emit a \u003e64 MB (or even \u003e2 MB) single JSONL line — that is shared-tailer robustness, not a codex behavior; the authoritative coverage is the agent-agnostic unit test core/pkg/tailer/large_line_test.go, so a codex recording would only sanity-check a moderate (~30 KB) line.",
+            "Lines above the 64 MB cap are dropped silently from the parser's point of view (offset advances, content lost) and surface only as an operator log line; the spec asserts the state arc, not content, so this is fine for the cell."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/codex/agent.go",
+              "note": "Source: FilesUnderRoot{Dir: sessionsDir(), Parser: JSONLineParser} — codex transcripts run through the shared tailer, so they inherit the same oversized-line handling as every JSONL adapter."
+            },
+            {
+              "kind": "file",
+              "ref": "core/pkg/tailer/tailer.go",
+              "note": "bufio.NewReaderSize + readLineCapped + maxTranscriptLineSize=64MB (line 21); oversized lines logged ('skipping oversized line at offset N', line 431) and skipped past, not stalled — references issue #270."
+            },
+            {
+              "kind": "file",
+              "ref": "core/pkg/tailer/large_line_test.go",
+              "note": "Agent-agnostic regression for #270: TestTailAndProcess_LargeToolResultLine (3 MB line still yields turn_done) and TestReadLineCapped_OversizedLineSkipped (direct skip path). This is the authoritative coverage for the cap."
+            },
+            {
+              "kind": "issue",
+              "ref": "ingo-eichhorst/Irrlicht#270",
+              "note": "Oversized JSONL line wedge fixed by switching the shared tailer from bufio.Scanner to bufio.Reader + readLineCapped."
+            }
+          ],
+          "record_blocked": "unit_test"
+        },
+        "recipe": {
+          "applicable": false,
+          "notes": "applicable:false — a live codex session cannot be deterministically driven to emit a \u003e64 MB (or even \u003e2 MB) single JSONL line; this is a shared-tailer robustness property, not a codex behavior. No special agent capability is exercised. The authoritative coverage is the agent-agnostic unit test core/pkg/tailer/large_line_test.go (TestTailAndProcess_LargeToolResultLine + TestReadLineCapped_OversizedLineSkipped), which pins the 64 MB cap (issue #270) on the shared tailer that codex (FilesUnderRoot{JSONLineParser}) runs on. A 5000-word live recipe would only be a ~30 KB sanity-check, not true cap-stress, and we do NOT fabricate a 64 MB line into a fixture. expected.jsonl is retained as the documented state-arc target."
+        }
+      }
+    },
+    "opencode": {
+      "artifacts": {},
+      "metadata": {
+        "agent_supports": "no",
+        "daemon_capability": "n/a",
+        "driver_capability": "n/a",
+        "confidence": 0.82,
+        "notes": "agent_supports: yes\ndaemon_capability: full\ndriver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "oversized-transcript-line",
+          "agent": "opencode",
+          "assessed_at": "2026-05-27T00:00:00Z",
+          "agent_supports": "no",
+          "daemon_capability": "n/a",
+          "driver_capability": "n/a",
+          "confidence": 0.82,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Reasoning\n\n`oversized-transcript-line` is a parser-robustness scenario, not an agent feature: a single transcript event is unusually large and the daemon must ingest it without stalling, so the session still resolves `ready → working → ready`. No special opencode capability is exercised — `agent_supports: yes` because opencode trivially produces a large transcript part (e.g. a large tool result), which is all the scenario needs.\n\n### Why daemon_capability is `full` (and structurally stronger than the JSONL adapters)\n\nopencode is the lone `ProcessOwnedStore` adapter (`core/adapters/inbound/agents/opencode/agent.go:41`). Its LIVE observation path does NOT go through the shared JSONL tailer's `readLineCapped` at all. The watcher reacts to WAL writes and reads parts straight from SQLite — `db.Query(...) → rows.Scan(\u0026partID, \u0026partData, ...)` (`watcher.go:456-499`), and metrics likewise via `db.Query(...) → rows.Scan(\u0026partData, \u0026msgData, ...)` (`metrics.go:67-103`). A SQLite TEXT/BLOB column is materialized whole into a Go string with no `bufio` line-buffer ceiling (SQLite's own limit is ~1 GB), so the 2 MB-class \"oversized line\" that the scenario targets — the bar the old `bufio.Scanner` 2 MB cap and issue #270's 64 MB tailer cap exist to guard for the JSONL adapters — simply cannot wedge opencode's store-read path. A single huge `part.data` row is read in one scan; the watcher's terminal detection (`isTerminalPart`, watcher.go:426) and the parser (`ParseLine`) then operate on the in-memory blob. The user-observable proof is the arc completing: if the read had stalled, the working→ready transition (`turn1_done`) would never fire.\n\n### Replay / committed-fixture side\n\nThe driver exports the session's parts as one JSONL line per part (`drive-opencode-interactive.sh:171-186`), so a single oversized part becomes a single oversized line in the committed `transcript.jsonl`. The recorded `events.jsonl` (the spec's source of truth) is produced by the live store-read path above; the oversized transcript line is additionally pinned byte-for-byte by `TestFixtureReplayByteIdentity` and re-parsed by `opencode.Parser` on replay, exercising the parser on the large single line.\n\n### Inducing the oversized part (recipe note)\n\nThe configured model is a small local LM Studio model (`lmstudio/gemma-4-e2b-it-uncensored`) that won't reliably emit huge text on its own. The reliable induction is to have a TOOL produce the large content: step 1 writes a large file in the run cwd via the Bash tool, step 2 asks opencode to read it with its read tool, so the read-tool-result part becomes a single \u003e256 KB row in the store / exported transcript. This is a sanity-check on a large single part, not a true \u003e64 MB cap-stress (which is pinned agent-agnostically by `core/pkg/tailer/large_line_test.go`, issue #270, on the shared tailer the JSONL adapters use).\n\n### driver_capability\n\nThe opencode driver implements `send` / `wait_turn` (no-op; `opencode run` blocks) / `sleep` (`drive-opencode-interactive.sh:125-146`). The recipe needs only those three step types — `send` a Bash tool prompt to create the file, `send` a read prompt, `wait_turn`, `sleep` — so `driver_capability: ready`.\n\n## Routing\n\nsupports=yes, daemon=full, driver=ready → **record**.",
+          "caveats": [
+            "N/A for opencode: oversized-transcript-line requires_transport=line_based, but opencode is structured_store (SQLite ProcessOwnedStore) — there is no append-only transcript LINE to oversize, so the scenario does not apply. The prior yes/full/ready verdict was a stale mislabel; no recording is expected.",
+            "LIVE-RECORDING OVERRIDE (2026-05-26, opencode 1.14.50): the implement stage proved the oversized part CANNOT be produced through opencode's tools, so this cell is NOT recordable despite the daemon-side path being robust. opencode's read tool truncates each line to 2000 chars, and its bash tool caps stored stdout to a ~30-50 KB preview with state.metadata.truncated=1, overflowing the full bytes to a separate ~/.local/share/opencode/tool-output/ sidecar file the daemon never reads as a transcript part. No tool path yields a single \u003e=256 KB part.data row. The recipe is therefore by_adapter.opencode.applicable=false; this is an opencode output-cap property, not a model weakness (the file was created and read correctly). The route remains record in principle (the daemon path IS full), but the inducibility blocks the recording — same shape as the codex applicable:false rationale for this scenario.",
+            "Not a true \u003e64 MB cap-stress regardless: the genuine \u003e64 MB cap is pinned agent-agnostically by core/pkg/tailer/large_line_test.go (issue #270) on the shared tailer — which never gates opencode's live SQLite store-read path (opencode reads part.data straight from SQLite with no bufio line-buffer)."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/opencode/agent.go",
+              "note": "Source is ProcessOwnedStore{Reader: metricsReader} — opencode bypasses the JSONL tailer entirely (line 41)."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/opencode/watcher.go",
+              "note": "Live path: db.Query + rows.Scan(\u0026partData) reads each part whole from SQLite (lines 456-499); no bufio line-buffer cap. isTerminalPart drives the working→ready close (line 426)."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/opencode/metrics.go",
+              "note": "ComputeMetrics scans partData/msgData strings directly from SQLite (lines 67-103); arbitrarily large TEXT columns are read in one scan."
+            },
+            {
+              "kind": "file",
+              "ref": "core/pkg/tailer/tailer.go",
+              "note": "readLineCapped / maxTranscriptLineSize=64MB (lines 19, 488-496) is the JSONL-adapter oversized-line guard; opencode's ProcessOwnedStore does not traverse this path."
+            },
+            {
+              "kind": "file",
+              "ref": "core/pkg/tailer/large_line_test.go",
+              "note": "Agent-agnostic unit coverage that pins the 64MB cap on the shared tailer (issue #270) — the authoritative cap-stress test."
+            },
+            {
+              "kind": "file",
+              "ref": ".claude/skills/ir:onboard-agent/scripts/drive-opencode-interactive.sh",
+              "note": "Driver step grammar (send/wait_turn/sleep, lines 125-146) and the parts→JSONL export (lines 171-186) that turns one large part into one large transcript line."
+            },
+            {
+              "kind": "file",
+              "ref": ".claude/skills/ir:onboard-agent/scenario-meanings.md",
+              "note": "Scenario essence + Primitive exercised: parser robustness on lines exceeding normal size (\u003e2 MB); user-observable signal ready→working→ready with no stuck working."
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": false,
+          "notes": "applicable:false — observed opencode INCAPABILITY (not a model weakness): a live opencode session cannot deterministically produce a single oversized (\u003e=256 KB) transcript part, because opencode's tools cap their output before persisting it to the SQLite store. Verified empirically at record time (2026-05-26) on opencode 1.14.50 + the local default model: (1) the recipe's tool-induction path DID run cleanly — bash created a 300000-byte single-line big.txt and the read tool read it back, arc ready-\u003eworking-\u003eready completed twice on one ses_… session (run-cell STAGED) — but the read-tool-result part was only ~4.6 KB: opencode's read tool truncates each line to 2000 chars (the recorded output literally says 'line truncated to 2000 chars'). (2) A direct probe forcing ~300 KB of bash stdout produced part.data of only ~82 KB with state.metadata.truncated=1 and 'Full output saved to: ~/.local/share/opencode/tool-output/tool_…' — opencode stores a ~30-50 KB preview in the part row and overflows the full bytes to a SEPARATE sidecar file that the daemon never reads as a transcript part. So no tool path yields a single \u003e=256 KB part.data row / \u003e=256 KB exported transcript.jsonl line. This is a shared-tailer/store robustness PROPERTY, not an opencode feature, and opencode is structurally stronger here anyway: it is the lone ProcessOwnedStore adapter (agent.go:41) — the live watcher reads part.data straight from SQLite via rows.Scan (watcher.go:456-499) and ComputeMetrics likewise (metrics.go:67-103) with NO bufio line-buffer cap, so even an oversized part would be read whole; the shared tailer's 64 MB readLineCapped guard (tailer.go, issue #270) never gates opencode store reads. The authoritative cap-stress coverage is the agent-agnostic unit test core/pkg/tailer/large_line_test.go (TestTailAndProcess_LargeToolResultLine + TestReadLineCapped_OversizedLineSkipped), which pins the 64 MB cap on the shared tailer. We do NOT fabricate a \u003e256 KB part into a fixture. expected.jsonl is retained as the documented state-arc target (the assessment route was record; the live recording overrode it — see assessment.json and the implement observability_correction)."
+        }
+      }
+    },
+    "pi": {
+      "recording_dir": "pi/scenarios/oversized-transcript-line",
+      "artifacts": {
+        "events": "pi/scenarios/oversized-transcript-line/events.jsonl",
+        "transcript": "pi/scenarios/oversized-transcript-line/transcript.jsonl",
+        "manifest": "pi/scenarios/oversized-transcript-line/manifest.json",
+        "golden": "pi/scenarios/oversized-transcript-line/transcript.jsonl.replay.json.golden"
+      },
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "pass_rate": "5/5 phases passed",
+        "agent_cli_version": "0.70.0",
+        "daemon_version": "0.4.7+6ab9f88",
+        "confidence": 0.78,
+        "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "oversized-transcript-line",
+          "agent": "pi",
+          "assessed_at": "2026-05-25T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.78,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\n`oversized-transcript-line` (scenario-meanings.md): a single transcript event is unusually large; the tailer + line parser must handle it without stalling, and the session still resolves to `ready` normally. User-observable signal: `ready → working → ready`, with NO parser stall causing a stuck `working`. Primitive exercised: parser/tailer robustness — no special agent capability is required.\n\n**agent_supports: yes.** Concern C8: pi writes its rollout JSONL ONCE at turn completion as a single line per message (no partial flushes). So a LARGE single line is naturally producible — a single prompt that elicits a large assistant reply (e.g. \"print the numbers 1 to 400, each on its own line\") yields ONE assistant `message` JSONL line containing the whole reply. That single oversized line is exactly what the tailer + parser must ingest without choking.\n\n**daemon_capability: full; driver_capability: ready.** The tailer caps a single JSONL line at 64 MB via `readLineCapped` (tailer.go:19-22,622-648) and explicitly handles `bufio.ErrBufferFull` by growing past the default reader buffer (issue #270); a regression test (`core/pkg/tailer/large_line_test.go`) pins that a 3 MB line — and a synthetic \u003ecap line — are consumed without wedging the tailer. The pi parser (parser.go) ingests the assistant `message` line and maps `stopReason == \"stop\"` to `turn_done` (working→ready) regardless of the line's size; nothing in the parser path is size-sensitive. So a large single assistant line is parsed, the turn boundary is preserved, and the session settles `ready → working → ready` with no stuck `working`.\n\n**Confidence 0.78** (not higher): a live `pi` reply is moderate in size (~a few hundred lines, well under both bufio.Scanner's old 2 MB cap and irrlicht's 64 MB ceiling), so the RECORDING is a sanity-check that the arc completes on a large-single-line turn, not a true \u003e2 MB cap-stress. The genuine oversized (\u003e64 MB) cap behavior is covered by the tailer unit test, not by a live recording — a live CLI cannot be coerced into emitting a multi-megabyte single line on demand. The 'line size' itself is not a phase-DSL form; the recording asserts the user-observable lifecycle arc (one clean ready→working→ready, no waiting, single process_exited) and the oversized-line robustness claim is documented as parser-unit-test territory in the spec notes.\n\n## Recipe-shape note (SCRIPT / interactive)\n\nRecorded with the INTERACTIVE pi driver (drive-pi-interactive.sh, a tmux REPL) rather than headless `pi --print`. WHY (concern C6): headless `pi --print` exits the instant it emits the final reply, so the daemon's scanner can miss the terminal working→ready settle before process_exited; script-mode keeps pi alive across one send + wait_turn so the daemon observes the settle cleanly, then a single tmux teardown yields one clean process_exited. The single prompt deliberately elicits a LARGE single assistant reply so the rollout flushes one oversized JSONL line the tailer/parser must handle. C7 / SESSION-IDENTITY: the live REPL emits a transient proc-\u003cPID\u003e pre-session born ready at launch (it bridges the gap until the UUID-keyed rollout transcript appears), so session_birth — which only asserts 'a session appears in ready within 2s of launch' — legitimately matches that pre-session with NO session pin. The oversized-line turn arc, pid_bind and teardown all pin to the rollout session via the first-working anchor (NO session pin on turn_start, so the matcher binds the FIRST working, necessarily the rollout session; the pre-session never goes working) + same_session_as.",
+          "caveats": [
+            "Concern C8: pi flushes the rollout JSONL once per message at turn completion (no partial flushes), so one large assistant reply IS one large single JSONL line — exactly the oversized-line input the tailer/parser must ingest.",
+            "The recording is a sanity-check (a live reply is moderate, well under the 64 MB tailer cap and the old 2 MB scanner limit), NOT a true cap-stress. Genuine \u003e64 MB cap behavior is covered by core/pkg/tailer/large_line_test.go (issue #270), not by this live recording.",
+            "The 'oversized line' property is not a phase-DSL form: the absence of a parser stall is INFERRED from the lifecycle arc completing cleanly (one ready→working→ready, no stuck working). The spec asserts that arc; the size-robustness claim is documented in the spec notes as parser-unit-test territory.",
+            "Pi cannot accept a pre-assigned UUID — it generates one itself; the interactive driver discovers the UUID from the session header on line 1 of the freshly-created rollout transcript.",
+            "Because the live REPL bridges with a transient proc-\u003cPID\u003e pre-session, the turn phase anchors to recording start with NO session pin so the matcher binds the FIRST working (necessarily the rollout session; the pre-session never goes working); every later phase pins to it via same_session_as."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "core/pkg/tailer/tailer.go",
+              "note": "tailer.go:19-22 maxTranscriptLineSize=64MB; readLineCapped (622-648) handles bufio.ErrBufferFull by growing past the default reader buffer so an oversized single line never wedges the tailer (issue #270)."
+            },
+            {
+              "kind": "file",
+              "ref": "core/pkg/tailer/large_line_test.go",
+              "note": "Regression test: a 3 MB line and a synthetic \u003ecap line are consumed without stalling the tailer — the genuine oversized-line robustness lives here, not in a live recording."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/pi/parser.go",
+              "note": "Parses the assistant `message` line and maps stopReason==stop → turn_done (working→ready) regardless of line size; nothing in the parser path is size-sensitive."
+            },
+            {
+              "kind": "file",
+              "ref": ".claude/skills/ir:onboard-agent/scenario-meanings.md",
+              "note": "oversized-transcript-line: single large transcript event handled without stalling; session resolves to ready normally; user-observable signal ready→working→ready, no parser stall causing stuck working."
+            },
+            {
+              "kind": "file",
+              "ref": ".claude/skills/ir:onboard-agent/scripts/drive-pi-interactive.sh",
+              "note": "Interactive tmux REPL driver; supports send / wait_turn / interrupt / sleep, keeps the rollout alive so the daemon observes the working→ready settle before teardown (concern C6)."
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": true,
+          "preconditions": [
+            "pi CLI on PATH and authenticated (pi runs against its configured model out-of-band)",
+            "tmux available — the interactive driver runs pi in a tmux REPL so the rollout stays alive long enough for the daemon to observe the working→ready settle before teardown",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+          ],
+          "setup": [
+            "The interactive driver (drive-pi-interactive.sh) launches pi in a fresh per-run cwd inside a tmux session, waits for the REPL prompt, then sends the prompt",
+            "pi writes its rollout JSONL ONCE per message at turn completion (no partial flushes; concern C8), so a single prompt eliciting a large reply produces ONE oversized assistant JSONL line under ~/.pi/agent/sessions/\u003ccwd-slug\u003e/ — exactly the oversized-line input the shared tailer + pi parser must ingest without stalling",
+            "The driver resolves that rollout file and extracts the UUID from line 1; wait_turn blocks until the rollout shows the completed assistant turn (stopReason=stop), then a trailing sleep + a single tmux teardown lets pi exit and the daemon emit one process_exited for the rollout session"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Print the numbers from 1 to 400, each on its own line, with nothing else. Just the numbers."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a transcript_new for the rollout session born ready within ~2s of REPL launch (a transient proc-\u003cPID\u003e pre-session may also appear at launch; the turn arc and pid_discovered land on the UUID-keyed rollout session)",
+            "events.jsonl contains exactly one ready→working transition for the rollout session_id as the large-reply turn begins",
+            "events.jsonl contains exactly one working→ready transition at turn end — completion of the arc is the parser-resilience proof: if the tailer had wedged on the oversized single line this transition would never fire (the genuine \u003e64 MB cap behavior is pinned by core/pkg/tailer/large_line_test.go, issue #270; this live recording is a sanity-check on a large single line)",
+            "events.jsonl contains a pid_discovered event bound to the rollout session_id",
+            "the rollout session's final live state is ready before the driver tears the REPL down",
+            "events.jsonl contains exactly one process_exited on the rollout session at REPL teardown",
+            "no state_transition to waiting appears for the rollout session at any point",
+            "transcript.jsonl contains 1 user line and at least 1 assistant message line; the large assistant reply is flushed as a single JSONL row (pi flushes once per message at turn completion)"
+          ],
+          "settings": {},
+          "timeout_seconds": 300
+        }
+      }
+    }
+  }
+}

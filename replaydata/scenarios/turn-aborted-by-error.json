@@ -1,0 +1,496 @@
+{
+  "id": "2.14",
+  "name": "turn-aborted-by-error",
+  "section": "Turn shape",
+  "feature": "Turn aborted by error",
+  "description": "Agent's model call fails mid-turn (network error, provider 5xx, timeout). No normal turn-end signal is emitted. Expected arc per spec: ready → working, then → ready within the sweep interval after the agent gives up. Failures split into three buckets: Bucket A (transcript epilogue with synthesized error text → observable via classifier rule 2b — CAPTURED via tools/agent-onboarding/recording/mock-anthropic-5xx/main.go), Bucket B (pure mid-stream network failure with NO transcript write → currently UNOBSERVABLE because there is no inactivity sweep on the working state since PR #106 removed the stale-tool timer), Bucket C (system/turn_duration on abnormal exit → observable via turn_done — not yet captured separately).",
+  "requires": [
+    "headless_mode"
+  ],
+  "verify": {
+    "final_state": "ready",
+    "transitions_topology": [
+      "ready",
+      "working",
+      "ready"
+    ]
+  },
+  "agents": {
+    "aider": {
+      "recording_dir": "aider/scenarios/turn-aborted-by-error",
+      "artifacts": {
+        "events": "aider/scenarios/turn-aborted-by-error/events.jsonl",
+        "transcript_md": "aider/scenarios/turn-aborted-by-error/transcript.md",
+        "manifest": "aider/scenarios/turn-aborted-by-error/manifest.json"
+      },
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "pass_rate": "5/5 phases passed",
+        "agent_cli_version": "0.86.2",
+        "daemon_version": "0.4.7+689e190",
+        "confidence": 0.85,
+        "notes": "agent_supports: yes\ndaemon_capability: full\ndriver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "turn-aborted-by-error",
+          "agent": "aider",
+          "assessed_at": "2026-05-25T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.85,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Reasoning\n\nThe scenario asks whether aider can fail a model call mid-turn with no normal turn-end signal, and whether irrlicht returns the session to `ready` rather than leaving it stuck in `working`.\n\n**agent_supports: yes.** Aider routes every model call through litellm, and a provider failure (network error, 5xx, timeout, bad request, unsupported model) surfaces as an error/exception that aider prints to the chat and appends to its per-project history file `.aider.chat.history.md` as a blockquote line — e.g. `\u003e litellm.BadRequestError: OpenAIException - …`. No `\u003e Tokens: …` accounting line is emitted in this case, so there is no normal end-of-call marker; the turn simply aborts. This is the canonical Bucket-A shape from the scenario description (transcript epilogue carrying synthesized error text). The recipe drives this deterministically with a bogus model id (`IRRLICHT_AIDER_MODEL=\u003cbogus\u003e` → `aider --model \u003cbogus\u003e`): litellm rejects the model rather than retrying it, so the abort is reproducible rather than transient.\n\n**daemon_capability: full.** The aider adapter is `Source: FilesUnderCWD` over the markdown history file, parsed by a `RawParser` (`core/adapters/inbound/agents/aider/parser.go`). This is aider's NATIVE error path — not just an idle backstop: the parser's `flushErrorTurn` matches the error blockquote via `errorRE` (`^\u003e\\s*\\S*(?:Error|Exception)(?:[: ]|$)`, parser.go:75), gated on `turnOpen` at the call site (parser.go:127-128), and emits a synthetic `turn_done` carrying the error text as `AssistantText` and flipping `turnOpen` false (parser.go:196-206). That is a real in-band end-of-turn signal landing in the watched Source. The state classifier maps a `turn_done` with no trailing question to `ready` (`state_classifier_test.go`: \"working → ready (turn_done, no question)\"). So the user-observable arc `ready → working → ready` holds: the session does not stick in `working`. A trace exists in the watched Source AND the parser handles it today → `daemon_capability: full`. This is the #262 fix, pinned by `TestParser_LLMError_EndsTurn` (synthetic turn_done with error text) and `TestParser_ErrorTurn_RecoversOnNextPrompt` (a subsequent `####` prompt reopens a fresh turn).\n\n**Defense in depth via IdleFlush.** Even setting the error blockquote aside, aider's clean turn-end is synthesized by `IdleFlush` after `aiderIdleTurnDoneAfter` (1500ms, parser.go:54) of transcript quiet (parser.go:216-228), and the SessionDetector re-polls working sessions every ~5s. So any turn that opened (`####` seen) and then went quiet — including an aborted one — is flushed to `turn_done` → `ready` within roughly one sweep interval, exactly the primitive the scenario names (\"sweep-based stall detection\").\n\n**driver_capability: ready.** The recipe needs only `send` (the prompt) + `sleep` (the ≥6–12s post-error settle window), plus the bogus-model trigger which the driver reads from `IRRLICHT_AIDER_MODEL` and passes as `aider --model \u003cbogus\u003e` (`drive-aider-interactive.sh:90-91`). All of those step types are implemented (`send`, `slash`, `wait_turn`, `interrupt`, `sleep` — driver case block lines 195-208). No gapped primitive (restart / reset_session / resume / sigkill / keys / fork) is required for this error-abort recipe, so `driver_capability: ready`.\n\n## What irrlicht does NOT see (and why it does not change the verdict)\n\nThe scenario splits failures into three buckets. Bucket A (error epilogue in the transcript) is the observable path covered above. Bucket B — a pure mid-stream network failure where aider writes NOTHING further to the markdown file and the turn never even opened a visible line — is the residual gap: aider has no working-state inactivity timer of its own that lands in the transcript, and PR #106 removed the daemon's stale-tool timer. In that narrow case the parser has no error line to match. In practice the turn has almost always already opened on a `####` user-prompt line, so `IdleFlush` still fires and resolves the session; the truly-silent variant is the residual caveat. The canonical spec asserts only the user-observable arc (`ready → working → ready`, final `ready`), which the Bucket-A + IdleFlush paths satisfy — so this is a narrow NON-spec gap kept as a caveat, not a `daemon_capability` downgrade.\n\n## Capability anchor\n\nPrimitive exercised: \"Sweep-based stall detection — daemon's periodic sweep identifies sessions stuck in `working` after a process event or timeout and forces a `→ ready` transition.\" The scenario's declared `requires` is `headless_mode`, and the matching key in `replaydata/agents/aider/capabilities.json` is `headless_mode: true` (confirmed present and true). Aider also exposes `streaming_output: true`, which is what makes a mid-stream provider failure reachable in the first place.",
+          "caveats": [
+            "Bucket B (pure mid-stream network failure that writes no further line to `.aider.chat.history.md` and never opens a `####` turn) is unobservable: there is no working-state inactivity sweep landing in the transcript since PR #106 removed the stale-tool timer, and no error blockquote for the parser to match. In practice the turn has usually already opened, so IdleFlush still resolves it; the truly-silent variant is the residual gap. This is a narrow NON-spec gap — the spec asserts only the user-observable `ready → working → ready` arc — so it stays a caveat, not a daemon downgrade.",
+            "The error blockquote must match `errorRE` (`Error`/`Exception` token after `\u003e`). A provider failure surfaced under a different word (e.g. a bare `\u003e Timed out` with no `Error`/`Exception` token) would not trigger flushErrorTurn directly and would instead rely on the slower IdleFlush path (1500ms quiet + ~5s detector poll) to reach `ready`.",
+            "End-of-turn is always synthesized, never in-band-clean: a clean turn settles via IdleFlush after 1500ms of transcript quiet, so working→ready trails file quiet. The error path is the one in-band signal; the recipe needs a trailing sleep ≥6s so the REPL outlives the settle + teardown window."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/aider/parser.go",
+              "note": "errorRE (line 75) + flushErrorTurn (lines 196-206) emit a synthetic in-band turn_done on an LLM error blockquote with no `\u003e Tokens:` line, gated on turnOpen (line 127-128); IdleFlush (lines 216-228) synthesizes turn_done after aiderIdleTurnDoneAfter=1500ms quiet (line 54) — grounds daemon_capability: full"
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/aider/parser_test.go",
+              "note": "TestParser_LLMError_EndsTurn (#262) and TestParser_ErrorTurn_RecoversOnNextPrompt pin the abort + recovery paths"
+            },
+            {
+              "kind": "file",
+              "ref": "core/application/services/state_classifier_test.go",
+              "note": "'working → ready (turn_done, no question)' confirms turn_done with error text resolves the session to ready"
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/aider/agent.go",
+              "note": "Source: FilesUnderCWD over .aider.chat.history.md via RawLineParser — transport that carries the error epilogue"
+            },
+            {
+              "kind": "file",
+              "ref": ".claude/skills/ir:onboard-agent/scripts/drive-aider-interactive.sh",
+              "note": "driver implements send/slash/wait_turn/interrupt/sleep (lines 195-208) and reads IRRLICHT_AIDER_MODEL → `aider --model` (lines 90-91); recipe needs only send+sleep+bogus-model, no gapped primitive — grounds driver_capability: ready"
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/aider/capabilities.json",
+              "note": "headless_mode: true (scenario's requires / Primitive-exercised anchor) and streaming_output: true make a mid-turn provider failure reachable"
+            },
+            {
+              "kind": "file",
+              "ref": ".claude/skills/ir:onboard-agent/agent-scenarios-coverage.json",
+              "note": "current cell already two-axis: daemon_capability=full, driver_capability=ready, note '#262 fixed — error blockquote emits turn_done early' — this assessment ratifies it"
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": true,
+          "preconditions": [
+            "aider CLI on PATH and authenticated for the model the bogus id routes through (e.g. ANTHROPIC_API_KEY / OPENAI_API_KEY, or a reachable OpenAI-compatible endpoint). The cell deliberately requests an UNSUPPORTED/INVALID model id, so auth must already work for normal aider recordings — the provider must accept the connection and then reject the model, not hang on a missing key. Headless aider with no reachable provider hangs ~5 min on the model-auth prompt (e.g. OpenRouter OAuth); that is an infra/auth failure, not a cell failure.",
+            "tmux available — the interactive driver runs aider in a tmux REPL so the process outlives the post-error settle window (see AIDER-SPECIFIC note in setup)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+            "AIDER-SPECIFIC ELICITATION (mirrors the pi sibling — a bogus model id, NO mock/proxy/faked transcript line): the operator must export IRRLICHT_AIDER_MODEL=\u003cbogus-model\u003e when invoking run-cell.sh. The driver passes it via `aider --model \u003cbogus\u003e`; the provider returns an unsupported/invalid-model error whose litellm message does NOT match aider's retry class, so aider does NOT retry, prints a `\u003e …Error`/`\u003e …Exception` blockquote to .aider.chat.history.md, and the turn aborts with no `\u003e Tokens:` end-of-call line. Do NOT use a 5xx/rate-limit/timeout-class trigger — litellm would retry it and the abort would be non-deterministic. The claudecode mock-anthropic-5xx path does NOT transfer here: that path is `claude --bare` + ANTHROPIC_BASE_URL against a local Go mock; aider routes through litellm and needs the bogus-model trigger instead."
+          ],
+          "setup": [
+            "WIRING NOTE (differs from the pi sibling): drive-aider-interactive.sh reads the bogus model ONLY from the IRRLICHT_AIDER_MODEL env var — it accepts the settings-blob path for ABI parity but ignores it, unlike drive-pi.sh which reads `.model` from the blob. settings.model below is recorded for documentation parity, but the OPERATIVE mechanism for aider is the env var; export IRRLICHT_AIDER_MODEL=\u003cbogus-model\u003e before run-cell.sh.",
+            "The interactive driver (drive-aider-interactive.sh) git-inits a fresh per-run cwd under \u003cstaging\u003e/cwd/, launches `aider --no-auto-commits --yes-always --no-gitignore --model \u003cbogus\u003e` inside a tmux session, and waits for the `\u003e Repo-map:` banner line before sending the prompt.",
+            "aider's transcript .aider.chat.history.md is LAZY (FilesUnderCWD): it materializes only once the first user input lands, so the live REPL is observable from launch as a transient proc-\u003cPID\u003e pre-session born ready (the process scanner) until the per-cwd transcript appears.",
+            "INTERACTIVE not headless: aider's working→ready error settle rides flushErrorTurn (the error blockquote) with IdleFlush (1500ms transcript-quiet) as the inactivity backstop, behind the daemon's 5s SessionDetector staleWorking poll. A headless `aider --message` would exit non-zero the instant it writes the error blockquote and truncate that settle and the teardown observation. The REPL must outlive the window — hence the trailing sleep ≥6s after the prompt before the driver tears the tmux session down once (one process_exited)."
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "sleep",
+              "seconds": 12
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a presession (proc-\u003cPID\u003e) event in ready within ~2s of REPL launch (aider's transcript is lazy, so the pre-session is the launch-time observable for 'session appears in ready')",
+            "events.jsonl shows a state_transition→working on the per-cwd rollout session_id when the prompt lands (the first working in the whole recording — the pre-session never enters working)",
+            "events.jsonl contains a pid_discovered event bound to the rollout session_id",
+            "events.jsonl shows a state_transition→ready on the SAME rollout session_id after the model call aborts: aider writes a `\u003e …Error`/`\u003e …Exception` blockquote with no `\u003e Tokens:` line, and the parser's flushErrorTurn (#262) synthesizes a turn_done carrying the error text (IdleFlush is the inactivity backstop) → the classifier's 'agent finished turn → ready' rule settles working→ready; state does NOT stick in working",
+            "events.jsonl never contains a state_transition to waiting for the session",
+            "events.jsonl contains exactly one process_exited on the rollout session at REPL teardown; the live state immediately before teardown is ready",
+            "final session state is ready"
+          ],
+          "settings": {
+            "model": "openai/nonexistent-model-zzz",
+            "aider_extra_args": [
+              "--no-show-model-warnings"
+            ]
+          },
+          "timeout_seconds": 120
+        }
+      }
+    },
+    "claudecode": {
+      "recording_dir": "claudecode/scenarios/turn-aborted-by-error",
+      "artifacts": {
+        "events": "claudecode/scenarios/turn-aborted-by-error/events.jsonl",
+        "transcript": "claudecode/scenarios/turn-aborted-by-error/transcript.jsonl",
+        "manifest": "claudecode/scenarios/turn-aborted-by-error/manifest.json",
+        "golden": "claudecode/scenarios/turn-aborted-by-error/transcript.jsonl.replay.json.golden"
+      },
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "pass_rate": "3/3 phases passed",
+        "agent_cli_version": "2.1.148",
+        "daemon_version": "unknown",
+        "confidence": 0.7,
+        "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "turn-aborted-by-error",
+          "agent": "claudecode",
+          "assessed_at": "2026-05-25T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.7,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nClaude Code's TUI surfaces API errors (network failure, provider 5xx, timeout) as an error notice in the conversation pane and returns the prompt to the user. The agent process keeps running — only the in-flight turn aborts. The runtime does NOT emit a normal `stop_reason=end_turn` or `system/turn_duration` for the aborted turn; whether anything terminal lands in the transcript at all depends on the failure mode and the Claude Code version.\n\n### What irrlicht observes\n\nThe failure modes split into three buckets and irrlicht handles them with mixed confidence:\n\n**Bucket A — runtime writes an error message to the transcript.** Some failure modes (provider 5xx after partial stream) cause Claude Code to write a synthesized assistant text describing the failure plus a terminal stop_reason. In that case the JSONL transcript carries an `end_turn` (or refusal) and `IsAgentDone()` fires the normal way — `working → ready` via classifier rule 2b. irrlicht sees this correctly.\n\n**Bucket B — pure network error, no transcript write.** If the in-flight POST to the Anthropic API fails before any response chunk lands, Claude Code may simply abandon the turn without writing anything terminal. The transcript stops growing but the agent process stays alive. irrlicht has no event to trigger `IsAgentDone()` — the session would sit in `working` indefinitely under the strict JSONL-event path. The spec accommodates this with 'state reaches ready within sweep interval after the agent gives up'.\n\nThe sweep that bails this out is the inactivity-driven side of the session detector: a working session with no fresh JSONL activity does NOT today have a hard 'idle → ready' timer in the classifier (rule set is purely event-driven, see state_classifier.go). The closest existing mechanism is the stale-tool timeout — which was DELETED in PR #106 (memory: 'PR-106-bundles-two-flicker-fixes-1-97') after issue #97 / #102. So there is no general-purpose 'aborted turn → ready' sweep currently. The session goes back to ready only when the next user prompt arrives and the parser sees the new user message (which itself does NOT clear working — rule 4 keeps it in working). Strictly speaking, Bucket B can leave irrlicht stuck in `working` until the next assistant terminal message lands.\n\n**Bucket C — Claude Code's own retry / error UI fires a turn_done.** Recent Claude Code versions emit `system/turn_duration` even on abnormal turn end as part of the stop-hook integration; the parser maps this to `turn_done` (parser.go:157-163) and `IsAgentDone()` fires via the primary path. This appears to be the increasingly common case but I do not have direct fixture evidence in the regression set.\n\n### Why 'partial'\n\nBuckets A and C land at ready correctly. Bucket B is the honest gap: a pure mid-stream network failure with no transcript epilogue can leave irrlicht's session in `working` indefinitely. The spec asserts 'state reaches ready within sweep interval' but irrlicht's classifier has no such inactivity sweep for the working state. This is a known shape of issue — the deleted stale-tool timer used to mitigate it but was removed as a flicker source (#97).\n\n### What the recipe needs\n\nTo realistically exercise this cell the driver must induce a network failure mid-turn — typically by sending a long prompt then severing network (e.g. `pfctl` block on api.anthropic.com or `nc` proxy that drops). That's intrusive and recipe-fragile. A cheaper proxy: kill the TLS handshake by toggling an `ANTHROPIC_BASE_URL` env that points at a closed port. Either way, the variant-3 path of the session-end recipe (SIGKILL mid-turn) is a related but distinct test — it kills the AGENT process, not the API call.",
+          "caveats": [
+            "There is no inactivity-driven 'working → ready' sweep in the current classifier. The deleted stale-tool timer (PR #106, removed for being a flicker source on Bash) used to mitigate this; nothing replaced it. Bucket-B failures can leave the session stuck in working until the next terminal event. This is the strongest argument for irrlicht_observes=partial rather than yes.",
+            "Distinguishing 'turn aborted by error' from 'user pressed ESC' (user-esc-interrupt scenario) is non-trivial — both can produce a quiet transcript tail. ESC has the `[Request interrupted by user]` text marker (recordUserInterruptFlags, parser.go:231); an API error has no such marker. If a future fix introduces an inactivity sweep, it must not race with ESC's explicit signal.",
+            "Newer Claude Code versions appear to emit `system/turn_duration` on abnormal exits too (Bucket C), shrinking the gap. Without a fixture in the regression set I cannot bound this precisely — confidence reflects that uncertainty.",
+            "Recipe construction is hard: inducing a real API failure requires manipulating network/env in a reproducible way. The recipe author should pick a method that the driver can toggle deterministically (e.g. point `ANTHROPIC_BASE_URL` at a port that refuses connections).",
+            "Capture status (as of 2026-05-22, issue #405): Bucket A is now captured via tools/agent-onboarding/recording/mock-anthropic-5xx/main.go + tools/agent-onboarding/recording/record-turn-aborted-by-error.sh. The mock sends message_start + a partial content_block_delta then emits SSE `event: error` (overloaded_error); claudecode appends a synthesized 'API Error: API returned an empty or malformed response (HTTP 200)' message with a terminal `stop_reason` and the session returns to ready cleanly. The committed events.jsonl shows the working→ready arc and the 4-phase expected.jsonl passes. Bucket B (silent network drop) and Bucket C (system/turn_duration on abnormal exit) remain documented gaps — confidence bumped 0.55→0.7 because Bucket A is now empirical rather than speculative."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "core/application/services/state_classifier.go",
+              "note": "The four classification rules (PermissionPending, NeedsUserAttention, IsAgentDone, ESC/denial, default) are all event-triggered. No inactivity timer drives working→ready, so Bucket-B (transcript-silent) failures have no recovery path here."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/claudecode/parser.go",
+              "note": "Lines 157-163: `system/turn_duration` and `system/stop_hook_summary` both map to `turn_done`, which Bucket-C abnormal exits use as the recovery signal. Lines 282-303: the terminal stop_reason allow-list includes `refusal`, which covers some provider-error variants."
+            },
+            {
+              "kind": "memory",
+              "ref": "PR-106 / issue-97 / issue-102",
+              "note": "PR #106 removed the 15s `defaultStaleToolTimeout` because it was a flicker source on long Bash runs. That removal also took away the only inactivity-based safety net that could have rescued Bucket-B failures."
+            },
+            {
+              "kind": "file",
+              "ref": "core/domain/session/session.go",
+              "note": "Lines 440-468 (`IsAgentDone`): both primary (turn_done) and fallback (terminal assistant) paths require a transcript event — neither fires on pure silence."
+            },
+            {
+              "kind": "file",
+              "ref": "tools/agent-onboarding/recording/mock-anthropic-5xx/main.go",
+              "note": "Anthropic-compatible mock used by the Bucket A recorder: streams message_start + partial content_block_delta then emits SSE `event: error` overloaded_error. Sibling of tools/agent-onboarding/recording/mock-anthropic-429/main.go (used by token-quota-exhausted)."
+            },
+            {
+              "kind": "file",
+              "ref": "tools/agent-onboarding/recording/record-turn-aborted-by-error.sh",
+              "note": "Bespoke recorder that launches claude --bare against the mock with ANTHROPIC_BASE_URL pointing at it. Sibling of tools/agent-onboarding/recording/record-token-quota-exhausted.sh; uses the same --bare workaround so claude reads ANTHROPIC_API_KEY + ANTHROPIC_BASE_URL from env (OAuth/keychain bypassed)."
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": true,
+          "preconditions": [
+            "claude CLI on PATH",
+            "go on PATH (to build the mock)",
+            "irrlichd running with --record (recording is captured via attached daemon)",
+            "port 18766 available on localhost"
+          ],
+          "setup": [
+            "tools/agent-onboarding/recording/record-turn-aborted-by-error.sh builds tools/agent-onboarding/recording/mock-anthropic-5xx/main.go, launches it, drives claude under --bare against the mock, and stages the fixture under .build/refresh/claudecode/turn-aborted-by-error-\u003cTS\u003e/. The mock streams message_start + a partial content_block_delta then emits SSE `event: error` (overloaded_error); claudecode appends a synthesized 'API Error' assistant message with a terminal stop_reason and IsAgentDone() fires."
+          ],
+          "driver": "tools/agent-onboarding/recording/record-turn-aborted-by-error.sh",
+          "verify": [
+            "events.jsonl shows session_birth → ready",
+            "events.jsonl shows pid_discovered within 1000 ms of birth",
+            "events.jsonl shows ready → working when the user prompt lands",
+            "events.jsonl shows working → ready after the mock's mid-stream error → synthesized assistant epilogue with terminal stop_reason (Bucket A path)",
+            "session state does NOT stick in working — recovery is event-driven (not via sweep, which doesn't exist today)",
+            "Bucket B (silent network drop with no transcript epilogue) and Bucket C (system/turn_duration on abnormal exit) are intentionally NOT exercised by this recipe — they remain documented gaps in assessment.json"
+          ],
+          "settings": {},
+          "timeout_seconds": 120
+        }
+      }
+    },
+    "codex": {
+      "artifacts": {},
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "incapable",
+        "driver_capability": "ready",
+        "confidence": 0.85,
+        "notes": "agent_supports: yes\ndaemon_capability: incapable; driver_capability: ready\n=\u003e applicable: n/a — but frozen at the recipe stage as applicable: false because there is no recipe primitive that can DETERMINISTICALLY induce a mid-turn provider error against codex, and even if one is induced the end state is unobservable today."
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "turn-aborted-by-error",
+          "agent": "codex",
+          "assessed_at": "2026-05-23T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "incapable",
+          "driver_capability": "ready",
+          "confidence": 0.85,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: incapable; driver_capability: ready\n=\u003e applicable: n/a — but frozen at the recipe stage as applicable: false because there is no recipe primitive that can DETERMINISTICALLY induce a mid-turn provider error against codex, and even if one is induced the end state is unobservable today.\n\n## Scenario\n\nturn-aborted-by-error asserts the user-observable arc `ready -\u003e working -\u003e ready`: the model call fails mid-turn (network error, provider 5xx, timeout) with NO normal turn-end signal, the agent gives up, and the daemon's sweep must settle the still-`working` session back to `ready` within one sweep interval. It is explicitly NOT a user-driven cancel (that is `user-esc-interrupt`).\n\n## agent_supports: yes\n\ncodex 0.130.0 surfaces a failed/aborted turn as `event_msg/turn_aborted` in the rollout transcript (no `task_complete`), the same marker the ESC-interrupt path produces. So codex has the underlying behavior.\n\n## Why this cell cannot be recorded (two independent blockers)\n\n### Blocker 1 — no deterministic error-injection primitive for codex\n\nThe claudecode cell records this scenario by pointing `claude` at `tools/agent-onboarding/recording/mock-anthropic-5xx/main.go` via an Anthropic base-URL override (driver `tools/agent-onboarding/recording/record-turn-aborted-by-error.sh`). codex has NO equivalent: \n\n- The mock tooling (`tools/agent-onboarding/recording/mock-anthropic-5xx/main.go`, `tools/agent-onboarding/recording/mock-anthropic-429/main.go`, `tools/agent-onboarding/recording/record-turn-aborted-by-error.sh`) is Anthropic-API-specific and only the claudecode adapter can be aimed at it.\n- Neither the codex headless driver (`drive-codex.sh`: `codex exec --json --skip-git-repo-check \u003cprompt\u003e`) nor the interactive driver (`drive-codex-interactive.sh`) wires any `OPENAI_BASE_URL`/model override or any error-injection step. The interactive step grammar (send/slash/wait_turn/interrupt/keys/sleep/reset_session/fork/exit_clean/resume) has no error-injection primitive at all.\n- Inducing a REAL mid-turn provider error (genuine network drop / 5xx) is inherently non-deterministic and cannot become a committed, re-recordable fixture.\n- The one primitive that DOES emit codex's `turn_aborted` marker is `interrupt` (Escape) — but that is the USER-ESC cancel path, a deliberately distinct scenario (`user-esc-interrupt`). Using it here would record a user cancel masquerading as a provider error, proving the wrong thing.\n\nWiring an OpenAI-side mock or an error-injection step into the codex drivers is a developer/tooling task outside this cell's scope.\n\n### Blocker 2 — even if induced, the end state is unobservable (same gap as user-esc-interrupt)\n\n1. `grep -rni turn_aborted core/` returns nothing. The codex parser (`core/adapters/inbound/agents/codex/parser.go`, `case \"event_msg\"`) maps ONLY `task_complete` to `turn_done`; every other `event_msg` payload (including `turn_aborted`) is skipped. With no turn-done on abort, `IsAgentDone()` never fires, so no `working -\u003e ready` transition is produced.\n2. There is no working-state idle sweep. The PID-liveness sweep in `core/application/services/pid_manager.go` only TTL-cleans `StateReady` sessions or reaps PID-dead ones; a `working` session with a live REPL PID is never settled to `ready`. (The scenario-meanings entry assumes a sweep that does not exist post-PR #106.)\n3. Empirical proof is the sibling codex `interrupted-turn` recording (committed, `known_failing`, `2/5 phases`): its state sequence is presession ready -\u003e rollout ready -\u003e working -\u003e ~30s silence -\u003e process_exited, with no `working -\u003e ready` settle at the abort. An error-aborted turn would produce the identical stuck-working-until-exit shape.\n\n## Conclusion\n\nBlocker 1 alone forces applicable: false (no deterministic way to elicit the behavior with any recipe primitive). Blocker 2 means that even a hand-induced error would not yield the spec's observable settle. No recipe, no spec, no recording — frozen until BOTH a codex error-injection driver path exists AND the codex parser learns to map `turn_aborted` -\u003e `turn_done` (the same daemon change the `interrupted-turn`/`user-esc-interrupt` cells call for).\n\n## What would unblock it\n\n1. Add an OpenAI-side mock (parallel to mock-anthropic-5xx.go) plus a codex driver hook that aims `codex` at it via base-URL override, so a 5xx can be injected deterministically.\n2. Add a `turn_aborted` -\u003e `turn_done` mapping in the codex parser's `case \"event_msg\"` so `IsAgentDone()` fires on abort and the classifier emits `working -\u003e ready`.\n\nWith both in place, re-assess to yes/yes and proceed to recipe + record.",
+          "caveats": [
+            "No deterministic error-injection path exists for codex (mock tooling is Anthropic-only; codex drivers have no base-URL override or error step).",
+            "Same daemon gap as codex/user-esc-interrupt and codex/interrupted-turn: the parser skips turn_aborted, so the post-abort working-\u003eready settle is unobservable; there is no working-state idle sweep."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/codex/parser.go",
+              "note": "case \"event_msg\": only task_complete maps to turn_done; turn_aborted is skipped — no turn-done on abort."
+            },
+            {
+              "kind": "file",
+              "ref": "core/application/services/pid_manager.go",
+              "note": "PID-liveness sweep TTL-cleans only StateReady or PID-dead sessions; a live-PID working session is never settled to ready."
+            },
+            {
+              "kind": "file",
+              "ref": ".claude/skills/ir:onboard-agent/scripts/drive-codex.sh",
+              "note": "Headless codex driver: codex exec --json --skip-git-repo-check \u003cprompt\u003e; no base-URL override or error-injection hook."
+            },
+            {
+              "kind": "file",
+              "ref": ".claude/skills/ir:onboard-agent/scripts/drive-codex-interactive.sh",
+              "note": "Interactive step grammar lacks any error-injection primitive; only interrupt (Escape) yields turn_aborted, but that is the user-cancel path."
+            },
+            {
+              "kind": "file",
+              "ref": "tools/agent-onboarding/recording/record-turn-aborted-by-error.sh",
+              "note": "Anthropic-only error-record driver (mock-anthropic-5xx.go); no codex/OpenAI equivalent."
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/codex/scenarios/interrupted-turn/expected.jsonl",
+              "note": "Sibling known_failing cell (2/5): daemon does not detect turn_aborted; working-\u003eready after abort never fires."
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/codex/scenarios/user-esc-interrupt/assessment.json",
+              "note": "Sibling cell frozen applicable: n/a for the same turn_aborted parser gap."
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": false,
+          "notes": "No deterministic way to elicit a mid-turn provider error against codex with any recipe primitive. The claudecode cell injects a 5xx via tools/agent-onboarding/recording/mock-anthropic-5xx/main.go behind an Anthropic base-URL override (tools/agent-onboarding/recording/record-turn-aborted-by-error.sh); codex has no equivalent — the mock tooling is Anthropic-API-specific, and neither drive-codex.sh (headless `codex exec`) nor drive-codex-interactive.sh wires an OPENAI_BASE_URL override or any error-injection step. The only primitive that emits codex's turn_aborted marker is `interrupt` (Escape), which is the user-cancel path (the distinct user-esc-interrupt scenario), not a provider error. A real network/5xx error is non-deterministic and can't be a committed fixture. Independently, even a hand-induced abort would be UNOBSERVABLE today: the codex parser maps only task_complete→turn_done and skips turn_aborted (empty `grep turn_aborted core/`), and there is no working-state idle sweep (pid_manager TTL-cleans only ready/PID-dead sessions), so an aborted turn sticks in working until process_exited — identical to the committed codex/interrupted-turn cell (known_failing, 2/5) and the frozen codex/user-esc-interrupt cell. Unblocks when both (a) a codex/OpenAI error-injection driver path exists and (b) the codex parser maps turn_aborted→turn_done. See assessment.json."
+        }
+      }
+    },
+    "opencode": {
+      "recording_dir": "opencode/scenarios/turn-aborted-by-error",
+      "artifacts": {
+        "events": "opencode/scenarios/turn-aborted-by-error/events.jsonl",
+        "transcript": "opencode/scenarios/turn-aborted-by-error/transcript.jsonl",
+        "manifest": "opencode/scenarios/turn-aborted-by-error/manifest.json",
+        "golden": "opencode/scenarios/turn-aborted-by-error/transcript.jsonl.replay.json.golden"
+      },
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "pass_rate": "4/4 phases passed",
+        "agent_cli_version": "unknown",
+        "daemon_version": "0.4.7+ab9f697",
+        "confidence": 0.95,
+        "notes": "agent_supports: yes\ndaemon_capability: full\ndriver_capability: gap:error-export"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "turn-aborted-by-error",
+          "agent": "opencode",
+          "assessed_at": "2026-05-27T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.95,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: gap:error-export\n\nRoute: driver-gap (extend the driver's transcript export, then implement).\n\n## Scenario\n\nturn-aborted-by-error: the model call fails mid-turn (provider error / 5xx / timeout / context overflow / unloadable model); no normal turn-end signal is emitted. Primitive exercised: sweep/terminal-based stall detection \u2014 the daemon must resolve the session to `ready` after the failure. User-observable signal (scenario-meanings): state reaches `ready` after the failure and does NOT stick in `working`.\n\n## agent_supports: yes\n\nopencode 1.14.50 surfaces a turn that aborts by error. It does NOT write a `step-finish` part with `reason=\"error\"`; instead it records the failure on the PARENT MESSAGE row's `message.data.error` field. A prior live store audit (~/.local/share/opencode/opencode.db) found 39 such rows \u2014 APIError ('Unauthorized' / 'Model not found' / 'Failed to load model \u2026'), UnknownError ('Unexpected server error', context-overflow 'n_keep \u003e context length'), and MessageAbortedError ('Aborted') \u2014 against 0 step-finish reason=error parts. The feature (a turn can abort by provider/runtime error) demonstrably exists; the `requires: headless_mode` gate is satisfied (capabilities.json `headless_mode: true`).\n\n## daemon_capability: full (CHANGED from the prior `incapable` narrative)\n\nThe prior assessment's body declared `incapable` because the opencode watcher's `scanParts` was part-driven and never inspected `message.data.error` \u2014 so an error turn produced a user `text` part (\u2192 working), an assistant message with `error` set and NO `step-finish` part, hence no `turn_done`, and the session stuck in `working` until process exit.\n\nThat is NO LONGER TRUE in the current daemon. The watcher now consumes the message-level error as a terminal signal:\n\n- `isErrorMessage(msgData)` (watcher.go:450-465) returns true for a non-empty `error` string or `{name,message,\u2026}` object (fail-open on null/empty/parse error).\n- `scanParts` SELECTs `m.data as message_data` (watcher.go:483) and flips `hasTerminal = true` when EITHER `isTerminalPart(partData)` OR `isErrorMessage(msgData)` (watcher.go:528-530), setting `EventActivity.Terminal = hasTerminal` (watcher.go:550).\n- `session_detector_activity.go:221-228` short-circuits the debounce on `ev.Terminal`, records `KindDebounceTerminal`, and runs `processActivity` \u2192 the turn resolves working\u2192ready.\n- Unit-tested: `TestScanSessions_ErrorMessageTerminal` (watcher_test.go:632) inserts a message with `message.data.error` and a non-terminal text part, and asserts the emitted EventActivity carries `Terminal=true`. `TestIsErrorMessage` covers the string/object/null/false/zero/array shapes. Both pass against current code (`go test ./core/adapters/inbound/agents/opencode/`).\n\nSo, given a recording that carries the message-level error, the daemon AS IT EXISTS TODAY emits the terminal transition the spec requires. daemon_capability = full.\n\n## driver_capability: gap:error-export (the blocker)\n\nThe recording cannot reproduce the settle because the interactive driver's transcript export omits the one field the daemon keys on. Both export queries in scripts/drive-opencode-interactive.sh \u2014 the headless path (lines 411-427) and the live-TUI path (lines 250-266) \u2014 project ONLY `part` rows:\n\n    SELECT json_set(p.data, '$._role', json_extract(m.data,'$.role'),\n                            '$._cwd',  s.directory,\n                            '$._ts',   p.time_updated,\n                            '$._model',json_extract(m.data,'$.model.modelID'))\n    FROM part p JOIN message m ON p.message_id = m.id ...\n\nThey augment each `p.data` with the message ROLE and MODEL, but never carry `message.data.error`. The replay tool (core/cmd/replay/main.go:74) drives the fixture through `opencode.Parser.ParseLine`, which sees only part data \u2014 and `isErrorMessage` is a watcher-only function reading the raw `m.data` column, with no equivalent in the parser. Hence a recorded transcript for an error-aborted turn contains no terminal signal, and replay would leave the session in `working` even though a LIVE daemon settles it correctly.\n\nThis is a tooling gap, not an observability limit: the daemon is capable; the recording harness lacks a step/export primitive to carry the message-level error into the fixture. Named primitive: `error-export`. Tracked as #493.\n\nThe new live-TUI path (slash / reset_session under tmux) added since the prior assess does NOT change this: it uses the SAME parts-only export query. The driver's input mechanism is irrelevant to the gap.\n\n## Recordability\n\nNot recordable today (gap:error-export). It becomes recordable once the driver exports a carrier for `message.data.error` into the JSONL fixture \u2014 e.g. synthesize a terminal part (or a message-error row the replay path can consume) when the parent message carries a non-empty error \u2014 so the replay parser/watcher path can reproduce the working\u2192ready settle. A context-overflow prompt or an unloadable/oversized-model prompt is a deterministic elicitation that lands on `message.data.error` (verified previously: a bogus model id is rejected at config resolution BEFORE a session row exists, so use a context-overflow or unloadable-model trigger instead).\n\n## Unblocks when\n\nThe `extend-driver opencode error-export` work adds the message-error carrier to the transcript export (both headless and live paths) so the fixture reproduces the daemon's now-working settle. No daemon change is required.\n\n## UPDATE 2026-05-27 \u2014 gap:error-export SUPERSEDED; driver_capability now `ready`\n\nThe prior `gap:error-export` verdict assumed the only elicitation was a provider/runtime error recorded on `message.data.error` with NO step-finish part, which the parts-only transcript export could not carry. That is no longer the binding path. A CONTEXT-WINDOW OUTPUT OVERFLOW elicits a clean terminal `step-finish reason=length` part instead: load the local LM Studio model at n_ctx 22528 (just above the ~21.4k prompt opencode builds in run-cell.sh's NON-git staging cwd \u2014 opencode enumerates the directory tree without a git repo, ~1.1k output headroom) and prompt for a 12000-word no-tools essay; the output overflows mid-generation and opencode persists `step-finish reason=length`. Verified 3/3 reproducible live (opencode 1.14.50, gemma-4-e2b-it-uncensored). parser.go:179 maps reason=length \u2192 turn_done and watcher.go:435 isTerminalPart accepts reason=length, so BOTH the live daemon and the replay fixture observe the working\u2192ready settle \u2014 the step-finish part rides the existing parts-only export with no `_error` carrier. The driver's unified oc_turn_total counter (reason IN stop/interrupted/length/error/content-filter) also detects the boundary so wait_turn works. Hence agent_supports:yes, daemon_capability:full, driver_capability:ready \u2014 RECORD via the headless send\u2192wait_turn\u2192sleep recipe. n_ctx MUST be ABOVE the system prompt (a sub-prompt n_ctx (e.g. 4096/12288/15360 against the non-git ~21.4k prompt) instead errors at PROMPT processing \u2192 message.data.error with no step-finish, the harder path).",
+          "caveats": [
+            "Trigger requires the local model loaded at n_ctx 22528 (out-of-band via `lms load \u2026 --context-length 22528`); restore n_ctx 32768 after recording so the other opencode cells work. The 22528 value is sized for run-cell.sh's NON-git staging cwd (~21.4k prompt); a git-init'd cwd builds a ~14.4k prompt and would need ~15360 instead. n_ctx BELOW the prompt errors at prompt processing (message.data.error, no step-finish, and the fast self-exit races the settle) \u2014 keep it ABOVE.",
+            "Driver export gap (#493): the transcript export is parts-only (drive-opencode-interactive.sh:411-427 and :250-266); it carries message role+model but not message.data.error, the field the daemon keys on. Until the export adds a message-error carrier, a replay fixture cannot reproduce the working\u2192ready settle even though the live daemon does it.",
+            "Zero-part errors are the remaining half of #493: the watcher's terminal-detection is part-driven (the part\u2194message JOIN must have a part row to carry msgData), so a turn that errors before emitting ANY part is not surfaced (watcher.go:521-527). The common error shapes (provider error / context overflow / unloadable model) all emit at least a user text part first, so this is a narrow caveat, not the primary blocker.",
+            "Probed on opencode 1.14.50 with the default local model (LM Studio, gemma-4-e2b-it-uncensored, loaded_context_length 70419)."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/opencode/watcher.go",
+              "note": "isErrorMessage (450-465) reads message.data.error as a terminal signal; scanParts SELECTs m.data as message_data (483) and sets hasTerminal via isTerminalPart||isErrorMessage (528-530), emitting EventActivity.Terminal (550). This is the code that makes daemon_capability=full."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/opencode/watcher_test.go",
+              "note": "TestScanSessions_ErrorMessageTerminal (632) asserts an errored turn (message.data.error, no step-finish part) yields EventActivity.Terminal=true; TestIsErrorMessage (601-625) covers the error JSON shapes. Both pass against current code."
+            },
+            {
+              "kind": "file",
+              "ref": "core/application/services/session_detector_activity.go",
+              "note": "Line 221-228: ev.Terminal short-circuits the debounce, records KindDebounceTerminal, and runs processActivity \u2014 the working\u2192ready settle the spec requires."
+            },
+            {
+              "kind": "file",
+              "ref": ".claude/skills/ir:onboard-agent/scripts/drive-opencode-interactive.sh",
+              "note": "Transcript export (headless 411-427, live-TUI 250-266) is parts-only: json_set(p.data, _role/_cwd/_ts/_model). It never projects message.data.error \u2014 the gap:error-export blocker. core/cmd/replay/main.go:74 drives the fixture through opencode.Parser.ParseLine, which only sees part data."
+            },
+            {
+              "kind": "command",
+              "ref": "sqlite3 ~/.local/share/opencode/opencode.db",
+              "note": "Prior live store audit: step-finish reasons = stop(102), tool-calls(165), error(0). message.data.error rows = 39 (APIError/UnknownError/MessageAbortedError incl. context-overflow n_keep\u003econtext length). Errors persist at the message level, never as a step-finish part \u2014 so the daemon's message-level path (not the step-finish path) is what observes this scenario."
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": true,
+          "preconditions": [
+            "opencode CLI on PATH (1.14.50) and authenticated against its default model. The cell uses opencode's configured default (lmstudio/gemma-4-e2b-it-uncensored, a local LM Studio model) so no remote key is needed.",
+            "OPENCODE-SPECIFIC TRIGGER (deterministic, no mock/proxy/remote provider): the local LM Studio model MUST be loaded at n_ctx 22528 BEFORE recording — just above the ~21.4k prompt opencode builds for the headless run in run-cell.sh's NON-git staging cwd (opencode enumerates the directory tree when there is no git repo, inflating the system prompt to ~21.4k; a git-init'd cwd would instead be ~14.4k — the harness cwd is NOT a git repo, so size for the non-git case). 22528 leaves ~1.1k OUTPUT headroom, so a 12000-word essay request overflows the window mid-generation and opencode persists a terminal `step-finish` part with reason=\"length\". Load it out-of-band: `lms load gemma-4-e2b-it-uncensored --context-length 22528 --identifier gemma-4-e2b-it-uncensored -y` (ensure NO second gemma instance at a different context is loaded, or LM Studio may route to it). Verified reproducible in the exact non-git staging-depth cwd (2026-05-27, opencode 1.14.50: input 21426 + output 1102 = 22528 → reason=length). RESTORE n_ctx 32768 after recording so the other opencode cells (which need full context) work.",
+            "irrlichd is recording with the opencode SQLite watcher enabled — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record."
+          ],
+          "setup": [
+            "The interactive driver (drive-opencode-interactive.sh) creates a fresh per-run cwd under \u003cstaging\u003e/cwd/ and, because the script carries a `{type:live}` marker, takes the LONG-LIVED TUI path: it launches ONE persistent `opencode` TUI under tmux, types the prompt, and keeps that process alive across the turn. This is REQUIRED here (not the headless `opencode run` path): a headless run self-EXITS the instant the turn ends, so even though it writes the terminal step-finish reason=length, the process_exited fires before the daemon's SQLite poll observes the working→ready settle — the recording then shows only ready→working then process_exited (the turn appears to stick in working). The persistent TUI outlives the settle window: oc_wait_turn detects the length turn via the unified oc_turn_total counter (reason IN stop/interrupted/length/error/content-filter), the trailing sleep lets the daemon record working→ready, and only THEN does the driver tear the tmux session down (one process_exited).",
+            "OpenCode session state lives in its SQLite store (~/.local/share/opencode/opencode.db), not per-cwd transcript files; the daemon's ProcessOwnedStore source polls the session table and observes the UUID-keyed ses_… session for this cwd. The driver discovers that session id from SQLite after the run returns.",
+            "WHY reason=length (not a provider error or message.data.error): a context-OUTPUT overflow makes opencode emit a clean terminal `step-finish reason=length` part — parser.go maps it to turn_done (parser.go:179) and the watcher's isTerminalPart accepts it (watcher.go:435), so the parts-only transcript export already carries the terminal signal end-to-end (daemon AND replay) with no `_error` carrier needed. CRITICAL: n_ctx must be ABOVE the prompt size (22528 \u003e ~21.4k non-git prompt). If n_ctx is BELOW the prompt (e.g. 15360 against the non-git ~21.4k prompt), opencode errors at PROMPT processing → message.data.error ('n_keep \u003e context length') with only a bare step-start and NO step-finish; the headless `opencode run` then self-exits so fast the daemon poll observes ready→working but process_exited BEFORE the working→ready settle — the turn appears to stick in working. The reason=length path keeps the process streaming long enough for the daemon to observe the settle.",
+            "The prompt forbids tools and demands immediate continuous prose: the small local model will otherwise call the `task` subagent tool (whose child runs in its own smaller context and never overflows the parent) or stop naturally well under the headroom. Forbidding tools + 'begin writing immediately' keeps generation in a single streaming step that overflows to reason=length."
+          ],
+          "script": [
+            {
+              "type": "live"
+            },
+            {
+              "type": "send",
+              "text": "Write an extremely long, exhaustive 12000-word essay about the complete history of the Roman Empire. Do NOT use any tools. Do not stop, do not summarize. Begin writing the prose immediately and keep writing paragraph after paragraph until you reach 12000 words."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 8
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a transcript_new (or session_created) for the ses_… session, born ready, within ~2s of agent launch (a transient proc-\u003cPID\u003e pre-session may also appear; the turn arc and pid_discovered land on the ses_… session)",
+            "events.jsonl contains a pid_discovered event bound to the ses_… session_id",
+            "events.jsonl shows a state_transition→working on the ses_… session_id when the prompt is sent (the single assistant turn begins streaming)",
+            "events.jsonl shows a state_transition→ready on the SAME ses_… session_id after the turn aborts: the model output overflows n_ctx and opencode persists a terminal step-finish reason=length → turn_done closes the turn → working→ready; the session does NOT stick in working (recovery is event-driven via the terminal part, not a sweep)",
+            "events.jsonl never contains a state_transition to waiting for the session (the aborted turn never reaches a tool/permission gate)",
+            "the session's final live state is ready"
+          ],
+          "settings": {},
+          "timeout_seconds": 300
+        }
+      }
+    },
+    "pi": {
+      "recording_dir": "pi/scenarios/turn-aborted-by-error",
+      "artifacts": {
+        "events": "pi/scenarios/turn-aborted-by-error/events.jsonl",
+        "transcript": "pi/scenarios/turn-aborted-by-error/transcript.jsonl",
+        "manifest": "pi/scenarios/turn-aborted-by-error/manifest.json",
+        "golden": "pi/scenarios/turn-aborted-by-error/transcript.jsonl.replay.json.golden"
+      },
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "pass_rate": "3/5 phases passed",
+        "agent_cli_version": "0.70.0",
+        "daemon_version": "0.4.7+9d9c471",
+        "confidence": 0.82,
+        "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "turn-aborted-by-error",
+          "agent": "pi",
+          "assessed_at": "2026-05-25T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.82,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\n### A deterministic, non-faked error trigger exists in pi 0.70.0\n\nThe reassessment worried that pi's aggressive auto-retry masks transient errors, making a deterministic error-abort hard to elicit. That is true ONLY for retryable errors. pi's retry gate is a hard-coded regex over `errorMessage` in `_isRetryableError` (dist/core/agent-session.js): it retries ONLY `overloaded|provider returned error|rate limit|429|5xx|service unavailable|network/connection error|fetch failed|timeout|terminated|retry delay`-class messages, up to `retry.maxRetries` (default 3). Any error whose message does NOT match that regex — e.g. an invalid/unsupported model id — is NOT retried: `_isRetryableError` returns false, the `agent_end` handler skips `_handleRetryableError`, and the turn terminates with a persisted assistant message carrying `stopReason: \"error\"` and the provider's `errorMessage`.\n\nThe concrete deterministic trigger validated by probe: `pi --print -p \u003cprompt\u003e --model \u003cprovider\u003e/\u003cbogus-model-id\u003e` against the user's configured provider (openai-codex). The provider returns `{\"detail\":\"The '\u003cbogus\u003e' model is not supported ...\"}`, pi prints a `Warning: Model not found` line, makes one model call, gets the unsupported-model error (no regex match → no retry), writes the error assistant message, and exits non-zero. This is reproducible, needs no mock/proxy and no faked transcript line, and is distinct from:\n- **user-esc-interrupt** — ESC yields `stopReason: \"aborted\"` (user-cancel), a separate committed scenario.\n- **self-correction / failed-bash-tool** — a failed tool result is handled INSIDE a normal `stopReason: stop` turn; not a turn abort.\n\n### The error message is persisted to the transcript BEFORE the retry check\n\nIn `_handleAgentEvent`, the `message_end` branch calls `this.sessionManager.appendMessage(event.message)` for any assistant message — including a `stopReason: error` one — and only THEN (on the later `agent_end` event) does the retry gate run. So the error assistant entry lands in the JSONL rollout transcript regardless of whether a retry would have fired. The probe transcript is exactly: `session` header → `model_change` → `thinking_level_change` → `user` message → `assistant {stopReason:\"error\"}` (5 lines), with no open tool call.\n\n### irrlicht observes the abort via the assistant-epilogue (turn_done-fallback) path — NOT a sweep\n\nThe canonical primitive for this scenario is \"sweep-based stall detection,\" and there is no working-state idle sweep in the daemon today (PR #106 removed the stale-tool timer; pid_manager TTL-cleans only ready/PID-dead sessions). pi nonetheless settles the aborted turn to `ready` WITHOUT any sweep, by the same epilogue mechanism the claudecode row uses (Bucket A): the pi parser (core/adapters/inbound/agents/pi/parser.go) maps `stopReason == \"stop\"` → `turn_done` and EVERY other stopReason (including `error`) → `EventType: \"assistant\"`. `SessionMetrics.IsAgentDone()` (core/domain/session/session.go) has an `assistant`-fallback: with no open tool call and no live background process, `case \"assistant\": return true`. So the error assistant message drives `IsAgentDone() = true`, and `ClassifyState` rule 2b transitions working → ready (\"agent finished turn → ready\"). The daemon-observable arc is therefore identical to basic-turn: ready → working → ready, one session, a single process_exited at headless exit, final state ready — the turn does NOT stick in `working`.\n\nThis is why pi's verdict differs from codex's frozen `no`: codex relies on the `turn_done` primary path only (no assistant fallback — it would flicker), so an aborted codex turn used to stick in working; pi's assistant-fallback makes the error epilogue observable today.\n\n### Capability anchor\n\nPrimitive exercised = sweep-based stall detection. pi has no sweep; it reaches the same user-observable end-state (no stick in working; resolves to ready) via the deterministic error-epilogue path, so the user-observable signal the scenario asserts (\"state reaches ready, does not stick in working\") holds.\n\n## Mode\n\nHeadless (`requires: headless_mode`). Driven by `pi --print -p` plus a bogus `--model` injected through a new `IRRLICHT_PI_MODEL` env passthrough in drive-pi.sh (mirrors the existing `IRRLICHT_AIDER_MODEL` convention in drive-aider.sh).",
+          "caveats": [
+            "Recovery is event-driven via the error assistant epilogue, NOT via an inactivity sweep — the daemon has no working-state sweep today (PR #106). The scenario's 'sweep' primitive is satisfied at the user-observable level (no stick in working; resolves to ready), not by an actual sweep firing.",
+            "Only NON-retryable errors abort deterministically. A transient/5xx-class error would be silently retried up to retry.maxRetries (default 3) and is non-deterministic — unsuitable as a committed fixture. The bogus-model id is chosen precisely because its message does not match pi's retry regex.",
+            "The error epilogue is parser-indistinguishable from an ESC-cancelled turn's aborted epilogue at the daemon level (both → assistant → ready); the scenarios differ by trigger, not by the observable daemon arc."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/pi/parser.go",
+              "note": "stopReason=='stop' → turn_done; all other stopReasons (incl. error) → EventType 'assistant'"
+            },
+            {
+              "kind": "file",
+              "ref": "core/domain/session/session.go",
+              "note": "IsAgentDone() assistant-fallback: case \"assistant\": return true (with no open tool call / live bg process)"
+            },
+            {
+              "kind": "file",
+              "ref": "core/application/services/state_classifier.go",
+              "note": "ClassifyState rule 2b: IsAgentDone \u0026\u0026 working → ready ('agent finished turn → ready')"
+            },
+            {
+              "kind": "file",
+              "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@mariozechner/pi-coding-agent/dist/core/agent-session.js",
+              "note": "_isRetryableError regex (only transient/5xx/network/rate-limit/timeout retried); message_end appendMessage persists the stopReason:error assistant BEFORE the agent_end retry gate"
+            },
+            {
+              "kind": "file",
+              "ref": ".claude/skills/ir:onboard-agent/scripts/drive-aider.sh",
+              "note": "IRRLICHT_AIDER_MODEL → aider --model: the existing env-passthrough convention mirrored as IRRLICHT_PI_MODEL in drive-pi.sh"
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/codex/parser.go",
+              "note": "Contrast: codex maps task_complete AND turn_aborted → turn_done, no assistant fallback — explains the divergent codex verdict in scenarios.json"
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": true,
+          "preconditions": [
+            "pi CLI on PATH and authenticated for the user's default provider (the cell uses that provider with an UNSUPPORTED model id, so auth must already work for normal pi recordings)",
+            "irrlichd recording — run-cell.sh in isolated mode or --attach against a running daemon started with --record",
+            "PI-SPECIFIC: the abort is elicited DETERMINISTICALLY and WITHOUT a mock/proxy/faked transcript line. The headless driver launches `pi --print -p \u003cprompt\u003e --model \u003cbogus-model\u003e`; the provider returns an 'unsupported model' error whose message does NOT match pi's retry regex (_isRetryableError in dist/core/agent-session.js, which retries only overloaded/5xx/rate-limit/network/timeout-class messages up to retry.maxRetries). pi therefore does NOT retry, persists a single assistant message with stopReason='error' (appendMessage fires on message_end, BEFORE the agent_end retry gate), and exits non-zero. Do NOT use a 5xx/rate-limit class trigger — pi would silently retry it and the abort would be non-deterministic."
+          ],
+          "setup": [
+            "Model override flows through the cell's settings.model: run-cell.sh writes the settings blob to a path, and drive-pi.sh reads `.model` from it and passes `--model \u003cbogus\u003e` to pi (mirrors drive-aider.sh's IRRLICHT_AIDER_MODEL convention; IRRLICHT_PI_MODEL is the env escape hatch). Fully reproducible from this committed recipe — no out-of-band env needed.",
+            "pi writes one JSONL rollout file per invocation on launch (FilesUnderRoot, non-lazy), so the daemon's first scanner tick keys the real UUID transcript — a SINGLE rollout session, no separately-matchable proc-\u003cPID\u003e pre-session phase (same shape as pi/basic-turn)."
+          ],
+          "prompt": "Reply with exactly the word: ok",
+          "verify": [
+            "events.jsonl shows a session appear in ready within 1s of launch (transcript_new on the rollout session)",
+            "events.jsonl shows a state_transition to working on the rollout session when the user prompt lands",
+            "events.jsonl shows a pid_discovered for the rollout session",
+            "events.jsonl shows a state_transition to ready on the rollout session carried by the ERROR epilogue: pi's parser maps stopReason='error' to EventType='assistant', and IsAgentDone()'s assistant-fallback (no open tool call) flips working→ready via classifier rule 2b — state does NOT stick in working (there is no working-state sweep; recovery is event-driven, same as the claudecode row)",
+            "events.jsonl never contains a state_transition to waiting",
+            "events.jsonl contains exactly one process_exited on the rollout session (pi exits non-zero after the aborted turn); the live state immediately before teardown is ready",
+            "final session state is ready"
+          ],
+          "settings": {
+            "model": "openai-codex/irrlicht-turn-abort-unsupported-model"
+          },
+          "timeout_seconds": 90
+        }
+      }
+    }
+  }
+}

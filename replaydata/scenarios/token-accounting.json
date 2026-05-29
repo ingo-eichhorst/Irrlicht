@@ -1,0 +1,671 @@
+{
+  "id": "5.1",
+  "name": "token-accounting",
+  "section": "Metrics",
+  "feature": "Token accounting",
+  "description": "Three back-to-back no-op turns ('Reply with the word: ok') in a single claudecode session. Exercises the per-turn UsageBreakdown extraction (input/output/cache tokens from raw.message.usage) and the monotonic accumulation into SessionMetrics.TotalTokens across multiple requestId boundaries. The state arc is unremarkable (three ready→working→ready cycles); the assertion lives in events.jsonl payload — each turn boundary emits a PerTurnContribution and TotalTokens is non-decreasing turn-over-turn. Token \u0026 cost extraction is already covered by basic-turn for a single turn; this recipe locks down the multi-turn accumulator.",
+  "requires": [
+    "headless_mode"
+  ],
+  "verify": {
+    "min_turns": 3,
+    "final_state": "ready",
+    "transitions_topology": [
+      "ready",
+      "working",
+      "ready",
+      "working",
+      "ready",
+      "working",
+      "ready"
+    ],
+    "tool_calls_max": 0
+  },
+  "agents": {
+    "aider": {
+      "recording_dir": "aider/scenarios/token-accounting",
+      "artifacts": {
+        "events": "aider/scenarios/token-accounting/events.jsonl",
+        "transcript_md": "aider/scenarios/token-accounting/transcript.md",
+        "manifest": "aider/scenarios/token-accounting/manifest.json"
+      },
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "incapable",
+        "driver_capability": "ready",
+        "pass_rate": "7/7 phases passed",
+        "agent_cli_version": "0.86.2",
+        "daemon_version": "0.4.7+15fbf14",
+        "confidence": 0.85,
+        "notes": "agent_supports: yes\ndaemon_capability: incapable\ndriver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "token-accounting",
+          "agent": "aider",
+          "assessed_at": "2026-05-25T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "incapable",
+          "driver_capability": "ready",
+          "confidence": 0.85,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: incapable\ndriver_capability: ready\n\n(#476 re-derivation of the prior `irrlicht_observes: partial`. The old `partial` conflated a fully-observable half with a structurally-unobservable half; splitting onto the two axes: the blocking fact is a spec-required signal that leaves NO trace in the watched Source — `daemon_capability: incapable`, NOT `bug` — while the driver has every step the recipe needs — `driver_capability: ready`.)\n\n## Reasoning\n\n### agent_supports: yes\n\nThe token-accounting primitive is *token reporting*: per-turn token counts (input, output, cache read/write) in a field the parser can extract, requiring `headless_mode` (`replaydata/agents/aider/capabilities.json` → `headless_mode: true`). Aider satisfies both halves of the scenario at the agent layer:\n\n1. **Per-turn counts that accumulate.** After every model call aider prints `Tokens: \u003csent\u003e sent, \u003creceived\u003e received.` and persists a `\u003e Tokens: …` blockquote to `.aider.chat.history.md` in the project CWD (https://aider.chat/docs/faq.html). Three back-to-back one-message turns yield three such lines, each carrying that call's real usage — exactly the multi-turn accumulator the scenario locks down.\n2. **Cache buckets exist at the agent layer.** With `--cache-prompts` (and `--no-stream`, since provider APIs don't surface cache stats while streaming — https://aider.chat/docs/usage/caching.html), aider additionally reports cache segments. `calculate_and_show_tokens_and_cost` in `aider/coders/base_coder.py` builds the report conditionally: `\"Tokens: {sent} sent\"`, then `\", {cache_write} cache write\"` if `cache_write_tokens`, then `\", {cache_hit} cache hit\"` if `cache_hit_tokens`, then `\", {received} received.\"` — so a fully-cached turn shows e.g. `Tokens: 21k sent, 19k cache hit, 964 received` (https://github.com/Aider-AI/aider/blob/main/aider/coders/base_coder.py).\n\n### daemon_capability: incapable\n\nThe aider adapter is `FilesUnderCWD{Filename: \".aider.chat.history.md\", Parser: RawLineParser}` (`core/adapters/inbound/agents/aider/agent.go`). irrlicht observes only what lands in that markdown history. Judging the named User-observable signals against the parser as it exists today splits cleanly into an observable half and a blind half — and the blind half is one of the scenario's own User-observable signals, with no trace in the Source. That is `incapable` (architecture: no trace), not `bug` (which would require a trace the daemon mis-handles).\n\n**Observable half — the multi-turn accumulator (the scenario's primary assertion):** `TotalTokens \u003e 0` after turn 1, non-decreasing after turn 2 is fully met. Each `\u003e Tokens:` line matches `tokensRE` and routes through `closeModelCall` (`parser.go`), emitting an `assistant_message` carrying `PerTurnContribution{Usage:{Input:sent, Output:received}}` and `TokenSnapshot{Input, Output, Total: sent+received}`. The cumulative accumulator in `core/pkg/tailer/tailer_metrics.go` sums per-turn contributions, so `TotalTokens` rises monotonically across turns. `parser_test.go` (`TestParser_MultipleTokensLines`, `TestParser_MultiTurn_EmitsAssistantMessagePerTurn`) pins one `assistant_message` per `\u003e Tokens:` line and monotonic accumulation across consecutive turns. The recorded cell's transcript carries the two `\u003e Tokens: 2.5k sent, 1 received. Cost: $…` lines that drive this. (Note: per `scenarios.json`, this accumulator is observable in the parser's events but NOT expressible in the `expected.jsonl` phase DSL — it's covered out-of-band by those parser unit tests; the recording asserts only the lifecycle arc it rides on.)\n\n**Blind half — the cache distinction (`CacheReadTokens \u003e 0`; fresh input = 0 for a fully-cached turn) — NO TRACE in the Source:** Two independent walls, the first of which is decisive for `incapable`:\n\n  1. **Transport: no trace.** Aider's cache-bucket report is emitted via `self.io.tool_output(self.usage_report)` in `show_usage_report` — terminal only; it is never passed to `append_chat_history`. Every `\u003e Tokens:` line that lands in `.aider.chat.history.md` is the bare `N sent, M received[. Cost: …]` form. Empirically, all 11 distinct `\u003e Tokens:` lines across irrlicht's own recorded aider transcripts (incl. this cell's two) carry zero `cache hit` / `cache write` segments. Because the cache signal leaves no trace in the watched Source, no `FilesUnderCWD` watch and no parser can ever emit it — the `daemon_capability: incapable` definition exactly (\"the behavior leaves no trace in the Source\").\n  2. **Parser: would-also-be-dropped.** Even if a cache segment did reach the markdown, `tokensRE` (`^\u003e\\s*Tokens:\\s*([\\d.]+\\s*[kKmM]?)\\s*sent,\\s*([\\d.]+\\s*[kKmM]?)\\s*received(.*)$`, `parser.go:58`) captures only `sent`/`received`; cache text falls into the unused `(.*)$` rest group, which `closeModelCall` scans only for a `$… message` cost suffix. `UsageBreakdown.CacheRead`/`CacheCreation` are never populated, so `metrics.CacheReadTokens` stays 0. This is a second-order observation, not the verdict driver — the trace already doesn't exist (wall 1), so the cell is `incapable` regardless. (`parser.go` carries the `CacheRead`/`CacheCreation` fields, ~lines 223-237; the aider parser leaves them zero.)\n\nThe scenario's core multi-turn accumulator is observed accurately; the cache-bucket sub-assertion — itself a named User-observable signal — is structurally unobservable through aider's file-watching transport. Routing on the blocking axis: a spec-required signal with no trace in the Source → `daemon_capability: incapable`.\n\n### driver_capability: ready\n\nThe recorded recipe needs only `send` + `wait_turn` + `sleep`, all implemented by `scripts/drive-aider-interactive.sh` (tmux REPL driver; `wait_turn` blocks on a new `\u003e Tokens:` line; keeps one aider session alive across all send/wait_turn cycles). No gapped primitive (`restart`/`reset_session`/`resume`/`keys`/`sigkill`/…) is required for token-accounting — `driver_capability: ready`.\n\n## Routing note\n\nWith `daemon_capability: incapable`, the cell routes **frozen** — no recording could ever prove the cache distinction. In practice the maintainer has recorded the OBSERVABLE half (multi-turn accumulator) and explicitly carved the cache sub-assertion out of `verify` (`scenarios.json` → \"NO cache-bucket assertion\"); that recording documents what IS observable, while this assessment documents that the spec's cache signal is fundamentally unobservable for aider.\n\n## Matrix\n\nRefines the coverage cell (`agent-scenarios-coverage.json` → aider/token-accounting), which currently reads `daemon_capability: unknown`, `driver_capability: ready`, \"regex-parsed '\u003e Tokens: N sent, M received'; no cache-bucket distinction\". This assessment resolves `unknown` → `incapable` (cache signal has no trace in the Source); `driver_capability: ready` unchanged; `agent_supports: yes` unchanged.\n\nPrimitive → capability key: the primitive is *token reporting*; the matching key in `replaydata/agents/aider/capabilities.json` is `cost_tracking: false`, which is consistent — aider carries sent/received token counts but no per-bucket cache accounting reaching the transcript.",
+          "caveats": [
+            "feature-invisible-but-spec-compliant: aider's cache-bucket usage report (`Tokens: … cache write … cache hit …`) is written via io.tool_output to the terminal only — never appended to .aider.chat.history.md — so irrlicht's file-watching transport never sees it. The multi-turn token accumulator IS fully observed; only the cache distinction is unobservable.",
+            "Even if a cache segment reached the markdown, the parser's tokensRE captures only sent/received; closeModelCall never sets UsageBreakdown.CacheRead/CacheCreation, so CacheReadTokens stays 0. Closing this would need BOTH a transcript-level cache line AND a regex/parser change — but the transport gap (no trace) is the binding one.",
+            "aider's cache-hit tokens are reported separately from `sent` (sent stays non-zero on a cached turn), so the scenario's 'fresh input tokens = 0 for a fully-cached turn' assertion does not map onto aider's reporting shape even at the agent layer.",
+            "The token-accumulation claim (TotalTokens \u003e 0 / non-decreasing) is NOT expressible in the expected.jsonl phase DSL; it is covered out-of-band by parser_test.go (TestParser_MultipleTokensLines, TestParser_MultiTurn_EmitsAssistantMessagePerTurn). The recording asserts only the two-turn lifecycle arc the accounting rides on."
+          ],
+          "sources": [
+            {
+              "kind": "url",
+              "ref": "https://aider.chat/docs/usage/caching.html",
+              "note": "--cache-prompts enables provider prompt caching; cache statistics/costs unavailable while streaming, so --no-stream is required to surface them"
+            },
+            {
+              "kind": "url",
+              "ref": "https://github.com/Aider-AI/aider/blob/main/aider/coders/base_coder.py",
+              "note": "calculate_and_show_tokens_and_cost builds 'Tokens: {sent} sent[, {cache_write} cache write][, {cache_hit} cache hit], {received} received.'; show_usage_report emits it via io.tool_output (terminal) — NOT append_chat_history. Proves the cache report leaves no trace in the transcript (daemon_capability: incapable)."
+            },
+            {
+              "kind": "url",
+              "ref": "https://aider.chat/docs/faq.html",
+              "note": "aider writes per-project chat history to .aider.chat.history.md including the `\u003e Tokens:` blockquote lines (the observable multi-turn accumulator)"
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/aider/agent.go",
+              "note": "Source = FilesUnderCWD{.aider.chat.history.md, RawLineParser} — irrlicht observes only what lands in the markdown history, not terminal output; grounds the no-trace / daemon_capability: incapable verdict for the cache signal"
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/aider/parser.go",
+              "note": "tokensRE (line 58) captures sent/received only (cache text falls in the unused rest group); closeModelCall sets UsageBreakdown.Input/Output + TokenSnapshot{Input,Output,Total} but never CacheRead/CacheCreation; one assistant_message per `\u003e Tokens:`. Even with a trace the parser would drop the cache buckets."
+            },
+            {
+              "kind": "file",
+              "ref": "core/pkg/tailer/tailer_metrics.go",
+              "note": "accumulates per-turn contributions into cumulative TotalTokens (monotonic across turns — the observable half is full); CumCacheReadTokens sourced from UsageBreakdown.CacheRead, which aider never populates → stays 0"
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/aider/parser_test.go",
+              "note": "TestParser_MultipleTokensLines / TestParser_MultiTurn_EmitsAssistantMessagePerTurn pin one assistant_message per `\u003e Tokens:` line and monotonic accumulation across turns; every fixture uses the bare `N sent, M received.` form — no cache segment"
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/aider/scenarios/token-accounting/transcript.md",
+              "note": "recorded transcript carries two `\u003e Tokens: 2.5k sent, 1 received. Cost: $…` lines (no cache segment) — empirical confirmation the cache report never reaches .aider.chat.history.md; together with the other 9 distinct recorded aider `\u003e Tokens:` lines, zero carry a cache hit/write segment"
+            },
+            {
+              "kind": "file",
+              "ref": ".claude/skills/ir:onboard-agent/scripts/drive-aider-interactive.sh",
+              "note": "tmux REPL driver implements send + wait_turn + sleep (wait_turn blocks on a new `\u003e Tokens:` line); the token-accounting recipe needs only these — no gapped primitive → driver_capability: ready"
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/aider/capabilities.json",
+              "note": "headless_mode: true (primitive's required capability); cost_tracking: false — token counts present, no per-bucket cache accounting reaches the transcript"
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": true,
+          "preconditions": [
+            "aider CLI on PATH and authenticated against a model out-of-band (IRRLICHT_AIDER_MODEL plus the matching provider key/endpoint — e.g. a local LM Studio / OpenAI-compatible server). Headless aider with no reachable provider hangs ~5min on the model-auth/OAuth prompt; the live REPL needs a model that actually answers each prompt.",
+            "tmux available — the interactive driver runs aider in a tmux REPL so it can send two prompts to one long-lived session",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+            "OBSERVES:PARTIAL scope_note — this cell proves only the OBSERVABLE half of token-accounting: the multi-turn TotalTokens accumulator (TotalTokens \u003e 0 after turn 1, non-decreasing after turn 2). The cache-bucket distinction (CacheReadTokens \u003e 0; fresh input = 0 on a fully-cached turn) is UNOBSERVABLE for aider and is deliberately NOT asserted: aider's `Tokens: … cache write … cache hit …` report goes to the terminal via io.tool_output, never to .aider.chat.history.md, and the parser's tokensRE captures only sent/received — so CacheRead/CacheCreation stay 0. See replaydata/agents/aider/scenarios/token-accounting/assessment.json."
+          ],
+          "setup": [
+            "The interactive driver (drive-aider-interactive.sh) git-inits a fresh per-run cwd under \u003cstaging\u003e/cwd/, launches `aider --no-auto-commits --yes-always --no-gitignore` (plus --model if IRRLICHT_AIDER_MODEL is set) inside a tmux session, and waits for the `\u003e Repo-map:` banner line in the transcript before sending the first prompt",
+            "aider's transcript .aider.chat.history.md is LAZY (FilesUnderCWD): it materializes only once the first user input lands, so the live REPL is observable from launch as a transient proc-\u003cPID\u003e pre-session born ready (the process scanner) until the per-cwd transcript appears",
+            "Each send bumps the turn counter; wait_turn blocks until a new `\u003e Tokens:` line appears (signals aider finished one model call and wrote the per-turn token snapshot). aider has NO turn-end transcript marker — end-of-turn is synthesized by IdleFlush after 1.5s quiet, surfaced as working→ready behind the daemon's 5s SessionDetector poll (~5s effective latency), which is why the inter-turn sleep is ≥12s and the trailing sleep ≥10s — gpt-5-nano answers fast enough that a shorter gap risks the next prompt re-entering working before IdleFlush fires (turn coalescing), losing the per-turn reset",
+            "Two turns give exactly one accumulation boundary (T1→T2) to witness the non-decreasing TotalTokens invariant — the minimum that exercises cross-turn accumulation. After the second wait_turn + trailing sleep the driver kills the tmux session once — aider exits and the daemon emits a single process_exited for the session",
+            "No special model or context flags beyond IRRLICHT_AIDER_MODEL — the assertion is about token accumulation, not which model produced the tokens"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 12
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 10
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a presession (proc-\u003cPID\u003e) event in ready within ~2s of REPL launch (aider's transcript is lazy, so the pre-session is the launch-time observable)",
+            "events.jsonl contains a pid_discovered event bound to the live aider session_id",
+            "events.jsonl contains two state_transition→working / →ready arcs on the SAME session_id, one per prompt — the per-turn working→ready flip is synthesized by IdleFlush and must be observed before the next prompt re-enters working (this is why the inter-turn sleep is ≥12s, covering the ~5s effective latency with headroom for gpt-5-nano's fast replies)",
+            "events.jsonl carries a PerTurnContribution / UsageBreakdown for each turn from its `\u003e Tokens: N sent, M received.` snapshot; input + output tokens \u003e 0 on each turn (the aider parser routes each `\u003e Tokens:` line through closeModelCall → assistant_message with TokenSnapshot{Input:sent,Output:received})",
+            "SessionMetrics.TotalTokens after turn 1 \u003e 0",
+            "SessionMetrics.TotalTokens after turn 2 ≥ TotalTokens after turn 1 (monotonic accumulation across the one T1→T2 boundary)",
+            "the session's final live state is ready before the driver tears the REPL down",
+            "events.jsonl contains exactly one process_exited on the session at REPL teardown (one long-lived session, not two exits)",
+            "no state_transition to waiting appears for the session at any point",
+            "NO cache-bucket assertion — CacheReadTokens stays 0 for aider (the cache report is terminal-only, never in .aider.chat.history.md, and tokensRE captures only sent/received). The cache-distinction signal is the observes:partial carve-out and is NOT verified here.",
+            "the token-accumulation claim (TotalTokens \u003e 0 / non-decreasing) is observable in the parser's assistant_message events but NOT expressible in the expected.jsonl phase DSL (no metric form); it is covered out-of-band by parser unit tests (parser_test.go: TestParser_MultipleTokensLines, TestParser_MultiTurn_EmitsAssistantMessagePerTurn). expected.jsonl asserts only the two-turn lifecycle arc the accounting rides on."
+          ],
+          "settings": {},
+          "timeout_seconds": 300
+        }
+      }
+    },
+    "claudecode": {
+      "recording_dir": "claudecode/scenarios/token-accounting",
+      "artifacts": {
+        "events": "claudecode/scenarios/token-accounting/events.jsonl",
+        "transcript": "claudecode/scenarios/token-accounting/transcript.jsonl",
+        "manifest": "claudecode/scenarios/token-accounting/manifest.json",
+        "golden": "claudecode/scenarios/token-accounting/transcript.jsonl.replay.json.golden"
+      },
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "pass_rate": "7/7 phases passed",
+        "agent_cli_version": "2.1.143",
+        "daemon_version": "0.4.5+f3523ad",
+        "confidence": 0.95,
+        "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "token-accounting",
+          "agent": "claudecode",
+          "assessed_at": "2026-05-18T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.95,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nClaude Code records authoritative token usage per turn in the JSONL transcript. Every assistant event carries a `usage` block (at `raw.usage`, `raw.message.usage`, or `raw.response.usage`) with `input_tokens`, `output_tokens`, `cache_read_input_tokens`, and the nested `cache_creation.ephemeral_5m_input_tokens` / `ephemeral_1h_input_tokens` (with the legacy flat `cache_creation_input_tokens` fallback). The parser extracts these into a `UsageBreakdown` and emits a `PerTurnContribution` on the requestId boundary (see `applyRequestIDContribution` and `extractAnthropicUsageBreakdown` in `parser.go`).\n\nirrlicht's session metrics accumulate Contributions across turns into `SessionMetrics.TotalTokens` (input + output + cache, see `session.go`). The merge logic in `MergeMetrics` is monotonic for tokens — once a turn's contribution is folded in, it never reduces.\n\nSpec Scenario 1 (two-turn session):\n- 'After turn 1: TotalTokens \u003e 0' — turn 1's assistant event carries a usage block; the requestId-boundary flush on turn 2's first event emits turn 1's Contribution; metrics aggregator increments TotalTokens.\n- 'After turn 2: TotalTokens ≥ turn-1 total' — turn 2's Contribution adds on top; monotonicity holds.\n\nSpec Scenario 2 (turn fits in prompt cache):\n- 'Fresh input tokens = 0' — `input_tokens` field reads 0 when the prompt is fully a cache hit. Parser reads the raw value directly.\n- 'CacheReadTokens \u003e 0' — `cache_read_input_tokens` is populated by the Anthropic API and lands in `UsageBreakdown.CacheRead`. UsageBreakdown is exposed on the Contribution and rolled up.\n\n## What irrlicht does NOT see (and why that's OK)\n\nThe pre-flush pending contribution (current turn, requestId still open) is exposed via `PendingContribution()` but does NOT yet land in `SessionMetrics.TotalTokens` — that's by design (only completed turns are counted). The dashboard surfaces pending separately. The spec asserts on post-turn totals, so this asymmetry is fine.\n\nA turn-without-usage (e.g. an attachment-only event or a fully-skipped event) contributes nothing — also correct, since there is no token cost to record.",
+          "caveats": [
+            "The cache-hit subscenario depends on the Anthropic backend actually caching the prompt. A recipe-controlled cache hit needs two near-identical sends within the cache TTL (5 min default); a one-shot recording can't guarantee CacheRead \u003e 0 because cache state is server-side and varies. The recipe should run send-1, sleep ~3s, send-1-again, and assert on the SECOND turn's CacheRead.",
+            "Cost (USD) computation is downstream of UsageBreakdown via the pricing/aliases table; if the alias map is missing the model, Total is still recorded but cost displays as $0. That's an alias-table concern, not a token-accounting concern."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/claudecode/parser.go",
+              "note": "extractClaudeCodeTokens / extractAnthropicUsageBreakdown / applyRequestIDContribution — pull input/output/cache_read/cache_creation from raw.usage (and message.usage / response.usage), emit PerTurnContribution on requestId boundary."
+            },
+            {
+              "kind": "file",
+              "ref": "core/domain/session/session.go L30-31, L584-628",
+              "note": "SessionMetrics.TotalTokens, MergeMetrics monotonicity — turn contributions roll up and old totals stick if a transient pass returns 0."
+            },
+            {
+              "kind": "spec",
+              "ref": ".specs/agent-scenarios.md L410-420",
+              "note": "Feature: Token accounting — two-turn monotonicity and cache-hit scenarios."
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": true,
+          "preconditions": [
+            "claude CLI on PATH and authenticated (subscription or API key)",
+            "irrlichd is recording (--attach against a daemon with --record, or isolated mode)",
+            "no other claudecode session uses the recipe's UUID"
+          ],
+          "setup": [
+            "Driver generates a fresh lowercased session UUID and a fresh cwd under \u003cstaging\u003e/cwd/",
+            "No special model or context flags — default model is fine; the assertion is about token accumulation, not which model produced the tokens"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl shows three ready→working→ready cycles on the same UUID (one per turn)",
+            "events.jsonl carries a PerTurnContribution / UsageBreakdown for each of the three turns; input_tokens + output_tokens \u003e 0 on every turn",
+            "SessionMetrics.TotalTokens after turn 1 \u003e 0",
+            "SessionMetrics.TotalTokens after turn 2 ≥ TotalTokens after turn 1 (monotonic)",
+            "SessionMetrics.TotalTokens after turn 3 ≥ TotalTokens after turn 2 (monotonic across 3 turns)",
+            "transcript.jsonl contains exactly 3 user lines and ≥ 3 assistant lines",
+            "final session state is ready"
+          ],
+          "settings": {},
+          "timeout_seconds": 180
+        }
+      }
+    },
+    "codex": {
+      "recording_dir": "codex/scenarios/token-accounting",
+      "artifacts": {
+        "events": "codex/scenarios/token-accounting/events.jsonl",
+        "transcript": "codex/scenarios/token-accounting/transcript.jsonl",
+        "manifest": "codex/scenarios/token-accounting/manifest.json",
+        "golden": "codex/scenarios/token-accounting/transcript.jsonl.replay.json.golden"
+      },
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "pass_rate": "10/10 phases passed",
+        "agent_cli_version": "0.130.0",
+        "daemon_version": "0.4.7+26ab78c",
+        "confidence": 0.9,
+        "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "token-accounting",
+          "agent": "codex",
+          "assessed_at": "2026-05-23T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.9,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\n`token-accounting` stresses per-turn token/cost accounting across MULTIPLE turns: after turn 1 `TotalTokens \u003e 0`; after each later turn `TotalTokens` is non-decreasing; and when a turn runs against prompt cache, cache-read tokens are bucketed separately from fresh input. The primitive is token reporting (input/output/cache read+write in a transcript field the parser can extract) and it requires `headless_mode`.\n\n**agent_supports: yes.** Codex CLI 0.130.0 emits a `token_count` event_msg on every API turn whose `payload.info` carries two usage blocks: `last_token_usage` (per-turn snapshot) and `total_token_usage` (cumulative running total across all turns in the session). OpenAI's usage shape nests cache hits under `input_tokens_details.cached_tokens`. Multiple turns in one rollout produce a monotonically advancing `total_token_usage`, which is exactly the accumulation the scenario asserts.\n\n**daemon_capability: full; driver_capability: ready.** The codex adapter watches rollout transcripts via `FilesUnderRoot{Dir: sessionsDir(), Parser: JSONLineParser{...}}` (agent.go). The parser (parser.go) is stateful: it keeps a `cursor` of the last committed cumulative `total_token_usage` and emits a `PerTurnContribution{Usage: UsageBreakdown{Input, Output, CacheRead}}` for the delta (`current − cursor`) on each turn boundary, advancing the cursor only when the delta is positive (`extractCodexMetadata` + the delta block in `ParseLine`). `extractOpenAIUsageBreakdown` routes `input_tokens_details.cached_tokens` to `CacheRead` and deducts it from `Input` to avoid double-counting (OpenAI already includes cached tokens in `input_tokens`). `CumulativeTokens`/`Tokens` are surfaced for `SessionMetrics.TotalTokens`, which therefore accumulates non-decreasingly across the three turns. The parser also persists the cumulative cursor via `GetParserLedger`/`SetParserLedger` so deltas stay correct across restarts. Parser unit test `TestParser_MultiTurnTokenCount_UsesPerTurnSnapshot` covers exactly the multi-turn per-turn-snapshot accounting; the coverage matrix already records codex/token-accounting as yes/yes (\"cumulative cursor → delta math; cached_tokens deducted to avoid double-count\"), and this assessment ratifies it.\n\nThe state arc is unremarkable (three `ready→working→ready` cycles on one rollout session); the token-accounting evidence lives in `events.jsonl` payloads (`PerTurnContribution` per turn boundary + accumulating `TotalTokens`), not in the phase-DSL state assertions. The phase DSL has no metric form, so the spec asserts the three-turn state arc (the recording's structural skeleton) and the token counts are verified via the recipe's plain-English `verify` bullets + the parser unit test.\n\nNo carve-outs apply to observability. One environmental caveat: the daemon has logged \"no pricing for model gpt-5.3-codex — cost will be 0 until LiteLLM cache is refreshed\" for some codex models, so `estimated_cost_usd` may read $0 even when token counts are real. Token accounting (the counts/deltas) is the user-observable signal this scenario is about and is unaffected; $0 cost on an un-priced model is a pricing-cache limitation, not a token-accounting gap.",
+          "caveats": [
+            "Cost may read $0 for codex models the LiteLLM pricing cache doesn't yet know (logged for gpt-5.3-codex); token counts/deltas are still real and observable — treat $0 cost as a pricing-cache limitation, not a token-accounting gap."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/codex/parser.go",
+              "note": "stateful cursor → per-turn delta PerTurnContribution; extractCodexMetadata reads last_token_usage + total_token_usage; extractOpenAIUsageBreakdown routes input_tokens_details.cached_tokens to CacheRead and deducts from Input; GetParserLedger/SetParserLedger persist cursor"
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/codex/agent.go",
+              "note": "FilesUnderRoot + JSONLineParser transport over the rollout sessions dir"
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/codex/parser_test.go",
+              "note": "TestParser_MultiTurnTokenCount_UsesPerTurnSnapshot covers multi-turn per-turn-snapshot token accounting"
+            },
+            {
+              "kind": "file",
+              "ref": ".claude/skills/ir:onboard-agent/agent-scenarios-coverage.json",
+              "note": "matrix records codex/token-accounting yes/yes — cumulative cursor → delta math; cached_tokens deducted"
+            },
+            {
+              "kind": "file",
+              "ref": ".claude/skills/ir:onboard-agent/scenario-meanings.md",
+              "note": "token-accounting: TotalTokens\u003e0 after T1, non-decreasing after T2, CacheReadTokens\u003e0 with fresh input=0 on a fully-cached turn"
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": true,
+          "preconditions": [
+            "codex CLI on PATH and authenticated (~/.codex/config.toml or OPENAI_API_KEY)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+            "Cost may read $0 if the LiteLLM pricing cache lacks the running codex model (logged for some models, e.g. gpt-5.3-codex). This is a pricing-cache limitation, not a token-accounting gap — assert token COUNTS/deltas (which are real), not a nonzero cost."
+          ],
+          "setup": [
+            "The interactive driver launches `codex --no-alt-screen` in a fresh per-run cwd under \u003cstaging\u003e/cwd/, accepts the trust dialog, and waits for the TUI banner + MCP boot before sending the first prompt",
+            "Each send bumps the expected-turn counter; wait_turn blocks until a new event_msg/task_complete line appears in the rollout, so prompts never race a still-running turn",
+            "No special model or context flags — the default model is fine; the assertion is about token accumulation, not which model produced the tokens"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a presession_created (proc-\u003cPID\u003e) event in ready within 1000 ms of agent launch",
+            "events.jsonl contains a transcript_new for the rollout session with a distinct session_id, born ready",
+            "events.jsonl contains a pid_discovered event bound to the rollout session_id",
+            "events.jsonl contains three state_transition→working / →ready arcs on the SAME rollout session_id, one per prompt (state resets to ready between turns)",
+            "events.jsonl carries a PerTurnContribution / UsageBreakdown on each turn boundary; input_tokens + output_tokens \u003e 0 across the turns (per-turn delta from codex total_token_usage cursor)",
+            "SessionMetrics.TotalTokens after turn 1 \u003e 0",
+            "SessionMetrics.TotalTokens after turn 2 ≥ TotalTokens after turn 1 (monotonic)",
+            "SessionMetrics.TotalTokens after turn 3 ≥ TotalTokens after turn 2 (monotonic accumulation across 3 turns)",
+            "if codex reports cached_tokens (input_tokens_details.cached_tokens), they populate the cache bucket and are deducted from fresh input; if absent on these tiny turns, cache buckets stay 0 — do not assert a nonzero cache",
+            "cost (estimated_cost_usd) may be $0 when the LiteLLM pricing cache lacks the model — known pricing-cache limitation; do not assert a nonzero cost",
+            "the rollout session final live state is ready before the driver tears the REPL down",
+            "events.jsonl contains a process_exited on the rollout session at REPL teardown (single live session, not three exits)",
+            "no state_transition to waiting appears for the rollout session at any point"
+          ],
+          "settings": {},
+          "timeout_seconds": 300
+        }
+      }
+    },
+    "opencode": {
+      "recording_dir": "opencode/scenarios/token-accounting",
+      "artifacts": {
+        "events": "opencode/scenarios/token-accounting/events.jsonl",
+        "transcript": "opencode/scenarios/token-accounting/transcript.jsonl",
+        "manifest": "opencode/scenarios/token-accounting/manifest.json",
+        "golden": "opencode/scenarios/token-accounting/transcript.jsonl.replay.json.golden",
+        "recordings": [
+          "opencode/scenarios/token-accounting/recordings/2026-05-25-23-39-45_irrlichd-0.4.7+094218b"
+        ]
+      },
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "pass_rate": "6/6 phases passed",
+        "agent_cli_version": "unknown",
+        "daemon_version": "0.4.7+094218b",
+        "confidence": 0.85,
+        "notes": "agent_supports: yes\ndaemon_capability: full\ndriver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "token-accounting",
+          "agent": "opencode",
+          "assessed_at": "2026-05-26T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.85,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n(REASSESSMENT against opencode CLI 1.14.50 + current daemon code. Flips the prior daemon_capability: bug — re-derivation finds NO token/cost mis-accounting bug; the recorded 6/8 is a per-turn STATE-arc coalescing that is the recipe's *vehicle*, not the scenario's asserted observable, so it belongs in caveats, not a daemon downgrade.)\n\n## What token-accounting actually asserts\n\nEssence + Primitive (scenario-meanings.md): *token reporting* — the agent's transcript carries per-turn token counts (input / output / cache read/write) in a parser-extractable field; User-observable signal is `TotalTokens \u003e 0` after turn 1, `TotalTokens` non-decreasing turn-over-turn, and `CacheReadTokens \u003e 0` (fresh input = 0) on a fully-cached turn. Requires `headless_mode`. The state arc (three ready→working→ready cycles) is the unremarkable carrier the accounting rides on, not the thing under test.\n\n## Is the daemon's token/cost extraction correct? Yes — full.\n\nopencode persists per-step token/cost data on its `step-finish` parts in the SQLite store. `parser.go: parseStepFinish` reads `tokens.input`, `tokens.output`, `tokens.total`, and the NESTED `tokens.cache.read` / `tokens.cache.write`, mapping them onto `UsageBreakdown{Input, Output, CacheRead, CacheCreation5m}` (cache.write → ephemeral 5m cache creation). opencode reports per-step (not cumulative) tokens, so each non-`tool-calls` step-finish builds a `PerTurnContribution`. `metrics.go: querySessionMetrics` folds those contributions into `cumInput / cumOutput / cumCacheRead / cumCost` → `CumInputTokens / CumOutputTokens / CumCacheReadTokens / EstimatedCostUSD` — a monotonic accumulator across all step-finish boundaries.\n\nThe existing recording PROVES this end to end: the replay golden summary carries `cum_input_tokens: 63173`, `cum_output_tokens: 6` (both \u003e 0), and the expected.jsonl note records the per-turn transcript progression `step-finish.tokens.total 21041→21057→21081` (input 21039→21055→21079) — i.e. all three turns ran and TotalTokens accumulated monotonically across both boundaries (T1→T2, T2→T3). The sibling `basic-turn` golden (`cum_input_tokens: 21037`) confirms single-turn extraction independently. parser.go / metrics.go are unchanged since the recording (last touched #410 + #412, both pre-2026-05-25), so this is the live behavior on the current daemon.\n\n## The recorded 6/8 is a STATE-arc artifact, not a token bug\n\nThe two failing phases are `t3_start` / `t3_end` — the per-turn working→ready STATE arc for turn 3, NOT any token field. opencode spawns a FRESH short-lived process per `opencode run` (the driver chains `--session` for continuity, so three turns = three processes against one `ses_…` SQLite row). The daemon's ProcessOwnedStore watcher observes via fsnotify WAL-write-triggered scans with a 500ms `minScanGap` debounce (watcher.go: `scanSessions` / `defaultMinScanGap`), not a per-turn streaming feed. Two back-to-back same-session runs land their WAL writes inside one debounce/scan window and coalesce: the golden shows turn-3's ready→working (transition index 5) and working→ready (index 6) at the SAME virtual_time `21:42:31.398` with `cause: debounce_coalesce` — turn 3's working span collapsed to zero width, so only 2 of 3 per-turn arcs are observable.\n\nThis is a transport/architecture property of poll-based observation of per-`run` processes, not the daemon mis-handling a token field. By the SKILL's own definitions it is closer to an `incapable`-flavoured limit on the STATE arc than a `bug` — but it does NOT touch the scenario's load-bearing observable (token reporting), which is fully delivered. Per the authoring rule \"caveats over downgrades,\" the daemon stays `full` for what token-accounting actually tests and the coalescing is recorded as a caveat. Net: the cell is record-able (token evidence passes); the recipe's three separable state-arc phases over-specify the vehicle through a transport that can't separate rapid same-session turns.\n\n## Reconciling capabilities.json cost_tracking=false\n\n`opencode/capabilities.json` sets `cost_tracking: false`, and `extractCost` reads the top-level `cost` field (only populated when opencode's pricing knows the model). This worktree's default is a local LM Studio model whose modelID normalizes to `gemma-4-e2b-it-uncensored`, for which opencode reports `cost = 0`. That is genuine: a local model has no dollar cost. But it is NOT the source of the recorded failure — the recipe, expected.jsonl, and the replay golden all assert token COUNTS/deltas, and the golden carries NO `cost` field at all (cost is intentionally unasserted). The recording fails on the turn-3 state arc, independent of cost. So `cost_tracking: false` is honest and orthogonal; expecting a nonzero cost is NOT what trips this cell.\n\n## Driver\n\ndrive-opencode-interactive.sh launches a blocking `opencode run -- \"\u003cprompt\u003e\"` per send (no `--model` flag → configured default) and chains `--session` for turns 2/3; `wait_turn` is a no-op because `run` blocks. token-accounting is three plain-text no-tool turns — well within the send/sleep/wait_turn grammar, so driver_capability: ready. (The per-turn coalescing is NOT a driver gap a richer driver step would fix at the recipe level; a long-lived REPL process keeping one opencode alive across turns — the #492 live-REPL driver — would incidentally also let the daemon see three distinct arcs, which is why #492's body lists this same root cause.)",
+          "caveats": [
+            "STATE-ARC COALESCING (recorded 6/8): opencode spawns a fresh process per `opencode run`, and the daemon observes the SQLite store via WAL-write-triggered scans with a 500ms debounce, so two back-to-back chained `--session` turns coalesce into one observed working→ready arc (golden: turn-3 ready→working + working→ready both at virtual_time 21:42:31.398, cause=debounce_coalesce). Only 2 of 3 per-turn arcs are separable. This is the recipe's vehicle, NOT the token observable — token extraction + monotonic accumulation pass.",
+            "RECIPE OVER-SPECIFIES THE VEHICLE: the expected.jsonl asserts three separable working→ready state arcs (t1/t2/t3) through a transport that cannot separate rapid same-session turns. The scenario's Primitive is token reporting (counts/deltas), which the daemon delivers in full; the third state arc is incidental. The recipe should either drop the t3 state-arc phases or keep them documented but not treat their coalescing as a daemon defect.",
+            "LOCAL ZERO-COST MODEL: the default LM Studio model (gemma-4-e2b-it-uncensored) reports cost = 0, so EstimatedCostUSD reads $0 and capabilities.json cost_tracking=false is honest. Assert token COUNTS/deltas (real), never a nonzero dollar cost. Cost is orthogonal to the recorded failure.",
+            "CACHE BUCKETS: CacheRead / CacheCreation5m are fully extractable from step-finish.tokens.cache.read/write, but on three tiny no-tool turns the model may report zero cache — do not assert a nonzero cache bucket; assert only that the buckets populate when present.",
+            "opencode exposes no CLI-assignable session IDs; the driver discovers the ses_… id from SQLite after the first `opencode run` returns, then chains --session. The local gemma model is slow (~30–45s/turn), hence the 240s timeout and ≥5s inter-turn sleeps."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/opencode/parser.go",
+              "note": "parseStepFinish (lines 97-149): reads tokens.input/output/total + nested cache.read/write → UsageBreakdown{Input, Output, CacheRead, CacheCreation5m}; builds a PerTurnContribution for every non-tool-calls reason. extractCost (319-325) reads top-level `cost`. Token/cost extraction is correct — no mis-accounted field."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/opencode/metrics.go",
+              "note": "querySessionMetrics (lines 211-250): folds PerTurnContribution into cumInput/cumOutput/cumCacheRead/cumCost → CumInputTokens/CumOutputTokens/CumCacheReadTokens/EstimatedCostUSD (monotonic accumulator). TotalTokens (line 223) tracks the latest step-finish total for context-utilization. This is the token-accounting path and it is full; unchanged since the recording (#410/#412 predate it)."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/opencode/watcher.go",
+              "note": "scanSessions + defaultMinScanGap=500ms (lines 21, 236-356): the ProcessOwnedStore watcher observes via fsnotify WAL-write-triggered scans with a 500ms debounce, not a per-turn stream. Back-to-back same-ses_ `opencode run` processes coalesce within one scan window — the mechanism behind the turn-3 state-arc collapse. This is the architecture limit on the STATE arc, not a token bug."
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/opencode/scenarios/token-accounting/transcript.jsonl.replay.json.golden",
+              "note": "Replay golden summary: cum_input_tokens=63173, cum_output_tokens=6 (token accumulation PASSES). transitions index 5 (ready→working) and index 6 (working→ready) share virtual_time 21:42:31.398 with cause=debounce_coalesce — turn-3 working span collapsed to zero width (the 6/8 failure)."
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/opencode/scenarios/token-accounting/expected.jsonl",
+              "note": "known_failing note: failing phases are t3_start/t3_end (STATE arc), NOT a token assertion; records transcript step-finish.tokens.total 21041→21057→21081, input 21039→21055→21079 (monotonic). Explicitly: 'the LOAD-BEARING claim of token-accounting still passes ... NOT recipe-fixable ... Clears if the daemon gains per-turn (not per-process-poll) state observation.'"
+            },
+            {
+              "kind": "url",
+              "ref": "https://github.com/ingo-eichhorst/Irrlicht/issues/492",
+              "note": "Live-REPL opencode driver enhancement. The prior assessment cited #492 for a token-accounting 'bug', but #492 is a driver-gap issue; its body names this exact root cause — opencode's per-`run` process exits at turn end so back-to-back turns' arcs are not separately observable, and 'A long-lived REPL process would fix that too.' Not a daemon token bug."
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/opencode/capabilities.json",
+              "note": "cost_tracking=false; default local LM Studio model reports cost=0. Honest and orthogonal — the recipe/golden assert token counts, not dollar cost, so cost_tracking=false is NOT the source of the recorded failure."
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": true,
+          "preconditions": [
+            "opencode CLI on PATH and authenticated against its default model (the default is a local LM Studio model, so no remote key is needed; run a single message in the opencode TUI to confirm it answers)",
+            "irrlichd is recording with the opencode SQLite watcher enabled — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+            "For a local/zero-cost model the estimated cost may read $0 — this is a model-pricing artifact, not a token-accounting gap. The assertion is about token COUNTS/deltas (which step-finish emits regardless), not a nonzero dollar cost."
+          ],
+          "setup": [
+            "The interactive driver (drive-opencode-interactive.sh) creates a fresh per-run cwd under \u003cstaging\u003e/cwd/ and launches a blocking `opencode run -- \"\u003cprompt\u003e\"` for the first send (no --model flag, so opencode uses its configured default model); the run blocks until the assistant turn finishes, so wait_turn is a no-op. After the first run returns the driver discovers the ses_… session id from SQLite (opencode exposes no CLI-assignable session IDs) and chains `--session` for turns 2 and 3 so all three turns land on one session",
+            "OpenCode session state lives in its SQLite store (~/.local/share/opencode/opencode.db), not per-cwd transcript files; the daemon's ProcessOwnedStore source polls the session table and observes the UUID-keyed ses_… session for this cwd",
+            "Each send is a no-tool single turn — opencode is asked to reply with exactly one word, so each working span carries no auto-executed tool call (tool_calls_max: 0) and the session never enters waiting (no permission gate fires)",
+            "The default model is a small, slow local LM Studio model (~30–45s per turn), so the trailing sleeps and timeout are generous: a slow turn must not trip a false timeout, and each inter-turn / trailing sleep must outlast the turn_done settle so every working→ready is observed before the next prompt re-enters working"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 5
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 5
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 6
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a transcript_new (or session_created) for the ses_… session, born ready, within ~2s of agent launch (a transient proc-\u003cPID\u003e pre-session may also appear; the turn arcs and pid_discovered land on the ses_… session)",
+            "events.jsonl contains a pid_discovered event bound to the ses_… session_id",
+            "events.jsonl contains three state_transition→working / →ready arcs on the SAME ses_… session_id, one per prompt (state resets to ready between turns; the driver chains --session so all three land on one session)",
+            "events.jsonl carries a PerTurnContribution / UsageBreakdown on each turn boundary; the opencode parser pulls step-finish.tokens.input/output and the nested cache.read/cache.write into UsageBreakdown{Input,Output,CacheRead,CacheCreation5m}, so input + output tokens \u003e 0 across the turns",
+            "SessionMetrics.TotalTokens after turn 1 \u003e 0",
+            "SessionMetrics.TotalTokens after turn 2 ≥ TotalTokens after turn 1 (monotonic)",
+            "SessionMetrics.TotalTokens after turn 3 ≥ TotalTokens after turn 2 (monotonic accumulation across 3 turns)",
+            "if opencode reports cache.read/cache.write on a cached turn they populate the CacheRead / CacheCreation5m buckets; on these tiny no-tool turns the buckets may stay 0 — do not assert a nonzero cache",
+            "no state_transition to waiting appears for the session at any point (no tool call, no permission gate)",
+            "the session's final live state is ready",
+            "NOTE: the token-accumulation claim (TotalTokens \u003e 0 / non-decreasing / cache buckets) is not expressible in the expected.jsonl phase DSL (no metric form); it is covered by the opencode parser path + unit tests and the replay .golden summary. expected.jsonl asserts only the three-turn lifecycle arc the accounting rides on."
+          ],
+          "settings": {},
+          "timeout_seconds": 240
+        }
+      }
+    },
+    "pi": {
+      "recording_dir": "pi/scenarios/token-accounting",
+      "artifacts": {
+        "events": "pi/scenarios/token-accounting/events.jsonl",
+        "transcript": "pi/scenarios/token-accounting/transcript.jsonl",
+        "manifest": "pi/scenarios/token-accounting/manifest.json",
+        "golden": "pi/scenarios/token-accounting/transcript.jsonl.replay.json.golden"
+      },
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "pass_rate": "9/9 phases passed",
+        "agent_cli_version": "0.70.0",
+        "daemon_version": "0.4.7+ec7acf6",
+        "confidence": 0.9,
+        "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "token-accounting",
+          "agent": "pi",
+          "assessed_at": "2026-05-25T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.90,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nThe scenario's User-observable signals are token counts accumulating across turns: `TotalTokens \u003e 0` after turn 1, `TotalTokens` non-decreasing after turn 2, and cache-read tokens reflected for a cached turn. Pi's JSONL transcript carries per-turn `usage.input` / `usage.output` / `usage.cacheRead` / `usage.cacheWrite` plus `cost` on each assistant event, which the pi parser extracts into a per-turn UsageBreakdown and accumulates monotonically into SessionMetrics.TotalTokens. Single-turn token \u0026 cost extraction is already exercised by basic-turn; this cell locks down the MULTI-turn accumulator (the non-decreasing claim across requestId boundaries).\n\nThe accumulation requires more than one turn on one live session, so the cell is recorded with the INTERACTIVE pi driver (drive-pi-interactive.sh): three back-to-back `Reply with exactly: ok` no-op turns in one tmux REPL via send+wait_turn, then a single teardown. Headless `pi --print` is single-shot (one reply → process_exited) so it cannot accumulate across turn boundaries; the interactive driver keeps the rollout alive for all three turns. The daemon observes a transient `proc-\u003cPID\u003e` pre-session born ready, the UUID-keyed rollout's `transcript_new`, three `working→ready` arcs (one per prompt) on the rollout session, `pid_discovered`, and one `process_exited` at teardown.\n\nThe TotalTokens accumulation itself is NOT expressible in the phase DSL today (the invariant DSL has no metric form — a `TotalTokens \u003e 0` assertion is not a phase). It is covered by the pi parser unit tests. The expected.jsonl therefore asserts only the observable lifecycle scaffolding the accounting rides on (the standard three-turn arc, no waiting, a single process_exited).",
+          "caveats": [
+            "Pi cannot accept a pre-assigned UUID — it generates one itself. The interactive driver discovers the UUID from the session header on line 1 of the freshly-created rollout transcript.",
+            "The token-accounting claim (TotalTokens \u003e 0 / non-decreasing / cache-read reflected) is not phase-expressible; it is covered by the pi parser unit tests, not by the recording's expected.jsonl phases.",
+            "Cache-read counts vary run-to-run (cold-start cache vs warm), and per-turn token counts vary with model-output variance; only the structural three-turn arc, single process_exited, and final ready state are stable across re-records."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/pi/agent.go",
+              "note": "Identity.Name=pi, Source variant FilesUnderRoot under ~/.pi/agent/sessions/, ExactName{Name: \"pi\"} process matcher."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/pi/parser.go",
+              "note": "Extracts usage.input/output/cacheRead/cacheWrite + cost per assistant event into a per-turn UsageBreakdown; accumulates into SessionMetrics.TotalTokens."
+            },
+            {
+              "kind": "file",
+              "ref": ".claude/skills/ir:onboard-agent/scripts/drive-pi-interactive.sh",
+              "note": "Interactive tmux REPL driver supporting send/slash/wait_turn/interrupt/sleep; keeps the rollout session alive across multiple turns so token totals accumulate."
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": true,
+          "preconditions": [
+            "pi CLI on PATH and authenticated (pi runs against its configured model out-of-band)",
+            "tmux available — the interactive driver runs pi in a tmux REPL so it can send three prompts to one long-lived session",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+          ],
+          "setup": [
+            "The interactive driver (drive-pi-interactive.sh) launches pi in a fresh per-run cwd inside a tmux session, waits for the REPL prompt, then sends the first prompt",
+            "pi writes one JSONL rollout file per session under ~/.pi/agent/sessions/\u003ccwd-slug\u003e/ on launch (FilesUnderRoot, non-lazy); the driver resolves that file and extracts the UUID from line 1",
+            "Each send bumps the expected-turn counter; wait_turn blocks until the rollout shows a completed assistant turn, so prompts never race a still-running turn",
+            "No special model or context flags — pi's configured model is fine; the assertion is about token accumulation, not which model produced the tokens",
+            "After the third wait_turn + trailing sleep the driver kills the tmux session once — pi exits and the daemon emits a single process_exited for the rollout session"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a transcript_new for the rollout session born ready within ~2s of REPL launch (a transient proc-\u003cPID\u003e pre-session may also appear; the turns and pid_discovered land on the UUID-keyed rollout session)",
+            "events.jsonl contains a pid_discovered event bound to the rollout session_id",
+            "events.jsonl contains three state_transition→working / →ready arcs on the SAME rollout session_id, one per prompt (state resets to ready between turns)",
+            "events.jsonl carries a PerTurnContribution / UsageBreakdown on each turn boundary; the pi parser pulls usage.input/output/cacheRead/cacheWrite + cost from each assistant event, so input + output tokens \u003e 0 across the turns",
+            "SessionMetrics.TotalTokens after turn 1 \u003e 0",
+            "SessionMetrics.TotalTokens after turn 2 ≥ TotalTokens after turn 1 (monotonic)",
+            "SessionMetrics.TotalTokens after turn 3 ≥ TotalTokens after turn 2 (monotonic accumulation across 3 turns)",
+            "if pi reports cacheRead on a cached turn it populates the cache bucket and is deducted from fresh input; on these tiny turns cache buckets may stay 0 — do not assert a nonzero cache",
+            "the rollout session's final live state is ready before the driver tears the REPL down",
+            "events.jsonl contains exactly one process_exited on the rollout session at REPL teardown (one long-lived session, not three exits)",
+            "no state_transition to waiting appears for the rollout session at any point",
+            "NOTE: the token-accumulation claim (TotalTokens \u003e 0 / non-decreasing / cacheRead) is not expressible in the expected.jsonl phase DSL (no metric form); it is covered by the pi parser unit tests. expected.jsonl asserts only the three-turn lifecycle arc the accounting rides on."
+          ],
+          "settings": {},
+          "timeout_seconds": 300
+        }
+      }
+    }
+  }
+}

@@ -911,8 +911,8 @@
       "feature": "User-blocking tool call (question)",
       "coverage": {
         "aider": {
-          "agent_supports": "yes",
-          "daemon_capability": "full",
+          "agent_supports": "partial",
+          "daemon_capability": "incapable",
           "driver_capability": "ready",
           "notes": "aider can ask via /ask interactively but no JSONL-style tool marker; not detected"
         },

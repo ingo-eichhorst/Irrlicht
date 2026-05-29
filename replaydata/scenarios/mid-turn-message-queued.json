@@ -1,0 +1,517 @@
+{
+  "id": "2.10",
+  "name": "mid-turn-message-queued",
+  "section": "Turn shape",
+  "feature": "Mid-turn user message queued",
+  "description": "Claude is given a slow count-to-10 prompt; while the agent is mid-turn, the driver types a follow-up message into the TUI which claudecode queues until a safe point. The daemon must see a single contiguous working span with no flicker to ready when the queued input lands, and the cycle must still end at ready once everything is consumed. Locks down the parser's transcript-driven state classification against a future regression where queued text appears as a synthetic user-line before consumption.",
+  "requires": [
+    "headless_mode"
+  ],
+  "verify": {
+    "final_state": "ready",
+    "has_waiting_state": false
+  },
+  "agents": {
+    "aider": {
+      "artifacts": {},
+      "metadata": {
+        "agent_supports": "no",
+        "daemon_capability": "n/a",
+        "driver_capability": "ready",
+        "confidence": 0.9,
+        "notes": "agent_supports: no\ndaemon_capability: n/a\ndriver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "mid-turn-message-queued",
+          "agent": "aider",
+          "assessed_at": "2026-05-25T00:00:00Z",
+          "agent_supports": "no",
+          "daemon_capability": "n/a",
+          "driver_capability": "ready",
+          "confidence": 0.9,
+          "body": "## Verdict\n\nagent_supports: no\ndaemon_capability: n/a\ndriver_capability: ready\n\n## Reasoning\n\nThe scenario's **primitive exercised** is message-queue handling: the agent's runtime buffers a user-supplied follow-up message *during* an active turn without emitting a turn boundary, so the daemon should see one contiguous `working` span with no `→ ready` flicker. This requires the agent to accept and hold concurrent user input while the model call is in flight.\n\nAider 0.86.2 has no such mechanism. Its main loop in `aider/coders/base_coder.py::run` is strictly synchronous:\n\n```\nwhile True:\n    user_message = self.get_input()   # blocks at the prompt\n    self.run_one(user_message, preproc)  # runs the whole turn to completion\n    self.show_undo_hint()\n```\n\nThere is no background input thread. The TUI reads exactly one user message at the prompt, runs the entire turn (`run_one`), and only *then* returns to `get_input()` for the next message. While a turn is in flight, the only mid-turn user-input affordance is `KeyboardInterrupt` (Ctrl-C → `keyboard_interrupt()`), which **aborts** the turn rather than queueing a follow-up. The `io.interrupt_input` path (`aider/io.py:516`) exists for file-watcher-triggered interrupts and merely stashes any partial prompt text as a `placeholder` to redisplay at the *next* prompt — it is not a concurrent message queue, and it tears down the current input session rather than buffering input alongside a running turn.\n\nBecause aider cannot queue a user message mid-turn at all, the agent-layer precondition for this scenario is unmet — `agent_supports: no`. This ratifies the existing matrix verdict (\"TUI-based, no queue concept\").\n\n## daemon_capability\n\nMarked `n/a`: with no queueing behavior to exercise, there is nothing for the daemon to observe — the observation question only exists when `agent_supports` is `yes`/`partial`. For completeness, irrlicht's aider adapter watches `.aider.chat.history.md` (a `FilesUnderCWD` markdown transcript via `RawLineParser`). A turn opens on a `#### ` user-prompt line, and `working`/`ready` classification is driven by `\u003e Tokens:` model-call lines plus an `IdleFlush` synthetic `turn_done` after 1500ms of quiet. Even if a user typed during a turn, aider writes nothing to the history file until the input is consumed at the next prompt, so no synthetic mid-turn `user_message` line could appear — but this is moot given the agent does not support the primitive.\n\n## driver_capability\n\nMarked `ready` (frozen-by-agent, not a tooling gap). Per #476 routing, a `supports: no` cell freezes at the agent layer regardless of the driver, so the driver axis is not the blocker. `scripts/drive-aider-interactive.sh` does implement `send` and `sleep`, which is all a hypothetical mid-turn-send recipe would need (type during `working`); the cell is frozen because there is no queueing behavior to drive, not because the driver lacks a `queue` primitive. There is intentionally no degrade to a driver gap here.\n\n## Capability key\n\nThe Primitive exercised (message-queue handling — buffering a user message during an active turn) maps to no dedicated key in `replaydata/agents/aider/capabilities.json`: the canonical feature flags track no async/queued-input capability, and the closest *scenario* gate (`headless_mode`, from `scenarios.json.requires`) is the run-mode precondition rather than the queue primitive. The absence of a matching capability key is consistent with `agent_supports: no`.\n\n## applicable\n\napplicable: no — the agent lacks the feature, so the pipeline is frozen at Stage 1. Re-assess only if aider ships an asynchronous/queued input model in a future release.",
+          "caveats": [],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "/Users/ingo/.local/share/uv/tools/aider-chat/lib/python3.12/site-packages/aider/coders/base_coder.py",
+              "note": "run() main loop is synchronous get_input → run_one → get_input; mid-turn input is only KeyboardInterrupt (abort), no queue — anchors agent_supports: no"
+            },
+            {
+              "kind": "file",
+              "ref": "/Users/ingo/.local/share/uv/tools/aider-chat/lib/python3.12/site-packages/aider/io.py",
+              "note": "interrupt_input (line 516) stashes partial prompt as placeholder for the next prompt; not a concurrent message queue"
+            },
+            {
+              "kind": "file",
+              "ref": "/Users/ingo/.local/share/uv/tools/aider-chat/lib/python3.12/site-packages/aider/_version.py",
+              "note": "assessed against aider 0.86.2"
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/aider/parser.go",
+              "note": "FilesUnderCWD markdown transcript; turn boundaries from #### / \u003e Tokens: / IdleFlush — transcript records nothing about un-consumed input (daemon_capability context only; n/a because agent_supports: no)"
+            },
+            {
+              "kind": "file",
+              "ref": ".claude/skills/ir:onboard-agent/agent-scenarios-coverage.json",
+              "note": "prior matrix cell already two-axis: agent_supports no / daemon_capability n/a / driver_capability n/a, 'TUI-based, no queue concept'"
+            }
+          ]
+        }
+      }
+    },
+    "claudecode": {
+      "recording_dir": "claudecode/scenarios/mid-turn-message-queued",
+      "artifacts": {
+        "events": "claudecode/scenarios/mid-turn-message-queued/events.jsonl",
+        "transcript": "claudecode/scenarios/mid-turn-message-queued/transcript.jsonl",
+        "manifest": "claudecode/scenarios/mid-turn-message-queued/manifest.json",
+        "golden": "claudecode/scenarios/mid-turn-message-queued/transcript.jsonl.replay.json.golden"
+      },
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "pass_rate": "4/4 phases passed",
+        "agent_cli_version": "2.1.143",
+        "daemon_version": "0.4.5+605ef47",
+        "confidence": 0.8,
+        "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "mid-turn-message-queued",
+          "agent": "claudecode",
+          "assessed_at": "2026-05-18T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.8,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nClaude Code's TUI explicitly supports typing follow-up messages while the agent is mid-turn — the input is queued and consumed at the next safe point (post-tool-use boundary or turn end). This is a first-class CLI feature, cited in the spec as a canonical example alongside Codex. So `agent_supports: yes` is uncontroversial.\n\nThe spec asserts three observables for the daemon:\n1. State stays `working` through the queued-message arrival.\n2. No `→ ready` flicker when the queued input lands.\n3. The agent eventually consumes the queued message; the cycle still ends at `ready`.\n\nirrlicht's claudecode parser is shaped favourably for all three. State is driven off transcript-line shape, not off keystrokes — the queued text is buffered inside the `claude` process and is NOT written to the JSONL transcript until the agent actually consumes it. From the parser's perspective, the turn looks like one long contiguous `working` span with the queued user-line appearing only when claudecode chooses to consume it (typically as part of the next prompt cycle, sometimes folded into the current turn). Either way, the parser sees no premature `→ ready` because the transcript's last entry remains an in-progress assistant/tool entry throughout.\n\nThe third bullet is the normal turn-end mechanic that all baseline scenarios cover.\n\nThe PendingContributor refinement (in-progress turn cost) the adapter implements is orthogonal here — it tracks accumulating cost during the working span and is unaffected by queued input.\n\n## What irrlicht does NOT see (and why that's OK)\n\nThe queue itself is invisible to irrlicht — there is no event for 'user typed text that is now buffered'. The spec does not assert one; it only asserts state invariants on the working span. The recipe should anchor its phase contract on `state stays working for duration_at_least_ms` plus the invariant 'no state_transition to ready between v1_send_initial and v1_turn_done' — both of which the daemon can verify from its event stream.",
+          "caveats": [
+            "Driving this scenario via tmux is straightforward: `send-keys` the first prompt, wait for the working state to land, `send-keys` a second prompt while still working. The driver should NOT press Enter twice for the second prompt — claudecode's input field accepts the queued text on a single Enter at the next safe point.",
+            "If claudecode ever changes to surface queued text in the transcript as a synthetic user-line *before* consumption, the parser might briefly flip to ready (treating it as a turn-boundary marker). That regression is exactly what this scenario's invariants would catch — which is the test's purpose.",
+            "The 'fold queued text into current turn' vs 'consume at next turn boundary' choice is internal to claudecode and varies by tool-use shape. The spec accommodates both — the phase contract should not assume one or the other."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": ".specs/agent-scenarios.md",
+              "note": "Feature: Mid-turn user message queued at line 190 — cites Claude Code queue as a canonical example."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/claudecode/parser.go",
+              "note": "Transcript-driven state classification: queued text lives inside the claude process and is not written to the JSONL until consumed — parser sees a contiguous working span."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/claudecode/agent.go",
+              "note": "PendingContributor refinement tracks in-progress cost; orthogonal to queued-input handling but confirms the parser models the working span as a single open turn."
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": true,
+          "preconditions": [
+            "claude CLI on PATH and authenticated (subscription or API key)",
+            "irrlichd is recording (--attach against a daemon with --record, or isolated mode)",
+            "Claude Code launched in auto mode so neither prompt trips a permission gate"
+          ],
+          "setup": [
+            "Driver generates a fresh lowercased session UUID and a fresh cwd under \u003cstaging\u003e/cwd/",
+            "The first prompt must keep claude busy long enough (a few seconds) to type a follow-up into the TUI — a slow count-to-10 with explicit pauses is sufficient",
+            "The mid-turn follow-up is delivered via tmux send-keys ending in Enter; claudecode's TUI buffers the text and consumes it at the next safe point (post-tool boundary or turn end)"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Count from 1 to 10, one number per line, with a brief pause between each. Then on the last line reply with exactly the word: done"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "keys",
+              "keys": "f o l l o w u p Space q u e u e d Enter"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 6
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl shows the UUID entering ready, then a ready→working transition for the first prompt",
+            "events.jsonl contains NO state_transition to ready between the first ready→working and the queued-message consumption (the working span must be contiguous through the queued arrival)",
+            "events.jsonl contains NO state_transition to waiting at any point during the working span",
+            "events.jsonl eventually shows a working→ready transition; final session state is ready",
+            "transcript.jsonl contains at least 1 user line for the initial prompt; the queued follow-up may appear as a second user line (consumed as a new turn) or be folded into the first turn — either shape is acceptable per spec"
+          ],
+          "settings": {},
+          "timeout_seconds": 240
+        }
+      }
+    },
+    "codex": {
+      "recording_dir": "codex/scenarios/mid-turn-message-queued",
+      "artifacts": {
+        "events": "codex/scenarios/mid-turn-message-queued/events.jsonl",
+        "transcript": "codex/scenarios/mid-turn-message-queued/transcript.jsonl",
+        "manifest": "codex/scenarios/mid-turn-message-queued/manifest.json",
+        "golden": "codex/scenarios/mid-turn-message-queued/transcript.jsonl.replay.json.golden"
+      },
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "pass_rate": "6/6 phases passed",
+        "agent_cli_version": "0.130.0",
+        "daemon_version": "0.4.7+1a685fa",
+        "confidence": 0.9,
+        "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "mid-turn-message-queued",
+          "agent": "codex",
+          "assessed_at": "2026-05-23T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.9,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\n`mid-turn-message-queued`: the user sends a follow-up WHILE the agent is mid-turn; the runtime queues it without emitting a turn boundary, the state stays `working` with no `→ ready` flicker, and the cycle still ends at `ready` once everything is consumed. The primitive is message-queue handling: the transcript must NOT emit a turn boundary when the queued message lands.\n\n**agent_supports: yes.** Probed codex CLI 0.130.0 (gpt-5.5 medium) live in a tmux REPL. Sent a slow count-to-20 prompt (the model ran a `sleep 0.5` shell call per number, keeping the turn busy ~30s), then ~3s in submitted a second message with Enter while the turn was still running. The TUI footer showed `Messages to be submitted after next tool call (press esc to interrupt and send immediately)` with the queued text below it — codex explicitly buffers the submitted message and dispatches it at the next tool-call boundary rather than rejecting it or starting a competing turn. The turn footer stayed `Working (..s • esc to interrupt)` continuously; there was no idle/ready flip when the queued message arrived. The arc completed with `done` then `secondmessage`, then returned to idle.\n\n**daemon_capability: full; driver_capability: ready.** Inspected the resulting rollout (`~/.codex/sessions/.../rollout-*.jsonl`): it contains exactly ONE `task_started` and ONE `task_complete` event_msg across the whole arc, plus TWO `user_message` response_items (the initial prompt and the queued follow-up). The queued message was folded into the same turn — no second turn boundary. The codex parser (parser.go) maps only `task_complete → turn_done`; a mid-turn `user_message` becomes `EventType: \"user_message\"` and does NOT set a turn-done event type. `SessionMetrics.IsAgentDone()` (session.go) fires the `working → ready` transition exclusively on `LastEventType == \"turn_done\"` for codex (the assistant_message fallback is deliberately excluded for codex to avoid working→ready→working flicker). With exactly one `task_complete`, the daemon observes a single contiguous `working` span through the queued-message arrival and a single `working → ready` settle at turn end — no waiting state, no premature ready. This is precisely the scenario's invariant.\n\nNo carve-outs apply. The queue is a first-class runtime feature in codex's TUI, and the JSONL rollout the daemon tails records the queued message inside the existing turn without a turn boundary, so the contiguous-working assertion is directly observable.",
+          "caveats": [
+            "The queued follow-up is folded into the SAME turn (one task_started/task_complete pair), not consumed as a separate post-turn turn. Codex submits queued input 'after next tool call', so a recipe must NOT bump the turn counter for the mid-turn input (use a raw `keys` Enter, not `send`); a `send` would make wait_turn block on a second task_complete that never arrives.",
+            "Probe used a prompt that elicits `sleep` shell calls to extend the turn; exact tool-call count and timing are model-dependent and may differ between runs. The structural invariant (one task_complete, contiguous working) is stable."
+          ],
+          "sources": [
+            {
+              "kind": "probe",
+              "ref": "tmux codex --no-alt-screen, gpt-5.5 medium",
+              "note": "live: 'Messages to be submitted after next tool call' footer; turn stayed Working through queued arrival; arc ended idle"
+            },
+            {
+              "kind": "file",
+              "ref": "~/.codex/sessions/.../rollout-*.jsonl (probe)",
+              "note": "1 task_started + 1 task_complete + 2 user_message — queued follow-up folded into one turn, no turn boundary"
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/codex/parser.go",
+              "note": "task_complete→turn_done; user_message (role user) → EventType user_message, no turn-done"
+            },
+            {
+              "kind": "file",
+              "ref": "core/domain/session/session.go",
+              "note": "IsAgentDone() fires working→ready only on LastEventType==turn_done for codex; assistant fallback excluded for codex to avoid flicker"
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": true,
+          "preconditions": [
+            "codex CLI on PATH and authenticated (~/.codex/config.toml or OPENAI_API_KEY)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+          ],
+          "setup": [
+            "The interactive driver launches `codex --no-alt-screen` in a fresh per-run cwd under \u003cstaging\u003e/cwd/, accepts the trust dialog, and waits for the TUI banner + MCP boot before sending the prompt (boot itself takes ~15-20s)",
+            "The first prompt keeps codex busy long enough to inject a follow-up while it is mid-turn — a slow count-to-20 that asks for a pause between numbers makes codex run a `sleep 0.5` shell call per number, extending the working turn to ~50-60s, giving a wide window to land the follow-up mid-turn",
+            "The mid-turn follow-up is delivered via raw `keys` steps, NOT a `send`: probing codex 0.130.0 live, a message submitted mid-turn is QUEUED — the TUI shows 'Messages to be submitted after next tool call' and folds it into the SAME turn, emitting only ONE task_complete for the whole arc. A `send` would bump the driver's expected-turn counter to 2, so the following wait_turn would block forever on a second task_complete that never arrives; raw `keys` submit the buffered text without touching the turn counter",
+            "The follow-up is split into TWO keys steps with a sleep between — first the literal text (no Enter), then a separate Enter — because codex's Ink input handler drops a batched text+Enter (the same render race step_send mitigates with a 0.3s pause): typing then pausing then pressing Enter lets the composer render the text before submit so the queue actually accepts it",
+            "The pre-injection sleep is 8s so the follow-up lands solidly inside the working turn (well after the ~50s+ count begins) rather than during boot, where it would be folded into the initial prompt and produce no observable queue"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Count slowly from 1 to 20, one number per line. Pause about half a second between each number. After 20, reply with exactly the word: done"
+            },
+            {
+              "type": "sleep",
+              "seconds": 8
+            },
+            {
+              "type": "keys",
+              "keys": "A f t e r Space y o u Space f i n i s h Space c o u n t i n g Space a l s o Space r e p l y Space w i t h Space t h e Space w o r d Space s e c o n d m e s s a g e"
+            },
+            {
+              "type": "sleep",
+              "seconds": 1
+            },
+            {
+              "type": "keys",
+              "keys": "Enter"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a presession_created (proc-\u003cPID\u003e) event in ready within 1000 ms of agent launch",
+            "events.jsonl contains a transcript_new for the rollout session with a distinct session_id, born ready, and a pid_discovered bound to it",
+            "events.jsonl contains a state_transition→working on the rollout session_id when the slow-count prompt is sent",
+            "events.jsonl contains NO state_transition to ready while the queued follow-up is buffered (the working span is contiguous through the queued arrival — codex folds it into the same turn, one task_complete)",
+            "events.jsonl contains NO state_transition to waiting at any point during the working span",
+            "events.jsonl eventually shows a single working→ready transition once the folded turn completes; final session state is ready, then process_exited at REPL teardown",
+            "transcript (rollout) shows ONE task_started/task_complete pair and TWO user_message lines (initial prompt + queued follow-up); the queued message does NOT introduce a second turn boundary"
+          ],
+          "settings": {},
+          "timeout_seconds": 240
+        }
+      }
+    },
+    "opencode": {
+      "recording_dir": "opencode/scenarios/mid-turn-message-queued",
+      "artifacts": {
+        "events": "opencode/scenarios/mid-turn-message-queued/events.jsonl",
+        "transcript": "opencode/scenarios/mid-turn-message-queued/transcript.jsonl",
+        "manifest": "opencode/scenarios/mid-turn-message-queued/manifest.json",
+        "golden": "opencode/scenarios/mid-turn-message-queued/transcript.jsonl.replay.json.golden"
+      },
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "pass_rate": "5/5 phases passed",
+        "agent_cli_version": "unknown",
+        "daemon_version": "0.4.7+94124e5",
+        "confidence": 0.8,
+        "notes": "agent_supports: yes (mid-turn queueing is opencode's documented default)\ndaemon_capability: full\ndriver_capability: gap:mid-turn-injection"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "mid-turn-message-queued",
+          "agent": "opencode",
+          "assessed_at": "2026-05-27T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.8,
+          "body": "## Verdict\n\nagent_supports: yes (mid-turn queueing is opencode's documented default)\ndaemon_capability: full\ndriver_capability: gap:mid-turn-injection\n\nRe-derived from scratch against opencode CLI v1.14.50, the current opencode adapter source, and the present `drive-opencode-interactive.sh` (which has since grown a live-TUI tmux path). The prior verdict was agent_supports:partial — that hedge is no longer honest: opencode's TUI mid-turn message-QUEUEING is the documented, shipped, default behavior, not an unverified guess. The genuine blocker is still purely the driver.\n\n## Scenario\n\nmid-turn-message-queued: a slow first prompt keeps the agent busy; WHILE that turn is still in progress the user types a SECOND message; the agent QUEUES the follow-up and consumes it at the next safe point. The user-observable invariant (scenario-meanings; the claudecode anchor expected.jsonl) is the `queued_window` phase: state stays `working` when the queued input LANDS — no `→ ready` flicker, no `→ waiting` flicker — and the cycle still ends at `ready`. The Primitive exercised: the transcript does NOT emit a turn boundary when the queued message ARRIVES. The claudecode anchor explicitly notes that whether the queued message is later folded into the current turn OR consumed as a new turn is BOTH legal per spec — the asserted invariant is only the no-flicker-on-arrival window plus the final ready.\n\n## Agent supports it (agent_supports: yes)\n\nopencode's TUI silently QUEUES a message typed during an active turn and delivers it as a new turn after the current one finishes. This is the documented current default, stated verbatim in the agent's own issue tracker:\n\n- Issue #21388 (\"Allow messages to be sent mid-turn\"): \"Today, once a turn begins (model is streaming tokens or executing tool calls), the input is effectively frozen. Any message typed by the user is … Queued silently and delivered as a new turn after the current one finishes.\" This describes the SHIPPED behavior; the issue requests an ALTERNATIVE (mid-turn inject/preempt) and was auto-closed as a duplicate of still-OPEN feature requests #18929/#17691 — i.e. mid-turn injection is NOT implemented, the silent-queue-as-new-turn default still stands.\n- Issue #17691 (`/btw`): \"users CAN queue messages — but those messages wait until the entire task completes before the agent sees them. The TUI already accepts input during agent execution.\"\n- Issue #21518 repro steps (against opencode, recent): \"Start a session and send a prompt that keeps the model busy long enough to submit another message before the first run finishes. While that run is still in progress, send a second user message. Let OpenCode continue and consume that queued message.\" — exactly this scenario.\n\nThe `partial` hedge in the prior assessment (\"queue vs. interrupt not verified for the live TUI\") is resolved: the live composer accepts input during an active turn and the default disposition is QUEUE, not interrupt/reject. opencode (#12707) even renders a queued-message row above the input with `Send now` / `Remove` / `Edit` controls — the message is held in the runtime/UI queue and is NOT committed to conversation history (and thus NOT written to the SQLite `part`/`message` tables) until it is drained and consumed. agent_supports is therefore `yes`.\n\n## daemon observes it (daemon_capability: full)\n\nopencode is the lone `ProcessOwnedStore` adapter (`core/adapters/inbound/agents/opencode/agent.go`): the daemon derives state by reading the SQLite store via `ComputeMetrics`, keyed on the `ses_…` session id, and classifying on the LAST part's event type (`core/adapters/inbound/agents/opencode/metrics.go`). State is `working` unless the most recent terminal signal is a `step-finish` with reason `stop`/`interrupted`/`length`/`error`/`content-filter` (parser.go `parseStepFinish`; watcher.go `isTerminalPart`).\n\nThe no-flicker-on-arrival invariant HOLDS for opencode for the same structural reason it holds for claudecode: the queued message lives in opencode's runtime/UI queue and is NOT persisted to the `part`/`message` tables until it is consumed (#12707's `Send now`/`Edit`/`Remove` controls operate on an in-memory queued item, not a committed history row). So during the queued window NO new `text` part with `_role=\"user\"` lands in the store — the parser's last event remains a turn-internal `assistant_message`/`function_call`, state stays `working`, and there is no `→ ready` (and no `→ waiting`) flicker when the input is typed. The cycle still ends at `ready` via the first turn's `step-finish reason=stop` → `turn_done`. These are exactly the store-read signals the opencode `basic-turn` cell already proves the daemon surfaces live. The daemon is NOT the blocker.\n\n## driver gap (driver_capability: gap:mid-turn-injection) — STILL OPEN\n\nThe scenario needs a SECOND user message injected WHILE the first turn is verifiably still in progress, so the agent has an in-flight turn to queue against. `drive-opencode-interactive.sh` now has TWO paths, and NEITHER provides this primitive:\n\n1. **Headless path (default for this scenario).** Each `send` shells out to a BLOCKING `opencode run` subprocess and WAITS for the turn to complete (`run_send`, lines ~296-350); `wait_turn` is a no-op; steps run strictly sequentially. By the time a second `send` could fire, the first turn is already over — no in-flight turn to queue against. Also, headless `opencode run` cannot even receive a second message into a held session the way a live composer does.\n2. **Live-TUI tmux path (NEW since the prior assessment) — but unreachable AND under-specified for this cell.** `run_live` (lines ~99-294) holds the opencode TUI open under tmux and its `oc_send` is non-blocking (types text + Enter, bumps `EXPECTED_TURNS`, returns). Two problems, however:\n   a. **Routing gate.** `run_live` is entered ONLY when the recipe contains a `reset_session` or `slash` step (line ~355: `any(.[]?; .type == \"reset_session\" or .type == \"slash\")`). A mid-turn-queued recipe is pure `send`/`wait_turn`/`sleep`, so it routes to the BLOCKING headless path. There is no step type, and no flag, to opt a send-only recipe into the live TUI.\n   b. **No controlled mid-turn-injection primitive even inside `run_live`.** The live loop is built around `send` (fire-and-forget keystrokes) + `wait_turn` (poll `step-finish` count). There is no step that (i) confirms the prior turn is verifiably STILL working before typing the second message (so the injection is genuinely mid-turn, not a race against turn start), and (ii) verifies the TUI QUEUED the follow-up vs. interrupted/rejected it. `oc_send`'s retry logic only checks that keystrokes LANDED in the composer, not the turn state; `EXPECTED_TURNS`/`oc_turn_total` count completed turns, with no notion of \"this message must be buffered INTO the active turn's window.\"\n\nThe missing primitive is `mid-turn-injection`: a recipe step (and a routing trigger for it) that holds the live TUI open, sends the slow first prompt, waits until that turn is verifiably in flight, then injects a SECOND message into the composer during that window — with a check that the TUI queued (one contiguous working span across the arrival) rather than interrupted. The live-TUI path got the harness most of the way there (held-open session + non-blocking send), so this is now a SMALLER tooling task than before — port the claudecode/codex `mid-turn` injection step and a route to reach it — but it is not yet present.\n\n### Not a recipe-lint catchable gap\n\nA two-`send` recipe lints in-grammar (`send`/`wait_turn`/`sleep` and the live `reset_session`/`slash` are all handled), so recipe-lint.sh cannot reject it. The gap is structural: the only path that even reaches the live TUI is gated on a slash/reset step, and there is no mid-turn-injection step grammar with the in-flight-window guarantee + queue-vs-interrupt verification this scenario requires.\n\n## What changed vs. the prior verdict\n\n- agent_supports: partial → **yes**. The TUI mid-turn QUEUE behavior is documented and default (opencode issues #21388/#17691/#16102/#12707/#21518), and the queued message is held in the runtime queue (not written to the store until consumed), so it does not emit a turn boundary on arrival — the exact primitive this scenario locks down.\n- daemon_capability: full → **full** (unchanged), now grounded in the actual persistence model (queued message materializes in the `part` table only at drain/consume time, so no mid-window user_message part → no flicker).\n- driver_capability: gap:mid-turn-injection → **gap:mid-turn-injection** (unchanged primitive name). The driver gained a live-TUI tmux path, but it is reachable only via a `reset_session`/`slash` step and still lacks a controlled mid-turn-injection step (in-flight-window guarantee + queue-vs-interrupt verification). The required unblock shrank from \"build a live-REPL driver\" to \"add a mid-turn-injection step + a route to the existing live path,\" but the cell is still NOT recordable today.\n\n## Confidence\n\n0.8. The agent behavior is documented in opencode's own issue tracker as the shipped default (queue silently, deliver as new turn) and the persistence/queue-controls model (#12707) supports the no-flicker-on-arrival read; the adapter transport (ProcessOwnedStore + store-read state classification) is read directly from source; and the driver gap (live path gated on slash/reset, no mid-turn-injection step) is read directly from the live script. Not higher because the no-flicker contiguity arc has not been CAPTURED live for opencode — that is the recording this driver gap defers — and the exact moment opencode writes the consumed queued message to the `part` table (and whether the inter-turn gap risks a brief daemon ready-flicker on the turn_end→next-turn boundary, which is legal per the anchor's own note) is the one shape a live recording would authoritatively settle.",
+          "caveats": [
+            "Reconciled post-record (2026-05-27): mid_turn_send primitive ported (commit 4ea4b308); cell recorded 5/5 green — driver_capability gap:mid-turn-injection-\u003eready.",
+            "Driver-gap, not a daemon limitation: the daemon (ProcessOwnedStore/SQLite) keeps state `working` across the queued-message arrival because opencode holds the queued message in its runtime/UI queue and does not write it to the `part`/`message` tables until consumed (no mid-window user_message part → no flicker) — the same store-read signal basic-turn proves. The blocker is purely the driver's inability to inject a verifiably mid-turn message (gap:mid-turn-injection).",
+            "agent_supports is now YES (was partial): opencode's TUI silently QUEUES a message typed during an active turn and delivers it as a new turn after the current finishes — the documented default (issues #21388, #17691, #16102, #12707). Mid-turn INJECTION (fold into the running turn) is a still-open feature request, but the scenario only asserts queue-on-arrival + final ready, which opencode satisfies.",
+            "The driver now has a live-TUI tmux path (run_live), but it is reachable ONLY when the recipe carries a reset_session/slash step, and even then it has no step that injects a second message during a verifiably in-flight turn or verifies queue-vs-interrupt. Unblock shrank to 'add a mid-turn-injection step + route to the existing live path' (port from claudecode/codex), but the cell is NOT recordable today.",
+            "Possible observability nuance to confirm on the eventual live recording: opencode consumes the queued message as a NEW turn (a step-finish reason=stop closes turn 1 before turn 2 begins) — legal per the claudecode anchor's own note that fold-vs-new-turn are both acceptable — so watch the turn_end→next-turn boundary for a brief daemon ready-flicker between the two turns; the no-flicker invariant the scenario pins is specifically the ARRIVAL window, not the inter-turn seam.",
+            "recipe-lint.sh does NOT catch this gap: a two-send recipe lints in-grammar; the missing capability is the routing gate on slash/reset plus the absent mid-turn-injection step (in-flight-window guarantee + queue-vs-interrupt check), not a missing leaf step TYPE."
+          ],
+          "sources": [
+            {
+              "kind": "url",
+              "ref": "https://github.com/anomalyco/opencode/issues/21388",
+              "note": "Agent's own tracker states the SHIPPED default: 'once a turn begins … Any message typed by the user is … Queued silently and delivered as a new turn after the current one finishes.' Closed as a duplicate of still-OPEN inject feature requests → mid-turn INJECTION not implemented; silent-queue-as-new-turn is the default. Grounds agent_supports:yes."
+            },
+            {
+              "kind": "url",
+              "ref": "https://github.com/anomalyco/opencode/issues/17691",
+              "note": "'users CAN queue messages — but those messages wait until the entire task completes before the agent sees them. The TUI already accepts input during agent execution.' Confirms the live composer queues mid-turn input by default."
+            },
+            {
+              "kind": "url",
+              "ref": "https://github.com/anomalyco/opencode/issues/12707",
+              "note": "Queued-message controls (queued-row above input, Send now / Remove / Edit). The queued message lives in the runtime/UI queue, NOT committed to conversation history — so it is not written to the SQLite part/message tables until consumed. This is why no user_message part lands during the queued window → daemon stays working, no flicker on arrival (daemon_capability:full grounding)."
+            },
+            {
+              "kind": "file",
+              "ref": ".claude/skills/ir:onboard-agent/scripts/drive-opencode-interactive.sh",
+              "note": "DRIVER GAP proof. Routing gate at line ~355 enters run_live ONLY for a reset_session/slash step — a pure send/wait_turn/sleep mid-turn recipe routes to the BLOCKING headless run_send (each send waits for opencode run to complete, sequential steps). Even inside run_live (oc_send non-blocking, lines ~144-161) there is NO step that confirms the prior turn is in flight before typing the second message and NO queue-vs-interrupt verification — gap:mid-turn-injection persists."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/opencode/metrics.go",
+              "note": "Daemon state is derived by reading the SQLite store and classifying on the LAST part's event type (lastEventType). A queued message not yet written to the part table cannot change lastEventType away from a turn-internal assistant_message/function_call → state stays working across the queued window (daemon_capability:full)."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/opencode/parser.go",
+              "note": "parseStepFinish: reason=stop → turn_done (ready); a user text part → user_message (still working, no waiting). Confirms no turn boundary is emitted by a queued user message that has not yet been persisted, and the cycle closes at ready via step-finish reason=stop."
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/claudecode/scenarios/mid-turn-message-queued/expected.jsonl",
+              "note": "Anchor. queued_window phase pins the no-→ready/no-→waiting invariant across the queued ARRIVAL; turn_end closes at ready. Its notes explicitly say fold-into-current-turn vs. consume-as-new-turn are BOTH legal — so opencode's consume-as-new-turn does not violate the spec; only the arrival window must stay working."
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": true,
+          "preconditions": [
+            "opencode CLI on PATH and authenticated against its default model (the dev env default is a local LM Studio model — no remote key needed). Verified opencode 1.14.50.",
+            "irrlichd is recording with the opencode SQLite watcher enabled (run-cell.sh in isolated/coexist mode, or --attach against a daemon started with --record)",
+            "the local model must be loaded with a context window large enough to complete a multi-paragraph turn without an n_keep\u003e=n_ctx overflow (the dev env uses gemma-4-e2b-it-uncensored at 32768 context)"
+          ],
+          "setup": [
+            "This cell uses the live-TUI path (run_live): the mid_turn_send step routes drive-opencode-interactive.sh into the long-lived tmux opencode process instead of a blocking headless `opencode run`. A blocking run would complete turn1 before a second message could fire, so there would be no in-flight turn to queue against. The driver launches one `opencode` under tmux and holds it alive across both turns.",
+            "The first prompt asks for a ~400-word explanation, which keeps the ses_… turn IN FLIGHT (working) for ~30-45s on the slow local LM Studio model — a wide window to land the mid-turn message. The pre-injection sleep (12s) lands the second message solidly inside that working window (well after the step-start, before any terminal step-finish).",
+            "mid_turn_send types the SECOND message + Enter into the composer WITHOUT bumping the driver's turn baseline (oc_mid_turn_send): opencode silently QUEUES the message — its documented default (issues #21388/#17691/#12707) — holding it in the runtime/UI queue and NOT writing it to the SQLite part/message tables until consumed. So during the in-flight + injection window the daemon's last store event stays a turn-internal assistant_message/function_call and the session stays working with no →ready or →waiting flicker.",
+            "Two wait_turn steps follow the injection: the first rides the slow-prompt baseline and detects turn1's terminal step-finish (reason=stop); the second detects the QUEUED message running as turn2 (its own working→ready arc). opencode consumes the queued message as a NEW turn — a step-finish reason=stop closes turn1, then turn2 begins — which is legal per the claudecode anchor's note (fold-vs-new-turn both acceptable; only the no-flicker-on-arrival window plus the final ready are asserted).",
+            "OpenCode session state lives in its SQLite store (~/.local/share/opencode/opencode.db); the daemon's ProcessOwnedStore source polls the session/part tables and classifies the ses_… session on the LAST part's event type. The run_live epilogue enumerates the top-level ses_… under the run cwd and stages its transcript after the TUI is dropped. The trailing sleep (8s) outlasts turn2's working→ready settle so the final ready is observed before daemon shutdown."
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Write a 400-word explanation of how TCP works, covering the three-way handshake, sequence numbers, acknowledgements, and flow control. Use full paragraphs."
+            },
+            {
+              "type": "sleep",
+              "seconds": 12
+            },
+            {
+              "type": "mid_turn_send",
+              "text": "Now also list three fun facts about giraffes."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 8
+            }
+          ],
+          "verify": [
+            "events.jsonl shows the ses_… session entering ready, then a single ready→working transition driven by the slow first prompt",
+            "events.jsonl contains a pid_discovered event bound to the ses_… session_id",
+            "events.jsonl contains NO state_transition to ready in the window from turn1's ready→working through the queued-message arrival (the working span is contiguous through the injection — opencode holds the queued message in its runtime queue, unwritten to SQLite, so the daemon's last store event stays turn-internal)",
+            "events.jsonl contains NO state_transition to waiting at any point during the working span (no permission gate; the queued message does not flip the session to waiting on arrival)",
+            "events.jsonl eventually shows a working→ready transition on the same ses_… and the final session state is ready — the queued message runs and the cycle closes. The transcript carries TWO step-finish parts (turn1's tool turn + turn2's giraffe-facts answer) proving the queued message was consumed; whether the daemon surfaces that as a second working→ready arc OR coalesces both turns into one contiguous working span (the inter-turn step-finish→step-start seam debounced, no settled ready between them — observed in this recording) is both legal per the anchor (fold-vs-new-turn). Only the no-flicker-on-arrival window plus the final ready are asserted.",
+            "the recording contains exactly ONE top-level ses_… session — a single mid-turn injection adds a queued turn on the one session, not a new session"
+          ],
+          "settings": {},
+          "timeout_seconds": 300
+        }
+      }
+    },
+    "pi": {
+      "recording_dir": "pi/scenarios/mid-turn-message-queued",
+      "artifacts": {
+        "events": "pi/scenarios/mid-turn-message-queued/events.jsonl",
+        "transcript": "pi/scenarios/mid-turn-message-queued/transcript.jsonl",
+        "manifest": "pi/scenarios/mid-turn-message-queued/manifest.json",
+        "golden": "pi/scenarios/mid-turn-message-queued/transcript.jsonl.replay.json.golden",
+        "recordings": [
+          "pi/scenarios/mid-turn-message-queued/recordings/2026-05-25-03-03-21_irrlichd-0.4.7+2f5b484"
+        ]
+      },
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "pass_rate": "5/5 phases passed",
+        "agent_cli_version": "0.70.0",
+        "daemon_version": "0.4.7+2f5b484",
+        "confidence": 0.7,
+        "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "mid-turn-message-queued",
+          "agent": "pi",
+          "assessed_at": "2026-05-25T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.7,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\n**Agent supports (yes).** Pi's REPL lets the user type a follow-up message WHILE a turn is in flight and queues it: Enter steers/queues the buffered text, Alt+Enter inserts a newline. The queued text is not dropped — it is consumed after the current turn settles. This satisfies the scenario's essence (user sends a follow-up mid-turn; the runtime buffers it without dropping it).\n\n**Irrlicht observes (partial).** The pi adapter is `FilesUnderRoot` over `~/.pi/agent/sessions/**.jsonl`, and the parser (`core/adapters/inbound/agents/pi/parser.go`) only flips the session back to `ready` on a `turn_done` event — i.e. a `{\"type\":\"message\",\"message\":{\"role\":\"assistant\",\"stopReason\":\"stop\"}}` line. A `user` line is classified as `user_message` and does NOT by itself emit a turn boundary or a ready transition. So a queued user line landing mid-turn cannot inject a working→ready flicker: the in-flight turn stays `working` until its own `stopReason:stop`.\n\nIn the live recording (pi 0.70.0), pi wrote the queued follow-up's `user` line within ~1ms of the first turn's `stopReason:stop` and began the next turn immediately, so the daemon never observed an intervening ready — the two back-to-back transcript turns COLLAPSED into a SINGLE contiguous working span (recorded: one ready→working→ready arc on the rollout session whose working span covers both turns, then a single process_exited). This is the canonical scenario observable, the same single-span shape claudecode/codex produce. The verdict is `partial` rather than `yes` because that single-span observability hinges on the sub-ms queue→consume timing: pi consumes the queued message as a distinct transcript turn (two `stop` lines, not one folded turn like codex), so if its consumption were delayed past the classifier's debounce window the queued message could instead surface as a separate working→ready arc. The negative invariant the scenario cares about (no mid-turn ready flicker, no waiting, ends ready) holds regardless. Hence `partial`, confidence 0.7.\n\n## What proves each signal\n\n- \"State stays working when the queued message arrives; no →ready flicker\": the working span is contiguous through the queued user line because only `stopReason:stop` flips to ready and the queued `user` line is not a stop; in the recording no ready transition appears between the first working and the cycle's end. Observable.\n- \"Cycle eventually ends at ready\": final `turn_done` on the rollout session → ready; single `process_exited` at REPL teardown. Observable.\n- \"No turn boundary on queued arrival\": the queued message is a `user_message`, which the parser does not treat as a turn boundary; the boundary is each turn's own `stop`. Observable.",
+          "caveats": [
+            "feature-invisible-but-spec-compliant: pi records the queued follow-up as a SEPARATE transcript turn (two stopReason==stop lines, not folded into one turn like codex), but consumes it within ~1ms of the first turn's stop, so the daemon observes a SINGLE contiguous working span rather than two arcs. The single-span observable depends on that sub-ms queue→consume timing; a delayed consumption could instead surface a second working→ready arc — the negative invariant (no mid-turn ready flicker, no waiting, ends ready) holds either way."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/pi/parser.go",
+              "note": "Only stopReason==\"stop\" maps to turn_done; a user line is user_message and emits no turn boundary, so a queued user line cannot inject a working→ready flicker."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/pi/agent.go",
+              "note": "Source is FilesUnderRoot over ~/.pi/agent/sessions — append-only JSONL transcript the daemon tails for state classification."
+            },
+            {
+              "kind": "file",
+              "ref": ".claude/skills/ir:onboard-agent/scripts/drive-pi-interactive.sh",
+              "note": "pi REPL banner documents Enter (steer/queue) vs Alt+Enter (newline); a second send before the first wait_turn types the follow-up while the turn is in flight."
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/codex/scenarios/mid-turn-message-queued/expected.jsonl",
+              "note": "Cross-adapter contrast: codex folds the queued message into one task_complete; pi does not, hence the partial."
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": true,
+          "preconditions": [
+            "pi CLI on PATH and authenticated (pi runs against its configured model out-of-band)",
+            "tmux available — the interactive driver runs pi in a tmux REPL so a follow-up can be typed while the first turn is still in flight",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+            "PARTIAL caveat (mirrored from the coverage assessment): pi queues the mid-turn follow-up (Enter steers/queues) and consumes it immediately after the in-flight turn — the queued user line is written to the transcript within ~1ms of the first turn's stopReason==stop and the next turn begins at once, so the daemon never observes an intervening ready and the two back-to-back transcript turns COLLAPSE into ONE contiguous working span (the canonical observable, same shape claudecode/codex produce). It is PARTIAL rather than yes because this single-span observability hinges on that sub-ms queue→consume timing; if pi's consumption were delayed past the classifier's debounce window the queued message could instead surface as a separate working→ready arc."
+          ],
+          "setup": [
+            "The interactive driver (drive-pi-interactive.sh) launches pi in a fresh per-run cwd inside a tmux session and waits for the REPL prompt",
+            "pi writes one JSONL rollout file per session under ~/.pi/agent/sessions/\u003ccwd-slug\u003e/ on first user input (FilesUnderRoot); the driver resolves that file and extracts the UUID from line 1",
+            "QUEUE MECHANICS via the driver's existing primitives (no new step type): the first send bumps the expected-turn counter to 1 and starts a slow count-to-10 that keeps pi busy for several seconds; a short sleep (NOT wait_turn) keeps the turn in flight; a SECOND send then types the follow-up while pi is still mid-turn — pi's REPL queues the buffered line (Enter steers/queues) and the second send bumps the expected-turn counter to 2; a single final wait_turn then blocks until the rollout shows ≥2 completed assistant turns (the in-flight turn THEN the queued message's turn)",
+            "WHY two sends rather than a `keys` injection: pi's interactive driver implements send/slash/wait_turn/interrupt/sleep but not `keys`; pi consumes a queued message as a full extra turn (unlike codex which folds it into one task_complete), so two sends with one final wait_turn is the natural, bookkeeping-correct expression — the EXPECTED_TURNS counter resolves at count≥2",
+            "After the final wait_turn + trailing sleep the driver kills the tmux session once — pi exits and the daemon emits a single process_exited for the rollout session"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Count slowly from 1 to 10, one number per line, with a brief pause between each. After 10, reply with exactly the word: done"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "send",
+              "text": "Also, after you finish counting, reply with exactly the word: followup"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a transcript_new for the rollout session born ready within ~2s of REPL launch (a transient proc-\u003cPID\u003e pre-session may also appear; the turns and pid_discovered land on the UUID-keyed rollout session)",
+            "events.jsonl contains a pid_discovered event bound to the rollout session_id",
+            "events.jsonl shows a single CONTIGUOUS working span on the rollout session: NO state_transition to ready between the first ready→working and the cycle's completion, even though the follow-up was typed (queued) mid-turn — pi folds the queued turn in within ~1ms of the first turn's stop so no intervening ready is observed",
+            "events.jsonl contains NO state_transition to waiting at any point on the rollout session",
+            "the rollout session's final live state is ready before the driver tears the REPL down (the cycle ends at ready once both the count and the queued follow-up are consumed)",
+            "events.jsonl contains exactly one process_exited on the rollout session at REPL teardown (one long-lived session)",
+            "transcript.jsonl contains at least two user lines (initial prompt + queued follow-up) and two assistant stopReason==stop lines; the queued user line introduces no turn boundary itself — only stopReason==stop flips state to ready, so the queued arrival cannot inject a synthetic working→ready flicker"
+          ],
+          "settings": {},
+          "timeout_seconds": 240
+        }
+      }
+    }
+  }
+}

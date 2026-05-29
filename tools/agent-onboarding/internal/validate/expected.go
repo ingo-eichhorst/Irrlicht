@@ -205,6 +205,20 @@ func ValidateExpectedAgainst(expectedPath, eventsPath string) (*ExpectedReport, 
 	if err != nil {
 		return nil, fmt.Errorf("load expected.jsonl: %w", err)
 	}
+	return ValidatePhases(meta, phases, eventsPath)
+}
+
+// ValidatePhases validates already-parsed spec phases against the recording at
+// eventsPath. It is the shared core of two callers that differ only in WHERE
+// the spec comes from: ValidateExpectedAgainst loads it from an on-disk
+// expected.jsonl; the shard readers parse it out of a scenario shard via
+// ParseShardSpec. Returns (nil, nil) when eventsPath is absent — the recording
+// hasn't been captured yet (the half-recorded guard lives in ValidateExpected,
+// the cell path).
+func ValidatePhases(meta ExpectedMeta, phases []ExpectedPhase, eventsPath string) (*ExpectedReport, error) {
+	if _, err := os.Stat(eventsPath); err != nil {
+		return nil, nil
+	}
 	events, err := loadEvents(eventsPath)
 	if err != nil {
 		return nil, fmt.Errorf("load events.jsonl: %w", err)
@@ -237,6 +251,47 @@ func ValidateExpectedAgainst(expectedPath, eventsPath string) (*ExpectedReport, 
 		Phases:         results,
 		Summary:        summarize(results),
 	}, nil
+}
+
+// ParseShardSpec parses a scenario shard's spec blocks — the per-adapter
+// details.expected_meta object and details.expected[] phase array — into the
+// same ExpectedMeta + []ExpectedPhase shapes loadExpected produces from an
+// on-disk expected.jsonl. The per-phase validation rules are identical to
+// loadExpected's (phase name required; exactly one of expected_state/kind;
+// same_session_as and new_session mutually exclusive) so a shard spec and an
+// expected.jsonl spec are accepted or rejected on the same terms. ok is false
+// when there are no phase lines — nothing to validate, not an error.
+func ParseShardSpec(metaLine json.RawMessage, phaseLines []json.RawMessage) (ExpectedMeta, []ExpectedPhase, bool, error) {
+	var meta ExpectedMeta
+	if len(metaLine) > 0 {
+		if err := json.Unmarshal(metaLine, &meta); err != nil {
+			return meta, nil, false, fmt.Errorf("parse expected_meta: %w", err)
+		}
+	}
+	if len(phaseLines) == 0 {
+		return meta, nil, false, nil
+	}
+	phases := make([]ExpectedPhase, 0, len(phaseLines))
+	for i, line := range phaseLines {
+		var p ExpectedPhase
+		if err := json.Unmarshal(line, &p); err != nil {
+			return meta, nil, false, fmt.Errorf("expected phase %d: %w", i, err)
+		}
+		if p.Phase == "" {
+			return meta, nil, false, fmt.Errorf("expected phase %d: phase name is required", i)
+		}
+		if p.ExpectedState == "" && p.Kind == "" {
+			return meta, nil, false, fmt.Errorf("expected phase %d (%q): exactly one of expected_state or kind required", i, p.Phase)
+		}
+		if p.ExpectedState != "" && p.Kind != "" {
+			return meta, nil, false, fmt.Errorf("expected phase %d (%q): expected_state and kind are mutually exclusive", i, p.Phase)
+		}
+		if p.SameSessionAs != "" && p.NewSession {
+			return meta, nil, false, fmt.Errorf("expected phase %d (%q): same_session_as and new_session are mutually exclusive", i, p.Phase)
+		}
+		phases = append(phases, p)
+	}
+	return meta, phases, true, nil
 }
 
 func loadExpected(path string) (ExpectedMeta, []ExpectedPhase, error) {

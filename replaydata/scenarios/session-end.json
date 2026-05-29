@@ -1,0 +1,518 @@
+{
+  "id": "1.2",
+  "name": "session-end",
+  "section": "Session lifecycle",
+  "feature": "Session end",
+  "description": "Three claude lifetimes recorded back-to-back, one per session-end variant from .specs/agent-scenarios.md: (1) clean exit after a no-op turn, (2) SIGKILL while idle in ready, (3) SIGKILL mid-turn while still working. The recording lets irrlicht surface three ready→working→ready arcs separated by grey gaps in the state band. Each variant tests a different teardown path and the user-observable assertion that the session disappears regardless of how it ended.",
+  "requires": [
+    "headless_mode"
+  ],
+  "verify": {
+    "transitions_topology": [
+      "ready",
+      "working",
+      "ready"
+    ],
+    "final_state": "ready",
+    "tool_calls_max": 0
+  },
+  "agents": {
+    "aider": {
+      "recording_dir": "aider/scenarios/session-end",
+      "artifacts": {
+        "events": "aider/scenarios/session-end/events.jsonl",
+        "transcript_md": "aider/scenarios/session-end/transcript.md",
+        "manifest": "aider/scenarios/session-end/manifest.json"
+      },
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "pass_rate": "2/2 phases passed",
+        "agent_cli_version": "0.86.2",
+        "daemon_version": "0.4.7+4886de8.dirty",
+        "confidence": 0.85,
+        "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "session-end",
+          "agent": "aider",
+          "assessed_at": "2026-05-25T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.85,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nThe scenario's three Expected variants are: (1) clean exit, (2) SIGKILL while idle in ready, and (3) SIGKILL mid-turn while still working. For the aider adapter, irrlicht observes variant 1 cleanly — the per-cwd `.aider.chat.history.md` is detected on launch, the session lands in ready, and process_exited fires after the working window closes (about 2 minutes in the recording due to the headless driver's idle-flush window). Variants 2 and 3 are NOT currently observable end-to-end because aider's headless `--print` is single-shot and the aider interactive driver does not currently expose `sigkill` / `restart` / `exit_clean`.\n\nThe captured invariants hold: process_exited fires while session is in ready, with no transition to waiting in the tail.",
+          "caveats": [
+            "Variants 2 and 3 unobservable: would need driver-level sigkill primitive added to drive-aider-interactive.sh.",
+            "Aider's TUI is not designed to outlive a single --print invocation; multi-variant chaining like claudecode's restart path doesn't translate directly."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/aider/agent.go",
+              "note": "Aider adapter declaration; FilesUnderCWD source with .aider.chat.history.md."
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": true,
+          "preconditions": [
+            "aider CLI on PATH and authenticated (ANTHROPIC_API_KEY or OPENAI_API_KEY)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+          ],
+          "setup": [
+            "Create an empty cwd under \u003cstaging\u003e/cwd/"
+          ],
+          "prompt": "Reply with exactly the word: ok",
+          "verify": [
+            "events.jsonl contains a transcript_new for .aider.chat.history.md and a state_transition to ready",
+            "events.jsonl contains a process_exited after the recording's working window closes",
+            "events.jsonl contains a transcript_removed once the aider process has gone",
+            "final session state is ready before process_exited"
+          ],
+          "settings": {},
+          "timeout_seconds": 120,
+          "scope_note": "Aider's headless `--print` exits within ~250 ms, so only variant 1 (clean exit) is recorded. Variants 2 and 3 (SIGKILL while idle / mid-turn) require driver-level primitives the aider interactive driver does not currently expose, and aider's TUI is not designed to outlive a single --print invocation anyway."
+        }
+      }
+    },
+    "claudecode": {
+      "recording_dir": "claudecode/scenarios/session-end",
+      "artifacts": {
+        "events": "claudecode/scenarios/session-end/events.jsonl",
+        "transcript": "claudecode/scenarios/session-end/transcript.jsonl",
+        "manifest": "claudecode/scenarios/session-end/manifest.json",
+        "golden": "claudecode/scenarios/session-end/transcript.jsonl.replay.json.golden"
+      },
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "pass_rate": "11/11 phases passed",
+        "agent_cli_version": "2.1.143",
+        "daemon_version": "0.4.5+e011e88",
+        "confidence": 0.9,
+        "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "session-end",
+          "agent": "claudecode",
+          "assessed_at": "2026-05-17T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.9,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nThe Session end spec has three variants, all of which claudecode supports as-shipped and irrlicht observes via committed transport.\n\n**Variant 1 — clean exit (Ctrl-D).** Claude Code's TUI exits gracefully on Ctrl-D after a no-op turn. The OS terminates the `claude` process, irrlicht's process scanner detects the disappearance and emits `process_exited`. Spec bullet 'State is `ready` at exit' is satisfied because the recipe sleeps 2 s after the turn completes before sending Ctrl-D — the state band shows `ready` immediately before `process_exited`. Spec bullet 'Session disappears within readyTTL' is satisfied by the standard ready→removed timer.\n\n**Variant 2 — SIGKILL mid-idle.** `kill -9 claude` terminates the process while it sits idle in `ready`. irrlicht emits `process_exited` within one scanner tick. Spec bullet 'Session disappears within 1s' is satisfied (scanner tick \u003c 1s). Spec bullet 'State never entered working post-exit' is asserted as an invariant on the v2_exit phase (no state_transition to working between v2_turn_done and process_exited).\n\n**Variant 3 — SIGKILL mid-turn (crash analogue).** `kill -9` while the session is `working` on a longer prompt. The agent process disappears with no turn-end signal. irrlicht's process-exit sweep emits `process_exited`. Spec bullet 'State reaches `ready` within sweep interval' is the daemon's sweep-to-ready behaviour; whether the sweep transition lands inside the recording's tail is variant-dependent (see caveat). The dashboard's live sweep handles it correctly regardless.\n\n## What irrlicht does NOT see (and why that's OK)\n\nThe variant-3 sweep-to-ready transition may not appear in the recording's 8-second tail (the recipe documents this). The live dashboard correctly settles to `ready` because the sweep keeps running, but the recording window may close first. The phase contract accommodates this by anchoring v3_exit to v3_turn_start with a 15-second budget instead of requiring an explicit ready phase. Issue #321 (zombie-on-restart) was fixed in irrlichd 0.4.x; the recipe historically passes 11/11 phases.",
+          "caveats": [
+            "Variant 3 (SIGKILL mid-turn): the post-crash sweep-to-ready transition may not land inside the recording's tail window — the live dashboard handles it correctly via the sweep, but the recording can miss it. The spec contract accommodates this by anchoring v3_exit to v3_turn_start, not requiring an explicit post-crash ready phase.",
+            "Each `restart` step mints a fresh cwd (cwd-2, cwd-3, ...) because claudecode caches per-directory trust dialogs; reusing a cwd would hang the driver's wait-for-trust loop. The driver handles this automatically; recipe authors must not 'optimize' by sharing cwds."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/claudecode/agent.go",
+              "note": "ExactName{Name: \"claude\"} process matcher — process_exited fires when pgrep no longer sees the process."
+            },
+            {
+              "kind": "file",
+              "ref": ".claude/skills/ir:onboard-agent/scenarios.json",
+              "note": "by_adapter.claudecode.script for session-end — 16 steps covering 3 variants (clean exit / SIGKILL idle / SIGKILL mid-turn) using exit_clean, restart, sigkill step types."
+            },
+            {
+              "kind": "issue",
+              "ref": "ingo-eichhorst/Irrlicht#321",
+              "note": "Zombie-on-restart fixed in 0.4.x — referenced by the matrix notes for this cell."
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": true,
+          "preconditions": [
+            "claude CLI on PATH and authenticated (subscription or API key)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+            "no other claudecode session uses any of the recipe's UUIDs"
+          ],
+          "setup": [
+            "Driver generates 3 lowercased UUIDs: the staging-supplied one for the first session, and two via `uuidgen | tr '[:upper:]' '[:lower:]'` for the restart steps",
+            "Driver creates 3 fresh cwds under \u003cstaging\u003e/cwd, cwd-2, cwd-3 so claudecode shows the trust dialog for each (claude caches trust per directory)"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 2
+            },
+            {
+              "type": "exit_clean"
+            },
+            {
+              "type": "sleep",
+              "seconds": 5
+            },
+            {
+              "type": "restart"
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "sigkill"
+            },
+            {
+              "type": "sleep",
+              "seconds": 5
+            },
+            {
+              "type": "restart"
+            },
+            {
+              "type": "send",
+              "text": "Write a 200 word essay about the history of coffee."
+            },
+            {
+              "type": "sleep",
+              "seconds": 2
+            },
+            {
+              "type": "sigkill"
+            },
+            {
+              "type": "sleep",
+              "seconds": 8
+            }
+          ],
+          "verify": [
+            "events.jsonl contains exactly 3 distinct UUID session_ids (one per variant) plus their proc-\u003cPID\u003e pre-session rows",
+            "events.jsonl contains exactly 3 process_exited events, one per UUID",
+            "variant 1: the first UUID session has a state_transition to ready right after its turn completes, immediately preceding its process_exited",
+            "variant 2: the second UUID session ends in ready (idle) when sigkill fires; no state_transition to working appears after the process_exited",
+            "variant 3: the third UUID session is in working when sigkill fires; irrlichd's sweep-promotes-to-ready behavior may or may not produce a working→ready transition before transcript_removed, depending on the 8 s tail window — accept either shape",
+            "the state band in the viewer shows three colored arcs separated by grey gaps where no session is alive between variants",
+            "transcript.jsonl contains 3 user lines and 3 assistant lines, with the variant-3 assistant message bearing stop_reason=stop_sequence (interrupted)"
+          ],
+          "settings": {},
+          "timeout_seconds": 180
+        }
+      }
+    },
+    "codex": {
+      "recording_dir": "codex/scenarios/session-end",
+      "artifacts": {
+        "events": "codex/scenarios/session-end/events.jsonl",
+        "transcript": "codex/scenarios/session-end/transcript.jsonl",
+        "manifest": "codex/scenarios/session-end/manifest.json",
+        "golden": "codex/scenarios/session-end/transcript.jsonl.replay.json.golden"
+      },
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "pass_rate": "14/14 phases passed",
+        "agent_cli_version": "0.130.0",
+        "daemon_version": "0.4.7+02a3ed5.dirty",
+        "confidence": 0.9,
+        "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "session-end",
+          "agent": "codex",
+          "assessed_at": "2026-05-24T22:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.9,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nThe scenario's three Expected variants are: (1) clean exit, (2) SIGKILL while idle in ready, and (3) SIGKILL mid-turn while still working. All three are now observed end-to-end for the codex adapter, recorded back-to-back via drive-codex-interactive.sh's `sigkill` + `restart` step primitives:\n\n- Variant 1 (clean Ctrl-D exit): the rollout session is born in ready, the turn completes (working→ready), and process_exited fires after state returned to ready.\n- Variant 2 (SIGKILL mid-idle): the turn completes back to ready, the rollout stays idle, and process_exited fires while in ready — no transition to working or waiting follows the turn.\n- Variant 3 (SIGKILL mid-turn): the rollout enters working on the prompt and process_exited fires while still in working (~3 s after the working transition).\n\nexpected.jsonl encodes all three arcs (per-variant session_birth → handoff → turn_start [→ turn_done] → exit) and validates 14/14 phases against the recording.\n\n## sigkill mechanism\n\nUnlike claudecode (which pgreps `--session-id \u003cuuid\u003e` from argv), codex's argv is uniform (`codex --no-alt-screen` for every session), so there is no per-session argv marker. drive-codex-interactive.sh's step_sigkill instead targets the exact process the daemon tracks: codex holds its rollout .jsonl open for writing for the session lifetime, and the daemon discovers the PID as that write-FD holder (codex/pid.go → DiscoverPIDByTranscriptWriter, via lsof). The driver mirrors that lsof lookup, with a tmux-pane-tree fallback so a SIGKILL cannot merely orphan codex.",
+          "caveats": [
+            "Variant 3 must sleep ~5 s before the kill (the recipe does), not the 2 s claudecode uses: codex's ready→working promotion lags ~2.7 s behind first activity, so a shorter window kills before working is observed and the variant collapses to ready→process_exited.",
+            "Variant 3's recording may or may not show a working→ready sweep before process_exited depending on the 8 s tail window — expected.jsonl asserts only that process_exited fires while in working (v3 has no turn_done phase)."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/codex/pid.go",
+              "note": "Daemon discovers the codex PID as the rollout's lsof write-FD holder — the target step_sigkill kills."
+            },
+            {
+              "kind": "file",
+              "ref": ".claude/skills/ir:onboard-agent/scripts/drive-codex-interactive.sh",
+              "note": "step_sigkill + step_restart primitives that make variants 2 and 3 recordable."
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": true,
+          "preconditions": [
+            "codex CLI on PATH and authenticated (~/.codex/config.toml or OPENAI_API_KEY)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+          ],
+          "setup": [
+            "Driver creates 3 fresh cwds under \u003cstaging\u003e/cwd, cwd-2, cwd-3 (one per variant); codex caches trust per directory, so each restart's fresh cwd shows its own trust dialog the driver auto-accepts",
+            "Codex assigns its own session_id per rollout — there is no preferred-UUID handoff like claudecode"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 2
+            },
+            {
+              "type": "exit_clean"
+            },
+            {
+              "type": "sleep",
+              "seconds": 5
+            },
+            {
+              "type": "restart"
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "sigkill"
+            },
+            {
+              "type": "sleep",
+              "seconds": 5
+            },
+            {
+              "type": "restart"
+            },
+            {
+              "type": "send",
+              "text": "Write a 200 word essay about the history of coffee."
+            },
+            {
+              "type": "sleep",
+              "seconds": 5
+            },
+            {
+              "type": "sigkill"
+            },
+            {
+              "type": "sleep",
+              "seconds": 8
+            }
+          ],
+          "verify": [
+            "events.jsonl contains exactly 3 distinct rollout session_ids (one per variant) plus their proc-\u003cPID\u003e pre-session rows",
+            "events.jsonl contains exactly 3 process_exited events, one per session_id",
+            "variant 1: the first session has a state_transition to ready right after its turn completes, immediately preceding its process_exited (clean Ctrl-D exit)",
+            "variant 2: the second session ends in ready (idle) when sigkill fires; no state_transition to working appears after its final ready",
+            "variant 3: the third session is in working when sigkill fires; irrlichd's sweep-promotes-to-ready behavior may or may not produce a working→ready transition before process_exited, depending on the 8 s tail window — accept either shape",
+            "the state band in the viewer shows three colored arcs separated by grey gaps where no session is alive between variants"
+          ],
+          "settings": {},
+          "timeout_seconds": 300,
+          "scope_note": "All three variants are recorded back-to-back via drive-codex-interactive.sh: (1) clean Ctrl-D exit after a no-op turn, (2) SIGKILL while idle in ready, (3) SIGKILL mid-turn while still working. restart starts a fresh codex (new rollout, fresh cwd) between variants; sigkill targets the daemon's PID directly (the rollout's lsof write-FD holder, per codex/pid.go) since codex's uniform argv has no per-session marker to pgrep. Variant 3 sleeps 5 s before the kill (vs claudecode's 2 s): codex's ready→working promotion lags ~2.7 s behind first activity, so a 2 s window kills BEFORE working is observed and the variant collapses to ready→process_exited. 5 s clears the promotion latency while staying mid-essay."
+        }
+      }
+    },
+    "opencode": {
+      "recording_dir": "opencode/scenarios/session-end",
+      "artifacts": {
+        "events": "opencode/scenarios/session-end/events.jsonl",
+        "transcript": "opencode/scenarios/session-end/transcript.jsonl",
+        "manifest": "opencode/scenarios/session-end/manifest.json",
+        "golden": "opencode/scenarios/session-end/transcript.jsonl.replay.json.golden"
+      },
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "pass_rate": "2/2 phases passed",
+        "agent_cli_version": "unknown",
+        "daemon_version": "0.4.7+0094b27.dirty",
+        "confidence": 0.85,
+        "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "session-end",
+          "agent": "opencode",
+          "assessed_at": "2026-05-25T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.85,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nThe scenario's three Expected variants are: (1) clean exit, (2) SIGKILL while idle in ready, and (3) SIGKILL mid-turn while still working. For the opencode adapter, irrlicht observes variant 1 cleanly — proc-\u003cPID\u003e presession born in ready, opencode's SQLite-backed `ses_…` session reconciles, working→ready transitions appear during the turn, and process_exited fires after the final ready. Variants 2 and 3 are NOT currently observable because `opencode run` is single-shot and the opencode interactive driver does not currently expose sigkill / restart.\n\nThe spec's invariants hold: process_exited fires after the working window closes with no transition to waiting in the tail.",
+          "caveats": [
+            "Variants 2 and 3 unobservable: would need driver-level sigkill added to drive-opencode-interactive.sh.",
+            "OpenCode's session lives across `opencode run --session` invocations via SQLite; chaining variants in one recording is possible in principle but requires recipe primitives the driver doesn't expose today (kill + restart while keeping the daemon attached)."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/opencode/agent.go",
+              "note": "OpenCode adapter declaration; ProcessOwnedStore source over SQLite."
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": true,
+          "preconditions": [
+            "opencode CLI on PATH and authenticated",
+            "irrlichd is recording with the opencode SQLite watcher enabled"
+          ],
+          "setup": [
+            "Create an empty cwd under \u003cstaging\u003e/cwd/"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a presession_created for proc-\u003cPID\u003e and a transcript_new for the opencode ses_… session",
+            "events.jsonl contains a state_transition to ready, then working (during the turn), then ready (turn complete)",
+            "events.jsonl contains a process_exited after the final ready (clean exit at end of `opencode run`)",
+            "no state_transition to working or waiting between the final ready and process_exited",
+            "final session state is ready (before exit)"
+          ],
+          "settings": {},
+          "timeout_seconds": 120,
+          "scope_note": "OpenCode's `opencode run` is single-shot per invocation, so only variant 1 (clean exit) is recorded. Variants 2 and 3 (SIGKILL idle / mid-turn) require driver-level primitives the opencode interactive driver does not currently expose."
+        }
+      }
+    },
+    "pi": {
+      "recording_dir": "pi/scenarios/session-end",
+      "artifacts": {
+        "events": "pi/scenarios/session-end/events.jsonl",
+        "transcript": "pi/scenarios/session-end/transcript.jsonl",
+        "manifest": "pi/scenarios/session-end/manifest.json",
+        "golden": "pi/scenarios/session-end/transcript.jsonl.replay.json.golden",
+        "recordings": [
+          "pi/scenarios/session-end/recordings/2026-05-25-01-48-39_irrlichd-0.4.7+597f655"
+        ]
+      },
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "pass_rate": "5/5 phases passed",
+        "agent_cli_version": "0.70.0",
+        "daemon_version": "0.4.7+597f655",
+        "confidence": 0.85,
+        "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "session-end",
+          "agent": "pi",
+          "assessed_at": "2026-05-25T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.85,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nThe scenario's User-observable signal is: the session row disappears within the expected TTL, and the state immediately before disappearing is `ready`. Pi supports the clean-exit teardown path natively. Headless `pi --print -p \u003cprompt\u003e` runs a single assistant turn and then exits the process at turn completion — there is no scripted clean-exit keystroke to issue; the natural end of the headless invocation IS the session end. The daemon's process scanner observes the pi PID exit and emits a `process_exited` event for the owning session, and the idle-TTL sweep removes the row afterward. Because pi writes one JSONL session file per invocation under `~/.pi/agent/sessions/\u003ccwd-slug\u003e/\u003cts\u003e_\u003cUUID\u003e.jsonl` (FilesUnderRoot, non-lazy), irrlicht observes the full arc: session born ready, working flip on the turn, working→ready settle when the turn completes (`stopReason=stop` → turn_done), then `pid_discovered` and `process_exited` at headless exit — with the session in `ready` before exit.\n\nOnly variant 1 (clean exit) is recordable for pi: the pi interactive driver supports send/slash/wait_turn/interrupt/sleep only and exposes NO exit_clean/sigkill primitives, so variants 2 (SIGKILL while idle) and 3 (SIGKILL mid-turn) cannot be driven and are out of scope for this cell. The clean-exit variant is the canonical session-end path and is fully observable.\n\nConfidence 0.85 reflects a known timing risk: headless `pi --print` exits very quickly at turn completion, so the post-exit settle window the spec asserts may be truncated by the fast process exit. If validation drifts because of that, the recording is committed and the drift flagged rather than the spec rebased.",
+          "caveats": [
+            "Pi cannot accept a pre-assigned UUID — it generates one itself. The headless driver discovers the UUID from the session header on line 1 of the freshly-created transcript.",
+            "Headless `pi --print` exits at turn completion, so the rollout session's terminal working→ready settle and the process_exited can land very close together; the spec anchors teardown to pid_bind/turn_end (not to session_birth) so the matcher picks the post-turn ready, not the earlier birth ready.",
+            "Variants 2 (SIGKILL idle) and 3 (SIGKILL mid-turn) require interactive-driver primitives the pi driver does not expose (send/slash/wait_turn/interrupt/sleep only); session-end is recorded as variant 1 (natural clean exit) alone."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/pi/agent.go",
+              "note": "Identity.Name=pi, Source variant FilesUnderRoot under ~/.pi/agent/sessions/, ExactName{Name: \"pi\"} process matcher; process-exit detection drives session removal."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/pi/parser.go",
+              "note": "stopReason=stop on the final assistant event maps to turn_done (working→ready) before exit."
+            },
+            {
+              "kind": "file",
+              "ref": ".claude/skills/ir:onboard-agent/scripts/drive-pi.sh",
+              "note": "Headless `pi --print -p \u003cprompt\u003e` single-shot driver; the process exits naturally at turn completion (no exit_clean keystroke), which is the session-end signal."
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": true,
+          "preconditions": [
+            "pi CLI on PATH and authenticated (pi runs against its configured model out-of-band)",
+            "tmux available — the interactive driver runs pi in a tmux REPL so the session is a real long-lived process that exits via a natural teardown at script end",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+          ],
+          "setup": [
+            "The interactive driver (drive-pi-interactive.sh) launches pi in a fresh per-run cwd inside a tmux session, waits for the REPL prompt, then sends one prompt",
+            "pi writes one JSONL rollout file per session under ~/.pi/agent/sessions/\u003ccwd-slug\u003e/ on launch (FilesUnderRoot, non-lazy); the driver resolves that file and extracts the UUID from line 1",
+            "The send bumps the expected-turn counter; wait_turn blocks until the rollout shows a completed assistant turn so teardown never races a still-running turn",
+            "After the trailing sleep the driver kills the tmux session once — pi exits naturally and the daemon emits a single process_exited for the rollout session: THAT process exit IS the session-end signal"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a transcript_new for the rollout session born ready within ~2s of REPL launch (a transient proc-\u003cPID\u003e pre-session may also appear; the turn and pid_discovered land on the UUID-keyed rollout session)",
+            "events.jsonl contains a pid_discovered event bound to the rollout session_id",
+            "events.jsonl contains one state_transition→working / →ready arc on the rollout session_id (the turn settles back to ready)",
+            "the rollout session's final live state is ready before the driver tears the REPL down",
+            "events.jsonl contains exactly one process_exited on the rollout session at REPL teardown, fired AFTER the final ready — the session row disappears and its state immediately before disappearing is ready",
+            "no state_transition to working or waiting appears between the final ready and process_exited"
+          ],
+          "settings": {},
+          "timeout_seconds": 180,
+          "scope_note": "Pi session-end is recorded in SCRIPT mode (interactive tmux REPL): one normal turn, then the driver kills the tmux session so pi exits naturally — that natural process exit after the final ready IS the modeled clean-exit teardown. Re-recorded from PROMPT mode because headless `pi --print` exits before the post-turn settle and a transient proc-\u003cPID\u003e pre-session row stole session_birth, breaking the same_session_as chain (the C7 anchor-to-start workaround that fixed multi-turn-conversation). SIGKILL-idle / SIGKILL-mid-turn variants stay out of scope — the pi interactive driver exposes send/slash/wait_turn/interrupt/sleep only (no sigkill/exit_clean), and natural teardown is the single correctly-modeled variant."
+        }
+      }
+    }
+  }
+}

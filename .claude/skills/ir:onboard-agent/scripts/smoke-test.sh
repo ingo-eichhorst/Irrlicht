@@ -44,13 +44,10 @@ echo ""
 echo "== unit tests (lib/cell-integrity_test.sh) =="
 bash "$SCRIPT_DIR/lib/cell-integrity_test.sh" || rc=1
 
-echo ""
-echo "== unit tests (lib/catalog-drift_test.sh) =="
-bash "$SCRIPT_DIR/lib/catalog-drift_test.sh" || rc=1
-
-echo ""
-echo "== unit tests (lib/consistency-gate_test.sh) =="
-bash "$SCRIPT_DIR/lib/consistency-gate_test.sh" || rc=1
+# The catalog-drift and consistency gates were retired with the #510 shard
+# migration: a per-scenario shard is the single source for a cell, so the
+# catalog↔rollup bijection and assessment⟺scenarios agreement they enforced
+# can no longer drift (there is no second file to disagree with).
 
 echo ""
 echo "== unit tests (lib/drive/drive-lib_test.sh) =="

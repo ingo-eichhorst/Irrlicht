@@ -1,0 +1,535 @@
+{
+  "id": "5.2",
+  "name": "model-identification",
+  "section": "Metrics",
+  "feature": "Model identification",
+  "description": "Single no-op turn in a claudecode session launched with a non-default model (e.g. --model claude-opus-4-7). Locks down that extractClaudeCodeModel pulls the model name from raw.message.model on the first assistant event and that SessionMetrics.ModelName is populated (not 'unknown') and ContextWindow matches the model's published window (via raw.context_management.context_window when present, the [1m] suffix heuristic, or the LiteLLM alias-table fallback). The state arc is the basic-turn arc; the assertion lives in events.jsonl payload.",
+  "requires": [
+    "headless_mode"
+  ],
+  "verify": {
+    "final_state": "ready",
+    "tool_calls_max": 0,
+    "transitions_topology": [
+      "ready",
+      "working",
+      "ready"
+    ],
+    "model_present": true
+  },
+  "agents": {
+    "aider": {
+      "recording_dir": "aider/scenarios/model-identification",
+      "artifacts": {
+        "events": "aider/scenarios/model-identification/events.jsonl",
+        "transcript_md": "aider/scenarios/model-identification/transcript.md",
+        "manifest": "aider/scenarios/model-identification/manifest.json"
+      },
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "pass_rate": "5/5 phases passed",
+        "agent_cli_version": "0.86.2",
+        "daemon_version": "0.4.7+6fcf3d4",
+        "confidence": 0.85,
+        "notes": "agent_supports: yes\ndaemon_capability: full\ndriver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "model-identification",
+          "agent": "aider",
+          "assessed_at": "2026-05-25T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.85,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Primitive\n\nModel metadata reporting: the agent's transcript records the active model name in a field the parser can extract, so the dashboard shows the launch model rather than 'unknown', and the context window matches the model's published window. The capability key is `multi_model_orchestration` in `replaydata/agents/aider/capabilities.json` (already `true`) — aider's first-class model selection is the surface that puts the launch model into the transcript.\n\n## Reasoning\n\n### Agent supports it\n\nAider is launched with a specific model via `--model \u003cname\u003e` (or the default config model), documented on the official model-selection page (https://aider.chat/docs/usage/commands.html and https://aider.chat/docs/llms.html). On the first assistant block of every session aider writes a `\u003e Model: \u003cname\u003e with \u003cedit format\u003e` blockquote into `.aider.chat.history.md` — confirmed in committed recordings, e.g. `replaydata/agents/aider/regression/multi-turn-conversation/transcript.md:10` (`\u003e Model: openai/google/gemma-4-26b-a4b with whole edit format`). So the launch model is recorded explicitly in the transcript from turn one.\n\n### daemon_capability: full\n\nThe scenario's two user-observable signals are:\n1. `ModelName = \u003claunch model\u003e` (not `\"unknown\"`).\n2. `ContextWindow` matches the model's published window.\n\nBoth resolve through the aider transport as it exists today, so a recording + working driver yields these observables:\n\n- **ModelName.** The parser's `modelRE` (`core/adapters/inbound/agents/aider/parser.go:66`) matches the `\u003e Model: \u003cname\u003e` blockquote, captures the name, runs it through `tailer.NormalizeModelName`, sets `p.model`, and emits a `Skip` event carrying `ModelName` (parser.go:110-113). Every subsequent `\u003e Tokens:` line then stamps that same `p.model` onto each `assistant_message` (`closeModelCall`, parser.go:153-187). The tailer's `applyModelMetadata` (`core/pkg/tailer/tailer_metrics.go:110`) sets `t.metrics.ModelName` on any event with a non-empty `ModelName`, including the `Skip` event — so `SessionMetrics.ModelName` is populated from the first assistant block and is never `\"unknown\"` for a model aider actually names. Transport is `FilesUnderCWD{ .aider.chat.history.md, RawLineParser }` (`agent.go:45`), a real local transcript, so there is no transport gap of the cloud-only kind that would make the daemon `incapable`.\n- **ContextWindow.** Unlike codex (which writes `payload.model_context_window`) or claudecode (`raw.context_management.context_window`), aider's markdown transcript carries NO context-window field — the parser never sets `parsed.ContextWindow`, so `contextWindowOverride` stays 0. `ContextWindow` is therefore derived entirely from the capacity manager: `ComputeContextUtilization` falls through to `capacityMgr.GetModelCapacity(modelName).ContextWindow` (`tailer_metrics.go:453-454`), i.e. exactly the scenario's third resolution path (\"the LiteLLM alias-table fallback\"). For any model present in the LiteLLM table (after the `modelAliases` rewrite in `core/pkg/capacity/capacity.go:104` and `aliases.go`), `ContextWindow` is the model's published window. For a model absent from LiteLLM, `GetModelCapacity` returns a zero window and the tailer sets `ContextWindowUnknown: true` (`tailer_metrics.go:457-458, 487`) — see caveats.\n\nSo both signals fall out of the parser + capacity manager for any LiteLLM-known launch model — the daemon handles the spec-required observables today, hence `full` (not `bug`: nothing mis-handled; not `incapable`: a real local transcript carries the model name). The `model_present: true` and basic-turn state arc (`ready→working→ready`, `tool_calls_max: 0`) in the scenario verify block are satisfied by a single no-op turn (the `\u003e Tokens:` line plus `IdleFlush`-synthesized `turn_done`, parser.go:216).\n\n### driver_capability: ready\n\nThe recipe drives one live aider REPL with a single `send` + `wait_turn` + trailing `sleep`. The aider interactive driver (`scripts/drive-aider-interactive.sh`) implements all three step types (`send|slash)`, `wait_turn)`, `sleep)`). No gapped primitive (no restart / reset_session / resume / keys / sigkill etc.) is required, so the driver can record this cell as-is — `ready`.\n\n### Matrix drift\n\nThe coverage matrix already records `agent_supports: yes`, `daemon_capability: full`, `driver_capability: ready` with the note \"regex-parsed '\u003e Model:' / '\u003e Main model:'\". This assessment ratifies that verdict — no drift.\n\n## Confidence\n\n0.85: the `\u003e Model:` line is documented and visible in committed aider recordings, and the ModelName path is grounded in the adapter source plus pinning tests (`parser_test.go`); the driver step types are confirmed in the driver script. Held below 0.9 because `ContextWindow` correctness depends on the launch model being present in the LiteLLM capacity table — true for mainstream models (claude-*, gpt-5) but not for the exotic/local gemma models aider's existing fixtures happen to use, and no end-to-end recording of this specific cell exists yet (that is Stage 4's job).",
+          "caveats": [
+            "ContextWindow correctness is contingent on the LiteLLM capacity table: aider's markdown transcript carries no context-window field, so the value comes solely from `capacityMgr.GetModelCapacity(modelName)`. A model absent from LiteLLM (e.g. the local/exotic `openai/gemma-*` models used in aider's current fixtures) resolves to a zero window with `ContextWindowUnknown: true` — the ModelName is still correct, but the published-window assertion only holds for LiteLLM-known launch models.",
+            "The `\u003e Weak model: …` line aider may also print is intentionally NOT matched by `modelRE` (parser.go:65) — only `Model:` / `Main model:` drive `ModelName`, which is correct here since the weak/summary model is not the turn's main model.",
+            "End-of-turn is always synthesized via the 1500ms IdleFlush (clamped to the SessionDetector working-refresh window), never marked in-band — so the working→ready flip trails file quiet and ContextWindow may briefly read 0 between session detection and the first assistant block; assert ModelName/ContextWindow only after turn_end."
+          ],
+          "sources": [
+            {
+              "kind": "url",
+              "ref": "https://aider.chat/docs/llms.html",
+              "note": "official model-selection docs: aider launches against a specific model via --model / config; the chosen model is the Main Model recorded in the session"
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/aider/parser.go",
+              "note": "modelRE (L66) matches `\u003e Model: \u003cname\u003e`; sets p.model via NormalizeModelName and emits Skip event with ModelName (L110-113); closeModelCall (L153) stamps p.model on each assistant_message; parser never sets ContextWindow — grounds daemon_capability: full"
+            },
+            {
+              "kind": "file",
+              "ref": "core/pkg/tailer/tailer_metrics.go",
+              "note": "applyModelMetadata (L110) sets metrics.ModelName from any non-empty ModelName event incl. the Skip event; ComputeContextUtilization (L447-458) derives ContextWindow from capacityMgr.GetModelCapacity when no override, sets ContextWindowUnknown when the model is absent (caveat 1)"
+            },
+            {
+              "kind": "file",
+              "ref": "core/pkg/capacity/capacity.go",
+              "note": "GetModelCapacity (L101) applies modelAliases then looks up the LiteLLM table; returns zero ContextWindow for unknown models — the alias-table fallback path the scenario names"
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/aider/regression/multi-turn-conversation/transcript.md",
+              "note": "L10 shows the real first-assistant `\u003e Model: openai/google/gemma-4-26b-a4b with whole edit format` blockquote aider writes — confirms the line shape modelRE parses"
+            },
+            {
+              "kind": "file",
+              "ref": ".claude/skills/ir:onboard-agent/scripts/drive-aider-interactive.sh",
+              "note": "interactive driver implements send|slash / wait_turn / sleep — the only step types this recipe needs — grounds driver_capability: ready"
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/aider/capabilities.json",
+              "note": "multi_model_orchestration: true (the capability key for this primitive); headless_mode: true (the scenario's requires:)"
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": true,
+          "preconditions": [
+            "aider CLI on PATH and authenticated against a provider out-of-band; the driver does not handle a login/OAuth prompt (headless aider hangs ~5min on OpenRouter OAuth if no key is present).",
+            "tmux available — the interactive driver runs aider in a tmux REPL so it can send one prompt to a long-lived session and tear it down cleanly.",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record.",
+            "the launch model is reachable on the account AND present in the LiteLLM capacity table so ContextWindow resolves to the published window. Set IRRLICHT_AIDER_MODEL to a known model name (e.g. a mainstream claude-* / gpt-* the alias table covers) for a deterministic ModelName and a non-zero ContextWindow; for a model absent from LiteLLM, ModelName is still correct but ContextWindow resolves to 0 / ContextWindowUnknown=true (assessment caveat 1).",
+            "feature-invisible caveat: aider's `\u003e Weak model:` line is intentionally NOT matched by the parser's modelRE (only `Model:`/`Main model:` drive ModelName), so the weak/summary model is never the asserted ModelName; this recipe runs on the MAIN model, which is what aider writes as `\u003e Model:` on the first assistant block."
+          ],
+          "setup": [
+            "The interactive driver (drive-aider-interactive.sh) launches aider in a fresh per-run cwd inside a tmux session against the configured main model (IRRLICHT_AIDER_MODEL) and waits for the REPL prompt.",
+            ".aider.chat.history.md (FilesUnderCWD) materializes lazily once the first user input lands; before that the live REPL is observable as a transient proc-\u003cPID\u003e pre-session born ready (the process scanner). The daemon keys the WHOLE session by proc-\u003cPID\u003e — there is no separate transcript-UUID rollout session.",
+            "On the first assistant block aider writes `\u003e Model: \u003cname\u003e with \u003cedit format\u003e`; the parser's modelRE captures the name → NormalizeModelName → a Skip event carrying ModelName, which applyModelMetadata stamps onto SessionMetrics.ModelName from turn one (never 'unknown' for a model aider names).",
+            "ContextWindow is NOT in aider's transcript — it is derived entirely from the capacity manager's LiteLLM alias-table fallback (ComputeContextUtilization → capacityMgr.GetModelCapacity(modelName)); a LiteLLM-known launch model yields the published window with ContextWindowUnknown=false.",
+            "Assertions on ModelName/ContextWindow are checked AFTER turn_end — ContextWindow may briefly read 0 between session detection and the first assistant block (per assessment caveat).",
+            "After the turn + trailing sleep the driver kills the tmux session once — aider exits and the daemon emits a SINGLE process_exited for the proc-\u003cPID\u003e session."
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "What is the capital of France? Answer in one word, no file edits."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 9
+            }
+          ],
+          "verify": [
+            "events.jsonl shows a proc-\u003cPID\u003e session born ready within 2s of launch (the lazy transcript has not materialized yet).",
+            "events.jsonl shows ONE ready→working→ready arc on that proc-\u003cPID\u003e session_id (the single no-op turn), with no state_transition to waiting.",
+            "events.jsonl contains a pid_discovered bound to the proc-\u003cPID\u003e session, and exactly one process_exited on it at REPL teardown (a single-turn session does NOT mint a second session).",
+            "the .replay.json.golden carries a non-empty summary.model_name equal to the normalized launch model (IRRLICHT_AIDER_MODEL), NOT 'unknown'; this is where model identification is asserted, since the events.jsonl phase DSL has no model field. The concrete value is environment-dependent (issue #440); assert presence + non-'unknown', and for a LiteLLM-known model a populated (non-zero) ContextWindow.",
+            "SessionMetrics.ContextWindowUnknown is false after turn_end when the launch model is in the LiteLLM table (per assessment caveat 1; otherwise ContextWindow reads 0 while ModelName stays correct).",
+            "transcript (.aider.chat.history.md) contains a `\u003e Model: \u003cname\u003e` blockquote on the first assistant block and ≥1 `\u003e Tokens:` close.",
+            "final session state is ready before teardown."
+          ],
+          "notes": "Single no-op turn in ONE live aider REPL launched against a specific main model (IRRLICHT_AIDER_MODEL): captures that the dashboard shows the launch model (ModelName != 'unknown') with a populated ContextWindow, not 'unknown'. TEMPLATED FROM claudecode/model-identification (same single send + wait_turn + trailing sleep shape) and adapted to aider's transport. RECORDABILITY (no driver_gap): the recipe needs only send/wait_turn/sleep — the aider interactive driver implements all three (case `send|slash)`, `wait_turn)`, `sleep)`), so there is no missing step type. WHY interactive (not headless `aider --message`): headless aider is single-shot and exits after one reply — on a short run the process can exit before the daemon classifies the working→ready settle and before the PID scanner ticks, truncating turn_end/teardown; the interactive driver keeps the REPL alive across the turn, then kills the tmux session once → a SINGLE clean process_exited. MODEL/CONTEXT ASSERTION IS OUT-OF-BAND: the events.jsonl phase DSL carries no model field, so expected.jsonl asserts only the basic-turn lifecycle skeleton (one ready→working→ready arc on one proc-\u003cPID\u003e session, a single process_exited, no waiting, final ready); the two user-observable signals (ModelName == launch model, ContextWindow == published window) are asserted at summary.model_name in the .replay.json.golden plus the aider parser unit tests for the `\u003e Model:`/`\u003e Main model:` blockquote. SESSION IDENTITY: aider stores its transcript in the cwd (FilesUnderCWD), so the daemon keys the whole session by proc-\u003cPID\u003e — no separate UUID rollout session and no handoff phase; the turn arc, pid_bind, and teardown all pin to session_birth via same_session_as, while session_birth itself is anchored to start UNPINNED so the transient proc-\u003cPID\u003e birth can't steal session identity. LAZY TRANSCRIPT: .aider.chat.history.md materializes only once the first user input lands, so the live REPL is observable from launch as the proc-\u003cPID\u003e pre-session born ready — session_birth matches that. AIDER TURN-END IS SYNTHESIZED, NOT MARKED: the markdown transcript has no turn-end marker — `\u003e Tokens:` closes one model CALL, not the turn; end-of-turn is synthesized by IdleFlush after ~1.5s quiet, clamped to the SessionDetector's ~5s working-refresh poll, so the EFFECTIVE working→ready latency is ~5s; the trailing 9s sleep (≥8s) lets the turn's working→ready flip fire AND be observed before daemon shutdown (a shorter tail would miss the terminal ready). PROMPT: a pure conversational question (`What is the capital of France? Answer in one word, no file edits.`) — gpt-5-nano writes `\u003e Model: gpt-5-nano` on the first assistant block regardless of whether it edits, and a non-edit prompt avoids the post-turn `Applied edit` write that re-triggers transcript_activity inside the idle dwell (the long-idle cell's known gpt-5-nano edit-flicker). What differs between runs: the concrete model value (set IRRLICHT_AIDER_MODEL for a deterministic, LiteLLM-known name; otherwise issue #440 — assert presence, not a hardcoded string), token counts, PID/timestamps, assistant wording, and the working→ready edge lands with ~5s idle-flush latency. What must NOT differ: one working→ready arc on ONE proc-\u003cPID\u003e session, a non-empty summary.model_name == the launch model in the golden, and a single process_exited at teardown. multi_model_orchestration=yes; headless_mode=yes (the scenario's requires:). RECORDING DEFERRED: validated when aider auth is available in-env — at authoring time there is no provider key present and headless aider hangs on OpenRouter OAuth, so this recipe + spec are the DOCUMENTED TARGET pending a recording.",
+          "settings": {},
+          "timeout_seconds": 180
+        }
+      }
+    },
+    "claudecode": {
+      "recording_dir": "claudecode/scenarios/model-identification",
+      "artifacts": {
+        "events": "claudecode/scenarios/model-identification/events.jsonl",
+        "transcript": "claudecode/scenarios/model-identification/transcript.jsonl",
+        "manifest": "claudecode/scenarios/model-identification/manifest.json",
+        "golden": "claudecode/scenarios/model-identification/transcript.jsonl.replay.json.golden"
+      },
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "pass_rate": "3/3 phases passed",
+        "agent_cli_version": "2.1.143",
+        "daemon_version": "0.4.5+73f31ff",
+        "confidence": 0.9,
+        "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "model-identification",
+          "agent": "claudecode",
+          "assessed_at": "2026-05-18T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.9,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nClaude Code records the active model on every assistant event under `message.model` (and on some system/metadata events under `model` / `request.model` / `metadata.model`). The parser's `extractClaudeCodeModel` walks these paths and runs the value through `tailer.NormalizeModelName` (lowercases, strips provider prefixes), producing a stable string like `claude-sonnet-4-5` or `claude-opus-4-7[1m]`.\n\nThe context window comes from two sources, in priority order:\n1. `raw.context_management.context_window` — the most accurate, server-reported value.\n2. The `[1m]` suffix heuristic — sets ContextWindow to 1_000_000 for opted-in extended-context models.\n3. Fallback: the LiteLLM-derived alias table (downstream of the parser) supplies a default per model name.\n\nLaunching with `--model claude-opus-4-7` puts that model into the first assistant event's `message.model` field; the parser captures it before any other event and `SessionMetrics.ModelName` is populated from the first turn onward.\n\nSpec bullets:\n- 'ModelName = \u003claunch model\u003e (not \"unknown\")' — extractClaudeCodeModel returns the normalized launch model from `message.model`. The default-unknown path only triggers when no event has yet carried a model field; once the first assistant event arrives, ModelName is set.\n- 'ContextWindow matches the model's published window' — context_management.context_window takes precedence when present; otherwise the alias table fills it.\n\n## What irrlicht does NOT see (and why that's OK)\n\nIf the recording cuts off before the first assistant event, ModelName will be 'unknown' — but that's a zero-turn session, not a real assertion of identification. The recipe must complete at least one turn.\n\nThe `[1m]` suffix detection is a string-match on the model name, which works for Claude's current opt-in extended-context flavour. Other providers may use a different convention; irrlicht's normalization layer would need extension for those — out of scope for the claudecode cell.",
+          "caveats": [
+            "ContextWindow may briefly read 0 between session detection and the first assistant event. The phase contract should assert ModelName/ContextWindow only after wait_turn, not at presession_created.",
+            "If LiteLLM aliases lag behind a newly released model name, ContextWindow falls back to the 32k sentinel and ContextWindowUnknown=true. This is a separable concern from model identification per se — ModelName will still be correct."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/claudecode/parser.go L410-452",
+              "note": "extractClaudeCodeModel walks raw.model / raw.request.model / raw.metadata.model / raw.message.model and pulls ContextWindow from raw.context_management.context_window (or the [1m] suffix)."
+            },
+            {
+              "kind": "file",
+              "ref": "core/domain/session/session.go L31-44",
+              "note": "SessionMetrics.ModelName, ContextWindow, ContextWindowUnknown — the merge logic at L627-628 keeps a known ModelName sticky across transient zero passes."
+            },
+            {
+              "kind": "spec",
+              "ref": ".specs/agent-scenarios.md L424-429",
+              "note": "Feature: Model identification — single-turn non-default model launch, ModelName != \"unknown\" and ContextWindow matches published window."
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": true,
+          "preconditions": [
+            "claude CLI on PATH and authenticated (subscription or API key)",
+            "irrlichd is recording (--attach against a daemon with --record, or isolated mode)",
+            "no other claudecode session uses the recipe's UUID",
+            "the chosen non-default model name is available on the maintainer's account (e.g. claude-opus-4-7 or claude-sonnet-4-5)"
+          ],
+          "setup": [
+            "Driver generates a fresh lowercased session UUID and a fresh cwd under \u003cstaging\u003e/cwd/",
+            "Driver launches claude with --model \u003cnon-default-model\u003e so the first assistant event's message.model field carries that name from turn 1",
+            "Assertions on ModelName/ContextWindow are checked AFTER turn_end — ContextWindow may briefly read 0 between session detection and the first assistant event (per assessment caveat)"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl shows one ready→working→ready cycle on the UUID",
+            "events.jsonl carries a model_name on the post-turn state_transition / metric snapshot equal to the normalized launch model (e.g. 'claude-opus-4-7' or 'claude-sonnet-4-5'), NOT 'unknown'",
+            "SessionMetrics.ContextWindow after turn_end matches the launch model's published window (1_000_000 for [1m] flavours; per-model default from the alias table otherwise)",
+            "SessionMetrics.ContextWindowUnknown is false after turn_end (unless the alias table is lagging — see assessment caveat 2)",
+            "transcript.jsonl contains 1 user line and ≥ 1 assistant line",
+            "final session state is ready"
+          ],
+          "settings": {},
+          "timeout_seconds": 120
+        }
+      }
+    },
+    "codex": {
+      "recording_dir": "codex/scenarios/model-identification",
+      "artifacts": {
+        "events": "codex/scenarios/model-identification/events.jsonl",
+        "transcript": "codex/scenarios/model-identification/transcript.jsonl",
+        "manifest": "codex/scenarios/model-identification/manifest.json",
+        "golden": "codex/scenarios/model-identification/transcript.jsonl.replay.json.golden"
+      },
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "pass_rate": "6/6 phases passed",
+        "agent_cli_version": "0.130.0",
+        "daemon_version": "0.4.7+db0201c",
+        "confidence": 0.85,
+        "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "model-identification",
+          "agent": "codex",
+          "assessed_at": "2026-05-23T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.85,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Primitive\n\nModel metadata reporting: the agent's transcript records the active model name (and context window) in a field the parser can extract, so the dashboard shows the launch model rather than 'unknown'.\n\n## agent_supports — yes\n\ncodex 0.130.0 boots on a concrete model (the TUI footer reads e.g. `model: gpt-5.5 high   /model to change`) and every turn it writes that model into the rollout. There is no way to run a turn without a model, so a single basic turn is enough to exercise this scenario — the model name is present from turn 1.\n\n## irrlicht_observes — yes\n\nThe codex rollout carries the active model on each turn's `turn_context` event at `payload.model`, and `extractCodexMetadata` (parser.go:263) reads `payload.model` for any payload-wrapped event and sets `ev.ModelName = NormalizeModelName(model)` (parser.go:270-278). Context window is read from `payload.info.model_context_window` (token_count) and `payload.model_context_window` (task_started) at parser.go:297-304. The `turn_context` event is marked Skip=true (parser.go:174), but the tailer's Skip branch still calls `applyMetadata` → `applyModelMetadata` (tailer.go / tailer_metrics.go), so the session's ModelName is populated from the skipped event. This was the regression behind issue #361 (codex dropped the model name on token_count events); it is fixed — the model is now sourced from turn_context.payload.model / usage, not from token_count. The replay golden captures the final value at `summary.model_name` (the codex basic-turn golden already carries a non-empty model_name), which `replay-fixtures.sh` diffs.\n\n## Observability caveat — where the assertion lives\n\nThe `expected.jsonl` validator DSL (validate/expected.go Phase struct: phase / expected_state / kind / max_delay_ms / duration_at_least_ms / same_session_as / new_session / invariants) operates over the lifecycle `events.jsonl` stream, which carries NO model_name field — so expected.jsonl cannot directly assert the model name. The model-identification proof is the metrics-level `summary.model_name` in the `.replay.json.golden` snapshot (must be non-empty / not 'unknown'), validated by replay-fixtures. expected.jsonl therefore asserts only the basic-turn lifecycle skeleton (pre-session born ready → rollout reconcile → working → ready → process_exited); the model presence is the golden's job. Per issue #440 the concrete model_name string is environment-dependent (whatever model the account boots on), so the assertion is 'a model_name IS present', not a hardcoded value.\n\n## Conclusion\n\napplicable: yes. This is a thin cell — the basic-turn arc plus the assertion that a model_name was extracted.",
+          "caveats": [
+            "In codex 0.130.0 the model name lives on per-turn turn_context events (Skip=true in the parser); observability relies on the tailer applying ModelName from Skip'd events — correct today (post-#361), but a refactor that drops metadata on skipped events would silently regress this.",
+            "The concrete model_name is environment-dependent (the account's boot default — gpt-5.5 in this worktree); per issue #440 the spec/golden assertion is that a model_name is present (non-empty, not 'unknown'), not a specific hardcoded string, so the cell stays deterministic and worktree-portable.",
+            "ContextWindow may briefly read 0 between session detection and the first turn_context/task_started event; assert model/context only after turn_end."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/codex/parser.go",
+              "note": "extractCodexMetadata reads payload.model (L263-278) and model_context_window (L297-304); turn_context Skip=true (L174)"
+            },
+            {
+              "kind": "file",
+              "ref": "core/pkg/tailer/tailer_metrics.go",
+              "note": "applyModelMetadata sets metrics.ModelName from parsed.ModelName even for Skip'd events"
+            },
+            {
+              "kind": "file",
+              "ref": "tools/agent-onboarding/internal/validate/expected.go",
+              "note": "Phase struct has no model field — DSL asserts state/kind on events.jsonl, not model_name"
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/codex/scenarios/basic-turn/transcript.jsonl.replay.json.golden",
+              "note": "golden carries summary.model_name (non-empty) — the metrics-level model artifact replay-fixtures diffs"
+            },
+            {
+              "kind": "issue",
+              "ref": "ingo-eichhorst/Irrlicht#361",
+              "note": "codex dropped model name on token_count events — since fixed; model now sourced from turn_context.payload.model / usage"
+            },
+            {
+              "kind": "issue",
+              "ref": "ingo-eichhorst/Irrlicht#440",
+              "note": "replay-summary model_name is environment-dependent — assert presence, not a hardcoded string"
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": true,
+          "preconditions": [
+            "codex CLI on PATH and authenticated (~/.codex/config.toml or OPENAI_API_KEY)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+            "The concrete model the account boots on is environment-dependent (gpt-5.5 in the maintainer's worktree). Per issue #440 the assertion is that a model_name is PRESENT (non-empty, not 'unknown'), not a specific hardcoded string — do not assert a particular model value."
+          ],
+          "setup": [
+            "The interactive driver launches `codex --no-alt-screen` in a fresh per-run cwd under \u003cstaging\u003e/cwd/, accepts the trust dialog, and waits for the TUI banner + MCP boot before sending the prompt",
+            "No special model flag — codex boots on its default model and writes that model into each turn's turn_context.payload.model from turn 1; the scenario is about the daemon extracting that name, not about which model produced the tokens",
+            "Each send bumps the expected-turn counter; wait_turn blocks until a new event_msg/task_complete line appears in the rollout, so the trailing sleep never races a still-running turn",
+            "ModelName is checked AFTER turn_end — ContextWindow may briefly read 0 between session detection and the first turn_context/task_started event (per assessment caveat)"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a presession_created (proc-\u003cPID\u003e) event in ready within 1000 ms of agent launch",
+            "events.jsonl contains a transcript_new for the rollout session with a distinct session_id, born ready",
+            "events.jsonl contains a pid_discovered event bound to the rollout session_id",
+            "events.jsonl shows one working→ready arc on the rollout session_id (the single assistant turn); the interactive REPL returns to ready, unlike headless codex exec which exits",
+            "the .replay.json.golden carries a non-empty summary.model_name (NOT 'unknown') — extractCodexMetadata pulled it from turn_context.payload.model and the tailer applied it via applyModelMetadata even though turn_context is Skip=true. The concrete value is environment-dependent (issue #440); assert presence, not a hardcoded string",
+            "the rollout session's final live state is ready before the driver tears the REPL down",
+            "events.jsonl contains a process_exited on the rollout session at REPL teardown",
+            "no state_transition to waiting appears for the rollout session at any point"
+          ],
+          "notes": "Thin/near-trivial cell: structurally identical to codex/basic-turn (one send + wait_turn + trailing sleep) — the only extra intent over basic-turn is that the daemon extracted a model_name. In codex 0.130.0 the model lives on per-turn turn_context.payload.model (NOT on token_count/usage events — that was the issue #361 regression, since fixed); extractCodexMetadata (parser.go:263-278) reads payload.model and model_context_window, and the tailer applies ModelName via applyModelMetadata even though turn_context is Skip=true. The model assertion is NOT expressible in the events.jsonl phase DSL (no model field in the validator Phase struct), so expected.jsonl covers only the basic-turn lifecycle skeleton and the model presence is asserted at summary.model_name in the .replay.json.golden, which replay-fixtures.sh diffs. What differs between runs: the concrete model_name (account boot default, env-dependent per #440), token counts/cost, rollout UUID/PID/timestamps, assistant wording (pinned with 'Reply with exactly the word: ok'). What must NOT differ: one working→ready arc on one rollout session, a non-empty model_name in the golden, and process_exited at teardown.",
+          "settings": {},
+          "timeout_seconds": 180
+        }
+      }
+    },
+    "opencode": {
+      "recording_dir": "opencode/scenarios/model-identification",
+      "artifacts": {
+        "events": "opencode/scenarios/model-identification/events.jsonl",
+        "transcript": "opencode/scenarios/model-identification/transcript.jsonl",
+        "manifest": "opencode/scenarios/model-identification/manifest.json",
+        "golden": "opencode/scenarios/model-identification/transcript.jsonl.replay.json.golden"
+      },
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "pass_rate": "4/4 phases passed",
+        "agent_cli_version": "unknown",
+        "daemon_version": "0.4.7+92e5631",
+        "confidence": 0.85,
+        "notes": "agent_supports: yes\ndaemon_capability: full\ndriver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "model-identification",
+          "agent": "opencode",
+          "assessed_at": "2026-05-25T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.85,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Reasoning\n\nmodel-identification asserts that the dashboard shows the model the agent was launched with — ModelName != 'unknown', and ContextWindow matching the model's published window — rather than 'unknown'. The state arc is the basic-turn arc (ready → working → ready); the extra intent over basic-turn is purely that the daemon extracted a model_name.\n\nWHERE THE MODEL CLAIM LIVES: opencode records the active model in its SQLite store under message.data.model = {providerID, modelID}. The opencode metrics path (metrics.go:117-131) reads modelID (fallback top-level modelID), runs it through tailer.NormalizeModelName, and sets SessionMetrics.ModelName; ComputeContextUtilization then derives ContextWindow/ContextWindowUnknown from that model via the capacity manager (metrics.go:255-256). The launch model can be set with `opencode run --model \u003cprovider/model\u003e`, but the driver passes NO --model flag, so opencode boots on its configured default; the scenario is about the daemon extracting that name, not about which model produced the tokens. Session state lives in opencode's SQLite store (~/.local/share/opencode/opencode.db), observed by the daemon's ProcessOwnedStore source as the UUID-keyed ses_… session for the cwd — so daemon_capability: full.\n\nThe model_name assertion is NOT expressible in the events.jsonl phase DSL (the validator Phase struct carries no model field), so expected.jsonl covers only the basic-turn lifecycle skeleton and the model presence is asserted at summary.model_name in the .replay.json.golden (which replay-fixtures.sh diffs) plus the opencode metrics unit tests.\n\nThe interactive driver (drive-opencode-interactive.sh) launches a blocking `opencode run -- \"\u003cprompt\u003e\"` per send and chains --session for continuity; wait_turn is a no-op because the run already blocks. model-identification is a single plain-text turn (one send + wait_turn + trailing sleep) — well within this grammar, so driver_capability: ready.\n\nMODEL note: this worktree's opencode default is the local LM Studio model whose modelID normalizes to 'gemma-4-e2b-it-uncensored' (set in ~/.config/opencode/opencode.json). It is small and slow (~30-45s per turn), so the recipe budgets a generous timeout (180s) and a trailing sleep that outlasts the turn_done settle. The observed/reported ModelName is the configured default model (not a Claude/Anthropic model); the assertion is presence (non-empty, not 'unknown'), with the concrete string being that default.",
+          "caveats": [
+            "OpenCode does not expose CLI-assignable session IDs; the driver discovers the session id by querying SQLite for the most recent row keyed on directory after the first `opencode run` returns.",
+            "The local gemma model is slow (~30-45s per turn); the recipe uses a 180s timeout and a generous trailing sleep so a slow turn does not trip a false timeout or miss the working→ready settle.",
+            "ContextWindow resolves to the model's published window only when the model is in the capacity table; for a model the table does not cover, ModelName is still correct but ContextWindow reads 0 / ContextWindowUnknown=true. The model assertion is presence (non-empty, not 'unknown') per issue #440, not a hardcoded string."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/opencode/metrics.go",
+              "note": "model[\"modelID\"] (fallback top-level modelID) → tailer.NormalizeModelName → metrics.ModelName; ComputeContextUtilization(metrics.ModelName, ...) derives ContextWindow/ContextWindowUnknown. raw[\"_model\"] carries the raw modelID into the event."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/opencode/agent.go",
+              "note": "Source variant ProcessOwnedStore (SQLite at ~/.local/share/opencode/opencode.db) with ExactName{Name: \"opencode\"} process matcher; daemon polls the session table for the ses_… session."
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/opencode/scenarios/basic-turn/events.jsonl",
+              "note": "Sibling recording: a single `opencode run` emits state_transition new_state ready→working→ready on one ses_… session — the same arc this cell records, with the spec framing the model-extraction intent."
+            },
+            {
+              "kind": "docs",
+              "ref": "https://opencode.ai/docs/cli/",
+              "note": "`--model | -m` model specification; the driver omits it so opencode uses its configured default model."
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": true,
+          "preconditions": [
+            "opencode CLI on PATH and authenticated against its default model (run a single message in the opencode TUI to confirm; the worktree default is a local LM Studio model so no remote key is needed)",
+            "irrlichd is recording with the opencode SQLite watcher enabled — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+            "the configured default model in ~/.config/opencode/opencode.json is the one whose name the dashboard should report; the driver passes NO --model flag, so whatever default is set is what gets asserted as ModelName (not 'unknown')"
+          ],
+          "setup": [
+            "The interactive driver (drive-opencode-interactive.sh) creates a fresh per-run cwd under \u003cstaging\u003e/cwd/ and launches a blocking `opencode run -- \"\u003cprompt\u003e\"` for the single send (no --model flag, so opencode uses its configured default model); the run blocks until the assistant turn finishes, so wait_turn is a no-op",
+            "OpenCode session state lives in its SQLite store (~/.local/share/opencode/opencode.db), not per-cwd transcript files; the daemon's ProcessOwnedStore source polls the session table and observes the UUID-keyed ses_… session for this cwd. The driver discovers that session id from SQLite after the run returns (opencode does not expose CLI-assignable session IDs)",
+            "opencode records the active model on each message under message.data.model = {providerID, modelID}; the metrics path reads modelID (fallback top-level modelID) → tailer.NormalizeModelName → SessionMetrics.ModelName, and ComputeContextUtilization derives ContextWindow from that model. The scenario is about the daemon extracting that name, not about which model produced the tokens",
+            "The send is a no-tool single turn — opencode is asked to reply with exactly one word, so the working span carries no auto-executed tool call (tool_calls_max: 0) and the session never enters waiting (no permission gate fires)",
+            "ModelName/ContextWindow are checked AFTER turn_done — ContextWindow may briefly read 0 between session detection and the first assistant event (per assessment caveat); the default model is a small, slow local LM Studio model (~30–45s per turn), so the trailing sleep and 180s timeout are generous so a slow turn must not trip a false timeout and the trailing sleep must outlast the turn_done settle so working→ready is observed"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 6
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a transcript_new (or session_created) for the ses_… session, born ready, within ~2s of agent launch (a transient proc-\u003cPID\u003e pre-session may also appear; the turn arc and pid_discovered land on the ses_… session)",
+            "events.jsonl contains a pid_discovered event bound to the ses_… session_id",
+            "events.jsonl shows one ready→working→ready cycle on the ses_… session_id (the single assistant turn); no state_transition to waiting appears (no tool call, no permission gate)",
+            "the .replay.json.golden carries a non-empty summary.model_name (NOT 'unknown') — opencode's metrics path pulled it from message.data.model.modelID and normalized it. This is where model identification is asserted, since the events.jsonl phase DSL has no model field. The concrete value follows the configured default (this worktree: the local LM Studio model normalizing to 'gemma-4-e2b-it-uncensored'); assert presence + non-'unknown'",
+            "the session's final live state is ready"
+          ],
+          "notes": "Single no-op turn in one headless opencode session: captures that the dashboard shows the configured default model (ModelName != 'unknown') instead of 'unknown'. TEMPLATED FROM opencode/basic-turn (same single send + wait_turn + trailing sleep shape) — the only extra intent over basic-turn is that the daemon extracted a model_name. RECORDABILITY (no driver_gap): the recipe needs only send/wait_turn/sleep, all implemented by drive-opencode-interactive.sh. WHY a blocking `opencode run` (not a long-lived REPL with teardown, unlike codex/pi): opencode's driver launches a fresh blocking `opencode run` per send and chains --session; the run already blocks until the turn completes, so wait_turn is a no-op and there is no in-process REPL to tear down — hence no teardown/process_exited phase (the opencode sibling specs basic-turn and turn-end-terminal-text omit it for the same reason). WHERE THE MODEL CLAIM LIVES: opencode stores model = {providerID, modelID} in its SQLite store; metrics.go reads modelID → NormalizeModelName → SessionMetrics.ModelName, and ComputeContextUtilization derives ContextWindow. The model assertion is NOT expressible in the events.jsonl phase DSL (the validator Phase struct carries no model field), so expected.jsonl asserts only the basic-turn lifecycle skeleton (one ready→working→ready arc on one ses_… session, no waiting, final ready); the user-observable model signal is asserted at summary.model_name in the .replay.json.golden (which replay-fixtures.sh diffs) plus the opencode metrics unit tests. SESSION IDENTITY: session_birth is anchored to recording start UNPINNED so a transient proc-\u003cPID\u003e pre-session can't steal identity; turn1_start (matching working) establishes the ses_… session identity that turn1_done chains off via same_session_as. MODEL note: the driver passes NO --model flag, so whatever default is configured in ~/.config/opencode/opencode.json is reported — this worktree boots on a local LM Studio model whose modelID normalizes to 'gemma-4-e2b-it-uncensored'; per issue #440 the concrete model string is environment-dependent, so assert presence (non-empty, not 'unknown'), with the value following the configured default. What differs between runs: the concrete model value (follows the configured default), token counts/cost, ses_… UUID/PID/timestamps, assistant wording (pinned with 'Reply with exactly the word: ok'). What must NOT differ: one ready→working→ready arc on one ses_… session, a non-empty summary.model_name in the golden, and a final ready state. The local gemma model is small and slow (~30–45s per turn), so the trailing 6s sleep outlasts the turn_done settle and the 180s timeout absorbs a slow turn.",
+          "settings": {},
+          "timeout_seconds": 180
+        }
+      }
+    },
+    "pi": {
+      "recording_dir": "pi/scenarios/model-identification",
+      "artifacts": {
+        "events": "pi/scenarios/model-identification/events.jsonl",
+        "transcript": "pi/scenarios/model-identification/transcript.jsonl",
+        "manifest": "pi/scenarios/model-identification/manifest.json",
+        "golden": "pi/scenarios/model-identification/transcript.jsonl.replay.json.golden"
+      },
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "pass_rate": "5/5 phases passed",
+        "agent_cli_version": "0.70.0",
+        "daemon_version": "0.4.7+d379043",
+        "confidence": 0.9,
+        "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "model-identification",
+          "agent": "pi",
+          "assessed_at": "2026-05-25T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.9,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Primitive\n\nModel metadata reporting: pi's JSONL rollout records the active model name on every assistant message in a field the parser extracts, so the dashboard shows the launch model rather than 'unknown'.\n\n## agent_supports — yes\n\npi boots on a concrete model and writes that model into the rollout on every assistant turn. There is no way to run a turn without a model, so a single basic turn is enough to exercise this scenario — the model name is present from turn 1.\n\n## irrlicht_observes — yes\n\nThe pi parser reads the model from two places, both normalized through tailer.NormalizeModelName (lowercases, strips provider prefixes): assistant messages carry it at message.model (parser.go L104 → ev.ModelName), and model_change events carry it at modelId (parser.go L40-42). ev.ModelName flows into SessionMetrics.ModelName, populated from the first assistant turn onward. extractPiContribution (parser.go L148) also tags the per-turn contribution with the same model name.\n\n## Observability caveat — where the assertion lives\n\nThe expected.jsonl validator DSL (validate/expected.go Phase struct: phase / expected_state / kind / max_delay_ms / duration_at_least_ms / same_session_as / new_session / invariants) operates over the lifecycle events.jsonl stream, which carries NO model_name field — so expected.jsonl cannot directly assert the model name. The model-identification proof is the metrics-level summary.model_name in the .replay.json.golden snapshot (non-empty / not 'unknown'), validated by replay-fixtures, plus the pi parser unit tests on message.model extraction. expected.jsonl therefore asserts only the basic-turn lifecycle skeleton (session born ready → working → ready, no waiting, a single process_exited); the model presence is the golden's / parser-test's job. Per issue #440 the concrete model_name string is environment-dependent (whatever model the account boots on), so the assertion is 'a model_name IS present', not a hardcoded value.\n\n## Conclusion\n\napplicable: yes. A thin cell — the basic-turn arc plus the (metrics-level) assertion that a model_name was extracted from message.model.",
+          "caveats": [
+            "ContextWindow may briefly read 0 between session detection and the first assistant event; assert model/context only after wait_turn, not at presession_created.",
+            "The concrete model_name is environment-dependent (pi's boot default); per issue #440 the spec/golden assertion is that a model_name is present (non-empty, not 'unknown'), not a specific hardcoded string, so the cell stays deterministic and worktree-portable.",
+            "The model name lives at metrics level (SessionMetrics.ModelName), not in the events.jsonl lifecycle stream the expected.jsonl DSL operates over — so the DSL spec asserts only the lifecycle arc; the model claim is covered by parser unit tests + the replay golden."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/pi/parser.go L40-42 / L103-105",
+              "note": "model_change.modelId and assistant message.model → ev.ModelName via tailer.NormalizeModelName"
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/pi/parser.go L148-149",
+              "note": "extractPiContribution tags the per-turn contribution with the same model name"
+            },
+            {
+              "kind": "file",
+              "ref": "tools/agent-onboarding/internal/validate/expected.go",
+              "note": "Phase struct has no model field — DSL asserts state/kind on events.jsonl, not model_name"
+            },
+            {
+              "kind": "issue",
+              "ref": "ingo-eichhorst/Irrlicht#440",
+              "note": "replay-summary model_name is environment-dependent — assert presence, not a hardcoded string"
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": true,
+          "preconditions": [
+            "pi CLI on PATH and authenticated (pi runs against its configured model out-of-band)",
+            "tmux available — the interactive driver runs pi in a tmux REPL so it can send one prompt to a long-lived session and tear it down cleanly (per concern C6: headless pi --print exits too fast and drifts)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+            "The concrete model pi boots on is environment-dependent. Per issue #440 the assertion is that a model_name is PRESENT (non-empty, not 'unknown'), not a specific hardcoded string — do not assert a particular model value."
+          ],
+          "setup": [
+            "The interactive driver (drive-pi-interactive.sh) launches pi in a fresh per-run cwd inside a tmux session, waits for the REPL prompt, then sends the single prompt",
+            "pi writes one JSONL rollout file per session under ~/.pi/agent/sessions/\u003ccwd-slug\u003e/ on launch (FilesUnderRoot, non-lazy); the driver resolves that file and extracts the UUID from line 1",
+            "No special model flag — pi boots on its configured model and writes that model into each assistant message.model from turn 1; the scenario is about the daemon extracting that name, not about which model produced the tokens",
+            "The send bumps the expected-turn counter; wait_turn blocks until the rollout shows a completed assistant turn, so the trailing sleep never races a still-running turn",
+            "ModelName is checked AFTER turn_end — ContextWindow may briefly read 0 between session detection and the first assistant event (per assessment caveat)",
+            "After wait_turn + trailing sleep the driver kills the tmux session once — pi exits and the daemon emits a single process_exited for the rollout session"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a transcript_new for the rollout session born ready within ~2s of REPL launch (a transient proc-\u003cPID\u003e pre-session may also appear; the turn and pid_discovered land on the UUID-keyed rollout session)",
+            "events.jsonl contains a pid_discovered event bound to the rollout session_id",
+            "events.jsonl shows one working→ready arc on the rollout session_id (the single assistant turn); the interactive REPL returns to ready, unlike headless pi --print which exits",
+            "the .replay.json.golden carries a non-empty summary.model_name (NOT 'unknown') — the pi parser pulled it from message.model and the tailer applied it. The concrete value is environment-dependent (issue #440); assert presence, not a hardcoded string",
+            "the rollout session's final live state is ready before the driver tears the REPL down",
+            "events.jsonl contains exactly one process_exited on the rollout session at REPL teardown",
+            "no state_transition to waiting appears for the rollout session at any point"
+          ],
+          "notes": "Thin/near-trivial cell: structurally identical to pi/basic-turn (one send + wait_turn + trailing sleep) — the only extra intent over basic-turn is that the daemon extracted a model_name. WHY interactive (not headless pi --print): per concern C6 the headless single-shot driver exits too fast and drifts; the pi interactive driver (drive-pi-interactive.sh) keeps the rollout REPL alive via send+wait_turn and kills the tmux session once at the end. The model lives on each assistant message.model (parser.go L104) — and on model_change events at modelId (L41) — which the pi parser pulls through tailer.NormalizeModelName into ev.ModelName → SessionMetrics.ModelName from turn 1. The model assertion is NOT expressible in the events.jsonl phase DSL (no model field in the validator Phase struct), so expected.jsonl covers only the basic-turn lifecycle skeleton and the model presence is asserted at summary.model_name in the .replay.json.golden (which replay-fixtures.sh diffs) plus the pi parser unit tests. C7/SESSION-IDENTITY: the live REPL emits a transient proc-\u003cPID\u003e pre-session born ready at launch; session_birth (which only asserts 'a session appears in ready within 2s') legitimately matches it. turn_start anchors to recording start with NO session pin so the matcher picks the FIRST working in the whole recording (necessarily the rollout session — the pre-session never goes working); turn_end, pid_bind, and teardown then pin to turn_start's session via same_session_as. What differs between runs: the concrete model_name (boot default, env-dependent per #440), token counts/cost, rollout UUID/PID/timestamps, assistant wording (pinned with 'Reply with exactly the word: ok'). What must NOT differ: one working→ready arc on one rollout session, a non-empty model_name in the golden, and a single process_exited at teardown.",
+          "settings": {},
+          "timeout_seconds": 180
+        }
+      }
+    }
+  }
+}

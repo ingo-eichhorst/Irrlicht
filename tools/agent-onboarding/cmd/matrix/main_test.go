@@ -8,33 +8,40 @@ import (
 	"testing"
 )
 
-// fixture writes a minimal scenarios.json + one agent's capabilities and
-// assessments under t.TempDir(), returning the override flags. It plants one
-// non-terminal (assessed-not-recorded) cell so completeness fails, and one
-// record_now/applicable:false contradiction so consistency fails.
-func fixture(t *testing.T) (scenarios, agentsRoot string) {
+// fixture writes a minimal shard repo under t.TempDir() (#510) and returns its
+// root for --repo-root. It plants one terminal (applicable:false) cell and one
+// non-terminal (assessed-not-recorded) cell so the completeness gate has both a
+// passing and a failing row to report.
+func fixture(t *testing.T) (repoRoot string) {
 	t.Helper()
 	tmp := t.TempDir()
-	scenarios = filepath.Join(tmp, "scenarios.json")
-	write(t, scenarios, `{"catalog":[{"id":"recd"},{"id":"unrec"}],
- "scenarios":[
-   {"name":"recd","coverage_id":"recd","requires":[],"by_adapter":{"ag":{"applicable":false}}},
-   {"name":"unrec","coverage_id":"unrec","requires":[],"by_adapter":{"ag":{"script":[{"type":"send"}]}}}
- ]}`)
-	agentsRoot = filepath.Join(tmp, "agents")
-	write(t, filepath.Join(agentsRoot, "ag", "capabilities.json"), `{"agent":"ag","transport":"line_based","features":{}}`)
-	// recd: record_now assessment + applicable:false → consistency contradiction.
-	write(t, filepath.Join(agentsRoot, "ag", "scenarios", "recd", "assessment.json"),
-		`{"agent_supports":"yes","daemon_capability":"full","driver_capability":"ready"}`)
+	scen := filepath.Join(tmp, "replaydata", "scenarios")
+	if err := os.MkdirAll(scen, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(scen, "_meta.json"), `{"min_versions":{"ag":"1.0.0"}}`)
+	// recd: applicable:false → terminal (the completeness gate's "ok" row).
+	write(t, filepath.Join(scen, "recd.json"), `{
+  "id": "1.1", "name": "recd", "section": "S", "feature": "Recd",
+  "agents": {"ag": {"details": {
+    "assessment": {"agent_supports":"yes","daemon_capability":"full","driver_capability":"ready"},
+    "recipe": {"applicable": false}
+  }}}
+}`)
 	// unrec: assessed recordable, no recording → completeness non-terminal.
-	write(t, filepath.Join(agentsRoot, "ag", "scenarios", "unrec", "assessment.json"),
-		`{"agent_supports":"yes","daemon_capability":"full","driver_capability":"ready"}`)
-	return scenarios, agentsRoot
+	write(t, filepath.Join(scen, "unrec.json"), `{
+  "id": "1.2", "name": "unrec", "section": "S", "feature": "Unrec",
+  "agents": {"ag": {"details": {
+    "assessment": {"agent_supports":"yes","daemon_capability":"full","driver_capability":"ready"},
+    "recipe": {"script": [{"type":"send"}]}
+  }}}
+}`)
+	return tmp
 }
 
 func TestRunUsageErrors(t *testing.T) {
-	scenarios, agentsRoot := fixture(t)
-	base := []string{"--scenarios", scenarios, "--agents-root", agentsRoot}
+	root := fixture(t)
+	base := []string{"--repo-root", root}
 	cases := []struct {
 		name string
 		args []string
@@ -56,11 +63,11 @@ func TestRunUsageErrors(t *testing.T) {
 }
 
 func TestRunCompleteness(t *testing.T) {
-	scenarios, agentsRoot := fixture(t)
+	root := fixture(t)
 	var out, errb bytes.Buffer
-	got := run([]string{"query", "--gate", "completeness", "--agent", "ag", "--scenarios", scenarios, "--agents-root", agentsRoot}, &out, &errb)
+	got := run([]string{"query", "--gate", "completeness", "--agent", "ag", "--repo-root", root}, &out, &errb)
 	if got != exitFail {
-		t.Fatalf("exit = %d; want %d", got, exitFail)
+		t.Fatalf("exit = %d; want %d (stderr: %s)", got, exitFail, errb.String())
 	}
 	if !strings.Contains(out.String(), "ok   recd") {
 		t.Errorf("expected recd terminal on stdout, got:\n%s", out.String())
@@ -70,22 +77,32 @@ func TestRunCompleteness(t *testing.T) {
 	}
 }
 
-func TestRunConsistency(t *testing.T) {
-	scenarios, agentsRoot := fixture(t)
+// TestRunCompletenessAgentsRootDerivesRepoRoot pins the #2 fix: the gate
+// scripts drive this CLI with an absolute --agents-root and NO --repo-root, so
+// the shard reader must derive the repo root from --agents-root rather than
+// defaulting to "." (the caller's CWD) and finding no shards. Regression guard:
+// before the fix this returned exitUsage ("no shards under replaydata/scenarios")
+// whenever run from any CWD that isn't the repo root.
+func TestRunCompletenessAgentsRootDerivesRepoRoot(t *testing.T) {
+	root := fixture(t)
+	// No --repo-root; only the absolute --agents-root the gate scripts pass.
+	// fixture writes shards at <root>/replaydata/scenarios, and
+	// <root>/replaydata/agents → repo root <root>.
+	agentsRoot := filepath.Join(root, "replaydata", "agents")
 	var out, errb bytes.Buffer
-	got := run([]string{"query", "--gate", "consistency", "--scenarios", scenarios, "--agents-root", agentsRoot}, &out, &errb)
+	got := run([]string{"query", "--gate", "completeness", "--agent", "ag", "--agents-root", agentsRoot}, &out, &errb)
 	if got != exitFail {
-		t.Fatalf("exit = %d; want %d (stderr: %s)", got, exitFail, errb.String())
+		t.Fatalf("exit = %d; want %d (must run the gate, not fail with 'no shards'); stderr: %s", got, exitFail, errb.String())
 	}
-	if !strings.Contains(errb.String(), "ag/recd: assessment routes RECORD") {
-		t.Errorf("expected the recd contradiction on stderr, got:\n%s", errb.String())
+	if !strings.Contains(out.String(), "ok   recd") {
+		t.Errorf("gate did not resolve shards via --agents-root; stdout:\n%s\nstderr:\n%s", out.String(), errb.String())
 	}
 }
 
 func TestRunCells(t *testing.T) {
-	scenarios, agentsRoot := fixture(t)
+	root := fixture(t)
 	var out, errb bytes.Buffer
-	got := run([]string{"query", "--cells", "--agent", "ag", "--scenarios", scenarios, "--agents-root", agentsRoot}, &out, &errb)
+	got := run([]string{"query", "--cells", "--agent", "ag", "--repo-root", root}, &out, &errb)
 	if got != exitOK {
 		t.Fatalf("exit = %d; want %d (stderr: %s)", got, exitOK, errb.String())
 	}

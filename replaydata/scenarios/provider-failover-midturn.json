@@ -1,0 +1,53 @@
+{
+  "id": "5.5",
+  "name": "provider-failover-midturn",
+  "section": "Metrics",
+  "feature": "Provider failover mid-turn",
+  "agents": {
+    "claudecode": {
+      "artifacts": {},
+      "metadata": {
+        "agent_supports": "partial",
+        "daemon_capability": "incapable",
+        "driver_capability": "ready",
+        "confidence": 0.55,
+        "notes": "agent_supports: partial\ndaemon_capability: incapable; driver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "provider-failover-midturn",
+          "agent": "claudecode",
+          "assessed_at": "2026-05-25T00:00:00Z",
+          "agent_supports": "partial",
+          "daemon_capability": "incapable",
+          "driver_capability": "ready",
+          "confidence": 0.55,
+          "body": "## Verdict\n\nagent_supports: partial\ndaemon_capability: incapable; driver_capability: ready\n\n## Reasoning\n\nThe spec frames this scenario around adapters with explicit auto-fallback (Aider's auto-fallback, Crush, Goose): the primary model 5xx/rate-limits, the agent falls back to a secondary, and the same turn completes under the fallback model. The Expected bullets require (a) ModelName changes mid-turn, (b) state stays `working` through the failover with no ready flicker, (c) post-turn ModelName reflects the fallback.\n\nClaude Code's situation is nuanced:\n- It supports multiple provider backends — Anthropic API, Vertex AI, AWS Bedrock — configured via env vars (`ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_USE_VERTEX`, `CLAUDE_CODE_USE_BEDROCK`). But the active provider is a startup choice, not a mid-turn fallback target.\n- It has no built-in 'try provider A then fall back to provider B' chain in the same turn. A rate-limit or 5xx surfaces as a turn-level error; the user retries.\n- The model name on a Vertex- or Bedrock-routed call is still `claude-*` — provider failover (if it existed) would not change `message.model`. So even if mid-turn provider switching were added, irrlicht's ModelName extraction wouldn't observe it, because the model name is the same regardless of provider.\n\nThis makes the cell `partial` on both axes:\n- `agent_supports: partial` — Claude Code can be CONFIGURED with a provider, and the official extended-context / 1m-token launches do involve transparent backend selection, but there is no documented mid-turn provider fallback that swaps providers within one inflight request and continues the same turn.\n- `daemon_capability: incapable; driver_capability: ready` — irrlicht observes the turn-level state arc (working → ready) and the per-turn ModelName, both of which would behave correctly IF a fallback occurred. But the spec's mid-turn ModelName change bullet would not fire for claudecode because the provider-routed model name is identical. Token accounting also rolls up cleanly regardless of which provider answered.\n\nA recording recipe for this cell would have to inject a synthetic provider error (e.g. block egress to api.anthropic.com mid-turn while CLAUDE_CODE_USE_BEDROCK is also set as a secondary) and observe whether claudecode (a) errors out the turn, or (b) silently retries via Bedrock. The literature on this is thin; absent a confirmed retry path, the safe verdict is partial.\n\n## What irrlicht does NOT see (and why that's OK)\n\n- Provider identity. `message.model` is the model name only; the provider is a transport-layer detail not surfaced in the JSONL. If irrlicht ever wanted to assert on provider failover, the adapter would need to expose this via metadata — not currently the case.\n- The exact moment of an HTTP-level retry. Claude Code may retry transient errors at the SDK layer without writing anything to the transcript; from irrlicht's perspective those retries are invisible (and the state correctly remains `working`, which IS observable and correct).",
+          "caveats": [
+            "If the test rig cannot reliably induce a mid-turn provider failover, this cell should be marked recordable=no and the matrix row left as documentation-only. The architect/editor cell is the cleaner template for an n/a path; provider-failover is a softer 'we partially cover it but can't drive a deterministic recording today'.",
+            "If future versions of Claude Code add a documented Anthropic-→-Bedrock fallback chain that announces itself in the transcript, this verdict upgrades to yes/yes. Watch for a `provider` or `route` field on assistant events.",
+            "The two clearer 'partial' observables here are (1) state stays `working` through transient errors — which is already covered by the turn-aborted-by-error and basic-turn cells — and (2) post-turn ModelName remains valid — covered by model-identification. Provider failover qua provider failover is not separately observable today."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/claudecode/parser.go L410-452",
+              "note": "extractClaudeCodeModel reads only the model name (claude-*) — no provider field is extracted because none is present in the JSONL."
+            },
+            {
+              "kind": "spec",
+              "ref": ".specs/agent-scenarios.md L454-460",
+              "note": "Feature: Provider failover mid-turn — explicitly lists Aider auto-fallback, Crush, Goose. Claude Code is not in that list; the spec's expected ModelName-changes-mid-turn bullet does not match Claude Code's same-model-name-across-providers reality."
+            },
+            {
+              "kind": "doc",
+              "ref": "https://docs.anthropic.com/claude/claude-code",
+              "note": "Claude Code docs document Vertex / Bedrock as alternate providers selected at process start via env vars; no documented mid-turn fallback chain as of the assessed date."
+            }
+          ]
+        }
+      }
+    }
+  }
+}

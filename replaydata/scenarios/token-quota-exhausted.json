@@ -1,0 +1,355 @@
+{
+  "id": "2.9",
+  "name": "token-quota-exhausted",
+  "section": "Turn shape",
+  "feature": "Token / quota budget exhausted",
+  "description": "Mocked 429 recording: a local Anthropic-compatible stub (tools/agent-onboarding/recording/mock-anthropic-429/main.go) returns 200 + end_turn on the first /v1/messages request and HTTP 429 on the second. claude runs under --bare so it reads ANTHROPIC_API_KEY + ANTHROPIC_BASE_URL from env (OAuth/keychain are bypassed). The bespoke recorder at tools/agent-onboarding/recording/record-token-quota-exhausted.sh handles launch, driving, and fixture staging — the standard driver-claudecode-interactive.sh does not pass --bare.",
+  "requires": [
+    "headless_mode"
+  ],
+  "verify": {
+    "min_turns": 1,
+    "final_state": "ready",
+    "has_waiting_state": false
+  },
+  "agents": {
+    "aider": {
+      "artifacts": {},
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "confidence": 0.8,
+        "notes": "agent_supports: yes\ndaemon_capability: full\ndriver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "token-quota-exhausted",
+          "agent": "aider",
+          "assessed_at": "2026-05-28T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.8,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Reasoning\n\n**agent_supports: yes.** Aider 0.86.2 enforces a hard stop when a token/cost budget is hit mid-turn and resolves the turn cleanly. The cap surfaces through litellm's exception classification in `aider/exceptions.py`:\n\n- `RateLimitError` (HTTP 429 / provider quota) is `retry: True` with the description \"The API provider has rate limited you. Try again later or check your quotas.\"\n- `BudgetExceededError` is also `retry: True` (litellm's own budget enforcement).\n- The non-retryable insufficient-credits case (`APIError` with `\"code\":402`) returns `retry: False`, \"Insufficient credits with the API provider.\"\n\nThe send loop in `coders/base_coder.py` (the `while True` around `self.send(...)`) doubles `retry_delay` (start 0.125s) on each retryable error; once `retry_delay \u003e RETRY_TIMEOUT` (60s, `aider/models.py`) it sets `should_retry = False`, writes the error via `io.tool_warning(err_msg)` + `io.tool_error(description)`, and `break`s — ending the turn. The non-retryable cases break immediately. Either way the turn terminates and aider returns to its idle prompt; it does not silently re-enter `working`. There is no separate aider-native \"subscription cost cap\" feature — the budget is enforced provider-side (429) or by litellm (`BudgetExceededError`); aider's only knob is `RETRY_TIMEOUT` governing how long it waits before surfacing the cap.\n\n**daemon_capability: full.** The aider adapter source is `FilesUnderCWD{.aider.chat.history.md}` with a markdown `RawParser` (`agent.go`). `io.tool_error`/`tool_warning` both route through `io._tool_message`, which calls `append_chat_history(..., blockquote=True)` — so the surfaced cap lands in the transcript as a `\u003e ...Error...` blockquote line. irrlicht's parser matches this with `errorRE` (`^\u003e\\s*\\S*(?:Error|Exception)(?:[: ]|$)`) and, while `turnOpen`, calls `flushErrorTurn` → emits `turn_done` with the error as `AssistantText`, flipping `LastEventType` so the state classifier transitions `working → ready` (`parser.go` ~127-205). This is the #262 path the matrix note cites.\n\nThe scenario's sole User-observable signal is \"state reaches `ready`\" — and the daemon reaches it today via the synthesized `turn_done`. The Primitive exercised says the budget cap \"Maps to the adapter's standard turn-end path,\" which is exactly the mechanism the parser already exercises. The canonical spec signal is representable and handled, so this is `full`, not `bug`/`incapable`: a trace exists in the watched Source and the parser handles it. The two narrow gaps below are NON-spec-required, so per the authoring rule they live in `caveats`, not in a downgrade.\n\n**driver_capability: ready.** No new driver step type is required. The error blockquote that aider's turn-end path writes can be elicited with the driver's existing `send` (a prompt) + `wait_turn` primitives by pointing aider at a tiny/bogus budget or an unreachable model (see the aider memory re: bogus-model errors producing `\u003e ...Error...` blockquotes). The recipe needs none of the gapped primitives (restart/reset_session/sigkill/keys/etc.).\n\n## Primitive → capabilities.json key\n\nPrimitive exercised = \"Budget enforcement — the agent CLI enforces a token or time budget and emits a turn-end signal when the cap is hit. Maps to the adapter's standard turn-end path.\" There is no dedicated `budget`/`token_cap` key in `capabilities.json`; the closest cost-related key is `cost_tracking` (`false` — aider has no native cost-cap feature, the budget is provider/litellm-enforced). Because the primitive explicitly routes through the adapter's STANDARD turn-end path rather than a dedicated budget feature, the gating capability for recordability is `headless_mode` (`true`), which is the scenario's only `requires`. Confirmed: `headless_mode: true`, `cost_tracking: false`.\n\n## Caveats are non-spec gaps, not a downgrade\n\nThe capped model call emits no `\u003e Tokens: …` line, so `closeModelCall` never runs and `flushErrorTurn` carries nil Tokens/Contribution: the cap is observed as a generic error-terminated turn, not a distinct budget/quota event, and no per-turn cost is recorded. Neither is part of the spec's user-observable signal (which asserts only state, and `has_waiting_state: false`), so they are caveats — they would only matter to a future budget/quota-specific event kind.",
+          "caveats": [
+            "record_blocked=infra (2026-05-28): axes are record-now but the cell is unrecordable in this environment — no aider auth (provider key) AND no deterministic aider quota mock (the claudecode mock-anthropic-429 stub does not transfer to litellm). Recordable once both auth and an aider-side quota mock / fixture-injection primitive exist. Not a driver_gap. (per scenarios.json by_adapter.aider)",
+            "feature-invisible-but-spec-compliant: the budget cap reaches `ready` via the generic LLM-error blockquote path (#262), so irrlicht cannot tell a quota/budget cap apart from any other turn-aborting provider error — the spec only requires reaching `ready`, which is observed.",
+            "metric-drift-downstream: the capped model call emits no `\u003e Tokens:` line, so `flushErrorTurn` carries nil Tokens/Contribution — no per-turn token/cost is recorded for the budget-capped turn (capabilities.cost_tracking is false); only the error text is surfaced as AssistantText.",
+            "Aider retries a 429/RateLimitError with exponential backoff up to RETRY_TIMEOUT (60s) before surfacing it; during retries the session legitimately stays `working`, and only flips to `ready` once retries are exhausted.",
+            "Recording is blocked on environment infra (no aider provider auth + no deterministic aider-side quota mock — the claudecode `--bare`/ANTHROPIC_BASE_URL 429 stub does not transfer to litellm-routed aider), NOT on any daemon limit or driver step; expected.jsonl is committed as the documented target until that infra exists."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/aider/agent.go",
+              "note": "Source is FilesUnderCWD{.aider.chat.history.md} with a markdown RawParser"
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/aider/parser.go",
+              "note": "parser.go ~127-205: errorRE matches `\u003e ...Error...` blockquotes while turnOpen; flushErrorTurn emits turn_done (nil Tokens) → working→ready (the #262 path); closeModelCall only runs on a `\u003e Tokens:` line"
+            },
+            {
+              "kind": "file",
+              "ref": "/Users/ingo/.local/share/uv/tools/aider-chat/lib/python3.12/site-packages/aider/exceptions.py",
+              "note": "aider 0.86.2: RateLimitError retry=True 'check your quotas'; BudgetExceededError retry=True; APIError+402 'Insufficient credits' retry=False"
+            },
+            {
+              "kind": "file",
+              "ref": "/Users/ingo/.local/share/uv/tools/aider-chat/lib/python3.12/site-packages/aider/coders/base_coder.py",
+              "note": "send loop: exponential retry_delay, when \u003e RETRY_TIMEOUT should_retry=False → tool_warning+tool_error then break (turn ends)"
+            },
+            {
+              "kind": "file",
+              "ref": "/Users/ingo/.local/share/uv/tools/aider-chat/lib/python3.12/site-packages/aider/io.py",
+              "note": "tool_error/tool_warning → _tool_message → append_chat_history(blockquote=True): the error lands in .aider.chat.history.md as a `\u003e ` line"
+            },
+            {
+              "kind": "file",
+              "ref": "/Users/ingo/.local/share/uv/tools/aider-chat/lib/python3.12/site-packages/aider/models.py",
+              "note": "RETRY_TIMEOUT = 60 — the retry ceiling before a 429/quota is surfaced"
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/aider/capabilities.json",
+              "note": "headless_mode: true (scenario's only `requires`, gates recordability); cost_tracking: false — no native budget key, cap is provider/litellm-enforced"
+            }
+          ],
+          "record_blocked": "infra"
+        },
+        "recipe": {
+          "applicable": false,
+          "notes": "scope_note: NOT RECORDABLE YET — assessed yes/partial (agent_supports:yes, observes:partial), so the cell is conceptually applicable, but it cannot be recorded in this environment because it is blocked on BOTH (a) auth and (b) a quota mock — NOT on a missing driver step type, so this is NOT a driver_gap. WHAT aider does: it stops cleanly on a 429/quota or budget cap — coders/base_coder.py's send loop doubles retry_delay until it exceeds RETRY_TIMEOUT (60s, models.py), then surfaces the cap (litellm RateLimitError 'check your quotas' / BudgetExceededError, both retry=True; or the non-retryable APIError+402 'Insufficient credits') via io.tool_warning+io.tool_error and breaks, ending the turn. The error lands in .aider.chat.history.md as a `\u003e …Error…` blockquote (io._tool_message → append_chat_history(blockquote=True)), which irrlicht's aider parser matches with errorRE and turns into a synthetic turn_done via flushErrorTurn (the #262 path) → working→ready. observes:partial because (1) the capped turn is indistinguishable from any other turn-aborting LLM error — there is no quota/budget-specific event kind — and (2) the capped model call emits no `\u003e Tokens:` line, so flushErrorTurn carries nil Tokens/Contribution (no per-turn cost recorded; capabilities.cost_tracking is false). WHY NOT RECORDABLE: (a) no aider auth in this environment — no provider key, headless aider hangs ~5min on provider OAuth, and the rig precheck delegates auth to the user (proven infra_fail). (b) NO deterministic aider quota mock exists: the claudecode mock-anthropic-429 path does NOT transfer — that recorder (tools/agent-onboarding/recording/record-token-quota-exhausted.sh) launches `claude --bare` with ANTHROPIC_BASE_URL pointed at an Anthropic-only stub, but aider's drivers (drive-aider.sh headless, drive-aider-interactive.sh) wire NO base-URL override and have no `--bare` equivalent, and aider routes every provider through litellm — so even WITH auth there is no deterministic way to elicit a 429/BudgetExceededError on demand. A recording becomes possible only once BOTH auth AND an aider-side quota mock (or a driver fixture-injection primitive) exist — a developer task. expected.jsonl is committed as the DOCUMENTED TARGET (ready→working→[`\u003e …Error…` blockquote aborts the turn]→ready within the daemon sweep, single proc-\u003cPID\u003e session, final ready, never waiting). See replaydata/agents/aider/scenarios/token-quota-exhausted/assessment.json."
+        }
+      }
+    },
+    "claudecode": {
+      "recording_dir": "claudecode/scenarios/token-quota-exhausted",
+      "artifacts": {
+        "events": "claudecode/scenarios/token-quota-exhausted/events.jsonl",
+        "transcript": "claudecode/scenarios/token-quota-exhausted/transcript.jsonl",
+        "manifest": "claudecode/scenarios/token-quota-exhausted/manifest.json",
+        "golden": "claudecode/scenarios/token-quota-exhausted/transcript.jsonl.replay.json.golden",
+        "recordings": [
+          "claudecode/scenarios/token-quota-exhausted/recordings/2026-05-18-23-08-01_irrlichd-0.4.5+6898561"
+        ]
+      },
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "pass_rate": "5/5 phases passed",
+        "agent_cli_version": "2.1.143",
+        "daemon_version": "0.4.5+6898561",
+        "confidence": 0.85,
+        "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "token-quota-exhausted",
+          "agent": "claudecode",
+          "assessed_at": "2026-05-18T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.85,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nClaudecode hits a quota / rate limit naturally when the Anthropic API returns HTTP 429. The TUI surfaces the error inline (assistant message text 'rate_limit_error' / 'quota exceeded') and the turn ends cleanly without a successful `end_turn` — claude's request finishes, the input prompt reappears, and the session sits in `ready` waiting for the user to either retry or wait for quota reset.\n\nThe spec's three Expected: bullets:\n\n1. `working → ready`. Observable: the daemon's state classifier sees the failed turn complete (no stuck working state) and transitions back to ready when claude's input prompt reappears.\n2. State reaches `ready` (not stuck in `working`). Same observable.\n3. Subsequent user prompts may not produce a new turn until budget resets — state stays `ready`. Observable: the second prompt either hits 429 again (state goes working briefly then back to ready) or claude refuses to send the request (state stays in ready). Either way no waiting state, no stuck working.\n\n**Recording approach.** The previous 2026-05-17 assessment marked this `applicable: false` because triggering a real 5h-subscription cap inside a recording would burn the maintainer's actual quota. Today the recipe uses a mocked Anthropic endpoint (`tools/agent-onboarding/recording/mock-anthropic-429/main.go`) that returns 200 + a valid end_turn streaming response on the first /v1/messages request and HTTP 429 on the second. claude is launched with `--bare` plus `ANTHROPIC_API_KEY=sk-mock` + `ANTHROPIC_BASE_URL=http://127.0.0.1:\u003cport\u003e` so it bypasses OAuth/keychain and talks to the mock. Result: the second turn deterministically reproduces the quota-exhausted code path without any real billing.\n\n**Why `--bare` is necessary.** Without `--bare`, claude reads OAuth tokens from the keychain first and ignores `ANTHROPIC_BASE_URL` (per the binary's own `--bare` help text: 'Anthropic auth is strictly ANTHROPIC_API_KEY or apiKeyHelper via --settings (OAuth and keychain are never read).'). The bespoke driver at `tools/agent-onboarding/recording/record-token-quota-exhausted.sh` launches claude under `--bare` because the standard `drive-claudecode-interactive.sh` does not pass it.\n\n## What irrlicht does NOT see (and why that's OK)\n\nThe specific HTTP status code (429 vs other failure modes) is invisible — claude's transcript records an error event, but irrlicht's parser treats all turn-failure shapes as 'turn ended abnormally → ready'. That conflates 429 with 500 / 503 / network errors. The spec doesn't require discriminating; only that state lands cleanly in ready.",
+          "caveats": [
+            "Recording uses a mocked Anthropic endpoint that 429s on the second request. The real 5h subscription quota path is the same shape but harder to trigger inside a recording without burning real money.",
+            "claude must be launched with --bare so it reads ANTHROPIC_API_KEY + ANTHROPIC_BASE_URL from env. The standard driver (drive-claudecode-interactive.sh) does not pass --bare; this scenario uses a bespoke recorder at tools/agent-onboarding/recording/record-token-quota-exhausted.sh.",
+            "irrlicht's daemon parser doesn't discriminate 429 from other turn-failure shapes — the spec is satisfied by 'state lands in ready', which is observable regardless of failure code."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "/Users/ingo/.local/bin/claude (strings extraction)",
+              "note": "Confirms ANTHROPIC_API_KEY / ANTHROPIC_BASE_URL env vars; claude --bare semantics (OAuth/keychain bypassed)."
+            },
+            {
+              "kind": "file",
+              "ref": "tools/agent-onboarding/recording/mock-anthropic-429/main.go",
+              "note": "Minimal Anthropic-compatible mock: 200 + SSE end_turn on first request, 429 on second."
+            },
+            {
+              "kind": "file",
+              "ref": "tools/agent-onboarding/recording/record-token-quota-exhausted.sh",
+              "note": "Bespoke recorder: launches mock, drives claude under --bare with mocked endpoint, captures lifecycle via attached --record daemon."
+            },
+            {
+              "kind": "file",
+              "ref": ".specs/agent-scenarios.md",
+              "note": "Feature: Token / quota budget exhausted L180-188. Three Expected: bullets all observable in this shape."
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": true,
+          "preconditions": [
+            "claude CLI on PATH",
+            "go on PATH (to build the mock)",
+            "irrlichd running with --record (recording is captured via attached daemon)",
+            "port 18765 available on localhost"
+          ],
+          "setup": [
+            "tools/agent-onboarding/recording/record-token-quota-exhausted.sh builds the mock, launches it, drives claude under --bare, and stages the fixture under .build/refresh/claudecode/token-quota-exhausted-\u003cTS\u003e/."
+          ],
+          "driver": "tools/agent-onboarding/recording/record-token-quota-exhausted.sh",
+          "verify": [
+            "events.jsonl shows session_birth → prompt1 working/ready arc → prompt2 working/ready arc",
+            "final state of the session is ready",
+            "no state_transition to waiting (no permission gates expected)",
+            "the second prompt's working→ready transition is the quota-exhausted code path"
+          ],
+          "settings": {},
+          "timeout_seconds": 120
+        }
+      }
+    },
+    "codex": {
+      "artifacts": {},
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "gap:429-mock",
+        "confidence": 0.7,
+        "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: gap:429-mock"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "token-quota-exhausted",
+          "agent": "codex",
+          "assessed_at": "2026-05-25T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "gap:429-mock",
+          "confidence": 0.7,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: gap:429-mock\n\n## Reasoning\n\nThis cell is the *cap-hit* sibling of `quota-burndown`. Where `quota-burndown` asserts that `Windows[0].UsedPercent` rises monotonically *below* the cap, `token-quota-exhausted` is the distinct condition where a quota window has actually hit 100%. For Codex this is the v3 (Jan 2026+) `rate_limit_reached_type` field inside `event_msg.payload.rate_limits`. `extractCodexRateLimits()` in `core/adapters/inbound/agents/codex/parser.go:360-361` reads it into `RateLimitSnapshot.ReachedType`, which flows through the metrics adapter (`core/adapters/outbound/metrics/adapter.go:218,269`) into the domain (`core/domain/session/rate_limit.go:31-33`). So the agent emits a quota-exhausted signal and irrlicht observes and stores it.\n\n**Why partial, not yes:** `ReachedType` is surfaced as a snapshot field for the UI to render a warning state — there is no dedicated session lifecycle state for quota exhaustion. The three-state machine (working/waiting/ready) has no `quota-exhausted` state; a quota-capped turn still resolves to `ready`. The signal is a metric, not a state transition. So irrlicht observes the snapshot but does not model exhaustion as a first-class lifecycle event.\n\n## Why this cell degrades to applicable:false at the implement stage\n\nThe observability is fine; the blocker is *deterministic elicitation*, exactly as the scenario's own description states for claudecode: \"a real quota exhaustion cannot be induced deterministically against the live API.\"\n\n1. You cannot burn the real Codex subscription/account quota on demand to make the live API return a `rate_limit_reached_type`.\n2. There is no codex/OpenAI-compatible mock-server primitive analogous to the claudecode path. The claudecode recipe relies on a bespoke Anthropic-only stub (`tools/agent-onboarding/recording/mock-anthropic-429/main.go`) plus `tools/agent-onboarding/recording/record-token-quota-exhausted.sh`, which is hard-wired to launch `claude --bare` so it reads `ANTHROPIC_API_KEY`/`ANTHROPIC_BASE_URL` from env. No equivalent stub or `--bare`-style env override exists for codex.\n3. The codex interactive driver (`.claude/skills/ir:onboard-agent/scripts/drive-codex-interactive.sh`) has no primitive to inject a quota-exhausted (`rate_limit_reached_type`) response into the transcript.\n\nWith no way to inject the response and no way to burn real quota, the `ReachedType` signal cannot be elicited deterministically in a live `--attach` recording. The cell is therefore frozen as `applicable: false` with a scope_note that references `quota-burndown` (the in-window observability is already validated there) and the missing injection primitive. This is an elicitation gap, not an observability gap — if a codex 429/quota-injection mock (or a fixture-injection driver primitive) is ever added, the cell becomes recordable.\n\n## What irrlicht does NOT do (and why that's OK)\n\nirrlicht does not transition the session into a special state on quota exhaustion; the turn completes to `ready` and the exhaustion is visible only via the `ReachedType` metric snapshot. Modeling exhaustion as a lifecycle state is out of scope for the three-state machine.",
+          "caveats": [
+            "Distinct from quota-burndown: burndown = sub-cap monotonic UsedPercent rise (already has a spec + assessment, no recording yet); this cell = the cap-hit ReachedType signal.",
+            "No deterministic live elicitation: real account quota cannot be burned on demand, there is no codex 429/quota mock (only the Anthropic-only tools/agent-onboarding/recording/mock-anthropic-429/main.go), and the codex interactive driver has no quota-exhausted-response injection primitive.",
+            "Observed as a metric snapshot field (ReachedType), not as a lifecycle state transition — a quota-capped turn still resolves to ready.",
+            "Becomes recordable only if a codex/OpenAI-compatible 429 mock or a driver fixture-injection primitive is added (a developer task)."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/codex/parser.go:344-361",
+              "note": "v3 schema (Jan 2026+) adds rate_limit_reached_type; extractCodexRateLimits reads it into RateLimitSnapshot.ReachedType."
+            },
+            {
+              "kind": "file",
+              "ref": "core/domain/session/rate_limit.go:31-33",
+              "note": "ReachedType: 'when non-empty, signals that one of the windows has hit its cap. UI uses this to switch the display into a warning state.' No lifecycle state."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/outbound/metrics/adapter.go:218,269",
+              "note": "ReachedType propagated through the metrics projection."
+            },
+            {
+              "kind": "file",
+              "ref": "tools/agent-onboarding/recording/mock-anthropic-429/main.go + tools/agent-onboarding/recording/record-token-quota-exhausted.sh",
+              "note": "The claudecode recipe's 429-injection path is Anthropic-only and launches claude --bare; no codex equivalent exists."
+            },
+            {
+              "kind": "file",
+              "ref": ".claude/skills/ir:onboard-agent/scripts/drive-codex-interactive.sh",
+              "note": "Codex interactive driver step types: keys/wait_turn/sleep/interrupt/resume/reset_session/exit_clean — no quota-exhausted-response injection primitive."
+            },
+            {
+              "kind": "spec",
+              "ref": ".specs/agent-scenarios.md → token-quota-exhausted",
+              "note": "Scenario description: 'a real quota exhaustion cannot be induced deterministically against the live API' — the same constraint applies to codex with no mock available."
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": false,
+          "notes": "Not recordable: the quota-exhausted signal cannot be elicited deterministically live. Codex DOES emit it (v3 rate_limit_reached_type → RateLimitSnapshot.ReachedType, observed by irrlicht), but (1) the real account quota cannot be burned on demand, (2) there is no codex/OpenAI-compatible 429 mock — tools/agent-onboarding/recording/mock-anthropic-429/main.go is Anthropic-only and launches claude --bare, with no codex equivalent, and (3) the codex interactive driver has no quota-exhausted-response injection primitive. The in-window observability is already validated by the sibling codex/quota-burndown cell (monotonic UsedPercent below the cap); this cap-hit ReachedType variant only becomes recordable if a codex 429 mock or a driver fixture-injection primitive is added (a developer task). See assessment.json."
+        }
+      }
+    },
+    "opencode": {
+      "artifacts": {},
+      "metadata": {
+        "agent_supports": "partial",
+        "daemon_capability": "incapable",
+        "driver_capability": "n/a",
+        "confidence": 0.85,
+        "notes": "agent_supports: yes\ndaemon_capability: full\ndriver_capability: gap:error-export\nroute: driver-gap"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "token-quota-exhausted",
+          "agent": "opencode",
+          "assessed_at": "2026-05-28T00:00:00Z",
+          "agent_supports": "partial",
+          "daemon_capability": "incapable",
+          "driver_capability": "n/a",
+          "confidence": 0.85,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: gap:error-export\nroute: driver-gap\n\n## Scenario\n\ntoken-quota-exhausted: a token/quota budget is exhausted mid-turn (provider 429 / cost cap / context-window overflow); the model call fails and the turn aborts. User-observable signal per the scenario `verify`: min_turns≥1, final_state `ready`, has_waiting_state false — i.e. the session settles to `ready` after the quota failure and does NOT stick in `working`, with no `waiting` transition.\n\n## agent_supports: yes\n\nopencode 1.14.50 enforces and surfaces a provider/quota failure: a 429 / cost cap / context-window overflow aborts the turn and opencode records the failure on the parent assistant `message` row as `message.data.error` (APIError / UnknownError, e.g. the context-overflow `n_keep \u003e= n_ctx` UnknownError). The quota class is one specialization of an error-aborted turn — the same surface as the opencode/turn-aborted-by-error sibling cell.\n\n## daemon_capability: full (flipped from incapable by #493)\n\nThis verdict CHANGED since the prior assessment. The old artifact recorded `incapable` because opencode never writes a `step-finish` part with reason=error on a quota/error abort, and the watcher's terminal-turn decision read only `isTerminalPart(partData)` — so the working→ready settle was invisible.\n\nThe daemon now consumes `message.data.error` as a terminal-turn signal. `scanParts` JOINs `m.data as message_data` (watcher.go:483) and the terminal decision is `isTerminalPart(partData) || isErrorMessage(msgData)` (watcher.go:528). `isErrorMessage` (watcher.go:441-465) returns true for a non-empty `error` string or object on the message row, setting `EventActivity.Terminal = true`, which settles the turn working→ready. This is the #493 fix and is unit-tested (`TestScanSessions_ErrorMessageTerminal`, `isErrorMessage` table test, watcher_test.go:621/632). Given a recording + a working driver, the live daemon CAN observe the scenario's user-observable signal. Hence `full`.\n\n(Narrow remaining gap, a caveat not a downgrade: a turn that errors before emitting ANY part has no part↔message join row to carry msgData, so the message error is unreachable — watcher.go:521-527. The quota path always emits at least the user `text` part, so this edge does not affect this cell.)\n\n## driver_capability: gap:error-export\n\nThe blocker is now purely at the recording harness. The daemon reads the error from the LIVE SQLite store, but the committed REPLAY fixture is parts-only and drops it. Both export paths in drive-opencode-interactive.sh — headless (lines 411-427) and the new live-TUI tmux path (lines 250-266) — emit `json_set(p.data, '$._role', …, '$._cwd', …, '$._ts', …, '$._model', …)`: they serialize the `part.data` blob enriched with four message-derived SCALARS only. `message.data.error` is never carried into the transcript JSONL. So replay sees the user `text` part and the assistant text/tool parts but no terminal-error signal, and cannot reproduce the working→ready settle the live daemon achieves. The missing driver primitive is `error-export` — fold `message.data.error` into the exported transcript (e.g. a synthetic `_error` field, or an injected step-finish reason=error part) so the parser/watcher path the live daemon exercises can fire on replay.\n\nThe recently-added live-TUI path (`slash` / `reset_session` primitives, run_live ~lines 99-294, route guard 355-357) does NOT change this verdict. It adds a different INPUT mechanism (tmux send-keys for in-REPL slash commands) for scenarios like session-reset; its transcript EXPORT is identical parts-only SQL (lines 250-266) and still omits `message.data.error`. token-quota-exhausted needs no slash/reset step anyway — a single context-overflow `send` elicits the error on the headless path — so it would not even route to run_live. Either way the export gap stands.\n\n## Why driver-gap, not incapable and not applicable:false\n\nThe prior artifact concluded `applicable:false` / `incapable` (observability gap). That conclusion is now stale: #493 made the daemon capable. This is queued tooling work (extend the driver's export with the `error-export` primitive), not an architectural freeze. Per the routing table, daemon=full + driver=gap:* → route `driver-gap`: extend the driver, do NOT freeze the cell. Tracked #493 (same fix unblocks the turn-aborted-by-error sibling, which carries the identical verdict).\n\n## Unblocks when\n\nThe driver's transcript export includes `message.data.error` (the `error-export` primitive). Once present, the existing daemon path (`isErrorMessage` → Terminal=true → working→ready) resolves on replay and the cell becomes recordable via a context-overflow prompt through the existing send-only headless path.",
+          "caveats": [
+            "SECOND PROBE (mock now returns 403 insufficient_quota, non-retryable): opencode persists the error terminally as message.data.error (APIError statusCode 403 isRetryable false) — the AI-SDK retry-forever issue is bypassed. BUT a deeper daemon blocker surfaced: opencode emits ZERO parts on the errored assistant message (no step-start before the API error fires), so the watcher.go scanParts JOIN (part→message, watcher.go:482-489) has no row to carry msgData to isErrorMessage. This is the documented narrow \"zero-part errored message\" edge at watcher.go:521-527 — the daemon cannot see a message-level error with no parts attached. So token-quota stays not-recordable until either (a) the watcher broadens to scan messages with .data.error and no terminal part, or (b) opencode v1.14.50 changes to emit a step-start before an API error lands. The mock + driver are correct; the gap is in the daemon scan path.",
+            "Mocked an OpenAI insufficient_quota 429 (tools/agent-onboarding/recording/mock-openai-429) to test the quota path. FINDING: opencode RETRIES a 429 indefinitely (AI-SDK exponential backoff — 24+ requests over 180s, the turn never completes, and message.data.error is NEVER written). So opencode does not surface quota exhaustion as a terminal state — the session hangs in `working` until the process is killed; there is no working-\u003eready settle to observe. Not recordable as a clean quota-abort. (Context-overflow IS terminal for opencode — see turn-aborted-by-error via reason=length — but that is a different scenario.) Records only if opencode changes 429 handling to abort terminally, or against a provider error class opencode treats as non-retryable.",
+            "Daemon verdict flipped incapable→full this cycle: #493 added watcher.go isErrorMessage(), which reads message.data.error as a terminal-turn signal (watcher.go:528, unit-tested TestScanSessions_ErrorMessageTerminal). The prior assessment's `incapable` was correct before that fix and is now stale.",
+            "The blocker is now driver-only (gap:error-export): the live daemon reads message.data.error from the SQLite store, but the driver's parts-only transcript export (drive-opencode-interactive.sh, both headless lines 411-427 and live-TUI lines 250-266) drops it, so a replay fixture can't reproduce the working→ready settle. Tracked #493.",
+            "The new live-TUI tmux path (slash / reset_session primitives, run_live) does not close this gap — it is a different INPUT mechanism with the SAME parts-only EXPORT; and this cell would route to the headless path regardless (no slash/reset step needed).",
+            "Narrow daemon edge (caveat, not a downgrade): a turn that errors before emitting ANY part has no part↔message join row to carry the message error (watcher.go:521-527), so it stays invisible. The quota path always emits the user text part first, so this edge does not affect this cell.",
+            "Probed on opencode 1.14.50 with the default local model lmstudio/gemma-4-e2b-it-uncensored (LM Studio). Live store audit of ~/.local/share/opencode/opencode.db: step-finish reasons = stop(102)/tool-calls(165)/error(0); message.data.error rows = APIError(10)/MessageAbortedError(26)/UnknownError(3), incl. context-overflow n_keep\u003e=n_ctx — quota/error turns persist at message level, never as a step-finish part."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/opencode/watcher.go",
+              "note": "isErrorMessage (441-465) treats a non-empty message.data.error (string or object) as a terminal signal; scanParts JOINs m.data as message_data (483) and the terminal decision is isTerminalPart(partData) || isErrorMessage(msgData) (528), settling an errored/quota turn working→ready. This is the #493 daemon fix — daemon_capability is now full."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/opencode/watcher_test.go",
+              "note": "TestScanSessions_ErrorMessageTerminal (632) asserts EventActivity.Terminal=true for a turn whose only terminal signal is message.data.error; the isErrorMessage table test (621) covers string/object/nil shapes. Confirms the daemon path is live and tested, not aspirational."
+            },
+            {
+              "kind": "file",
+              "ref": ".claude/skills/ir:onboard-agent/scripts/drive-opencode-interactive.sh",
+              "note": "Both transcript exports — headless (411-427) and live-TUI run_live (250-266) — SELECT json_set(p.data, '$._role',…, '$._cwd',…, '$._ts',…, '$._model',…): part data plus four scalars, no message.data.error. The live-TUI path (route guard 355-357) is a slash/reset INPUT mechanism with the same parts-only EXPORT. This is the gap:error-export primitive (#493): the replay fixture cannot carry the terminal-error signal the live daemon reads."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/opencode/parser.go",
+              "note": "parseStepFinish maps reason=error → turn_done (164-166), but that branch is dead for opencode quota/error turns because opencode never persists a step-finish reason=error part; the terminal signal lives on message.data.error, which the watcher (not the parser) consumes via isErrorMessage."
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": false,
+          "notes": "scope_note: NOT RECORDABLE — daemon observability gap (live-corrected from the doc verdict daemon_capability=full, \"step-finish reason=error covers\"). This is the SAME transport gap as the opencode/turn-aborted-by-error sibling: a quota/token-budget exhaustion is one error class of an error-aborted turn, and opencode 1.14.50 records ALL turn aborts on the message row (message.data.error), never as a step-finish part. Live store audit of ~/.local/share/opencode/opencode.db: step-finish reasons = stop(102)/tool-calls(165)/error(0) — ZERO error parts ever persisted; the closest live token-budget analog (context overflow, UnknownError \"n_keep: 27429 \u003e= n_ctx: 4096\") plus quota/auth APIErrors all land on message.data.error. The watcher's scanParts JOINs message only for role context and discards it (watcher.go:498 `_ = msgData`); the terminal-turn decision (watcher.go:495) reads only isTerminalPart(partData), so no step-finish reason=error part means no turn_done — the session sticks in `working` until process_exited and never settles to `ready`. So the scenario's user-observable signal (final_state ready after the quota failure, no waiting) is unobservable from the store. NOT a driver_gap: the send-only driver is `ready` and a context-overflow prompt elicits the error live, but no observable part is written. Unblocks when opencode emits a step-finish reason=error part on quota aborts OR the watcher consumes message.data.error as a terminal signal (mirroring aider's flushErrorTurn, #262). No recipe, no recording, no expected.jsonl. See replaydata/agents/opencode/scenarios/token-quota-exhausted/assessment.json.",
+          "scope_note": "UNELICITABLE IN THIS RIG — token/quota exhaustion is a remote-provider billing condition; the local LM Studio model (gemma-4-e2b) has no quota/billing, so no quota-exhaustion error can be triggered here. Groundwork is in place for when a billed remote model with a hittable quota is configured in ~/.config/opencode/opencode.json: the error-export driver fix (ee477644) carries message.data.error into the fixture, and watcher.go isErrorMessage (#493) settles working-\u003eready on it — but only when the errored message has \u003e=1 part (the documented zero-part blind spot, watcher.go:524-526). Verdict: agent_supports=yes / daemon_capability=full (\u003e=1-part errors) / driver_capability=ready (error-export ported). Shares the error-export primitive with turn-aborted-by-error."
+        }
+      }
+    },
+    "pi": {
+      "artifacts": {},
+      "metadata": {
+        "agent_supports": "partial",
+        "daemon_capability": "incapable",
+        "driver_capability": "ready",
+        "confidence": 0.55,
+        "notes": "agent_supports: partial\ndaemon_capability: incapable; driver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "token-quota-exhausted",
+          "agent": "pi",
+          "assessed_at": "2026-05-25T00:00:00Z",
+          "agent_supports": "partial",
+          "daemon_capability": "incapable",
+          "driver_capability": "ready",
+          "confidence": 0.55,
+          "body": "## Verdict\n\nagent_supports: partial\ndaemon_capability: incapable; driver_capability: ready\n\n`applicable` resolves to `yes` on the matrix algebra (partial/partial), but the cell degrades to recording-not-applicable: there is no deterministic, non-faked way to drive a real quota-exhaustion episode in a bounded live recording, and even if a provider 429 occurred, pi masks it (no distinct observable state).\n\n## What the scenario wants\n\nFrom scenario-meanings: the agent hits a hard token/cost cap mid-turn, emits a turn-end signal, the session resolves `working → ready`, and subsequent prompts stay `ready` until the budget resets. The canonical primitive is *budget enforcement* — the CLI itself enforces a token/time budget and emits a turn-end signal when the cap is hit.\n\n## agent_supports: partial\n\npi tracks per-turn usage/cost (parser.go:107-113 reads `message.usage`; extractPiContribution prefers the provider-reported `cost`), and the footer surfaces a running cost figure. But pi enforces NO self-imposed hard cap: `pi --help` (0.70.0) exposes no `--max-tokens`, `--budget`, `--cost-limit`, or any session-aborting cap flag (the only `Limit` mentions are model-cycling globs). pi cannot self-abort a turn at a token budget. The only way a quota episode arises is an upstream provider 429 — and pi's underlying `@mariozechner/pi-ai` SDK auto-retries transient HTTP failures transparently inside its request layer, so a 429 does not surface as a distinct turn-end. Hence `partial`: pi tracks cost/usage (the metric half of the primitive) but does not enforce a budget (the enforcement half), and provider-side quota is auto-retried away.\n\n## daemon_capability: incapable; driver_capability: ready\n\nThe pi adapter (FilesUnderRoot ~/.pi/agent/sessions) tails an append-only JSONL transcript. The parser (parser.go) recognizes exactly: `session`, `model_change`, `compaction` (→ assistant/working), `message`/assistant with `stopReason==\"stop\"` (→ turn_done/ready) vs non-stop (→ assistant/working), `user`, `toolResult` (with `isError`). There is NO quota-exhausted, rate-limit, or provider-error event kind. A quota episode would have to manifest as either (a) an ordinary `stopReason==stop` turn-end (indistinguishable from a normal turn completing) or (b) the process exiting (`process_exited`). irrlicht would observe the resulting `working → ready` arc, but nothing in the transcript marks it as quota-driven — so the observable is identical to any normal turn end. `partial`: the lifecycle arc is observable; the *quota* nature of it is not.\n\n## Why this cell is recording-not-applicable (degrade to applicable:false)\n\nThere is no genuine, deterministic, non-faked trigger:\n\n1. **No self-cap flag.** Verified against `pi --help` 0.70.0 and the dist bundle — pi has no `--max-tokens`/budget/cost-limit flag that self-aborts a session. So we cannot make pi end a turn at a token budget on demand.\n2. **Real provider 429 is not inducible on demand**, and the project rule forbids faking/injecting transcript lines.\n3. **The Anthropic-429 mock path doesn't transfer.** claudecode records this cell via tools/agent-onboarding/recording/mock-anthropic-429/main.go, but that mock launches `claude --bare` (reading ANTHROPIC_API_KEY + ANTHROPIC_BASE_URL); there is no pi equivalent. Even if pi were pointed at an Anthropic-compatible 429 mock, pi-ai auto-retries the 429 internally and pi writes nothing distinct to the JSONL for a quota event — so the curated fixture would contain only ordinary working/ready arcs with no quota signal to assert against.\n\nThis mirrors the codex sibling verdict (codex/token-quota-exhausted is also applicable:false: real quota cannot be burned on demand, no codex 429 mock, no driver injection primitive). For pi the gap is even cleaner: there is no quota-exhausted observable in the transcript AT ALL, so the cell is unrecordable as specified regardless of trigger.\n\nThe committed expected.jsonl documents the TARGET arc (a working span that ends in ready without sticking, no waiting) should pi ever ship a self-enforced budget cap OR surface a distinct quota signal in its transcript.",
+          "caveats": [
+            "feature-invisible-but-spec-compliant: even if a real 429 occurred, pi's transcript carries no quota/rate-limit/provider-error line — the only observable is an ordinary working→ready arc, indistinguishable from a normal turn end.",
+            "pi-ai auto-retries provider 429s transparently inside the SDK request layer, so a quota response does not surface as a distinct turn-end signal.",
+            "pi 0.70.0 has no self-imposed token/cost budget cap flag (no --max-tokens / --budget / --cost-limit); pi cannot self-abort a turn at a budget on demand."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/pi/parser.go",
+              "note": "Parser recognizes session/model_change/compaction/message(stop→turn_done, non-stop→assistant)/user/toolResult(isError) — no quota/rate-limit/provider-error event kind."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/pi/adapter.go",
+              "note": "Source = FilesUnderRoot ~/.pi/agent/sessions (append-only JSONL); the daemon only sees what pi writes to that file."
+            },
+            {
+              "kind": "file",
+              "ref": ".claude/skills/ir:onboard-agent/scenarios.json",
+              "note": "codex/token-quota-exhausted is applicable:false (real quota not burnable on demand, no codex 429 mock, no driver injection); claudecode uses the Anthropic-only mock-anthropic-429 launching claude --bare — neither path transfers to pi."
+            },
+            {
+              "kind": "file",
+              "ref": "tools/agent-onboarding/recording/mock-anthropic-429/main.go",
+              "note": "Mock is Anthropic-only and launches claude --bare; there is no pi equivalent, and pi-ai would auto-retry the 429 with no distinct transcript line."
+            },
+            {
+              "kind": "url",
+              "ref": "pi --help (0.70.0, @mariozechner/pi-coding-agent)",
+              "note": "No --max-tokens/--budget/--cost-limit/quota-cap flag; only model-cycling 'Limit' globs. Confirms pi has no self-enforced budget cap."
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": false,
+          "notes": "scope_note: NOT RECORDABLE — no deterministic quota-exhaustion trigger, and no distinct quota observable even if one occurred. Reassessed partial/partial (0.55). (1) pi enforces NO self-imposed budget cap: pi --help 0.70.0 exposes no --max-tokens/--budget/--cost-limit/quota-cap flag (only model-cycling 'Limit' globs), so pi cannot self-abort a turn at a token budget on demand. (2) The only path to a quota episode is an upstream provider 429, which (a) cannot be induced on demand and (b) the project rule forbids faking/injecting into the transcript. (3) The claudecode mock-anthropic-429 path does NOT transfer: that mock launches `claude --bare` (no pi equivalent), pi's @mariozechner/pi-ai SDK auto-retries 429s transparently in its request layer, and — decisively — pi writes NOTHING distinct to its JSONL for a quota event. The parser (parser.go) recognizes only session/model_change/compaction/message(stop→turn_done, non-stop→assistant)/user/toolResult(isError); there is no quota/rate-limit/provider-error event kind. So even a real 429 would surface only as an ordinary working→ready arc indistinguishable from a normal turn end — the curated fixture would have no quota signal to assert. This is a cleaner case than the codex sibling (codex at least EMITS rate_limit_reached_type but still can't be driven live): for pi the quota observable does not exist in the transcript at all. expected.jsonl is committed as the DOCUMENTED TARGET (a baseline turn + a capped turn that resolves working→ready without sticking, no waiting) should pi ever ship a self-enforced budget cap OR surface a distinct quota signal in its transcript. No recording; no retry. See replaydata/agents/pi/scenarios/token-quota-exhausted/assessment.json."
+        }
+      }
+    }
+  }
+}

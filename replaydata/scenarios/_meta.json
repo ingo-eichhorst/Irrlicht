@@ -1,0 +1,16 @@
+{
+  "min_versions": {
+    "aider": "0.86.0",
+    "claudecode": "2.0.0",
+    "codex": "0.50.0",
+    "opencode": "1.0.0",
+    "pi": "0.70.0"
+  },
+  "transcript_extensions": {
+    "aider": "md",
+    "claudecode": "jsonl",
+    "codex": "jsonl",
+    "opencode": "jsonl",
+    "pi": "jsonl"
+  }
+}

@@ -1,0 +1,645 @@
+{
+  "id": "4.1",
+  "name": "multiple-sessions-same-cwd",
+  "section": "Multi-session and multi-agent",
+  "feature": "Multiple sessions in same cwd",
+  "description": "Two concurrent claude REPL sessions in the SAME cwd, driven via the interactive driver start_session step + per-step session targeting. Asserts two distinct session_ids with independent working-\u003eready arcs and a stable PID-to-session binding (session 1 is re-driven while session 2 is alive). Recordable since the driver gained concurrent-session support (start_session / {\"session\":N}).",
+  "requires": [
+    "headless_mode"
+  ],
+  "verify": {
+    "final_state": "ready"
+  },
+  "agents": {
+    "aider": {
+      "artifacts": {},
+      "metadata": {
+        "agent_supports": "partial",
+        "daemon_capability": "incapable",
+        "driver_capability": "ready",
+        "confidence": 0.85,
+        "notes": "agent_supports: partial\ndaemon_capability: incapable\ndriver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "multiple-sessions-same-cwd",
+          "agent": "aider",
+          "assessed_at": "2026-05-25T00:00:00Z",
+          "agent_supports": "partial",
+          "daemon_capability": "incapable",
+          "driver_capability": "ready",
+          "confidence": 0.85,
+          "body": "## Verdict\n\nagent_supports: partial\ndaemon_capability: incapable\ndriver_capability: ready\n\n## Scenario\n\n**Primitive exercised:** PID-based session isolation — the daemon must bind each session to its own PID even when multiple agents share the same transcript directory and filename pattern. **User-observable signal:** two distinct session rows with separate `session_id`s and PIDs, each transitioning state independently, with no flapping and no PID cross-contamination.\n\n## agent_supports: partial\n\nNothing in aider prevents launching two instances in the same cwd, and `headless_mode` (the scenario's only `requires:`) is supported (`capabilities.json` → `headless_mode: true`). But aider has no concept of session identity: `capabilities.json` records `session_id_assignment: false` and `session_resume: false`, and its history file name is the static `.aider.chat.history.md` with no per-instance/per-PID component. The default `--chat-history-file` is literally `.aider.chat.history.md` (aider docs), and the file lives per-project in the cwd (aider FAQ). Two instances in the same cwd therefore append to the **same** shared transcript with no demultiplexing key. So aider can host the situation but has no native primitive that keeps the two instances' data apart — hence `partial`, not `yes`.\n\n## daemon_capability: incapable\n\nThe aider adapter is the repo's only `FilesUnderCWD` source (`agent.go`): the scanner watches processes by command-line regex (`/aider`) and probes each PID's cwd for a fixed filename. Two same-cwd aiders are two distinct PIDs, and the scanner mints one synthetic session per PID — `sessionID := fmt.Sprintf(\"proc-%d\", pid)` (`scanner.go`). So at the session-creation layer the PID isolation primitive *does* hold: two distinct rows with distinct PIDs appear.\n\nThe break is in the transcript binding. For each tracked PID the scanner computes `path := filepath.Join(proc.cwd, s.transcriptFilename)` (`scanner.go` line 322), and `transcriptFilename` is the hardcoded `.aider.chat.history.md` (`agent.go`). Two PIDs sharing a cwd resolve to the **identical** `TranscriptPath`. Each session gets its own `Parser` instance (the `NewParser` factory in `agent.go` exists precisely so idle-flush state doesn't collide), but both parsers tail the *same* file. Every `####`/`\u003e Tokens:`/idle-flush line is fed to both sessions, so:\n\n- State transitions move in lockstep (both go working→ready together when *either* aider writes) — the \"each transitions state independently\" signal fails.\n- Per-call tokens/cost are double-counted across the two rows.\n\nThis is `incapable`, not `bug`: there *is* a trace (the shared `.aider.chat.history.md`), but the `FilesUnderCWD` transport offers no key to attribute a transcript line to one PID over the other, and the 3-state model has nothing to disambiguate two arcs interleaved in one file. No `events.jsonl` could prove independent per-session arcs because the signal that would distinguish them never reaches the daemon distinctly. The owner is architecture (transport redesign — e.g. per-PID transcript binding), not a product bug in the existing parser. This ratifies the coverage matrix verdict (`incapable`).\n\n## driver_capability: ready\n\nThe interactive driver (`scripts/drive-aider-interactive.sh`) implements send / slash / wait_turn / interrupt / sleep. The aider scenario as conceived (two instances launched in the same cwd, each driven independently) can in principle be set up with `start_session` + per-step targeting in the generic recipe framework; the driver's own grammar does not block the *recording* of two processes. But `daemon_capability: incapable` dominates — even a perfectly-driven pair of sessions cannot be observed as two independent arcs, so the route is **frozen** regardless of driver readiness. There is no driver primitive whose absence is the blocking axis here, so `driver_capability` stays `ready` rather than masquerading the architecture limit as a `gap:session`.\n\n## Capability-key mapping\n\n**Primitive exercised** = \"PID-based session isolation.\" This has no dedicated key in `aider/capabilities.json`; the closest evidence keys are `session_id_assignment: false` and `session_resume: false`, both confirming aider provides no session-identity primitive of its own. There is no flag to flip — the limitation is the `FilesUnderCWD` single-shared-file transport, not a missing aider capability.\n\n## Route\n\n`partial` + `incapable` + `ready` ⇒ **frozen**: aider can be put in this situation but the daemon's `FilesUnderCWD` transport cannot observe two independent arcs from one shared transcript, so there is no recording to make. Unblocking would require a transport redesign (per-PID transcript binding or a per-instance `--chat-history-file` the adapter could discover).",
+          "caveats": [
+            "feature-invisible-but-spec-compliant: the scanner does PID-isolate at session creation (one proc-\u003cpid\u003e row per PID), so distinct rows/PIDs do appear; the gap is purely the shared TranscriptPath, which makes the two rows' state and metrics non-independent.",
+            "Setting AIDER_CHAT_HISTORY_FILE (or --chat-history-file) to a distinct path per instance would give each aider its own transcript, but the adapter probes a single hardcoded filename, so irrlicht would not pick up the second file even then."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/aider/agent.go",
+              "note": "FilesUnderCWD source with hardcoded transcriptFilename = .aider.chat.history.md; per-process NewParser factory"
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/processlifecycle/scanner.go",
+              "note": "sessionID = proc-\u003cpid\u003e (PID-isolated rows, line 282); TranscriptPath = filepath.Join(proc.cwd, transcriptFilename) (line 322) — identical for two same-cwd PIDs, so the daemon is incapable of attributing lines per-PID"
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/aider/pid.go",
+              "note": "DiscoverPIDByCWDAndCmdLine('/aider', cwd) — binds by cwd+cmdline; two same-cwd aiders disambiguate to one PID"
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/aider/capabilities.json",
+              "note": "session_id_assignment: false, session_resume: false — aider has no session-identity primitive; headless_mode: true satisfies the scenario requires:"
+            },
+            {
+              "kind": "url",
+              "ref": "https://aider.chat/docs/config/options.html",
+              "note": "--chat-history-file default is the static .aider.chat.history.md (no per-instance uniqueness)"
+            },
+            {
+              "kind": "url",
+              "ref": "https://aider.chat/docs/faq.html",
+              "note": "aider writes .aider.chat.history.md per-project in the cwd; global override only via AIDER_CHAT_HISTORY_FILE"
+            }
+          ]
+        }
+      }
+    },
+    "claudecode": {
+      "recording_dir": "claudecode/scenarios/multiple-sessions-same-cwd",
+      "artifacts": {
+        "events": "claudecode/scenarios/multiple-sessions-same-cwd/events.jsonl",
+        "transcript": "claudecode/scenarios/multiple-sessions-same-cwd/transcript.jsonl",
+        "manifest": "claudecode/scenarios/multiple-sessions-same-cwd/manifest.json",
+        "golden": "claudecode/scenarios/multiple-sessions-same-cwd/transcript.jsonl.replay.json.golden"
+      },
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "pass_rate": "7/7 phases passed",
+        "agent_cli_version": "2.1.150",
+        "daemon_version": "0.4.7+c979655",
+        "confidence": 0.9,
+        "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "multiple-sessions-same-cwd",
+          "agent": "claudecode",
+          "assessed_at": "2026-05-23T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.9,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n(Re-evaluation of the 2026-05-18 assessment. Verdict unchanged: yes/yes. The reasoning is reaffirmed against the current adapter source, and the prior assessment's PID-race caveat is REVISED — the source no longer matches the heuristic it described.)\n\n## Reasoning\n\nClaude Code supports launching multiple concurrent CLI sessions in the same cwd as-shipped. Each `claude` invocation mints (or accepts via `--session-id`) a fresh UUID and writes to its own transcript at `~/.claude/projects/\u003cslug\u003e/\u003cUUID\u003e.jsonl`. Two sessions in the same cwd produce two distinct transcripts because the path is keyed by UUID, not cwd.\n\nirrlicht observes both sessions via the standard transport. `agent.go` declares `Source: FilesUnderRoot{Dir: ~/.claude/projects/, Parser: JSONLineParser{NewParser: () =\u003e \u0026Parser{}}}`. The fswatcher on `~/.claude/projects/` picks up two new files (one per UUID); the JSONL tailer instantiates a FRESH stateful `Parser{}` per file via `NewParser`, so the two sessions never share parser state. The process scanner uses `ExactName{Name: \"claude\"}` (pgrep -x), which returns every running `claude` PID; `DiscoverPID` in `pid.go` reconciles transcript ↔ PID and ties each session row to its own PID.\n\nSpec bullets map cleanly:\n- 'Two distinct session rows appear, each with its own session_id and PID' — two transcripts → two SessionState rows; each row's PID comes from independent DiscoverPID resolution keyed on the transcript's UUID.\n- 'Each session transitions state independently — no flapping between rows' — the tailer is per-file (one goroutine, one Parser) so a turn on session A's transcript only updates session A's metrics. There is no shared-cwd state on the session domain object.\n- 'PID-to-session binding is stable and does not cross-contaminate' — once `DiscoverPID` binds, the binding persists until process_exited; the dispatcher keys per-session, not per-cwd. The current DiscoverPID actively defends this invariant (see below).\n\n## PID discovery has been HARDENED — the prior race caveat no longer applies\n\nThe 2026-05-18 assessment described DiscoverPID as a 'cwd+start-time heuristic' that 'can briefly swap PID-to-session assignment when two sessions start within the same scanner tick.' Reading the current `pid.go`, that description is no longer accurate (and, by commit dates, was already stale when written):\n\n- **Layer 1 (authoritative):** Claude writes `~/.claude/sessions/\u003cpid\u003e.json` containing `{pid, sessionId, cwd}` for every live process. DiscoverPID scans this directory and, on an exact `sessionId == wantSessionID` match (derived from the transcript filename), returns that PID directly — no cwd or start-time reasoning at all. This is the normal path once metadata exists.\n- **Layer 2 (restricted cwd fallback):** Used only during the brief startup window before a session's metadata file appears. It first excludes PIDs already claimed by OTHER sessions' metadata (`claimedByOthers`), then binds only if exactly one candidate remains; if two live `claude` processes share the cwd with no disambiguating metadata, it returns 0 so `DiscoverPIDWithRetry` retries — it never guesses. The caller's 'prefer unclaimed else highest PID' disambiguator is deliberately ignored precisely because that strategy let a new session steal a rival's PID (issue #109).\n- There is NO start-time logic anywhere — the only `startedAt` reference is a comment documenting the on-disk schema; `claudeSessionMeta` reads only `pid` and `sessionId`.\n\nThis hardening landed in #109 (2026-04-09) and #169 (2026-04-19), both BEFORE the 2026-05-18 assessment. The two-sessions-same-tick swap the old caveat warned about cannot occur on the metadata path, and on the fallback path the daemon returns 0-and-retries rather than mis-binding. The residual seam is benign: a session may sit at PID=0 for a tick or two until either its metadata file lands or the rival's metadata disambiguates it — observable only as a momentarily-late PID, never as a cross-contaminated binding.\n\n## Status of this cell\n\nThe verdict is unchanged (yes/yes, confidence 0.9) and the matrix already records yes/yes. The cell's real blocker is NOT an assessment gap — it is Stage 4 (recording): the catalog shows `measurement.status: no_recording`, recipe `authored: false`, `archive_count: 0`. The next action to finish this cell is recipe + record, not re-assessment.",
+          "caveats": [
+            "Recording recipe must launch two `claude` processes in the same cwd with distinct `--session-id` UUIDs and drive them in parallel (tmux split windows or two background sends). A naive single-shell recipe will serialize the turns.",
+            "During the brief startup window before a session's ~/.claude/sessions/\u003cpid\u003e.json metadata appears, two concurrent sessions in the same cwd may each sit at PID=0 for a tick or two while DiscoverPID returns 0-and-retries rather than guess. This is observable as a momentarily-late PID, never as a swapped/cross-contaminated binding. Anchor PID-to-session phase checks at a moment after both transcripts have written at least one line.",
+            "DiscoverPID hardcodes ~/.claude/sessions/ for the authoritative metadata lookup and does not follow CLAUDE_CONFIG_DIR (per the comment in adapter.go). A recipe that relocates the config root via that env var would fall back to the Layer-2 cwd path and could leave concurrent same-cwd sessions at PID=0 longer; record under the default config root."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/claudecode/agent.go",
+              "note": "Source: FilesUnderRoot{Dir: transcriptsDir(), Parser: JSONLineParser{NewParser: () =\u003e \u0026Parser{}}} — a fresh stateful Parser per transcript file means two sessions in one cwd do not share parser state; Process.Match = ExactName{ProcessName \"claude\"} (pgrep -x) returns every live claude PID."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/claudecode/pid.go",
+              "note": "DiscoverPID is now metadata-first: Layer 1 returns the PID whose ~/.claude/sessions/\u003cpid\u003e.json sessionId exactly matches the transcript UUID; Layer 2 cwd fallback excludes PIDs claimed by other sessions and returns 0 (retry) when ambiguous rather than guessing. No start-time heuristic exists. Hardened in #109 and #169, both predating the 2026-05-18 assessment."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/processlifecycle/discovery.go",
+              "note": "narrowByCWD / DiscoverPIDByCWD: the underlying cwd matcher. claudecode wraps its disambiguate callback to enforce the strict unambiguous-or-zero rule rather than the default highest-PID pick."
+            },
+            {
+              "kind": "url",
+              "ref": "https://github.com/ingo-eichhorst/Irrlicht/pull/174",
+              "note": "Commit history on pid.go: #109 (fa6180c, 2026-04-09) introduced ~/.claude/sessions metadata-based PID discovery to fix the flap loop; #169 (0012099, 2026-04-19) gated the negative filter on metadata mtime; e3cc0b9 (PR #174) tightened review findings. All predate 2026-05-18."
+            },
+            {
+              "kind": "file",
+              "ref": ".claude/skills/ir:onboard-agent/scenario-meanings.md",
+              "note": "### multiple-sessions-same-cwd — Primitive exercised: 'PID-based session isolation — daemon correctly binds each session to its own PID even when multiple agents share the same transcript directory and filename pattern.' Maps to capabilities.json key session_id_assignment (true). User-observable signal: two distinct session rows with separate session_ids and PIDs, independent transitions, no flapping."
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": true,
+          "preconditions": [
+            "claude CLI on PATH and authenticated (subscription or API key)",
+            "irrlichd is recording — run-cell.sh isolated mode (spawns its own --record daemon on 7837), or --attach against a daemon started with --record",
+            "no other claudecode session uses the recipe UUIDs"
+          ],
+          "setup": [
+            "Driver auto-starts session 1 (slot 1) in \u003cstaging\u003e/cwd with the staging-supplied UUID and accepts the trust dialog",
+            "The start_session step launches session 2 (slot 2) in the SAME \u003cstaging\u003e/cwd; claude caches trust per directory so no second trust dialog fires",
+            "Steps carrying {\"session\":1} route send/wait_turn back to session 1 while session 2 stays alive — exercising the concurrent, independent arcs"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: alpha"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "start_session"
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: bravo"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: alpha2",
+              "session": 1
+            },
+            {
+              "type": "wait_turn",
+              "session": 1
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl contains 2 distinct UUID session_ids, both keyed to the same cwd slug",
+            "each UUID has its own independent working-\u003eready arc; no transition on one UUID is attributed to the other",
+            "session 1 shows TWO working-\u003eready arcs (turn1 + the post-start_session re-drive); session 2 shows ONE — proving session 1 stayed bound and independent while session 2 was alive",
+            "no state flapping: the daemon never swaps the PID-to-session binding between the two rows",
+            "transcript.jsonl concatenates both sessions: 3 user lines + 3 assistant lines total across the two UUIDs"
+          ],
+          "settings": {},
+          "timeout_seconds": 180
+        }
+      }
+    },
+    "codex": {
+      "recording_dir": "codex/scenarios/multiple-sessions-same-cwd",
+      "artifacts": {
+        "events": "codex/scenarios/multiple-sessions-same-cwd/events.jsonl",
+        "transcript": "codex/scenarios/multiple-sessions-same-cwd/transcript.jsonl",
+        "manifest": "codex/scenarios/multiple-sessions-same-cwd/manifest.json",
+        "golden": "codex/scenarios/multiple-sessions-same-cwd/transcript.jsonl.replay.json.golden"
+      },
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "pass_rate": "6/6 phases passed",
+        "agent_cli_version": "0.130.0",
+        "daemon_version": "0.4.7+83509be.dirty",
+        "confidence": 0.95,
+        "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready\napplicable: yes — recorded 2026-05-24 (driver gained concurrent-session support)"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "multiple-sessions-same-cwd",
+          "agent": "codex",
+          "assessed_at": "2026-05-24T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.95,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\napplicable: yes — recorded 2026-05-24 (driver gained concurrent-session support)\n\n## Reasoning\n\n`multiple-sessions-same-cwd` (scenario-meanings.md): two instances of the SAME agent launched in one working directory must appear as two distinct session rows, each with its own session_id and PID, transitioning state independently with no flapping and no PID cross-contamination. Primitive exercised = PID-based session isolation. Explicitly NOT `session-resume` (one session_id reused across PID lifetimes) and NOT `multiple-agents-same-workspace` (different agent types).\n\n**agent_supports: yes.** Codex CLI 0.130.0 supports launching multiple concurrent `codex` processes in the same cwd as-shipped. Each codex process mints its own rollout UUID and writes to a distinct transcript under `~/.codex/sessions/YYYY/MM/DD/\u003crollout-uuid\u003e.jsonl` (adapter.go: `defaultRootDir = .codex/sessions`, FilesUnderRoot). The rollout path is keyed by date+UUID, not cwd, so two codex sessions in the same cwd produce two distinct rollouts. (capabilities.json records `session_id_assignment: false` — codex mints its own UUID rather than accepting `--session-id` — but that does not block running two instances; it only means the recipe cannot pin the UUIDs in advance.)\n\n**daemon_capability: full; driver_capability: ready.** This is the load-bearing verdict and it is actually STRONGER for codex than for claudecode. The codex Source is `FilesUnderRoot{Dir: ~/.codex/sessions/, Parser: JSONLineParser{NewParser: () =\u003e \u0026Parser{}}}` — a fresh stateful `Parser{}` per rollout file, so two sessions in one cwd never share parser state (no metric/turn cross-contamination). The fswatcher picks up two new rollout files (one per UUID) → two SessionState rows. PID-to-session binding is the key seam: codex's `DiscoverPID` (pid.go) calls `processlifecycle.DiscoverPIDByTranscriptWriter(transcriptPath)` — it finds the owning PID by which process currently holds THAT specific rollout file open for writing (codex keeps its rollout open for the session lifetime). This binds each session to its own PID by per-file ownership, NOT by the cwd+start-time heuristic claudecode uses — so two concurrent codex processes in the same cwd are disambiguated by which rollout each holds open, with no cwd-based ambiguity. The recording confirms this empirically: events.jsonl shows two distinct rollout session_ids, each bound to its own PID (rollout-…862d→pid 41099, rollout-…d89d→pid 42422), with independent working→ready arcs and no flapping.\n\n## Recording (driver gap closed 2026-05-24)\n\nThe codex interactive driver (`scripts/drive-codex-interactive.sh`) gained a per-slot session model: a `start_session` step launches a SECOND concurrent codex in the same cwd without tearing down the first, and any step may carry `{\"session\":N}` to route send/wait_turn back to an earlier slot. Each slot resolves its OWN rollout via a per-slot discovery marker (with claimed-path exclusion so two near-simultaneous rollouts in the shared `~/.codex/sessions` dir never double-bind). The recipe drives: session 1 turn → start_session (session 2, same cwd) → session 2 turn → session 1 driven AGAIN while session 2 is alive. This elicits exactly the two-simultaneously-live-processes condition `DiscoverPIDByTranscriptWriter` disambiguates — the whole point of the scenario.\n\n## Conclusion\n\nThe cell is recorded (`by_adapter.codex.applicable=true`). events.jsonl carries two distinct rollout sessions with independent two-/one-turn arcs and stable PID binding; expected.jsonl asserts the arcs via new_session/same_session_as relations (codex mints its own UUIDs, so ids are not pre-pinned). Every phase anchors on a WORKING transition because codex's process scanner emits a pre-session proc-\u003cPID\u003e row born in ready that never works — a ready-anchored new_session phase would greedily bind to that placeholder. This is the same scenario the claudecode cell records; the two recordings together prove same-cwd PID isolation across both adapters.",
+          "caveats": [
+            "DiscoverPIDByTranscriptWriter is the critical seam: it binds by which process holds each rollout file open for writing. If both codex processes start within the same scanner tick before either has flushed its first rollout line, the file-writer probe may briefly find no owner; the recipe sequences start_session AFTER session 1's first turn and waits a turn on session 2 before re-driving session 1, so both rollouts have written lines before any PID-binding assertion.",
+            "codex mints its own rollout UUID (session_id_assignment: false), so unlike claudecode the recipe cannot pre-pin the two UUIDs via a flag — the spec asserts two DISTINCT sessions via new_session/same_session_as relations, not two known IDs.",
+            "Every expected.jsonl phase anchors on a working transition, never a ready: codex's pre-session proc-\u003cPID\u003e placeholder is born ready before the rollout is discovered and never works, so a ready-anchored new_session phase would bind to the placeholder instead of the rollout session."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": ".claude/skills/ir:onboard-agent/scenario-meanings.md",
+              "note": "multiple-sessions-same-cwd: two instances of the same agent in one cwd → two distinct session_id+PID rows, independent transitions, stable non-cross-contaminating PID binding; primitive = PID-based session isolation; distinct from session-resume and multiple-agents-same-workspace."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/codex/agent.go",
+              "note": "Source: FilesUnderRoot{Dir: ~/.codex/sessions/, Parser: JSONLineParser{NewParser: () =\u003e \u0026Parser{}}} — a fresh stateful parser per rollout file means two codex sessions in one cwd do not share parser state."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/codex/pid.go",
+              "note": "DiscoverPID delegates to processlifecycle.DiscoverPIDByTranscriptWriter(transcriptPath): binds each session to the PID holding ITS rollout file open for writing — stronger per-file isolation than claudecode's cwd+start-time heuristic; two concurrent codex in one cwd are disambiguated by file ownership, not cwd."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/codex/adapter.go",
+              "note": "defaultRootDir = .codex/sessions; rollouts live under sessions/YYYY/MM/DD/\u003cuuid\u003e.jsonl keyed by date+UUID, not cwd — two same-cwd sessions yield two distinct rollout files."
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/codex/capabilities.json",
+              "note": "headless_mode: true (scenario requires it); session_id_assignment: false (codex mints its own UUID — recipe cannot pre-pin the two IDs)."
+            },
+            {
+              "kind": "file",
+              "ref": ".claude/skills/ir:onboard-agent/scripts/drive-codex-interactive.sh",
+              "note": "Per-slot session model: start_session launches a concurrent second codex in the same cwd; {\"session\":N} routes steps to an earlier slot; each slot discovers its own rollout via a per-slot marker with claimed-path exclusion. This is the concurrent-second-session primitive that unblocked the recording."
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/claudecode/scenarios/multiple-sessions-same-cwd/assessment.json",
+              "note": "Sibling claudecode cell: same capability verdict (yes/yes) and same recipe shape (start_session + per-step session targeting). The two recordings together prove same-cwd PID isolation across both adapters."
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": true,
+          "preconditions": [
+            "codex CLI on PATH and authenticated",
+            "irrlichd is recording — run-cell.sh isolated mode (spawns its own --record daemon on 7837), or --attach against a daemon started with --record",
+            "no other codex session is live in the run cwd"
+          ],
+          "setup": [
+            "Driver auto-starts session 1 (slot 1) as a codex TUI in \u003cstaging\u003e/cwd and accepts the trust dialog",
+            "The start_session step launches session 2 (slot 2) in the SAME \u003cstaging\u003e/cwd; codex caches trust per directory so no second trust dialog fires, and each slot discovers its OWN rollout via a per-slot marker",
+            "Steps carrying {\"session\":1} route send/wait_turn back to session 1 while session 2 stays alive — exercising the concurrent, independent arcs the daemon disambiguates by which PID holds each rollout open"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: alpha"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "start_session"
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: bravo"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: alpha2",
+              "session": 1
+            },
+            {
+              "type": "wait_turn",
+              "session": 1
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl contains 2 distinct codex session_ids, both keyed to the same cwd slug",
+            "each session_id has its own independent working-\u003eready arc; no transition on one session is attributed to the other",
+            "session 1 shows TWO working-\u003eready arcs (turn1 + the post-start_session re-drive); session 2 shows ONE — proving session 1 stayed bound and independent while session 2 was alive",
+            "no state flapping: the daemon never swaps the PID-to-session binding between the two rows",
+            "transcript.jsonl concatenates both sessions: 3 user prompts + 3 completed turns total across the two session_ids"
+          ],
+          "settings": {},
+          "timeout_seconds": 240
+        }
+      }
+    },
+    "opencode": {
+      "recording_dir": "opencode/scenarios/multiple-sessions-same-cwd",
+      "artifacts": {
+        "events": "opencode/scenarios/multiple-sessions-same-cwd/events.jsonl",
+        "transcript": "opencode/scenarios/multiple-sessions-same-cwd/transcript.jsonl",
+        "manifest": "opencode/scenarios/multiple-sessions-same-cwd/manifest.json",
+        "golden": "opencode/scenarios/multiple-sessions-same-cwd/transcript.jsonl.replay.json.golden",
+        "recordings": [
+          "opencode/scenarios/multiple-sessions-same-cwd/recordings/2026-05-27-03-35-01_irrlichd-0.4.7+7dc5c70"
+        ]
+      },
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "bug",
+        "driver_capability": "ready",
+        "pass_rate": "0/7 phases passed",
+        "agent_cli_version": "unknown",
+        "daemon_version": "0.4.7+7dc5c70",
+        "confidence": 0.8,
+        "notes": "agent_supports: yes\ndaemon_capability: full\ndriver_capability: gap:start_session"
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "multiple-sessions-same-cwd",
+          "agent": "opencode",
+          "assessed_at": "2026-05-27T00:00:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "bug",
+          "driver_capability": "ready",
+          "confidence": 0.8,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: gap:start_session\n\n## Reasoning\n\nThis scenario asks whether two concurrent opencode instances sharing ONE cwd are tracked as two independent sessions (two distinct session_ids, independent working-\u003eready arcs, stable PID-to-session binding, no flapping).\n\n**agent_supports: yes.** Nothing in opencode prevents two processes running in the same directory — every `opencode run` invocation (and every TUI process) creates its own row in the SQLite `session` table with its own `ses_…` UUID. Two instances in one cwd simply produce two session rows. This is structural, not a hidden REPL feature.\n\n**daemon_capability: full — the load-bearing fact is that opencode sessions are keyed by the store's `session.id`, NOT by cwd.** opencode's transport is `ProcessOwnedStore` (SQLite at ~/.local/share/opencode/opencode.db), unlike the file-tailing adapters. The watcher's `scanSessions` (watcher.go) reads the `session` table and maintains one `sessionCursor` PER `session.id`, broadcasting a distinct `EventNewSession` (with that row's `ses_…` id) and an independent `EventActivity`/terminal stream for each. The `directory` column is used only as a LIVENESS GATE via `liveCWDs()` — `if _, alive := live[s.directory]; !alive { continue }` — never as the identity key. So two same-cwd sessions yield two cursors, two session_ids, two independent working-\u003eready arcs, and no flapping: exactly the two user-observable signals the scenario asserts. The note in the coverage row (\"DB-keyed sessions; cwd not the disambiguator\") is correct, and it is why the verdict is `full`, not `bug`: cwd-collision is irrelevant to opencode's session identity.\n\n**PID-to-session binding is handled at the PIDManager layer, not the adapter.** opencode/pid.go's `DiscoverPID` narrows candidate PIDs by cwd, and its own comment warns that two same-cwd opencode processes are \"not distinguishable\" at the OS level (it does not hold the DB open, so lsof-writer detection isn't available). But that comment describes the raw OS lookup in isolation. The actual binding goes through `PIDManager.TryDiscoverPID` (pid_manager.go), whose `disambiguate` callback prefers UNCLAIMED PIDs (`bestUnclaimed`) over already-claimed ones. Once session 1 claims PID-A, session 2's discovery is handed both same-cwd PIDs and selects the highest UNCLAIMED one (PID-B). A stable, non-cross-contaminated binding therefore emerges from the claimed-PID set even though the two PIDs share a cwd. The only residual risk is a startup-order race (both sessions briefly at PID=0, or a transient mis-pair before the first claim settles) — a caveat, identical in shape to the claudecode cell's PID caveat, not a spec-required observable the daemon mis-handles.\n\nThe claudecode sibling cell (`claudecode/multiple-sessions-same-cwd`) is `yes/full/ready` for the same reason at the observation layer; it differs only in driver readiness.\n\n## driver_capability: gap:start_session\n\nThe scenario can be ASSESSED as observable but cannot be RECORDED today, because `scripts/drive-opencode-interactive.sh` cannot launch two concurrent opencode sessions in one cwd. Its step grammar is single-session:\n- Headless path: `send` / `wait_turn` (no-op, since `opencode run` blocks) / `sleep`. The first `send` mints ONE session; later sends chain into it via `--session \u003cid\u003e`. One process, one session per driver run.\n- Live (tmux) path: `send` / `wait_turn` / `reset_session` / `slash` / `sleep` — still ONE tmux pane, ONE opencode process.\n\nNeither path has a `start_session` step (launch a SECOND live session without tearing the first down) nor a `{\"session\":N}` per-step targeting selector. The claudecode reference driver (`drive-claudecode-interactive.sh`) DOES have both (`step_start_session`, the `{\"session\":N}` focus switch, the ACTIVE-slot machinery) — and that is precisely the primitive the canonical scenarios.json description quotes (\"start_session / {\\\"session\\\":N}\"). That description is the claude-reference catalog text; the opencode driver has not yet gained the primitive.\n\nNOTE: this is NOT the same as `multiple-agents-same-workspace`, which run-cell-multi.sh records by launching SEPARATE per-adapter single-session drivers concurrently against a shared cwd. That gives one opencode session + one DIFFERENT-adapter session. To get TWO opencode sessions in one cwd, the opencode driver itself must learn the concurrent-launch + per-step-targeting primitive — a tooling task (owner: extend-driver), not an observability limit.\n\n## Capability key\n\nThe Primitive exercised — \"PID-based session isolation\" — has no dedicated key in opencode/capabilities.json. The closest anchor is `session_id_assignment: false`: the daemon derives each `ses_…` id from the SQLite store rather than assigning it, which is the exact mechanism that makes same-cwd isolation work for opencode. No new key is invented here.\n\n## Route\n\ndriver-gap: queue `extend-driver opencode start_session` to port the concurrent-session launch + `{\"session\":N}` targeting from the claudecode driver, then re-queue for implement. Do NOT freeze — the daemon can observe this once the driver can drive it.",
+          "caveats": [
+            "Reconciled post-record (2026-05-27): re-recorded clean at 32k (commit c57b1fd6). The daemon DOES emit working for BOTH concurrent same-cwd sessions (count=2) — #503's zero-working premise was a 4096-context artifact — but the per-turn closing ready edge is deferred for concurrent short-lived turns (daemon_capability=bug, #503 re-scoped). driver_capability gap:start_session-\u003eready. Cell stays known_failing for the narrower real gap.",
+            "PID startup-order race: during the brief window before both sessions have claimed a PID, the two same-cwd opencode processes may transiently both sit at PID=0 (DiscoverPID returns 0-and-retries rather than guess) or the claimed-PID disambiguation may settle a tick late. Observable as a momentarily-late PID, never a swapped/cross-contaminated binding. Anchor any PID-phase check at a moment after both sessions have written at least one part. (Same shape as the claudecode sibling caveat.)",
+            "opencode/pid.go's DiscoverPID comment states two same-cwd opencode instances are 'not distinguishable' — true for the raw OS lookup in isolation, but the PIDManager.disambiguate unclaimed-PID preference resolves the binding at the application layer. The recording is the authoritative check that the binding lands stably.",
+            "opencode's default local LM Studio model is slow (~30-45s/turn); a recording recipe should widen the working-anchor windows so a slow turn does not read as a missing transition."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/opencode/watcher.go",
+              "note": "scanSessions keys one sessionCursor per session.id (ses_… UUID) and broadcasts a distinct EventNewSession/EventActivity per row; directory is used only as a liveness gate (liveCWDs), never as the identity key — so two same-cwd sessions are two independent observable arcs. This is the evidence for daemon_capability: full."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/opencode/pid.go",
+              "note": "DiscoverPID narrows by cwd; its comment warns two same-cwd opencode instances are 'not distinguishable' at the OS level (no held-open DB for lsof-writer detection) — the basis for the PID caveat, resolved at the PIDManager layer."
+            },
+            {
+              "kind": "file",
+              "ref": "core/application/services/pid_manager.go",
+              "note": "TryDiscoverPID's disambiguate callback prefers unclaimed PIDs (bestUnclaimed over bestAny), so session 2 receives the PID session 1 did not claim — a stable per-session binding emerges from the claimed-PID set despite the shared cwd."
+            },
+            {
+              "kind": "file",
+              "ref": ".claude/skills/ir:onboard-agent/scripts/drive-opencode-interactive.sh",
+              "note": "Step grammar is single-session: headless (send/wait_turn/sleep, one process chained via --session) and live tmux (send/wait_turn/reset_session/slash/sleep, one pane). No start_session step, no {\"session\":N} targeting — the evidence for driver_capability: gap:start_session."
+            },
+            {
+              "kind": "file",
+              "ref": ".claude/skills/ir:onboard-agent/scripts/drive-claudecode-interactive.sh",
+              "note": "step_start_session + {\"session\":N} focus switch + ACTIVE-slot machinery — the reference implementation of the missing primitive that extend-driver would port to opencode."
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/opencode/capabilities.json",
+              "note": "session_id_assignment: false — the daemon derives ses_… ids from the SQLite store; the closest capability anchor for the 'PID-based session isolation' primitive."
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/claudecode/scenarios/multiple-sessions-same-cwd/assessment.json",
+              "note": "Sibling cell is yes/full/ready; opencode matches at the observation layer (full) and differs only in driver readiness (gap)."
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": true,
+          "preconditions": [
+            "opencode on PATH and authenticated (~/.local/share/opencode/auth.json) — verified opencode 1.x. The arc is model-agnostic; the dev env's default is a slow local LM Studio model (~30-45s/turn), which is fine — the spec windows are widened to ≤60s so a slow turn never reads as a missing transition.",
+            "irrlichd is recording — run-cell.sh isolated mode (spawns its own --record daemon), or --attach against a daemon started with --record.",
+            "no other opencode session is live in the run cwd (a stray same-cwd opencode would add a third row and confuse the two-row assertion)."
+          ],
+          "setup": [
+            "HEADLESS cell — NOT tmux/TUI. The driver routes to run_live (tmux) ONLY for reset_session/slash steps; this recipe uses just send/wait_turn/start_session/sleep, so it stays on the deterministic headless `opencode run` path (two interleaved `opencode run --session \u003cses\u003e` chains in one shared \u003cstaging\u003e/cwd).",
+            "Driver slot 1's first send launches `opencode run` in \u003cstaging\u003e/cwd, minting ses_1; wait_turn is a no-op because `opencode run` already blocks until the turn ends.",
+            "The start_session step allocates a SECOND slot (empty id) in the SAME cwd; its first send (no --session) mints a fresh ses_2 — opencode keys sessions on the SQLite session.id, not the directory (watcher.go scanSessions; the directory column is only a liveness gate via liveCWDs), so two same-cwd chains are two independent ses_… rows.",
+            "The step carrying {\"session\":1} switches the active slot back to slot 1, so the final send/wait_turn re-drives ses_1 (via --session ses_1) WHILE ses_2 is still alive — exercising the two concurrent, independent arcs. The driver's epilogue exports session.uuids + transcript.paths for BOTH ses_ chains so curate-lifecycle-fixture.sh captures both arcs."
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: alpha"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "start_session"
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: bravo"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: alpha2",
+              "session": 1
+            },
+            {
+              "type": "wait_turn",
+              "session": 1
+            },
+            {
+              "type": "sleep",
+              "seconds": 6
+            }
+          ],
+          "verify": [
+            "events.jsonl contains 2 distinct ses_… session_ids, both keyed to the same cwd slug (two independent SQLite session rows, not one merged row)",
+            "each ses_… has its own independent working-\u003eready arc; no transition on one session is attributed to the other",
+            "session 1 (ses_1) shows TWO working-\u003eready arcs (turn1 'alpha' + the post-start_session re-drive 'alpha2'); session 2 (ses_2) shows ONE ('bravo') — proving session 1 stayed bound and independent while session 2 was alive",
+            "no state flapping/merge: the daemon never collapses the two same-cwd rows into one nor swaps a transition between them",
+            "transcript.jsonl concatenates both sessions: 3 user prompts + 3 completed turns total across the two ses_… ids",
+            "final live state is ready"
+          ],
+          "settings": {},
+          "timeout_seconds": 300
+        }
+      }
+    },
+    "pi": {
+      "recording_dir": "pi/scenarios/multiple-sessions-same-cwd",
+      "artifacts": {
+        "events": "pi/scenarios/multiple-sessions-same-cwd/events.jsonl",
+        "transcript": "pi/scenarios/multiple-sessions-same-cwd/transcript.jsonl",
+        "manifest": "pi/scenarios/multiple-sessions-same-cwd/manifest.json",
+        "golden": "pi/scenarios/multiple-sessions-same-cwd/transcript.jsonl.replay.json.golden"
+      },
+      "metadata": {
+        "agent_supports": "yes",
+        "daemon_capability": "full",
+        "driver_capability": "ready",
+        "pass_rate": "6/6 phases passed",
+        "agent_cli_version": "0.70.0",
+        "daemon_version": "0.4.7+8b18d87",
+        "confidence": 0.86,
+        "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready (driver gap was closed by d2bf47d9)\napplicable: true — recorded 2026-05-28 (events.jsonl: two distinct UUID rollout sessions, two distinct PIDs, three independent working→ready arcs across the two sessions). Spec passes 6/6 phases."
+      },
+      "details": {
+        "assessment": {
+          "schema_version": 1,
+          "scenario_id": "multiple-sessions-same-cwd",
+          "agent": "pi",
+          "assessed_at": "2026-05-28T07:15:00Z",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "confidence": 0.86,
+          "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready (driver gap was closed by d2bf47d9)\napplicable: true — recorded 2026-05-28 (events.jsonl: two distinct UUID rollout sessions, two distinct PIDs, three independent working→ready arcs across the two sessions). Spec passes 6/6 phases.\n\n## Reasoning\n\n`multiple-sessions-same-cwd` (scenario-meanings.md): two instances of the SAME agent launched in one working directory must appear as two distinct session rows, each with its own session_id and PID, transitioning state independently with no flapping and no PID cross-contamination. Primitive exercised = PID-based session isolation. Distinct from `session-resume` (one session_id reused across PID lifetimes) and from `multiple-agents-same-workspace` (different agent types).\n\n**agent_supports: yes.** Pi launches as an independent REPL per invocation; two `pi` processes can run in the same cwd as-shipped. Each mints its own session UUID and writes a distinct transcript at `~/.pi/agent/sessions/\u003ccwd-slug\u003e/\u003cts\u003e_\u003cuuid\u003e.jsonl` — the path is keyed by cwd-slug + timestamp + UUID, so two sessions in one cwd produce two distinct transcript files (capabilities.json: session_id_assignment:false — pi mints its own UUID, so a recipe cannot pre-pin the two ids).\n\n**daemon_capability: full (live observation).** Source = FilesUnderRoot{Dir: ~/.pi/agent/sessions/, Parser: JSONLineParser{NewParser: () =\u003e \u0026Parser{}}} (agent.go). The fswatcher picks up two new transcript files (one per UUID) → two SessionState rows, and the JSONL tailer instantiates a FRESH stateful Parser{} per file, so the two sessions never share parser state — a turn on one transcript only updates that session's metrics. The recording confirms independent working→ready arcs on both UUIDs: s1 shows multiple arcs (turn 1 lazy-batched, turn 2, post-start_session re-drive turn 3); s2 shows its own arc.\n\n**PID binding (live observation overrode the pessimistic prior).** Prior assessment predicted that pi's DiscoverPID = DiscoverPIDByCWD (`pi/pid.go` → `processlifecycle.DiscoverPIDByCWD(\"pi\", cwd, disambiguate)`) would fail to deterministically bind each same-cwd session to its own PID, because both pi PIDs survive the cwd narrowing and the daemon would have to pick between them. The live recording showed this concern did NOT manifest for the typical sequential-launch flow: events.jsonl has exactly one pid_discovered per UUID session (s1→PID 56032 at +0:31s, s2→PID 56852 at +1:25s), no duplicates, no re-discovery, no cross-row bindings. The reason: once session 1's PID is bound (while it's still the only pi in the candidate set), the binding is sticky and never re-resolved; when session 2 is then born, the candidate set grows to two but session 1 keeps its existing binding, and session 2 falls back to the disambiguate callback whose default 'highest PID' happens to be session 2's genuinely-newer PID. The algorithm IS still structurally weaker than codex (DiscoverPIDByTranscriptWriter — binds by which process holds each rollout file open) and claudecode (metadata-first ~/.claude/sessions/\u003cpid\u003e.json lookup + strict unambiguous-or-zero cwd fallback hardened in #109/#169) — concurrent launches (truly simultaneous spawn) or PID reuse could still produce mis-bindings — but those failure modes are not exercised by the sequential-launch shape this scenario records. Verdict: daemon_capability:full, with the structural caveat documented (not asserted in the spec).\n\n## Why this cell is now applicable:true\n\nCommit d2bf47d9 extended drive-pi-interactive.sh with the start_session step type, inline {\"session\":N} per-step session-target routing, and the bare session focus-switch arm — closing the driver_gap that previously held this cell at applicable:false. Recording follows the intended arc: session 1 turn 1 + turn 2 → start_session (spawns concurrent session 2 in the SAME cwd) → session 2 turn 1 + turn 2 → session 1 re-drive (turn 3 on its original UUID, proving it stayed observable as a distinct row while session 2 was alive). The driver's start_session implementation pins the active slot's transcript before spawning the new slot (resolve_transcript on the prior slot, then alloc_slot for the new one), which avoids the new slot's `find -newer` poll binding to the OLD \u003cts\u003e_\u003cuuid\u003e.jsonl when the prior turn is still streaming.\n\n## Status of this cell\n\nVerdict: agent_supports yes, daemon_capability full, driver_capability ready (confidence 0.86). Recording committed 2026-05-28 with 6/6 spec phases passing. The structural PID-binding weakness is documented in caveats but deliberately not asserted by the spec — hardening pi's DiscoverPID to per-transcript-writer or per-PID-metadata-file is a separate maintainer task (file an issue only if a concurrent-launch failure mode is actually observed in production).",
+          "caveats": [
+            "DRIVER GAP CLOSED (was: applicable:false). The pi interactive driver was extended in commit d2bf47d9 with start_session + inline {\"session\":N} per-step routing + bare session step; driver_capability is now ready. Recipe + recording committed.",
+            "PID-BINDING SEAM (live observability finding): the prior pessimistic prediction — 'two pi processes in the SAME cwd both survive cwd narrowing, so the daemon cannot deterministically bind each session to its own PID' — was NOT borne out by the live recording. The recording's events.jsonl shows two distinct pid_discovered events, one per UUID rollout session, each pinned to its own distinct PID (s1→PID 56032, s2→PID 56852), with no flapping, duplicate cross-row bindings, or re-discovery once bound. The algorithm IS structurally weaker than codex's per-rollout-file-writer binding and claudecode's metadata-first lookup, but its sticky-once-bound + highest-PID disambiguate fallback happens to resolve sequential same-cwd launches correctly: session 1's PID is bound while it's alone in the candidate set, then session 2's launch adds a new PID and the fallback's 'highest PID' is genuinely the new one. The algorithm remains vulnerable to concurrent (truly simultaneous) launches and to PID reuse, but those are not exercised by this scenario. daemon_capability stays full; the spec deliberately does NOT assert stable per-PID binding, so the algorithmic weakness is documented as a caveat rather than a recording-failing invariant.",
+            "PHASE ANCHORING (live confirmation): pi's process scanner (ExactName{pi}, pgrep -x) does emit a transient proc-\u003cPID\u003e presession row born in ready before the UUID transcript is discovered — confirmed in events.jsonl (proc-56032, proc-56852). Every UUID-keyed phase in expected.jsonl must therefore anchor on a working transition, never on ready, so the matcher skips the proc-\u003cPID\u003e placeholder. The live recording also showed pi's lazy-materialization behavior is timing-variable: in this run, turn 1 DID emit a (microsecond-fast, 14ms) working→ready arc — unlike pi/checkpoint-rewind where turn 1 was fully batched. The recipe sends two prompts per session for robustness, and the spec's working anchor matches the first observable arc regardless of how pi batches turn 1.",
+            "pi mints its own session UUID (session_id_assignment:false), so — like codex and unlike claudecode — a recipe cannot pre-pin the two ids; the spec asserts two DISTINCT sessions via new_session/same_session_as relations."
+          ],
+          "sources": [
+            {
+              "kind": "file",
+              "ref": ".claude/skills/ir:onboard-agent/scenario-meanings.md",
+              "note": "multiple-sessions-same-cwd: two instances of the same agent in one cwd → two distinct session_id+PID rows, independent transitions, stable non-cross-contaminating PID binding; primitive = PID-based session isolation; distinct from session-resume and multiple-agents-same-workspace."
+            },
+            {
+              "kind": "file",
+              "ref": ".claude/skills/ir:onboard-agent/scripts/drive-pi-interactive.sh",
+              "note": "DRIVER GAP root cause: single-session driver. case labels = send|slash|wait_turn|interrupt|sleep only; one tmux SESSION, one TRANSCRIPT, one EXPECTED_TURNS counter; no start_session, no {\"session\":N} routing. Cannot stage two concurrent same-cwd pi sessions."
+            },
+            {
+              "kind": "file",
+              "ref": ".claude/skills/ir:onboard-agent/scripts/drive-codex-interactive.sh",
+              "note": "Contrast: the codex driver HAS step_start_session + slot allocation + per-step {\"session\":N} routing with claimed-path exclusion. This is the concurrent-second-session primitive the pi driver lacks; the codex/claudecode recipes for this scenario depend on it."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/pi/agent.go",
+              "note": "Source: FilesUnderRoot{Dir: ~/.pi/agent/sessions/, Parser: JSONLineParser{NewParser: () =\u003e \u0026Parser{}}} — a fresh stateful parser per transcript file means two pi sessions in one cwd do not share parser state (independent arcs are observable). Process.Match = ExactName{pi} (pgrep -x)."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/pi/pid.go",
+              "note": "DiscoverPID delegates to processlifecycle.DiscoverPIDByCWD(\"pi\", cwd, disambiguate): cwd-only narrowing. Weaker than codex's per-rollout-file-writer binding and claudecode's metadata-first lookup; two same-cwd pi processes both survive the narrowing → cannot be cleanly bound to distinct PIDs by cwd alone (irrlicht_observes:partial)."
+            },
+            {
+              "kind": "file",
+              "ref": "core/adapters/inbound/agents/processlifecycle/discovery.go",
+              "note": "DiscoverPIDByCWD → narrowByCWD: lists matching PIDs, filters by cwd, and on multiple matches falls back to disambiguate (default highest PID). No per-process metadata and no per-file-writer probe, so two same-cwd processes are indistinguishable by this path alone."
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/pi/capabilities.json",
+              "note": "headless_mode:true (scenario requires it); session_id_assignment:false (pi mints its own UUID — recipe cannot pre-pin the two ids); subagents:false, permission_hooks:false."
+            },
+            {
+              "kind": "file",
+              "ref": "replaydata/agents/codex/scenarios/multiple-sessions-same-cwd/assessment.json",
+              "note": "Sibling codex cell: recorded (yes/yes) via the codex driver's start_session model. Same spec shape; the pi spec is adapted from it. The pi cell is blocked only by the pi driver lacking that step model."
+            }
+          ]
+        },
+        "recipe": {
+          "applicable": true,
+          "preconditions": [
+            "pi CLI on PATH and authenticated (pi runs against its configured model out-of-band)",
+            "tmux available — the interactive driver launches each pi REPL in its own tmux session",
+            "irrlichd is recording — run-cell.sh isolated mode (spawns its own --record daemon), or --attach against a daemon started with --record",
+            "no other pi session is live in the run cwd (a stray same-cwd pi would surface as a third row and break the two-row assertion)"
+          ],
+          "setup": [
+            "Driver auto-starts session 1 (slot 1) as a pi REPL in \u003cstaging\u003e/cwd; the first send lazy-materializes session 1's \u003cts\u003e_\u003cuuid\u003e.jsonl transcript under ~/.pi/agent/sessions/\u003ccwd-slug\u003e/",
+            "The start_session step launches session 2 (slot 2) in the SAME \u003cstaging\u003e/cwd in a fresh tmux/process — its first send lazy-materializes a SECOND distinct \u003cts\u003e_\u003cuuid\u003e.jsonl in the same project dir (pi keys transcripts by UUID, not by cwd)",
+            "Steps carrying {\"session\":1} route send/wait_turn back to session 1 while session 2 stays alive — exercising the concurrent, independent arcs across two distinct UUID rollouts",
+            "LAZY-MATERIALIZATION (discovered live in pi/checkpoint-rewind): pi creates each per-session JSONL only AFTER the first user message commits, with turn 1 batched into that initial write; turn 1's working→ready arc is therefore NOT daemon-observable. The recipe sends a SECOND prompt per session so the spec can anchor identity on an observable working transition",
+            "PID-BINDING SEAM (caveat, not asserted): pi's DiscoverPID = DiscoverPIDByCWD (cwd-only narrowing + highest-PID disambiguate fallback) — two pi processes sharing one cwd both survive the narrowing, so the daemon may flap or mis-bind PIDs; the spec asserts what IS observable (two distinct session_id rows, each with its own birth + working→ready arc) and leaves PID-binding stability documented as a known weakness"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: alpha"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: alpha2"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "start_session"
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: bravo"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: bravo2"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: alpha3",
+              "session": 1
+            },
+            {
+              "type": "wait_turn",
+              "session": 1
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl contains 2 distinct pi session_ids (UUID-keyed rollouts), both keyed to the same cwd slug under ~/.pi/agent/sessions/",
+            "each session_id has at least one independent working-\u003eready arc; no working transition on one session is attributed to the other",
+            "session 1 has MULTIPLE working-\u003eready arcs (at least one pre-start_session + at least one post-start_session re-drive); session 2 has at least one — proving session 1 stayed observable as a distinct row while session 2 was alive",
+            "every UUID-keyed phase anchors on a WORKING transition (never on ready), to skip pi's transient proc-\u003cPID\u003e presession placeholder (born in ready, never enters working) and pi's variable lazy-materialization behavior (turn 1 sometimes emits a microsecond-fast batched arc, sometimes doesn't)",
+            "PID-binding stability is NOT asserted: pi's cwd-only DiscoverPID is structurally vulnerable to same-cwd ambiguity, though in practice the sticky-once-bound + highest-PID fallback resolves sequential launches correctly (this recording confirmed two distinct PIDs were bound to the two UUID sessions without flapping — see assessment.json for the live observability correction)"
+          ],
+          "settings": {},
+          "timeout_seconds": 300
+        }
+      }
+    }
+  }
+}
