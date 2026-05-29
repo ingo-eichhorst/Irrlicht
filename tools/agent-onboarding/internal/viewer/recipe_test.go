@@ -66,7 +66,12 @@ func TestLoadRecipeMap(t *testing.T) {
 // coverage_id, each carrying a by_adapter map of recipes.
 func TestHandleRecipes(t *testing.T) {
 	root := writeShardRepo(t, map[string]string{
-		"a": `{"id":"1.1","name":"a","section":"S","feature":"A","agents":{"aider":{"details":{"recipe":{"script":[]}}}}}`,
+		// aider records under the coverage_id folder; codex records under a
+		// VARIANT folder (basename != coverage_id) — exercises folder_by_agent.
+		"a": `{"id":"1.1","name":"a","section":"S","feature":"A","agents":{
+  "aider":{"recording_dir":"aider/scenarios/a","details":{"recipe":{"script":[]}}},
+  "codex":{"recording_dir":"codex/scenarios/a-variant","details":{"recipe":{"script":[]}}}
+}}`,
 	})
 	srv := &Server{RepoRoot: root}
 	req := httptest.NewRequest(http.MethodGet, "/api/recipes", nil)
@@ -77,9 +82,10 @@ func TestHandleRecipes(t *testing.T) {
 	}
 	var doc struct {
 		Scenarios []struct {
-			Name       string                     `json:"name"`
-			CoverageID string                     `json:"coverage_id"`
-			ByAdapter  map[string]json.RawMessage `json:"by_adapter"`
+			Name          string                     `json:"name"`
+			CoverageID    string                     `json:"coverage_id"`
+			ByAdapter     map[string]json.RawMessage `json:"by_adapter"`
+			FolderByAgent map[string]string          `json:"folder_by_agent"`
 		} `json:"scenarios"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
@@ -94,6 +100,15 @@ func TestHandleRecipes(t *testing.T) {
 	}
 	if _, ok := s.ByAdapter["aider"]; !ok {
 		t.Errorf("by_adapter missing aider: %+v", s.ByAdapter)
+	}
+	// folder_by_agent resolves the variant folder per agent (the #511 fix the
+	// viewer.js recording link depends on): coverage_id for aider, the variant
+	// basename for codex.
+	if got := s.FolderByAgent["aider"]; got != "a" {
+		t.Errorf("folder_by_agent[aider] = %q; want a", got)
+	}
+	if got := s.FolderByAgent["codex"]; got != "a-variant" {
+		t.Errorf("folder_by_agent[codex] = %q; want a-variant", got)
 	}
 }
 

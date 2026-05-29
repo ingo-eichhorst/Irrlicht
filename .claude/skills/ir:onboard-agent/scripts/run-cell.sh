@@ -33,7 +33,8 @@ SKILL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 [[ -n "$REPO_ROOT" ]] || { echo "not in a git repo" >&2; exit 1; }
 
-SCENARIOS_JSON="$SKILL_DIR/scenarios.json"
+# shellcheck source=lib/shard-lib.sh
+source "$SCRIPT_DIR/lib/shard-lib.sh"   # per-scenario shard reader (#511)
 
 RECORDER="off"
 ATTACH=0
@@ -59,6 +60,14 @@ fi
 ADAPTER="${positional[0]}"
 SCENARIO="${positional[1]}"
 
+# Resolve the shard that owns this cell. SCENARIO may be given as the coverage_id
+# (shard name) OR a variant recording-folder name; both resolve to the same
+# (coverage_id, folder) pair via the shard catalog (#511). The recipe is read
+# under COVERAGE_ID; the on-disk recording folder is FOLDER (the bash twin of
+# Go's resolveScenarioFolderForAgent — they differ for the 2 variant-folder cells).
+COVERAGE_ID="$(shard_coverage_for_dir "$SCENARIO" "$ADAPTER")"
+FOLDER="$(shard_folder "$COVERAGE_ID" "$ADAPTER")"
+
 # --recorder=on is a deprecated no-op flag. Mode B's sensor recorder
 # (signals.jsonl + frames + ground_truth) has been retired in favor of
 # expected.jsonl as the single source of behavioral truth. Accept the
@@ -67,27 +76,10 @@ if [[ "$RECORDER" == "on" ]]; then
   echo "note: --recorder=on is deprecated (Mode B retired); flag has no effect." >&2
 fi
 
-# Look up the cell from scenarios.json. Absent cell → refuse.
+# Look up the cell from its shard (#511). Absent cell → refuse.
 # A cell carries either `prompt` (single-shot, headless driver) or `script`
 # (array of step objects, interactive driver). Both can't be set.
-CELL_JSON="$(jq --arg s "$SCENARIO" --arg a "$ADAPTER" '
-  .scenarios[]
-  | select(.name == $s)
-  | select(.by_adapter[$a])
-  | {
-      description,
-      requires,
-      verify,
-      applicable: .by_adapter[$a].applicable,
-      scope_note: .by_adapter[$a].scope_note,
-      notes: .by_adapter[$a].notes,
-      partner_adapter: .by_adapter[$a].partner_adapter,
-      prompt: .by_adapter[$a].prompt,
-      script: .by_adapter[$a].script,
-      settings: .by_adapter[$a].settings,
-      timeout_seconds: .by_adapter[$a].timeout_seconds
-    }
-' "$SCENARIOS_JSON")"
+CELL_JSON="$(shard_cell "$COVERAGE_ID" "$ADAPTER")"
 if [[ -z "$CELL_JSON" || "$CELL_JSON" == "null" ]]; then
   echo "cell not found: scenario=$SCENARIO adapter=$ADAPTER (either unknown or missing-prompt)" >&2
   exit 1
@@ -137,7 +129,7 @@ if [[ -n "$SCRIPT_JSON" ]]; then
   # shellcheck source=lib/recipe-lint.sh
   . "$SCRIPT_DIR/lib/recipe-lint.sh"
   LINT_DRIVER="$SCRIPT_DIR/drive-$ADAPTER-interactive.sh"
-  if LINT_GAPS="$(recipe_lint_gaps "$LINT_DRIVER" "$SCENARIOS_JSON" "$SCENARIO" "$ADAPTER")"; then :; else
+  if LINT_GAPS="$(recipe_lint_gaps "$LINT_DRIVER" "$COVERAGE_ID" "$ADAPTER")"; then :; else
     echo "driver_gap: $ADAPTER/$SCENARIO needs step type(s) drive-$ADAPTER-interactive.sh doesn't implement:" >&2
     printf '  - gap:%s\n' $LINT_GAPS >&2
     echo "Queue extend-driver $ADAPTER <primitive> (ports the step type), then implement — not recording yet." >&2
@@ -147,7 +139,7 @@ if [[ -n "$SCRIPT_JSON" ]]; then
   # (or a slash command in send-text on a slash-requires adapter) would record
   # a no-op. The driver declares what it elicits via DRIVE_ELICITS (#508 #4).
   # Refuse before burning a daemon + CLI.
-  if SEM_GAPS="$(recipe_semantic_gaps "$LINT_DRIVER" "$SCENARIOS_JSON" "$SCENARIO" "$ADAPTER")"; then :; else
+  if SEM_GAPS="$(recipe_semantic_gaps "$LINT_DRIVER" "$COVERAGE_ID" "$ADAPTER")"; then :; else
     echo "semantic_gap: $ADAPTER/$SCENARIO uses step(s) the driver accepts but doesn't elicit (per its DRIVE_ELICITS):" >&2
     # Quote + read-loop: a slash-in-send gap carries the full send-text, which
     # can contain spaces/glob chars — never word-split or pathname-expand it.
@@ -158,14 +150,17 @@ if [[ -n "$SCRIPT_JSON" ]]; then
 fi
 
 # --- Precheck ------------------------------------------------------------
-ATTACH="$ATTACH" "$SCRIPT_DIR/precheck.sh" "$ADAPTER" "$SCENARIOS_JSON"
+ATTACH="$ATTACH" "$SCRIPT_DIR/precheck.sh" "$ADAPTER"
 
 # --- Staging -------------------------------------------------------------
+# Stage under FOLDER (the on-disk recording dir), which equals COVERAGE_ID for
+# all but the 2 variant-folder cells — so a re-record lands on the same dir the
+# committed recording uses and promote-recording can diff it.
 TS="$(date -u +%Y%m%dT%H%M%S)"
-STAGING="$REPO_ROOT/.build/refresh/$ADAPTER/$SCENARIO-$TS"
+STAGING="$REPO_ROOT/.build/refresh/$ADAPTER/$FOLDER-$TS"
 # shellcheck source=lib/assert-staging-path.sh
 . "$SCRIPT_DIR/lib/assert-staging-path.sh"
-mkdir -p "$STAGING/recordings" "$STAGING/replaydata/agents/$ADAPTER/scenarios/$SCENARIO" "$STAGING/reports"
+mkdir -p "$STAGING/recordings" "$STAGING/replaydata/agents/$ADAPTER/scenarios/$FOLDER" "$STAGING/reports"
 
 # Scenario's settings blob → staging file, passed to driver as a path.
 # This avoids --settings <json-blob> shell-quoting fragility.
@@ -398,7 +393,7 @@ write_error_manifest() {
   local extras_json="$2"
   jq -n \
     --arg adapter "$ADAPTER" \
-    --arg scenario "$SCENARIO" \
+    --arg scenario "$FOLDER" \
     --arg session_uuid "$ACTUAL_UUID" \
     --arg error "$error_code" \
     --arg driver_exit_reason "$DRIVER_REASON" \
@@ -484,13 +479,12 @@ fi
 #   <staging>/replaydata/agents/<adapter>/scenarios/<scenario>/{transcript,events}.jsonl
 "$REPO_ROOT/tools/curate-lifecycle-fixture.sh" \
   -d "$STAGING/replaydata/agents" \
-  "$RECORDING" "$ACTUAL_UUID" "$TRANSCRIPT" "$ADAPTER" "$SCENARIO"
+  "$RECORDING" "$ACTUAL_UUID" "$TRANSCRIPT" "$ADAPTER" "$FOLDER"
 
-# Adapter declares its curated transcript extension in capabilities.json
-# (default "jsonl").
-TRANSCRIPT_EXT="$(jq -r '.transcript_extension // "jsonl"' \
-  "$REPO_ROOT/replaydata/agents/$ADAPTER/capabilities.json")"
-STAGED_TRANSCRIPT="$STAGING/replaydata/agents/$ADAPTER/scenarios/$SCENARIO/transcript.$TRANSCRIPT_EXT"
+# Adapter declares its curated transcript extension in _meta.json (#511; was
+# the per-adapter capabilities.json). Default "jsonl".
+TRANSCRIPT_EXT="$(meta_transcript_ext "$ADAPTER")"
+STAGED_TRANSCRIPT="$STAGING/replaydata/agents/$ADAPTER/scenarios/$FOLDER/transcript.$TRANSCRIPT_EXT"
 
 # --- Build replay reports -----------------------------------------------
 # precheck.sh pre-built the replay binary under .build/refresh/bin/replay
@@ -507,7 +501,7 @@ replay_one() {
 
 replay_one "$STAGED_TRANSCRIPT" "$STAGING/reports/staged.json" || exit 1
 
-COMMITTED_TRANSCRIPT="$REPO_ROOT/replaydata/agents/$ADAPTER/scenarios/$SCENARIO/transcript.$TRANSCRIPT_EXT"
+COMMITTED_TRANSCRIPT="$REPO_ROOT/replaydata/agents/$ADAPTER/scenarios/$FOLDER/transcript.$TRANSCRIPT_EXT"
 if [[ -f "$COMMITTED_TRANSCRIPT" ]]; then
   replay_one "$COMMITTED_TRANSCRIPT" "$STAGING/reports/committed.json" || exit 1
   COMMITTED_PRESENT=true
@@ -518,13 +512,13 @@ fi
 # --- Manifest -----------------------------------------------------------
 jq -n \
   --arg adapter "$ADAPTER" \
-  --arg scenario "$SCENARIO" \
+  --arg scenario "$FOLDER" \
   --arg session_uuid "$ACTUAL_UUID" \
   --arg staging "$STAGING" \
   --arg raw_recording "$RECORDING" \
   --arg source_transcript "$TRANSCRIPT" \
   --arg staged_fixture_transcript "$STAGED_TRANSCRIPT" \
-  --arg staged_fixture_events "$STAGING/replaydata/agents/$ADAPTER/scenarios/$SCENARIO/events.jsonl" \
+  --arg staged_fixture_events "$STAGING/replaydata/agents/$ADAPTER/scenarios/$FOLDER/events.jsonl" \
   --arg staged_report "$STAGING/reports/staged.json" \
   --argjson committed_fixture_present "$COMMITTED_PRESENT" \
   --arg committed_report "$STAGING/reports/committed.json" \

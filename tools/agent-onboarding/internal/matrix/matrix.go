@@ -45,8 +45,10 @@ type AssessmentSource struct {
 type CellState struct {
 	Agent      string `json:"agent"`
 	CoverageID string `json:"coverage_id"`
-	// Applicable is whether the coverage_id is in scope for the agent at all
-	// (requires vs capabilities + requires_transport), per cg_applicable_coverage_ids.
+	// Applicable is whether the coverage_id is in scope for the agent at all.
+	// Since the #510/#511 shard migration a cell exists iff its shard names the
+	// agent, so every present cell is applicable (the old requires-vs-capabilities
+	// gate is gone); fine-grained skip lives in ApplicableState (recipe.applicable).
 	Applicable bool `json:"applicable"`
 	// ApplicableState is the by_adapter.<agent>.applicable rollup (absent/true/false).
 	ApplicableState ApplicableState   `json:"applicable_state"`
@@ -56,18 +58,6 @@ type CellState struct {
 	Disposition     Disposition       `json:"disposition"`
 	DisplayState    string            `json:"display_state"`
 	BlockedReason   string            `json:"blocked_reason,omitempty"`
-}
-
-// Disagreement is one assessment ⟺ scenarios contradiction (the consistency
-// gate's finding), carrying the axes and a maintainer-facing message.
-type Disagreement struct {
-	Agent      string  `json:"agent"`
-	CoverageID string  `json:"coverage_id"`
-	Verdict    Verdict `json:"verdict"`
-	Supports   string  `json:"agent_supports"`
-	Daemon     string  `json:"daemon_capability"`
-	Driver     string  `json:"driver_capability"`
-	Message    string  `json:"message"`
 }
 
 // Config locates the inputs. Empty fields fall back to repo-relative defaults
@@ -170,34 +160,11 @@ func Load(cfg Config) (*Matrix, error) {
 // (>= 99); those rows exist as shards but are NOT catalog rows (they never
 // appeared in the committed rollup), so the matrix excludes them from m.catalog.
 func inCatalog(id string) bool {
-	sec, _, ok := splitShardSection(id)
+	sec, _, ok := shard.SplitID(id)
 	if !ok {
 		return true // malformed → keep (defensive; real ids are well-formed)
 	}
 	return sec < 99
-}
-
-// splitShardSection parses the leading "<section>." of a shard id.
-func splitShardSection(id string) (section int, rest string, ok bool) {
-	dot := -1
-	for i := 0; i < len(id); i++ {
-		if id[i] == '.' {
-			dot = i
-			break
-		}
-	}
-	if dot <= 0 {
-		return 0, "", false
-	}
-	n := 0
-	for i := 0; i < dot; i++ {
-		c := id[i]
-		if c < '0' || c > '9' {
-			return 0, "", false
-		}
-		n = n*10 + int(c-'0')
-	}
-	return n, id[dot+1:], true
 }
 
 // HasAgent reports whether the agent is an onboarded column (present in the
@@ -381,37 +348,6 @@ func (m *Matrix) ApplicableCells(agent string) []CellState {
 	out := make([]CellState, 0, len(cids))
 	for _, cid := range cids {
 		out = append(out, byCID[cid])
-	}
-	return out
-}
-
-// Disagreements ports cs_errors: for every applicable, un-recorded, assessed
-// cell across all agents, the assessment verdict and the matrix applicable flag
-// must agree. Returns one Disagreement per contradiction, sorted by (agent, cid).
-func (m *Matrix) Disagreements() []Disagreement {
-	var out []Disagreement
-	for _, agent := range m.agents {
-		for _, cs := range m.ApplicableCells(agent) {
-			if cs.Recorded || cs.Assessment == nil || cs.Route == RouteNone {
-				continue
-			}
-			v := CellVerdict(cs.Route, cs.ApplicableState, false, cs.BlockedReason)
-			if v == VerdictOK {
-				continue
-			}
-			s, d, dr := cs.Assessment.AgentSupports, cs.Assessment.DaemonCapability, cs.Assessment.DriverCapability
-			dg := Disagreement{
-				Agent: agent, CoverageID: cs.CoverageID, Verdict: v,
-				Supports: s, Daemon: d, Driver: dr,
-			}
-			switch v {
-			case VerdictContradictRecord:
-				dg.Message = fmt.Sprintf("%s/%s: assessment routes RECORD (supports=%s daemon=%s driver=%s) but scenarios.json marks by_adapter.%s applicable:false and no recording exists — reconcile: fix the assessment DOWN (e.g. daemon→incapable/unknown) or flip the matrix UP and record", agent, cs.CoverageID, s, d, dr, agent)
-			case VerdictContradictFrozen:
-				dg.Message = fmt.Sprintf("%s/%s: scenarios.json marks by_adapter.%s applicable:true but the assessment routes FROZEN (supports=%s daemon=%s) — reconcile: fix the assessment UP or mark the recipe applicable:false", agent, cs.CoverageID, agent, s, d)
-			}
-			out = append(out, dg)
-		}
 	}
 	return out
 }

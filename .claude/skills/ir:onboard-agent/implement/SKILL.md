@@ -126,7 +126,7 @@ types from its `case "$type"` arms and checks them against the recipe:
 
 ```bash
 SK=.claude/skills/ir:onboard-agent
-$SK/scripts/lib/recipe-lint.sh $SK/scenarios.json <scenario> <agent>
+$SK/scripts/lib/recipe-lint.sh <scenario> <agent>
 # exit 0 = clean (proceed); exit 3 = driver_gap (missing step type → extend-driver);
 # exit 4 = semantic_gap (a step the driver accepts but doesn't elicit, or a
 #          slash command in send-text on a slash-requires adapter — #496 RC3)

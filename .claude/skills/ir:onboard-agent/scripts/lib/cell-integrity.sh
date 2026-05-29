@@ -24,28 +24,28 @@
 #
 # Sourced as a library (functions only; see cell-integrity_test.sh) AND runnable
 # as a CLI. MUST NOT call `set` (it would leak options into a sourcing shell).
+#
+# #511: legitimate dir names + the dir→coverage_id mapping come from the
+# per-scenario shards (replaydata/scenarios/), read through shard-lib.sh,
+# instead of the retired scenarios.json.
 
-# ci_recipe_dir_names <scenarios.json> <agent>
-#   → every dir name that a by_adapter.<agent> recording may legitimately use:
-#     the scenario `name`s AND `coverage_id`s of scenarios with a recipe. A
-#     recorded dir NOT in this set is an orphan (no recipe to --re-record from).
+# shellcheck source=shard-lib.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/shard-lib.sh"
+
+# ci_recipe_dir_names <agent>
+#   → every dir name an <agent> recording may legitimately use: each shard's
+#     name (coverage_id) AND its recording_dir basename. A recorded dir NOT in
+#     this set is an orphan (no shard to --re-record from).
 ci_recipe_dir_names() {
-  local json="$1" agent="$2"
-  jq -r --arg a "$agent" '
-    .scenarios[] | select(.by_adapter[$a] != null) | (.name, .coverage_id)
-  ' "$json" 2>/dev/null | sort -u
+  shard_recipe_dir_names "$1"
 }
 
-# ci_coverage_id_for_dir <scenarios.json> <dir-name>
-#   → the coverage_id a recording dir belongs to: the coverage_id of the
-#     scenario whose `name` == <dir-name>, else <dir-name> itself (the dir is
-#     already a coverage_id). Used to find the sibling assessment.json dir.
+# ci_coverage_id_for_dir <dir-name> <agent>
+#   → the coverage_id a recording dir belongs to: the shard whose name or
+#     recording_dir basename == <dir-name>, else <dir-name> itself (already a
+#     coverage_id). Used to find the sibling assessment.json dir.
 ci_coverage_id_for_dir() {
-  local json="$1" name="$2" cid
-  cid="$(jq -r --arg n "$name" '
-    [ .scenarios[] | select(.name == $n) | .coverage_id ] | first // empty
-  ' "$json" 2>/dev/null)"
-  echo "${cid:-$name}"
+  shard_coverage_for_dir "$1" "$2"
 }
 
 # ci_is_recorded <cell-dir>  → exit 0 iff the dir claims a recording.
@@ -54,22 +54,23 @@ ci_is_recorded() {
   [[ -f "$d/transcript.jsonl" || -f "$d/transcript.md" || -f "$d/events.jsonl" ]]
 }
 
-# ci_missing_artifacts <scenarios.json> <agent> <dir-name> <cell-dir> <scenarios-root>
+# ci_missing_artifacts <agent> <dir-name> <cell-dir> <scenarios-root>
 #   → prints each missing/inconsistent artifact, one per line. Returns 0 when
 #     the cell is complete, 1 when at least one problem is printed.
 ci_missing_artifacts() {
-  local json="$1" agent="$2" name="$3" dir="$4" sdir="$5"
+  local agent="$1" name="$2" dir="$3" sdir="$4"
   local problems=()
 
-  # recipe row — dir name must be a recipe name (or its coverage_id).
-  if ! ci_recipe_dir_names "$json" "$agent" | grep -qxF "$name"; then
-    problems+=("recipe-row [orphan: no by_adapter.$agent recipe maps to '$name']")
+  # recipe row — dir name must be a shard name or recording_dir basename.
+  if ! ci_recipe_dir_names "$agent" | grep -qxF "$name"; then
+    problems+=("recipe-row [orphan: no $agent shard maps to '$name']")
   fi
 
-  # assessment.json — per coverage_id; accept it here OR in the coverage_id dir.
-  local cid; cid="$(ci_coverage_id_for_dir "$json" "$name")"
-  if [[ ! -f "$dir/assessment.json" && ! -f "$sdir/$cid/assessment.json" ]]; then
-    problems+=("assessment.json [absent in this dir and in coverage_id dir '$cid']")
+  # assessment — since #511 it lives in the shard (.agents.<agent>.details.assessment),
+  # keyed by coverage_id, not an on-disk assessment.json.
+  local cid; cid="$(ci_coverage_id_for_dir "$name" "$agent")"
+  if ! shard_has_assessment "$cid" "$agent"; then
+    problems+=("assessment [absent from shard '$cid' agents.$agent.details.assessment]")
   fi
 
   [[ -f "$dir/expected.jsonl" ]] || problems+=("expected.jsonl")
@@ -87,16 +88,15 @@ ci_missing_artifacts() {
   return 1
 }
 
-# CLI: cell-integrity.sh [agent] [scenarios.json] [replaydata-root]
+# CLI: cell-integrity.sh [agent] [replaydata-root]
 #   No agent → all five adapters. exit 0 = every recorded cell is complete;
 #   exit 1 = at least one incomplete/orphaned cell (listed on stderr).
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   set -uo pipefail
   SK="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"          # …/ir:onboard-agent
-  REPO="$(cd "$SK/../../.." && pwd)"                                 # repo root
+  REPO_ROOT="$(cd "$SK/../../.." && pwd)"                            # repo root (shard-lib reads it)
   agent_arg="${1:-}"
-  json="${2:-$SK/scenarios.json}"
-  root="${3:-$REPO/replaydata}"
+  root="${2:-$REPO_ROOT/replaydata}"
 
   command -v jq >/dev/null || { echo "cell-integrity: jq is required" >&2; exit 2; }
 
@@ -112,7 +112,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
       [[ -d "$cell" ]] || continue
       ci_is_recorded "$cell" || continue
       name="$(basename "$cell")"
-      if probs="$(ci_missing_artifacts "$json" "$agent" "$name" "${cell%/}" "$sdir")"; then
+      if probs="$(ci_missing_artifacts "$agent" "$name" "${cell%/}" "$sdir")"; then
         printf '  ok   %s\n' "$name"
       else
         printf '  BAD  %s — missing/inconsistent:\n' "$name" >&2

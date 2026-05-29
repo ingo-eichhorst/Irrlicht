@@ -1,16 +1,32 @@
 name: Replaydata deletion guard
 
-# Fails any PR whose diff deletes a file under:
-#   replaydata/agents/*/scenarios/*/
-#   replaydata/agents/*/regression/*/
-#   replaydata/orchestrators/*/scenarios/*/
+# Protects load-bearing replaydata from accidental deletion. Rather than
+# enumerate artifact filenames (which let new types like subagents/*.jsonl slip
+# through), it protects WHOLE recording folders. A PR may FAIL only if its diff
+# deletes one of:
+#   - a per-scenario shard / _meta      replaydata/scenarios/*.json   (#511: the matrix catalog)
+#   - ANY file under a regression recording   replaydata/agents/*/regression/*/**
+#     (regression cells aren't in the shard catalog, so even their assessment.json
+#     is load-bearing — the viewer reads it on disk)
+#   - ANY file (except assessment.json) under a scenarios/ recording whose folder
+#     IS STILL REFERENCED by a shard at HEAD (name or recording_dir basename) —
+#     i.e. a live catalog cell
+#   - any orchestrator scenario fixture   replaydata/orchestrators/*/scenarios/*  (#268)
 #
-# Introduced by #268 Phase 1. The pipeline can ADD recordings (new captures
-# land in regression/; new pipeline-managed scenarios land in scenarios/) but
-# it must NEVER delete existing ones — they are load-bearing regression
-# tests, including the orphans migrated into regression/ in #268's Phase 1.
+# What is ALLOWED (so the pipeline + #511 consolidation can proceed):
+#   - deleting any scenarios/ recording whose folder is referenced by NO shard
+#     (an orphan / properly-retired cell — the shard reference is the source of
+#     truth, mirrored by internal/shard TestNoOrphanRecordingFolders and the
+#     bash cell-integrity gate);
+#   - deleting a scenarios/ cell's assessment.json (the assessment now lives in
+#     the shard's details.assessment; #511);
+#   - renames (git mv between subtrees) — never counted as deletions.
 #
-# Renames (git mv between subtrees) are NOT deletions and are allowed.
+# Background: #268 Phase 1 introduced a blanket scenarios/+regression guard; #511
+# made it folder-granular + shard-reference-aware so the migration can retire
+# orphan recordings and drop scenarios/ assessment.json, while still protecting
+# every other artifact (events/transcript/golden/manifest/expected/subagents/
+# recordings) of live cells and all of regression/.
 
 on:
   pull_request:
@@ -30,45 +46,83 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha }}
 
-      - name: Detect deleted recording files
+      - name: Detect deletions of load-bearing replaydata
         run: |
           set -euo pipefail
+          command -v jq >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq jq; }
           base="${{ github.event.pull_request.base.sha }}"
           head="${{ github.event.pull_request.head.sha }}"
           echo "Comparing merge-base($base, $head) ...head $head"
 
-          # Three-dot (base...head) diffs from the MERGE BASE of the two commits
-          # to head, i.e. only what this PR branch actually changed since it
-          # forked. A two-dot diff (base head) would also surface files added to
-          # the base branch AFTER the fork point as phantom "deletions" whenever
-          # the PR branch is behind base — a false positive that fails the guard
-          # on stale branches that never touched replaydata at all.
-          #
-          # --diff-filter=D selects deletions only.
-          # `git diff` treats a rename as a (D, A) pair only if -M is below the
-          # threshold; with -M (the default for `git diff`) renames stay as
-          # renames and do NOT count as deletions. We pass --find-renames=50%
-          # explicitly so the threshold is documented and stable.
-          deletions=$(git diff --name-only --diff-filter=D --find-renames=50% "$base...$head" -- \
-            'replaydata/agents/*/scenarios/*' \
-            'replaydata/agents/*/regression/*' \
-            'replaydata/orchestrators/*/scenarios/*' \
-            || true)
+          # Three-dot (base...head) diffs from the MERGE BASE to head — only what
+          # this branch changed since it forked (avoids phantom deletions on
+          # stale branches). --diff-filter=D = deletions; --find-renames=50% keeps
+          # git mv as a rename (not a delete), documented + stable.
+          deletions=$(git diff --name-only --diff-filter=D --find-renames=50% "$base...$head" -- 'replaydata/**' || true)
 
-          if [ -n "$deletions" ]; then
-            echo "::error::PR deletes load-bearing recording files. See https://github.com/ingo-eichhorst/Irrlicht/issues/268"
+          # A scenarios/ recording folder is protected iff some shard at HEAD
+          # references it — by shard name (coverage_id) or an agent cell's
+          # recording_dir basename. (Shards on disk == HEAD; we checked it out.)
+          shard_references() {
+            local a="$1" fold="$2" s match
+            for s in replaydata/scenarios/*.json; do
+              [ "$(basename "$s")" = "_meta.json" ] && continue
+              [ -f "$s" ] || continue
+              match=$(jq -r --arg a "$a" --arg f "$fold" \
+                'select(.name==$f or ((.agents[$a].recording_dir // "") | split("/") | last)==$f) | .name' "$s" 2>/dev/null || true)
+              [ -n "$match" ] && return 0
+            done
+            return 1
+          }
+
+          violations=""
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            # Protect WHOLE recording folders rather than enumerating artifact
+            # filenames — so a new artifact type (e.g. subagents/*.jsonl) can't
+            # silently slip through an outdated glob list. The ONLY allowed
+            # deletion inside a recording folder is assessment.json (which #511
+            # retires from scenarios/ cells; regression keeps its own). Patterns
+            # are bash `case` globs where `*` also matches `/`, so a single
+            # `…/scenarios/*` covers nested subagents/ and recordings/ files.
+            case "$f" in
+              replaydata/scenarios/*.json)
+                # _meta.json also matches here; it is load-bearing too, so the
+                # protection is correct (only the label is generic).
+                violations="$violations  - $f  (shard / _meta — matrix catalog)"$'\n' ;;
+              replaydata/orchestrators/*/scenarios/*)
+                violations="$violations  - $f  (orchestrator scenario fixture)"$'\n' ;;
+              replaydata/agents/*/regression/*)
+                # Everything under a regression recording is load-bearing,
+                # INCLUDING assessment.json (regression cells aren't in the shard
+                # catalog, so the viewer reads their assessment.json on disk).
+                violations="$violations  - $f  (regression recording)"$'\n' ;;
+              replaydata/agents/*/scenarios/*/assessment.json)
+                : ;;  # allowed (#511: the assessment lives in the shard now)
+              replaydata/agents/*/scenarios/*)
+                # Any other artifact under a scenarios cell is protected IFF the
+                # cell is still referenced by a shard at HEAD (orphan/retired
+                # folders are deletable — that is the #511 consolidation path).
+                agent=$(printf '%s' "$f" | sed -E 's#replaydata/agents/([^/]+)/scenarios/([^/]+)/.*#\1#')
+                folder=$(printf '%s' "$f" | sed -E 's#replaydata/agents/([^/]+)/scenarios/([^/]+)/.*#\2#')
+                if shard_references "$agent" "$folder"; then
+                  violations="$violations  - $f  (recording of shard-referenced cell '$agent/$folder')"$'\n'
+                fi ;;
+              *) : ;;  # outside any recording folder (e.g. capabilities.json) → allowed
+            esac
+          done <<< "$deletions"
+
+          if [ -n "$violations" ]; then
+            echo "::error::PR deletes load-bearing replaydata (shards or referenced recordings)."
             echo
-            echo "Deleted files:"
-            echo "$deletions" | sed 's/^/  - /'
+            echo "Disallowed deletions:"
+            printf '%s' "$violations"
             echo
-            echo "These files are regression-test fixtures. If you genuinely need to remove"
-            echo "one (e.g. it corresponds to a feature that was rolled back), open an"
-            echo "issue first and get maintainer sign-off — do not delete it in a PR."
-            echo
-            echo "If you are renaming a file or moving it between subtrees (scenarios/ <-> "
-            echo "regression/), use \`git mv\` so git records a rename and this guard"
-            echo "passes."
+            echo "Shards and the recordings of live (shard-referenced) catalog cells are"
+            echo "load-bearing regression fixtures. To retire a cell, first remove its shard"
+            echo "reference (so the folder becomes unreferenced), or git mv the recording to"
+            echo "regression/. For a genuine removal, open an issue and get maintainer sign-off."
             exit 1
           fi
 
-          echo "OK: no deletions under replaydata recording subtrees."
+          echo "OK: no disallowed deletions (orphan recordings, assessment.json, and renames are permitted)."
