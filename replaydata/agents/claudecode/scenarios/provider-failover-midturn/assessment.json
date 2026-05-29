@@ -11,7 +11,8 @@
   "caveats": [
     "If the test rig cannot reliably induce a mid-turn provider failover, this cell should be marked recordable=no and the matrix row left as documentation-only. The architect/editor cell is the cleaner template for an n/a path; provider-failover is a softer 'we partially cover it but can't drive a deterministic recording today'.",
     "If future versions of Claude Code add a documented Anthropic-→-Bedrock fallback chain that announces itself in the transcript, this verdict upgrades to yes/yes. Watch for a `provider` or `route` field on assistant events.",
-    "The two clearer 'partial' observables here are (1) state stays `working` through transient errors — which is already covered by the turn-aborted-by-error and basic-turn cells — and (2) post-turn ModelName remains valid — covered by model-identification. Provider failover qua provider failover is not separately observable today."
+    "The two clearer 'partial' observables here are (1) state stays `working` through transient errors — which is already covered by the turn-aborted-by-error and basic-turn cells — and (2) post-turn ModelName remains valid — covered by model-identification. Provider failover qua provider failover is not separately observable today.",
+    "2026-05-29 (mock considered & REJECTED): a synthetic/mock fixture was evaluated and declined. This harness records real CLI sessions — there is no synthetic-fixture mechanism — and a Claude Code provider failover is transport-layer (the SDK retries invisibly; message.model stays claude-* regardless of provider/route), so it leaves NO trace in the transcript or events.jsonl. A mock would fabricate events Claude Code never emits — misleading test data, worse than an honest documentation-only N/A. Cell stays applicable_false; the genuinely-observable subsets are already covered by turn-aborted-by-error and model-identification."
   ],
   "sources": [
     {
