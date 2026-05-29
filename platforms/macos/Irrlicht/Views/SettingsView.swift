@@ -5,6 +5,7 @@ import UserNotifications
 struct SettingsView: View {
     @Binding var isPresented: Bool
     @EnvironmentObject var updateManager: UpdateManager
+    @EnvironmentObject var sessionManager: SessionManager
     @AppStorage("debugMode") private var debugMode: Bool = false
     @AppStorage("showCostDisplay") private var showCostDisplay: Bool = false
     @AppStorage("showQuotaForecast") private var showQuotaForecast: Bool = true
@@ -14,207 +15,235 @@ struct SettingsView: View {
     @AppStorage(NotificationEvent.ready.enabledKey) private var notifyOnReady: Bool = true
     @AppStorage(NotificationEvent.waiting.enabledKey) private var notifyOnWaiting: Bool = true
     @AppStorage(NotificationEvent.contextPressure.enabledKey) private var notifyOnContextPressure: Bool = true
-    // Sources (multi-source): mirror the web dashboard's keys. The relay URL is
-    // edited in a draft and committed on Return so the connection doesn't churn
-    // on every keystroke.
+    // Sources (multi-source): mirror the web dashboard's keys.
     @AppStorage("useLocalDaemon") private var useLocalDaemon: Bool = true
     @AppStorage("useRelayServer") private var useRelayServer: Bool = false
     @AppStorage("relayServerURL") private var relayServerURL: String = ""
     @State private var relayURLDraft: String = ""
+    @State private var relayURLDebounceTask: Task<Void, Never>? = nil
     @State private var notificationsDenied = false
     @State private var customImportError: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        // Header and footer are pinned; only the settings sections scroll.
+        // This keeps the "Done" button visible no matter how many sections
+        // expand — the old fixed `height: 860` frame overflowed the menu-bar
+        // popover and clipped the footer. The scroll area is capped the same
+        // way SessionListView caps its list (see `groupListMaxHeight`).
+        // Horizontal insets live on the header, footer, scroll *content*, and
+        // dividers — NOT on the outer container — so the ScrollView spans the
+        // full panel width and its scroll track sits flush against the right
+        // edge, while the text stays inset.
+        VStack(alignment: .leading, spacing: 0) {
             Text("Settings")
                 .font(.headline)
+                .padding(.horizontal, 20)
+                .padding(.top, 20)
+                .padding(.bottom, 12)
 
             Divider()
+                .padding(.horizontal, 20)
 
-            VStack(alignment: .leading, spacing: 8) {
-                LeadingToggle(isOn: $debugMode, label: "Debug Mode")
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    LeadingToggle(
+                        isOn: $debugMode,
+                        label: "Debug Mode",
+                        info: "Show session IDs, creation time, and time since last update."
+                    )
 
-                Text("Show session IDs, creation time, and time since last update.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
+                    LeadingToggle(
+                        isOn: $showCostDisplay,
+                        label: "Show Estimated Cost",
+                        info: "Display estimated USD cost per session and per project group. Cost estimates are approximate."
+                    )
 
-            VStack(alignment: .leading, spacing: 8) {
-                LeadingToggle(isOn: $showCostDisplay, label: "Show Estimated Cost")
+                    VStack(alignment: .leading, spacing: 8) {
+                        LeadingToggle(
+                            isOn: $showQuotaForecast,
+                            label: "Show Quota Forecast",
+                            info: "Replace the app version in the header with a live burn-rate forecast against your Pro/Max or ChatGPT subscription cap. Only appears when a subscription session is active."
+                        )
 
-                Text("Display estimated USD cost per session and per project group. Cost estimates are approximate.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+                        if showQuotaForecast {
+                            HStack(spacing: 6) {
+                                Text("Provider")
+                                    .font(.caption)
+                                    .fontWeight(.medium)
+                                    .foregroundColor(.secondary)
+                                InfoIcon(text: "Auto picks the chip variant from the snapshot; override when you have multiple paths into one provider.")
+                                Spacer()
+                            }
+                            providerModeRow(label: "Anthropic", selection: $providerModeAnthropic)
+                            providerModeRow(label: "OpenAI", selection: $providerModeOpenAI)
+                        }
+                    }
 
-            VStack(alignment: .leading, spacing: 8) {
-                LeadingToggle(isOn: $showQuotaForecast, label: "Show Quota Forecast")
+                    LeadingToggle(
+                        isOn: $launchAtLogin,
+                        label: "Open at Login",
+                        info: "Start Irrlicht automatically when you log in to your Mac."
+                    )
+                    .onChange(of: launchAtLogin) { newValue in LoginItemManager.setEnabled(newValue) }
 
-                Text("Replace the app version in the header with a live burn-rate forecast against your Pro/Max or ChatGPT subscription cap. Only appears when a subscription session is active.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                    Divider()
 
-                if showQuotaForecast {
-                    providerModeRow(label: "Anthropic", selection: $providerModeAnthropic)
-                    providerModeRow(label: "OpenAI", selection: $providerModeOpenAI)
-                    Text("Auto picks the chip variant from the snapshot; override when you have multiple paths into one provider.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Sources")
+                            .font(.subheadline)
+                            .fontWeight(.medium)
 
-            VStack(alignment: .leading, spacing: 8) {
-                LeadingToggle(isOn: $launchAtLogin, label: "Open at Login")
+                        LeadingToggle(
+                            isOn: $useLocalDaemon,
+                            label: "Local",
+                            info: "Watch the daemon this app connects to directly."
+                        )
 
-                Text("Start Irrlicht automatically when you log in to your Mac.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .onChange(of: launchAtLogin) { newValue in LoginItemManager.setEnabled(newValue) }
+                        LeadingToggle(
+                            isOn: $useRelayServer,
+                            label: "Relay server",
+                            info: "Also connect to a relay to see sessions from other machines."
+                        )
 
-            Divider()
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Sources")
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-
-                LeadingToggle(isOn: $useLocalDaemon, label: "Local")
-                Text("Watch the daemon this app connects to directly.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                LeadingToggle(isOn: $useRelayServer, label: "Relay server")
-                Text("Also connect to a relay to see sessions from other machines.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                if useRelayServer {
-                    TextField("ws://localhost:7839", text: $relayURLDraft)
-                        .textFieldStyle(.roundedBorder)
-                        .font(.system(.caption, design: .monospaced))
-                        .autocorrectionDisabled(true)
-                        .onSubmit { commitRelayURL() }
-                    Text("Press Return to apply.")
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                }
-            }
-            .onAppear { relayURLDraft = relayServerURL }
-            .onChange(of: useRelayServer) { on in if on { commitRelayURL() } }
-
-            Divider()
-
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Notifications")
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-
-                NotificationEventRow(
-                    event: .ready,
-                    enabled: $notifyOnReady,
-                    sampleText: "Agent ready",
-                    onImportError: { customImportError = $0 }
-                )
-                NotificationEventRow(
-                    event: .waiting,
-                    enabled: $notifyOnWaiting,
-                    sampleText: "Agent waiting for input",
-                    onImportError: { customImportError = $0 }
-                )
-                NotificationEventRow(
-                    event: .contextPressure,
-                    enabled: $notifyOnContextPressure,
-                    sampleText: "Context pressure: 80% threshold reached",
-                    onImportError: { customImportError = $0 }
-                )
-
-                Text("Pick a sound per event, choose your own audio file, or have the message read aloud.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                if let error = customImportError {
-                    Text(error)
-                        .font(.caption)
-                        .foregroundColor(.orange)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                if notificationsDenied && (notifyOnReady || notifyOnWaiting || notifyOnContextPressure) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundColor(.orange)
-                            .font(.caption)
-                            .tooltip("Notifications blocked in System Settings")
-                        Text("Notifications are blocked.")
-                            .font(.caption)
-                            .foregroundColor(.orange)
-                        Button("Open Settings") {
-                            if let url = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings") {
-                                NSWorkspace.shared.open(url)
+                        if useRelayServer {
+                            HStack(spacing: 6) {
+                                TextField("ws://localhost:7839", text: $relayURLDraft)
+                                    .textFieldStyle(.roundedBorder)
+                                    .font(.system(.caption, design: .monospaced))
+                                    .autocorrectionDisabled(true)
+                                    .onChange(of: relayURLDraft) { newValue in
+                                        relayURLDebounceTask?.cancel()
+                                        relayURLDebounceTask = Task {
+                                            try? await Task.sleep(nanoseconds: 600_000_000)
+                                            guard !Task.isCancelled else { return }
+                                            relayServerURL = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                                        }
+                                    }
+                                Circle()
+                                    .fill(sessionManager.relayConnectionState.dotColor)
+                                    .frame(width: 8, height: 8)
+                                    .help(sessionManager.relayConnectionState.shortLabel)
                             }
                         }
-                        .font(.caption)
-                        .buttonStyle(.link)
-                        .tooltip("Open System Settings → Notifications")
                     }
+                    .onAppear { relayURLDraft = relayServerURL }
+                    .onChange(of: useRelayServer) { on in
+                        if on && relayURLDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            relayURLDraft = "ws://localhost:7839"
+                        }
+                        commitRelayURL()
+                    }
+
+                    Divider()
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(spacing: 6) {
+                            Text("Notifications")
+                                .font(.subheadline)
+                                .fontWeight(.medium)
+                            InfoIcon(text: "Pick a sound per event, choose your own audio file, or have the message read aloud.")
+                            Spacer()
+                        }
+
+                        NotificationEventRow(
+                            event: .ready,
+                            enabled: $notifyOnReady,
+                            sampleText: "Agent ready",
+                            onImportError: { customImportError = $0 }
+                        )
+                        NotificationEventRow(
+                            event: .waiting,
+                            enabled: $notifyOnWaiting,
+                            sampleText: "Agent waiting for input",
+                            onImportError: { customImportError = $0 }
+                        )
+                        NotificationEventRow(
+                            event: .contextPressure,
+                            enabled: $notifyOnContextPressure,
+                            sampleText: "Context pressure: 80% threshold reached",
+                            onImportError: { customImportError = $0 }
+                        )
+
+                        if let error = customImportError {
+                            Text(error)
+                                .font(.caption)
+                                .foregroundColor(.orange)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+
+                        if notificationsDenied && (notifyOnReady || notifyOnWaiting || notifyOnContextPressure) {
+                            HStack(spacing: 4) {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .foregroundColor(.orange)
+                                    .font(.caption)
+                                    .tooltip("Notifications blocked in System Settings")
+                                Text("Notifications are blocked.")
+                                    .font(.caption)
+                                    .foregroundColor(.orange)
+                                Button("Open Settings") {
+                                    if let url = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings") {
+                                        NSWorkspace.shared.open(url)
+                                    }
+                                }
+                                .font(.caption)
+                                .buttonStyle(.link)
+                                .tooltip("Open System Settings → Notifications")
+                            }
+                        }
+                    }
+                    .onAppear { checkNotificationAuth() }
+                    .onChange(of: notifyOnReady) { _ in checkNotificationAuth() }
+                    .onChange(of: notifyOnWaiting) { _ in checkNotificationAuth() }
+                    .onChange(of: notifyOnContextPressure) { _ in checkNotificationAuth() }
+
+                    Divider()
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Updates")
+                            .font(.subheadline)
+                            .fontWeight(.medium)
+
+                        LeadingToggle(
+                            isOn: $updateManager.automaticallyChecksForUpdates,
+                            label: "Automatically check for updates"
+                        )
+
+                        HStack {
+                            Text("Current version")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Spacer()
+                            Text(appVersion)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .monospacedDigit()
+                        }
+
+                        HStack {
+                            Text("Last checked")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Spacer()
+                            Text(lastCheckedDescription)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+
+                        Button("Check for Updates…") {
+                            updateManager.checkForUpdates()
+                        }
+                        .controlSize(.small)
+                    }
+                    .onAppear { updateManager.refresh() }
                 }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 16)
             }
-            .onAppear { checkNotificationAuth() }
-            .onChange(of: notifyOnReady) { _ in checkNotificationAuth() }
-            .onChange(of: notifyOnWaiting) { _ in checkNotificationAuth() }
-            .onChange(of: notifyOnContextPressure) { _ in checkNotificationAuth() }
+            .frame(maxHeight: 520)
+            .fixedSize(horizontal: false, vertical: true)
 
             Divider()
-
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Updates")
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-
-                LeadingToggle(
-                    isOn: $updateManager.automaticallyChecksForUpdates,
-                    label: "Automatically check for updates"
-                )
-
-                HStack {
-                    Text("Current version")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    Spacer()
-                    Text(appVersion)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .monospacedDigit()
-                }
-
-                HStack {
-                    Text("Last checked")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    Spacer()
-                    Text(lastCheckedDescription)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-
-                Button("Check for Updates…") {
-                    updateManager.checkForUpdates()
-                }
-                .controlSize(.small)
-            }
-            .onAppear { updateManager.refresh() }
-
-            Spacer()
-
-            Divider()
+                .padding(.horizontal, 20)
 
             HStack {
                 Text("Irrlicht v\(appVersion)")
@@ -224,9 +253,11 @@ struct SettingsView: View {
                 Button("Done") { isPresented = false }
                     .keyboardShortcut(.defaultAction)
             }
+            .padding(.horizontal, 20)
+            .padding(.top, 12)
+            .padding(.bottom, 20)
         }
-        .padding(20)
-        .frame(width: 360, height: 860)
+        .frame(width: 360)
         .background(Color(NSColor.windowBackgroundColor))
         .toggleStyle(IrrlichtSwitchToggleStyle())
     }
@@ -238,10 +269,6 @@ struct SettingsView: View {
         return formatter.localizedString(for: date, relativeTo: Date())
     }
 
-    /// One row of the Providers section: provider name + segmented
-    /// picker. Bound to the raw AppStorage string so SwiftUI re-renders
-    /// downstream views (SessionListView's chip) as soon as the user
-    /// flips it.
     @ViewBuilder
     private func providerModeRow(label: String, selection: Binding<String>) -> some View {
         HStack {
@@ -258,8 +285,6 @@ struct SettingsView: View {
         }
     }
 
-    /// Commits the relay URL draft to @AppStorage (trimmed), which the
-    /// SessionManager observes to (re)connect the relay source.
     private func commitRelayURL() {
         relayServerURL = relayURLDraft.trimmingCharacters(in: .whitespacesAndNewlines)
     }
@@ -272,8 +297,6 @@ struct SettingsView: View {
             DispatchQueue.main.async {
                 notificationsDenied = settings.authorizationStatus == .denied
             }
-            // If user just toggled a notification setting and we've never asked,
-            // show the "blocked" banner so the user knows to enable in System Settings.
             let anyEnabled = NotificationEvent.allCases.contains {
                 UserDefaults.standard.bool(forKey: $0.enabledKey)
             }
@@ -358,9 +381,6 @@ private struct NotificationEventRow: View {
     }
 
     private static func openSpokenContentSettings() {
-        // macOS 14/15 expose Spoken Content as an anchor inside the
-        // Accessibility settings extension. Older macOS opens the general
-        // Accessibility pane (no Spoken Content anchor, but close enough).
         let candidates = [
             "x-apple.systempreferences:com.apple.Accessibility-Settings.extension?SpokenContent",
             "x-apple.systempreferences:com.apple.preference.universalaccess",
@@ -377,7 +397,6 @@ private struct NotificationEventRow: View {
 
     private func handle(_ newValue: SoundChoice) {
         if newValue == .customPickerSentinel {
-            // Restore previous selection until the open panel resolves.
             let previous = SoundChoice(rawValue: UserDefaults.standard.string(forKey: event.soundKey) ?? "") ?? .default
             selection = previous
             pickCustomFile()
@@ -411,15 +430,36 @@ private struct NotificationEventRow: View {
 }
 
 /// Left-aligned switch + label, rendered by `IrrlichtSwitchToggleStyle`.
+/// An optional `info` string adds a hover-reveal ⓘ next to the label so the
+/// explanation doesn't cost a permanent block of caption text below the row.
 private struct LeadingToggle: View {
     @Binding var isOn: Bool
     let label: String
+    var info: String? = nil
 
     var body: some View {
-        HStack {
+        HStack(spacing: 6) {
             Toggle(isOn: $isOn) { Text(label) }
+                .fixedSize()
+            if let info {
+                InfoIcon(text: info)
+            }
             Spacer()
         }
+    }
+}
+
+/// Small ⓘ affordance: reveals a one-line explainer on hover instead of
+/// spending vertical space on a caption paragraph under every control.
+private struct InfoIcon: View {
+    let text: String
+
+    var body: some View {
+        Image(systemName: "info.circle")
+            .font(.caption)
+            .foregroundColor(.secondary)
+            .tooltip(text)
+            .accessibilityLabel(text)
     }
 }
 
@@ -443,9 +483,6 @@ private struct IrrlichtSwitchToggleStyle: ToggleStyle {
 
             configuration.label
         }
-        // contentShape extends the hit area across the entire row (pill + gap
-        // + label), so tapping anywhere along the row flips the switch — not
-        // just the small pill itself.
         .contentShape(Rectangle())
         .onTapGesture { configuration.isOn.toggle() }
         .accessibilityAddTraits(.isButton)
@@ -454,9 +491,5 @@ private struct IrrlichtSwitchToggleStyle: ToggleStyle {
 }
 
 private extension SoundChoice {
-    /// Stand-in tag for the "Custom audio file…" picker item. We can't use
-    /// `.custom(...)` directly because the menu row pre-exists the user's
-    /// selection — picking it presents `NSOpenPanel` and only then promotes
-    /// into a real `.custom` value.
     static let customPickerSentinel: SoundChoice = .custom(installedFilename: "__picker_sentinel__", displayPath: "")
 }
