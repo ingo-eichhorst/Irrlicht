@@ -1,0 +1,138 @@
+{
+  "schema_version": 1,
+  "source_transcript": "",
+  "generated_at": "0001-01-01T00:00:00Z",
+  "settings": {
+    "adapter": "codex",
+    "debounce_window": 2000000000,
+    "flicker_max_duration": 10000000000
+  },
+  "summary": {
+    "total_events": 27,
+    "consumed_events": 27,
+    "total_transitions": 7,
+    "first_event_time": "2026-05-29T21:42:25.55Z",
+    "last_event_time": "2026-05-29T21:42:49.894Z",
+    "wall_clock_session_duration": 24344000000,
+    "state_durations": {
+      "ready": 8298000000,
+      "working": 16046000000
+    },
+    "flicker_count": 5,
+    "flickers_by_category": {
+      "ready_between_working": 2,
+      "working_between_ready": 3
+    },
+    "flickers_by_reason": {
+      "agent finished turn → ready": 2,
+      "force ready→working on first activity": 3
+    },
+    "estimated_cost_usd": 0.459455,
+    "cum_input_tokens": 88465,
+    "cum_output_tokens": 571,
+    "model_name": "gpt-5.5"
+  },
+  "transitions": [
+    {
+      "index": 0,
+      "event_index": -1,
+      "virtual_time": "2026-05-29T21:42:25.55Z",
+      "cause": "init",
+      "prev_state": "",
+      "new_state": "ready",
+      "reason": "initial state",
+      "last_event_type": "",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 1,
+      "event_index": 6,
+      "virtual_time": "2026-05-29T21:42:25.816Z",
+      "cause": "debounce_coalesce",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "user_message",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 2,
+      "event_index": 10,
+      "virtual_time": "2026-05-29T21:42:32.089Z",
+      "cause": "debounce_coalesce",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "turn_done",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "…s find the first matching key and then read neighboring leaf entries in sorte…"
+    },
+    {
+      "index": 3,
+      "event_index": 14,
+      "virtual_time": "2026-05-29T21:42:35.773Z",
+      "cause": "debounce_coalesce",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "user_message",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 4,
+      "event_index": 18,
+      "virtual_time": "2026-05-29T21:42:40.006Z",
+      "cause": "debounce_coalesce",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "turn_done",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "…e complexity is `O(n)` because each node is pushed, popped, and visited once.…"
+    },
+    {
+      "index": 5,
+      "event_index": 22,
+      "virtual_time": "2026-05-29T21:42:44.354Z",
+      "cause": "debounce_coalesce",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "user_message",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 6,
+      "event_index": 26,
+      "virtual_time": "2026-05-29T21:42:49.894Z",
+      "cause": "debounce_coalesce",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "turn_done",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "…decrementing scarce inventory during checkout. Because many buyers may compet…"
+    }
+  ]
+}
