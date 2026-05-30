@@ -113,11 +113,18 @@ class SessionManager: ObservableObject {
     /// Relay-sourced sessions, keyed by session id.
     private var relaySessionMap: [String: SessionState] = [:]
     /// Daemons the relay reports connected: daemon_id → label, for the tooltip.
-    /// Drives `connectionTooltip` (a computed property read by the view) but
-    /// isn't @Published, so nudge SwiftUI on every change — otherwise a
-    /// daemon_status update with no accompanying session change leaves the
-    /// tooltip stale.
-    private var relayDaemons: [String: String] = [:] {
+    /// Drives `connectionTooltip` and the per-row origin glyph tooltip (#538) —
+    /// both read by the view. Not @Published, so nudge SwiftUI on every change —
+    /// otherwise a daemon_status update with no accompanying session change
+    /// leaves the tooltip stale.
+    var relayDaemons: [String: String] = [:] {
+        willSet { objectWillChange.send() }
+    }
+    /// Daemons that disconnected but whose rows we keep on screen, faded, until
+    /// they reconnect (#540 "fade, don't delete"): daemon_id → label, so the
+    /// faded rows keep their hostname tooltip even though the daemon left
+    /// `relayDaemons`. A session is faded when its `daemonID` is a key here.
+    var offlineDaemons: [String: String] = [:] {
         willSet { objectWillChange.send() }
     }
     /// The relay URL currently connected, so a URL change forces a reconnect.
@@ -500,30 +507,45 @@ class SessionManager: ObservableObject {
         }
     }
 
-    private func handleRelayMessage(_ text: String) {
+    func handleRelayMessage(_ text: String) {
         guard let data = text.data(using: .utf8),
               let kind = (try? JSONDecoder().decode(RelayFrameType.self, from: data))?.type else { return }
         switch kind {
         case "push":
             if let push = try? JSONDecoder().decode(RelayPush.self, from: data), let inner = push.msg {
-                applyRelayInner(inner)
+                applyRelayInner(inner, daemonID: push.source)
             }
         case "snapshot":
             if let ctrl = try? JSONDecoder().decode(RelayControl.self, from: data) {
                 relayDaemons.removeAll()
-                for d in ctrl.daemons ?? [] { relayDaemons[d.daemonID] = d.daemonLabel ?? d.daemonID }
+                for d in ctrl.daemons ?? [] {
+                    relayDaemons[d.daemonID] = d.daemonLabel ?? d.daemonID
+                    // A daemon we were fading is back — drop its stale rows and
+                    // the offline mark; its fresh state arrives as pushes.
+                    if offlineDaemons[d.daemonID] != nil { restoreDaemon(d.daemonID) }
+                }
             }
         case "daemon_status":
             if let ctrl = try? JSONDecoder().decode(RelayControl.self, from: data), let id = ctrl.daemonID {
-                if ctrl.status == "disconnected" { relayDaemons.removeValue(forKey: id) }
-                else { relayDaemons[id] = ctrl.daemonLabel ?? id }
+                if ctrl.status == "disconnected" {
+                    // Fade, don't delete (#540): keep the daemon's rows on screen
+                    // (the relay no longer deletes them) and remember its label so
+                    // the faded rows keep their tooltip. The view dims them via
+                    // `isOffline`.
+                    let label = relayDaemons.removeValue(forKey: id) ?? offlineDaemons[id] ?? id
+                    offlineDaemons[id] = label
+                } else {
+                    relayDaemons[id] = ctrl.daemonLabel ?? id
+                    if offlineDaemons[id] != nil { restoreDaemon(id) }
+                }
             }
         case "hello_ack":
             break
         default:
             // The URL pointed at a daemon (raw frames): handle it like one.
+            // A raw daemon frame has no envelope source, so it has no daemon id.
             if let inner = try? JSONDecoder().decode(WsEnvelope.self, from: data) {
-                applyRelayInner(inner)
+                applyRelayInner(inner, daemonID: nil)
             }
         }
     }
@@ -531,27 +553,55 @@ class SessionManager: ObservableObject {
     /// Applies a relay session frame into the relay-only map. History and
     /// focus frames are ignored for relay sources in v0 (history bars for
     /// relay-only sessions are deferred; focus is host-local).
-    private func applyRelayInner(_ env: WsEnvelope) {
+    ///
+    /// The relay Push envelope's `source` (daemon id) is stamped onto the
+    /// session and folded into its `rowID`, so two daemons sharing a session_id
+    /// stay distinct in `relaySessionMap` instead of colliding (#537). The
+    /// local-collapse dedup still compares bare `id` against `sessionMap`.
+    private func applyRelayInner(_ env: WsEnvelope, daemonID: String?) {
         switch env.type {
         case "session_created", "session_updated":
-            if let s = env.session {
+            if var s = env.session {
+                s.daemonID = daemonID
                 // Notify on a state transition for a relay-only session. One
                 // also present locally is handled by the local path, so
                 // notifying here too would double-fire.
-                if sessionMap[s.id] == nil, let old = relaySessionMap[s.id]?.state, old != s.state {
+                if sessionMap[s.id] == nil, let old = relaySessionMap[s.rowID]?.state, old != s.state {
                     checkStateTransitionNotification(session: s, previousState: old)
                 }
-                relaySessionMap[s.id] = s
+                relaySessionMap[s.rowID] = s
                 rebuildSessionsFromMap()
                 recomposeApiGroups()
             }
         case "session_deleted":
-            if let s = env.session, relaySessionMap.removeValue(forKey: s.id) != nil {
-                rebuildSessionsFromMap()
-                recomposeApiGroups()
+            if var s = env.session {
+                s.daemonID = daemonID
+                if relaySessionMap.removeValue(forKey: s.rowID) != nil {
+                    rebuildSessionsFromMap()
+                    recomposeApiGroups()
+                }
             }
         default:
             break
+        }
+    }
+
+    /// A relay session is faded when its daemon is currently offline (#540).
+    func isOffline(_ session: SessionState) -> Bool {
+        guard let id = session.daemonID else { return false }
+        return offlineDaemons[id] != nil
+    }
+
+    /// A faded daemon reconnected: drop its kept rows (any that ended while it
+    /// was offline are gone for good; live ones re-arrive as fresh pushes) and
+    /// clear the offline mark so its rows render solid again.
+    private func restoreDaemon(_ id: String) {
+        offlineDaemons.removeValue(forKey: id)
+        let before = relaySessionMap.count
+        relaySessionMap = relaySessionMap.filter { $0.value.daemonID != id }
+        if relaySessionMap.count != before {
+            rebuildSessionsFromMap()
+            recomposeApiGroups()
         }
     }
 
@@ -573,19 +623,23 @@ class SessionManager: ObservableObject {
         guard !relaySessionMap.isEmpty else { return [] }
         let localIDs = Set(sessionMap.keys)
         let relayOnly = relaySessionMap.values.filter { !localIDs.contains($0.id) }
-        // A relay session is top-level only if its parent is unknown in BOTH
-        // maps — matching rebuildSessionsFromMap, which excludes any session
-        // whose parent it can see. Keeps a relay child of a local parent from
-        // surfacing as a stray top-level row that the flat list omits.
-        let knownIDs = localIDs.union(relaySessionMap.keys)
+        // A relay session is top-level only if its parent is unknown within its
+        // own daemon (rowIDs are "daemon/id") and is not a local session —
+        // matching rebuildSessionsFromMap. Keeps a relay child from surfacing as
+        // a stray top-level row, while two daemons sharing a session_id stay
+        // distinct (#537).
+        let relayParentKeys = Set(relaySessionMap.keys)
         let topLevel = relayOnly.filter { s in
             guard let pid = s.parentSessionId else { return true }
-            return !knownIDs.contains(pid)
+            if let dID = s.daemonID {
+                return !relayParentKeys.contains("\(dID)/\(pid)")
+            }
+            return !localIDs.contains(pid)
         }
         guard !topLevel.isEmpty else { return [] }
         var byProject: [String: [SessionState]] = [:]
         var order: [String] = []
-        for s in topLevel.sorted(by: { $0.id < $1.id }) {
+        for s in topLevel.sorted(by: { $0.rowID < $1.rowID }) {
             let key = s.projectName ?? "unknown"
             if byProject[key] == nil { order.append(key) }
             byProject[key, default: []].append(s)
@@ -1094,18 +1148,24 @@ class SessionManager: ObservableObject {
         // Merge relay-only sessions (ids not present locally) so the cycle and
         // menu-bar counts include other machines' sessions. Local wins on id
         // collision — the same daemon reached via both sources shows once.
-        var combined = sessionMap
-        for (id, s) in relaySessionMap where combined[id] == nil {
-            combined[id] = s
-        }
-        let all = Array(combined.values)
-        let ids = Set(all.map { $0.id })
+        let localIDs = Set(sessionMap.keys)
+        // Two different relay daemons sharing a session_id stay distinct (keyed
+        // by compound rowID), so build a flat array rather than a bare-id dict
+        // — a dict would collide them back into one row (#537).
+        let relayOnly = relaySessionMap.values.filter { !localIDs.contains($0.id) }
+        let all = Array(sessionMap.values) + relayOnly
 
-        // Exclude child sessions (subagents) from the main session list
-        // so they don't appear in the cycle or as separate rows.
+        // Exclude child sessions (subagents) from the main session list so they
+        // don't appear in the cycle or as separate rows. A parent must resolve
+        // within the same scope: a relay child against its own daemon's
+        // sessions (rowIDs are "daemon/id"), a local child against the local set.
+        let relayParentKeys = Set(relaySessionMap.keys)
         var topLevel = all.filter { session in
             guard let pid = session.parentSessionId else { return true }
-            return !ids.contains(pid)
+            if let dID = session.daemonID {
+                return !relayParentKeys.contains("\(dID)/\(pid)")
+            }
+            return !localIDs.contains(pid)
         }
         topLevel = sortSessionsByOrder(topLevel)
         updateSessionOrder(with: topLevel)
@@ -1417,8 +1477,10 @@ class SessionManager: ObservableObject {
     }
 
     private func sortSessionsByOrder(_ sessions: [SessionState]) -> [SessionState] {
-        // Create a map of session ID to session for quick lookup
-        let sessionMap = Dictionary(uniqueKeysWithValues: sessions.map { ($0.id, $0) })
+        // Key by rowID (compound for relay sessions): two daemons sharing a
+        // session_id would otherwise trap `uniqueKeysWithValues` on the dup
+        // key (#537). rowID == id for local sessions, so order is unchanged.
+        let sessionMap = Dictionary(uniqueKeysWithValues: sessions.map { ($0.rowID, $0) })
 
         var orderedSessions: [SessionState] = []
 
@@ -1431,7 +1493,7 @@ class SessionManager: ObservableObject {
 
         // Then add any new sessions that aren't in the saved order yet
         let orderedIds = Set(sessionOrder)
-        let newSessions = sessions.filter { !orderedIds.contains($0.id) }
+        let newSessions = sessions.filter { !orderedIds.contains($0.rowID) }
 
         // Sort new sessions: active first, then by recency (as fallback for new sessions)
         let sortedNewSessions = newSessions.sorted { lhs, rhs in
@@ -1451,8 +1513,8 @@ class SessionManager: ObservableObject {
     }
 
     private func updateSessionOrder(with sessions: [SessionState]) {
-        let currentSessionIds = Set(sessions.map { $0.id })
-        let orderedSessionIds = sessions.map { $0.id }
+        let currentSessionIds = Set(sessions.map { $0.rowID })
+        let orderedSessionIds = sessions.map { $0.rowID }
 
         // Only update if the order has changed
         if sessionOrder != orderedSessionIds {
@@ -1475,7 +1537,7 @@ class SessionManager: ObservableObject {
         sessions.insert(session, at: adjustedDestination)
 
         // Update the order array to match
-        sessionOrder = sessions.map { $0.id }
+        sessionOrder = sessions.map { $0.rowID }
         saveSessionOrder()
 
         print("🔄 Reordered session \(session.shortId) from \(sourceIndex) to \(adjustedDestination)")

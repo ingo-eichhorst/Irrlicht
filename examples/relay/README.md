@@ -28,8 +28,19 @@ IRRLICHT_RELAY_URL=ws://<relay-host>:7839 irrlichd
 
 ## Notes
 
-- **No auth, no TLS** (relay v0). Publish `7839` only to a trusted host
-  loopback, or front it with your own TLS-terminating proxy.
+- **Auth & TLS are off by default** — fine for this loopback-published demo. To
+  expose the relay, enable a bearer token and front it with TLS:
+
+  ```bash
+  docker compose -f examples/relay/docker-compose.yml exec relay \
+    irrlichtrelay token issue --label laptop      # secret shown once
+  ```
+
+  then uncomment the `--auth tokens-file` block in `docker-compose.yml` and put
+  a TLS-terminating proxy in front. Full recipes (auth, TLS, systemd, the
+  cloned-VM identity gotcha) → **[DEPLOY.md](./DEPLOY.md)**.
+- For a non-container deploy, a system unit ships at
+  [`irrlichtrelay.service`](./irrlichtrelay.service).
 - The image **bakes a snapshot** of `platforms/web/`. Dashboard edits need an
   image rebuild (`--build`) — unlike the daemon, which serves the dashboard
   live from disk.

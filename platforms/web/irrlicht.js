@@ -168,7 +168,7 @@
       const proj = s && s.project_name ? s.project_name : '';
       const branch = s && s.git_branch ? s.git_branch : '';
       if (proj && branch) return proj + ' · ' + branch;
-      return proj || branch || (s && s.session_id ? s.session_id.slice(0, 8) : 'session');
+      return proj || branch || (s && s.session_id ? displaySessionId(s.session_id).slice(0, 8) : 'session');
     }
     function maybeNotifyOnUpdate(prev, next) {
       if (!next) return;
@@ -374,7 +374,7 @@
       return '';
     }
 
-    function shortID(id) { return id ? id.slice(0, 6) : ''; }
+    function shortID(id) { return id ? displaySessionId(id).slice(0, 6) : ''; }
 
     function pressureClass(level) {
       if (level === 'critical') return 'critical';
@@ -787,6 +787,7 @@
         '<span class="row-num"></span>' +
         '<span class="row-sub-badge" style="display:none"></span>' +
         '<span class="row-role-badge" style="display:none"></span>' +
+        '<span class="row-origin" style="display:none"></span>' +
         '<span class="row-branch"></span>' +
         '<span class="row-tool" style="display:none"></span>' +
         '<span class="row-ctx-bar"><span class="row-ctx-fill"></span><span class="row-ctx-label"></span></span>' +
@@ -890,6 +891,21 @@
       // SessionListView.swift:481-490. Toggling .has-sub on the row
       // shrinks the branch column so columns downstream still align with
       // rows that don't have a badge.
+      // Origin glyph (#538) — a cloud marks a session delivered by a relay
+      // (remote daemon); local-socket sessions show nothing, so a local-only
+      // dashboard is visually unchanged. Tooltip = the daemon's hostname.
+      const originEl = el.querySelector('.row-origin');
+      if (sessionOrigin(agent) === 'remote') {
+        if (!originEl.dataset.on) {
+          originEl.innerHTML = '<svg viewBox="0 0 24 24" width="11" height="11" fill="currentColor" aria-hidden="true"><path d="M19 18H6a4 4 0 0 1-.55-7.96 5 5 0 0 1 9.65-1.65A4 4 0 0 1 19 18z"/></svg>';
+          originEl.dataset.on = '1';
+        }
+        originEl.style.display = '';
+        originEl.title = daemonLabelFor(sourceIdOf(agent.session_id));
+      } else if (originEl.style.display !== 'none') {
+        originEl.style.display = 'none';
+      }
+
       const subBadge = el.querySelector('.row-sub-badge');
       const activeSubs = activeSubagentCount(agent);
       if (activeSubs > 0) {
@@ -1028,12 +1044,17 @@
         const showHeaders = dashboardGroups.length > 1;
         let agentNum = 0;
 
+        // Local-wins (#538): a relay session whose bare id is also delivered by
+        // a local source collapses to the local row — skip the relay duplicate.
+        const localIds = localBareIds(dashboardGroups);
+
         for (const g of dashboardGroups) {
           if (showHeaders) {
             items.push({type: 'group', key: 'g:' + g.name, group: g});
           }
           if (!collapsedGroups.has(g.name)) {
             for (const a of g.agents) {
+              if (isShadowedRemote(a, localIds)) continue;
               agentNum++;
               items.push({type: 'agent', key: 'a:' + a.session_id, agent: a, num: agentNum, isChild: false});
               // Pressure alert
@@ -1378,11 +1399,84 @@
     // (`snapshot`/`daemon_status`) feed the connection tooltip, and anything
     // else is a raw daemon frame processed exactly as the single socket was.
     //
-    // Sessions are keyed by `session_id` (the existing model), so the same
-    // daemon reached over both the local socket and a relay collapses to one
-    // row automatically. Two *different* daemons that happen to share a
-    // session_id (e.g. proc-<pid>) would merge — a documented v0 caveat;
-    // per-source keying is deferred with row-level source badges.
+    // Relay sessions are keyed by the compound `(daemon_id, session_id)` (#537):
+    // the relay Push envelope carries the authoritative `source` (daemon id),
+    // which `normalizeSourcedFrame` folds into the inner frame's id at the push
+    // boundary so two *different* daemons sharing a session_id (e.g. proc-<pid>)
+    // never merge into one row. Local-socket frames keep their bare id (daemon =
+    // self), so the same daemon reached over both the local socket and a relay
+    // still collapses to one row.
+
+    // compoundSessionId folds a relay daemon id into a daemon-local session_id
+    // to make a globally-unique, client-internal id. NUL-delimited so it can't
+    // collide with a real id (daemon ids may be arbitrary labels) and never
+    // renders; a falsy daemon id (local frames) yields the bare session id.
+    // Pure; exported for tests.
+    function compoundSessionId(daemonId, sessionId) {
+      if (!daemonId) return sessionId || '';
+      return daemonId + ' ' + (sessionId || '');
+    }
+
+    // displaySessionId is the inverse used for display slices — it recovers the
+    // daemon-local id and passes bare (local) ids through unchanged.
+    // Pure; exported for tests.
+    function displaySessionId(id) {
+      if (!id) return '';
+      const i = id.indexOf(' ');
+      return i === -1 ? id : id.slice(i + 1);
+    }
+
+    // sessionOrigin classifies a session by its id (#538): a relay session's id
+    // is compound (its bare form differs), a local-socket session's id is bare.
+    // Derives from displaySessionId so it never embeds the delimiter literal.
+    // Pure; exported for tests.
+    function sessionOrigin(a) {
+      const id = a && a.session_id;
+      return id && displaySessionId(id) !== id ? 'remote' : 'local';
+    }
+
+    // sourceIdOf recovers the relay daemon id (the compound prefix) from a
+    // session id, or '' for a bare/local id. Pure; exported for tests.
+    function sourceIdOf(id) {
+      if (!id) return '';
+      const bare = displaySessionId(id);
+      return bare === id ? '' : id.slice(0, id.length - bare.length - 1);
+    }
+
+    // localBareIds collects the bare session ids delivered by a local source,
+    // so a relay duplicate of the same session collapses to the local row
+    // (local wins, #538). Pure; exported for tests.
+    function localBareIds(groups) {
+      const out = new Set();
+      for (const g of (groups || [])) {
+        for (const a of (g.agents || [])) {
+          if (sessionOrigin(a) === 'local' && a.session_id) out.add(a.session_id);
+        }
+      }
+      return out;
+    }
+
+    // isShadowedRemote is true when a relay session is also present locally —
+    // the same daemon reached over both paths shows once, as the local row.
+    // Pure; exported for tests.
+    function isShadowedRemote(a, localIds) {
+      return sessionOrigin(a) === 'remote' && localIds.has(displaySessionId(a.session_id));
+    }
+
+    // daemonSessionIds returns the session ids delivered by one relay daemon.
+    // Used to drop its rows when it disconnects (#540): the relay no longer
+    // deletes them per-session, so the web dashboard removes them itself to keep
+    // its existing behaviour (macOS fades instead). Pure; exported for tests.
+    function daemonSessionIds(groups, daemonId) {
+      const out = [];
+      if (!daemonId) return out;
+      for (const g of (groups || [])) {
+        for (const a of (g.agents || [])) {
+          if (sourceIdOf(a.session_id) === daemonId) out.push(a.session_id);
+        }
+      }
+      return out;
+    }
 
     // relayFrameKind classifies an incoming frame so the handler can branch.
     // Pure; exported for tests.
@@ -1429,6 +1523,18 @@
     // Active sources, keyed by a stable id. Each: { id, label, kind, wsUrl,
     // state, ws, reconnectDelay, closing, daemons: Map<id,{label,status}> }.
     const sources = new Map();
+
+    // daemonLabelFor resolves a relay daemon id to its hostname label for the
+    // origin-glyph tooltip (#538), scanning the live per-source daemon maps
+    // (populated from snapshot/daemon_status). Falls back to the id itself.
+    function daemonLabelFor(daemonId) {
+      if (!daemonId) return '';
+      for (const src of sources.values()) {
+        const d = src.daemons && src.daemons.get(daemonId);
+        if (d && d.label) return d.label;
+      }
+      return daemonId;
+    }
 
     function desiredSources() {
       const out = [];
@@ -1514,6 +1620,16 @@
       setTimeout(() => { if (!src.closing && sources.get(src.id) === src) connectSource(src); }, delay);
     }
 
+    // purgeDaemonSessions drops every row from one relay daemon — the web
+    // dashboard's response to a daemon disconnect (#540). The relay stopped
+    // fanning out per-session deletes on disconnect, so we reproduce the prior
+    // behaviour here (macOS fades the rows instead).
+    function purgeDaemonSessions(daemonId) {
+      const ids = daemonSessionIds(dashboardGroups, daemonId);
+      for (const sid of ids) applySessionDelete(sid);
+      if (ids.length) render();
+    }
+
     function handleSourceFrame(src, msg) {
       if (!msg) return;
       switch (relayFrameKind(msg)) {
@@ -1528,17 +1644,50 @@
           return;
         case 'daemon_status':
           if (msg.daemon_id) {
-            if (msg.status === 'disconnected') src.daemons.delete(msg.daemon_id);
-            else src.daemons.set(msg.daemon_id, { label: msg.daemon_label || msg.daemon_id, status: msg.status || 'connected' });
+            if (msg.status === 'disconnected') {
+              src.daemons.delete(msg.daemon_id);
+              purgeDaemonSessions(msg.daemon_id);   // #540: relay no longer deletes them for us
+            } else {
+              src.daemons.set(msg.daemon_id, { label: msg.daemon_label || msg.daemon_id, status: msg.status || 'connected' });
+            }
           }
           updateWsStatus();
           return;
         case 'push':
-          if (msg.msg) dispatchRawFrame(msg.msg);
+          if (msg.msg) dispatchRawFrame(normalizeSourcedFrame(msg.source, msg.msg));
           return;
         default:
           dispatchRawFrame(msg);
       }
+    }
+
+    // normalizeSourcedFrame folds a relay Push envelope's `source` (daemon id)
+    // into the inner frame's session identity, so two daemons sharing a
+    // session_id stay distinct downstream (#537). Mutates the inner frame in
+    // place — it's freshly JSON.parsed per message and not reused. A frame with
+    // no source (or an un-sourced relay) passes through unchanged. Orchestrator
+    // state is global, not per-daemon, so it's left alone.
+    function normalizeSourcedFrame(source, inner) {
+      if (!source || !inner) return inner;
+      if (inner.session) {
+        if (inner.session.session_id) inner.session.session_id = compoundSessionId(source, inner.session.session_id);
+        if (inner.session.parent_session_id) inner.session.parent_session_id = compoundSessionId(source, inner.session.parent_session_id);
+      } else if (inner.type === 'history_snapshot' || inner.type === 'history_upgrade') {
+        if (inner.session_id) inner.session_id = compoundSessionId(source, inner.session_id);
+      } else if (inner.type === 'history_tick') {
+        inner.buckets = remapSourcedKeys(source, inner.buckets);
+        inner.bucket_generations = remapSourcedKeys(source, inner.bucket_generations);
+      }
+      return inner;
+    }
+
+    // remapSourcedKeys returns a fresh object with each session_id key folded
+    // with the daemon source. history_tick keys its bucket maps by session_id.
+    function remapSourcedKeys(source, obj) {
+      if (!obj || typeof obj !== 'object') return obj;
+      const out = {};
+      for (const k of Object.keys(obj)) out[compoundSessionId(source, k)] = obj[k];
+      return out;
     }
 
     // dispatchRawFrame processes a raw daemon PushMessage — the local frame
@@ -2236,4 +2385,7 @@ export {
   formatCost, formatUsageCost, pressureClass, historyPriorityForState,
   lastNotifiedPressure,
   relayFrameKind, aggregateConnState, relayWsUrl,
+  compoundSessionId, displaySessionId,
+  sessionOrigin, sourceIdOf, localBareIds, isShadowedRemote,
+  daemonSessionIds,
 };

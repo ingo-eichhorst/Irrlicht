@@ -917,6 +917,15 @@
       flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
       max-width: 100px;
     }
+    /* Origin glyph (#538) — a cloud marking a session delivered by a relay
+       (remote daemon). Hidden for local sessions, so a local-only dashboard
+       is visually unchanged. Muted to read as secondary metadata. */
+    .row-origin {
+      width: 14px; height: 14px; flex-shrink: 0;
+      display: inline-flex; align-items: center; justify-content: center;
+      color: var(--muted); opacity: 0.85;
+    }
+    .row-origin svg { display: block; }
     /* Active tool indicator — hidden for now (the overlay doesn't surface it
        in the default row either). Keep the rule + JS update path so we can
        re-enable later, but force-hide via CSS. */

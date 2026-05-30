@@ -1,0 +1,57 @@
+# systemd unit for the standalone irrlichtrelay hub (issue #539).
+#
+# Install (run as root):
+#   1. Build/copy the binary to /usr/local/bin/irrlichtrelay
+#        (cd core && go build -trimpath -ldflags "-X main.Version=$(git describe --tags --always)" \
+#           -o /usr/local/bin/irrlichtrelay ./cmd/irrlichtrelay)
+#   2. Create the service user (StateDirectory needs it to exist):
+#        useradd --system --no-create-home --home /var/lib/irrlichtrelay irrlichtrelay
+#   3. Install this file:  cp examples/relay/irrlichtrelay.service /etc/systemd/system/
+#   4. Issue a bearer token (as the service user, into the shared state dir):
+#        install -d -o irrlichtrelay -g irrlichtrelay /var/lib/irrlichtrelay
+#        sudo -u irrlichtrelay IRRLICHT_HOME=/var/lib/irrlichtrelay \
+#          irrlichtrelay token issue --label "first-daemon"
+#   5. systemctl daemon-reload && systemctl enable --now irrlichtrelay
+#        journalctl -u irrlichtrelay -f
+#
+# This binds loopback + bearer-token auth — the secure default. Terminate TLS in
+# a reverse proxy in front (see DEPLOY.md), or swap ExecStart for the native-TLS
+# variant below. `token revoke <id>` takes effect within ~2s without a restart.
+
+[Unit]
+Description=Irrlicht relay — cross-host session hub
+Documentation=https://github.com/ingo-eichhorst/Irrlicht/blob/main/examples/relay/DEPLOY.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=irrlichtrelay
+Group=irrlichtrelay
+# Creates + owns /var/lib/irrlichtrelay (mode 0700); holds tokens.json.
+StateDirectory=irrlichtrelay
+StateDirectoryMode=0700
+Environment=IRRLICHT_HOME=/var/lib/irrlichtrelay
+ExecStart=/usr/local/bin/irrlichtrelay serve --addr 127.0.0.1:7839 --auth tokens-file
+# Native TLS instead of a reverse proxy — bind a routable address and serve wss://
+# directly (keep --auth; TLS encrypts but does not authenticate the peer):
+# ExecStart=/usr/local/bin/irrlichtrelay serve --addr 0.0.0.0:7839 --auth tokens-file --tls-cert /etc/irrlichtrelay/cert.pem --tls-key /etc/irrlichtrelay/key.pem
+Restart=on-failure
+RestartSec=2
+
+# Hardening — the relay only needs a network socket and its state dir.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+
+[Install]
+WantedBy=multi-user.target

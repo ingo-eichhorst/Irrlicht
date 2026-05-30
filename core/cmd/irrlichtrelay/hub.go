@@ -437,17 +437,18 @@ func (h *hub) daemonDisconnected(id string) {
 		h.mu.Unlock()
 		return // another live connection for this daemon remains
 	}
-	sessions := h.sessions[id]
 	delete(h.daemons, id)
 	delete(h.sessions, id)
 	delete(h.agents, id)
 	h.mu.Unlock()
 
-	// v0 deletes the daemon's rows on disconnect ("fade don't delete" is a
-	// deferred enhancement), then announces the disconnect for the tooltip.
-	for _, s := range sessions {
-		h.fanoutPush(id, outbound.PushMessage{Type: outbound.PushTypeDeleted, Session: s})
-	}
+	// Announce the disconnect and let clients decide how to present the now-
+	// orphaned rows (#540 "fade, don't delete"): the relay no longer fans out a
+	// session_deleted per session, so a flapping link doesn't yank rows out from
+	// under a client. macOS fades them and restores on reconnect; the web
+	// dashboard drops them. The cache is still evicted, so /api/v1/sessions and
+	// any late-joining client reflect only live daemons, and a reconnect
+	// reconciles via a fresh daemon_snapshot.
 	h.broadcastDaemonStatus(id, label, relay.StatusDisconnected, now)
 }
 
