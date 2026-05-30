@@ -87,6 +87,18 @@ docker compose -f docker-compose.yml exec -it codex-1 tmux attach -t codex
 - **Baked dashboard.** The relay image bakes a snapshot of `platforms/web/`;
   dashboard edits need an image rebuild (`--build`).
 
+## Stop
+
+```bash
+docker compose -f examples/coding-factory/docker-compose.yml down
+```
+
+To stop without removing containers (preserves state for a quick restart):
+
+```bash
+docker compose -f examples/coding-factory/docker-compose.yml stop
+```
+
 → Simpler single-agent demo: [`../roundtrip/`](../roundtrip/) ·
 Protocol reference: [`../../docs/relay-protocol.md`](../../docs/relay-protocol.md) ·
 Deploy/ops: [`../relay/DEPLOY.md`](../relay/DEPLOY.md)

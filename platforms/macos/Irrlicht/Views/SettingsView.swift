@@ -276,6 +276,15 @@ struct SettingsView: View {
         .frame(width: 360)
         .background(Color(NSColor.windowBackgroundColor))
         .toggleStyle(IrrlichtSwitchToggleStyle())
+        .background(
+            WindowAccessor { window in
+                // The panel is .borderless + .nonactivatingPanel + orderFrontRegardless(),
+                // so canBecomeKey is false by default and the app is never active.
+                // Activate + makeKey here so Settings text fields are editable.
+                NSApp.activate(ignoringOtherApps: true)
+                window.makeKey()
+            }
+        )
     }
 
     private var lastCheckedDescription: String {
@@ -327,6 +336,19 @@ struct SettingsView: View {
             }
         }
     }
+}
+
+private struct WindowAccessor: NSViewRepresentable {
+    let onWindow: (NSWindow) -> Void
+    func makeNSView(context: Context) -> NSView {
+        let v = NSView()
+        // Defer one runloop so NSView.window is populated (nil during makeNSView).
+        DispatchQueue.main.async { [weak v] in
+            if let w = v?.window { onWindow(w) }
+        }
+        return v
+    }
+    func updateNSView(_ nsView: NSView, context: Context) {}
 }
 
 /// One row in the Settings notifications section: enable toggle, sound
