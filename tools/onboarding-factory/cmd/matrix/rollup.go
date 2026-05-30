@@ -29,7 +29,7 @@ func runRollup(args []string, stdout, stderr io.Writer) int {
 
 	scenariosPath := *scenarios
 	if scenariosPath == "" {
-		scenariosPath = filepath.Join(*repoRoot, ".claude", "skills", "ir:onboard-agent", "scenarios.json")
+		scenariosPath = filepath.Join(*repoRoot, "replaydata", "agents", "scenarios.json")
 	}
 	rootPath := *agentsRoot
 	if rootPath == "" {

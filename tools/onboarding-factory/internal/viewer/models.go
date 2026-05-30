@@ -89,18 +89,13 @@ type ArchivedRecordingDetail struct {
 	Tools       []ToolCall               `json:"tools,omitempty"`    // tool_use blocks extracted from archive's transcript.jsonl
 }
 
-// ScenarioSpec is the parsed shape of one Feature: heading from the
-// catalog markdown.
+// ScenarioSpec is the agent-AGNOSTIC spec for one scenario, served at
+// /api/scenario-spec/<name> straight from the catalog shard. Process and
+// AcceptanceCriteria are markdown.
 type ScenarioSpec struct {
-	ID        string             `json:"id"`
-	Section   string             `json:"section"`
-	Feature   string             `json:"feature"`
-	Scenarios []ScenarioSpecCase `json:"scenarios"`
-}
-
-// ScenarioSpecCase is one Scenario:/Expected: pair under a Feature
-// heading. Multi-paragraph descriptions are joined with newlines.
-type ScenarioSpecCase struct {
-	Text     string   `json:"text"`
-	Expected []string `json:"expected"`
+	ID                 string `json:"id"`   // "<section>.<index>" code
+	Name               string `json:"name"` // kebab slug
+	Description        string `json:"description"`
+	Process            string `json:"process"`
+	AcceptanceCriteria string `json:"acceptance_criteria"`
 }

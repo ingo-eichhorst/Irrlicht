@@ -93,7 +93,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		AgentsRoot:    *agentsRoot,
 	}
 	if cfg.ScenariosPath == "" {
-		cfg.ScenariosPath = filepath.Join(*repoRoot, ".claude", "skills", "ir:onboard-agent", "scenarios.json")
+		cfg.ScenariosPath = filepath.Join(*repoRoot, "replaydata", "agents", "scenarios.json")
 	}
 	if cfg.AgentsRoot == "" {
 		cfg.AgentsRoot = filepath.Join(*repoRoot, "replaydata", "agents")
@@ -144,7 +144,7 @@ func gateCompleteness(m *matrix.Matrix, agent string, stdout, stderr io.Writer) 
 		return exitUsage
 	}
 	if !m.HasAgent(agent) {
-		fmt.Fprintf(stderr, "completeness-gate: %q is not an onboarded adapter (not in replaydata/scenarios.json meta.min_versions)\n", agent)
+		fmt.Fprintf(stderr, "completeness-gate: %q is not an onboarded adapter (not in replaydata/agents/scenarios.json meta.min_versions)\n", agent)
 		return exitUsage
 	}
 	fmt.Fprintf(stdout, "== completeness gate: %s ==\n", agent)

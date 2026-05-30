@@ -252,728 +252,289 @@
     {
       "id": "1.1",
       "name": "session-start",
-      "section": "Session lifecycle",
-      "feature": "Session start",
       "description": "Agent is launched in a fresh cwd, writes its first transcript line, sits idle. The recording proves irrlicht binds the session to ready + a PID within ~1s of agent launch. Adapter-specific note: claudecode does not create the per-session transcript file until the first user input lands — the recipe sends a 1-token nudge ('hi') so the transcript materializes and the UUID-keyed session row appears. The pre-session row (proc-<PID>) is observable from launch independent of the nudge.",
-      "requires": [
-        "headless_mode"
-      ],
-      "verify": {
-        "transitions_topology": [
-          "ready",
-          "working",
-          "ready"
-        ],
-        "final_state": "ready",
-        "tool_calls_max": 0
-      }
+      "acceptance_criteria": "Session row appears in `ready` within 1 second of agent launch; PID is bound.\n- Session appears in `ready` within 1s of agent launch.\n- PID bound within 1s.\n- State topology: `ready → working → ready`\n- Final state: `ready`\n- Tool calls: ≤ 0",
+      "process": "1. User launches the agent in a fresh directory.\n2. Daemon's PID scanner picks up the new process.\n3. Daemon tails the agent's transcript file.\n4. Session row appears in the dashboard in state `ready`.\n5. PID is bound to the session."
     },
     {
       "id": "1.2",
       "name": "session-end",
-      "section": "Session lifecycle",
-      "feature": "Session end",
       "description": "Three claude lifetimes recorded back-to-back, one per session-end variant from .specs/agent-scenarios.md: (1) clean exit after a no-op turn, (2) SIGKILL while idle in ready, (3) SIGKILL mid-turn while still working. The recording lets irrlicht surface three ready→working→ready arcs separated by grey gaps in the state band. Each variant tests a different teardown path and the user-observable assertion that the session disappears regardless of how it ended.",
-      "requires": [
-        "headless_mode"
-      ],
-      "verify": {
-        "transitions_topology": [
-          "ready",
-          "working",
-          "ready"
-        ],
-        "final_state": "ready",
-        "tool_calls_max": 0
-      }
+      "acceptance_criteria": "Session row disappears within the expected TTL; state immediately before disappearing is `ready` (or moves there first if it was `working`).\n- State is `ready` at exit.\n- Session disappears within readyTTL.\n- Session disappears within 1s.\n- State never entered `working` post-exit.\n- State reaches `ready` within sweep interval (process-exit detection).\n- State does not stick in `working`.\n- State topology: `ready → working → ready`\n- Final state: `ready`\n- Tool calls: ≤ 0",
+      "process": "1. Agent exits, is killed, or crashes.\n2. Daemon detects process exit within one sweep interval.\n3. If state was `working`, it resolves to `ready`.\n4. Session row disappears within `readyTTL`."
     },
     {
       "id": "1.3",
       "name": "long-idle-live-session",
-      "section": "Session lifecycle",
-      "feature": "Long-idle live session",
       "description": "Claude session enters ready, sits idle past readyTTL, and resumes working on the next user prompt. The recording proves irrlicht's PID-liveness check keeps the session alive past the TTL cutoff (the session would otherwise be swept on idle). Note: the production readyTTL is 30 min; this recording uses IRRLICHT_READY_SESSION_TTL=15s on the daemon so the assertion 'session stayed past readyTTL' is testable in ~45s instead of 32min. The shortened TTL only affects the recording — production behavior is unchanged.",
-      "requires": [
-        "headless_mode"
-      ],
-      "verify": {
-        "transitions_topology": [
-          "ready",
-          "working",
-          "ready",
-          "working",
-          "ready"
-        ],
-        "final_state": "ready",
-        "tool_calls_max": 0
-      }
+      "acceptance_criteria": "Session row persists in `ready` past `readyTTL`; `ready → working` resumes correctly on the next user prompt.\n- Session does NOT disappear.\n- State remains `ready`.\n- On the next user prompt: `ready → working` resumes normally.\n- State topology: `ready → working → ready → working → ready`\n- Final state: `ready`\n- Tool calls: ≤ 0",
+      "process": "1. Agent finishes a turn and enters `ready`.\n2. User sends no prompts for an extended period (past `readyTTL`).\n3. Daemon checks the PID — process is still alive.\n4. Session row remains visible in `ready`.\n5. User eventually sends a prompt; `ready → working` resumes normally."
     },
     {
       "id": "1.4",
       "name": "session-resume",
-      "section": "Session lifecycle",
-      "feature": "Session resume",
       "description": "Claude session is launched, runs one no-op turn, exits cleanly, then re-launches with the SAME --session-id and same cwd. The daemon should observe the same UUID re-appearing (not a new session row) and the second turn driving ready→working on that same session. Adapter-specific note: claudecode's resume mechanism is implicit — passing the same --session-id <UUID> at relaunch and using the same cwd causes claude to append to the existing transcript at ~/.claude/projects/<slug>/<UUID>.jsonl. The driver's new `resume` step does exactly that.",
-      "requires": [
-        "headless_mode"
-      ],
-      "verify": {
-        "transitions_topology": [
-          "ready",
-          "working",
-          "ready",
-          "working",
-          "ready"
-        ],
-        "final_state": "ready",
-        "tool_calls_max": 0
-      }
+      "acceptance_criteria": "Same `session_id` row reappears after relaunch; state and history are preserved; each new PID lifetime drives its own state transitions correctly.\n- Same `session_id` reappears (not a new session row).\n- State `ready` initially.\n- `ready → working` on the first new turn.\n- Single session row persists across all lifetimes (one `session_id`, not multiple rows).\n- Each lifetime's `ready → working → ready` cycle is independent.\n- State transitions are correctly attributed to the current PID lifetime.\n- State topology: `ready → working → ready → working → ready`\n- Final state: `ready`\n- Tool calls: ≤ 0",
+      "process": "1. Agent runs, does work, and exits cleanly.\n2. User re-launches the agent with a resume flag pointing at the prior session.\n3. Daemon sees the same `session_id` become active under a new PID.\n4. Dashboard shows the original session row — not a new one.\n5. New turns proceed; each lifetime's arc is independently correct."
     },
     {
       "id": "1.5",
       "name": "session-reset",
-      "section": "Session lifecycle",
-      "feature": "Session reset (/clear, /new)",
       "description": "Claude session runs a no-op turn, then the user invokes /clear. The old session row should disappear from the dashboard and a new session_id should appear in ready. Adapter-specific note: claudecode's /clear creates a new transcript file under the same project slug; the driver's reset_session step auto-detects the new UUID and re-points subsequent turns at it. Coverage notes a known partial caveat (#169 stale PID metadata) — if the daemon retains the old session_id past /clear, this recipe surfaces that as a fail on the old_session_ended phase.",
-      "requires": [
-        "headless_mode"
-      ],
-      "verify": {
-        "transitions_topology": [
-          "ready",
-          "working",
-          "ready",
-          "ready",
-          "working",
-          "ready"
-        ],
-        "final_state": "ready",
-        "tool_calls_max": 0
-      }
+      "acceptance_criteria": "Old session row disappears; a new session row appears with a different `session_id` in `ready`.\n- Old session disappears.\n- New session appears in `ready` with a new `session_id`.\n- State topology: `ready → working → ready → ready → working → ready`\n- Final state: `ready`\n- Tool calls: ≤ 0",
+      "process": "1. User is in an active session in `ready` (or `working`).\n2. User issues the agent's reset command.\n3. Old session row disappears.\n4. New session row appears with a new `session_id` in `ready`."
     },
     {
       "id": "1.6",
       "name": "checkpoint-rewind",
-      "section": "Session lifecycle",
-      "feature": "Checkpoint rewind",
       "description": "User rewinds to an earlier auto-checkpoint, restoring files and/or conversation; subsequent turns start cleanly from the rewound point. Each adapter exercises this differently: claudecode rewinds IN PLACE (Esc+Esc shortcut / /rewind picker) and mutates its transcript backwards, keeping the SAME session_id — the goal there is to capture what irrlicht observes when the append-oriented transcript_tailer sees a truncation (session-removed-then-reborn vs. activity). codex instead FORKS (/fork): it spawns a NEW rollout with a fresh session_id carrying the replayed pre-fork history (the original lingers frozen), so irrlicht observes a new linked session row rather than an in-place truncation. Every variant drives two normal turns, rewinds, then runs a third turn from the rewound point.",
-      "requires": [
-        "headless_mode"
-      ],
-      "verify": {
-        "final_state": "ready",
-        "tool_calls_max": 0,
-        "transitions_topology": [
-          "ready",
-          "working",
-          "ready",
-          "working",
-          "ready",
-          "working",
-          "ready"
-        ]
-      }
+      "acceptance_criteria": "Session row shows state `ready` after rewind; same `session_id` if rewound in place, or a linked new `session_id` if the adapter forks; turns after the rewind follow a clean arc.\n- Session row reflects the rewound state with state `ready`.\n- Same `session_id` if the adapter rewinds in place; a new `session_id` linked back to the original if the adapter forks.\n- Subsequent turns start cleanly from the rewound point: `ready → working → ready`.\n- State topology: `ready → working → ready → working → ready → working → ready`\n- Final state: `ready`\n- Tool calls: ≤ 0",
+      "process": "1. Agent is in `ready` after some turns.\n2. User triggers the adapter's rewind to an earlier checkpoint.\n3. Files and/or conversation state are restored.\n4. Session row reflects state `ready`.\n5. Next user prompt starts cleanly from the rewound point: `ready → working → ready`."
     },
     {
       "id": "1.7",
       "name": "cloud-background-agent",
-      "section": "Session lifecycle",
-      "feature": "Cloud / background agent (remote process)",
       "description": "Stub entry — claudecode is a local CLI with no first-party cloud variant, so this scenario is not recordable for that adapter. Forward-looking for Cursor Cloud / Codex Cloud / Copilot Cloud / Devin adapters when they exist.",
-      "requires": [
-        "headless_mode"
-      ],
-      "verify": {}
+      "acceptance_criteria": "Session appears with PID = 0 or absent; state transitions mirror the remote agent's progress through `ready → working → ready`; session disappears when the remote run completes or errors.\n- Session appears with no bound local PID (PID = 0 or absent).\n- State transitions track the remote agent's progress through the same `ready → working → ready` states.\n- Session disappears when the remote run completes, errors out, or is dismissed by the user.",
+      "process": "1. User triggers a cloud/remote agent run (Cursor Cloud, Codex Cloud, Devin, etc.).\n2. Daemon connects to the remote feed.\n3. Session appears in the dashboard with PID = 0 or absent.\n4. State transitions mirror the remote agent's progress.\n5. Session disappears when the remote run completes, errors, or is dismissed."
     },
     {
       "id": "2.1",
       "name": "basic-turn",
-      "section": "Turn shape",
-      "feature": "Basic turn",
       "description": "Smallest possible round-trip. Verifies session detection and a clean ready→working→ready cycle.",
-      "requires": [
-        "headless_mode"
-      ],
-      "verify": {
-        "transitions_topology": [
-          "ready",
-          "working",
-          "ready"
-        ],
-        "tool_calls_max": 0,
-        "final_state": "ready"
-      }
+      "acceptance_criteria": "`ready → working → ready`; `TotalTokens > 0` after the turn.\n- `ready → working → ready`.\n- `TotalTokens > 0` after turn.\n- State topology: `ready → working → ready`\n- Final state: `ready`\n- Tool calls: ≤ 0",
+      "process": "1. Agent is in `ready`.\n2. User sends a simple prompt.\n3. State transitions `ready → working`.\n4. Agent emits one assistant reply and the turn-end signal.\n5. State returns to `ready`. Token count is non-zero."
     },
     {
       "id": "2.2",
       "name": "auto-executed-tool-call",
-      "section": "Turn shape",
-      "feature": "Auto-executed tool call",
       "description": "Claude executes a single auto-approved Bash tool call ('echo hello') inside one turn, then replies 'done'. Verifies the ready→working→ready arc with a tool_use mid-turn and the spec invariant that state never enters waiting for auto-executed tool calls. Distinct from full-lifecycle-toolcall, which deliberately exercises the PostToolUse hook to surface waiting; this scenario locks down the auto-approved happy path.",
-      "requires": [
-        "headless_mode",
-        "tool_calls"
-      ],
-      "verify": {
-        "transitions_topology": [
-          "ready",
-          "working",
-          "ready"
-        ],
-        "final_state": "ready",
-        "contains_tool_call": true,
-        "has_waiting_state": false
-      }
+      "acceptance_criteria": "`ready → working → ready`; state never entered `waiting`.\n- `ready → working → ready`.\n- State never entered `waiting`.\n- State topology: `ready → working → ready`\n- Final state: `ready`\n- Includes at least one tool call",
+      "process": "1. Agent is in `ready`.\n2. User sends a prompt requiring tool use (read a file, run a command, etc.).\n3. State transitions `ready → working`.\n4. Agent calls one or more tools; all auto-resolve without user input.\n5. Agent emits the turn-end signal; state returns to `ready`."
     },
     {
       "id": "2.3",
       "name": "task-list",
-      "section": "Turn shape",
-      "feature": "Task list observability",
       "description": "Agent maintains a todo/task list within its own session — no subagents involved. The driver asks the agent to create three task items and walk each one pending → in_progress → completed. The point of the scenario: the items surface in the session API's `tasks` field with matching subjects and status, while SubagentCount stays 0 and state follows a normal ready → working → ready arc. Claude Code drives this via the Task tool (TaskCreate/TaskUpdate); OpenCode via todowrite (full-list replace). Distinct from foreground-subagent / background-subagent, which spawn real child sessions via the Agent tool.",
-      "requires": [
-        "task_list"
-      ],
-      "verify": {
-        "final_state": "ready"
-      }
+      "acceptance_criteria": "- Three task items appear in the session API `tasks` field with matching subjects.\n- Each item's status progresses `pending → in_progress → completed`.\n- `SubagentCount` stays 0 (no child sessions spawned).\n- State topology: `ready → working → ready`\n- Final state: `ready`",
+      "process": "1. Agent is in `ready`.\n2. Driver asks the agent to create three task items.\n3. Agent walks each item `pending → in_progress → completed`.\n4. The items surface in the session API's `tasks` field; `SubagentCount` stays 0.\n5. State follows a normal `ready → working → ready` arc."
     },
     {
       "id": "2.4",
       "name": "self-correction-iteration",
-      "section": "Turn shape",
-      "feature": "Self-correction iteration",
       "description": "Claude runs bash 'false' (which fails), inspects the failing tool_result, retries with bash 'echo recovered', then replies 'done'. The whole arc must show a single contiguous working span — no flicker to ready or waiting between the failed attempt and the recovery. Locks down the parser's terminal-stop_reason gate (intermediate tool_use/tool_result pairs do not change state).",
-      "requires": [
-        "headless_mode",
-        "tool_calls"
-      ],
-      "verify": {
-        "transitions_topology": [
-          "ready",
-          "working",
-          "ready"
-        ],
-        "final_state": "ready",
-        "contains_tool_call": true,
-        "has_waiting_state": false
-      }
+      "acceptance_criteria": "State stays continuously `working` across all retry cycles; no flicker to `ready` or `waiting` between attempts; final state is `ready` (or `waiting` if the agent gives up and asks).\n- `ready → working`.\n- State stays `working` across all retry cycles — no flicker to `ready` or `waiting` between attempts.\n- After the final attempt: `working → ready` (or `→ waiting` if the agent gives up and asks).\n- State topology: `ready → working → ready`\n- Final state: `ready`\n- Includes at least one tool call",
+      "process": "1. Agent is in `ready`.\n2. User asks the agent to run tests, build, or lint.\n3. State transitions `ready → working`.\n4. Agent runs the tool; result is a failure (test fail, lint error, build error).\n5. Agent retries with corrected input — state stays `working`, no flicker.\n6. Retry cycles repeat until the agent succeeds or gives up.\n7. State returns to `ready` (or `waiting` if the agent asks the user)."
     },
     {
       "id": "2.5",
       "name": "synchronous-slash-command",
-      "section": "Turn shape",
-      "feature": "Synchronous slash command (no LLM call)",
       "description": "Claude session receives two synchronous slash commands (/cost and /help) that do not call the model, then a tiny normal prompt to prove the session is still alive. State must stay ready throughout the slash-command window — the parser's isLocalCommandContent filter drops the <local-command> wrappers so no state machinery fires. Locks down the regression where a future TUI change logs slash invocations as real user messages.",
-      "requires": [
-        "headless_mode"
-      ],
-      "verify": {
-        "transitions_topology": [
-          "ready",
-          "working",
-          "ready"
-        ],
-        "final_state": "ready",
-        "tool_calls_max": 0,
-        "has_waiting_state": false
-      }
+      "acceptance_criteria": "State stays `ready`; no `→ working` transition recorded for the slash command itself.\n- State stays `ready` throughout.\n- No `→ working` transition recorded for the slash command itself.\n- State topology: `ready → working → ready`\n- Final state: `ready`\n- Tool calls: ≤ 0",
+      "process": "1. Agent is in `ready`.\n2. User invokes a no-LLM slash command (e.g. `/help`, `/cost`).\n3. Agent responds locally with no model call.\n4. State stays `ready` throughout."
     },
     {
       "id": "2.6",
       "name": "long-agentic-session-stress",
-      "section": "Turn shape",
-      "feature": "Long agentic session (stress)",
       "description": "Compressed proxy for a real long session: 4 plain user prompts in one session. Spec asserts per-turn ready→working→ready arcs with no flicker WITHIN a turn, no stuck state. Tool calls were originally part of the recipe but the modern claudecode default (Sonnet 4.6 + high effort) refuses auto-mode for paid models, which stalls tool-call turns at the permission gate. Plain prompts keep the recording deterministic; the no-flicker-within-turn invariant is still meaningful because each turn still has multiple intermediate assistant chunks even without tool_use.",
-      "requires": [
-        "headless_mode",
-        "tool_calls"
-      ],
-      "verify": {
-        "transitions_topology": [
-          "ready",
-          "working",
-          "ready",
-          "working",
-          "ready",
-          "working",
-          "ready",
-          "working",
-          "ready"
-        ],
-        "final_state": "ready",
-        "contains_tool_call": true,
-        "has_waiting_state": false
-      }
+      "acceptance_criteria": "Within each turn, state stays continuously `working`; between turns, clean `working → ready` and `ready → working` transitions; state never stuck in any state.\n- Within each turn: state stays `working` continuously — no flicker to `ready` or `waiting` between assistant text fragments or between tool-call/result pairs.\n- Between turns: `working → ready` at turn end, `ready → working` on the next user prompt.\n- State never gets stuck in any single state across the entire session.\n- After the final turn: state reaches `ready`.\n- State topology: `ready → working → ready → working → ready → working → ready → working → ready`\n- Final state: `ready`\n- Includes at least one tool call",
+      "process": "1. Agent starts in `ready`.\n2. User sends a complex prompt; state transitions `ready → working`.\n3. Agent calls multiple tools, emits multiple assistant fragments — state stays `working`.\n4. Turn ends; state transitions `working → ready`.\n5. Repeat for many turns.\n6. After the final turn: state reaches `ready` and stays there."
     },
     {
       "id": "2.7",
       "name": "autonomous-loop",
-      "section": "Turn shape",
-      "feature": "Autonomous loop (self-prompting)",
       "description": "Claudecode /goal autonomous self-prompting loop. /goal <condition> registers a Stop hook that re-prompts with the condition after each turn ends; the agent iterates until goal_status.met == true or /goal clear fires. The recording uses a goal that converges in 2-3 iterations.",
-      "requires": [
-        "headless_mode"
-      ],
-      "verify": {
-        "min_turns": 2,
-        "final_state": "ready"
-      }
+      "acceptance_criteria": "`ready → working` at loop start; state stays `working` for the entire run with no `ready` between internal iterations; `working → ready` when the goal is reached.\n- `ready → working` at loop start.\n- State stays `working` for the entire autonomous run — no `ready` between internal iterations.\n- After the goal is reached: `working → ready`.\n- Final state: `ready`\n- At least 2 turn(s)",
+      "process": "1. User starts the agent in autonomous mode (e.g. `/goal <condition>`).\n2. State transitions `ready → working`.\n3. Agent generates and executes its own next steps with no user prompts.\n4. State stays `working` throughout all internal iterations.\n5. Agent reaches the stated goal.\n6. State transitions `working → ready`."
     },
     {
       "id": "2.8",
       "name": "autonomous-loop-iteration-limit",
-      "section": "Turn shape",
-      "feature": "Autonomous loop iteration limit reached",
       "description": "Claudecode /goal with an unsatisfiable condition; the recipe lets the loop run a few iterations then sends /goal clear as a stand-in for the max_iterations cap (which is not deterministically forceable today). The state arc on cap-hit and on /goal clear is identical: end_turn followed by ready with no further Stop-hook re-prompts. Tests the loop's graceful-termination shape from the spec.",
-      "requires": [
-        "headless_mode"
-      ],
-      "verify": {
-        "min_turns": 2,
-        "final_state": "ready"
-      }
+      "acceptance_criteria": "State reaches `ready` even though the agent did not fully succeed; does not stick in `working`.\n- `working → ready`.\n- State reaches `ready` even though the agent didn't fully succeed.\n- State does not stick in `working` indefinitely.\n- Final state: `ready`\n- At least 2 turn(s)",
+      "process": "1. Agent is running in autonomous mode; state is `working`.\n2. Agent reaches its configured max-iteration count.\n3. Agent emits a terminal turn signal and stops self-prompting.\n4. State transitions `working → ready`."
     },
     {
       "id": "2.9",
       "name": "token-quota-exhausted",
-      "section": "Turn shape",
-      "feature": "Token / quota budget exhausted",
       "description": "Mocked 429 recording: a local Anthropic-compatible stub (tools/agent-onboarding/recording/mock-anthropic-429/main.go) returns 200 + end_turn on the first /v1/messages request and HTTP 429 on the second. claude runs under --bare so it reads ANTHROPIC_API_KEY + ANTHROPIC_BASE_URL from env (OAuth/keychain are bypassed). The bespoke recorder at tools/agent-onboarding/recording/record-token-quota-exhausted.sh handles launch, driving, and fixture staging — the standard driver-claudecode-interactive.sh does not pass --bare.",
-      "requires": [
-        "headless_mode"
-      ],
-      "verify": {
-        "min_turns": 1,
-        "final_state": "ready",
-        "has_waiting_state": false
-      }
+      "acceptance_criteria": "State reaches `ready`; subsequent user prompts stay `ready` (agent may decline to start a new turn) until the budget resets.\n- `working → ready`.\n- State reaches `ready` (not stuck in `working`).\n- Subsequent user prompts may not produce a new turn until the budget resets — state stays `ready`.\n- Final state: `ready`\n- At least 1 turn(s)",
+      "process": "1. Agent is `working` through a long turn (e.g. 5-hour budget window).\n2. Agent hits its token or cost budget.\n3. Agent emits a turn-end signal and stops.\n4. State transitions `working → ready`.\n5. Further user prompts keep the session in `ready` (no new turn starts until budget resets)."
     },
     {
       "id": "2.10",
       "name": "mid-turn-message-queued",
-      "section": "Turn shape",
-      "feature": "Mid-turn user message queued",
       "description": "Claude is given a slow count-to-10 prompt; while the agent is mid-turn, the driver types a follow-up message into the TUI which claudecode queues until a safe point. The daemon must see a single contiguous working span with no flicker to ready when the queued input lands, and the cycle must still end at ready once everything is consumed. Locks down the parser's transcript-driven state classification against a future regression where queued text appears as a synthetic user-line before consumption.",
-      "requires": [
-        "headless_mode"
-      ],
-      "verify": {
-        "final_state": "ready",
-        "has_waiting_state": false
-      }
+      "acceptance_criteria": "State stays `working` when the queued message arrives; no `→ ready` flicker; cycle eventually ends at `ready`.\n- State stays `working` through the queued-message arrival.\n- No `→ ready` flicker when the queued input lands.\n- The agent eventually consumes the queued message; the cycle still ends at `ready`.\n- Final state: `ready`",
+      "process": "1. Agent is `working` through a long turn.\n2. User types a follow-up message.\n3. Agent runtime queues it; the transcript shows no turn boundary.\n4. State stays `working` throughout.\n5. Agent finishes the current turn.\n6. Agent picks up the queued message; the cycle eventually ends at `ready`."
     },
     {
       "id": "2.11",
       "name": "auto-classified-permission",
-      "section": "Turn shape",
-      "feature": "Auto-classified permission approval",
       "description": "Claude Code running in auto mode receives a prompt that triggers a benign tool call (Bash 'echo hello' or Read on a project file) which the in-product auto-classifier approves without firing a permission prompt. The daemon must see ready→working→ready with no transition to waiting at any point. Locks down the safe-path branch of the March 2026 Auto Mode feature; the risky-path branch is owned by tool-gate-permission-prompt.",
-      "requires": [
-        "headless_mode",
-        "tool_calls"
-      ],
-      "verify": {
-        "transitions_topology": [
-          "ready",
-          "working",
-          "ready"
-        ],
-        "final_state": "ready",
-        "contains_tool_call": true,
-        "has_waiting_state": false
-      }
+      "acceptance_criteria": "Safe calls: `ready → working → ready`, never entering `waiting`; risky call: `working → waiting`; after user approval, `waiting → working → ready`.\n- For safe tool calls: `ready → working → ready`. State never entered `waiting`.\n- For the risky tool call: `working → waiting`; after user approval, `waiting → working → ready`.\n- State topology: `ready → working → ready`\n- Final state: `ready`\n- Includes at least one tool call",
+      "process": "1. Agent is in `ready`.\n2. User sends a prompt involving both safe edits and one risky shell command.\n3. Safe tool calls execute; state stays `working`, never entering `waiting`.\n4. Risky tool call: state transitions `working → waiting`.\n5. User approves; state transitions `waiting → working → ready`."
     },
     {
       "id": "2.12",
       "name": "context-compaction",
-      "section": "Turn shape",
-      "feature": "Context compaction",
       "description": "Claude session runs one normal turn to populate context, then the driver triggers /compact to compact the conversation history, then runs a second normal turn to prove the session continues working after compaction. Recording may be brittle: newer Claude Code (2.1.x+) writes a NEW transcript file at the compaction boundary, which can register as a fresh session row to irrlicht depending on session-stitching (see session-resume cell). Per assessment.json, irrlicht's CompactionState domain field is dead code — the dashboard cannot distinguish compaction from a normal long turn. The recipe therefore asserts only the visible state arc (ready→working→ready on each side of /compact).",
-      "requires": [
-        "headless_mode"
-      ],
-      "verify": {
-        "transitions_topology": [
-          "ready",
-          "working",
-          "ready",
-          "working",
-          "ready"
-        ],
-        "final_state": "ready",
-        "tool_calls_max": 0
-      }
+      "acceptance_criteria": "`ready → working` at compaction start; state stays `working` throughout; `working → ready` when done; no further transitions until the next user prompt.\n- `ready → working` at compaction start.\n- State stays `working` for the entire compaction duration — no flicker to `ready` or `waiting` mid-compaction.\n- `working → ready` when compaction completes.\n- State stays `ready` immediately after — no further transitions until the user sends a new prompt.\n- State topology: `ready → working → ready → working → ready`\n- Final state: `ready`\n- Tool calls: ≤ 0",
+      "process": "1. Agent is in `ready`.\n2. User invokes `/compact` or auto-compaction triggers.\n3. State transitions `ready → working`.\n4. Agent makes an LLM summarization call.\n5. State stays `working` throughout compaction.\n6. Agent emits the turn-end signal.\n7. State transitions `working → ready`."
     },
     {
       "id": "2.13",
       "name": "turn-end-terminal-text",
-      "section": "Turn shape",
-      "feature": "Turn end via terminal text",
       "description": "Smallest tool-less round-trip pinning the terminal-text end signal: the assistant produces a final message with stop_reason: end_turn and no tool_use, and the classifier drives working→ready via rule 2b. Overlaps intentionally with basic-turn — this cell focuses on the end-signal mechanism (parser.resolveAssistantStreaming's terminal stop_reason allow-list, the Bug-D fix from issue #102), rather than the broader happy-path lifecycle.",
-      "requires": [
-        "headless_mode"
-      ],
-      "verify": {
-        "transitions_topology": [
-          "ready",
-          "working",
-          "ready"
-        ],
-        "tool_calls_max": 0,
-        "final_state": "ready"
-      }
+      "acceptance_criteria": "`ready → working → ready`; state reaches `ready` regardless of which adapter-specific signal closes the turn.\n- `ready → working → ready`.\n- State reaches `ready` regardless of which adapter-specific end signal closes the turn.\n- State topology: `ready → working → ready`\n- Final state: `ready`\n- Tool calls: ≤ 0",
+      "process": "1. Agent is in `ready`.\n2. User sends a prompt.\n3. State transitions `ready → working`.\n4. Agent emits the adapter-specific turn-end signal.\n5. Parser recognizes the signal.\n6. State returns to `ready`."
     },
     {
       "id": "2.14",
       "name": "turn-aborted-by-error",
-      "section": "Turn shape",
-      "feature": "Turn aborted by error",
       "description": "Agent's model call fails mid-turn (network error, provider 5xx, timeout). No normal turn-end signal is emitted. Expected arc per spec: ready → working, then → ready within the sweep interval after the agent gives up. Failures split into three buckets: Bucket A (transcript epilogue with synthesized error text → observable via classifier rule 2b — CAPTURED via tools/agent-onboarding/recording/mock-anthropic-5xx/main.go), Bucket B (pure mid-stream network failure with NO transcript write → currently UNOBSERVABLE because there is no inactivity sweep on the working state since PR #106 removed the stale-tool timer), Bucket C (system/turn_duration on abnormal exit → observable via turn_done — not yet captured separately).",
-      "requires": [
-        "headless_mode"
-      ],
-      "verify": {
-        "final_state": "ready",
-        "transitions_topology": [
-          "ready",
-          "working",
-          "ready"
-        ]
-      }
+      "acceptance_criteria": "State reaches `ready` within one sweep interval after the failure; does not stick in `working`.\n- `ready → working`.\n- State reaches `ready` within sweep interval after the agent gives up.\n- State does not stick in `working` indefinitely.\n- State topology: `ready → working → ready`\n- Final state: `ready`",
+      "process": "1. Agent is `working` through a turn.\n2. Provider call fails (network error, 5xx, timeout).\n3. No turn-end signal is emitted.\n4. Agent gives up.\n5. Daemon's sweep detects the session stuck in `working`.\n6. State resolves to `ready` within the sweep interval."
     },
     {
       "id": "2.15",
       "name": "shell-escape-command",
-      "section": "Turn shape",
-      "feature": "Shell escape command",
       "description": "Driver types Claude Code's !cmd shell-escape (`!echo hello`) in the interactive REPL. claude runs the shell command locally without an LLM round-trip and writes <bash-input>/<bash-stdout> wrapper events to the transcript. Per parser.go:216-225, irrlicht's claudecode parser deliberately skips these wrapper events, so state must stay in ready throughout (no synthesized turn). The recipe then sends a normal user prompt to prove the session is still alive and a real prompt still drives the ready→working→ready arc. Verdict adopts the intent reading of the spec (no stuck in working) per assessment.json — the alternative literal reading would require a parser change to synthesize a transition arc.",
-      "requires": [
-        "headless_mode"
-      ],
-      "verify": {
-        "transitions_topology": [
-          "ready",
-          "working",
-          "ready"
-        ],
-        "final_state": "ready",
-        "tool_calls_max": 0
-      }
+      "acceptance_criteria": "`ready → working → ready`; state does not stick in `working` after the shell command exits.\n- `ready → working → ready`.\n- State does not stick in `working` after the shell command exits.\n- State topology: `ready → working → ready`\n- Final state: `ready`\n- Tool calls: ≤ 0",
+      "process": "1. Agent is in `ready`.\n2. User sends a prompt containing a shell escape (e.g. `!ls`).\n3. State transitions `ready → working`.\n4. Shell command runs and exits.\n5. State returns to `ready`."
     },
     {
       "id": "2.16",
       "name": "oversized-transcript-line",
-      "section": "Turn shape",
-      "feature": "Oversized transcript line",
       "description": "Claude is prompted to emit a single very long sentence (≥5000 words, no embedded newlines) so the transcript flushes one large JSONL line. Recording may be brittle: 5000 words is moderate (~30 KB) — well under irrlicht's 64 MB tailer cap (issue #270) and also under bufio.Scanner's old 2 MB limit, so the test is a sanity-check rather than a true cap-stress. The spec asserts only the visible state arc (ready→working→ready); the absence of a parser stall is INFERRED from the arc completing. Per assessment.json caveats, manufacturing a truly oversized (>2 MB) line from a real claude CLI is awkward — a follow-up cell can hand-craft a synthetic >2 MB line into the live transcript file if deeper cap-stress coverage is needed.",
-      "requires": [
-        "headless_mode"
-      ],
-      "verify": {
-        "transitions_topology": [
-          "ready",
-          "working",
-          "ready"
-        ],
-        "final_state": "ready",
-        "tool_calls_max": 0
-      }
+      "acceptance_criteria": "`ready → working → ready`; no parser stall causing stuck `working`.\n- `ready → working → ready`.\n- State still resolves to `ready` — no parser stall causing stuck `working`.\n- State topology: `ready → working → ready`\n- Final state: `ready`\n- Tool calls: ≤ 0",
+      "process": "1. Agent is in `ready`.\n2. User sends a prompt that triggers very large tool output (e.g. a base64 artifact or a long diff).\n3. State transitions `ready → working`.\n4. The oversized transcript line is buffered and parsed without stalling.\n5. State returns to `ready`."
     },
     {
       "id": "2.17",
       "name": "user-blocking-question",
-      "section": "Turn shape",
-      "feature": "User-blocking tool call (question)",
       "description": "Agent's reply ends in a question mark, signalling it's waiting for user input. Validates the trailing-? path through the state classifier (session.IsWaitingForUserInput → state_classifier.go decision 2a). The recipe deliberately stops at the waiting episode and does not answer the question — locking down the entry into waiting. The coalesced-flush second-scenario variant (#150) is covered by unit tests around ShouldSynthesizeCollapsedWaiting.",
-      "requires": [
-        "headless_mode"
-      ],
-      "verify": {
-        "has_waiting_state": true,
-        "final_state": "waiting"
-      }
+      "acceptance_criteria": "`ready → working → waiting`; after user replies, `waiting → working → ready`; the `waiting` episode is visible to the user.\n- `ready → working → waiting`.\n- After user replies: `waiting → working → ready`.\n- The `waiting` episode is visible to the user (no skip-over).\n- `waiting → working → ready`.\n- State does not stick in `waiting` after the user reply, regardless of fswatcher event ordering.\n- Final state: `waiting`\n- A `waiting` episode occurs and is user-visible",
+      "process": "1. Agent is `working` through a turn.\n2. Agent calls AskUserQuestion (or equivalent) and pauses.\n3. State transitions `working → waiting`.\n4. User sees the question in the dashboard.\n5. User types a reply.\n6. State transitions `waiting → working`.\n7. Agent completes the turn; state reaches `ready`."
     },
     {
       "id": "2.18",
       "name": "user-blocking-plan-mode-approval",
-      "section": "Turn shape",
-      "feature": "User-blocking tool call (plan-mode approval)",
       "description": "Claude is started in plan mode via permissions.defaultMode=plan, then prompted to make a plan; the agent emits an ExitPlanMode tool_use and pauses for approval. Validates the same waiting path as user-blocking-question but via the ExitPlanMode branch (tailer_config.go user-blocking tool list, hooks.go toolExitPlanMode case). Recipe captures only entry into waiting; the approve/reject continuation is structurally identical to other waiting-resume paths.",
-      "requires": [
-        "headless_mode"
-      ],
-      "verify": {
-        "has_waiting_state": true,
-        "final_state": "waiting"
-      }
+      "acceptance_criteria": "`ready → working → waiting`; state never entered `ready` between the plan emission and the user reply; after approval, `waiting → working → ready`.\n- `ready → working → waiting`.\n- State never entered `ready` between the plan emission and the user reply.\n- After approval: `waiting → working → ready`.\n- `waiting → working → ready`.\n- State does not stick in `waiting` indefinitely — the new prompt counts as turn-resume input.\n- Final state: `waiting`\n- A `waiting` episode occurs and is user-visible",
+      "process": "1. Agent is `working`.\n2. Agent emits a plan and enters plan-mode pause.\n3. State transitions `working → waiting`.\n4. User reviews the plan.\n5. User approves (or dismisses with a new prompt).\n6. State transitions `waiting → working → ready`."
     },
     {
       "id": "2.19",
       "name": "tool-gate-permission-prompt",
-      "section": "Turn shape",
-      "feature": "Tool gate via permission prompt",
       "description": "Claude invokes the Bash tool; a PreToolUse hook returns permissionDecision=ask, deterministically opening the permission prompt. Validates the rule-0 (PermissionPending=true → waiting) path in state_classifier.go, which is the most authoritative gate and predates HasOpenToolCall — defends against the race fixed in #108 where the hook fires before the JSONL tool_use line lands. Recipe captures entry into waiting and stops; the second-scenario variant (late PostToolUse after ready) is a no-op in the classifier and not exercised here.",
-      "requires": [
-        "headless_mode",
-        "tool_calls",
-        "permission_hooks"
-      ],
-      "verify": {
-        "has_waiting_state": true,
-        "final_state": "waiting"
-      }
+      "acceptance_criteria": "`ready → working → waiting`; after user resolves, `waiting → working → ready`; a delayed post-tool hook arriving after `→ ready` does NOT change state.\n- `ready → working → waiting`.\n- After the prompt resolves: `waiting → working → ready`.\n- State stays `ready`.\n- The late hook does not bounce the session back to `waiting`.\n- Final state: `waiting`\n- A `waiting` episode occurs and is user-visible",
+      "process": "1. Agent is `working`.\n2. Agent attempts a tool call requiring permission.\n3. State transitions `working → waiting`.\n4. User approves or denies.\n5. State transitions `waiting → working`.\n6. Agent completes the turn; state reaches `ready`.\n7. A delayed PostToolUse hook arrives; state stays `ready`."
     },
     {
       "id": "2.20",
       "name": "user-esc-interrupt",
-      "section": "Turn shape",
-      "feature": "User ESC interrupt",
       "description": "User cancels a long turn with ESC. Validates parser.recordUserInterruptFlags (sets ev.IsUserInterrupt on '[Request interrupted by user]' marker), the sticky LastWasUserInterrupt flag in tailer.go, and classifier rule 3 driving working→ready with reason 'user ESC interrupt'. Spec: ready→working→ready; state does not stick in working post-interrupt. The driver's 'interrupt' step sends Escape to the tmux pane.",
-      "requires": [
-        "headless_mode"
-      ],
-      "verify": {
-        "contains_interrupt": true,
-        "final_state": "ready"
-      }
+      "acceptance_criteria": "`ready → working → ready`; state does not stick in `working` post-interrupt.\n- `ready → working → ready`.\n- State does not stick in `working` post-interrupt.\n- Final state: `ready`\n- An interrupt is observed",
+      "process": "1. Agent is idle in `ready`.\n2. User sends a prompt that will take >2s to answer.\n3. State transitions `ready → working`.\n4. Before the agent emits a turn-done marker, the user presses the interrupt key.\n5. State transitions `working → ready`.\n6. The next user prompt drives a clean `ready → working → ready` arc (proving the parser reset)."
     },
     {
       "id": "2.21",
       "name": "streaming-partial-writes",
-      "section": "Turn shape",
-      "feature": "Streaming partial writes",
       "description": "Claude streams a multi-sentence prose response across several JSONL chunks. The parser must keep the session in working across all intermediate assistant_streaming events (non-terminal stop_reason) and only flip to ready when the terminal end_turn event lands. This locks down the Bug-D streaming-flicker family (issue #102): resolveAssistantStreaming (parser.go:288) downgrades non-terminal stop_reasons to assistant_streaming, which is excluded from IsAgentDone(). The streaming_window phase pins the no-flicker invariant.",
-      "requires": [
-        "headless_mode"
-      ],
-      "verify": {
-        "transitions_topology": [
-          "ready",
-          "working",
-          "ready"
-        ],
-        "final_state": "ready",
-        "tool_calls_max": 0
-      }
+      "acceptance_criteria": "`ready → working → ready`; state stays `working` across all partial flushes — no flicker to `ready` before the turn-end signal arrives.\n- `ready → working → ready`.\n- State stays `working` across all partial flushes — no flicker to `ready` before the turn ends.\n- State topology: `ready → working → ready`\n- Final state: `ready`\n- Tool calls: ≤ 0",
+      "process": "1. Agent is in `ready`.\n2. User sends a prompt.\n3. State transitions `ready → working`.\n4. Agent emits the first partial chunk of the response.\n5. Agent emits additional partial chunks — state stays `working`, no flicker.\n6. Agent emits the turn-end signal.\n7. State transitions `working → ready`."
     },
     {
       "id": "3.1",
       "name": "foreground-subagent",
-      "section": "Subagents",
-      "feature": "Foreground subagent",
       "description": "Parent claude session uses the Task (Agent) tool to launch one foreground subagent. The subagent reads a small file and reports a result; the parent waits for the subagent to finish, then replies 'done'. Verifies the parent's ready→working→ready arc wraps the subagent's lifetime, the child sidechain transcript materializes under <parent>/subagents/, and the daemon emits parent_linked binding child→parent. Predecessor recipe is the orchestrator-side subagent-spawn (3 parallel children); this scenario locks down the minimal 1-child shape per the agent-level coverage matrix.",
-      "requires": [
-        "headless_mode",
-        "subagents"
-      ],
-      "verify": {
-        "transitions_topology": [
-          "ready",
-          "working",
-          "ready"
-        ],
-        "final_state": "ready",
-        "contains_tool_call": "Agent",
-        "parent_linked_min": 1,
-        "subagent_transcripts_min": 1
-      }
+      "acceptance_criteria": "Child sessions appear with `ParentSessionID = parent.session_id`; `SubagentCount(parent) = N` while N children are alive; `SubagentCount` decreases as each child finishes; parent transitions `working → ready` only after the last child ends.\n- Parent: `ready → working` at spawn.\n- Child session appears with `ParentSessionID = parent.session_id`.\n- `SubagentCount(parent) = 1` while child is alive.\n- Parent stays `working` until child ends.\n- Parent: `working → ready` after child ends (or `waiting` if a question is open).\n- Parent: `ready → working`.\n- 3 child sessions appear, each with `ParentSessionID = parent.session_id`.\n- `SubagentCount(parent) = 3` while any child is alive.\n- `SubagentCount` decreases as each child ends.\n- Parent: `working → ready` only after the last child ends.\n- Child: `working → waiting`.\n- Parent stays `working`.\n- After user replies to child: child `waiting → working → ready`.\n- Parent: `→ ready` once last child ends.\n- Child session disappears (orphan cleanup).\n- Parent: `→ ready` within sweep interval after last child gone.\n- State topology: `ready → working → ready`\n- Final state: `ready`\n- Includes at least one tool call\n- ≥ 1 child session(s) linked to a parent\n- ≥ 1 subagent transcript(s)",
+      "process": "1. Parent is `working`.\n2. Parent spawns one or more foreground children via Agent/Task tool.\n3. Child sessions appear in the dashboard, linked to the parent by `ParentSessionID`.\n4. `SubagentCount(parent)` reflects the live child count.\n5. Each child completes its task; `SubagentCount` decreases.\n6. Parent transitions `working → ready` once the last child ends."
     },
     {
       "id": "3.2",
       "name": "background-subagent",
-      "section": "Subagents",
-      "feature": "Background subagent",
       "description": "Parent claude session dispatches one or more FIRE-AND-FORGET background subagents via the Agent/Task tool with run_in_background:true, then FINISHES ITS OWN REPLY (acknowledges the launch and reports back) WITHOUT waiting for the children's results. The defining, user-observable shape (scenario-meanings.md#background-subagent, the unified rule): the parent's own reply reaches end_turn while a detached, named child keeps working, yet the SESSION stays working — it does NOT go ready when the parent's reply ends — because reevaluateParent holds it on hasActiveChildren; SubagentCount(parent) INCLUDES the live child (ComputeSubagentSummary); the session transitions working→ready ONLY after the last background child drains. This is the SAME daemon mechanism as foreground-subagent — the ONLY difference is the timing: here the parent end_turn lands BEFORE the child drain, where foreground's parent end_turn lands AFTER. Why this recipe shape: the single send launches three staggered run_in_background:true Explore agents (≈8/14/20s of work each) and instructs the parent to acknowledge immediately and report back without waiting, so the parent's end_turn lands mid-child; the ~18s sleep holds the children fresh UNDER the 30s SubagentQuietWindow so the daemon doesn't fast-forward a still-writing child out of the held-working window; the staggered child runtimes make the subagent-count decrement observable as a sequence rather than a single jump. How it differs between runs: child UUIDs, PIDs, token counts, exact assistant wording, and sub-second timing vary; the structural arc (parent ready→working, ≥1 parent_linked, held working across the child lifetime, parent working→ready only after the last child drains) is invariant. Where to look if it breaks: if validation shows the parent going ready while a child is still alive, that is a held-working daemon regression (session_detector_subagent.go reevaluateParent / hasActiveChildren); if the recording shows the parent blocked until the children finished (parent end_turn AFTER child drain), the prompt let the dispatch run foreground — re-craft the send to force run_in_background:true + report-immediately, do NOT accept it.",
-      "requires": [
-        "headless_mode",
-        "subagents"
-      ],
-      "verify": {
-        "final_state": "ready"
-      }
+      "acceptance_criteria": "Parent transitions `working → ready` at turn end; child state is unchanged by parent's transition; `SubagentCount(parent)` excludes the background child.\n- Parent: `working → ready` at turn end (not held).\n- Child state unchanged by parent's transition.\n- `SubagentCount(parent)` excludes the background child.\n- Parent state unchanged (already `ready`).\n- Background child session disappears within readyTTL.\n- Final state: `ready`",
+      "process": "1. Parent is `working`.\n2. Parent sends a message to a background child and ends its own turn.\n3. Parent transitions `working → ready` at turn end.\n4. Background child continues running independently.\n5. Background child eventually completes; its session disappears within `readyTTL`."
     },
     {
       "id": "3.3",
       "name": "background-process",
-      "section": "Subagents",
-      "feature": "Background process",
       "description": "Claude runs a Bash command with run_in_background:true (`sleep 8 && echo done`); the tool returns immediately carrying toolUseResult.backgroundTaskId, then the agent polls the process via the BashOutput tool until it reports a terminated status. WHAT it captures: the user-observable arc that PR #450 (issue #445) added — ready → working at the prompt, then the session STAYS working past the turn's own end_turn while the detached shell process is alive, then a single working → ready once the process exits. WHY this exact shape: #450 detects the spawn from the structured backgroundTaskId and gates IsAgentDone on a live `lsof` probe of the tasks/<id>.output file, so the only way to make the daemon observe completion (rather than just letting the turn end) is to drive a BashOutput poll that reports `completed` — there is no async exit hook the tailer can see. The single prompt asks claude to spawn AND poll-to-completion in one turn so the driver's one wait_turn brackets the whole arc. HOW it differs between runs: how many BashOutput polls the model issues, exact token counts, and the precise working dwell length vary with model pacing — the spec's dwell assertion is a ≥4s lower bound (well inside the 8s sleep) so jitter never trips it; the structural arc (one ready→working, one working→ready, single session) is fixed. WHERE to look if it breaks: if the session flips to ready while the process is still alive, the daemon's lsof probe or backgroundTaskId extraction regressed (core/application/services/background_probe.go, core/adapters/inbound/agents/claudecode/parser.go); if the session never returns to ready, the BashOutput-completed parse or the refreshStaleSessions re-probe regressed.",
-      "requires": [
-        "tool_calls",
-        "background_process"
-      ],
-      "verify": {
-        "final_state": "ready"
-      }
+      "acceptance_criteria": "`ready → working`; `BackgroundProcessCount > 0` while any background process is alive; agent stays `working` until the last background process exits; then `→ ready`.\n- Agent: `ready → working` at the tool call.\n- Agent stays `working` while the background process is alive — even after the turn's normal completion signal.\n- `BackgroundProcessCount > 0` while any background process is alive.\n- When the last background process exits: agent `→ ready` (or `→ waiting` if a question is open).\n- Final state: `ready`",
+      "process": "1. Agent is `working`.\n2. Agent calls a tool with `run_in_background: true` (or equivalent).\n3. Tool call returns immediately; the shell process keeps running.\n4. `BackgroundProcessCount > 0` appears in the dashboard.\n5. The background process eventually exits.\n6. Agent transitions `working → ready`."
     },
     {
       "id": "3.4",
       "name": "subagent-orphan-cleanup",
-      "section": "Subagents",
-      "feature": "Subagent orphan cleanup",
       "description": "Parent claude session launches a foreground subagent via the Task tool; once the parent_linked event fires and the child sidechain transcript is visible, the recipe SIGKILLs the parent's process group, leaving the child orphaned. The daemon's pid_manager sweep must emit process_exited for both parent and child without a spurious state_transition to working for the orphaned child during cleanup. Regression coverage for issue #321 (zombie-on-restart). The spec describes a 5-child variant; this recipe records the minimal 1-child shape since the no-working-transition invariant is identical for any N≥1.",
-      "requires": [
-        "headless_mode",
-        "subagents"
-      ],
-      "verify": {
-        "final_state": "ready",
-        "parent_linked_min": 1,
-        "subagent_transcripts_min": 1
-      }
+      "acceptance_criteria": "All orphaned sessions disappear after the restart sweep; state never transitions to `working` during cleanup.\n- All 6 sessions disappear after the restart sweep.\n- State never transitioned to `working` during cleanup.\n- Final state: `ready`\n- ≥ 1 child session(s) linked to a parent\n- ≥ 1 subagent transcript(s)",
+      "process": "1. Multiple parent + child sessions are running.\n2. Daemon restarts (crash, upgrade, etc.).\n3. Daemon performs a startup sweep of all known session transcripts.\n4. Sessions whose PIDs no longer exist are identified as orphans.\n5. All 6 sessions disappear; no `working` transition during cleanup."
     },
     {
       "id": "4.1",
       "name": "multiple-sessions-same-cwd",
-      "section": "Multi-session and multi-agent",
-      "feature": "Multiple sessions in same cwd",
       "description": "Two concurrent claude REPL sessions in the SAME cwd, driven via the interactive driver start_session step + per-step session targeting. Asserts two distinct session_ids with independent working->ready arcs and a stable PID-to-session binding (session 1 is re-driven while session 2 is alive). Recordable since the driver gained concurrent-session support (start_session / {\"session\":N}).",
-      "requires": [
-        "headless_mode"
-      ],
-      "verify": {
-        "final_state": "ready"
-      }
+      "acceptance_criteria": "Two distinct session rows appear with separate `session_id`s and PIDs; each transitions state independently; no flapping between rows.\n- Two distinct sessions appear, each with its own `session_id` and PID.\n- Each session's state transitions independently — no state flapping between rows.\n- PID-to-session binding is stable across both.\n- Final state: `ready`",
+      "process": "1. Two instances of the same agent are launched in the same working directory.\n2. Two distinct session rows appear in the dashboard.\n3. Each session's state transitions independently (a turn in session A does not affect session B).\n4. PID-to-session binding is stable and does not cross-contaminate."
     },
     {
       "id": "4.2",
       "name": "multiple-agents-same-workspace",
-      "section": "Multi-session and multi-agent",
-      "feature": "Multiple agents in same workspace",
       "description": "DIFFERENT coding agents (claudecode + codex + pi) live in the SAME cwd at once. The daemon labels each adapter independently (disjoint ProcessMatchers + transcript roots; per-(adapter, session_id) state and metrics from the maps.go projections), so the single recording shows distinct sessions each with its own working->ready arc and no cross-contamination. Recorded by run-cell-multi.sh, which launches each listed adapter's interactive driver concurrently against one shared cwd under a single --record daemon, then curates one per-adapter fixture each (same workspace events.jsonl, that adapter's own transcript). Each by_adapter cell is driven by the SAME recording — each stores its adapter's transcript for the replay golden and shares the workspace events.jsonl. The spec is adapter-agnostic (agentA = first to enter working, agentB = the other), so any two of the coexisting sessions validate the two-distinct-independent-arcs assertion; a third coexisting adapter is tolerated (working anchors + new_session skip placeholders and already-matched sessions).",
-      "requires": [
-        "headless_mode"
-      ],
-      "verify": {
-        "final_state": "ready"
-      },
-      "cross_adapter": [
-        "claudecode",
-        "codex",
-        "pi",
-        "aider",
-        "opencode"
-      ]
+      "acceptance_criteria": "Each session appears with its correct adapter label; states transition independently; no cross-contamination of metrics, parent linkage, or subagent counts.\n- Each session appears with its correct adapter label.\n- States transition independently per agent.\n- No cross-contamination of metrics, parent linkage, or subagent counts.\n- Final state: `ready`",
+      "process": "1. One instance of Agent A (e.g. Claude Code) and one instance of Agent B (e.g. Codex) are launched in the same project directory.\n2. Each appears in the dashboard with its correct adapter label.\n3. Turns in Agent A do not affect Agent B's state, and vice versa.\n4. Metrics (tokens, model, subagent counts) are tracked separately per session."
     },
     {
       "id": "5.1",
       "name": "token-accounting",
-      "section": "Metrics",
-      "feature": "Token accounting",
       "description": "Three back-to-back no-op turns ('Reply with the word: ok') in a single claudecode session. Exercises the per-turn UsageBreakdown extraction (input/output/cache tokens from raw.message.usage) and the monotonic accumulation into SessionMetrics.TotalTokens across multiple requestId boundaries. The state arc is unremarkable (three ready→working→ready cycles); the assertion lives in events.jsonl payload — each turn boundary emits a PerTurnContribution and TotalTokens is non-decreasing turn-over-turn. Token & cost extraction is already covered by basic-turn for a single turn; this recipe locks down the multi-turn accumulator.",
-      "requires": [
-        "headless_mode"
-      ],
-      "verify": {
-        "min_turns": 3,
-        "final_state": "ready",
-        "transitions_topology": [
-          "ready",
-          "working",
-          "ready",
-          "working",
-          "ready",
-          "working",
-          "ready"
-        ],
-        "tool_calls_max": 0
-      }
+      "acceptance_criteria": "`TotalTokens > 0` after turn 1; `TotalTokens` is non-decreasing after turn 2; `CacheReadTokens > 0` and fresh input tokens = 0 for a fully-cached turn.\n- After turn 1: `TotalTokens > 0`.\n- After turn 2: `TotalTokens ≥ turn-1 total` (non-decreasing).\n- Fresh input tokens for that turn = 0.\n- `CacheReadTokens > 0` for that turn.\n- State topology: `ready → working → ready → working → ready → working → ready`\n- Final state: `ready`\n- Tool calls: ≤ 0\n- At least 3 turn(s)",
+      "process": "1. Agent runs turn 1.\n2. After turn 1: `TotalTokens > 0` in the dashboard.\n3. Agent runs turn 2.\n4. After turn 2: `TotalTokens` ≥ turn-1 total (non-decreasing).\n5. Agent runs a turn that fits entirely in the prompt cache.\n6. `CacheReadTokens > 0`; fresh input tokens for that turn = 0."
     },
     {
       "id": "5.2",
       "name": "model-identification",
-      "section": "Metrics",
-      "feature": "Model identification",
       "description": "Single no-op turn in a claudecode session launched with a non-default model (e.g. --model claude-opus-4-7). Locks down that extractClaudeCodeModel pulls the model name from raw.message.model on the first assistant event and that SessionMetrics.ModelName is populated (not 'unknown') and ContextWindow matches the model's published window (via raw.context_management.context_window when present, the [1m] suffix heuristic, or the LiteLLM alias-table fallback). The state arc is the basic-turn arc; the assertion lives in events.jsonl payload.",
-      "requires": [
-        "headless_mode"
-      ],
-      "verify": {
-        "final_state": "ready",
-        "tool_calls_max": 0,
-        "transitions_topology": [
-          "ready",
-          "working",
-          "ready"
-        ],
-        "model_present": true
-      }
+      "acceptance_criteria": "`ModelName = <launch model>` (not `\"unknown\"`); `ContextWindow` matches the model's published window.\n- `ModelName = <launch model>` (not `\"unknown\"`).\n- `ContextWindow` matches the model's published window.\n- State topology: `ready → working → ready`\n- Final state: `ready`\n- Tool calls: ≤ 0\n- Model identity is reported",
+      "process": "1. Agent is launched with a specific non-default model.\n2. Agent completes a turn.\n3. `ModelName` in the dashboard reflects the configured model (not `\"unknown\"`).\n4. `ContextWindow` matches the model's published context window size."
     },
     {
       "id": "5.3",
       "name": "model-switch-midsession",
-      "section": "Metrics",
-      "feature": "Model switch mid-session",
       "description": "Two no-op turns in a single claudecode session separated by a /model slash command that swaps the active model. Locks down (a) the parser's per-turn Contribution.Model attribution (turn 1 → model A, turn 2 → model B), (b) MergeMetrics' latest-non-unknown-wins rule promoting ModelName to model B by t2_end, and (c) the isLocalCommandContent filter dropping the /model wrapper so no state machinery fires during the switch window (no working/waiting flicker). TotalTokens accumulates across the two models (T2 > T1). NOTE: claudecode's /model accepts an INLINE ALIAS argument (`/model sonnet`) that switches directly with no arrow-key picker, so the recipe drives it via a plain `slash` step — model A is pinned via --settings (model: opus) for a deterministic turn 1, and a trailing `/model opus` restores the account default.",
-      "requires": [
-        "headless_mode",
-        "multi_model_orchestration"
-      ],
-      "verify": {
-        "min_turns": 2,
-        "final_state": "ready",
-        "model_changed": true,
-        "transitions_topology": [
-          "ready",
-          "working",
-          "ready",
-          "working",
-          "ready"
-        ],
-        "tool_calls_max": 0
-      }
+      "acceptance_criteria": "After turn 1: `ModelName = <model A>`; after turn 2: `ModelName = <model B>`; `TotalTokens` after turn 2 > after turn 1.\n- After turn 1: `ModelName = <model A>`.\n- After turn 2: `ModelName = <model B>` (latest wins).\n- `TotalTokens` after turn 2 > after turn 1 (accumulates across models).\n- State topology: `ready → working → ready → working → ready`\n- Final state: `ready`\n- Tool calls: ≤ 0\n- At least 2 turn(s)\n- Model identity changes mid-session",
+      "process": "1. Agent runs turn 1 with model A.\n2. User changes the model (via `/model` or config).\n3. Agent runs turn 2 with model B.\n4. After turn 2: dashboard shows `ModelName = <model B>`.\n5. `TotalTokens` after turn 2 > after turn 1 (accumulates across model changes)."
     },
     {
       "id": "5.4",
       "name": "architect-editor-pair",
-      "section": "Metrics",
-      "feature": "Architect/Editor model pair",
       "description": "Claude Code's plan→implement MODE pair (one model) captured across the approval gate — the FULL lifecycle arc ready→working→waiting→working→ready. Instantiation (b) of architect-editor-pair: the architect is the PLAN phase (plan mode via permissions.defaultMode=plan; the agent proposes a plan via ExitPlanMode → waiting), the editor is the IMPLEMENT phase (the user approves → waiting→working; the agent applies a real Edit/Write and the turn completes → ready). Distinct from user-blocking-plan-mode-approval (2.18), which terminates at the waiting gate; this cell continues PAST approval through the editor/implement phase, asserting the post-approval continuation + a real edit + cross-phase token accumulation. One model throughout (mode-pair, not the Aider two-model shape).",
-      "requires": [
-        "headless_mode",
-        "plan_mode"
-      ],
-      "verify": {
-        "has_waiting_state": true,
-        "final_state": "ready",
-        "transitions_topology": [
-          "ready",
-          "working",
-          "waiting",
-          "working",
-          "ready"
-        ],
-        "tool_calls_min": 1
-      }
+      "acceptance_criteria": "`ModelName` reflects the architect model (or the adapter's chosen primary); `TotalTokens` accumulates from both models in the same turn; state follows a clean `ready → working → ready` arc with no flicker from the model handoff.\n- Within one turn: two model contributions recorded, each with its own `ModelName`.\n- Session `ModelName` reflects the architect model (or the adapter's chosen primary).\n- `TotalTokens` accumulates contributions from both models in the same turn.\n- State follows the normal `ready → working → ready` arc — no flicker mid-turn from the model handoff.\n- State topology: `ready → working → waiting → working → ready`\n- Final state: `ready`\n- A `waiting` episode occurs and is user-visible\n- Tool calls: ≥ 1",
+      "process": "1. Agent is in `ready`.\n2. User sends a prompt.\n3. State transitions `ready → working`.\n4. Architect model plans the response (internal to the turn).\n5. Editor model emits the actual edits (internal to the turn).\n6. Dashboard accumulates token counts from both model calls.\n7. State transitions `working → ready`; `ModelName` reflects the primary model."
     },
     {
       "id": "5.5",
       "name": "provider-failover-midturn",
-      "section": "Metrics",
-      "feature": "Provider failover mid-turn"
+      "description": "Primary model fails mid-turn; agent falls back to a secondary model and completes the turn; `ModelName` updates to the fallback and state stays continuous through the switch.",
+      "acceptance_criteria": "`ModelName` changes mid-turn without user action; state stays `working` through the failover; after turn completes, `→ ready` with the fallback model name visible.\n- `ModelName` changes mid-turn without user action.\n- State stays `working` through the failover — no flicker to `ready`.\n- After turn completes: `→ ready` with the fallback model's name visible.",
+      "process": "1. Agent is `working` through a turn.\n2. Primary model returns an error (rate limit, 5xx, timeout).\n3. Agent switches to the secondary model automatically.\n4. `ModelName` updates to the fallback model (no state flicker).\n5. Agent completes the turn with the fallback model.\n6. State transitions `working → ready`; dashboard shows the fallback model name."
     },
     {
       "id": "5.6",
       "name": "subscription-detection",
-      "section": "Metrics",
-      "feature": "Subscription / billing-model detection",
       "description": "A normal Claude Code Pro/Max session runs one moderate turn, then sits alive long enough for at least one asynchronous statusline tick to arrive. The user-observable point is that a subscription (Claude.ai Pro/Max) session is detected as such: Claude Code's statusLine command POSTs a payload carrying a `rate_limits` block to the daemon (POST /api/v1/hooks/claudecode/statusline), and the daemon's statuslineToSnapshot() turns that into a non-nil RateLimitSnapshot with at least one Window. API-key/Bedrock/Vertex sessions get no rate_limits block and produce a nil snapshot — that absence-variant is the separate, deferred subscription-detection-apikey cell, not this one. Why this exact shape: the statusLine hook fires on the Claude Code CLI's own timer, NOT synchronously with the turn, so the recipe keeps the process alive with extra no-op turns and a generous trailing sleep (>=15s) after the last turn so at least one statusline POST lands and is recorded before teardown — a one-shot --print run would exit before any tick fired. The settings blob is intentionally empty `{}`: claude --settings MERGES with the developer's global ~/.claude/settings.json, whose statusLine.command tees the payload to http://localhost:7837/.../statusline, so the Pro/Max rate_limits POST happens with no per-scenario setup. How it differs between runs: the rate-limit UsedPercent / ResetsAt values are live account numbers and vary every run; token counts and assistant wording vary; the lifecycle state arc (ready->working->ready) and the presence of a non-nil snapshot do not. Where to look if it breaks: confirm the running daemon is on :7837 with --record (attach mode), that ~/.claude/settings.json still has the statusLine curl to /api/v1/hooks/claudecode/statusline, and that the session was Pro/Max (not API-key) — an API-key session legitimately yields a nil snapshot and belongs to subscription-detection-apikey.",
-      "requires": [
-        "headless_mode"
-      ],
-      "verify": {
-        "min_turns": 1,
-        "final_state": "ready",
-        "tool_calls_max": 0
-      },
-      "idle_only": false
+      "acceptance_criteria": "Subscription session: `RateLimitSnapshot` is non-nil with at least one `Window` entry after the first turn. API-key session: `RateLimitSnapshot` is nil (Claude Code) or `Credits` is non-nil with `PlanType` empty (Codex).\n- `RateLimitSnapshot` is non-nil after the first turn.\n- `Windows[]` contains at least one entry.\n- Codex only: `PlanType` is a non-empty subscription identifier (e.g. \"plus\").\n- Claude Code: `RateLimitSnapshot` is nil (no `rate_limits` block in statusline).\n- Codex: `RateLimitSnapshot.PlanType` is empty and `Credits` is non-nil.\n- Final state: `ready`\n- Tool calls: ≤ 0\n- At least 1 turn(s)",
+      "process": "1. Agent (subscription variant) completes one turn.\n2. `RateLimitSnapshot` is non-nil; `Windows[]` contains at least one entry with `UsedPercent ≥ 0`.\n3. For Codex: `PlanType` is \"plus\" (or similar subscription identifier)."
     },
     {
       "id": "5.7",
       "name": "quota-burndown",
-      "section": "Metrics",
-      "feature": "Quota burndown (rate-limit usage)"
+      "description": "As a subscription session consumes tokens across multiple turns, `RateLimitSnapshot.Windows[].UsedPercent` increases and the remaining forecast decreases monotonically. Irrlicht faithfully surfaces this progression turn-by-turn.",
+      "acceptance_criteria": "`Windows[].UsedPercent` after turn N ≥ `Windows[].UsedPercent` after turn N-1. The dashboard shows quota consumption growing, not resetting or flattening unexpectedly.\n- `Windows[0].UsedPercent` after turn 2 ≥ after turn 1 (non-decreasing).\n- No unexpected reset to 0 between turns.\n- `RateLimitSnapshot.SampledAt` updates on each turn (not replaying a stale snapshot).",
+      "process": "1. Subscription session starts.\n2. Turn 1 completes; `Windows[0].UsedPercent` reads some non-negative value.\n3. Turn 2 completes; `Windows[0].UsedPercent` ≥ turn-1 value.\n4. Progression continues — the window approaches the cap without resetting."
     }
   ]
 }

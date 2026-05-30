@@ -15,10 +15,10 @@ import (
 func TestCatalogHandler(t *testing.T) {
 	dir := t.TempDir()
 	rd := filepath.Join(dir, "replaydata")
-	if err := os.MkdirAll(rd, 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(rd, "agents"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(rd, "scenarios.json"), []byte(`{
+	if err := os.WriteFile(filepath.Join(rd, "agents", "scenarios.json"), []byte(`{
   "meta": {"min_versions": {"alphaagent": "1.0.0"}},
   "scenarios": [
     {"id": "1.1", "name": "alpha", "section": "S", "feature": "Alpha"},

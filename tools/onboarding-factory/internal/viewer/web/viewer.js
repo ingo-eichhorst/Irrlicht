@@ -326,11 +326,8 @@ function loadOverview() {
   if (overviewBtn) overviewBtn.classList.add("active");
   document.title = "Irrlicht — Scenarios";
   document.getElementById("title").textContent = "Scenario coverage";
-  const sourceLabel = catalogSource === "coverage"
-    ? ".claude/skills/ir:onboard-agent/agent-scenarios-coverage.json (source of truth)"
-    : ".claude/skills/ir:onboard-agent/scenarios.json (fallback)";
   document.getElementById("breadcrumb").textContent =
-    catalog ? `from ${sourceLabel} — refresh to pick up edits` : "catalog unavailable";
+    catalog ? "from replaydata/agents/scenarios.json — refresh to pick up edits" : "catalog unavailable";
   const detail = document.getElementById("detail");
   detail.innerHTML = "";
 
@@ -369,15 +366,8 @@ function renderCoverageMatrix(detail) {
     if (r.subtree === "scenarios") recIndex.set(`${r.agent}/${r.id}`, r);
   }
 
-  // Group by section so the table visually breaks at "Session
-  // lifecycle", "Tool calls", etc.
-  const bySection = new Map();
-  for (const sc of catalog.scenarios) {
-    const sec = sc.section || "(other)";
-    if (!bySection.has(sec)) bySection.set(sec, []);
-    bySection.get(sec).push(sc);
-  }
-
+  // Scenarios are agent-agnostic now (no section/feature) — list them flat in
+  // catalog (code) order; the per-row code chip carries the "<section>.<index>".
   const panel = document.createElement("div");
   panel.className = "panel";
   const h3 = document.createElement("h3");
@@ -397,18 +387,7 @@ function renderCoverageMatrix(detail) {
   table.appendChild(thead);
 
   const tbody = document.createElement("tbody");
-  let currentSection = "";
   for (const sc of catalog.scenarios) {
-    if (sc.section && sc.section !== currentSection) {
-      currentSection = sc.section;
-      const sectionRow = document.createElement("tr");
-      const td = document.createElement("td");
-      td.colSpan = 1 + agents.length;
-      td.style.cssText = "background: #f5f4ee; font-size: 11px; font-weight: 600; color: #555; padding: 6px 8px;";
-      td.textContent = sc.section;
-      sectionRow.appendChild(td);
-      tbody.appendChild(sectionRow);
-    }
     const row = document.createElement("tr");
     const nameCell = document.createElement("td");
     nameCell.style.cssText = "cursor: pointer;";
@@ -417,8 +396,7 @@ function renderCoverageMatrix(detail) {
     const codeChip = sc.code
       ? `<span style="display: inline-block; min-width: 28px; padding: 1px 5px; margin-right: 6px; background: #e8e6da; color: #555; border-radius: 3px; font-size: 10px; font-weight: 600; font-family: monospace; vertical-align: 1px;">${escapeHtml(sc.code)}</span>`
       : "";
-    nameLink.innerHTML = `${codeChip}<span style="font-weight: 600; color: #1f56a8; text-decoration: underline;">${sc.id}</span><br>` +
-      `<span style="font-weight: normal; color: #666; font-size: 11px; margin-left: ${sc.code ? '34px' : '0'};">${sc.feature || ""}</span>`;
+    nameLink.innerHTML = `${codeChip}<span style="font-weight: 600; color: #1f56a8; text-decoration: underline;">${sc.id}</span>`;
     nameLink.addEventListener("click", () => navigate(`#/scenario/${sc.id}`));
     nameCell.appendChild(nameLink);
     row.appendChild(nameCell);
@@ -583,9 +561,9 @@ async function loadCoverageDetail(scenarioId) {
 
   document.querySelectorAll(".scn").forEach(e => e.classList.remove("active"));
   const codePrefix = sc.code ? `${sc.code} ` : "";
-  document.title = `Irrlicht — ${codePrefix}${sc.feature || sc.id}`;
-  document.getElementById("title").textContent = sc.feature || sc.id;
-  document.getElementById("breadcrumb").textContent = `${sc.section || ""} → ${sc.id}`;
+  document.title = `Irrlicht — ${codePrefix}${sc.id}`;
+  document.getElementById("title").textContent = sc.id;
+  document.getElementById("breadcrumb").textContent = sc.code ? `${sc.code} · ${sc.id}` : sc.id;
   const detail = document.getElementById("detail");
   detail.innerHTML = "";
 
@@ -604,9 +582,9 @@ async function loadCoverageDetail(scenarioId) {
     ? `<span style="display: inline-block; padding: 2px 8px; margin-right: 8px; background: #e8e6da; color: #555; border-radius: 3px; font-size: 12px; font-weight: 600; font-family: monospace; vertical-align: 4px;">${escapeHtml(sc.code)}</span>`
     : "";
   header.innerHTML = `
-    <h3 style="margin-top:0;">${codeBadge}${sc.feature || sc.id}</h3>
+    <h3 style="margin-top:0;">${codeBadge}${sc.id}</h3>
     <div style="font-size: 11px; color: #888; margin-bottom: 6px;">
-      <code>${sc.id}</code> · ${sc.section || ""}
+      <code>${sc.id}</code>
     </div>
   `;
   detail.appendChild(header);
@@ -618,7 +596,7 @@ async function loadCoverageDetail(scenarioId) {
   try {
     const spec = await fetch("/api/scenario-spec/" + encodeURIComponent(sc.id))
       .then(r => r.ok ? r.json() : null);
-    if (spec && Array.isArray(spec.scenarios) && spec.scenarios.length > 0) {
+    if (spec && (spec.description || spec.process || spec.acceptance_criteria)) {
       detail.appendChild(renderSpecPanel(spec));
     }
   } catch (_) { /* spec unavailable — show recipe-only */ }
@@ -646,10 +624,9 @@ async function loadCoverageDetail(scenarioId) {
     stub.innerHTML = `
       <h3>Recording recipe</h3>
       <p style="font-size: 12px; color: #888; margin: 0;">
-        No recording recipe configured yet for this coverage scenario.
-        To add one, edit <code>.claude/skills/ir:onboard-agent/scenarios.json</code>
-        and set <code>coverage_id: "${sc.id}"</code> on a new or existing
-        entry under <code>scenarios[]</code>.
+        No recording recipe configured yet for this scenario's cells.
+        Recipes live per (scenario, agent) cell under
+        <code>replaydata/agents/&lt;agent&gt;/scenarios/${escapeHtml(sc.code ? sc.code.replace(/\./g, "-") + "_" : "")}${sc.id}/metadata.json</code>.
       </p>
     `;
     detail.appendChild(stub);
@@ -669,28 +646,22 @@ async function loadCoverageDetail(scenarioId) {
 function renderSpecPanel(spec) {
   const panel = document.createElement("div");
   panel.className = "panel";
-  let html = `<h3 style="margin-top:0;">Scenario description <span style="font-weight: normal; color: #888; font-size: 11px;">— from <code>.specs/agent-scenarios.md</code></span></h3>`;
-  if (spec.scenarios.length === 1) {
-    const sc = spec.scenarios[0];
-    html += `<div style="font-size: 12px; color: #333; margin-bottom: 8px;">${escapeHtml(sc.text)}</div>`;
-    if (sc.expected && sc.expected.length) {
-      html += `<div style="font-size: 11px; color: #666; margin-bottom: 4px;"><b>Expected (user-observable)</b></div>`;
-      html += "<ul style=\"font-size: 12px; padding-left: 22px; margin: 0; color: #333;\">";
-      for (const e of sc.expected) html += `<li>${escapeHtml(e)}</li>`;
-      html += "</ul>";
-    }
-  } else {
-    spec.scenarios.forEach((sc, i) => {
-      html += `<div style="margin-bottom: 12px;">`;
-      html += `<div style="font-size: 11px; color: #888; font-weight: 600; margin-bottom: 3px;">Variant ${i + 1}</div>`;
-      html += `<div style="font-size: 12px; color: #333; margin-bottom: 4px;">${escapeHtml(sc.text)}</div>`;
-      if (sc.expected && sc.expected.length) {
-        html += "<ul style=\"font-size: 12px; padding-left: 22px; margin: 0; color: #333;\">";
-        for (const e of sc.expected) html += `<li>${escapeHtml(e)}</li>`;
-        html += "</ul>";
-      }
-      html += `</div>`;
-    });
+  // process / acceptance_criteria are markdown-ish (numbered steps, "- "
+  // bullets, `code`). Render as escaped pre-wrap so the structure stays
+  // readable without pulling in a markdown engine.
+  const block = (md) =>
+    `<div style="font-size: 12px; color: #333; white-space: pre-wrap; line-height: 1.5;">${escapeHtml(md || "")}</div>`;
+  let html = `<h3 style="margin-top:0;">Scenario <span style="font-weight: normal; color: #888; font-size: 11px;">— applies to all agents</span></h3>`;
+  if (spec.description) {
+    html += `<div style="font-size: 12px; color: #333; margin-bottom: 12px;">${escapeHtml(spec.description)}</div>`;
+  }
+  if (spec.process) {
+    html += `<div style="font-size: 11px; color: #666; font-weight: 600; margin-bottom: 4px;">Process</div>`;
+    html += block(spec.process);
+  }
+  if (spec.acceptance_criteria) {
+    html += `<div style="font-size: 11px; color: #666; font-weight: 600; margin: 12px 0 4px;">Acceptance criteria</div>`;
+    html += block(spec.acceptance_criteria);
   }
   panel.innerHTML = html;
   return panel;
