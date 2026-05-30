@@ -260,7 +260,7 @@ type JSONLineParser struct { NewParser func() LineParser }
 type RawLineParser  struct { NewParser func() RawParser }
 </code></pre>
 
-      <p>Per-adapter capability declarations (which canonical scenarios apply to this agent) live alongside as JSON in <code>replaydata/agents/&lt;name&gt;/capabilities.json</code>, keyed against <code>replaydata/agents/features.json</code>. They are read by the <code>/ir:onboard-agent</code> skill, not by Go code.</p>
+      <p>Which canonical scenarios apply to an adapter is no longer a static per-adapter declaration. It is judged per (scenario, adapter) cell by the <code>assess</code> verb of the <code>/ir:onboarding-factory</code> skill across three pillars (agent capability / daemon sensor capture / driver capability), recorded in each cell's <code>replaydata/agents/&lt;name&gt;/scenarios/&lt;cell&gt;/metadata.json</code>. None of it is read by Go daemon code.</p>
 
       <h3 id="iface-parser">Transcript parser &mdash; <code>tailer.TranscriptParser</code></h3>
 

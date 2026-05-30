@@ -3,8 +3,8 @@ name: Tests
 # Pass/fail gate for Go tests on every PR and on pushes to main. This is the
 # enforcement the coverage workflow never provided: coverage.yml runs only on
 # push-to-main, covers the `core` module alone, and swallows test failures
-# (it parses coverage out of a discarded run). Without this, module tests —
-# including TestRollupInSync in tools/onboarding-factory — were verified
+# (it parses coverage out of a discarded run). Without this, the module tests —
+# including the onboarding-factory matrix/shard/validate suites — were verified
 # locally only and could not block a PR.
 #
 # Both Go modules are exercised. They share a go.work, so the runner resolves
@@ -38,8 +38,20 @@ jobs:
       - name: Test core module
         run: go test ./core/... -race -count=1
 
-      # tools/onboarding-factory holds the viewer + replay/validate/matrix/shard
-      # packages and TestRollupInSync, which keeps the derived coverage rollup
-      # in sync with the per-scenario shards (#510).
-      - name: Test agent-onboarding module
+      # tools/onboarding-factory holds the `of` factory CLI + the viewer +
+      # replay/validate/matrix/shard packages (#510/#521).
+      - name: Test onboarding-factory module
         run: go test ./tools/onboarding-factory/... -count=1
+
+      # `of validate` is the factory's schema + referential-integrity gate over
+      # replaydata/ (the catalog's 5-field scenarios, every cell metadata.json,
+      # expected.jsonl presence, recording ownership). It is the single sanctioned
+      # writer's read-back check, so a hand-edit that bypassed `of` fails here.
+      - name: Validate replaydata (of validate)
+        run: go run ./tools/onboarding-factory/cmd/of validate
+
+      # The recording-rig shell scripts aren't exercised by `go test` /
+      # replay-fixtures (those replay static transcripts without driving), so
+      # smoke-test is their only automated coverage: bash -n + the lib unit tests.
+      - name: Smoke-test the recording rig
+        run: bash tools/onboarding-factory/scripts/smoke-test.sh

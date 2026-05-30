@@ -60,17 +60,15 @@ type CellState struct {
 	BlockedReason   string            `json:"blocked_reason,omitempty"`
 }
 
-// Config locates the inputs. Empty fields fall back to repo-relative defaults
-// via LoadRepo. AgentsRoot is .../replaydata/agents. As of P2 the model is
-// shard-backed: RepoRoot (or, when empty, the parent of AgentsRoot) is the
-// authoritative source — every cell comes from replaydata/scenarios/<name>.json
-// and the onboarded-adapter column set from replaydata/scenarios/_meta.json.
-// ScenariosPath/AgentsRoot are kept for back-compat (callers still set them) but
-// are no longer the data source.
+// Config locates the inputs. The model is shard-backed: RepoRoot (or, when
+// empty, the parent of AgentsRoot) is the authoritative source — every cell
+// comes from the per-scenario shards under replaydata/agents/ and the
+// onboarded-adapter column set from that file's meta block. AgentsRoot
+// (.../replaydata/agents) is retained as the RepoRoot fallback for callers
+// that set it directly.
 type Config struct {
-	ScenariosPath string
-	AgentsRoot    string
-	RepoRoot      string
+	AgentsRoot string
+	RepoRoot   string
 }
 
 // Matrix is the loaded, normalized model. Construct via Load / LoadRepo.
@@ -95,13 +93,11 @@ type shardRecipe struct {
 }
 
 // LoadRepo loads the matrix from a repo root. Data comes from the per-scenario
-// shards under replaydata/scenarios/ (#510); ScenariosPath/AgentsRoot are still
-// populated for back-compat but no longer read.
+// shards under replaydata/agents/ (#510).
 func LoadRepo(repoRoot string) (*Matrix, error) {
 	return Load(Config{
-		ScenariosPath: filepath.Join(repoRoot, "replaydata", "agents", "scenarios.json"),
-		AgentsRoot:    filepath.Join(repoRoot, "replaydata", "agents"),
-		RepoRoot:      repoRoot,
+		AgentsRoot: filepath.Join(repoRoot, "replaydata", "agents"),
+		RepoRoot:   repoRoot,
 	})
 }
 

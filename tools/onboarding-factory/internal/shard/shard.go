@@ -86,17 +86,14 @@ type ShardDetails struct {
 	Recipe       json.RawMessage   `json:"recipe,omitempty"`
 }
 
-// Meta is the global replaydata/scenarios/_meta.json: the onboarded-adapter
-// column set (min_versions) plus each adapter's transcript file extension.
+// Meta is the global replaydata/agents/scenarios.json meta block: the
+// onboarded-adapter column set (min_versions) plus each adapter's transcript
+// file extension. (The former capability_vocab was pruned in #529 — it backed
+// the dropped scenario `requires` gate and the deleted discover-agent.sh, and
+// nothing reads it under the factory model.)
 type Meta struct {
 	MinVersions          map[string]string `json:"min_versions"`
 	TranscriptExtensions map[string]string `json:"transcript_extensions"`
-	// CapabilityVocab is the closed agent-capability vocabulary (the former
-	// replaydata/agents/features.json), folded in here in #511 so the
-	// discovery preamble has a single home. Kept as a raw blob — the matrix
-	// never reads it (applicability is shard-driven); only discover-agent.sh
-	// formats it.
-	CapabilityVocab json.RawMessage `json:"capability_vocab,omitempty"`
 }
 
 // AgentCellDir returns the directory that holds one (adapter, scenario) cell:
