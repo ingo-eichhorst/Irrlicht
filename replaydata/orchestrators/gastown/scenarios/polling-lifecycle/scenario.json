@@ -1,4 +1,16 @@
 {
   "description": "gt CLI is healthy on tick 1, fails completely on tick 2 (poller falls back to cached rigs.json sidecar; polecats/dogs/boot become empty since they have no fallback), then recovers on tick 3. Verifies the production fallback path through the rigs.json sidecar.",
-  "poll_ticks": 3
+  "poll_ticks": 3,
+  "verify": {
+    "codebases_count_per_tick": [
+      1,
+      1,
+      1
+    ],
+    "boot_present_per_tick": [
+      true,
+      false,
+      true
+    ]
+  }
 }

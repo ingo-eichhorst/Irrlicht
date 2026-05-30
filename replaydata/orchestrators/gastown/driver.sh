@@ -33,37 +33,19 @@ SKILL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 [[ -n "$REPO_ROOT" ]] || { echo "not in a git repo" >&2; exit 1; }
 
-# Orchestrator scenarios moved out of scenarios.json into their own home under
-# replaydata/orchestrators/ in #511 (the agent shard catalog never held them).
-ORCH_SCENARIOS_JSON="$REPO_ROOT/replaydata/orchestrators/scenarios.json"
-
 if [[ $# -ne 1 ]]; then
-  echo "usage: drive-gastown.sh <scenario-name>" >&2
+  echo "usage: driver.sh <scenario-name>" >&2
   exit 2
 fi
 ADAPTER="gastown"
 SCENARIO="$1"
 
-# Look up the orchestrator scenario; refuse if absent.
-CELL_JSON="$(jq --arg s "$SCENARIO" '
-  .scenarios[]?
-  | select(.name == $s)
-  | select(.by_orchestrator.gastown)
-  | {description, verify, fixture_dir: .by_orchestrator.gastown.fixture_dir}
-' "$ORCH_SCENARIOS_JSON")"
-if [[ -z "$CELL_JSON" || "$CELL_JSON" == "null" ]]; then
-  echo "orchestrator scenario not found: $SCENARIO" >&2
-  exit 1
-fi
-
-# `fixture_dir` is repo-relative; resolve against $REPO_ROOT so the JSON is
-# the single source of truth. If a maintainer relocates fixtures they only
-# update replaydata/orchestrators/scenarios.json — script keeps working.
-FIXTURE_REL="$(jq -r '.fixture_dir // empty' <<<"$CELL_JSON")"
-if [[ -z "$FIXTURE_REL" ]]; then
-  echo "orchestrators/scenarios.json: scenarios[$SCENARIO].by_orchestrator.gastown.fixture_dir is missing" >&2
-  exit 1
-fi
+# The fixture dir is derived directly from the scenario name — each gastown cell
+# lives at replaydata/orchestrators/gastown/scenarios/<name>/. (The catalog at
+# replaydata/orchestrators/scenarios.json is the agent-agnostic display spec; it
+# no longer carries by_orchestrator wiring — #521 P6.) The golden DIFF is the
+# assertion, so no structured `verify` is read here.
+FIXTURE_REL="replaydata/orchestrators/gastown/scenarios/$SCENARIO"
 COMMITTED_DIR="$REPO_ROOT/$FIXTURE_REL"
 [[ -d "$COMMITTED_DIR" ]] || { echo "committed fixture missing: $COMMITTED_DIR" >&2; exit 1; }
 
@@ -71,7 +53,7 @@ COMMITTED_DIR="$REPO_ROOT/$FIXTURE_REL"
 TS="$(date -u +%Y%m%dT%H%M%S)"
 STAGING="$REPO_ROOT/.build/refresh/$ADAPTER/$SCENARIO-$TS"
 # shellcheck source=lib/assert-staging-path.sh
-. "$SCRIPT_DIR/lib/assert-staging-path.sh"
+. "$SCRIPT_DIR/../../_lib/assert-staging-path.sh"
 mkdir -p "$STAGING/fixtures"
 cp -R "$COMMITTED_DIR" "$STAGING/fixtures/$SCENARIO"
 

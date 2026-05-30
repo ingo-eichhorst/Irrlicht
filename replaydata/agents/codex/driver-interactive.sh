@@ -143,7 +143,7 @@ TRUSTED_CWDS=()
 # Slot bookkeeping (daemon_sid / save_active / load_slot / alloc_slot) is the
 # shared model in lib/drive/slots.sh — byte-identical to pi's except the marker
 # filename, set via DRIVE_MARKER_PREFIX (#508 #3).
-_DRIVE_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")/lib/drive" && pwd)"
+_DRIVE_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../_lib/drive" && pwd)"
 DRIVE_MARKER_PREFIX="$STAGING/.codex-start-marker"
 # shellcheck source=lib/drive/slots.sh
 source "$_DRIVE_LIB/slots.sh"
