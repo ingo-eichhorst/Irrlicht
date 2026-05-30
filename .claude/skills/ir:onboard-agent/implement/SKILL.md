@@ -261,7 +261,7 @@ Note any structural change in the return.
 
 `promote-recording.sh` writes the recording but NOT the
 `transcript.jsonl.replay.json.golden` that `TestFixtureReplayByteIdentity`
-(core/cmd/replay) pins — so without this step a fresh recording leaves
+(tools/onboarding-factory/cmd/replay) pins — so without this step a fresh recording leaves
 `go test ./core/...` red. Regenerate this scenario's golden(s):
 
 ```bash

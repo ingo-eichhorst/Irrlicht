@@ -48,7 +48,7 @@ fi
 mkdir -p "$REPORTS_DIR" .build
 BIN=".build/replay"
 echo "building $BIN ..." >&2
-( cd core && go build -o "../${BIN}" ./cmd/replay )
+( cd tools/onboarding-factory && go build -o "../../${BIN}" ./cmd/replay )
 
 # Walk every transcript.jsonl under replaydata/agents/<adapter>/scenarios/.
 # Skip subagent transcripts (they live under .../subagents/ and are

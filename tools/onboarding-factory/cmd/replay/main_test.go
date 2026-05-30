@@ -15,7 +15,7 @@ import (
 
 // fixturePath returns an absolute path to a recording artifact under the
 // repo-root replaydata/agents/<adapter>/<subtree>/<scenario>/recordings/<name>/
-// tree. The test binary runs from the package directory (core/cmd/replay), so
+// tree. The test binary runs from the package directory (tools/onboarding-factory/cmd/replay), so
 // we walk up three parents.
 //
 // Callers pass "<adapter>/<scenario>/<basename>" — e.g.
@@ -30,7 +30,7 @@ func fixturePath(t *testing.T, rel string) string {
 	parts := strings.SplitN(rel, "/", 3)
 	if len(parts) != 3 {
 		// No scenario/basename split — treat rel as a literal agents-relative path.
-		abs, err := filepath.Abs(filepath.Join("..", "..", "..", "replaydata", "agents", rel))
+		abs, err := filepath.Abs(filepath.Join("..", "..", "..", "..", "replaydata", "agents", rel))
 		if err != nil {
 			t.Fatalf("abs fixture path: %v", err)
 		}
@@ -38,7 +38,7 @@ func fixturePath(t *testing.T, rel string) string {
 	}
 	adapter, scenario, base := parts[0], parts[1], parts[2]
 	for _, subtree := range []string{"scenarios", "regressions"} {
-		cellDir := filepath.Join("..", "..", "..", "replaydata", "agents", adapter, subtree, scenario)
+		cellDir := filepath.Join("..", "..", "..", "..", "replaydata", "agents", adapter, subtree, scenario)
 		recsDir := filepath.Join(cellDir, "recordings")
 		entries, err := os.ReadDir(recsDir)
 		if err != nil {
@@ -64,7 +64,7 @@ func fixturePath(t *testing.T, rel string) string {
 		}
 	}
 	// Nothing found — return a scenarios/ recordings path for a clear error.
-	abs, err := filepath.Abs(filepath.Join("..", "..", "..", "replaydata", "agents", adapter, "scenarios", scenario, "recordings", base))
+	abs, err := filepath.Abs(filepath.Join("..", "..", "..", "..", "replaydata", "agents", adapter, "scenarios", scenario, "recordings", base))
 	if err != nil {
 		t.Fatalf("abs fixture path: %v", err)
 	}
