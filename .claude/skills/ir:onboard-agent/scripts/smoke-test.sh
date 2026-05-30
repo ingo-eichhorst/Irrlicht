@@ -51,7 +51,7 @@ bash "$SCRIPT_DIR/lib/cell-integrity_test.sh" || rc=1
 
 echo ""
 echo "== unit tests (lib/drive/drive-lib_test.sh) =="
-bash "$SCRIPT_DIR/lib/drive/drive-lib_test.sh" || rc=1
+bash "$SCRIPT_DIR/../../../../replaydata/_lib/drive/drive-lib_test.sh" || rc=1
 
 echo ""
 echo "== shellcheck (advisory) =="

@@ -103,15 +103,15 @@ for a in "${ADAPTERS[@]}"; do
   [[ "$has_script" == "yes" ]] || { echo "adapter $a has no script for $SCENARIO" >&2; exit 1; }
   # Driver-gap backstop (#476): refuse a step type this adapter's driver lacks
   # before launching any daemon/CLI, mirroring run-cell.sh's exit 3.
-  if gaps="$(recipe_lint_gaps "$SCRIPT_DIR/drive-$a-interactive.sh" "$SCENARIO" "$a")"; then :; else
-    echo "driver_gap: $a/$SCENARIO needs step type(s) drive-$a-interactive.sh doesn't implement:" >&2
+  if gaps="$(recipe_lint_gaps "$REPO_ROOT/replaydata/agents/$a/driver-interactive.sh" "$SCENARIO" "$a")"; then :; else
+    echo "driver_gap: $a/$SCENARIO needs step type(s) driver-interactive.sh doesn't implement:" >&2
     printf '  - gap:%s\n' $gaps >&2
     exit 3
   fi
   # Semantic backstop (#496 RC3): mirror run-cell.sh — a step the driver accepts
   # but doesn't elicit (or a slash command in send-text on a slash-requires
   # adapter) would record a no-op on the cross-adapter path too.
-  if sem="$(recipe_semantic_gaps "$SCRIPT_DIR/drive-$a-interactive.sh" "$SCENARIO" "$a")"; then :; else
+  if sem="$(recipe_semantic_gaps "$REPO_ROOT/replaydata/agents/$a/driver-interactive.sh" "$SCENARIO" "$a")"; then :; else
     echo "semantic_gap: $a/$SCENARIO uses step(s) the driver accepts but doesn't elicit (per its DRIVE_ELICITS):" >&2
     while IFS= read -r p; do [[ -n "$p" ]] && printf '  - %s\n' "$p" >&2; done <<< "$sem"
     exit 4
@@ -216,7 +216,7 @@ for a in "${ADAPTERS[@]}"; do
   script_json="$(jq -c '.script' <<<"$recipe")"
   timeout_s="$(jq -r '.timeout_seconds // 240' <<<"$recipe")"
   uuid="$(uuidgen | tr '[:upper:]' '[:lower:]')"
-  driver="$SCRIPT_DIR/drive-$a-interactive.sh"
+  driver="$REPO_ROOT/replaydata/agents/$a/driver-interactive.sh"
   [[ -x "$driver" ]] || { echo "driver missing: $driver" >&2; exit 1; }
   echo "launching $a driver (shared cwd=$SHARED_CWD, timeout=${timeout_s}s)"
   IRRLICHT_ONBOARD_CWD="$SHARED_CWD" \

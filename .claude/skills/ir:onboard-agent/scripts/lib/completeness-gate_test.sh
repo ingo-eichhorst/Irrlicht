@@ -38,11 +38,11 @@ ROOT="$TMP/replaydata"
 SCEN_ACC="$TMP/_scen"
 mkdir -p "$SCEN_ACC" "$ROOT/agents/fake"
 
-# rebuild_catalog → (re)write the consolidated replaydata/scenarios.json from
-# the per-name global accumulator, with the meta block the matrix needs.
+# rebuild_catalog → (re)write the consolidated replaydata/agents/scenarios.json
+# from the per-name global accumulator, with the meta block the matrix needs.
 rebuild_catalog() {
   jq -s '{meta:{min_versions:{fake:"0.0.0"},transcript_extensions:{fake:"jsonl"}}, scenarios: .}' \
-    "$SCEN_ACC"/*.json > "$ROOT/scenarios.json"
+    "$SCEN_ACC"/*.json > "$ROOT/agents/scenarios.json"
 }
 
 # shard <name> <agents-json> — register scenario <name> (global fields) and write

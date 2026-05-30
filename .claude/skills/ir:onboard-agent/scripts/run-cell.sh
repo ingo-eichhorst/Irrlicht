@@ -128,9 +128,9 @@ fi
 if [[ -n "$SCRIPT_JSON" ]]; then
   # shellcheck source=lib/recipe-lint.sh
   . "$SCRIPT_DIR/lib/recipe-lint.sh"
-  LINT_DRIVER="$SCRIPT_DIR/drive-$ADAPTER-interactive.sh"
+  LINT_DRIVER="$REPO_ROOT/replaydata/agents/$ADAPTER/driver-interactive.sh"
   if LINT_GAPS="$(recipe_lint_gaps "$LINT_DRIVER" "$COVERAGE_ID" "$ADAPTER")"; then :; else
-    echo "driver_gap: $ADAPTER/$SCENARIO needs step type(s) drive-$ADAPTER-interactive.sh doesn't implement:" >&2
+    echo "driver_gap: $ADAPTER/$SCENARIO needs step type(s) driver-interactive.sh doesn't implement:" >&2
     printf '  - gap:%s\n' $LINT_GAPS >&2
     echo "Queue extend-driver $ADAPTER <primitive> (ports the step type), then implement — not recording yet." >&2
     exit 3
@@ -159,7 +159,7 @@ ATTACH="$ATTACH" "$SCRIPT_DIR/precheck.sh" "$ADAPTER"
 TS="$(date -u +%Y%m%dT%H%M%S)"
 STAGING="$REPO_ROOT/.build/refresh/$ADAPTER/$FOLDER-$TS"
 # shellcheck source=lib/assert-staging-path.sh
-. "$SCRIPT_DIR/lib/assert-staging-path.sh"
+. "$REPO_ROOT/replaydata/_lib/assert-staging-path.sh"
 mkdir -p "$STAGING/recordings" "$STAGING/replaydata/agents/$ADAPTER/scenarios/$FOLDER" "$STAGING/reports"
 
 # Scenario's settings blob → staging file, passed to driver as a path.
@@ -284,10 +284,10 @@ fi
 # Cells with a `script` block route through the interactive driver (REPL +
 # step-script). Plain `prompt` cells use the headless driver.
 if [[ -n "$SCRIPT_JSON" ]]; then
-  DRIVER="$SCRIPT_DIR/drive-$ADAPTER-interactive.sh"
+  DRIVER="$REPO_ROOT/replaydata/agents/$ADAPTER/driver-interactive.sh"
   DRIVER_INPUT="$SCRIPT_JSON"
 else
-  DRIVER="$SCRIPT_DIR/drive-$ADAPTER.sh"
+  DRIVER="$REPO_ROOT/replaydata/agents/$ADAPTER/driver.sh"
   DRIVER_INPUT="$PROMPT"
 fi
 [[ -x "$DRIVER" ]] || { echo "driver missing: $DRIVER" >&2; exit 1; }

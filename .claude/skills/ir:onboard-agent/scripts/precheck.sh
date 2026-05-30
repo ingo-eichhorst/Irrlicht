@@ -90,7 +90,7 @@ fi
 if ! command -v jq >/dev/null 2>&1; then
   fail "jq is required (brew install jq)"
 fi
-CATALOG_JSON="$REPO_ROOT/replaydata/scenarios.json"
+CATALOG_JSON="$REPO_ROOT/replaydata/agents/scenarios.json"
 if [[ ! -f "$CATALOG_JSON" ]]; then
   fail "scenarios.json not found at $CATALOG_JSON"
 fi

@@ -41,7 +41,10 @@ const usage = `usage:
   of scenario add|update --name n [--id i] [--description d] [--process-file f] [--acceptance-file f]
   of agent add --id i --name n --provider p [--min-version v] [--prereq p]...
   of cell write --agent a --scenario s --file metadata.json [--folder f]
-  of verify --agent a --scenario s [--folder f] [--json]`
+  of verify --agent a --scenario s [--folder f] [--json]
+  of record run --agent a --scenario s [--attach] [--dry-run]
+  of record prereq-check --agent a
+  of record verify --agent a --scenario s`
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
 
@@ -65,6 +68,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runCell(args[1:], stdout, stderr)
 	case "verify":
 		return runVerify(args[1:], stdout, stderr)
+	case "record":
+		return runRecord(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintln(stderr, usage)
 		return exitUsage
