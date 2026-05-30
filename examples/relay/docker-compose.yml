@@ -12,6 +12,21 @@ services:
       dockerfile: examples/relay/Dockerfile
     image: irrlicht-relay
     ports:
-      # Loopback-only: v0 relay is no-auth/no-TLS, so don't expose it on the LAN.
+      # Loopback-only by default: auth/TLS are off, so don't expose this on the
+      # LAN as-is. To expose it, enable auth (below) + front it with TLS and
+      # publish "7839:7839". See DEPLOY.md.
       - "127.0.0.1:7839:7839"
     restart: unless-stopped
+    # --- Optional: bearer-token auth ---------------------------------------
+    # Persist tokens across rebuilds and turn on auth, then issue a token into
+    # the same volume the relay reads:
+    #   docker compose -f examples/relay/docker-compose.yml exec relay \
+    #     irrlichtrelay token issue --label laptop      # prints the secret once
+    # Daemons present it via IRRLICHT_RELAY_TOKEN; clients in Settings → Sources.
+    # environment:
+    #   IRRLICHT_HOME: /var/lib/irrlichtrelay
+    # command: ["irrlichtrelay", "serve", "--addr", "0.0.0.0:7839", "--auth", "tokens-file"]
+    # volumes:
+    #   - relay-state:/var/lib/irrlichtrelay
+# volumes:
+#   relay-state:
