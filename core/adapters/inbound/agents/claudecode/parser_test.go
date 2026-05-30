@@ -1263,7 +1263,7 @@ func TestTailer_TaskNotification_SurfacedThroughMetrics(t *testing.T) {
 	// so this test stays useful through follow-up migrations or restores.
 	candidates := []string{
 		filepath.Join("..", "..", "..", "..", "..", "replaydata", "agents", "claudecode",
-			"regression", "13-full-lifecycle-continue-8a525d27", "transcript.jsonl"),
+			"regressions", "13-full-lifecycle-continue-8a525d27", "transcript.jsonl"),
 		filepath.Join("..", "..", "..", "..", "..", "replaydata", "agents", "claudecode",
 			"scenarios", "13-full-lifecycle-continue-8a525d27", "transcript.jsonl"),
 	}

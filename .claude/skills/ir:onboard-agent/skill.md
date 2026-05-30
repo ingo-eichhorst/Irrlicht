@@ -183,13 +183,13 @@ comm -23 \
 > (`TestRollupInSync`) remain.
 
 The completeness gate is a thin client of the canonical matrix model
-(`tools/agent-onboarding/internal/matrix`, run via the `matrix query` binary);
+(`tools/onboarding-factory/internal/matrix`, run via the `matrix query` binary);
 the applicability rule, disposition table, and routing all live there. After
 changing a cell's assessment, regenerate the derived coverage rollup so it
 can't drift from the assessments:
 
 ```bash
-( cd tools/agent-onboarding && go run ./cmd/matrix rollup )  # regenerate agent-scenarios-coverage.json
+( cd tools/onboarding-factory && go run ./cmd/matrix rollup )  # regenerate agent-scenarios-coverage.json
 ```
 
 `matrix rollup --check` (and the Go `TestRollupInSync`) fail CI when the

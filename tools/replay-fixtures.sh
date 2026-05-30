@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # replay-fixtures.sh — run the offline replay against every transcript under
-# replaydata/agents/<adapter>/{scenarios,regression}/<id>/transcript.{jsonl,md}
+# replaydata/agents/<adapter>/{scenarios,regressions}/<id>/transcript.{jsonl,md}
 # and emit JSON + Markdown reports into replaydata/agents/_reports/.
 #
 # `scenarios/` holds pipeline-managed recordings tied to the skill's
-# scenarios.json catalog. `regression/` holds legacy orphans and ad-hoc
+# scenarios.json catalog. `regressions/` holds legacy orphans and ad-hoc
 # captures (introduced by #268, Phase 1). Both subtrees are walked by the
 # same find; reports are named `<adapter>-<id>.{json,md}` regardless of
 # subtree (the markdown title carries the subtree label for clarity).
@@ -65,7 +65,7 @@ while IFS= read -r fix; do
   recname="$(basename "$rec_dir")"
   cell_dir="$(dirname "$(dirname "$rec_dir")")"            # strip recordings/<recname>
   name="$(basename "$cell_dir")"
-  kind="$(basename "$(dirname "$cell_dir")")"              # scenarios | regression
+  kind="$(basename "$(dirname "$cell_dir")")"              # scenarios | regressions
   adapter="$(basename "$(dirname "$(dirname "$cell_dir")")")"
   # One report per recording — names include the recording so multiple
   # recordings of the same cell don't collide.
@@ -225,10 +225,10 @@ while IFS= read -r expected_path; do
     ev_rc=0
     if [[ "$recname" == "$newest_rec" ]]; then
       # Newest: half-record guard active (no recording-name arg → ValidateExpected).
-      go run ./tools/agent-onboarding/cmd/expected-validate "$cell_dir" > "$report_json" 2>&1 || ev_rc=$?
+      go run ./tools/onboarding-factory/cmd/expected-validate "$cell_dir" > "$report_json" 2>&1 || ev_rc=$?
     else
       # Older: validate this specific recording (drift signal, non-gating).
-      go run ./tools/agent-onboarding/cmd/expected-validate "$cell_dir" "$recname" > "$report_json" 2>&1 || ev_rc=$?
+      go run ./tools/onboarding-factory/cmd/expected-validate "$cell_dir" "$recname" > "$report_json" 2>&1 || ev_rc=$?
       case "$ev_rc" in
         0) echo "expected: ${agent}/${scenario}/${recname} PASS (older)" >&2 ;;
         *) echo "expected: ${agent}/${scenario}/${recname} drift (older recording vs current spec — informational; see $report_json)" >&2 ;;

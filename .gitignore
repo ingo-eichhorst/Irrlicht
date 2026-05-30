@@ -48,6 +48,10 @@ Temporary Items
 *.so
 *.dylib
 tools/copilot-hooks-merger/copilot-hooks-merger
+# onboarding-factory cmd binaries built in-place (use `go run` / `.build/` instead)
+tools/onboarding-factory/matrix
+tools/onboarding-factory/viewer
+tools/onboarding-factory/expected-validate
 
 # Gas Town runtime directories
 .beads/

@@ -2,7 +2,7 @@
 # matrix-cli.sh — locate/build the `matrix` query binary and run it.
 #
 # #508 introduced internal/matrix/ as the single canonical model of the
-# scenario × adapter matrix, with a `matrix query` CLI (tools/agent-onboarding/
+# scenario × adapter matrix, with a `matrix query` CLI (tools/onboarding-factory/
 # cmd/matrix). The completeness and consistency gates — which used to each
 # reconstruct the matrix from scenarios.json + capabilities.json + on-disk
 # artifacts with their own jq filters — are now THIN CLIENTS of that binary.
@@ -45,7 +45,7 @@ matrix_cli() {
     echo "matrix-cli: mktemp failed" >&2
     return 2
   }
-  if ! build_err="$( (cd "$repo/tools/agent-onboarding" && go build -o "$bin" ./cmd/matrix) 2>&1 )"; then
+  if ! build_err="$( (cd "$repo/tools/onboarding-factory" && go build -o "$bin" ./cmd/matrix) 2>&1 )"; then
     echo "matrix-cli: failed to build the matrix binary:" >&2
     echo "$build_err" >&2
     rm -f "$bin"

@@ -9,7 +9,7 @@
 # it does NOT prove the Stage-1 Linux sensor. A handful of cells depend on live
 # sensor timing where the macOS goldens are not faithful Linux artifacts:
 #   • codex session-reset  — the ~7ms same-PID #169 cleanup vs pid_discovered lag
-#   • a flicker/debounce case (e.g. codex/regression/02-flicker-start-session)
+#   • a flicker/debounce case (e.g. codex/regressions/02-flicker-start-session)
 #     — inotify coalesces writes differently than FSEvents/kqueue, so the
 #       transcript_activity / debounce cadence differs.
 # Timing is *expected* to differ; the user-observable outcome must not.

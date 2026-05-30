@@ -47,7 +47,7 @@ These mean the same thing wherever they appear — do not redefine them per verb
 
 `agent-scenarios-coverage.json` is DERIVED from the assessments (#508 #2). Any
 verb that changes an `assessment.json` axis or adds a `catalog[]` row leaves the
-rollup stale — regenerate it with `( cd tools/agent-onboarding && go run
+rollup stale — regenerate it with `( cd tools/onboarding-factory && go run
 ./cmd/matrix rollup )` and commit, or `matrix rollup --check` / the Go
 `TestRollupInSync` fail CI. Never hand-edit the rollup's axes (only its
 editorial `notes` / `legend` are hand-owned).

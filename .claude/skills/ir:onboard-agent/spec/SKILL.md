@@ -148,7 +148,7 @@ Once the file is written, run the validator against any existing
 recording in the folder:
 
 ```bash
-go run ./tools/agent-onboarding/cmd/expected-validate \
+go run ./tools/onboarding-factory/cmd/expected-validate \
   replaydata/agents/<agent>/scenarios/<scenario>
 ```
 

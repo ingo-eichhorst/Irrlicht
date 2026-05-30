@@ -37,7 +37,7 @@ func fixturePath(t *testing.T, rel string) string {
 		return abs
 	}
 	adapter, scenario, base := parts[0], parts[1], parts[2]
-	for _, subtree := range []string{"scenarios", "regression"} {
+	for _, subtree := range []string{"scenarios", "regressions"} {
 		cellDir := filepath.Join("..", "..", "..", "replaydata", "agents", adapter, subtree, scenario)
 		recsDir := filepath.Join(cellDir, "recordings")
 		entries, err := os.ReadDir(recsDir)

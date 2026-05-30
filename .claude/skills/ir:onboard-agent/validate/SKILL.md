@@ -50,7 +50,7 @@ Validates the latest top-level recording in
 archived recording, run the binary directly:
 
 ```bash
-go run ./tools/agent-onboarding/cmd/expected-validate \
+go run ./tools/onboarding-factory/cmd/expected-validate \
   replaydata/agents/<agent>/scenarios/<scenario>/recordings/<TS>_irrlichd-<ver>
 ```
 

@@ -2,6 +2,6 @@ go 1.25.0
 
 use (
 	./core
-	./tools/agent-onboarding
+	./tools/onboarding-factory
 	./tools/seed-demo-sessions
 )
