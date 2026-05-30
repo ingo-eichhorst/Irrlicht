@@ -11,6 +11,8 @@ import {
   relayFrameKind,
   aggregateConnState,
   relayWsUrl,
+  compoundSessionId,
+  displaySessionId,
 } from './irrlicht.js'
 
 describe('resolvedTheme', () => {
@@ -201,5 +203,49 @@ describe('relayWsUrl', () => {
   test('an explicit stream path is preserved (not doubled)', () => {
     expect(relayWsUrl('ws://localhost:7839/api/v1/sessions/stream'))
       .toBe('ws://localhost:7839/api/v1/sessions/stream')
+  })
+})
+
+describe('compoundSessionId', () => {
+  test('prefixes a relay daemon_id so colliding session_ids stay distinct', () => {
+    const a = compoundSessionId('daemon-A', 'proc-1234')
+    const b = compoundSessionId('daemon-B', 'proc-1234')
+    expect(a).not.toBe(b)            // two daemons sharing a session_id never merge
+    expect(a).toContain('proc-1234')
+  })
+
+  test('local / un-sourced frames keep the bare session_id', () => {
+    expect(compoundSessionId('', 'proc-1234')).toBe('proc-1234')
+    expect(compoundSessionId(undefined, 'proc-1234')).toBe('proc-1234')
+  })
+
+  test('delimiter cannot collide with a label-style daemon_id', () => {
+    // daemon_ids can be arbitrary labels; a printable delimiter could split
+    // wrong. The NUL delimiter keeps the boundary unambiguous.
+    const id = compoundSessionId('my:weird/daemon|id', 'proc-1')
+    expect(displaySessionId(id)).toBe('proc-1')
+  })
+})
+
+describe('displaySessionId', () => {
+  test('recovers the daemon-local id for display', () => {
+    expect(displaySessionId(compoundSessionId('daemon-A', 'proc-1234'))).toBe('proc-1234')
+  })
+
+  test('passes bare (local) ids through unchanged', () => {
+    expect(displaySessionId('proc-1234')).toBe('proc-1234')
+    expect(displaySessionId('')).toBe('')
+  })
+})
+
+describe('compound keying keeps two daemons distinct in an index', () => {
+  test('same session_id + different daemon_id → two map entries / render keys', () => {
+    const idx = new Map()
+    const k1 = compoundSessionId('daemon-A', 'proc-1234')
+    const k2 = compoundSessionId('daemon-B', 'proc-1234')
+    idx.set(k1, { daemon: 'A' })
+    idx.set(k2, { daemon: 'B' })
+    expect(idx.size).toBe(2)                  // would be 1 under bare session_id keying
+    expect('a:' + k1).not.toBe('a:' + k2)     // distinct reconciliation render keys
   })
 })

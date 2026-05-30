@@ -967,7 +967,7 @@ struct SessionListView: View {
                     .font(.system(.body, design: .monospaced))
                     .foregroundColor(.primary)
             } else if sessionManager.sessions.count <= 3 {
-                ForEach(sessionManager.sessions.prefix(3)) { session in
+                ForEach(sessionManager.sessions.prefix(3), id: \.rowID) { session in
                     SessionStateIcon(state: session.state, size: 12)
                 }
             } else {
@@ -1592,7 +1592,7 @@ struct GroupView: View {
             .padding(.vertical, isTopLevel ? 4 : 3)
 
             if isExpanded {
-                ForEach(Array((group.agents ?? []).enumerated()), id: \.element.id) { index, session in
+                ForEach(Array((group.agents ?? []).enumerated()), id: \.element.rowID) { index, session in
                     SessionRowView(
                         session: session,
                         agentNumber: index + 1,

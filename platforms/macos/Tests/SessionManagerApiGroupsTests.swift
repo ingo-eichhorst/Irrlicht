@@ -338,7 +338,54 @@ final class SessionManagerApiGroupsTests: XCTestCase {
         XCTAssertEqual(cleared.metrics?.estimatedCostUSD, 1.00)
     }
 
+    // MARK: - Relay compound keying (#537)
+
+    /// Two daemons emitting the same session_id must render as two distinct
+    /// rows, keyed by the compound (daemon_id, session_id) — not merged.
+    func testRelay_sameSessionId_differentDaemons_yieldsTwoRows() {
+        sut.handleRelayMessage(relayPush(source: "daemonA", sessionId: "proc-1234", project: "alpha"))
+        sut.handleRelayMessage(relayPush(source: "daemonB", sessionId: "proc-1234", project: "beta"))
+
+        XCTAssertEqual(sut.sessions.count, 2, "two daemons sharing a session_id must be two rows")
+        XCTAssertEqual(Set(sut.sessions.map { $0.rowID }).count, 2, "rowIDs must be distinct")
+        XCTAssertEqual(Set(sut.sessions.map { $0.id }), ["proc-1234"], "bare session_id is preserved on both")
+        XCTAssertEqual(Set(sut.sessions.compactMap { $0.daemonID }), ["daemonA", "daemonB"])
+        // apiGroups (the list-view surface): both rows present across the groups.
+        let groupAgentRowIDs = sut.apiGroups.flatMap { $0.agents ?? [] }.map { $0.rowID }
+        XCTAssertEqual(Set(groupAgentRowIDs), ["daemonA/proc-1234", "daemonB/proc-1234"])
+    }
+
+    /// The same daemon re-emitting a session_id updates in place (one row),
+    /// so a daemon reached over both paths never doubles.
+    func testRelay_sameDaemonSameId_updatesInPlace() {
+        sut.handleRelayMessage(relayPush(source: "daemonA", sessionId: "proc-1234", project: "alpha"))
+        sut.handleRelayMessage(relayPush(source: "daemonA", sessionId: "proc-1234", project: "alpha", state: "waiting"))
+
+        XCTAssertEqual(sut.sessions.count, 1)
+        XCTAssertEqual(sut.sessions.first?.state, .waiting)
+    }
+
+    /// A relay session whose id is also present locally collapses to the local
+    /// row (local wins) — the v0 "same daemon over both paths shows once" guard.
+    func testRelay_idAlsoPresentLocally_collapsesToLocal() {
+        sut.sessionMap["proc-1234"] = makeSession(id: "proc-1234")     // local, no daemonID
+        sut.handleRelayMessage(relayPush(source: "daemonA", sessionId: "proc-1234", project: "alpha"))
+
+        XCTAssertEqual(sut.sessions.filter { $0.id == "proc-1234" }.count, 1, "local wins; relay copy suppressed")
+        XCTAssertNil(sut.sessions.first { $0.id == "proc-1234" }?.daemonID, "the surviving row is the local one")
+    }
+
     // MARK: - Helpers
+
+    /// Builds a relay Push frame (envelope `source` + inner session_created)
+    /// as the hub would forward it.
+    private func relayPush(source: String, sessionId: String, project: String, state: String = "working") -> String {
+        """
+        {"type":"push","source":"\(source)","msg":{"type":"session_created",\
+        "session":{"session_id":"\(sessionId)","state":"\(state)","model":"m",\
+        "cwd":"/tmp","project_name":"\(project)","first_seen":0,"updated_at":0}}}
+        """
+    }
 
     private func makeSession(
         id: String,

@@ -168,7 +168,7 @@
       const proj = s && s.project_name ? s.project_name : '';
       const branch = s && s.git_branch ? s.git_branch : '';
       if (proj && branch) return proj + ' · ' + branch;
-      return proj || branch || (s && s.session_id ? s.session_id.slice(0, 8) : 'session');
+      return proj || branch || (s && s.session_id ? displaySessionId(s.session_id).slice(0, 8) : 'session');
     }
     function maybeNotifyOnUpdate(prev, next) {
       if (!next) return;
@@ -374,7 +374,7 @@
       return '';
     }
 
-    function shortID(id) { return id ? id.slice(0, 6) : ''; }
+    function shortID(id) { return id ? displaySessionId(id).slice(0, 6) : ''; }
 
     function pressureClass(level) {
       if (level === 'critical') return 'critical';
@@ -1378,11 +1378,32 @@
     // (`snapshot`/`daemon_status`) feed the connection tooltip, and anything
     // else is a raw daemon frame processed exactly as the single socket was.
     //
-    // Sessions are keyed by `session_id` (the existing model), so the same
-    // daemon reached over both the local socket and a relay collapses to one
-    // row automatically. Two *different* daemons that happen to share a
-    // session_id (e.g. proc-<pid>) would merge — a documented v0 caveat;
-    // per-source keying is deferred with row-level source badges.
+    // Relay sessions are keyed by the compound `(daemon_id, session_id)` (#537):
+    // the relay Push envelope carries the authoritative `source` (daemon id),
+    // which `normalizeSourcedFrame` folds into the inner frame's id at the push
+    // boundary so two *different* daemons sharing a session_id (e.g. proc-<pid>)
+    // never merge into one row. Local-socket frames keep their bare id (daemon =
+    // self), so the same daemon reached over both the local socket and a relay
+    // still collapses to one row.
+
+    // compoundSessionId folds a relay daemon id into a daemon-local session_id
+    // to make a globally-unique, client-internal id. NUL-delimited so it can't
+    // collide with a real id (daemon ids may be arbitrary labels) and never
+    // renders; a falsy daemon id (local frames) yields the bare session id.
+    // Pure; exported for tests.
+    function compoundSessionId(daemonId, sessionId) {
+      if (!daemonId) return sessionId || '';
+      return daemonId + ' ' + (sessionId || '');
+    }
+
+    // displaySessionId is the inverse used for display slices — it recovers the
+    // daemon-local id and passes bare (local) ids through unchanged.
+    // Pure; exported for tests.
+    function displaySessionId(id) {
+      if (!id) return '';
+      const i = id.indexOf(' ');
+      return i === -1 ? id : id.slice(i + 1);
+    }
 
     // relayFrameKind classifies an incoming frame so the handler can branch.
     // Pure; exported for tests.
@@ -1534,11 +1555,40 @@
           updateWsStatus();
           return;
         case 'push':
-          if (msg.msg) dispatchRawFrame(msg.msg);
+          if (msg.msg) dispatchRawFrame(normalizeSourcedFrame(msg.source, msg.msg));
           return;
         default:
           dispatchRawFrame(msg);
       }
+    }
+
+    // normalizeSourcedFrame folds a relay Push envelope's `source` (daemon id)
+    // into the inner frame's session identity, so two daemons sharing a
+    // session_id stay distinct downstream (#537). Mutates the inner frame in
+    // place — it's freshly JSON.parsed per message and not reused. A frame with
+    // no source (or an un-sourced relay) passes through unchanged. Orchestrator
+    // state is global, not per-daemon, so it's left alone.
+    function normalizeSourcedFrame(source, inner) {
+      if (!source || !inner) return inner;
+      if (inner.session) {
+        if (inner.session.session_id) inner.session.session_id = compoundSessionId(source, inner.session.session_id);
+        if (inner.session.parent_session_id) inner.session.parent_session_id = compoundSessionId(source, inner.session.parent_session_id);
+      } else if (inner.type === 'history_snapshot' || inner.type === 'history_upgrade') {
+        if (inner.session_id) inner.session_id = compoundSessionId(source, inner.session_id);
+      } else if (inner.type === 'history_tick') {
+        inner.buckets = remapSourcedKeys(source, inner.buckets);
+        inner.bucket_generations = remapSourcedKeys(source, inner.bucket_generations);
+      }
+      return inner;
+    }
+
+    // remapSourcedKeys returns a fresh object with each session_id key folded
+    // with the daemon source. history_tick keys its bucket maps by session_id.
+    function remapSourcedKeys(source, obj) {
+      if (!obj || typeof obj !== 'object') return obj;
+      const out = {};
+      for (const k of Object.keys(obj)) out[compoundSessionId(source, k)] = obj[k];
+      return out;
     }
 
     // dispatchRawFrame processes a raw daemon PushMessage — the local frame
@@ -2236,4 +2286,5 @@ export {
   formatCost, formatUsageCost, pressureClass, historyPriorityForState,
   lastNotifiedPressure,
   relayFrameKind, aggregateConnState, relayWsUrl,
+  compoundSessionId, displaySessionId,
 };
