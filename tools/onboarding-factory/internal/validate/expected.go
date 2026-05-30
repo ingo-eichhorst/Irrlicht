@@ -16,7 +16,7 @@
 // See .claude/skills/ir:onboard-agent/spec/SKILL.md for the
 // authoring workflow.
 //
-// # Relationship to core/cmd/replay's extended check
+// # Relationship to tools/onboarding-factory/cmd/replay's extended check
 //
 // There are two validators in this repo and they are orthogonal — neither
 // overrides the other, because they answer different questions:
@@ -25,7 +25,7 @@
 //     satisfy the spec-grounded assertions?" It compares events.jsonl
 //     against the hand-authored expected.jsonl. A failure here means the
 //     daemon drifted from the spec — a behaviour regression.
-//   - core/cmd/replay/extended_check.go (recording-fidelity): "does the
+//   - tools/onboarding-factory/cmd/replay/extended_check.go (recording-fidelity): "does the
 //     deterministic replay reproduce the same state transitions the live
 //     daemon recorded in the sidecar?" It compares replayed transitions
 //     against the recorded ones. A failure here means the replay engine

@@ -15,7 +15,7 @@
 //
 // Usage:
 //
-//	go run ./core/cmd/replay [flags] INPUT.jsonl
+//	go run ./tools/onboarding-factory/cmd/replay [flags] INPUT.jsonl
 //
 // INPUT can be a transcript .jsonl or a sidecar .events.jsonl.
 //

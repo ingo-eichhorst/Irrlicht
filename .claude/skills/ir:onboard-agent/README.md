@@ -235,4 +235,4 @@ replaydata/agents/
 - `tools/promote-recording.sh` — archives the previous recording and
   re-validates the new one (invoked by `implement`).
 - `tools/curate-lifecycle-fixture.sh` — the underlying fixture curator.
-- `core/cmd/replay/main.go` — the replay engine behind the reports.
+- `tools/onboarding-factory/cmd/replay/main.go` — the replay engine behind the reports.

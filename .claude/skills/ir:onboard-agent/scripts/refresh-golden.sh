@@ -3,7 +3,7 @@
 # scenario's committed recording(s), leaving every other adapter/scenario
 # golden untouched.
 #
-# Why this exists: TestFixtureReplayByteIdentity (core/cmd/replay) pins the
+# Why this exists: TestFixtureReplayByteIdentity (tools/onboarding-factory/cmd/replay) pins the
 # replay JSON of every committed transcript to a sibling
 # `transcript.jsonl.replay.json.golden`. `promote-recording.sh` writes the
 # recording but NOT that golden, so a fresh recording leaves `go test
@@ -41,7 +41,7 @@ fi
 # REQUIRED: a cached `go test` run does not execute the test body, so the
 # UPDATE_REPLAY_GOLDENS side effect never fires and no goldens are written.
 echo "refresh-golden: regenerating goldens (UPDATE_REPLAY_GOLDENS=1)..." >&2
-if ! UPDATE_REPLAY_GOLDENS=1 go test ./core/cmd/replay/... -count=1 \
+if ! UPDATE_REPLAY_GOLDENS=1 go test ./tools/onboarding-factory/cmd/replay/... -count=1 \
        -run TestFixtureReplayByteIdentity >/dev/null 2>&1; then
   echo "refresh-golden: golden regeneration failed (replay build/test error)" >&2
   exit 1

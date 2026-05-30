@@ -17,12 +17,12 @@ import (
 // TranscriptTailer.DisableModelConfigFallback, issue #440) — so regenerating
 // is reproducible across machines. Refresh with:
 //
-//	UPDATE_REPLAY_GOLDENS=1 go test ./core/cmd/replay/...
+//	UPDATE_REPLAY_GOLDENS=1 go test ./tools/onboarding-factory/cmd/replay/...
 func TestFixtureReplayByteIdentity(t *testing.T) {
 	// Walk the agents tree from its repo-root anchor. We cannot reuse
 	// fixturePath here because that helper inserts a "scenarios/" segment
 	// for "<adapter>/..." inputs; here we want the bare adapters root.
-	fixturesDir, err := filepath.Abs(filepath.Join("..", "..", "..", "replaydata", "agents"))
+	fixturesDir, err := filepath.Abs(filepath.Join("..", "..", "..", "..", "replaydata", "agents"))
 	if err != nil {
 		t.Fatalf("abs fixtures dir: %v", err)
 	}
@@ -52,7 +52,7 @@ func TestFixtureReplayByteIdentity(t *testing.T) {
 			}
 			if !bytes.Equal(got, want) {
 				t.Fatalf("replay output differs from golden %s\n"+
-					"run UPDATE_REPLAY_GOLDENS=1 go test ./core/cmd/replay/... to refresh\n"+
+					"run UPDATE_REPLAY_GOLDENS=1 go test ./tools/onboarding-factory/cmd/replay/... to refresh\n"+
 					"first diff: %s", goldenPath, firstJSONDiff(got, want))
 			}
 		})

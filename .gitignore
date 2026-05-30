@@ -52,6 +52,7 @@ tools/copilot-hooks-merger/copilot-hooks-merger
 tools/onboarding-factory/matrix
 tools/onboarding-factory/viewer
 tools/onboarding-factory/expected-validate
+tools/onboarding-factory/replay
 
 # Gas Town runtime directories
 .beads/
