@@ -32,6 +32,8 @@ COPY platforms/web/index.html platforms/web/irrlicht.css platforms/web/irrlicht.
 ENV IRRLICHT_UI_DIR=/web
 EXPOSE 7839
 # Bind 0.0.0.0 (NOT the loopback default) so the published port is reachable
-# from outside the container. v0 relay has no auth/TLS — only publish it to a
-# trusted host loopback.
+# from outside the container; the compose file publishes it on the host
+# loopback. Auth/TLS are OFF here — fine for a trusted host. Before exposing on
+# a LAN/the internet, add `--auth tokens-file` and front it with TLS (or
+# `--tls-cert`/`--tls-key`); see DEPLOY.md.
 CMD ["irrlichtrelay", "serve", "--addr", "0.0.0.0:7839"]

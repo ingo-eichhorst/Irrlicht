@@ -3,7 +3,10 @@ package main
 import (
 	"encoding/json"
 	"log"
+	"net"
 	"net/http"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -19,7 +22,36 @@ const (
 	pingInterval = 30 * time.Second
 	pongTimeout  = 45 * time.Second
 	writeTimeout = 10 * time.Second
+
+	// rejectLogInterval throttles over-cap rejection logging so a connection
+	// flood can't itself become a log flood.
+	rejectLogInterval = time.Second
 )
+
+// limits bounds resource use on an exposed listener: maxMsgBytes caps a single
+// inbound WebSocket frame (memory-exhaustion guard), maxConns the total live
+// connections, and maxConnsPerIP the live connections from one remote IP. A
+// non-positive value disables that cap.
+type limits struct {
+	maxMsgBytes   int64
+	maxConns      int
+	maxConnsPerIP int
+}
+
+// defaultLimits are the built-in caps used when no flag/env overrides them.
+func defaultLimits() limits {
+	return limits{maxMsgBytes: 1 << 20, maxConns: 256, maxConnsPerIP: 32}
+}
+
+// maxDaemonMsgBytes caps a frame on the trusted daemon path, which the strict
+// maxMsgBytes (a client-frame guard) must not constrain: a daemon's
+// daemon_snapshot is one JSON frame whose size scales with its live session
+// count, so the small client cap would put a busy daemon into an unrecoverable
+// "snapshot too big → close → reconnect → resend" loop. This bound is large
+// enough for any realistic snapshot yet still finite, since the v0 daemon hello
+// is unauthenticated — an attacker that sends a daemon hello must not unlock an
+// unbounded read.
+const maxDaemonMsgBytes = 32 << 20
 
 // hub is the relay's in-memory core: it tracks connected daemons, caches the
 // latest session state per (daemon_id, session_id) and the per-daemon adapter
@@ -33,6 +65,17 @@ type hub struct {
 	sessions map[string]map[string]*session.SessionState // daemon_id → session_id → state
 	agents   map[string][]relay.AgentInfo                // daemon_id → adapter registry
 	upgrader websocket.Upgrader
+
+	// auth is nil when the relay runs with --auth off (trusted-LAN default):
+	// every hello is accepted. When set, both daemon and client hellos must
+	// carry a valid bearer token, and a token revoked mid-session closes the
+	// peer with relay.CloseRevoked on its next frame.
+	auth *authStore
+
+	limits        limits
+	totalConns    int            // live connections across all peers
+	ipConns       map[string]int // remote IP → live connections
+	lastRejectLog time.Time      // throttle for over-cap rejection logs
 }
 
 // daemonState tracks one daemon's connection liveness. conns counts live
@@ -48,21 +91,56 @@ type daemonState struct {
 // closed by the read pump when the socket drops so the write pump exits
 // promptly instead of waiting for the next ping tick.
 type clientConn struct {
-	conn *websocket.Conn
-	send chan []byte
-	done chan struct{}
+	conn    *websocket.Conn
+	send    chan []byte
+	done    chan struct{}
+	tokenID string // bearer-token id (empty on a no-auth relay); watched for revoke
 }
 
-func newHub() *hub {
+// newHub builds a no-auth, all-origins hub with the given connection limits
+// (the loopback default and the shape the tests use).
+func newHub(lim limits) *hub { return newHubWithAuth(nil, nil, lim) }
+
+// newHubWithAuth builds a hub with optional bearer-token auth, an optional
+// browser-Origin allowlist, and connection limits. A nil auth accepts every
+// hello; an empty allowlist accepts every Origin (loopback-safe, unchanged
+// from v0).
+func newHubWithAuth(auth *authStore, allowedOrigins []string, lim limits) *hub {
 	return &hub{
 		clients:  make(map[*clientConn]struct{}),
 		daemons:  make(map[string]*daemonState),
 		sessions: make(map[string]map[string]*session.SessionState),
 		agents:   make(map[string][]relay.AgentInfo),
-		// Permissive origin policy: v0 is localhost-only with no auth, and the
-		// dashboard served from a different port than the WS endpoint is
-		// cross-origin. Tighten alongside auth in a later phase.
-		upgrader: websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }},
+		auth:     auth,
+		limits:   lim,
+		ipConns:  make(map[string]int),
+		upgrader: websocket.Upgrader{CheckOrigin: originChecker(allowedOrigins)},
+	}
+}
+
+// originChecker gates the WS upgrade by the request Origin. An empty allowlist
+// keeps the permissive v0 behavior (localhost dev served cross-origin from a
+// different port). A non-empty allowlist admits only listed hosts; requests
+// without an Origin header (native daemons, curl — non-browser peers) are
+// always allowed since browsers always send one and auth still gates them.
+func originChecker(allowed []string) func(*http.Request) bool {
+	if len(allowed) == 0 {
+		return func(*http.Request) bool { return true }
+	}
+	set := make(map[string]bool, len(allowed))
+	for _, o := range allowed {
+		set[strings.ToLower(strings.TrimSpace(o))] = true
+	}
+	return func(r *http.Request) bool {
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			return true
+		}
+		u, err := url.Parse(origin)
+		if err != nil {
+			return false
+		}
+		return set[strings.ToLower(u.Host)]
 	}
 }
 
@@ -75,6 +153,25 @@ func (h *hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer conn.Close()
+
+	// Cap a single inbound frame before any read so an oversized payload is
+	// closed by gorilla (code 1009) instead of buffered unbounded. This strict
+	// cap governs the pre-dispatch hello read and the client read pump; the
+	// trusted daemon path raises it in serveDaemon (see maxDaemonMsgBytes).
+	if h.limits.maxMsgBytes > 0 {
+		conn.SetReadLimit(h.limits.maxMsgBytes)
+	}
+
+	// Enforce connection caps before the hello read. A WebSocket close frame
+	// requires a completed handshake, so we upgrade first, then close over-cap
+	// peers cleanly with code 1013 (try-again-later) and a diagnostic reason.
+	ip := remoteIP(r)
+	if reason, ok := h.acquire(ip); !ok {
+		closeWith(conn, websocket.CloseTryAgainLater, reason)
+		h.logReject(ip, reason)
+		return
+	}
+	defer h.release(ip)
 
 	conn.SetReadDeadline(time.Now().Add(helloTimeout))
 	_, data, err := conn.ReadMessage()
@@ -90,21 +187,123 @@ func (h *hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 		// dashboard.
 		log.Printf("relay: opening frame is not a valid hello (%v); treating peer as a client", err)
 	}
+
+	// Bearer-token gate (both roles). On a no-auth relay h.auth is nil and the
+	// token is ignored. Otherwise the hello.token must hash to a known token;
+	// an empty/invalid token closes the socket with relay.CloseRevoked.
+	tokenID := ""
+	if h.auth != nil {
+		id, ok := h.auth.validate(hello.Token)
+		if !ok {
+			closeWith(conn, relay.CloseRevoked, "unauthorized")
+			return
+		}
+		tokenID = id
+	}
+
 	if hello.Type == relay.MsgHello && hello.Role == relay.RoleDaemon {
-		h.serveDaemon(conn, hello)
+		h.serveDaemon(conn, hello, tokenID)
 		return
 	}
-	h.serveClient(conn)
+	h.serveClient(conn, tokenID)
+}
+
+// closeWith sends a WebSocket close frame with the given code and reason, then
+// lets the deferred conn.Close() tear down the socket. Best-effort.
+func closeWith(conn *websocket.Conn, code int, reason string) {
+	_ = conn.WriteControl(
+		websocket.CloseMessage,
+		websocket.FormatCloseMessage(code, reason),
+		time.Now().Add(writeTimeout),
+	)
+}
+
+// revoked reports whether an authenticated connection's token has since been
+// revoked. Always false on a no-auth relay or an unauthenticated (token-less)
+// connection.
+func (h *hub) revoked(tokenID string) bool {
+	return h.auth != nil && tokenID != "" && !h.auth.valid(tokenID)
+}
+
+// closeIfRevoked closes conn with CloseRevoked and returns true when tokenID has
+// been revoked, so each read/write loop can guard with a single line and the
+// check+close+return triplet lives in one place.
+func (h *hub) closeIfRevoked(conn *websocket.Conn, tokenID string) bool {
+	if h.revoked(tokenID) {
+		closeWith(conn, relay.CloseRevoked, "token revoked")
+		return true
+	}
+	return false
+}
+
+// acquire reserves a connection slot for ip, enforcing the total and per-IP
+// caps. It returns (reason, false) without reserving when a cap is hit, so the
+// caller closes the connection; otherwise (",", true) and the caller must
+// release(ip) on exit.
+func (h *hub) acquire(ip string) (string, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.limits.maxConns > 0 && h.totalConns >= h.limits.maxConns {
+		return "relay at capacity", false
+	}
+	if h.limits.maxConnsPerIP > 0 && h.ipConns[ip] >= h.limits.maxConnsPerIP {
+		return "per-IP connection limit reached", false
+	}
+	h.totalConns++
+	h.ipConns[ip]++
+	return "", true
+}
+
+// release frees the slot reserved by a matching acquire.
+func (h *hub) release(ip string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.totalConns > 0 {
+		h.totalConns--
+	}
+	if n := h.ipConns[ip]; n <= 1 {
+		delete(h.ipConns, ip)
+	} else {
+		h.ipConns[ip] = n - 1
+	}
+}
+
+// logReject logs an over-cap rejection at most once per rejectLogInterval so a
+// connection flood doesn't become a log flood.
+func (h *hub) logReject(ip, reason string) {
+	now := time.Now()
+	h.mu.Lock()
+	throttled := now.Sub(h.lastRejectLog) < rejectLogInterval
+	if !throttled {
+		h.lastRejectLog = now
+	}
+	h.mu.Unlock()
+	if !throttled {
+		log.Printf("relay: rejected connection from %s: %s", ip, reason)
+	}
+}
+
+// remoteIP extracts the host portion of the request's remote address. v1 trusts
+// no proxy headers (X-Forwarded-For), so this is the direct peer address.
+func remoteIP(r *http.Request) string {
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		return host
+	}
+	return r.RemoteAddr
 }
 
 // --- daemon side ---
 
-func (h *hub) serveDaemon(conn *websocket.Conn, hello relay.Hello) {
+func (h *hub) serveDaemon(conn *websocket.Conn, hello relay.Hello, tokenID string) {
 	if hello.DaemonID == "" {
 		log.Printf("relay: refusing daemon hello with empty daemon_id")
 		return // untracked, undedupable — refuse
 	}
 	id, label := hello.DaemonID, hello.DaemonLabel
+
+	// Relax the strict client-frame cap: the daemon_snapshot read below scales
+	// with the daemon's session count and must not be clamped by maxMsgBytes.
+	conn.SetReadLimit(maxDaemonMsgBytes)
 
 	conn.SetWriteDeadline(time.Now().Add(writeTimeout))
 	if err := conn.WriteJSON(relay.HelloAck{Type: relay.MsgHelloAck, AcceptedVersion: relay.ProtocolVersion}); err != nil {
@@ -119,7 +318,7 @@ func (h *hub) serveDaemon(conn *websocket.Conn, hello relay.Hello) {
 	// gorilla's one-concurrent-writer rule.
 	done := make(chan struct{})
 	defer close(done)
-	go h.pingLoop(conn, done)
+	go h.pingLoop(conn, done, tokenID)
 
 	conn.SetReadDeadline(time.Now().Add(pongTimeout))
 	conn.SetPongHandler(func(string) error {
@@ -129,6 +328,9 @@ func (h *hub) serveDaemon(conn *websocket.Conn, hello relay.Hello) {
 	for {
 		_, data, err := conn.ReadMessage()
 		if err != nil {
+			return
+		}
+		if h.closeIfRevoked(conn, tokenID) {
 			return
 		}
 		h.handleDaemonFrame(id, data)
@@ -235,24 +437,25 @@ func (h *hub) daemonDisconnected(id string) {
 		h.mu.Unlock()
 		return // another live connection for this daemon remains
 	}
-	sessions := h.sessions[id]
 	delete(h.daemons, id)
 	delete(h.sessions, id)
 	delete(h.agents, id)
 	h.mu.Unlock()
 
-	// v0 deletes the daemon's rows on disconnect ("fade don't delete" is a
-	// deferred enhancement), then announces the disconnect for the tooltip.
-	for _, s := range sessions {
-		h.fanoutPush(id, outbound.PushMessage{Type: outbound.PushTypeDeleted, Session: s})
-	}
+	// Announce the disconnect and let clients decide how to present the now-
+	// orphaned rows (#540 "fade, don't delete"): the relay no longer fans out a
+	// session_deleted per session, so a flapping link doesn't yank rows out from
+	// under a client. macOS fades them and restores on reconnect; the web
+	// dashboard drops them. The cache is still evicted, so /api/v1/sessions and
+	// any late-joining client reflect only live daemons, and a reconnect
+	// reconciles via a fresh daemon_snapshot.
 	h.broadcastDaemonStatus(id, label, relay.StatusDisconnected, now)
 }
 
 // --- client side ---
 
-func (h *hub) serveClient(conn *websocket.Conn) {
-	cc := &clientConn{conn: conn, send: make(chan []byte, 64), done: make(chan struct{})}
+func (h *hub) serveClient(conn *websocket.Conn, tokenID string) {
+	cc := &clientConn{conn: conn, send: make(chan []byte, 64), done: make(chan struct{}), tokenID: tokenID}
 
 	// Register before snapshotting so no daemon_status fired between the two
 	// is missed: any daemon present at snapshot time is in the snapshot, any
@@ -345,11 +548,20 @@ func (h *hub) clientWritePump(cc *clientConn) {
 		case <-cc.done:
 			return
 		case data := <-cc.send:
+			// A client mostly receives, so its read pump rarely runs; check for a
+			// mid-session revoke here (and on the ping tick) so a revoked client is
+			// closed within one fan-out frame or ping interval.
+			if h.closeIfRevoked(cc.conn, cc.tokenID) {
+				return
+			}
 			cc.conn.SetWriteDeadline(time.Now().Add(writeTimeout))
 			if err := cc.conn.WriteMessage(websocket.TextMessage, data); err != nil {
 				return
 			}
 		case <-ticker.C:
+			if h.closeIfRevoked(cc.conn, cc.tokenID) {
+				return
+			}
 			cc.conn.SetWriteDeadline(time.Now().Add(writeTimeout))
 			if err := cc.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 				return
@@ -438,7 +650,7 @@ func (h *hub) buildAgents() []relay.AgentInfo {
 	return out
 }
 
-func (h *hub) pingLoop(conn *websocket.Conn, done <-chan struct{}) {
+func (h *hub) pingLoop(conn *websocket.Conn, done <-chan struct{}, tokenID string) {
 	ticker := time.NewTicker(pingInterval)
 	defer ticker.Stop()
 	for {
@@ -446,6 +658,13 @@ func (h *hub) pingLoop(conn *websocket.Conn, done <-chan struct{}) {
 		case <-done:
 			return
 		case <-ticker.C:
+			// An idle daemon sends no frames, so the read loop's per-frame revoke
+			// check never fires. Re-check here each tick (WriteControl is
+			// concurrent-safe with these pings) so a revoked but quiet daemon is
+			// closed within one ping interval rather than lingering authenticated.
+			if h.closeIfRevoked(conn, tokenID) {
+				return
+			}
 			conn.SetWriteDeadline(time.Now().Add(writeTimeout))
 			if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 				return

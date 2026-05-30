@@ -967,7 +967,7 @@ struct SessionListView: View {
                     .font(.system(.body, design: .monospaced))
                     .foregroundColor(.primary)
             } else if sessionManager.sessions.count <= 3 {
-                ForEach(sessionManager.sessions.prefix(3)) { session in
+                ForEach(sessionManager.sessions.prefix(3), id: \.rowID) { session in
                     SessionStateIcon(state: session.state, size: 12)
                 }
             } else {
@@ -1080,6 +1080,23 @@ struct SessionRowView: View {
                         .font(.system(size: 9, weight: .medium, design: .monospaced))
                         .foregroundColor(.secondary)
                         .frame(width: 12, alignment: .trailing)
+                }
+
+                // Origin glyph (#538) — a cloud marks a session delivered by a
+                // remote relay daemon; local sessions show nothing, so a
+                // local-only dashboard is visually unchanged. A session that is
+                // also present locally is filtered to the local row upstream
+                // (relayOnly), so any row with a daemonID is genuinely remote.
+                // Tooltip = the daemon's hostname (from the relay's label map).
+                if let daemonID = session.daemonID {
+                    let host = sessionManager.relayDaemons[daemonID]
+                        ?? sessionManager.offlineDaemons[daemonID] ?? daemonID
+                    let offline = sessionManager.isOffline(session)
+                    Image(systemName: offline ? "cloud.slash" : "cloud")
+                        .font(.system(size: 9))
+                        .foregroundColor(.secondary)
+                        .frame(width: 14, alignment: .center)
+                        .tooltip(offline ? "\(host) — offline" : host)
                 }
 
                 // Active subagent count badge
@@ -1260,6 +1277,11 @@ struct SessionRowView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 4)
+        // Fade, don't delete (#540): a row whose relay daemon has gone offline
+        // dims in place and restores on reconnect, so a flapping link doesn't
+        // yank rows. Local sessions are never offline.
+        .opacity(sessionManager.isOffline(session) ? 0.4 : 1)
+        .animation(IrrMotion.easeOut(duration: IrrMotion.fast), value: sessionManager.isOffline(session))
         .background(isHovered ? IrrColors.surfaceHover : Color.clear)
         .contentShape(Rectangle())
         .onHover { hovering in
@@ -1592,7 +1614,7 @@ struct GroupView: View {
             .padding(.vertical, isTopLevel ? 4 : 3)
 
             if isExpanded {
-                ForEach(Array((group.agents ?? []).enumerated()), id: \.element.id) { index, session in
+                ForEach(Array((group.agents ?? []).enumerated()), id: \.element.rowID) { index, session in
                     SessionRowView(
                         session: session,
                         agentNumber: index + 1,

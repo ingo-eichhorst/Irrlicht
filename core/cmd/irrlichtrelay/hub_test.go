@@ -21,7 +21,12 @@ import (
 
 func newTestServer(t *testing.T) (wsURL, baseURL string) {
 	t.Helper()
-	h := newHub()
+	return newTestServerWithLimits(t, defaultLimits())
+}
+
+func newTestServerWithLimits(t *testing.T, lim limits) (wsURL, baseURL string) {
+	t.Helper()
+	h := newHub(lim)
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/sessions/stream", h.ServeWS)
 	mux.HandleFunc("GET /api/v1/sessions", handleSessions(h))
@@ -201,7 +206,7 @@ func TestRelayReplaysCacheToLateClient(t *testing.T) {
 	}
 }
 
-func TestRelayDaemonDisconnectDeletesSessions(t *testing.T) {
+func TestRelayDaemonDisconnectKeepsRowsClientSide(t *testing.T) {
 	wsURL, baseURL := newTestServer(t)
 
 	client := dial(t, wsURL)
@@ -236,12 +241,13 @@ func TestRelayDaemonDisconnectDeletesSessions(t *testing.T) {
 		t.Fatalf("expected s1 cached before disconnect, got %s", body)
 	}
 
-	// Daemon drops → the relay must fan out a session_deleted for its cached
-	// session and a disconnected status, and evict the session from the cache.
+	// Daemon drops → the relay announces the disconnect but must NOT fan out a
+	// session_deleted (#540 "fade, don't delete"): clients keep the rows and
+	// decide how to present them. The cache is still evicted.
 	daemon.Close()
-	sawDelete, sawDisconnect := false, false
+	sawDisconnect := false
 	deadline := time.Now().Add(2 * time.Second)
-	for (!sawDelete || !sawDisconnect) && time.Now().Before(deadline) {
+	for !sawDisconnect && time.Now().Before(deadline) {
 		client.SetReadDeadline(time.Now().Add(2 * time.Second))
 		_, data, err := client.ReadMessage()
 		if err != nil {
@@ -252,7 +258,7 @@ func TestRelayDaemonDisconnectDeletesSessions(t *testing.T) {
 			var p relay.Push
 			mustJSON(t, data, &p)
 			if p.Msg.Type == outbound.PushTypeDeleted && p.Msg.Session != nil && p.Msg.Session.SessionID == "s1" {
-				sawDelete = true
+				t.Fatal("unexpected session_deleted on disconnect — rows must fade, not delete (#540)")
 			}
 		case relay.MsgDaemonStatus:
 			var ds relay.DaemonStatus
@@ -262,14 +268,208 @@ func TestRelayDaemonDisconnectDeletesSessions(t *testing.T) {
 			}
 		}
 	}
-	if !sawDelete {
-		t.Fatal("no session_deleted push for the disconnected daemon's session")
-	}
 	if !sawDisconnect {
 		t.Fatal("no daemon disconnect status")
 	}
 	if body := httpGet(t, baseURL+"/api/v1/sessions"); bytes.Contains(body, []byte(`"session_id":"s1"`)) {
 		t.Fatalf("s1 should be evicted from the cache after daemon disconnect, got %s", body)
+	}
+}
+
+// newTestServerWithAuth starts a relay with bearer-token auth backed by a
+// tokens file seeded with the given labels, returning the ws URL and the
+// plaintext token for each label.
+func newTestServerWithAuth(t *testing.T, labels ...string) (wsURL string, tokens map[string]string, tokensPath string, store *authStore) {
+	t.Helper()
+	tokensPath = filepath.Join(t.TempDir(), "tokens.json")
+	tokens = make(map[string]string, len(labels))
+	for _, l := range labels {
+		_, plaintext, err := issueToken(tokensPath, l)
+		if err != nil {
+			t.Fatalf("seed token %q: %v", l, err)
+		}
+		tokens[l] = plaintext
+	}
+	store, err := newAuthStore(tokensPath)
+	if err != nil {
+		t.Fatalf("newAuthStore: %v", err)
+	}
+	h := newHubWithAuth(store, nil, defaultLimits())
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/v1/sessions/stream", h.ServeWS)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/v1/sessions/stream", tokens, tokensPath, store
+}
+
+// expectClose4401 reads from c expecting the relay to close with CloseRevoked.
+func expectClose4401(t *testing.T, c *websocket.Conn) {
+	t.Helper()
+	c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	for {
+		_, _, err := c.ReadMessage()
+		if err == nil {
+			continue // skip any buffered data frames until the close arrives
+		}
+		if ce, ok := err.(*websocket.CloseError); ok {
+			if ce.Code != relay.CloseRevoked {
+				t.Fatalf("close code = %d, want %d", ce.Code, relay.CloseRevoked)
+			}
+			return
+		}
+		t.Fatalf("expected a 4401 close, got: %v", err)
+	}
+}
+
+func TestAuthDaemonAcceptedWithValidToken(t *testing.T) {
+	wsURL, tokens, _, _ := newTestServerWithAuth(t, "daemon")
+	c := dial(t, wsURL)
+	if err := c.WriteJSON(relay.Hello{
+		Type: relay.MsgHello, ProtocolVersion: relay.ProtocolVersion,
+		Role: relay.RoleDaemon, DaemonID: "d1", DaemonLabel: "laptop", Token: tokens["daemon"],
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var ack relay.HelloAck
+	c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if err := c.ReadJSON(&ack); err != nil || ack.Type != relay.MsgHelloAck {
+		t.Fatalf("expected hello_ack for a valid token: err=%v ack=%+v", err, ack)
+	}
+}
+
+func TestAuthRejectsMissingAndBadToken(t *testing.T) {
+	wsURL, tokens, _, _ := newTestServerWithAuth(t, "good")
+
+	// Daemon with no token.
+	d := dial(t, wsURL)
+	if err := d.WriteJSON(relay.Hello{Type: relay.MsgHello, ProtocolVersion: relay.ProtocolVersion, Role: relay.RoleDaemon, DaemonID: "d1"}); err != nil {
+		t.Fatal(err)
+	}
+	expectClose4401(t, d)
+
+	// Client with a wrong token.
+	c := dial(t, wsURL)
+	if err := c.WriteJSON(relay.Hello{Type: relay.MsgHello, ProtocolVersion: relay.ProtocolVersion, Role: relay.RoleClient, Token: tokens["good"] + "x"}); err != nil {
+		t.Fatal(err)
+	}
+	expectClose4401(t, c)
+}
+
+func TestAuthRevokeClosesLiveDaemon(t *testing.T) {
+	wsURL, tokens, tokensPath, store := newTestServerWithAuth(t, "daemon")
+	recs, _ := loadTokens(tokensPath)
+	id := recs[0].ID
+
+	d := dial(t, wsURL)
+	if err := d.WriteJSON(relay.Hello{
+		Type: relay.MsgHello, ProtocolVersion: relay.ProtocolVersion,
+		Role: relay.RoleDaemon, DaemonID: "d1", DaemonLabel: "laptop", Token: tokens["daemon"],
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var ack relay.HelloAck
+	if err := d.ReadJSON(&ack); err != nil {
+		t.Fatal(err)
+	}
+
+	// Revoke the token out-of-band and reload the live store as the poll loop
+	// would. The daemon's next frame must then be closed with 4401.
+	if ok, err := revokeToken(tokensPath, id); err != nil || !ok {
+		t.Fatalf("revoke: ok=%v err=%v", ok, err)
+	}
+	if err := store.reload(); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	// Send a frame to trigger the read loop's revocation check.
+	if err := d.WriteJSON(relay.DaemonSnapshot{Type: relay.MsgDaemonSnapshot}); err != nil {
+		t.Fatal(err)
+	}
+	expectClose4401(t, d)
+}
+
+func TestOriginChecker(t *testing.T) {
+	// Empty allowlist: every origin (and none) is allowed.
+	allow := originChecker(nil)
+	if !allow(reqWithOrigin("https://evil.example")) || !allow(reqWithOrigin("")) {
+		t.Fatal("empty allowlist should allow all origins")
+	}
+
+	// Non-empty allowlist: only listed hosts; non-browser (no Origin) allowed.
+	allow = originChecker([]string{"app.irrlicht.dev", "localhost:7839"})
+	cases := []struct {
+		origin string
+		want   bool
+	}{
+		{"https://app.irrlicht.dev", true},
+		{"http://localhost:7839", true},
+		{"https://evil.example", false},
+		{"", true}, // native daemon / curl: no Origin header
+		{"://malformed", false},
+	}
+	for _, c := range cases {
+		if got := allow(reqWithOrigin(c.origin)); got != c.want {
+			t.Errorf("origin %q: got %v, want %v", c.origin, got, c.want)
+		}
+	}
+}
+
+func reqWithOrigin(origin string) *http.Request {
+	r := httptest.NewRequest("GET", "/api/v1/sessions/stream", nil)
+	if origin != "" {
+		r.Header.Set("Origin", origin)
+	}
+	return r
+}
+
+func TestRequireTokenGatesHTTP(t *testing.T) {
+	tokensPath := filepath.Join(t.TempDir(), "tokens.json")
+	_, plaintext, err := issueToken(tokensPath, "http")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := newAuthStore(tokensPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ok := func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }
+
+	// Auth off: pass-through, no token needed.
+	rec := httptest.NewRecorder()
+	requireToken(nil, ok)(rec, httptest.NewRequest("GET", "/api/v1/sessions", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("auth off should pass through, got %d", rec.Code)
+	}
+
+	gated := requireToken(store, ok)
+
+	// No token → 401.
+	rec = httptest.NewRecorder()
+	gated(rec, httptest.NewRequest("GET", "/api/v1/sessions", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("missing token should be 401, got %d", rec.Code)
+	}
+
+	// Valid token via query param → 200.
+	rec = httptest.NewRecorder()
+	gated(rec, httptest.NewRequest("GET", "/api/v1/sessions?token="+plaintext, nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("valid ?token should be 200, got %d", rec.Code)
+	}
+
+	// Valid token via Authorization header → 200.
+	rec = httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/api/v1/sessions", nil)
+	r.Header.Set("Authorization", "Bearer "+plaintext)
+	gated(rec, r)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("valid Bearer header should be 200, got %d", rec.Code)
+	}
+
+	// Wrong token → 401.
+	rec = httptest.NewRecorder()
+	gated(rec, httptest.NewRequest("GET", "/api/v1/sessions?token=nope", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("bad token should be 401, got %d", rec.Code)
 	}
 }
 

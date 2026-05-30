@@ -15,6 +15,11 @@ import (
 
 const forwardWriteTimeout = 10 * time.Second
 
+// maxRelayFrameBytes caps a single inbound frame from the relay so a malicious
+// or buggy relay can't exhaust daemon memory. The daemon only reads hello_ack
+// and control frames, so this is generous headroom.
+const maxRelayFrameBytes = 1 << 20
+
 // streamPath is the relay's WebSocket endpoint, shared with the daemon and
 // every client.
 const streamPath = "/api/v1/sessions/stream"
@@ -54,6 +59,7 @@ type SnapshotFunc func() ([]*session.SessionState, []AgentInfo)
 type Forwarder struct {
 	url      string
 	identity Identity
+	token    string
 	push     outbound.PushBroadcaster
 	snapshot SnapshotFunc
 	logger   outbound.Logger
@@ -64,11 +70,13 @@ type Forwarder struct {
 }
 
 // NewForwarder builds a Forwarder targeting relayURL. push and snapshot are
-// required; logger may be nil.
-func NewForwarder(relayURL string, id Identity, push outbound.PushBroadcaster, snapshot SnapshotFunc, logger outbound.Logger) *Forwarder {
+// required; logger may be nil. token is sent in the hello for an auth-enabled
+// relay and may be empty (a no-auth relay ignores it).
+func NewForwarder(relayURL string, id Identity, token string, push outbound.PushBroadcaster, snapshot SnapshotFunc, logger outbound.Logger) *Forwarder {
 	return &Forwarder{
 		url:        normalizeRelayURL(relayURL),
 		identity:   id,
+		token:      token,
 		push:       push,
 		snapshot:   snapshot,
 		logger:     logger,
@@ -125,6 +133,7 @@ func (f *Forwarder) runOnce(ctx context.Context) error {
 		Role:            RoleDaemon,
 		DaemonID:        f.identity.DaemonID,
 		DaemonLabel:     f.identity.DaemonLabel,
+		Token:           f.token,
 	}); err != nil {
 		return err
 	}
@@ -149,6 +158,7 @@ func (f *Forwarder) runOnce(ctx context.Context) error {
 
 	// Read pump: surface the relay closing the socket (and drain any
 	// hello_ack / control frames, which v0 does not act on).
+	conn.SetReadLimit(maxRelayFrameBytes)
 	readErr := make(chan error, 1)
 	go func() {
 		for {

@@ -546,6 +546,17 @@ struct SessionState: Identifiable, Codable {
     // For duplicate handling (not stored in JSON, computed by SessionManager)
     var duplicateIndex: Int? = nil
 
+    // Relay daemon that emitted this session (not stored in JSON; stamped by
+    // SessionManager from the relay Push envelope `source`). Disambiguates two
+    // daemons that share a session_id — see `rowID`. nil for local sessions.
+    var daemonID: String? = nil
+
+    /// Render/identity key (#537). Compound `(daemon, session_id)` for relay
+    /// sessions with a known daemon, else the bare `id` — so local rows and the
+    /// persisted session order are unchanged. Only ever compared/keyed, never
+    /// split, so a "/" delimiter is safe.
+    var rowID: String { daemonID.map { "\($0)/\(id)" } ?? id }
+
     private static let logger = Logger(subsystem: "io.irrlicht.app", category: "SessionState")
 
     // Custom coding keys to match JSON from irrlichd
@@ -760,6 +771,7 @@ struct SessionState: Identifiable, Codable {
             children: newChildren, launcher: launcher
         )
         copy.duplicateIndex = duplicateIndex
+        copy.daemonID = daemonID
         return copy
     }
 
@@ -779,6 +791,7 @@ struct SessionState: Identifiable, Codable {
             children: children, launcher: launcher
         )
         copy.duplicateIndex = duplicateIndex
+        copy.daemonID = daemonID
         return copy
     }
 
