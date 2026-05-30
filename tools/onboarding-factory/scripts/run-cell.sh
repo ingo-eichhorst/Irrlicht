@@ -503,7 +503,12 @@ replay_one "$STAGED_TRANSCRIPT" "$STAGING/reports/staged.json" || exit 1
 # The committed recording lives under recordings/<newest>/ (no "latest" at the
 # cell root). Compare the staged transcript against the newest committed one.
 COMMITTED_CELL="$REPO_ROOT/replaydata/agents/$ADAPTER/scenarios/$FOLDER"
-NEWEST_REC="$(ls -1d "$COMMITTED_CELL"/recordings/*/ 2>/dev/null | sort | tail -n1)"
+# A never-recorded cell has no recordings/ dir, so the glob matches nothing
+# and `ls` exits non-zero — under `set -euo pipefail` that would abort the
+# whole run right after a successful capture. Tolerate the empty match; the
+# `[[ -n "$NEWEST_REC" ... ]]` guard below already handles "no committed
+# recording yet" (COMMITTED_PRESENT=false).
+NEWEST_REC="$(ls -1d "$COMMITTED_CELL"/recordings/*/ 2>/dev/null | sort | tail -n1 || true)"
 COMMITTED_TRANSCRIPT="${NEWEST_REC%/}/transcript.$TRANSCRIPT_EXT"
 if [[ -n "$NEWEST_REC" && -f "$COMMITTED_TRANSCRIPT" ]]; then
   replay_one "$COMMITTED_TRANSCRIPT" "$STAGING/reports/committed.json" || exit 1
