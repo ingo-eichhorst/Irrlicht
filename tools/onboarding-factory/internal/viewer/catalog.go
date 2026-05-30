@@ -207,10 +207,7 @@ func annotateMeasurements(top map[string]any, repoRoot string) {
 			if !ok {
 				continue
 			}
-			folder := resolveScenarioFolderForAgent(recipes, agentSlug, sid)
-			if folder == "" {
-				folder = sid
-			}
+			folder := resolveCellFolder(repoRoot, recipes, agentSlug, sid)
 			cell["measurement"] = measureScenario(repoRoot, agentSlug, folder)
 		}
 	}
@@ -276,10 +273,7 @@ func annotatePipelineState(top map[string]any, repoRoot string) {
 			if !ok {
 				continue
 			}
-			folder := resolveScenarioFolderForAgent(recipes, agentSlug, sid)
-			if folder == "" {
-				folder = sid
-			}
+			folder := resolveCellFolder(repoRoot, recipes, agentSlug, sid)
 			cell["pipeline"] = pipelineForCell(repoRoot, agentSlug, sid, folder, recipes)
 		}
 	}

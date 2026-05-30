@@ -106,6 +106,27 @@ func resolveScenarioFolderForAgent(idx recipeIndex, agent, coverageID string) st
 	return ""
 }
 
+// resolveCellFolder resolves the on-disk recording folder for one (agent,
+// scenario) cell. It prefers the recording-dir-derived folder from the shard
+// (which also captures variant-folder cells like pi's
+// user-blocking-question → agent-question-pending), then the canonical
+// "<dashed-id>_<name>" folder, and only as a last resort the bare coverage_id.
+//
+// The canonical fallback matters: catalog cells always live under the
+// id-prefixed folder, so falling back to the bare slug — as the call sites
+// once did — could never find a recording when the shard lacked a
+// recording_dir (e.g. a recording wired only via artifacts, not recording_dir),
+// silently rendering a recorded cell as pending-record in the viewer.
+func resolveCellFolder(repoRoot string, idx recipeIndex, agent, coverageID string) string {
+	if folder := resolveScenarioFolderForAgent(idx, agent, coverageID); folder != "" {
+		return folder
+	}
+	if folder := shard.FolderForScenario(repoRoot, coverageID); folder != "" {
+		return folder
+	}
+	return coverageID
+}
+
 // handleRecipes serves the run-cell.sh scenario recipe catalog. Built from the
 // shards (one row per coverage_id, so no dedup is needed). Shape:
 //
