@@ -1,10 +1,13 @@
 {
   "recording_dir": "opencode/scenarios/1-3_long-idle-live-session",
   "artifacts": {
-    "events": "opencode/scenarios/1-3_long-idle-live-session/events.jsonl",
-    "transcript": "opencode/scenarios/1-3_long-idle-live-session/transcript.jsonl",
-    "manifest": "opencode/scenarios/1-3_long-idle-live-session/manifest.json",
-    "golden": "opencode/scenarios/1-3_long-idle-live-session/transcript.jsonl.replay.json.golden"
+    "events": "opencode/scenarios/1-3_long-idle-live-session/recordings/2026-05-23-11-10-44_irrlichd-0.4.7+7656b89.dirty/events.jsonl",
+    "transcript": "opencode/scenarios/1-3_long-idle-live-session/recordings/2026-05-23-11-10-44_irrlichd-0.4.7+7656b89.dirty/transcript.jsonl",
+    "manifest": "opencode/scenarios/1-3_long-idle-live-session/recordings/2026-05-23-11-10-44_irrlichd-0.4.7+7656b89.dirty/manifest.json",
+    "golden": "opencode/scenarios/1-3_long-idle-live-session/recordings/2026-05-23-11-10-44_irrlichd-0.4.7+7656b89.dirty/transcript.jsonl.replay.json.golden",
+    "recordings": [
+      "opencode/scenarios/1-3_long-idle-live-session/recordings/2026-05-23-11-10-44_irrlichd-0.4.7+7656b89.dirty"
+    ]
   },
   "metadata": {
     "agent_supports": "yes",

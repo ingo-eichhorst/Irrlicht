@@ -1,10 +1,13 @@
 {
   "recording_dir": "claudecode/scenarios/3-1_foreground-subagent",
   "artifacts": {
-    "events": "claudecode/scenarios/3-1_foreground-subagent/events.jsonl",
-    "transcript": "claudecode/scenarios/3-1_foreground-subagent/transcript.jsonl",
-    "manifest": "claudecode/scenarios/3-1_foreground-subagent/manifest.json",
-    "golden": "claudecode/scenarios/3-1_foreground-subagent/transcript.jsonl.replay.json.golden"
+    "events": "claudecode/scenarios/3-1_foreground-subagent/recordings/2026-05-18-00-29-04_irrlichd-0.4.5+cf1166a/events.jsonl",
+    "transcript": "claudecode/scenarios/3-1_foreground-subagent/recordings/2026-05-18-00-29-04_irrlichd-0.4.5+cf1166a/transcript.jsonl",
+    "manifest": "claudecode/scenarios/3-1_foreground-subagent/recordings/2026-05-18-00-29-04_irrlichd-0.4.5+cf1166a/manifest.json",
+    "golden": "claudecode/scenarios/3-1_foreground-subagent/recordings/2026-05-18-00-29-04_irrlichd-0.4.5+cf1166a/transcript.jsonl.replay.json.golden",
+    "recordings": [
+      "claudecode/scenarios/3-1_foreground-subagent/recordings/2026-05-18-00-29-04_irrlichd-0.4.5+cf1166a"
+    ]
   },
   "metadata": {
     "agent_supports": "yes",

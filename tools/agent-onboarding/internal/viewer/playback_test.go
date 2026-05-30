@@ -16,8 +16,10 @@ import (
 func fixtureRoot(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
-	scenarioDir := filepath.Join(root, "replaydata", "agents", "claudecode", "scenarios", "test")
-	if err := os.MkdirAll(scenarioDir, 0o755); err != nil {
+	// The recording lives under recordings/<name>/ (no "latest" at the root).
+	recDir := filepath.Join(root, "replaydata", "agents", "claudecode", "scenarios", "test",
+		"recordings", "2026-05-14-12-00-00_irrlichd-test")
+	if err := os.MkdirAll(recDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	start := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
@@ -26,7 +28,7 @@ func fixtureRoot(t *testing.T) string {
 		`{"seq":2,"ts":"` + start.Add(time.Second).Format(time.RFC3339Nano) + `","kind":"state_transition","session_id":"s1","new_state":"working"}`,
 		`{"seq":3,"ts":"` + start.Add(2*time.Second).Format(time.RFC3339Nano) + `","kind":"state_transition","session_id":"s1","new_state":"ready"}`,
 	}, "\n") + "\n"
-	if err := os.WriteFile(filepath.Join(scenarioDir, "events.jsonl"), []byte(events), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(recDir, "events.jsonl"), []byte(events), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	// platforms/web/{index.html,irrlicht.css,irrlicht.js} — a realistic

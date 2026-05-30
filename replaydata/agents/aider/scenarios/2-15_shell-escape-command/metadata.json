@@ -1,11 +1,12 @@
 {
   "recording_dir": "aider/scenarios/2-15_shell-escape-command",
   "artifacts": {
-    "events": "aider/scenarios/2-15_shell-escape-command/events.jsonl",
-    "transcript_md": "aider/scenarios/2-15_shell-escape-command/transcript.md",
-    "manifest": "aider/scenarios/2-15_shell-escape-command/manifest.json",
+    "events": "aider/scenarios/2-15_shell-escape-command/recordings/2026-05-25-20-05-52_irrlichd-0.4.7+81e67cb.dirty/events.jsonl",
+    "transcript_md": "aider/scenarios/2-15_shell-escape-command/recordings/2026-05-25-20-05-52_irrlichd-0.4.7+81e67cb.dirty/transcript.md",
+    "manifest": "aider/scenarios/2-15_shell-escape-command/recordings/2026-05-25-20-05-52_irrlichd-0.4.7+81e67cb.dirty/manifest.json",
     "recordings": [
-      "aider/scenarios/2-15_shell-escape-command/recordings/2026-05-25-18-33-41_irrlichd-0.4.7+81e67cb.dirty"
+      "aider/scenarios/2-15_shell-escape-command/recordings/2026-05-25-18-33-41_irrlichd-0.4.7+81e67cb.dirty",
+      "aider/scenarios/2-15_shell-escape-command/recordings/2026-05-25-20-05-52_irrlichd-0.4.7+81e67cb.dirty"
     ]
   },
   "metadata": {

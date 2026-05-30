@@ -1,12 +1,13 @@
 {
   "recording_dir": "codex/scenarios/2-18_user-blocking-plan-mode-approval",
   "artifacts": {
-    "events": "codex/scenarios/2-18_user-blocking-plan-mode-approval/events.jsonl",
-    "transcript": "codex/scenarios/2-18_user-blocking-plan-mode-approval/transcript.jsonl",
-    "manifest": "codex/scenarios/2-18_user-blocking-plan-mode-approval/manifest.json",
-    "golden": "codex/scenarios/2-18_user-blocking-plan-mode-approval/transcript.jsonl.replay.json.golden",
+    "events": "codex/scenarios/2-18_user-blocking-plan-mode-approval/recordings/2026-05-23-23-48-22_irrlichd-0.4.7+eb984db/events.jsonl",
+    "transcript": "codex/scenarios/2-18_user-blocking-plan-mode-approval/recordings/2026-05-23-23-48-22_irrlichd-0.4.7+eb984db/transcript.jsonl",
+    "manifest": "codex/scenarios/2-18_user-blocking-plan-mode-approval/recordings/2026-05-23-23-48-22_irrlichd-0.4.7+eb984db/manifest.json",
+    "golden": "codex/scenarios/2-18_user-blocking-plan-mode-approval/recordings/2026-05-23-23-48-22_irrlichd-0.4.7+eb984db/transcript.jsonl.replay.json.golden",
     "recordings": [
-      "codex/scenarios/2-18_user-blocking-plan-mode-approval/recordings/2026-05-23-22-33-16_irrlichd-0.4.7+eb984db"
+      "codex/scenarios/2-18_user-blocking-plan-mode-approval/recordings/2026-05-23-22-33-16_irrlichd-0.4.7+eb984db",
+      "codex/scenarios/2-18_user-blocking-plan-mode-approval/recordings/2026-05-23-23-48-22_irrlichd-0.4.7+eb984db"
     ]
   },
   "metadata": {

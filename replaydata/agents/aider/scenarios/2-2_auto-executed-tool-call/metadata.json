@@ -1,9 +1,12 @@
 {
   "recording_dir": "aider/scenarios/2-2_auto-executed-tool-call",
   "artifacts": {
-    "events": "aider/scenarios/2-2_auto-executed-tool-call/events.jsonl",
-    "transcript_md": "aider/scenarios/2-2_auto-executed-tool-call/transcript.md",
-    "manifest": "aider/scenarios/2-2_auto-executed-tool-call/manifest.json"
+    "events": "aider/scenarios/2-2_auto-executed-tool-call/recordings/2026-05-25-17-59-35_irrlichd-0.4.7+fd1343c/events.jsonl",
+    "transcript_md": "aider/scenarios/2-2_auto-executed-tool-call/recordings/2026-05-25-17-59-35_irrlichd-0.4.7+fd1343c/transcript.md",
+    "manifest": "aider/scenarios/2-2_auto-executed-tool-call/recordings/2026-05-25-17-59-35_irrlichd-0.4.7+fd1343c/manifest.json",
+    "recordings": [
+      "aider/scenarios/2-2_auto-executed-tool-call/recordings/2026-05-25-17-59-35_irrlichd-0.4.7+fd1343c"
+    ]
   },
   "metadata": {
     "agent_supports": "yes",

@@ -120,10 +120,12 @@ func writeShardFixture(t *testing.T, agent string, shards map[string]shardFix) s
 		// Agent cell metadata.json (written even when minimal so the matrix sees the cell).
 		cell := map[string]any{"scenario_id": name}
 		if fx.recorded {
+			rec := agent + "/scenarios/" + folder + "/recordings/2026-01-01-00-00-00_irrlichd-test"
 			cell["recording_dir"] = agent + "/scenarios/" + folder
 			cell["artifacts"] = map[string]any{
-				"events":     agent + "/scenarios/" + folder + "/events.jsonl",
-				"transcript": agent + "/scenarios/" + folder + "/transcript.jsonl",
+				"events":     rec + "/events.jsonl",
+				"transcript": rec + "/transcript.jsonl",
+				"recordings": []string{rec},
 			}
 		}
 		details := map[string]any{}

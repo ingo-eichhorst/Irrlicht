@@ -49,38 +49,57 @@ ci_coverage_id_for_dir() {
 }
 
 # ci_is_recorded <cell-dir>  → exit 0 iff the dir claims a recording.
+# ci_is_recorded <cell-dir> → exit 0 iff the cell has at least one recording
+#   under recordings/<name>/ (events.jsonl or a transcript).
 ci_is_recorded() {
-  local d="$1"
-  [[ -f "$d/transcript.jsonl" || -f "$d/transcript.md" || -f "$d/events.jsonl" ]]
+  local d r
+  d="$1"
+  for r in "$d"/recordings/*/; do
+    [[ -d "$r" ]] || continue
+    [[ -f "$r/transcript.jsonl" || -f "$r/transcript.md" || -f "$r/events.jsonl" ]] && return 0
+  done
+  return 1
 }
 
 # ci_missing_artifacts <agent> <dir-name> <cell-dir> <scenarios-root>
 #   → prints each missing/inconsistent artifact, one per line. Returns 0 when
-#     the cell is complete, 1 when at least one problem is printed.
+#     the cell is complete, 1 when at least one problem is printed. Every
+#     recording lives under recordings/<name>/; expected.jsonl is the cell-root
+#     spec. Each recording must be self-complete (events + transcript + golden).
 ci_missing_artifacts() {
   local agent="$1" name="$2" dir="$3" sdir="$4"
-  local problems=()
+  local problems=() r recname
 
-  # recipe row — dir name must be a shard name or recording_dir basename.
+  # recipe row — the folder must be a live cell (holds a metadata.json).
   if ! ci_recipe_dir_names "$agent" | grep -qxF "$name"; then
-    problems+=("recipe-row [orphan: no $agent shard maps to '$name']")
+    problems+=("recipe-row [orphan: no $agent cell maps to '$name']")
   fi
 
-  # assessment — since #511 it lives in the shard (.agents.<agent>.details.assessment),
-  # keyed by coverage_id, not an on-disk assessment.json.
+  # assessment — lives in the cell's metadata.json (details.assessment), keyed
+  # by coverage_id.
   local cid; cid="$(ci_coverage_id_for_dir "$name" "$agent")"
   if ! shard_has_assessment "$cid" "$agent"; then
-    problems+=("assessment [absent from shard '$cid' agents.$agent.details.assessment]")
+    problems+=("assessment [absent from cell '$cid' details.assessment]")
   fi
 
+  # The spec stays at the cell root.
   [[ -f "$dir/expected.jsonl" ]] || problems+=("expected.jsonl")
-  [[ -f "$dir/events.jsonl" ]]   || problems+=("events.jsonl")
 
-  if [[ -f "$dir/transcript.jsonl" ]]; then
-    [[ -f "$dir/transcript.jsonl.replay.json.golden" ]] \
-      || problems+=("transcript.jsonl.replay.json.golden")
-  elif [[ ! -f "$dir/transcript.md" ]]; then
-    problems+=("transcript.jsonl|transcript.md")
+  # The NEWEST recording (the canonical one) must carry a complete set. Older
+  # recordings are historical and may be partial — they're not gated (the
+  # byte-identity golden test independently pins every transcript-bearing one).
+  # Pathname globbing yields sorted-ascending names, so the last is the newest.
+  local newest=""
+  for r in "$dir"/recordings/*/; do [[ -d "$r" ]] && newest="$r"; done
+  if [[ -n "$newest" ]]; then
+    recname="$(basename "${newest%/}")"
+    [[ -f "$newest/events.jsonl" ]] || problems+=("recordings/$recname/events.jsonl")
+    if [[ -f "$newest/transcript.jsonl" ]]; then
+      [[ -f "$newest/transcript.jsonl.replay.json.golden" ]] \
+        || problems+=("recordings/$recname/transcript.jsonl.replay.json.golden")
+    elif [[ ! -f "$newest/transcript.md" ]]; then
+      problems+=("recordings/$recname/transcript.jsonl|transcript.md")
+    fi
   fi
 
   [[ ${#problems[@]} -eq 0 ]] && return 0

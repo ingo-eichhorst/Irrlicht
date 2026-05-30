@@ -1,10 +1,13 @@
 {
   "recording_dir": "claudecode/scenarios/1-4_session-resume",
   "artifacts": {
-    "events": "claudecode/scenarios/1-4_session-resume/events.jsonl",
-    "transcript": "claudecode/scenarios/1-4_session-resume/transcript.jsonl",
-    "manifest": "claudecode/scenarios/1-4_session-resume/manifest.json",
-    "golden": "claudecode/scenarios/1-4_session-resume/transcript.jsonl.replay.json.golden"
+    "events": "claudecode/scenarios/1-4_session-resume/recordings/2026-05-17-23-49-01_irrlichd-0.4.5+53618ac/events.jsonl",
+    "transcript": "claudecode/scenarios/1-4_session-resume/recordings/2026-05-17-23-49-01_irrlichd-0.4.5+53618ac/transcript.jsonl",
+    "manifest": "claudecode/scenarios/1-4_session-resume/recordings/2026-05-17-23-49-01_irrlichd-0.4.5+53618ac/manifest.json",
+    "golden": "claudecode/scenarios/1-4_session-resume/recordings/2026-05-17-23-49-01_irrlichd-0.4.5+53618ac/transcript.jsonl.replay.json.golden",
+    "recordings": [
+      "claudecode/scenarios/1-4_session-resume/recordings/2026-05-17-23-49-01_irrlichd-0.4.5+53618ac"
+    ]
   },
   "metadata": {
     "agent_supports": "yes",

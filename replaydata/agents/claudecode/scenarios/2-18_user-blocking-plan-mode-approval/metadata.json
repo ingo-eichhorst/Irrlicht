@@ -1,12 +1,13 @@
 {
   "recording_dir": "claudecode/scenarios/2-18_user-blocking-plan-mode-approval",
   "artifacts": {
-    "events": "claudecode/scenarios/2-18_user-blocking-plan-mode-approval/events.jsonl",
-    "transcript": "claudecode/scenarios/2-18_user-blocking-plan-mode-approval/transcript.jsonl",
-    "manifest": "claudecode/scenarios/2-18_user-blocking-plan-mode-approval/manifest.json",
-    "golden": "claudecode/scenarios/2-18_user-blocking-plan-mode-approval/transcript.jsonl.replay.json.golden",
+    "events": "claudecode/scenarios/2-18_user-blocking-plan-mode-approval/recordings/2026-05-23-00-29-47_irrlichd-0.4.7+a5eee20.dirty/events.jsonl",
+    "transcript": "claudecode/scenarios/2-18_user-blocking-plan-mode-approval/recordings/2026-05-23-00-29-47_irrlichd-0.4.7+a5eee20.dirty/transcript.jsonl",
+    "manifest": "claudecode/scenarios/2-18_user-blocking-plan-mode-approval/recordings/2026-05-23-00-29-47_irrlichd-0.4.7+a5eee20.dirty/manifest.json",
+    "golden": "claudecode/scenarios/2-18_user-blocking-plan-mode-approval/recordings/2026-05-23-00-29-47_irrlichd-0.4.7+a5eee20.dirty/transcript.jsonl.replay.json.golden",
     "recordings": [
-      "claudecode/scenarios/2-18_user-blocking-plan-mode-approval/recordings/2026-05-18-00-22-33_irrlichd-0.4.7+a5eee20.dirty"
+      "claudecode/scenarios/2-18_user-blocking-plan-mode-approval/recordings/2026-05-18-00-22-33_irrlichd-0.4.7+a5eee20.dirty",
+      "claudecode/scenarios/2-18_user-blocking-plan-mode-approval/recordings/2026-05-23-00-29-47_irrlichd-0.4.7+a5eee20.dirty"
     ]
   },
   "metadata": {

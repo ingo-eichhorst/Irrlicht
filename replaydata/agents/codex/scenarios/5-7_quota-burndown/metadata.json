@@ -1,9 +1,12 @@
 {
   "artifacts": {
-    "events": "codex/scenarios/5-7_quota-burndown/events.jsonl",
-    "transcript": "codex/scenarios/5-7_quota-burndown/transcript.jsonl",
-    "manifest": "codex/scenarios/5-7_quota-burndown/manifest.json",
-    "golden": "codex/scenarios/5-7_quota-burndown/transcript.jsonl.replay.json.golden"
+    "events": "codex/scenarios/5-7_quota-burndown/recordings/2026-05-29-23-41-38_irrlichd-0.4.7+71522a4/events.jsonl",
+    "transcript": "codex/scenarios/5-7_quota-burndown/recordings/2026-05-29-23-41-38_irrlichd-0.4.7+71522a4/transcript.jsonl",
+    "manifest": "codex/scenarios/5-7_quota-burndown/recordings/2026-05-29-23-41-38_irrlichd-0.4.7+71522a4/manifest.json",
+    "golden": "codex/scenarios/5-7_quota-burndown/recordings/2026-05-29-23-41-38_irrlichd-0.4.7+71522a4/transcript.jsonl.replay.json.golden",
+    "recordings": [
+      "codex/scenarios/5-7_quota-burndown/recordings/2026-05-29-23-41-38_irrlichd-0.4.7+71522a4"
+    ]
   },
   "metadata": {
     "agent_supports": "yes",

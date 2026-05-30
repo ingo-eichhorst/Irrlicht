@@ -26,15 +26,11 @@ func (s *Server) handleRecordingsList(w http.ResponseWriter, scenarioDir string)
 		}
 		out = append(out, archive)
 	}
-	sort.Slice(out, func(i, j int) bool {
-		// Newest-first by promoted_at, falling back to name for archives
-		// that predate the manifest field.
-		ai, bi := out[i].PromotedAt, out[j].PromotedAt
-		if ai != "" || bi != "" {
-			return ai > bi
-		}
-		return out[i].Name > out[j].Name
-	})
+	// Newest-first by NAME. Recording names are timestamp-prefixed, so
+	// lexicographic descending == chronological newest-first — and it matches
+	// validate.NewestRecordingDir (name-max), so list[0] is the same recording
+	// the detail view embeds as the newest. "Ordered by name" is the contract.
+	sort.Slice(out, func(i, j int) bool { return out[i].Name > out[j].Name })
 	writeJSON(w, out)
 }
 

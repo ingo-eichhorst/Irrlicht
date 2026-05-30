@@ -1,10 +1,13 @@
 {
   "recording_dir": "pi/scenarios/2-16_oversized-transcript-line",
   "artifacts": {
-    "events": "pi/scenarios/2-16_oversized-transcript-line/events.jsonl",
-    "transcript": "pi/scenarios/2-16_oversized-transcript-line/transcript.jsonl",
-    "manifest": "pi/scenarios/2-16_oversized-transcript-line/manifest.json",
-    "golden": "pi/scenarios/2-16_oversized-transcript-line/transcript.jsonl.replay.json.golden"
+    "events": "pi/scenarios/2-16_oversized-transcript-line/recordings/2026-05-25-02-36-28_irrlichd-0.4.7+6ab9f88/events.jsonl",
+    "transcript": "pi/scenarios/2-16_oversized-transcript-line/recordings/2026-05-25-02-36-28_irrlichd-0.4.7+6ab9f88/transcript.jsonl",
+    "manifest": "pi/scenarios/2-16_oversized-transcript-line/recordings/2026-05-25-02-36-28_irrlichd-0.4.7+6ab9f88/manifest.json",
+    "golden": "pi/scenarios/2-16_oversized-transcript-line/recordings/2026-05-25-02-36-28_irrlichd-0.4.7+6ab9f88/transcript.jsonl.replay.json.golden",
+    "recordings": [
+      "pi/scenarios/2-16_oversized-transcript-line/recordings/2026-05-25-02-36-28_irrlichd-0.4.7+6ab9f88"
+    ]
   },
   "metadata": {
     "agent_supports": "yes",

@@ -1,10 +1,13 @@
 {
   "recording_dir": "codex/scenarios/2-10_mid-turn-message-queued",
   "artifacts": {
-    "events": "codex/scenarios/2-10_mid-turn-message-queued/events.jsonl",
-    "transcript": "codex/scenarios/2-10_mid-turn-message-queued/transcript.jsonl",
-    "manifest": "codex/scenarios/2-10_mid-turn-message-queued/manifest.json",
-    "golden": "codex/scenarios/2-10_mid-turn-message-queued/transcript.jsonl.replay.json.golden"
+    "events": "codex/scenarios/2-10_mid-turn-message-queued/recordings/2026-05-23-22-06-09_irrlichd-0.4.7+1a685fa/events.jsonl",
+    "transcript": "codex/scenarios/2-10_mid-turn-message-queued/recordings/2026-05-23-22-06-09_irrlichd-0.4.7+1a685fa/transcript.jsonl",
+    "manifest": "codex/scenarios/2-10_mid-turn-message-queued/recordings/2026-05-23-22-06-09_irrlichd-0.4.7+1a685fa/manifest.json",
+    "golden": "codex/scenarios/2-10_mid-turn-message-queued/recordings/2026-05-23-22-06-09_irrlichd-0.4.7+1a685fa/transcript.jsonl.replay.json.golden",
+    "recordings": [
+      "codex/scenarios/2-10_mid-turn-message-queued/recordings/2026-05-23-22-06-09_irrlichd-0.4.7+1a685fa"
+    ]
   },
   "metadata": {
     "agent_supports": "yes",

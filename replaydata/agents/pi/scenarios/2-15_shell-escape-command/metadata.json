@@ -1,10 +1,13 @@
 {
   "recording_dir": "pi/scenarios/2-15_shell-escape-command",
   "artifacts": {
-    "events": "pi/scenarios/2-15_shell-escape-command/events.jsonl",
-    "transcript": "pi/scenarios/2-15_shell-escape-command/transcript.jsonl",
-    "manifest": "pi/scenarios/2-15_shell-escape-command/manifest.json",
-    "golden": "pi/scenarios/2-15_shell-escape-command/transcript.jsonl.replay.json.golden"
+    "events": "pi/scenarios/2-15_shell-escape-command/recordings/2026-05-25-02-51-25_irrlichd-0.4.7+021b5b0/events.jsonl",
+    "transcript": "pi/scenarios/2-15_shell-escape-command/recordings/2026-05-25-02-51-25_irrlichd-0.4.7+021b5b0/transcript.jsonl",
+    "manifest": "pi/scenarios/2-15_shell-escape-command/recordings/2026-05-25-02-51-25_irrlichd-0.4.7+021b5b0/manifest.json",
+    "golden": "pi/scenarios/2-15_shell-escape-command/recordings/2026-05-25-02-51-25_irrlichd-0.4.7+021b5b0/transcript.jsonl.replay.json.golden",
+    "recordings": [
+      "pi/scenarios/2-15_shell-escape-command/recordings/2026-05-25-02-51-25_irrlichd-0.4.7+021b5b0"
+    ]
   },
   "metadata": {
     "agent_supports": "yes",

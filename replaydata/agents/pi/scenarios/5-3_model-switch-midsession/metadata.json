@@ -1,10 +1,13 @@
 {
   "recording_dir": "pi/scenarios/5-3_model-switch-midsession",
   "artifacts": {
-    "events": "pi/scenarios/5-3_model-switch-midsession/events.jsonl",
-    "transcript": "pi/scenarios/5-3_model-switch-midsession/transcript.jsonl",
-    "manifest": "pi/scenarios/5-3_model-switch-midsession/manifest.json",
-    "golden": "pi/scenarios/5-3_model-switch-midsession/transcript.jsonl.replay.json.golden"
+    "events": "pi/scenarios/5-3_model-switch-midsession/recordings/2026-05-25-04-02-05_irrlichd-0.4.7+4de276d/events.jsonl",
+    "transcript": "pi/scenarios/5-3_model-switch-midsession/recordings/2026-05-25-04-02-05_irrlichd-0.4.7+4de276d/transcript.jsonl",
+    "manifest": "pi/scenarios/5-3_model-switch-midsession/recordings/2026-05-25-04-02-05_irrlichd-0.4.7+4de276d/manifest.json",
+    "golden": "pi/scenarios/5-3_model-switch-midsession/recordings/2026-05-25-04-02-05_irrlichd-0.4.7+4de276d/transcript.jsonl.replay.json.golden",
+    "recordings": [
+      "pi/scenarios/5-3_model-switch-midsession/recordings/2026-05-25-04-02-05_irrlichd-0.4.7+4de276d"
+    ]
   },
   "metadata": {
     "agent_supports": "yes",

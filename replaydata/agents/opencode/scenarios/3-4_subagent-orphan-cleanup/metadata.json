@@ -1,10 +1,13 @@
 {
   "recording_dir": "opencode/scenarios/3-4_subagent-orphan-cleanup",
   "artifacts": {
-    "events": "opencode/scenarios/3-4_subagent-orphan-cleanup/events.jsonl",
-    "transcript": "opencode/scenarios/3-4_subagent-orphan-cleanup/transcript.jsonl",
-    "manifest": "opencode/scenarios/3-4_subagent-orphan-cleanup/manifest.json",
-    "golden": "opencode/scenarios/3-4_subagent-orphan-cleanup/transcript.jsonl.replay.json.golden"
+    "events": "opencode/scenarios/3-4_subagent-orphan-cleanup/recordings/2026-05-27-05-32-05_irrlichd-0.4.7+76ca42f/events.jsonl",
+    "transcript": "opencode/scenarios/3-4_subagent-orphan-cleanup/recordings/2026-05-27-05-32-05_irrlichd-0.4.7+76ca42f/transcript.jsonl",
+    "manifest": "opencode/scenarios/3-4_subagent-orphan-cleanup/recordings/2026-05-27-05-32-05_irrlichd-0.4.7+76ca42f/manifest.json",
+    "golden": "opencode/scenarios/3-4_subagent-orphan-cleanup/recordings/2026-05-27-05-32-05_irrlichd-0.4.7+76ca42f/transcript.jsonl.replay.json.golden",
+    "recordings": [
+      "opencode/scenarios/3-4_subagent-orphan-cleanup/recordings/2026-05-27-05-32-05_irrlichd-0.4.7+76ca42f"
+    ]
   },
   "metadata": {
     "agent_supports": "yes",

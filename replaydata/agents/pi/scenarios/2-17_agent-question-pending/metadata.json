@@ -1,10 +1,13 @@
 {
   "recording_dir": "pi/scenarios/2-17_agent-question-pending",
   "artifacts": {
-    "events": "pi/scenarios/2-17_agent-question-pending/events.jsonl",
-    "transcript": "pi/scenarios/2-17_agent-question-pending/transcript.jsonl",
-    "manifest": "pi/scenarios/2-17_agent-question-pending/manifest.json",
-    "golden": "pi/scenarios/2-17_agent-question-pending/transcript.jsonl.replay.json.golden"
+    "events": "pi/scenarios/2-17_agent-question-pending/recordings/2026-05-25-05-28-25_irrlichd-0.4.7+730a676/events.jsonl",
+    "transcript": "pi/scenarios/2-17_agent-question-pending/recordings/2026-05-25-05-28-25_irrlichd-0.4.7+730a676/transcript.jsonl",
+    "manifest": "pi/scenarios/2-17_agent-question-pending/recordings/2026-05-25-05-28-25_irrlichd-0.4.7+730a676/manifest.json",
+    "golden": "pi/scenarios/2-17_agent-question-pending/recordings/2026-05-25-05-28-25_irrlichd-0.4.7+730a676/transcript.jsonl.replay.json.golden",
+    "recordings": [
+      "pi/scenarios/2-17_agent-question-pending/recordings/2026-05-25-05-28-25_irrlichd-0.4.7+730a676"
+    ]
   },
   "metadata": {
     "agent_supports": "yes",

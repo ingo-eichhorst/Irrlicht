@@ -52,7 +52,11 @@ type ShardAgent struct {
 }
 
 // ShardArtifacts names the on-disk recording files, as paths relative to
-// replaydata/agents/. Missing files are omitted.
+// replaydata/agents/. Every recording lives under recordings/<name>/ (there is
+// no "latest" at the cell root). Events/Transcript/TranscriptMD/Manifest/Golden
+// point at the NEWEST recording's files; Recordings lists every recording dir
+// (newest sorts last by name). Missing files are omitted. A cell is "recorded"
+// iff Recordings is non-empty (see matrix.cellRecorded).
 type ShardArtifacts struct {
 	Events       string   `json:"events,omitempty"`
 	Transcript   string   `json:"transcript,omitempty"`

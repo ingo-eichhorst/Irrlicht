@@ -1,10 +1,13 @@
 {
   "recording_dir": "codex/scenarios/2-7_autonomous-loop",
   "artifacts": {
-    "events": "codex/scenarios/2-7_autonomous-loop/events.jsonl",
-    "transcript": "codex/scenarios/2-7_autonomous-loop/transcript.jsonl",
-    "manifest": "codex/scenarios/2-7_autonomous-loop/manifest.json",
-    "golden": "codex/scenarios/2-7_autonomous-loop/transcript.jsonl.replay.json.golden"
+    "events": "codex/scenarios/2-7_autonomous-loop/recordings/2026-05-23-23-15-25_irrlichd-0.4.7+774c575/events.jsonl",
+    "transcript": "codex/scenarios/2-7_autonomous-loop/recordings/2026-05-23-23-15-25_irrlichd-0.4.7+774c575/transcript.jsonl",
+    "manifest": "codex/scenarios/2-7_autonomous-loop/recordings/2026-05-23-23-15-25_irrlichd-0.4.7+774c575/manifest.json",
+    "golden": "codex/scenarios/2-7_autonomous-loop/recordings/2026-05-23-23-15-25_irrlichd-0.4.7+774c575/transcript.jsonl.replay.json.golden",
+    "recordings": [
+      "codex/scenarios/2-7_autonomous-loop/recordings/2026-05-23-23-15-25_irrlichd-0.4.7+774c575"
+    ]
   },
   "metadata": {
     "agent_supports": "partial",

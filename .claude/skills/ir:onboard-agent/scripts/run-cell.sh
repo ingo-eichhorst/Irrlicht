@@ -501,8 +501,12 @@ replay_one() {
 
 replay_one "$STAGED_TRANSCRIPT" "$STAGING/reports/staged.json" || exit 1
 
-COMMITTED_TRANSCRIPT="$REPO_ROOT/replaydata/agents/$ADAPTER/scenarios/$FOLDER/transcript.$TRANSCRIPT_EXT"
-if [[ -f "$COMMITTED_TRANSCRIPT" ]]; then
+# The committed recording lives under recordings/<newest>/ (no "latest" at the
+# cell root). Compare the staged transcript against the newest committed one.
+COMMITTED_CELL="$REPO_ROOT/replaydata/agents/$ADAPTER/scenarios/$FOLDER"
+NEWEST_REC="$(ls -1d "$COMMITTED_CELL"/recordings/*/ 2>/dev/null | sort | tail -n1)"
+COMMITTED_TRANSCRIPT="${NEWEST_REC%/}/transcript.$TRANSCRIPT_EXT"
+if [[ -n "$NEWEST_REC" && -f "$COMMITTED_TRANSCRIPT" ]]; then
   replay_one "$COMMITTED_TRANSCRIPT" "$STAGING/reports/committed.json" || exit 1
   COMMITTED_PRESENT=true
 else

@@ -1,9 +1,12 @@
 {
   "recording_dir": "aider/scenarios/5-3_model-switch-midsession",
   "artifacts": {
-    "events": "aider/scenarios/5-3_model-switch-midsession/events.jsonl",
-    "transcript_md": "aider/scenarios/5-3_model-switch-midsession/transcript.md",
-    "manifest": "aider/scenarios/5-3_model-switch-midsession/manifest.json"
+    "events": "aider/scenarios/5-3_model-switch-midsession/recordings/2026-05-25-17-46-10_irrlichd-0.4.7+67feba0/events.jsonl",
+    "transcript_md": "aider/scenarios/5-3_model-switch-midsession/recordings/2026-05-25-17-46-10_irrlichd-0.4.7+67feba0/transcript.md",
+    "manifest": "aider/scenarios/5-3_model-switch-midsession/recordings/2026-05-25-17-46-10_irrlichd-0.4.7+67feba0/manifest.json",
+    "recordings": [
+      "aider/scenarios/5-3_model-switch-midsession/recordings/2026-05-25-17-46-10_irrlichd-0.4.7+67feba0"
+    ]
   },
   "metadata": {
     "agent_supports": "yes",

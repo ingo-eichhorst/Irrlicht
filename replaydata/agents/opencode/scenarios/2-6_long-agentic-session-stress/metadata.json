@@ -1,12 +1,13 @@
 {
   "recording_dir": "opencode/scenarios/2-6_long-agentic-session-stress",
   "artifacts": {
-    "events": "opencode/scenarios/2-6_long-agentic-session-stress/events.jsonl",
-    "transcript": "opencode/scenarios/2-6_long-agentic-session-stress/transcript.jsonl",
-    "manifest": "opencode/scenarios/2-6_long-agentic-session-stress/manifest.json",
-    "golden": "opencode/scenarios/2-6_long-agentic-session-stress/transcript.jsonl.replay.json.golden",
+    "events": "opencode/scenarios/2-6_long-agentic-session-stress/recordings/2026-05-27-07-20-36_irrlichd-0.4.7+860c0a8/events.jsonl",
+    "transcript": "opencode/scenarios/2-6_long-agentic-session-stress/recordings/2026-05-27-07-20-36_irrlichd-0.4.7+860c0a8/transcript.jsonl",
+    "manifest": "opencode/scenarios/2-6_long-agentic-session-stress/recordings/2026-05-27-07-20-36_irrlichd-0.4.7+860c0a8/manifest.json",
+    "golden": "opencode/scenarios/2-6_long-agentic-session-stress/recordings/2026-05-27-07-20-36_irrlichd-0.4.7+860c0a8/transcript.jsonl.replay.json.golden",
     "recordings": [
-      "opencode/scenarios/2-6_long-agentic-session-stress/recordings/2026-05-26-00-42-40_irrlichd-0.4.7+860c0a8"
+      "opencode/scenarios/2-6_long-agentic-session-stress/recordings/2026-05-26-00-42-40_irrlichd-0.4.7+860c0a8",
+      "opencode/scenarios/2-6_long-agentic-session-stress/recordings/2026-05-27-07-20-36_irrlichd-0.4.7+860c0a8"
     ]
   },
   "metadata": {

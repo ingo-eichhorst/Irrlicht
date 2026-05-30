@@ -1,9 +1,12 @@
 {
   "artifacts": {
-    "events": "opencode/scenarios/5-3_model-switch-midsession/events.jsonl",
-    "transcript": "opencode/scenarios/5-3_model-switch-midsession/transcript.jsonl",
-    "manifest": "opencode/scenarios/5-3_model-switch-midsession/manifest.json",
-    "golden": "opencode/scenarios/5-3_model-switch-midsession/transcript.jsonl.replay.json.golden"
+    "events": "opencode/scenarios/5-3_model-switch-midsession/recordings/2026-05-29-23-39-07_irrlichd-0.4.7+c56c426.dirty/events.jsonl",
+    "transcript": "opencode/scenarios/5-3_model-switch-midsession/recordings/2026-05-29-23-39-07_irrlichd-0.4.7+c56c426.dirty/transcript.jsonl",
+    "manifest": "opencode/scenarios/5-3_model-switch-midsession/recordings/2026-05-29-23-39-07_irrlichd-0.4.7+c56c426.dirty/manifest.json",
+    "golden": "opencode/scenarios/5-3_model-switch-midsession/recordings/2026-05-29-23-39-07_irrlichd-0.4.7+c56c426.dirty/transcript.jsonl.replay.json.golden",
+    "recordings": [
+      "opencode/scenarios/5-3_model-switch-midsession/recordings/2026-05-29-23-39-07_irrlichd-0.4.7+c56c426.dirty"
+    ]
   },
   "metadata": {
     "agent_supports": "yes",

@@ -1,10 +1,13 @@
 {
   "recording_dir": "claudecode/scenarios/2-15_shell-escape-command",
   "artifacts": {
-    "events": "claudecode/scenarios/2-15_shell-escape-command/events.jsonl",
-    "transcript": "claudecode/scenarios/2-15_shell-escape-command/transcript.jsonl",
-    "manifest": "claudecode/scenarios/2-15_shell-escape-command/manifest.json",
-    "golden": "claudecode/scenarios/2-15_shell-escape-command/transcript.jsonl.replay.json.golden"
+    "events": "claudecode/scenarios/2-15_shell-escape-command/recordings/2026-05-18-00-21-28_irrlichd-0.4.5+5b13ba9/events.jsonl",
+    "transcript": "claudecode/scenarios/2-15_shell-escape-command/recordings/2026-05-18-00-21-28_irrlichd-0.4.5+5b13ba9/transcript.jsonl",
+    "manifest": "claudecode/scenarios/2-15_shell-escape-command/recordings/2026-05-18-00-21-28_irrlichd-0.4.5+5b13ba9/manifest.json",
+    "golden": "claudecode/scenarios/2-15_shell-escape-command/recordings/2026-05-18-00-21-28_irrlichd-0.4.5+5b13ba9/transcript.jsonl.replay.json.golden",
+    "recordings": [
+      "claudecode/scenarios/2-15_shell-escape-command/recordings/2026-05-18-00-21-28_irrlichd-0.4.5+5b13ba9"
+    ]
   },
   "metadata": {
     "agent_supports": "yes",

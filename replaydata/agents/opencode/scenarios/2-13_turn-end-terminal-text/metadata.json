@@ -1,10 +1,13 @@
 {
   "recording_dir": "opencode/scenarios/2-13_turn-end-terminal-text",
   "artifacts": {
-    "events": "opencode/scenarios/2-13_turn-end-terminal-text/events.jsonl",
-    "transcript": "opencode/scenarios/2-13_turn-end-terminal-text/transcript.jsonl",
-    "manifest": "opencode/scenarios/2-13_turn-end-terminal-text/manifest.json",
-    "golden": "opencode/scenarios/2-13_turn-end-terminal-text/transcript.jsonl.replay.json.golden"
+    "events": "opencode/scenarios/2-13_turn-end-terminal-text/recordings/2026-05-25-23-28-09_irrlichd-0.4.7+95eb996/events.jsonl",
+    "transcript": "opencode/scenarios/2-13_turn-end-terminal-text/recordings/2026-05-25-23-28-09_irrlichd-0.4.7+95eb996/transcript.jsonl",
+    "manifest": "opencode/scenarios/2-13_turn-end-terminal-text/recordings/2026-05-25-23-28-09_irrlichd-0.4.7+95eb996/manifest.json",
+    "golden": "opencode/scenarios/2-13_turn-end-terminal-text/recordings/2026-05-25-23-28-09_irrlichd-0.4.7+95eb996/transcript.jsonl.replay.json.golden",
+    "recordings": [
+      "opencode/scenarios/2-13_turn-end-terminal-text/recordings/2026-05-25-23-28-09_irrlichd-0.4.7+95eb996"
+    ]
   },
   "metadata": {
     "agent_supports": "yes",

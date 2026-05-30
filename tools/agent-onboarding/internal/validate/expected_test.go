@@ -107,7 +107,7 @@ func TestValidateExpected_transcriptWithoutEventsErrors(t *testing.T) {
 	mustWrite(t, filepath.Join(dir, "expected.jsonl"),
 		`{"schema_version":1,"scenario_id":"test","source":"unit test"}`+"\n"+
 			`{"phase":"p1","expected_state":"ready","relative_to":"start","text":"_"}`+"\n")
-	mustWrite(t, filepath.Join(dir, "transcript.jsonl"), `{"type":"user"}`+"\n")
+	writeRec(t, dir, "transcript.jsonl", `{"type":"user"}`+"\n")
 	report, err := ValidateExpected(dir)
 	if err == nil {
 		t.Fatalf("expected an error for a transcript-without-events cell, got report=%+v", report)
@@ -126,7 +126,7 @@ func TestValidateExpected_transcriptWithoutEventsErrors(t *testing.T) {
 // corrupt one expected.jsonl and confirm the validator fails".
 func TestValidateExpected_unknownAnchorFails(t *testing.T) {
 	dir := t.TempDir()
-	mustWrite(t, filepath.Join(dir, "events.jsonl"),
+	writeRec(t, dir, "events.jsonl",
 		`{"ts":"2026-01-01T00:00:00Z","kind":"transcript_new","session_id":"x"}`+"\n"+
 			`{"ts":"2026-01-01T00:00:01Z","kind":"state_transition","session_id":"x","new_state":"ready"}`+"\n")
 	mustWrite(t, filepath.Join(dir, "expected.jsonl"),
@@ -153,7 +153,7 @@ func TestValidateExpected_unknownAnchorFails(t *testing.T) {
 // matching.
 func TestValidateExpected_maxDelayCatchesDrift(t *testing.T) {
 	dir := t.TempDir()
-	mustWrite(t, filepath.Join(dir, "events.jsonl"),
+	writeRec(t, dir, "events.jsonl",
 		`{"ts":"2026-01-01T00:00:00Z","kind":"transcript_new","session_id":"x"}`+"\n"+
 			`{"ts":"2026-01-01T00:00:02Z","kind":"state_transition","session_id":"x","new_state":"ready"}`+"\n")
 	mustWrite(t, filepath.Join(dir, "expected.jsonl"),
@@ -177,7 +177,7 @@ func TestValidateExpected_maxDelayCatchesDrift(t *testing.T) {
 // the OLDER session's ready, not the newer one.
 func TestValidateExpected_sameSessionAs_filtersByID(t *testing.T) {
 	dir := t.TempDir()
-	mustWrite(t, filepath.Join(dir, "events.jsonl"),
+	writeRec(t, dir, "events.jsonl",
 		`{"ts":"2026-01-01T00:00:00Z","kind":"transcript_new","session_id":"sess-a"}`+"\n"+
 			`{"ts":"2026-01-01T00:00:00.001Z","kind":"state_transition","session_id":"sess-a","new_state":"ready"}`+"\n"+
 			`{"ts":"2026-01-01T00:00:01Z","kind":"state_transition","session_id":"sess-a","new_state":"working"}`+"\n"+
@@ -211,7 +211,7 @@ func TestValidateExpected_sameSessionAs_filtersByID(t *testing.T) {
 // phase fails with a session-specific error message.
 func TestValidateExpected_sameSessionAs_rejectsWhenNoMatch(t *testing.T) {
 	dir := t.TempDir()
-	mustWrite(t, filepath.Join(dir, "events.jsonl"),
+	writeRec(t, dir, "events.jsonl",
 		`{"ts":"2026-01-01T00:00:00Z","kind":"transcript_new","session_id":"sess-a"}`+"\n"+
 			`{"ts":"2026-01-01T00:00:00.001Z","kind":"state_transition","session_id":"sess-a","new_state":"ready"}`+"\n"+
 			`{"ts":"2026-01-01T00:00:01Z","kind":"transcript_removed","session_id":"OTHER-SESS"}`+"\n")
@@ -238,7 +238,7 @@ func TestValidateExpected_sameSessionAs_rejectsWhenNoMatch(t *testing.T) {
 // stale transition on the original UUID.
 func TestValidateExpected_newSession_requiresFreshID(t *testing.T) {
 	dir := t.TempDir()
-	mustWrite(t, filepath.Join(dir, "events.jsonl"),
+	writeRec(t, dir, "events.jsonl",
 		`{"ts":"2026-01-01T00:00:00Z","kind":"transcript_new","session_id":"old"}`+"\n"+
 			`{"ts":"2026-01-01T00:00:00.001Z","kind":"state_transition","session_id":"old","new_state":"ready"}`+"\n"+
 			`{"ts":"2026-01-01T00:00:01Z","kind":"state_transition","session_id":"old","new_state":"working"}`+"\n"+
@@ -266,7 +266,7 @@ func TestValidateExpected_newSession_requiresFreshID(t *testing.T) {
 // with a new-session-specific error message.
 func TestValidateExpected_newSession_failsWhenOnlyOldSeen(t *testing.T) {
 	dir := t.TempDir()
-	mustWrite(t, filepath.Join(dir, "events.jsonl"),
+	writeRec(t, dir, "events.jsonl",
 		`{"ts":"2026-01-01T00:00:00Z","kind":"transcript_new","session_id":"only"}`+"\n"+
 			`{"ts":"2026-01-01T00:00:00.001Z","kind":"state_transition","session_id":"only","new_state":"ready"}`+"\n"+
 			`{"ts":"2026-01-01T00:00:01Z","kind":"state_transition","session_id":"only","new_state":"ready"}`+"\n")
@@ -292,7 +292,7 @@ func TestValidateExpected_newSession_failsWhenOnlyOldSeen(t *testing.T) {
 // new_session: true.
 func TestValidateExpected_sameAndNewMutuallyExclusive(t *testing.T) {
 	dir := t.TempDir()
-	mustWrite(t, filepath.Join(dir, "events.jsonl"), "")
+	writeRec(t, dir, "events.jsonl", "")
 	mustWrite(t, filepath.Join(dir, "expected.jsonl"),
 		`{"schema_version":1,"scenario_id":"test","source":"unit test"}`+"\n"+
 			`{"phase":"bad","expected_state":"ready","relative_to":"start","same_session_as":"x","new_session":true,"text":"can't have both"}`+"\n")
@@ -307,7 +307,18 @@ func TestValidateExpected_sameAndNewMutuallyExclusive(t *testing.T) {
 
 func mustWrite(t *testing.T, path, content string) {
 	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", filepath.Dir(path), err)
+	}
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write %s: %v", path, err)
 	}
+}
+
+// writeRec writes a recording artifact under dir/recordings/rec/<file>, mirroring
+// the on-disk layout where every recording lives under recordings/<name>/. The
+// spec (expected.jsonl) stays at the cell root.
+func writeRec(t *testing.T, dir, file, content string) {
+	t.Helper()
+	mustWrite(t, filepath.Join(dir, "recordings", "rec", file), content)
 }

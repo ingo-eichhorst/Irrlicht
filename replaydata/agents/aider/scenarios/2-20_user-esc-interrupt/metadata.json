@@ -1,9 +1,12 @@
 {
   "recording_dir": "aider/scenarios/2-20_user-esc-interrupt",
   "artifacts": {
-    "events": "aider/scenarios/2-20_user-esc-interrupt/events.jsonl",
-    "transcript_md": "aider/scenarios/2-20_user-esc-interrupt/transcript.md",
-    "manifest": "aider/scenarios/2-20_user-esc-interrupt/manifest.json"
+    "events": "aider/scenarios/2-20_user-esc-interrupt/recordings/2026-05-25-19-10-41_irrlichd-0.4.7+940e85a/events.jsonl",
+    "transcript_md": "aider/scenarios/2-20_user-esc-interrupt/recordings/2026-05-25-19-10-41_irrlichd-0.4.7+940e85a/transcript.md",
+    "manifest": "aider/scenarios/2-20_user-esc-interrupt/recordings/2026-05-25-19-10-41_irrlichd-0.4.7+940e85a/manifest.json",
+    "recordings": [
+      "aider/scenarios/2-20_user-esc-interrupt/recordings/2026-05-25-19-10-41_irrlichd-0.4.7+940e85a"
+    ]
   },
   "metadata": {
     "agent_supports": "yes",

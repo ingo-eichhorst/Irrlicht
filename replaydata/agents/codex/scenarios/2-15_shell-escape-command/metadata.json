@@ -1,10 +1,13 @@
 {
   "recording_dir": "codex/scenarios/2-15_shell-escape-command",
   "artifacts": {
-    "events": "codex/scenarios/2-15_shell-escape-command/events.jsonl",
-    "transcript": "codex/scenarios/2-15_shell-escape-command/transcript.jsonl",
-    "manifest": "codex/scenarios/2-15_shell-escape-command/manifest.json",
-    "golden": "codex/scenarios/2-15_shell-escape-command/transcript.jsonl.replay.json.golden"
+    "events": "codex/scenarios/2-15_shell-escape-command/recordings/2026-05-23-22-23-45_irrlichd-0.4.7+7075bff/events.jsonl",
+    "transcript": "codex/scenarios/2-15_shell-escape-command/recordings/2026-05-23-22-23-45_irrlichd-0.4.7+7075bff/transcript.jsonl",
+    "manifest": "codex/scenarios/2-15_shell-escape-command/recordings/2026-05-23-22-23-45_irrlichd-0.4.7+7075bff/manifest.json",
+    "golden": "codex/scenarios/2-15_shell-escape-command/recordings/2026-05-23-22-23-45_irrlichd-0.4.7+7075bff/transcript.jsonl.replay.json.golden",
+    "recordings": [
+      "codex/scenarios/2-15_shell-escape-command/recordings/2026-05-23-22-23-45_irrlichd-0.4.7+7075bff"
+    ]
   },
   "metadata": {
     "agent_supports": "yes",
