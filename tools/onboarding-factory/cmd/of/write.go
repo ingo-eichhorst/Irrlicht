@@ -27,7 +27,7 @@ func flagPassed(fs *flag.FlagSet, name string) bool {
 
 // writeCatalog is the writable shape of replaydata/agents/scenarios.json. Meta
 // is kept as a raw blob so it round-trips byte-for-byte (we never touch
-// min_versions/transcript_extensions/capability_vocab from a scenario write).
+// min_versions/transcript_extensions from a scenario write).
 type writeCatalog struct {
 	Meta      json.RawMessage `json:"meta"`
 	Scenarios []shard.Shard   `json:"scenarios"`
@@ -269,7 +269,7 @@ func runAgent(args []string, stdout, stderr io.Writer) int {
 }
 
 // registerAgentColumn adds id→minVer to scenarios.json meta.min_versions,
-// preserving the rest of meta (transcript_extensions, capability_vocab).
+// preserving the rest of meta (transcript_extensions).
 func registerAgentColumn(repoRoot, id, minVer string, stderr io.Writer) int {
 	cat, err := loadWriteCatalog(repoRoot)
 	if err != nil {

@@ -299,17 +299,17 @@ test: add table-driven tests for state machine</code></pre>
 
       <p>Agent adapters are the most concrete extension path Irrlicht offers. The repo ships a guided onboarding flow so a new adapter can be built, fixtured, and promoted without re-deriving conventions from the source.</p>
 
-      <h3>Start with the onboarding skill</h3>
+      <h3>Start with the onboarding factory</h3>
 
-      <p>Run the <code>/ir:onboard-agent</code> skill (under <code>.claude/skills/ir:onboard-agent/</code>). It drives the agent's CLI through a shared scenario catalogue, records lifecycle events, and stages curated fixtures under <code>.build/refresh/</code> for review.</p>
+      <p>Run the <code>/ir:onboarding-factory</code> skill (under <code>.claude/skills/ir:onboarding-factory/</code>). It is a zero-bash dispatcher over four verbs -- <code>create-scenario</code>, <code>create-agent</code>, <code>assess</code>, and <code>record</code> -- each of which drives the <code>of</code> factory CLI (<code>tools/onboarding-factory</code>). The factory is the sole writer of everything under <code>replaydata/</code>; <code>record</code> drives the agent's CLI through the cell's recipe, captures lifecycle events, and verifies the recording against its spec.</p>
 
-      <p>The skill unifies three operations -- bootstrap (first time onboarding a new agent), refresh (re-recording fixtures against a newer CLI), and validation (diffing recordings against committed fixtures).</p>
+      <p>The verbs cover the whole flow -- <code>create-agent</code> (first-time onboarding of a new agent column), <code>assess</code> (judge a cell + author its recipe and spec), and <code>record</code> (capture + verify, including re-recording against a newer CLI).</p>
 
-      <h3>Declare capabilities, not behavior</h3>
+      <h3>Judge support, don't declare it</h3>
 
-      <p>Adapters are agent-agnostic in the scenario layer. Each adapter declares what it supports in <code>replaydata/agents/&lt;name&gt;/capabilities.json</code>, drawing from the canonical feature catalogue at <code>replaydata/agents/features.json</code>. Scenarios in <code>.claude/skills/ir:onboard-agent/scenarios.json</code> declare a <code>requires</code> array, and the matrix cells fall out automatically: a scenario applies to an adapter only if the adapter's capabilities cover its requirements.</p>
+      <p>Scenarios are agent-agnostic: one five-field row (<code>id</code>, <code>name</code>, <code>description</code>, <code>acceptance_criteria</code>, <code>process</code>) in <code>replaydata/agents/scenarios.json</code>, with no per-adapter data and no <code>requires</code> gate. Whether a scenario applies to your adapter -- and whether the daemon can observe it and the driver can drive it -- is judged per cell by the <code>assess</code> verb across three pillars (agent capability / daemon sensor capture / driver capability), each anchored to cited evidence.</p>
 
-      <p>This means: never write per-adapter scenarios. Add a missing capability to <code>features.json</code>, declare it in your adapter's <code>capabilities.json</code>, and reuse the canonical scenarios.</p>
+      <p>This means: never write per-adapter scenarios. Add the agent-agnostic row once via <code>of scenario add</code>, then <code>assess</code> and <code>record</code> each adapter against it.</p>
 
       <h3>Aim for a maturity stage</h3>
 

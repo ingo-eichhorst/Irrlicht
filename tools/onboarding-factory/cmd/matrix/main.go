@@ -81,19 +81,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 	cells := fs.Bool("cells", false, "emit per-cell JSON for --agent")
 	agent := fs.String("agent", "", "agent slug (required for completeness / cells)")
 	repoRoot := fs.String("repo-root", ".", "repository root containing replaydata/ and .claude/")
-	scenarios := fs.String("scenarios", "", "override path to scenarios.json")
 	agentsRoot := fs.String("agents-root", "", "override path to replaydata/agents")
 	if err := fs.Parse(args[1:]); err != nil {
 		return exitUsage
 	}
 
 	cfg := matrix.Config{
-		RepoRoot:      *repoRoot,
-		ScenariosPath: *scenarios,
-		AgentsRoot:    *agentsRoot,
-	}
-	if cfg.ScenariosPath == "" {
-		cfg.ScenariosPath = filepath.Join(*repoRoot, "replaydata", "agents", "scenarios.json")
+		RepoRoot:   *repoRoot,
+		AgentsRoot: *agentsRoot,
 	}
 	if cfg.AgentsRoot == "" {
 		cfg.AgentsRoot = filepath.Join(*repoRoot, "replaydata", "agents")

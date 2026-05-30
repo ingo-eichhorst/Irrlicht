@@ -20,27 +20,22 @@ func runRollup(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	check := fs.Bool("check", false, "verify the committed rollup matches the derived output; exit 1 on drift")
 	repoRoot := fs.String("repo-root", ".", "repository root containing replaydata/ and .claude/")
-	scenarios := fs.String("scenarios", "", "override path to scenarios.json")
 	agentsRoot := fs.String("agents-root", "", "override path to replaydata/agents")
 	out := fs.String("out", "", "override path to agent-scenarios-coverage.json")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
 
-	scenariosPath := *scenarios
-	if scenariosPath == "" {
-		scenariosPath = filepath.Join(*repoRoot, "replaydata", "agents", "scenarios.json")
-	}
 	rootPath := *agentsRoot
 	if rootPath == "" {
 		rootPath = filepath.Join(*repoRoot, "replaydata", "agents")
 	}
 	outPath := *out
 	if outPath == "" {
-		outPath = filepath.Join(filepath.Dir(scenariosPath), "agent-scenarios-coverage.json")
+		outPath = filepath.Join(rootPath, "agent-scenarios-coverage.json")
 	}
 
-	m, err := matrix.Load(matrix.Config{ScenariosPath: scenariosPath, AgentsRoot: rootPath})
+	m, err := matrix.Load(matrix.Config{AgentsRoot: rootPath})
 	if err != nil {
 		fmt.Fprintf(stderr, "matrix rollup: %v\n", err)
 		return exitUsage

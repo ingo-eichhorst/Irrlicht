@@ -17,7 +17,7 @@ const defaultMaxSessionAge = 5 * 24 * time.Hour
 // (e.g. when the daemon itself is the only process with the transcript open).
 //
 // Overridable via IRRLICHT_READY_SESSION_TTL (Go duration string, e.g. "15s",
-// "5m") so the ir:onboard-agent skill can record the long-idle-live-session
+// "5m") so the onboarding factory can record the long-idle-live-session
 // scenario in seconds instead of half an hour. Default in production
 // remains 30 min.
 const defaultReadySessionTTL = 30 * time.Minute

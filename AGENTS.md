@@ -66,22 +66,32 @@ There are two web trees, and they are NOT competing copies:
 
 When changing the live dashboard, edit `platforms/web/` only.
 
-## Onboarding fixture matrix (one catalog + per-agent cells)
+## Onboarding fixture matrix (the factory + per-agent cells)
 
 The agent-onboarding coverage matrix — scenario × adapter, browsed by the
-viewer's catalog SPA — is split across two file kinds:
+viewer's catalog SPA — is maintained entirely through the **onboarding factory**
+(`tools/onboarding-factory`), whose `of` CLI is the SOLE writer of everything
+under `replaydata/`. The `ir:onboarding-factory` skill (a zero-bash dispatcher +
+four verbs: create-scenario / create-agent / assess / record) drives `of`; it
+never edits `replaydata/` by hand. (`of validate` is the read-back gate that
+enforces this — see Testing.) Data is two file kinds:
 
-- **Catalog** — `replaydata/scenarios.json`, a single object
+- **Catalog** — `replaydata/agents/scenarios.json`, a single object
   `{"meta": {...}, "scenarios": [...]}`. Each `scenarios[]` entry is the
-  scenario-global spec for one matrix row: `id` (`<section>.<index>`),
-  `name`, `section`/`feature`/`description`, `requires`, `verify`, `idle_only`,
-  and (for the one cross-adapter cell) `cross_adapter`. No per-agent data. The
-  `meta` block holds the onboarded-adapter set (`min_versions` keys), per-adapter
-  `transcript_extensions`, and the `capability_vocab`.
+  agent-agnostic spec for one matrix row, **five fields only**: `id`
+  (`<section>.<index>`), `name` (kebab slug — the FK), `description`,
+  `acceptance_criteria` (markdown), and `process` (markdown). No
+  `requires` / `verify` / `section` / `feature` / `cross_adapter` /
+  per-agent data — applicability is decided per cell by the `assess` verb, not
+  by a `requires` gate. The `meta` block holds the onboarded-adapter set
+  (`min_versions` keys) and per-adapter `transcript_extensions`. Written via
+  `of scenario add|update`.
 - **Per-agent cell** — `replaydata/agents/<adapter>/scenarios/<id>_<name>/metadata.json`.
-  One (scenario, adapter) cell: a `metadata` overview tier (assessment axes +
-  versions + a note excerpt), a `details` tier (`assessment`, `recipe`),
-  `artifacts` refs, and a `scenario_id` tying the cell back to its catalog row.
+  One (scenario, adapter) cell: a `metadata` overview tier (the three pillars
+  `agent_supports` / `daemon_capability` / `driver_capability` + versions + a
+  note), a `details` tier (`assessment`, `recipe`), `artifacts` refs, and a
+  `scenario_id` tying the cell back to its catalog row. Written via
+  `of cell write`; its spec (`expected.jsonl`) via `of cell spec`.
   **Recording folders are prefixed by the scenario's dashed id** —
   e.g. scenario `architect-editor-pair` (id `5.4`) records under
   `5-4_architect-editor-pair`. A few cells use a variant folder name (e.g. pi's
@@ -98,7 +108,7 @@ Recording folder names are timestamp-prefixed
 viewer lists them name-descending and autoselects the newest; the
 `metadata.json` `artifacts` point at the newest recording and list all of them.
 `expected.jsonl` is validated against each recording (the newest gates; older
-ones are a drift signal). **`regression/` cells keep their plain (un-prefixed)
+ones are a drift signal). **`regressions/` cells keep their plain (un-prefixed)
 folder names** — they're not catalog rows — but follow the same
 `recordings/<name>/` layout.
 
@@ -112,9 +122,14 @@ read the catalog; `LoadAdapterCells` (scan one adapter, keyed by `scenario_id`),
 `LoadAllCells`, and `LoadAgentCell` (direct by folder) read per-agent
 `metadata.json`; `LoadMeta`/`Agents` read the `meta` block; `FolderForScenario`
 computes the `<id>_<name>` folder. `internal/matrix` and the viewer both go
-through it. The bash rig reads cells through `scripts/lib/shard-lib.sh`
+through it. The live-capture rig — the tmux drivers plus `run-cell.sh` /
+`precheck.sh` / the gate libs, all under `tools/onboarding-factory/scripts/` —
+reads cells through `tools/onboarding-factory/scripts/lib/shard-lib.sh`
 (`shard_recipe`, `shard_cell`, `shard_folder`, `agent_cell_file`,
-`scenario_global`, …).
+`scenario_global`, …). Agent drivers live in
+`replaydata/agents/<adapter>/driver{,-interactive}.sh`, the gastown orchestrator
+driver in `replaydata/orchestrators/gastown/driver.sh`, and shared driver
+helpers in `replaydata/_lib/`. `of record run` resolves and drives them.
 
 ## Key Conventions
 
@@ -172,12 +187,18 @@ fswatcher roots, process scanners, parser-factory map, PID-discovery map
 
 ## Testing
 
-Before marking a ticket done, run the full suite — all three layers must pass:
+Before marking a ticket done, run the full suite — every layer must pass:
 
 - Unit + e2e: `go test ./core/... -race -count=1` (includes the headless
   daemon startup smoke test — boots a real `irrlichd` on an ephemeral port
   under `t.TempDir()`, so it never touches the production daemon).
+- Factory: `go test ./tools/onboarding-factory/... -race -count=1`.
 - Replay: `tools/replay-fixtures.sh`
+- replaydata integrity: `go run ./tools/onboarding-factory/cmd/of validate`
+  (schema + referential integrity over the catalog + cells — a CI gate). When a
+  `web/` or recording-rig change is in play, also `bash
+  tools/onboarding-factory/scripts/smoke-test.sh` (the rig's `bash -n` + lib
+  unit tests).
 - Web (only when touching a `web/` tree): `npm test` in that tree. There are
   two independent suites, each with its own `node_modules`:
   - `platforms/web/` — the dashboard.

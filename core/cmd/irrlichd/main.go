@@ -456,7 +456,7 @@ func main() {
 	// Recordings default to <dataDir>/recordings, so IRRLICHT_HOME already
 	// isolates them. IRRLICHT_RECORDINGS_DIR is the narrower override that
 	// wins even when IRRLICHT_HOME is set, so test harnesses (e.g. the
-	// ir:onboard-agent skill) can pin recordings somewhere specific.
+	// onboarding factory's record path) can pin recordings somewhere specific.
 	if recordEnabled {
 		recordingsDir := os.Getenv("IRRLICHT_RECORDINGS_DIR")
 		if recordingsDir == "" {
