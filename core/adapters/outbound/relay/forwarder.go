@@ -15,6 +15,11 @@ import (
 
 const forwardWriteTimeout = 10 * time.Second
 
+// maxRelayFrameBytes caps a single inbound frame from the relay so a malicious
+// or buggy relay can't exhaust daemon memory. The daemon only reads hello_ack
+// and control frames, so this is generous headroom.
+const maxRelayFrameBytes = 1 << 20
+
 // streamPath is the relay's WebSocket endpoint, shared with the daemon and
 // every client.
 const streamPath = "/api/v1/sessions/stream"
@@ -153,6 +158,7 @@ func (f *Forwarder) runOnce(ctx context.Context) error {
 
 	// Read pump: surface the relay closing the socket (and drain any
 	// hello_ack / control frames, which v0 does not act on).
+	conn.SetReadLimit(maxRelayFrameBytes)
 	readErr := make(chan error, 1)
 	go func() {
 		for {
