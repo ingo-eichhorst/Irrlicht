@@ -1,0 +1,57 @@
+# Coding factory: 3× codex agents, each = irrlichd + codex co-located, all
+# forwarding into ONE auth-enabled irrlichtrelay, surfaced live on macOS/web as
+# three distinct rows. Builds on examples/roundtrip/ (1× claude).
+#
+# Quickstart:  ./up.sh        (brings up the relay, issues a token, starts the 3)
+# Manual:      see README.md.  Needs OPENAI_API_KEY (set in .env).
+name: irrlicht-coding-factory
+
+services:
+  # The hub, with bearer-token auth on. Loopback-published for the host
+  # dashboard; the agents reach it over the internal docker network.
+  relay:
+    build:
+      context: ../..
+      dockerfile: examples/relay/Dockerfile
+    image: irrlicht-relay
+    environment:
+      IRRLICHT_HOME: /var/lib/irrlichtrelay
+    command: ["irrlichtrelay", "serve", "--addr", "0.0.0.0:7839", "--auth", "tokens-file"]
+    ports:
+      - "127.0.0.1:7839:7839"
+    volumes:
+      - relay-state:/var/lib/irrlichtrelay      # persists tokens.json across restarts
+
+  codex-1:
+    <<: &agent
+      build:
+        context: ../..
+        dockerfile: examples/coding-factory/agent.Dockerfile
+      image: irrlicht-coding-factory-agent
+      depends_on: [relay]                       # start ordering; the daemon's backoff handles readiness
+      restart: unless-stopped
+    hostname: codex-1                           # → the daemon label / row name on the Mac
+    environment:
+      <<: &agent-env
+        IRRLICHT_RELAY_URL: ws://relay:7839
+        IRRLICHT_RELAY_TOKEN: ${IRRLICHT_RELAY_TOKEN:?run ./up.sh, or set IRRLICHT_RELAY_TOKEN in .env}
+        OPENAI_API_KEY: ${OPENAI_API_KEY:?set OPENAI_API_KEY in .env}
+        CODEX_MODEL: ${CODEX_MODEL:-gpt-4o-mini}
+      AGENT_TASK: "Add a short, helpful comment to README.md and commit it."
+
+  codex-2:
+    <<: *agent
+    hostname: codex-2
+    environment:
+      <<: *agent-env
+      AGENT_TASK: "Create a small utility function in util.py with a docstring, then commit."
+
+  codex-3:
+    <<: *agent
+    hostname: codex-3
+    environment:
+      <<: *agent-env
+      AGENT_TASK: "Append a dated entry to CHANGELOG.md and commit."
+
+volumes:
+  relay-state:
