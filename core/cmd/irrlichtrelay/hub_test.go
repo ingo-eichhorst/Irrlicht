@@ -21,7 +21,12 @@ import (
 
 func newTestServer(t *testing.T) (wsURL, baseURL string) {
 	t.Helper()
-	h := newHub()
+	return newTestServerWithLimits(t, defaultLimits())
+}
+
+func newTestServerWithLimits(t *testing.T, lim limits) (wsURL, baseURL string) {
+	t.Helper()
+	h := newHub(lim)
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/sessions/stream", h.ServeWS)
 	mux.HandleFunc("GET /api/v1/sessions", handleSessions(h))
@@ -291,7 +296,7 @@ func newTestServerWithAuth(t *testing.T, labels ...string) (wsURL string, tokens
 	if err != nil {
 		t.Fatalf("newAuthStore: %v", err)
 	}
-	h := newHubWithAuth(store, nil)
+	h := newHubWithAuth(store, nil, defaultLimits())
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/sessions/stream", h.ServeWS)
 	srv := httptest.NewServer(mux)

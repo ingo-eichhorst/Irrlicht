@@ -20,6 +20,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -28,7 +29,28 @@ import (
 // Version is injected at build time via -ldflags "-X main.Version=x.y.z".
 var Version = "dev"
 
-const envUIDir = "IRRLICHT_UI_DIR"
+const (
+	envUIDir         = "IRRLICHT_UI_DIR"
+	envMaxMsgBytes   = "IRRLICHT_RELAY_MAX_MSG_BYTES"
+	envMaxConns      = "IRRLICHT_RELAY_MAX_CONNS"
+	envMaxConnsPerIP = "IRRLICHT_RELAY_MAX_CONNS_PER_IP"
+)
+
+// envInt64 returns the int64 value of env var name, or def when unset/unparseable.
+func envInt64(name string, def int64) int64 {
+	if v, err := strconv.ParseInt(os.Getenv(name), 10, 64); err == nil {
+		return v
+	}
+	return def
+}
+
+// envInt returns the int value of env var name, or def when unset/unparseable.
+func envInt(name string, def int) int {
+	if v, err := strconv.Atoi(os.Getenv(name)); err == nil {
+		return v
+	}
+	return def
+}
 
 // tokenReloadInterval is how often a serving relay re-checks the tokens file's
 // mtime so `token revoke` (a separate process) propagates without a restart.
@@ -85,7 +107,17 @@ func runServe(args []string) {
 	auth := fs.String("auth", "off", "authentication: 'off' (trusted LAN, accept any hello) or 'tokens-file[:PATH]' (verify a hashed bearer token; PATH defaults to <data-dir>/tokens.json)")
 	originAllowlist := fs.String("origin-allowlist", "", "comma-separated Origin hosts allowed for browser WS clients (empty = allow all, loopback-safe)")
 	dataDirFlag := fs.String("data-dir", "", "state directory for the tokens file (default: $IRRLICHT_HOME or ~/.local/share/irrlicht)")
+	// Connection-hardening caps for an exposed listener. Flag defaults are
+	// seeded from env when set (env < flag), mirroring IRRLICHT_UI_DIR.
+	def := defaultLimits()
+	maxMsgBytes := fs.Int64("max-msg-bytes", envInt64(envMaxMsgBytes, def.maxMsgBytes), "max inbound WebSocket message size in bytes (0 disables)")
+	maxConns := fs.Int("max-conns", envInt(envMaxConns, def.maxConns), "max total concurrent connections (0 disables)")
+	// Keyed on the direct peer address (X-Forwarded-For is not trusted in v1), so
+	// behind a reverse proxy or shared NAT every client collapses to one IP and
+	// this becomes a de-facto global cap — set 0 to disable it in that topology.
+	maxConnsPerIP := fs.Int("max-conns-per-ip", envInt(envMaxConnsPerIP, def.maxConnsPerIP), "max concurrent connections per remote IP (0 disables; meaningless behind a proxy/NAT — see --max-conns)")
 	_ = fs.Parse(args)
+	lim := limits{maxMsgBytes: *maxMsgBytes, maxConns: *maxConns, maxConnsPerIP: *maxConnsPerIP}
 
 	if (*tlsCert == "") != (*tlsKey == "") {
 		log.Fatal("--tls-cert and --tls-key must be given together")
@@ -135,7 +167,7 @@ func runServe(args []string) {
 	_ = mime.AddExtensionType(".js", "application/javascript")
 	_ = mime.AddExtensionType(".css", "text/css")
 
-	h := newHubWithAuth(store, allowedOrigins)
+	h := newHubWithAuth(store, allowedOrigins, lim)
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/sessions/stream", h.ServeWS)
 	// The data endpoints carry the same session content as the WS stream, so
