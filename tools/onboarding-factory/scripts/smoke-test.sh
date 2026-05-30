@@ -12,7 +12,7 @@
 # legacy warnings; tighten later if desired):
 #   3. shellcheck -S warning, if installed
 #
-# Run directly:  .claude/skills/ir:onboard-agent/scripts/smoke-test.sh
+# Run directly:  tools/onboarding-factory/scripts/smoke-test.sh
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 rc=0
@@ -37,21 +37,17 @@ echo "== unit tests (lib/recipe-lint_test.sh) =="
 bash "$SCRIPT_DIR/lib/recipe-lint_test.sh" || rc=1
 
 echo ""
-echo "== unit tests (lib/completeness-gate_test.sh) =="
-bash "$SCRIPT_DIR/lib/completeness-gate_test.sh" || rc=1
-
-echo ""
 echo "== unit tests (lib/cell-integrity_test.sh) =="
 bash "$SCRIPT_DIR/lib/cell-integrity_test.sh" || rc=1
 
-# The catalog-drift and consistency gates were retired with the #510 shard
-# migration: a per-scenario shard is the single source for a cell, so the
-# catalog↔rollup bijection and assessment⟺scenarios agreement they enforced
-# can no longer drift (there is no second file to disagree with).
+# completeness-gate / catalog-drift / consistency gates were retired (#528):
+# `of validate` + `of coverage` (Go) now own schema + referential + coverage
+# integrity, and a per-scenario shard is the single source for a cell, so the
+# catalog↔rollup bijection those bash gates enforced can no longer drift.
 
 echo ""
-echo "== unit tests (lib/drive/drive-lib_test.sh) =="
-bash "$SCRIPT_DIR/../../../../replaydata/_lib/drive/drive-lib_test.sh" || rc=1
+echo "== unit tests (replaydata/_lib/drive/drive-lib_test.sh) =="
+bash "$SCRIPT_DIR/../../../replaydata/_lib/drive/drive-lib_test.sh" || rc=1
 
 echo ""
 echo "== shellcheck (advisory) =="

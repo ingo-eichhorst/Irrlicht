@@ -43,8 +43,8 @@ SCENARIO="$3"
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 [[ -n "$REPO_ROOT" ]] || { echo "not in a git repo" >&2; exit 1; }
 
-# shellcheck source=../.claude/skills/ir:onboard-agent/scripts/lib/shard-lib.sh
-source "$REPO_ROOT/.claude/skills/ir:onboard-agent/scripts/lib/shard-lib.sh"
+# shellcheck source=onboarding-factory/scripts/lib/shard-lib.sh
+source "$REPO_ROOT/tools/onboarding-factory/scripts/lib/shard-lib.sh"
 
 STAGED_DIR="$STAGING/replaydata/agents/$AGENT/scenarios/$SCENARIO"
 TARGET_DIR="$REPO_ROOT/replaydata/agents/$AGENT/scenarios/$SCENARIO"

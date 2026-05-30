@@ -112,8 +112,10 @@ ci_missing_artifacts() {
 #   exit 1 = at least one incomplete/orphaned cell (listed on stderr).
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   set -uo pipefail
-  SK="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"          # …/ir:onboard-agent
-  REPO_ROOT="$(cd "$SK/../../.." && pwd)"                            # repo root (shard-lib reads it)
+  # repo root (shard-lib reads it): git toplevel, else up 4 from
+  # tools/onboarding-factory/scripts/lib/.
+  REPO_ROOT="$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel 2>/dev/null)"
+  [[ -n "$REPO_ROOT" ]] || REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
   agent_arg="${1:-}"
   root="${2:-$REPO_ROOT/replaydata}"
 

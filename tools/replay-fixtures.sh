@@ -266,7 +266,7 @@ done < <(find "$FIXTURES_ROOT" -name 'expected.jsonl' -not -path '*/_reports/*' 
 integrity_failures=0
 echo >&2
 echo "== cell-integrity gate (artifact completeness) ==" >&2
-if ! bash .claude/skills/ir:onboard-agent/scripts/lib/cell-integrity.sh >&2; then
+if ! bash tools/onboarding-factory/scripts/lib/cell-integrity.sh >&2; then
   integrity_failures=1
 fi
 
