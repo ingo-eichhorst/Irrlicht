@@ -19,9 +19,10 @@ import (
 // capabilities.json and the scenario's requires were met) but which carry no
 // per-agent block in the shard, so P2 intentionally drops them as empty cells.
 // They MUST NOT appear in the shard cell set. Ground truth in the migrated
-// shards: only the two provider-failover-midturn cells (codex, opencode) are
-// genuinely absent — claudecode/architect-editor-pair DOES carry a (frozen)
-// assessment block in its shard, so it remains a real cell and is NOT a drop.
+// shards: only opencode/provider-failover-midturn is genuinely absent —
+// codex/provider-failover-midturn and claudecode/architect-editor-pair both
+// carry a (frozen) assessment block in their shard, so they remain real cells
+// and are NOT drops.
 //
 // Hermetic-friendly: skips when replaydata/scenarios is unreadable.
 func TestShardCellEquivalence(t *testing.T) {
@@ -64,7 +65,6 @@ func TestShardCellEquivalence(t *testing.T) {
 	// (the migrator dropped these empty cells; the consistency gate stays green
 	// because there are zero disagreements once they're gone).
 	benignAbsent := []struct{ agent, cid string }{
-		{"codex", "provider-failover-midturn"},
 		{"opencode", "provider-failover-midturn"},
 	}
 	for _, b := range benignAbsent {
@@ -73,10 +73,14 @@ func TestShardCellEquivalence(t *testing.T) {
 		}
 	}
 
-	// Counter-case: claudecode/architect-editor-pair is NOT a drop — its shard
-	// carries a frozen assessment block, so it remains a real cell.
+	// Counter-case: claudecode/architect-editor-pair and
+	// codex/provider-failover-midturn are NOT drops — each shard carries a
+	// frozen assessment block, so they remain real cells.
 	if _, ok := m.Cell("claudecode", "architect-editor-pair"); !ok {
 		t.Errorf("claudecode/architect-editor-pair should be PRESENT (its shard has an assessment block) but Cell() did not find it")
+	}
+	if _, ok := m.Cell("codex", "provider-failover-midturn"); !ok {
+		t.Errorf("codex/provider-failover-midturn should be PRESENT (its shard has a frozen assessment block) but Cell() did not find it")
 	}
 }
 
