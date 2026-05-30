@@ -335,6 +335,47 @@ All tests must pass before proceeding.
 
 ## Step 6: Build Artifacts
 
+> **⚠️ AUTHORITATIVE BUILD PATH — read before running the manual commands below.**
+> `tools/build-release.sh` is the maintained build pipeline and is what actually
+> shipped v0.4.5–v0.4.8. Prefer it over hand-running the per-command blocks in
+> this step, which have drifted. Run it with the signing env vars inline (they
+> are unset in each fresh shell):
+>
+> ```bash
+> DEVELOPER_ID="Ingo Eichhorst (93Y3GMJAMV)" \
+> NOTARYTOOL_KEYCHAIN_PROFILE="irrlicht-notarytool" \
+> tools/build-release.sh
+> ```
+>
+> It builds the universal daemon + `irrlicht-focus`, the Linux tarballs,
+> assembles + DevID-signs the bundle, notarizes + staples the DMG, builds the
+> PKG, and writes `.build/checksums.sha256`. It does **NOT** do four things —
+> do them by hand afterward:
+> 1. **ZIP**: `ditto -c -k --sequesterRsrc --keepParent .build/Irrlicht.app .build/Irrlicht-$NEW_VERSION.zip`
+> 2. **Re-checksum to include the zip**: regenerate `.build/checksums.sha256` over the dmg, pkg, zip, and the three tarballs.
+> 3. **Sparkle-sign the DMG** + add the `site/appcast.xml` `<item>` (Step 6 step 7's Sparkle block).
+> 4. **Smoke-test** the bundle (Step 6 step 8) — but see the port hazard below.
+>
+> **STALE: the `focus-status` entitlement.** v0.4.7 STRIPPED
+> `com.apple.developer.focus-status` (AMFI POSIX 153 killed launches; the
+> entitlements file `platforms/macos/Irrlicht/Resources/Irrlicht.entitlements`
+> is now an empty `<dict/>`). The `FOCUS_TRUE`/"focus-status entitlement present"
+> assertions in this step, the Info.plist template, and Step 9's canary are
+> therefore WRONG — they will fail a correct release. Ignore them until
+> focus-status is re-enabled with a provisioning profile (#357). The
+> get-task-allow guard is still correct and load-bearing.
+>
+> **Port hazard for the smoke test + Step 9 canary.** The maintainer often runs
+> a dev `core/bin/irrlichd --record` on port 7837. Launching the app on the
+> DEFAULT port triggers `DaemonManager.killStaleDaemons()` → a global
+> `pkill irrlichd` that kills that recording daemon. Launch-test on an isolated
+> port instead — `IRRLICHT_DAEMON_PORT=7839 IRRLICHT_HOME=/tmp/smoke-home
+> /Applications/Irrlicht.app/Contents/MacOS/Irrlicht` — which makes
+> `killStaleDaemons` skip the pkill. The app's embedded daemon spawn can be
+> flaky under a bare exec; if so, validate the bundle's daemon directly:
+> `IRRLICHT_BIND_ADDR=127.0.0.1:7839 IRRLICHT_HOME=… .build/Irrlicht.app/Contents/MacOS/irrlichd`
+> then `curl 127.0.0.1:7839/ | grep '<title>'` (covers the v0.4.4 missing-web bug).
+
 ### Go daemon (universal binary + tarball)
 The daemon reads `platforms/web/index.html` from disk at runtime; no embed.
 The standalone curl `--daemon-only` install ships a tarball containing both
@@ -1034,6 +1075,26 @@ without `--push`; the verification will report a mismatch you can ignore.
    in-process smoke tests but failed every end-user install because
    the failure was misdiagnosed as environment-specific. The canary
    below would have caught it before the release page was visible.
+
+   > **⚠️ Two corrections (see the banner at the top of Step 6).**
+   > (a) **Don't run the literal `curl … | sh` canary while a dev
+   > `irrlichd --record` daemon is on 7837** — the installer's `open`
+   > launches the app on the DEFAULT port, and `killStaleDaemons()` will
+   > `pkill irrlichd` and take the recording daemon down. Instead: download
+   > the live ZIP, `ditto`-install to /Applications, verify version +
+   > `spctl -a -vv` (Notarized Developer ID) + get-task-allow-not-true
+   > statically, then launch-test with `IRRLICHT_DAEMON_PORT=7839
+   > IRRLICHT_HOME=/tmp/… /Applications/Irrlicht.app/Contents/MacOS/Irrlicht`
+   > so killStaleDaemons skips the pkill. (b) **The `FOCUS_TRUE` /
+   > "missing focus-status entitlement" check below is STALE** (stripped in
+   > v0.4.7) — skip it; keep only the get-task-allow guard.
+   >
+   > **Recovery gotcha:** a leftover `/tmp/Irrlicht-canary-backup.app` makes
+   > the `mv` below fail silently, and a subsequent `cp -R` then merges the
+   > new app *into* the old bundle and corrupts /Applications/Irrlicht.app
+   > (`spctl` → "unsealed contents present in the bundle root"). Fix by
+   > `rm -rf /Applications/Irrlicht.app` then `ditto <clean-extract>/Irrlicht.app
+   > /Applications/Irrlicht.app`.
 
    ```bash
    # Backup current install (probably from the just-finished release if
