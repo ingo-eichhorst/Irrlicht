@@ -165,25 +165,36 @@ subsequent lines are phases:
 ### 6. Write both artifacts through the factory
 
 ```bash
-# metadata.json: pillars in `metadata`, reasoning+sources in details.assessment, recipe in details.recipe
+# metadata.json: the verdict lives in details.assessment; recipe in details.recipe
 of cell write --agent <agent> --scenario <scenario> --file /tmp/<agent>-<scenario>.metadata.json
 # expected.jsonl: the spec
 of cell spec  --agent <agent> --scenario <scenario> --file /tmp/<agent>-<scenario>.expected.jsonl
 of validate
 ```
 
-The metadata.json shape (`of cell write` validates + forces `scenario_id`):
+The metadata.json shape. **`details.assessment` is the verdict of record** — it
+MUST carry the three pillar enums + `confidence` alongside the reasoning, because
+the matrix reads its routing/disposition straight from there. The `metadata`
+overview tier is DERIVED: `of cell write` mirrors the pillars + confidence from
+`details.assessment` into it, so you don't hand-write (or risk drifting) the
+overview copy — fill `notes`/version fields there and leave the pillars to the
+mirror. (`of cell write` also forces `scenario_id`.)
 
 ```json
 {
   "metadata": {
-    "agent_supports": "yes", "daemon_capability": "full", "driver_capability": "ready",
-    "confidence": 0.8, "notes": "<one-line excerpt of the verdict>"
+    "notes": "<one-line excerpt of the verdict>",
+    "agent_cli_version": "<x.y.z>", "daemon_version": "<x.y.z+sha>"
   },
   "details": {
-    "assessment": { "body": "## Verdict ...markdown reasoning...",
-                    "caveats": ["..."],
-                    "sources": [{"kind":"url|file","ref":"...","note":"..."}] },
+    "assessment": {
+      "schema_version": 1, "scenario_id": "<scenario>", "agent": "<agent>",
+      "agent_supports": "yes", "daemon_capability": "full", "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict ...markdown reasoning...",
+      "caveats": ["..."],
+      "sources": [{"kind":"url|file","ref":"...","note":"..."}]
+    },
     "recipe": { "script": [ {"type":"send","text":"..."}, {"type":"wait_turn"}, {"type":"sleep","seconds":10} ] }
   }
 }
