@@ -23,7 +23,7 @@ command -v jq >/dev/null || { echo "completeness-gate_test: jq is required" >&2;
 REPO="$(cd "$DIR/../../../../.." && pwd)"
 BIN="$REPO/.build/matrix"
 mkdir -p "$REPO/.build"
-( cd "$REPO/tools/agent-onboarding" && go build -o "$BIN" ./cmd/matrix ) \
+( cd "$REPO/tools/onboarding-factory" && go build -o "$BIN" ./cmd/matrix ) \
   || { echo "completeness-gate_test: failed to build matrix binary" >&2; exit 2; }
 export IR_MATRIX_BIN="$BIN"
 

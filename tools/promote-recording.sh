@@ -112,7 +112,7 @@ echo "wrote recording $REC_DIR" >&2
 #    pass rate for the manifest.
 NEW_PASS_RATE=""
 if [[ -f "$TARGET_DIR/expected.jsonl" ]]; then
-  if VAL_OUT="$(cd "$REPO_ROOT" && go run ./tools/agent-onboarding/cmd/expected-validate "$TARGET_DIR" "$REC_NAME" 2>/dev/null)"; then
+  if VAL_OUT="$(cd "$REPO_ROOT" && go run ./tools/onboarding-factory/cmd/expected-validate "$TARGET_DIR" "$REC_NAME" 2>/dev/null)"; then
     NEW_PASS_RATE="$(echo "$VAL_OUT" | jq -r '.summary' 2>/dev/null || echo "")"
   else
     NEW_PASS_RATE="$(echo "$VAL_OUT" | jq -r '.summary' 2>/dev/null || echo "validate-failed")"
@@ -168,11 +168,11 @@ fi
 #    exit non-zero so the maintainer reviews. The recording is already saved.
 if [[ -f "$TARGET_DIR/expected.jsonl" ]]; then
   echo "validating new recording against expected.jsonl..." >&2
-  if ! (cd "$REPO_ROOT" && go run ./tools/agent-onboarding/cmd/expected-validate "$TARGET_DIR" "$REC_NAME" >/dev/null 2>&1); then
+  if ! (cd "$REPO_ROOT" && go run ./tools/onboarding-factory/cmd/expected-validate "$TARGET_DIR" "$REC_NAME" >/dev/null 2>&1); then
     echo "WARNING: new recording fails expected.jsonl validation" >&2
     echo "         the recording is in place but the validator is unhappy" >&2
     echo "         either the recipe needs tightening (likely) or the daemon drifted from spec (file an issue)" >&2
-    echo "         run: go run ./tools/agent-onboarding/cmd/expected-validate $TARGET_DIR $REC_NAME  for the report" >&2
+    echo "         run: go run ./tools/onboarding-factory/cmd/expected-validate $TARGET_DIR $REC_NAME  for the report" >&2
     exit 3
   fi
 fi

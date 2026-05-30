@@ -92,7 +92,7 @@ which adds matrix COLUMNS (a whole new agent). Don't confuse them.
    row appears with every adapter at the unassessed default
    (`unknown`/`unknown`/`ready`, empty notes):
    ```bash
-   ( cd tools/agent-onboarding && go run ./cmd/matrix rollup )
+   ( cd tools/onboarding-factory && go run ./cmd/matrix rollup )
    ```
    You are not assessing here — `assess` later flips the axes on evidence and
    you re-run `matrix rollup` then.

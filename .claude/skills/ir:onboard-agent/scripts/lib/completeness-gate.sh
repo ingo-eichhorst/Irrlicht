@@ -7,7 +7,7 @@
 # Non-terminal (FAIL):       unassessed | assessed_not_recorded.
 #
 # #508 collapsed this gate into a THIN CLIENT of the canonical matrix model
-# (tools/agent-onboarding/internal/matrix, exposed via `matrix query`). The
+# (tools/onboarding-factory/internal/matrix, exposed via `matrix query`). The
 # per-cell disposition decision table and the table/summary output all live in
 # Go — proven byte-for-byte equal to the prior bash via the package's parity
 # tests (internal/matrix/matrix_test.go). Since the #510/#511 shard migration

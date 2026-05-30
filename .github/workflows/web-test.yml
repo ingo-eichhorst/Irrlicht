@@ -10,7 +10,7 @@ jobs:
       matrix:
         tree:
           - platforms/web
-          - tools/agent-onboarding/internal/viewer/web
+          - tools/onboarding-factory/internal/viewer/web
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

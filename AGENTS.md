@@ -60,7 +60,7 @@ There are two web trees, and they are NOT competing copies:
   viewer rebuild) and injects a tiny non-invasive `ws-diag` console-logging
   script before `</head>` via `injectBeforeClosingTag` — it never edits the
   production markup.
-- **`tools/agent-onboarding/internal/viewer/web/`** — the viewer's OWN
+- **`tools/onboarding-factory/internal/viewer/web/`** — the viewer's OWN
   embedded SPA: the **catalog / scenario browser** (coverage matrix,
   per-cell detail, recording archives). It is never the live session view.
 
@@ -107,7 +107,7 @@ viewer, `cmd/expected-validate`, `replay-fixtures.sh`, `promote-recording.sh`,
 and `cell-integrity.sh` all go through it. `matrix.cellRecorded` reports a cell
 as recorded iff `artifacts.recordings` is non-empty.
 
-The Go reader is `tools/agent-onboarding/internal/shard`: `LoadAll`/`Load`
+The Go reader is `tools/onboarding-factory/internal/shard`: `LoadAll`/`Load`
 read the catalog; `LoadAdapterCells` (scan one adapter, keyed by `scenario_id`),
 `LoadAllCells`, and `LoadAgentCell` (direct by folder) read per-agent
 `metadata.json`; `LoadMeta`/`Agents` read the `meta` block; `FolderForScenario`
@@ -181,6 +181,6 @@ Before marking a ticket done, run the full suite — all three layers must pass:
 - Web (only when touching a `web/` tree): `npm test` in that tree. There are
   two independent suites, each with its own `node_modules`:
   - `platforms/web/` — the dashboard.
-  - `tools/agent-onboarding/internal/viewer/web/` — the onboarding viewer.
+  - `tools/onboarding-factory/internal/viewer/web/` — the onboarding viewer.
 
   `npm test` runs `vitest run` (single CI-shaped pass, no watch).
