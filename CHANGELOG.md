@@ -12,6 +12,46 @@ beyond), see the [Roadmap](https://irrlicht.io/docs/roadmap.html).
 
 ## [Unreleased]
 
+## [0.4.8] — 2026-05-30
+
+### Watch your agents from any machine — the `irrlichtrelay` ships, alongside a Linux daemon and per-provider quota tracking.
+
+### Highlights
+
+#### Watch every machine from one place
+
+![Three irrlichd daemons pushing over authenticated wss to a standalone irrlichtrelay, which fans out to the macOS app and web dashboard](assets/releases/v0.4.8/relay.png)
+
+`irrlichtrelay` is a new standalone binary. Point each machine's daemon at it and your macOS app and web dashboard show every session from every host in one aggregated list — your laptop, a Linux box, a VM — without being at any of them. The link is secured end-to-end: TLS/`wss`, bearer-token auth (with a token-minting CLI), an origin allowlist, and per-IP / per-connection caps.
+
+**Why it matters:** you no longer have to sit at the machine running an agent to see what it's doing — one relay, every host, from anywhere, over an authenticated connection. (#483, #547, #544, #548, #519)
+
+### Added
+- **Linux daemon** (#482, #478) — `irrlichd` now builds and runs on Linux (amd64 + arm64), daemon-only, behind a portable `ProcessObserver` observation layer; install via the same `curl … | sh` one-liner.
+- **Per-provider windowed usage spend + subscription empty-state** (#441, #386) — usage and quota are tracked per provider, with a clean empty-state before the first window of data lands.
+- **OpenCode inherits OpenAI rate limits** (#424) — OpenCode sessions pick up the OpenAI rate-limit window via the JWT `account_id`, so quota burndown is accurate for OpenCode→OpenAI users.
+- **Background Bash processes hold a session `working`** (#450, #452) — a claudecode session with a live backgrounded process stays `working` until it finishes, instead of falsely settling to `ready`.
+- **Editable relay URL + token fields in macOS Settings** (#550) — the relay endpoint and bearer token are now editable text fields in the app's Settings.
+
+### Fixed
+- **Surface claudecode tool-use permission prompts as `waiting`** (#490) — a session paused on a permission prompt now flips to `waiting` instead of looking busy.
+- **Codex: settle interrupted turns** (#464) — a `turn_aborted` is treated as turn-end, so an interrupted Codex turn settles instead of hanging in `working`.
+- **Price Warp / Cursor / Antigravity sessions correctly** — added 22 new model aliases synced from codeburn (Warp auto-routers and codex display strings, Cursor dash-form reasoning tiers, Antigravity Gemini 3.5 Flash, and human-readable display-name forms), so these frontends price at real dollars instead of $0. Closes the alias-sync gap deferred in v0.4.7.
+- **claudecode: strip trailing period from background-process output path** (#501).
+
+### Changed / Distribution
+- **Web dashboard split into three files** (#418) — `index.html` + `irrlicht.css` + `irrlicht.js`, with Vitest unit tests; the daemon serves them from disk, no codegen.
+- **Linux replay Dockerfile relocated** to `tools/` (#499).
+
+### Technical appendix
+
+- **Relay (`irrlichtrelay`).** v0 round-trip daemon → relay → macOS + web (#483); v1·A secure exposure — TLS/`wss`, bearer-token auth + token-minting CLI, origin allowlist (#547); v1·B hardening — websocket read-limit + per-IP / per-connection caps (#544); v1 epic C–G — compound session keying across hosts, origin glyph, deploy artifacts, fade-on-disconnect, coding-factory demo (#548); macOS auto-connect on relay URL, connection-status dot, restored ⓘ + scroll (#519); editable relay URL + token Settings fields (#550); live cross-host round-trip testbed under `examples/` (#486).
+- **Cross-platform observation layer.** New `ports.ProcessObserver` seam with build-tagged `process_{darwin,linux,other}.go`; the adapters are unchanged (internal seam, not DI), and a Linux daemon falls out — Windows is now "add one file" (#482, #478).
+- **Quota / pricing.** Per-provider windowed usage spend + subscription empty-state (#441, #386); OpenCode→OpenAI rate-limit inheritance via JWT `account_id` (#424); 22 new frontend aliases in `core/pkg/capacity/aliases.go` synced from codeburn's `BUILTIN_ALIASES`. Five Warp codex aliases resolve to `gpt-5.3-codex`, which LiteLLM does not yet price — they log on miss and are flagged for a follow-up sync rather than blocking the release.
+- **Session detection.** claudecode tool-use permission prompts surface as `waiting` (#490); backgrounded-Bash tracking keeps the session `working` and recognizes `TaskOutput` / `<task-notification>` completion in SDK-harnessed claude as well as `BashOutput` / `KillShell` in bare claude (#450, #452, #501); codex `turn_aborted` treated as turn-end (#464).
+- **Onboarding factory (internal fixture tooling — no runtime impact).** Eight-phase rewrite of the scenario × adapter coverage matrix: `tools/agent-onboarding` → `tools/onboarding-factory`, with the `of` CLI as the sole writer of everything under `replaydata/` (#522–#530). Schema cutover to per-scenario shards — one catalog (`scenarios.json`) plus per-cell `metadata.json` in id-prefixed folders, every recording moved under `recordings/<name>/` (#510, #511, #514, #524). New 4-verb `ir:onboarding-factory` skill (create-scenario / create-agent / assess / record) retiring `ir:onboard-agent`; `of validate` as a CI integrity gate. Per-adapter column recordings landed across claudecode, codex, opencode, aider, and pi (#515, #517, #518, #504, #489, #477, and others).
+- **Tests / CI.** Per-worktree state isolation + headless daemon startup smoke test (#448); hermetic replay so byte-identity goldens reproduce (#447, #451); fswatcher flake fixes (#485, #487); three-dot diff in the replaydata deletion guard (#466); web dashboard Vitest suite (#418).
+
 ## [0.4.7] — 2026-05-22
 
 ### macOS distribution levels up: Sparkle auto-updates and a notarized DMG, plus OpenCode task progress reaches dashboard parity.
@@ -816,7 +856,8 @@ Four distinct bugs caused long-running Claude Code sessions to bounce between
 - First bundled macOS installer `Irrlicht-0.2.0-mac-installer.pkg` containing
   the daemon, menu bar app, and auto-start LaunchAgent.
 
-[Unreleased]: https://github.com/ingo-eichhorst/Irrlicht/compare/v0.4.7...HEAD
+[Unreleased]: https://github.com/ingo-eichhorst/Irrlicht/compare/v0.4.8...HEAD
+[0.4.8]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.4.8
 [0.4.7]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.4.7
 [0.4.6]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.4.6
 [0.4.5]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.4.5

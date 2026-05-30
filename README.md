@@ -76,7 +76,7 @@ Stages: `stable` production-ready · `beta` feature-complete, edge cases remain 
 | Web dashboard         | beta    | `http://127.0.0.1:7837`   |
 | CLI                   | alpha   | `irrlicht-ls` (`-w` for watch) |
 | VS Code extension     | planned | tracked in [#350](https://github.com/ingo-eichhorst/Irrlicht/issues/350) |
-| Linux                 | planned | —                         |
+| Linux (daemon-only)   | alpha   | `curl -fsSL https://irrlicht.io/install.sh \| sh` |
 | Windows               | planned | —                         |
 
 → [Adapters reference](https://ingo-eichhorst.github.io/Irrlicht/docs/adapters.html#maturity-stages) for stage criteria, watch paths, model detection, and roadmap.

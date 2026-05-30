@@ -109,4 +109,38 @@ var modelAliases = map[string]string{
 	"gemini-3-pro":           "gemini-3-pro-preview",
 	"gemini-3.1-flash-image": "gemini-3.1-flash-image-preview",
 	"gemini-3.1-flash-lite":  "gemini-3.1-flash-lite-preview",
+	// Antigravity Gemini 3.5 Flash — dash-form reasoning suffixes plus the
+	// human-readable display-name forms; price as the base flash entry.
+	"gemini-3.5-flash-high":     "gemini-3.5-flash",
+	"gemini-3.5-flash-medium":   "gemini-3.5-flash",
+	"gemini-3.5-flash-low":      "gemini-3.5-flash",
+	"Gemini 3.5 Flash (High)":   "gemini-3.5-flash",
+	"Gemini 3.5 Flash (Medium)": "gemini-3.5-flash",
+	"Gemini 3.5 Flash (Low)":    "gemini-3.5-flash",
+
+	// Warp — auto-router slugs plus the literal "GPT-5.3 Codex (… reasoning)"
+	// display strings Warp emits. codeburn maps the codex tier to
+	// "gpt-5.3-codex", which LiteLLM does not yet price — these resolve to a
+	// zero-value capacity and log on miss until LiteLLM ships the key.
+	"warp-auto-efficient":                  "gpt-5.3-codex",
+	"warp-auto-powerful":                   "claude-opus-4-6",
+	"GPT-5.3 Codex (low reasoning)":        "gpt-5.3-codex",
+	"GPT-5.3 Codex (medium reasoning)":     "gpt-5.3-codex",
+	"GPT-5.3 Codex (high reasoning)":       "gpt-5.3-codex",
+	"GPT-5.3 Codex (extra high reasoning)": "gpt-5.3-codex",
+
+	// Human-readable display-name forms emitted by some frontends.
+	"Claude Sonnet 4.6": "claude-sonnet-4-6",
+	"Claude Sonnet 4.5": "claude-sonnet-4-5",
+	"Claude Haiku 4.5":  "claude-haiku-4-5",
+	"Claude Opus 4.6":   "claude-opus-4-6",
+
+	// Cursor dash-form reasoning suffixes (tier-last): -high/-low/-medium/
+	// -high-fast and the opus -xhigh tier. Dot-form equivalents live above.
+	"claude-4-6-sonnet-high":      "claude-sonnet-4-6",
+	"claude-4-6-sonnet-low":       "claude-sonnet-4-6",
+	"claude-4-6-sonnet-medium":    "claude-sonnet-4-6",
+	"claude-4-6-sonnet-high-fast": "claude-sonnet-4-6",
+	"claude-4-7-opus-xhigh":       "claude-opus-4-7",
+	"claude-4-7-opus-xhigh-fast":  "claude-opus-4-7",
 }

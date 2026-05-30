@@ -87,6 +87,58 @@
       <h1>Changelog</h1>
       <p class="page-subtitle">All notable changes to Irrlicht, following Keep a Changelog conventions.</p>
 
+      <h2>v0.4.8 <small>(2026-05-30)</small></h2>
+
+      <h3>Watch your agents from any machine &mdash; the <code>irrlichtrelay</code> ships, alongside a Linux daemon and per-provider quota tracking.</h3>
+
+      <h3>Highlights</h3>
+
+      <h4>Watch every machine from one place</h4>
+
+      <figure style="margin: 0.5rem 0 1rem; max-width: 720px;">
+        <picture>
+          <source srcset="../assets/releases/v0.4.8/relay.webp" type="image/webp">
+          <img src="../assets/releases/v0.4.8/relay.png" alt="Three irrlichd daemons pushing over authenticated wss to a standalone irrlichtrelay, which fans out to the macOS app and web dashboard" style="display:block; width:100%; height:auto; border-radius:6px; border:1px solid var(--border);">
+        </picture>
+      </figure>
+
+      <p><code>irrlichtrelay</code> is a new standalone binary. Point each machine&rsquo;s daemon at it and your macOS app and web dashboard show every session from every host in one aggregated list &mdash; your laptop, a Linux box, a VM &mdash; without being at any of them. The link is secured end-to-end: TLS/<code>wss</code>, bearer-token auth (with a token-minting CLI), an origin allowlist, and per-IP / per-connection caps.</p>
+
+      <p><strong>Why it matters:</strong> you no longer have to sit at the machine running an agent to see what it&rsquo;s doing &mdash; one relay, every host, from anywhere, over an authenticated connection. (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/483" target="_blank" rel="noopener">#483</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/547" target="_blank" rel="noopener">#547</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/544" target="_blank" rel="noopener">#544</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/548" target="_blank" rel="noopener">#548</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/519" target="_blank" rel="noopener">#519</a>)</p>
+
+      <h3>Added</h3>
+      <ul>
+        <li><strong>Linux daemon</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/482" target="_blank" rel="noopener">#482</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/478" target="_blank" rel="noopener">#478</a>) &mdash; <code>irrlichd</code> now builds and runs on Linux (amd64 + arm64), daemon-only, behind a portable <code>ProcessObserver</code> observation layer; install via the same <code>curl &hellip; | sh</code> one-liner.</li>
+        <li><strong>Per-provider windowed usage spend + subscription empty-state</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/441" target="_blank" rel="noopener">#441</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/386" target="_blank" rel="noopener">#386</a>) &mdash; usage and quota are tracked per provider, with a clean empty-state before the first window of data lands.</li>
+        <li><strong>OpenCode inherits OpenAI rate limits</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/424" target="_blank" rel="noopener">#424</a>) &mdash; OpenCode sessions pick up the OpenAI rate-limit window via the JWT <code>account_id</code>, so quota burndown is accurate for OpenCode&rarr;OpenAI users.</li>
+        <li><strong>Background Bash processes hold a session <code>working</code></strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/450" target="_blank" rel="noopener">#450</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/452" target="_blank" rel="noopener">#452</a>) &mdash; a claudecode session with a live backgrounded process stays <code>working</code> until it finishes, instead of falsely settling to <code>ready</code>.</li>
+        <li><strong>Editable relay URL + token fields in macOS Settings</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/550" target="_blank" rel="noopener">#550</a>) &mdash; the relay endpoint and bearer token are now editable text fields in the app&rsquo;s Settings.</li>
+      </ul>
+
+      <h3>Fixed</h3>
+      <ul>
+        <li><strong>Surface claudecode tool-use permission prompts as <code>waiting</code></strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/490" target="_blank" rel="noopener">#490</a>) &mdash; a session paused on a permission prompt now flips to <code>waiting</code> instead of looking busy.</li>
+        <li><strong>Codex: settle interrupted turns</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/464" target="_blank" rel="noopener">#464</a>) &mdash; a <code>turn_aborted</code> is treated as turn-end, so an interrupted Codex turn settles instead of hanging in <code>working</code>.</li>
+        <li><strong>Price Warp / Cursor / Antigravity sessions correctly</strong> &mdash; added 22 new model aliases synced from codeburn (Warp auto-routers and codex display strings, Cursor dash-form reasoning tiers, Antigravity Gemini 3.5 Flash, and human-readable display-name forms), so these frontends price at real dollars instead of $0. Closes the alias-sync gap deferred in v0.4.7.</li>
+        <li><strong>claudecode: strip trailing period from background-process output path</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/501" target="_blank" rel="noopener">#501</a>).</li>
+      </ul>
+
+      <h3>Changed / Distribution</h3>
+      <ul>
+        <li><strong>Web dashboard split into three files</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/418" target="_blank" rel="noopener">#418</a>) &mdash; <code>index.html</code> + <code>irrlicht.css</code> + <code>irrlicht.js</code>, with Vitest unit tests; the daemon serves them from disk, no codegen.</li>
+        <li><strong>Linux replay Dockerfile relocated</strong> to <code>tools/</code> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/499" target="_blank" rel="noopener">#499</a>).</li>
+      </ul>
+
+      <h3>Technical appendix</h3>
+      <ul>
+        <li><strong>Relay (<code>irrlichtrelay</code>)</strong> &mdash; v0 round-trip daemon &rarr; relay &rarr; macOS + web (#483); v1&middot;A secure exposure &mdash; TLS/<code>wss</code>, bearer-token auth + token-minting CLI, origin allowlist (#547); v1&middot;B hardening &mdash; websocket read-limit + per-IP / per-connection caps (#544); v1 epic C&ndash;G &mdash; compound session keying across hosts, origin glyph, deploy artifacts, fade-on-disconnect, coding-factory demo (#548); macOS auto-connect on relay URL, connection-status dot, restored &#9432; + scroll (#519); editable relay URL + token Settings fields (#550); live cross-host round-trip testbed under <code>examples/</code> (#486).</li>
+        <li><strong>Cross-platform observation layer</strong> &mdash; new <code>ports.ProcessObserver</code> seam with build-tagged <code>process_{darwin,linux,other}.go</code>; the adapters are unchanged (internal seam, not DI), and a Linux daemon falls out &mdash; Windows is now &ldquo;add one file&rdquo; (#482, #478).</li>
+        <li><strong>Quota / pricing</strong> &mdash; per-provider windowed usage spend + subscription empty-state (#441, #386); OpenCode&rarr;OpenAI rate-limit inheritance via JWT <code>account_id</code> (#424); 22 new frontend aliases in <code>core/pkg/capacity/aliases.go</code> synced from codeburn&rsquo;s <code>BUILTIN_ALIASES</code>. Five Warp codex aliases resolve to <code>gpt-5.3-codex</code>, which LiteLLM does not yet price &mdash; they log on miss and are flagged for a follow-up sync rather than blocking the release.</li>
+        <li><strong>Session detection</strong> &mdash; claudecode tool-use permission prompts surface as <code>waiting</code> (#490); backgrounded-Bash tracking keeps the session <code>working</code> and recognizes <code>TaskOutput</code> / <code>&lt;task-notification&gt;</code> completion in SDK-harnessed claude as well as <code>BashOutput</code> / <code>KillShell</code> in bare claude (#450, #452, #501); codex <code>turn_aborted</code> treated as turn-end (#464).</li>
+        <li><strong>Onboarding factory (internal fixture tooling &mdash; no runtime impact)</strong> &mdash; eight-phase rewrite of the scenario &times; adapter coverage matrix: <code>tools/agent-onboarding</code> &rarr; <code>tools/onboarding-factory</code>, with the <code>of</code> CLI as the sole writer of everything under <code>replaydata/</code> (#522&ndash;#530). Schema cutover to per-scenario shards &mdash; one catalog (<code>scenarios.json</code>) plus per-cell <code>metadata.json</code> in id-prefixed folders, every recording moved under <code>recordings/&lt;name&gt;/</code> (#510, #511, #514, #524). New 4-verb <code>ir:onboarding-factory</code> skill retiring <code>ir:onboard-agent</code>; <code>of validate</code> as a CI integrity gate. Per-adapter column recordings landed across claudecode, codex, opencode, aider, and pi (#515, #517, #518, #504, #489, #477, and others).</li>
+        <li><strong>Tests / CI</strong> &mdash; per-worktree state isolation + headless daemon startup smoke test (#448); hermetic replay so byte-identity goldens reproduce (#447, #451); fswatcher flake fixes (#485, #487); three-dot diff in the replaydata deletion guard (#466); web dashboard Vitest suite (#418).</li>
+      </ul>
+
       <h2>v0.4.7 <small>(2026-05-22)</small></h2>
 
       <h3>macOS distribution levels up: Sparkle auto-updates and a notarized DMG, plus OpenCode task progress reaches dashboard parity.</h3>
