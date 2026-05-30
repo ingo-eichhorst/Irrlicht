@@ -1,0 +1,90 @@
+{
+  "recording_dir": "claudecode/scenarios/3-1_foreground-subagent",
+  "artifacts": {
+    "events": "claudecode/scenarios/3-1_foreground-subagent/events.jsonl",
+    "transcript": "claudecode/scenarios/3-1_foreground-subagent/transcript.jsonl",
+    "manifest": "claudecode/scenarios/3-1_foreground-subagent/manifest.json",
+    "golden": "claudecode/scenarios/3-1_foreground-subagent/transcript.jsonl.replay.json.golden"
+  },
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "pass_rate": "6/6 phases passed",
+    "agent_cli_version": "2.1.143",
+    "daemon_version": "0.4.5+cf1166a",
+    "confidence": 0.9,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "foreground-subagent",
+      "agent": "claudecode",
+      "assessed_at": "2026-05-18T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.9,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nClaude Code has a first-class Task tool (a.k.a. Agent tool) that spawns sub-agents for parallel exploration. Each subagent writes an `isSidechain` transcript to `~/.claude/projects/<slug>/<parent>/subagents/agent-<uuid>.jsonl`. The parent waits for the subagent's completion signal — a `task-notification` user-event in the parent transcript carrying the subagent's task-id and status — before continuing its turn.\n\nirrlicht's claudecode adapter observes the full topology via file-based discovery, not in-process counting:\n\n1. The fswatcher walks `~/.claude/projects/` (transcriptsDir(), agent.go:36) and picks up every subagent transcript as its own `SessionState`.\n2. The detector emits a `KindParentLinked` lifecycle event when the child session's `ParentSessionID` is set (session_detector_activity.go:110). The orchestrator-side scenario `subagent-spawn` already verifies this with `parent_linked_min: 2`.\n3. `CountOpenSubagents` (parser.go:553) deliberately returns 0 because the file-based path is the single source of truth — counting in-process Agent tool_use entries as well would double-count. The metrics layer derives `SubagentCount(parent)` from the live children that link to it.\n4. Parent state: the parent's outstanding Agent tool_use prevents `IsAgentDone()` from firing, so the parent stays `working` until the tool_result for the Task arrives. `handleTaskNotification` (parser.go:192) records the subagent completion signals from the parent transcript.\n\nMapped to spec bullets:\n- 'Parent ready → working at spawn' — parent's Agent tool_use line drives the transition.\n- 'Child session appears with ParentSessionID = parent.session_id' — fswatcher discovers the sidechain file and links via lifecycle KindParentLinked.\n- 'SubagentCount(parent) = N while any child alive' — derived from live linked children.\n- 'Parent stays working until child ends' — parent's pending Agent tool_use blocks IsAgentDone.\n- 'Parent → ready after last child ends' — task-notification arrives, parent emits end_turn, working→ready.\n\nThe AskUserQuestion-from-child variant works because the child has its own independent transcript and tailer state, so its `working→waiting→working→ready` arc is computed exactly like a parent's. The orphan-on-death variant is covered by the sweep — if the child process dies without an end-of-turn line, it's reaped by the same mechanism used in `subagent-orphan-cleanup` (assessed separately).",
+      "caveats": [
+        "claudecode's subagent transcripts live under `<parent>/subagents/agent-*.jsonl` — a path that the curator's fixture bundler treats specially (`<fixture>.subagents/`). The orchestrator-side `subagent-spawn` recipe already validates the end-to-end shape; the agent-level coverage_id maps to `foreground-subagent` directly.",
+        "The N=3 parallel variant works because the file-based path scales linearly — each sidechain transcript is an independent SessionState. No special-case parser logic is needed for the 1-vs-3 distinction."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/claudecode/parser.go",
+          "note": "CountOpenSubagents (line 553) returns 0 by design — file-based sidechain transcripts are the single source of truth, avoiding double-counting against open Agent tool_use entries."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/session_detector_activity.go",
+          "note": "lifecycle.KindParentLinked emitted at line 110 when a child SessionState's ParentSessionID is bound — this is what the orchestrator-side verify asserts."
+        },
+        {
+          "kind": "file",
+          "ref": ".claude/skills/ir:onboard-agent/scenarios.json",
+          "note": "subagent-spawn recipe (coverage_id: foreground-subagent) — prompts 3 parallel Explore subagents and asserts parent_linked_min: 2, subagent_transcripts_min: 2."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "claude CLI on PATH and authenticated (subscription or API key)",
+        "irrlichd is recording (--attach against a daemon with --record, or isolated mode)",
+        "claude session can spawn at least 1 subagent (default model has Task/Agent tool exposed)"
+      ],
+      "setup": [
+        "Driver generates a fresh lowercased session UUID and a fresh cwd under <staging>/cwd/ (claude's trust dialog appears once and the driver auto-accepts)",
+        "A README.md with a single H1 heading is seeded into the cwd so the subagent has a deterministic file to read"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Use the Task tool to launch a general-purpose subagent that reads the README.md in the current directory and reports the first heading. Wait for the subagent to finish, then reply 'done'."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the parent UUID entering ready, then a single ready→working transition driven by the user prompt",
+        "events.jsonl contains at least 1 parent_linked event pointing at the parent UUID — the child sidechain transcript was discovered and bound",
+        "transcript.jsonl contains a tool_use block with name=Agent (the Task tool invocation)",
+        "the subagent transcript is present under ~/.claude/projects/<slug>/<parent>/subagents/agent-<uuid>.jsonl",
+        "no state_transition to ready or waiting fires on the parent UUID between parent_linked and the final working→ready (parent stays working until the child reports back)",
+        "events.jsonl shows exactly one working→ready transition for the parent UUID at turn end",
+        "final session state for the parent is ready"
+      ],
+      "settings": {},
+      "timeout_seconds": 240
+    }
+  },
+  "scenario_id": "foreground-subagent"
+}

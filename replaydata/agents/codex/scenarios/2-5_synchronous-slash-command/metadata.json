@@ -1,0 +1,98 @@
+{
+  "recording_dir": "codex/scenarios/2-5_synchronous-slash-command",
+  "artifacts": {
+    "events": "codex/scenarios/2-5_synchronous-slash-command/events.jsonl",
+    "transcript": "codex/scenarios/2-5_synchronous-slash-command/transcript.jsonl",
+    "manifest": "codex/scenarios/2-5_synchronous-slash-command/manifest.json",
+    "golden": "codex/scenarios/2-5_synchronous-slash-command/transcript.jsonl.replay.json.golden"
+  },
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "pass_rate": "4/4 phases passed",
+    "agent_cli_version": "0.130.0",
+    "daemon_version": "0.4.7+6934b22",
+    "confidence": 0.95,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "synchronous-slash-command",
+      "agent": "codex",
+      "assessed_at": "2026-05-23T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.95,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nOpenAI Codex's TUI has a family of synchronous, local-only slash commands that render their response client-side without round-tripping to the model: `/status`, `/mcp`, `/help`, `/model` (the picker). Of these, `/status` is the cleanest no-LLM probe — it renders a panel with the active model, account, session id, and usage link, entirely in the Ink TUI.\n\nThe load-bearing transport fact (verified live against codex-cli 0.130.0): a synchronous slash command appends NOTHING to the codex rollout file. After a warm-up turn materialized the rollout (12 lines, ending in `event_msg/task_complete`), sending `/status` produced a delta of ZERO new rollout lines and the `task_complete` count stayed at 1. The status panel rendered in the TUI but no `user_message`, no `task_started`, and no `task_complete` were written.\n\nThis is a stronger guarantee than claudecode's. claudecode appends a `<local-command>` wrapper that its parser's `isLocalCommandContent` filter must discard; codex writes no transcript content at all for the slash, so there is simply nothing for the daemon to react to.\n\nThe spec's two Expected bullets:\n\n**Bullet 1 — state stays `ready` throughout.** Because the slash writes no rollout line, the codex fswatcher sees no `transcript_activity`, the parser is never invoked, and no `state_transition` is emitted. The session sits in `ready` before, during, and after the slash.\n\n**Bullet 2 — no `→ working` transition recorded for the slash command itself.** Direct consequence: a `working` transition fires only on the parser's first-activity force (`task_started` / assistant message) and ends on `task_complete` (parser.go maps `event_msg/task_complete` → `turn_done`). Neither appears for `/status`.\n\nLive daemon evidence: the prod `irrlichd --record` daemon recorded exactly three state_transitions for the probe session — `ready` (new session created), `ready→working` (force ready→working on first activity), `working→ready` (agent finished turn → ready) — all driven by the single warm-up prompt. No fourth transition followed `/status` over the trailing window.\n\n## What irrlicht does NOT see (and why that's OK)\n\nThe `/status` panel's text (model, account, usage) is rendered in the TUI but never appears as a rollout event, so the daemon has nothing to surface. This is correct: the scenario's premise is precisely that there is no model call to observe.\n\n## Caveat on which commands count\n\nNot every codex slash command is synchronous. `/compact` triggers a real model call (context summarisation — belongs to `context-compaction`). `/clear` (reset_session) and `/fork` mint a fresh rollout/session_id — they belong to session-reset / fork scenarios, not this one. The recipe restricts itself to `/status`, which is verified to be a pure client-side render.",
+      "caveats": [
+        "`/clear` (reset_session) and `/fork` mint a fresh rollout with a new session_id — observable as a new session. Those belong to session-reset / fork, not this scenario. The recipe must avoid them.",
+        "`/compact` calls the model and would invalidate this scenario. Stick to `/status` (or `/mcp` / `/help`), which render entirely client-side.",
+        "If a future codex TUI change starts logging slash invocations into the rollout as real user/task events, this scenario would start failing — that is exactly the regression the recording locks down."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": ".specs/agent-scenarios.md",
+          "note": "Section 'Feature: Synchronous slash command (no LLM call)' — two Expected bullets (state stays ready; no working transition for the slash)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/codex/parser.go",
+          "note": "event_msg/task_complete maps to turn_done (155-172); only task_started / assistant activity forces ready→working. A slash that writes no rollout line drives neither."
+        },
+        {
+          "kind": "live-probe",
+          "ref": "codex-cli 0.130.0 /status",
+          "note": "Verified live: /status appended 0 lines to the rollout and produced 0 new state_transitions; status panel rendered client-side in the TUI only."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "codex CLI on PATH and authenticated (verified against codex-cli 0.130.0)",
+        "irrlichd is recording (--attach against a daemon with --record, or isolated mode)",
+        "/status must remain a local-only render in the running codex version — if codex ever routes it through the model the scenario premise breaks (verified live: /status appends zero lines to the rollout)"
+      ],
+      "setup": [
+        "Driver boots a fresh codex TUI in a per-run cwd under <staging>/cwd/ and accepts the trust dialog; codex assigns its own session UUID per rollout",
+        "Avoid /clear (reset_session — mints a fresh rollout/session_id, a different scenario) and /compact (real model call, a different scenario)"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly: warm"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        },
+        {
+          "type": "slash",
+          "text": "/status"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        }
+      ],
+      "verify": [
+        "events.jsonl shows exactly one ready→working→ready cycle for the entire run, driven by the warm-up turn only (codex's first-activity force drives working, task_complete drives ready)",
+        "events.jsonl contains NO state_transition to working after the warm-up turn returns to ready — /status drives none because codex writes no rollout line for it",
+        "events.jsonl contains NO state_transition to waiting at any point",
+        "the slash window (≥4s after the warm-up turn ends) shows the session continuously ready — no transcript_activity is recorded for /status",
+        "final session state is ready"
+      ],
+      "settings": {},
+      "timeout_seconds": 120,
+      "notes": "Codex difference vs claudecode: a synchronous slash command writes NOTHING to the rollout (verified live against codex-cli 0.130.0 — /status appended 0 lines, task_complete count unchanged), so there's no <local-command> wrapper for the parser to filter; the daemon simply sees no activity. The warm-up turn FIRST is mandatory: codex creates rollout-*.jsonl only after the first user message, so without it resolve_transcript hangs. Only /status is exercised (single slash) because it's the cleanest verified no-LLM render; /help and /mcp are equally synchronous but /status was the one probed. Between runs: warm-up assistant wording, token counts, session UUID, PID and timestamps differ; the state_transition set (ready, ready→working, working→ready) and its order are the structural baseline. If it broke, look at core/adapters/inbound/agents/codex/parser.go (task_complete→turn_done) and whether a codex update started logging slash invocations into the rollout."
+    }
+  },
+  "scenario_id": "synchronous-slash-command"
+}

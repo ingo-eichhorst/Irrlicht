@@ -47,14 +47,14 @@ fail() {
   exit 1
 }
 
-# #511: the scenario entry + recipe come from the per-scenario shard. SCENARIO
-# may be a coverage_id (shard name) OR a variant recording-folder name; both
-# resolve to the owning shard. The shard's `name` IS the coverage_id.
+# The scenario's global fields come from the catalog; the recipe from the
+# adapter's metadata.json. SCENARIO may be a coverage_id OR a variant
+# recording-folder name; shard_coverage_for_dir resolves both to the coverage_id.
 COVERAGE_ID="$(shard_coverage_for_dir "$SCENARIO" "$ADAPTER")"
-SHARD="$(shard_dir)/$COVERAGE_ID.json"
+SCENARIO_GLOBAL="$(scenario_global "$COVERAGE_ID")"
 
-# --- 1. shard entry + this adapter's recipe ----------------------------
-if [[ ! -f "$SHARD" ]]; then
+# --- 1. scenario entry + this adapter's recipe -------------------------
+if [[ -z "$SCENARIO_GLOBAL" ]]; then
   # The arg order here is <scenario-id> <adapter>, scenario first — the
   # reverse of run-cell.sh / the dispatcher (`<agent> <scenario>`). If the
   # first arg is an adapter slug, the caller most likely swapped them.
@@ -62,12 +62,15 @@ if [[ ! -f "$SHARD" ]]; then
     claudecode|codex|pi|aider|opencode)
       fail "'$SCENARIO' is an adapter slug, not a scenario. Args are <scenario-id> <adapter> (scenario first) — did you swap them?" ;;
     *)
-      fail "scenario not found in the shard catalog: $SCENARIO (run scenario-create first?)" ;;
+      fail "scenario not found in the catalog: $SCENARIO (run scenario-create first?)" ;;
   esac
 fi
-SCENARIO_SLICE="$(jq --arg a "$ADAPTER" '
-  {name, description, coverage_id: .name, idle_only, requires, verify, recipe: .agents[$a].details.recipe}
-' "$SHARD")"
+# The per-adapter recipe comes from the adapter's metadata.json (via shard_recipe).
+RECIPE_JSON="$(shard_recipe "$COVERAGE_ID" "$ADAPTER")"
+[[ -n "$RECIPE_JSON" ]] || RECIPE_JSON="null"
+SCENARIO_SLICE="$(jq -n --argjson scen "$SCENARIO_GLOBAL" --argjson recipe "$RECIPE_JSON" '
+  $scen | {name, description, coverage_id: .name, idle_only, requires, verify, recipe: $recipe}
+')"
 
 # When the input is a scenario NAME whose coverage_id differs (the 7
 # name != coverage_id scenarios), the recipe below is this scenario's but

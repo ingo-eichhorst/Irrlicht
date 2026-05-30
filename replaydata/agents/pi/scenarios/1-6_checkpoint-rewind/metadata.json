@@ -1,0 +1,163 @@
+{
+  "recording_dir": "pi/scenarios/1-6_checkpoint-rewind",
+  "artifacts": {
+    "events": "pi/scenarios/1-6_checkpoint-rewind/events.jsonl",
+    "transcript": "pi/scenarios/1-6_checkpoint-rewind/transcript.jsonl",
+    "manifest": "pi/scenarios/1-6_checkpoint-rewind/manifest.json",
+    "golden": "pi/scenarios/1-6_checkpoint-rewind/transcript.jsonl.replay.json.golden"
+  },
+  "metadata": {
+    "agent_supports": "partial",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "pass_rate": "8/8 phases passed",
+    "agent_cli_version": "0.70.0",
+    "daemon_version": "0.4.7+4ddeaf9",
+    "confidence": 0.6,
+    "notes": "agent_supports: partial\ndaemon_capability: full; driver_capability: gap:keys"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "checkpoint-rewind",
+      "agent": "pi",
+      "assessed_at": "2026-05-28T00:00:00Z",
+      "agent_supports": "partial",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.6,
+      "body": "## Verdict\n\nagent_supports: partial\ndaemon_capability: full; driver_capability: gap:keys\n\n(Refines the prior matrix cell, which read `no` / `n/a` against pi 0.69.x where stock Pi shipped no rewind — pi-mono discussion #1223. pi 0.70.0 changed this.)\n\n## Reasoning\n\npi 0.70.0 DOES ship an in-REPL rewind: the `/tree` slash command opens an interactive tree-selector overlay (`dist/modes/interactive/components/tree-selector.js`), and selecting an earlier entry calls `session.navigateTree(entryId)` → `SessionManager.branch(branchFromId)`. The mechanism is an APPEND-ONLY tree: `branch()` only moves the in-memory `leafId` pointer; the source comment is explicit — \"Existing entries are not modified or deleted.\" The next `appendXXX()` (the next turn) writes a child of the rewound entry into the SAME `.jsonl` session file under the SAME `session_id`. There is no `/clone`-style new file at rewind time (that is a separate `createBranchedSession` path, not what `/tree` selection does). So pi rewinds IN PLACE, like claudecode — not a fork like codex.\n\nWhy `agent_supports: partial` rather than `yes`: the spec's canonical primitive is a files-and-conversation checkpoint restore. pi restores CONVERSATION state (leaf pointer) but does not snapshot or restore the working-tree FILES — there is no shadow-git / file-checkpoint layer in stock pi. The conversation half is present; the file-restore half is not. Hence partial.\n\n## What irrlicht observes (and doesn't)\n\npi's adapter is `FilesUnderRoot` (`core/adapters/inbound/agents/pi/agent.go`: `Source: FilesUnderRoot{Dir: sessionsDir(), Parser: JSONLineParser{...}}`) — it tails the append-only session JSONL.\n\nMapping the scenario's three user-observable signals:\n\n1. **Session row state `ready` after rewind** — observable, but trivially: the rewind is not a turn, so the session sits in `ready` throughout the picker.\n2. **Same `session_id` (in-place rewind)** — TRUE for pi (append-only, same file/UUID), and would be observable on the post-rewind turn.\n3. **Post-rewind turn `ready → working → ready`** — observable as a standard turn arc on the same session_id, IF a turn follows.\n\nThe rewind EVENT ITSELF is invisible to file-watching: `branch()` writes nothing at selection time — no truncation, no `transcript_removed`, no `transcript_new`, no session_id change, no marker line. The tailer sees the post-rewind turn as ordinary append activity; nothing distinguishes a rewind from normal forward progress. This is the same invisibility claudecode has (see claudecode/checkpoint-rewind assessment), so the cell is at best `partial`, never `yes` on the observe axis.\n\n## Why this cell is not recordable today (driver gap)\n\nReaching and SELECTING a checkpoint inside the `/tree` overlay is keyboard-driven: `tree-selector.js#handleInput` consumes `tui.select.up` / `tui.select.down` (arrow keys) to move the highlight and `tui.select.confirm` (Enter) to commit `onSelect`. The pi interactive driver (`.claude/skills/ir:onboard-agent/scripts/drive-pi-interactive.sh`) implements only `send` / `slash` (type-text-and-Enter), `wait_turn`, `interrupt`, and `sleep` — it has NO `keys` step type for arrow-key picker navigation. Sending the literal text `/tree` opens the picker but the driver cannot then move the selection or confirm a non-default entry, so the rewind can never be exercised deterministically. Extending the driver with a `keys` step is a developer task, out of scope for this cell — so the cell is frozen as a driver gap, not recorded.\n\n## What would unblock it\n\nAdd a `keys` step type to `drive-pi-interactive.sh` (emit `tmux send-keys Up/Down/Enter` against the picker). Once the driver can navigate the `/tree` overlay, this cell becomes recordable as a `partial` observe — the post-rewind turn arc on the same session_id is the observable surface; the rewind event itself remains undetectable (document as a caveat, exactly as for claudecode).",
+      "caveats": [
+        "The rewind event itself is invisible to irrlicht's file-watch transport: pi's branch() only moves an in-memory leaf pointer and writes nothing at selection time, so no transcript transition distinguishes a rewind from normal forward progress. Spec state-correctness is unaffected (the post-rewind turn arc on the same session_id is observable), but irrlicht cannot DETECT that a rewind happened.",
+        "agent_supports is partial, not yes: pi restores conversation state (leaf pointer) but has no file/shadow-git checkpoint, so the working-tree-files half of the canonical checkpoint primitive is absent.",
+        "Not recordable today: the /tree picker needs arrow-key + confirm keystrokes and the pi interactive driver has no `keys` step type.",
+        "LAZY-TRANSCRIPT CORRECTION (discovered 2026-05-28 during live recording): contrary to the earlier doc claim that pi is FilesUnderRoot non-lazy, pi actually creates its per-session .jsonl file only AFTER the first user message commits, with turn 1 user+assistant already batched into the file at creation time. The daemon`s transcript_new fires after the file exists, so no working→ready state_transition is emitted for the FIRST turn. The recipe sends three prompts (one/two/three) but only two turn arcs are daemon-observable (the recipe`s `two` turn and the post-rewind `three` turn). The spec was rewritten to use pre_rewind_turn + post_rewind_ready (bounded duration_at_least_ms dwell, same shape as claudecode/checkpoint-rewind) + post_rewind_turn instead of three explicit t1/t2/t3 arcs. The rewind itself remains unobservable (branch() writes nothing), which is the same observability shape claudecode has."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "~/.nvm/versions/node/v22.18.0/lib/node_modules/@mariozechner/pi-coding-agent/dist/core/session-manager.js",
+          "note": "branch(branchFromId) moves leafId only; 'Existing entries are not modified or deleted'; sessions are append-only JSONL trees (lines 419-843)"
+        },
+        {
+          "kind": "file",
+          "ref": "~/.nvm/versions/node/v22.18.0/lib/node_modules/@mariozechner/pi-coding-agent/dist/modes/interactive/interactive-mode.js",
+          "note": "/tree handler (line 2022) → showTreeSelector → session.navigateTree(entryId) → branch() (line 3426ff); /tree is in-place rewind, distinct from /clone createBranchedSession"
+        },
+        {
+          "kind": "file",
+          "ref": "~/.nvm/versions/node/v22.18.0/lib/node_modules/@mariozechner/pi-coding-agent/dist/modes/interactive/components/tree-selector.js",
+          "note": "handleInput consumes tui.select.up/down (arrows) + tui.select.confirm (Enter) — picker navigation is keystroke-driven (line 763ff)"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/pi/agent.go",
+          "note": "pi Source is FilesUnderRoot{Dir: sessionsDir(), Parser: JSONLineParser} — append-only transcript tail; no event emitted for an in-place leaf-pointer move"
+        },
+        {
+          "kind": "file",
+          "ref": ".claude/skills/ir:onboard-agent/scripts/drive-pi-interactive.sh",
+          "note": "driver implements send/slash/wait_turn/interrupt/sleep only; no `keys` step for arrow-key picker navigation"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/checkpoint-rewind/assessment.json",
+          "note": "anchor: in-place rewind invisible to file-watch but post-rewind arc observable — same shape pi would have if drivable"
+        }
+      ]
+    },
+    "recipe": {
+      "preconditions": [
+        "pi CLI on PATH (verified pi 0.70.0) and authenticated (provider API key in env)",
+        "pi version with /tree in-place rewind — confirmed 0.70.0 (interactive-mode.js /tree → showTreeSelector → session.navigateTree → branch())",
+        "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+        "PARTIAL observability (per assessment.json): the rewind event itself is invisible (branch() moves the in-memory leaf pointer and writes nothing at selection time); only the post-rewind turn arc on the SAME append-only session_id is observable"
+      ],
+      "setup": [
+        "Driver launches pi in a fresh per-run cwd under <staging>/cwd/.",
+        "pi writes one append-only JSONL session file (FilesUnderRoot, non-lazy) under sessionsDir(); the same file + session_id persists across the rewind — branch() appends the next turn as a child of the rewound entry, it does not mint a new file.",
+        "/tree is sent as a slash step (text + Enter) to open the picker; the picker is then driven with `keys` steps (Up/Down to highlight the turn-1 checkpoint, Enter to confirm) using the raw tmux send-keys path provided by the `keys` step type."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: one"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: two"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "slash",
+          "text": "/tree"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "keys",
+          "keys": "Up Up"
+        },
+        {
+          "type": "sleep",
+          "seconds": 1
+        },
+        {
+          "type": "keys",
+          "keys": "Enter"
+        },
+        {
+          "type": "sleep",
+          "seconds": 2
+        },
+        {
+          "type": "keys",
+          "keys": "Enter"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: three"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        }
+      ],
+      "verify": [
+        "events.jsonl shows a proc-<PID> pre-session entering ready, handing off to the rollout-keyed session in ready",
+        "the rollout session runs two working→ready turns (turn 1 'one', turn 2 'two') — the checkpoints to rewind to",
+        "after /tree selection, NO transcript_removed and NO transcript_new appear — the rewind is invisible to file-watching (branch() writes nothing at selection time); the session stays ready and on the SAME session_id",
+        "the post-rewind turn shows a clean ready → working → ready arc on the SAME rollout session_id (in-place rewind, not a fork) — the 'same session_id if rewound in place' signal from scenario-meanings",
+        "exactly one session_id appears across the whole recording (no fork); a single process_exited at teardown",
+        "final live state is ready"
+      ],
+      "settings": {},
+      "timeout_seconds": 150,
+      "applicable": true,
+      "notes": "pi 0.70.0 ships an in-REPL rewind via the /tree slash command: it opens an interactive tree-selector overlay whose handleInput consumes tui.select.up/down + tui.select.confirm; selecting an earlier entry calls session.navigateTree(entryId) → SessionManager.branch(branchFromId), which only moves the in-memory leafId pointer (\"existing entries are not modified or deleted\") and keeps the SAME append-only .jsonl session file under the SAME session_id — the next turn is appended as a child of the rewound entry. An in-place rewind, like claudecode (NOT a fork like codex). agent_supports=partial: pi restores conversation state but not the working-tree files (no shadow-git in stock pi). The rewind EVENT itself is invisible to file-watch — branch() writes nothing at selection time — so we assert it as a negative invariant over the dwell window between the /tree selection and turn 3. Recipe uses the `keys` step type (raw tmux send-keys) added in commit 88400160 to navigate the /tree picker: send /tree, sleep to let the overlay materialize, `Up Up` to walk back from the latest-highlighted entry to the turn-1 leaf, Enter to commit the rewind. If the live overlay layout differs (oldest-first instead of newest-first), adjust the `Up` count to whatever lands on turn-1. The picker shows newest-first highlighted at the latest entry; `Up Up` from (4/4) `assistant: two` lands on (2/4) `assistant: one` (the turn-1 leaf). The first Enter selects that leaf and pi pops up a `Summarize branch? → No summary / Summarize / Summarize with custom prompt` confirmation dialog; a SECOND Enter accepts the default `No summary` and surfaces `Navigated to selected point`. Only then is it safe to send turn 3 (otherwise the third send is consumed by the dialog)."
+    }
+  },
+  "scenario_id": "checkpoint-rewind"
+}

@@ -1,0 +1,77 @@
+{
+  "recording_dir": "opencode/scenarios/1-2_session-end",
+  "artifacts": {
+    "events": "opencode/scenarios/1-2_session-end/events.jsonl",
+    "transcript": "opencode/scenarios/1-2_session-end/transcript.jsonl",
+    "manifest": "opencode/scenarios/1-2_session-end/manifest.json",
+    "golden": "opencode/scenarios/1-2_session-end/transcript.jsonl.replay.json.golden"
+  },
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "pass_rate": "2/2 phases passed",
+    "agent_cli_version": "unknown",
+    "daemon_version": "0.4.7+0094b27.dirty",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "session-end",
+      "agent": "opencode",
+      "assessed_at": "2026-05-25T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nThe scenario's three Expected variants are: (1) clean exit, (2) SIGKILL while idle in ready, and (3) SIGKILL mid-turn while still working. For the opencode adapter, irrlicht observes variant 1 cleanly — proc-<PID> presession born in ready, opencode's SQLite-backed `ses_…` session reconciles, working→ready transitions appear during the turn, and process_exited fires after the final ready. Variants 2 and 3 are NOT currently observable because `opencode run` is single-shot and the opencode interactive driver does not currently expose sigkill / restart.\n\nThe spec's invariants hold: process_exited fires after the working window closes with no transition to waiting in the tail.",
+      "caveats": [
+        "Variants 2 and 3 unobservable: would need driver-level sigkill added to drive-opencode-interactive.sh.",
+        "OpenCode's session lives across `opencode run --session` invocations via SQLite; chaining variants in one recording is possible in principle but requires recipe primitives the driver doesn't expose today (kill + restart while keeping the daemon attached)."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/opencode/agent.go",
+          "note": "OpenCode adapter declaration; ProcessOwnedStore source over SQLite."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "opencode CLI on PATH and authenticated",
+        "irrlichd is recording with the opencode SQLite watcher enabled"
+      ],
+      "setup": [
+        "Create an empty cwd under <staging>/cwd/"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        }
+      ],
+      "verify": [
+        "events.jsonl contains a presession_created for proc-<PID> and a transcript_new for the opencode ses_… session",
+        "events.jsonl contains a state_transition to ready, then working (during the turn), then ready (turn complete)",
+        "events.jsonl contains a process_exited after the final ready (clean exit at end of `opencode run`)",
+        "no state_transition to working or waiting between the final ready and process_exited",
+        "final session state is ready (before exit)"
+      ],
+      "settings": {},
+      "timeout_seconds": 120,
+      "scope_note": "OpenCode's `opencode run` is single-shot per invocation, so only variant 1 (clean exit) is recorded. Variants 2 and 3 (SIGKILL idle / mid-turn) require driver-level primitives the opencode interactive driver does not currently expose."
+    }
+  },
+  "scenario_id": "session-end"
+}

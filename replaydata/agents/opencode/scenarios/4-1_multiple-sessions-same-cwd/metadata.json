@@ -1,0 +1,143 @@
+{
+  "recording_dir": "opencode/scenarios/4-1_multiple-sessions-same-cwd",
+  "artifacts": {
+    "events": "opencode/scenarios/4-1_multiple-sessions-same-cwd/events.jsonl",
+    "transcript": "opencode/scenarios/4-1_multiple-sessions-same-cwd/transcript.jsonl",
+    "manifest": "opencode/scenarios/4-1_multiple-sessions-same-cwd/manifest.json",
+    "golden": "opencode/scenarios/4-1_multiple-sessions-same-cwd/transcript.jsonl.replay.json.golden",
+    "recordings": [
+      "opencode/scenarios/4-1_multiple-sessions-same-cwd/recordings/2026-05-27-03-35-01_irrlichd-0.4.7+7dc5c70"
+    ]
+  },
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "bug",
+    "driver_capability": "ready",
+    "pass_rate": "0/7 phases passed",
+    "agent_cli_version": "unknown",
+    "daemon_version": "0.4.7+7dc5c70",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes\ndaemon_capability: full\ndriver_capability: gap:start_session"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "multiple-sessions-same-cwd",
+      "agent": "opencode",
+      "assessed_at": "2026-05-27T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "bug",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: gap:start_session\n\n## Reasoning\n\nThis scenario asks whether two concurrent opencode instances sharing ONE cwd are tracked as two independent sessions (two distinct session_ids, independent working->ready arcs, stable PID-to-session binding, no flapping).\n\n**agent_supports: yes.** Nothing in opencode prevents two processes running in the same directory — every `opencode run` invocation (and every TUI process) creates its own row in the SQLite `session` table with its own `ses_…` UUID. Two instances in one cwd simply produce two session rows. This is structural, not a hidden REPL feature.\n\n**daemon_capability: full — the load-bearing fact is that opencode sessions are keyed by the store's `session.id`, NOT by cwd.** opencode's transport is `ProcessOwnedStore` (SQLite at ~/.local/share/opencode/opencode.db), unlike the file-tailing adapters. The watcher's `scanSessions` (watcher.go) reads the `session` table and maintains one `sessionCursor` PER `session.id`, broadcasting a distinct `EventNewSession` (with that row's `ses_…` id) and an independent `EventActivity`/terminal stream for each. The `directory` column is used only as a LIVENESS GATE via `liveCWDs()` — `if _, alive := live[s.directory]; !alive { continue }` — never as the identity key. So two same-cwd sessions yield two cursors, two session_ids, two independent working->ready arcs, and no flapping: exactly the two user-observable signals the scenario asserts. The note in the coverage row (\"DB-keyed sessions; cwd not the disambiguator\") is correct, and it is why the verdict is `full`, not `bug`: cwd-collision is irrelevant to opencode's session identity.\n\n**PID-to-session binding is handled at the PIDManager layer, not the adapter.** opencode/pid.go's `DiscoverPID` narrows candidate PIDs by cwd, and its own comment warns that two same-cwd opencode processes are \"not distinguishable\" at the OS level (it does not hold the DB open, so lsof-writer detection isn't available). But that comment describes the raw OS lookup in isolation. The actual binding goes through `PIDManager.TryDiscoverPID` (pid_manager.go), whose `disambiguate` callback prefers UNCLAIMED PIDs (`bestUnclaimed`) over already-claimed ones. Once session 1 claims PID-A, session 2's discovery is handed both same-cwd PIDs and selects the highest UNCLAIMED one (PID-B). A stable, non-cross-contaminated binding therefore emerges from the claimed-PID set even though the two PIDs share a cwd. The only residual risk is a startup-order race (both sessions briefly at PID=0, or a transient mis-pair before the first claim settles) — a caveat, identical in shape to the claudecode cell's PID caveat, not a spec-required observable the daemon mis-handles.\n\nThe claudecode sibling cell (`claudecode/multiple-sessions-same-cwd`) is `yes/full/ready` for the same reason at the observation layer; it differs only in driver readiness.\n\n## driver_capability: gap:start_session\n\nThe scenario can be ASSESSED as observable but cannot be RECORDED today, because `scripts/drive-opencode-interactive.sh` cannot launch two concurrent opencode sessions in one cwd. Its step grammar is single-session:\n- Headless path: `send` / `wait_turn` (no-op, since `opencode run` blocks) / `sleep`. The first `send` mints ONE session; later sends chain into it via `--session <id>`. One process, one session per driver run.\n- Live (tmux) path: `send` / `wait_turn` / `reset_session` / `slash` / `sleep` — still ONE tmux pane, ONE opencode process.\n\nNeither path has a `start_session` step (launch a SECOND live session without tearing the first down) nor a `{\"session\":N}` per-step targeting selector. The claudecode reference driver (`drive-claudecode-interactive.sh`) DOES have both (`step_start_session`, the `{\"session\":N}` focus switch, the ACTIVE-slot machinery) — and that is precisely the primitive the canonical scenarios.json description quotes (\"start_session / {\\\"session\\\":N}\"). That description is the claude-reference catalog text; the opencode driver has not yet gained the primitive.\n\nNOTE: this is NOT the same as `multiple-agents-same-workspace`, which run-cell-multi.sh records by launching SEPARATE per-adapter single-session drivers concurrently against a shared cwd. That gives one opencode session + one DIFFERENT-adapter session. To get TWO opencode sessions in one cwd, the opencode driver itself must learn the concurrent-launch + per-step-targeting primitive — a tooling task (owner: extend-driver), not an observability limit.\n\n## Capability key\n\nThe Primitive exercised — \"PID-based session isolation\" — has no dedicated key in opencode/capabilities.json. The closest anchor is `session_id_assignment: false`: the daemon derives each `ses_…` id from the SQLite store rather than assigning it, which is the exact mechanism that makes same-cwd isolation work for opencode. No new key is invented here.\n\n## Route\n\ndriver-gap: queue `extend-driver opencode start_session` to port the concurrent-session launch + `{\"session\":N}` targeting from the claudecode driver, then re-queue for implement. Do NOT freeze — the daemon can observe this once the driver can drive it.",
+      "caveats": [
+        "Reconciled post-record (2026-05-27): re-recorded clean at 32k (commit c57b1fd6). The daemon DOES emit working for BOTH concurrent same-cwd sessions (count=2) — #503's zero-working premise was a 4096-context artifact — but the per-turn closing ready edge is deferred for concurrent short-lived turns (daemon_capability=bug, #503 re-scoped). driver_capability gap:start_session->ready. Cell stays known_failing for the narrower real gap.",
+        "PID startup-order race: during the brief window before both sessions have claimed a PID, the two same-cwd opencode processes may transiently both sit at PID=0 (DiscoverPID returns 0-and-retries rather than guess) or the claimed-PID disambiguation may settle a tick late. Observable as a momentarily-late PID, never a swapped/cross-contaminated binding. Anchor any PID-phase check at a moment after both sessions have written at least one part. (Same shape as the claudecode sibling caveat.)",
+        "opencode/pid.go's DiscoverPID comment states two same-cwd opencode instances are 'not distinguishable' — true for the raw OS lookup in isolation, but the PIDManager.disambiguate unclaimed-PID preference resolves the binding at the application layer. The recording is the authoritative check that the binding lands stably.",
+        "opencode's default local LM Studio model is slow (~30-45s/turn); a recording recipe should widen the working-anchor windows so a slow turn does not read as a missing transition."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/opencode/watcher.go",
+          "note": "scanSessions keys one sessionCursor per session.id (ses_… UUID) and broadcasts a distinct EventNewSession/EventActivity per row; directory is used only as a liveness gate (liveCWDs), never as the identity key — so two same-cwd sessions are two independent observable arcs. This is the evidence for daemon_capability: full."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/opencode/pid.go",
+          "note": "DiscoverPID narrows by cwd; its comment warns two same-cwd opencode instances are 'not distinguishable' at the OS level (no held-open DB for lsof-writer detection) — the basis for the PID caveat, resolved at the PIDManager layer."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/pid_manager.go",
+          "note": "TryDiscoverPID's disambiguate callback prefers unclaimed PIDs (bestUnclaimed over bestAny), so session 2 receives the PID session 1 did not claim — a stable per-session binding emerges from the claimed-PID set despite the shared cwd."
+        },
+        {
+          "kind": "file",
+          "ref": ".claude/skills/ir:onboard-agent/scripts/drive-opencode-interactive.sh",
+          "note": "Step grammar is single-session: headless (send/wait_turn/sleep, one process chained via --session) and live tmux (send/wait_turn/reset_session/slash/sleep, one pane). No start_session step, no {\"session\":N} targeting — the evidence for driver_capability: gap:start_session."
+        },
+        {
+          "kind": "file",
+          "ref": ".claude/skills/ir:onboard-agent/scripts/drive-claudecode-interactive.sh",
+          "note": "step_start_session + {\"session\":N} focus switch + ACTIVE-slot machinery — the reference implementation of the missing primitive that extend-driver would port to opencode."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/opencode/capabilities.json",
+          "note": "session_id_assignment: false — the daemon derives ses_… ids from the SQLite store; the closest capability anchor for the 'PID-based session isolation' primitive."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/multiple-sessions-same-cwd/assessment.json",
+          "note": "Sibling cell is yes/full/ready; opencode matches at the observation layer (full) and differs only in driver readiness (gap)."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "opencode on PATH and authenticated (~/.local/share/opencode/auth.json) — verified opencode 1.x. The arc is model-agnostic; the dev env's default is a slow local LM Studio model (~30-45s/turn), which is fine — the spec windows are widened to ≤60s so a slow turn never reads as a missing transition.",
+        "irrlichd is recording — run-cell.sh isolated mode (spawns its own --record daemon), or --attach against a daemon started with --record.",
+        "no other opencode session is live in the run cwd (a stray same-cwd opencode would add a third row and confuse the two-row assertion)."
+      ],
+      "setup": [
+        "HEADLESS cell — NOT tmux/TUI. The driver routes to run_live (tmux) ONLY for reset_session/slash steps; this recipe uses just send/wait_turn/start_session/sleep, so it stays on the deterministic headless `opencode run` path (two interleaved `opencode run --session <ses>` chains in one shared <staging>/cwd).",
+        "Driver slot 1's first send launches `opencode run` in <staging>/cwd, minting ses_1; wait_turn is a no-op because `opencode run` already blocks until the turn ends.",
+        "The start_session step allocates a SECOND slot (empty id) in the SAME cwd; its first send (no --session) mints a fresh ses_2 — opencode keys sessions on the SQLite session.id, not the directory (watcher.go scanSessions; the directory column is only a liveness gate via liveCWDs), so two same-cwd chains are two independent ses_… rows.",
+        "The step carrying {\"session\":1} switches the active slot back to slot 1, so the final send/wait_turn re-drives ses_1 (via --session ses_1) WHILE ses_2 is still alive — exercising the two concurrent, independent arcs. The driver's epilogue exports session.uuids + transcript.paths for BOTH ses_ chains so curate-lifecycle-fixture.sh captures both arcs."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: alpha"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        },
+        {
+          "type": "start_session"
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: bravo"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: alpha2",
+          "session": 1
+        },
+        {
+          "type": "wait_turn",
+          "session": 1
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        }
+      ],
+      "verify": [
+        "events.jsonl contains 2 distinct ses_… session_ids, both keyed to the same cwd slug (two independent SQLite session rows, not one merged row)",
+        "each ses_… has its own independent working->ready arc; no transition on one session is attributed to the other",
+        "session 1 (ses_1) shows TWO working->ready arcs (turn1 'alpha' + the post-start_session re-drive 'alpha2'); session 2 (ses_2) shows ONE ('bravo') — proving session 1 stayed bound and independent while session 2 was alive",
+        "no state flapping/merge: the daemon never collapses the two same-cwd rows into one nor swaps a transition between them",
+        "transcript.jsonl concatenates both sessions: 3 user prompts + 3 completed turns total across the two ses_… ids",
+        "final live state is ready"
+      ],
+      "settings": {},
+      "timeout_seconds": 300
+    }
+  },
+  "scenario_id": "multiple-sessions-same-cwd"
+}

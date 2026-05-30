@@ -1,0 +1,173 @@
+{
+  "recording_dir": "opencode/scenarios/2-6_long-agentic-session-stress",
+  "artifacts": {
+    "events": "opencode/scenarios/2-6_long-agentic-session-stress/events.jsonl",
+    "transcript": "opencode/scenarios/2-6_long-agentic-session-stress/transcript.jsonl",
+    "manifest": "opencode/scenarios/2-6_long-agentic-session-stress/manifest.json",
+    "golden": "opencode/scenarios/2-6_long-agentic-session-stress/transcript.jsonl.replay.json.golden",
+    "recordings": [
+      "opencode/scenarios/2-6_long-agentic-session-stress/recordings/2026-05-26-00-42-40_irrlichd-0.4.7+860c0a8"
+    ]
+  },
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "pass_rate": "4/4 phases passed",
+    "agent_cli_version": "unknown",
+    "daemon_version": "0.4.7+860c0a8",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes\ndaemon_capability: full\ndriver_capability: gap:live-session"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "long-agentic-session-stress",
+      "agent": "opencode",
+      "assessed_at": "2026-05-27T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: gap:live-session\n\n## Reasoning\n\nThis is a REASSESSMENT of a previously non-green cell (prior verdict: yes / bug / ready, recorded known_failing 3/4). Re-derived from scratch against opencode CLI v1.14.50 and the current daemon code. The prior `daemon_capability: bug` was a MISLABEL: the daemon does not mis-handle the terminal settle — it is a process-exit-before-poll RACE that is owned by the recording driver, not the daemon. The verdict flips to daemon_capability: full, and the real non-green axis is the driver.\n\nlong-agentic-session-stress asserts the daemon keeps a long, tool-heavy session coherently observed: state stays continuously `working` across MANY interleaved assistant-message / tool-call / tool-result iterations, no spurious flicker to ready/waiting mid-work, and a clean settle to ready when the turn ends. opencode supports tool calls (capabilities.json tool_calls:true) and in headless default (`opencode run`) auto-executes them inside its own sandbox with no permission gate, so the burst never enters waiting. Session state lives in opencode's SQLite store; the daemon's ProcessOwnedStore source polls the UUID-keyed ses_… session.\n\nDaemon path (full): the opencode watcher (watcher.go scanParts) reads new part rows and emits one EventActivity per scan, setting Terminal=true when it sees a step-finish part with a turn-ending reason (isTerminalPart: stop/interrupted/length/error/content-filter) or a message-level error (isErrorMessage, #493). A tool-calls step-finish reason is NOT terminal, so a long write→read→edit tool sequence inside one turn stays one contiguous `working` span — exactly the coherence this scenario stresses. The settle to ready happens in the application layer: session_detector_activity.go short-circuits the debounce on a Terminal activity and calls processActivity, which records the working→ready transition (\"agent finished turn → ready\"). metrics.go carries no state logic (pure token accounting). This settle path is PROVEN correct on the sibling headless recordings basic-turn (events.jsonl seq 701 working→ready lands 39ms BEFORE process_exited at seq 702) and self-correction-iteration (ready seq 4203 lands 12ms before process_exited seq 4204) — same driver, same source, clean settle. So given the terminal step-finish part while the process is alive, the daemon settles correctly: daemon_capability is full.\n\nDriver gap (root cause of the prior known_failing): the existing recording's events.jsonl shows the long turn's terminal step-finish reason=stop landing in the WAL at seq 4761 (07.379s) — ~175ms AFTER process_exited at seq 4760 (07.204s). Because headless `opencode run` exits at turn end, the daemon's poller never reads the terminal part while the session's process is alive, so no terminal working→ready transition is recorded (no \"agent finished turn → ready\" line; the session is left in `working` at observation end, with only debounce_terminal at seq 4762). This is a timing race created by the DRIVER killing the process at turn end, not the daemon mis-parsing anything — and it is exactly how OPEN issue #492 frames it (labeled enhancement / scope:tooling, NOT bug): \"the headless `opencode run` process exits at turn end, so the final step-finish reason=stop lands in the SQLite store ~140–175ms after process_exited, and the terminal working→ready settle is missed. A long-lived REPL process would fix that too.\"\n\nThe fix mechanism already exists in the driver: #495 added a LIVE-TUI path (run_live) to drive-opencode-interactive.sh that launches the opencode TUI under tmux and keeps ONE process alive across the whole step-script (send / wait_turn / reset_session / slash / sleep). A long-lived process never exits at turn end, so the daemon polls the terminal step-finish while the session is still alive and the working→ready settle lands normally — clearing the race. BUT the routing only engages run_live when the recipe carries a `reset_session` or `slash` step (drive-opencode-interactive.sh line ~355); this scenario's recipe is send/wait_turn/sleep only, so it still routes to the headless path and hits the race. Hence driver_capability: gap:live-session — the live/long-lived-process step path exists but this recipe is not wired to it. This is queued tooling work (route this scenario to run_live, or add an opt-in), NOT a daemon bug and NOT a freeze.\n\nMODEL note: opencode's default is the local LM Studio model lmstudio/gemma-4-e2b-it-uncensored (~/.config/opencode/opencode.json); the driver passes no --model. gemma 2B is slow and may be unreliable at sustaining a long multi-tool loop; if it will not sustain the burst that is a model/infra limit, not a daemon/opencode incapability (tool_calls:true).",
+      "caveats": [
+        "Reconciled post-record (2026-05-27): routed onto the long-lived run_live path via the 'live' marker (commit f6919c45); cell recorded 4/4 green — driver_capability gap:live-session->ready.",
+        "The recordable target is now via the live-TUI driver path (run_live, added in #495), which keeps one opencode TUI process alive across the whole turn so the terminal step-finish is polled before exit. The current recipe (send/wait_turn/sleep) routes to the headless path; route it to run_live (the driver opts in on reset_session/slash steps today) to clear the race and re-record toward green.",
+        "opencode exposes no CLI-assignable session IDs; the driver discovers the ses_… session id by querying SQLite keyed on the per-run cwd.",
+        "The phase DSL has no tool-event form, so the stress is asserted via the single sustained working span + the no-waiting invariant; the high tool-call volume (≥5 function_call/output pairs) is verified in the SQLite store / transcript out-of-band at record time.",
+        "The local gemma 2B default model is slow and may be unreliable at sustaining a LONG multi-tool loop in one turn; if it will not sustain the burst the limitation is the model, not opencode/daemon (capabilities.json tool_calls:true)."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/opencode/scenarios/long-agentic-session-stress/events.jsonl",
+          "note": "PROVES the miss is a process-exit race, not daemon mishandling: terminal step-finish lands as transcript_activity at seq 4761 (07.379s) ~175ms AFTER process_exited at seq 4760 (07.204s); no terminal state_transition→ready is recorded — the session is left in working with only debounce_terminal (seq 4762)."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/opencode/scenarios/basic-turn/events.jsonl",
+          "note": "PROVES the daemon settle path is correct (daemon_capability: full): same headless driver, working→ready (\"agent finished turn → ready\") at seq 701 lands 39ms BEFORE process_exited at seq 702 — when the terminal step-finish is polled while the process is alive, the daemon settles cleanly. self-correction-iteration shows the same (seq 4203 ready 12ms before seq 4204 process_exited)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/opencode/watcher.go",
+          "note": "scanParts/isTerminalPart: a step-finish with reason stop/interrupted/length/error/content-filter sets Terminal=true on EventActivity; a tool-calls reason is non-terminal so a long multi-tool turn stays ONE working span. metrics.go carries no state logic — settle is entirely activity-driven."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/session_detector_activity.go",
+          "note": "On a Terminal activity the detector short-circuits the debounce and calls processActivity, which records the working→ready settle. Process exit (KindProcessExited, pid_manager.go) emits no state transition, so a terminal part arriving AFTER process_exited produces no settle — the driver-owned race."
+        },
+        {
+          "kind": "url",
+          "ref": "https://github.com/ingo-eichhorst/Irrlicht/issues/492",
+          "note": "OPEN, labeled enhancement / scope:tooling / scope:opencode — frames this cell's known_failing explicitly as a DRIVER problem ('headless `opencode run` process exits at turn end … the terminal working→ready settle is missed. A long-lived REPL process would fix that too.'). Not a daemon bug."
+        },
+        {
+          "kind": "file",
+          "ref": ".claude/skills/ir:onboard-agent/scripts/drive-opencode-interactive.sh",
+          "note": "run_live (added in #495) launches the opencode TUI under tmux and keeps ONE process alive across send/wait_turn/reset_session/slash/sleep — the long-lived path that clears the #492 race. Routing (line ~355) engages it only on reset_session/slash steps; this recipe (send/wait_turn/sleep) still routes headless, hence driver_capability: gap:live-session."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "opencode CLI on PATH and authenticated against its configured default model (~/.config/opencode/opencode.json; the local LM Studio model lmstudio/gemma-4-e2b-it-uncensored at authoring time). The driver passes NO --model, so it uses that default",
+        "opencode's SQLite store exists at ~/.local/share/opencode/opencode.db (created on first run); the driver queries it for the ses_… session id and exports the parts transcript",
+        "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+      ],
+      "setup": [
+        "RUN_LIVE — the leading {\"type\":\"live\"} marker forces drive-opencode-interactive.sh onto its run_live path (router engages on any of reset_session/slash/interrupt/keys/restart/sigkill/mid_turn_send/live). run_live launches ONE opencode TUI under tmux in a fresh per-run cwd under <staging>/cwd/ and keeps that SAME process alive across ALL the sequential send/wait_turn turns; opencode auto-assigns the ses_… session id (no CLI-assignable id) and the driver discovers it from the SQLite session table keyed on that cwd",
+        "WHY run_live (not headless `opencode run`): headless spawns a FRESH subprocess per send that EXITS ~140–175ms before the daemon's ProcessOwnedStore poller reads its terminal `step-finish reason=stop`, so the final working→ready settle lands in the store AFTER process_exited and is missed (issue #492 — a DRIVER process-exit-before-poll race, NOT a daemon bug). A long-lived run_live process never exits at turn end, so the poller reads the terminal step-finish while the session is alive and the FINAL settle lands normally — this is the deliberate fix that lets the cell drop its prior known_failing",
+        "WHY a genuinely LONG multi-turn arc: the scenario stresses the daemon keeping ONE session coherently observed across MANY interleaved assistant-message / tool-call / tool-result iterations. Each of the six sequential turns gives opencode a small, fully-enumerated file task (create / write / read-back / list / append / summarize) so its agent loop chains real write/read/list tool calls, and the turns accumulate work across the run — a high tool-call volume and monotonic token accumulation across the whole session",
+        "WHY tool calls auto-execute without a gate: opencode runs its file/list tools inside its own sandbox with NO interactive permission prompt, so no turn enters waiting",
+        "WHY each turn is send → wait_turn → sleep: wait_turn blocks on run_live until the terminal step-finish total exceeds the pre-send baseline (the turn actually ended), and the inter-turn sleeps (5s) let each working→ready settle land before the next send re-enters working. The local gemma 2B default model is slow (~30–45s per turn) so the timeout is generous (900s). NOTE: the daemon's ProcessOwnedStore watcher observes the store via WAL-write-triggered scans with a 500ms minScanGap debounce, so back-to-back same-ses_ turns may COALESCE into one observed working→ready span — the spec asserts the SESSION-LEVEL arc + FINAL settle, not N separable per-turn arcs"
+      ],
+      "script": [
+        {
+          "type": "live"
+        },
+        {
+          "type": "send",
+          "text": "Using your file tools, do all of this in THIS turn, one step at a time (do not ask me anything): create six files named step1.txt, step2.txt, step3.txt, step4.txt, step5.txt, step6.txt, and into each write exactly its step number on a single line (step1.txt contains 1, …, step6.txt contains 6). Then reply with exactly: created."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        },
+        {
+          "type": "send",
+          "text": "Using your file tools, read all six files step1.txt through step6.txt back and tell me the number each one contains. Then reply with exactly: read-back-done."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        },
+        {
+          "type": "send",
+          "text": "Using your file tools, list every file in the current directory, then create a file summary.md that lists one per line each stepN.txt filename followed by the number it contains. Then reply with exactly: summary-written."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        },
+        {
+          "type": "send",
+          "text": "Using your file tools, append a new line 'total=21' to summary.md, then read summary.md back and show me its full contents. Then reply with exactly: total-appended."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        },
+        {
+          "type": "send",
+          "text": "Using your file tools, create three more files notes1.txt, notes2.txt, notes3.txt, each containing a single line with its own name, then read all three back. Then reply with exactly: notes-done."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        },
+        {
+          "type": "send",
+          "text": "Using your file tools, list every file in the current directory one final time and tell me the total count of files you see. Then reply with exactly: all-done."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the ses_… session appear in ready within ~3s of agent launch (a transient proc-<PID> presession may also appear; the arc and pid_discovered land on the UUID-keyed ses_… session)",
+        "events.jsonl contains a pid_discovered event bound to the ses_… session_id",
+        "events.jsonl contains a state_transition→working on the ses_… session when the first multi-step prompt is sent (start of the long agentic burst)",
+        "across the entire run, NO state_transition to waiting fires (opencode auto-executes its file/list tools under run_live; no permission gate)",
+        "transcript.jsonl / the SQLite part table contains a HIGH VOLUME of tool parts across the six turns (≥5 function_call / function_call_output pairs: the file writes, read-backs, list calls, and summary writes) — verified out-of-band since the phase DSL has no tool-event form",
+        "token accumulation is monotonic across the turns (cum_input_tokens > 0, cum_output_tokens > 0, non-decreasing across the turn boundaries in events.jsonl / the replay .golden summary) — verified out-of-band since the phase DSL has no TotalTokens/delta form",
+        "after the FINAL turn the SAME ses_… session settles working→ready (the previously-truncated terminal settle is now captured under run_live; clean settle, not stuck working) — back-to-back turns may COALESCE under the WAL-poll debounce so per-turn arc separability is NOT asserted",
+        "final session state is ready"
+      ],
+      "settings": {},
+      "timeout_seconds": 900
+    }
+  },
+  "scenario_id": "long-agentic-session-stress"
+}

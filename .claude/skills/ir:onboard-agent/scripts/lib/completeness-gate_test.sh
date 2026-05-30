@@ -35,14 +35,29 @@ trap 'rm -rf "$TMP"' EXIT
 # The binary derives the shard dir (repo root) from --agents-root, so we build
 # <root>/replaydata/scenarios/*.json + _meta.json under TMP.
 ROOT="$TMP/replaydata"
-SDIR="$ROOT/scenarios"
-mkdir -p "$SDIR" "$ROOT/agents/fake"
-cat > "$SDIR/_meta.json" <<'JSON'
-{"min_versions":{"fake":"0.0.0"},"transcript_extensions":{"fake":"jsonl"}}
-JSON
+SCEN_ACC="$TMP/_scen"
+mkdir -p "$SCEN_ACC" "$ROOT/agents/fake"
 
-# shard <name> <agents-json> — one shard for coverage_id <name>.
-shard() { printf '{"id":"1.%s","name":"%s","section":"S","feature":"F","agents":%s}\n' "$RANDOM" "$1" "$2" > "$SDIR/$1.json"; }
+# rebuild_catalog → (re)write the consolidated replaydata/scenarios.json from
+# the per-name global accumulator, with the meta block the matrix needs.
+rebuild_catalog() {
+  jq -s '{meta:{min_versions:{fake:"0.0.0"},transcript_extensions:{fake:"jsonl"}}, scenarios: .}' \
+    "$SCEN_ACC"/*.json > "$ROOT/scenarios.json"
+}
+
+# shard <name> <agents-json> — register scenario <name> (global fields) and write
+# a metadata.json per agent in <agents-json> (keyed by scenario_id == <name>), the
+# data the matrix now reads from replaydata/agents/<a>/scenarios/<folder>/metadata.json.
+shard() {
+  local name="$1" agents="$2" a
+  printf '{"id":"1.%s","name":"%s","section":"S","feature":"F"}\n' "$RANDOM" "$name" > "$SCEN_ACC/$name.json"
+  for a in $(jq -r 'keys[]' <<<"$agents"); do
+    mkdir -p "$ROOT/agents/$a/scenarios/$name"
+    jq -c --arg a "$a" --arg n "$name" '.[$a] + {scenario_id:$n}' <<<"$agents" \
+      > "$ROOT/agents/$a/scenarios/$name/metadata.json"
+  done
+  rebuild_catalog
+}
 # A recorded cell carries non-empty artifact refs (cellRecorded checks the refs,
 # not the files on disk); an assessed-not-recorded cell has an assessment but
 # no refs; an unassessed cell has neither.

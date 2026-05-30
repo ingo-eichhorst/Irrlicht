@@ -31,7 +31,7 @@ func repoRoot(t *testing.T) string {
 // lockstep.
 func TestReplayTranscript_producesWaitingFromQuestion(t *testing.T) {
 	src := filepath.Join(repoRoot(t),
-		"replaydata", "agents", "claudecode", "scenarios", "user-blocking-question", "transcript.jsonl")
+		"replaydata", "agents", "claudecode", "scenarios", "2-17_user-blocking-question", "transcript.jsonl")
 
 	res, err := replayengine.ReplayTranscript(src, replayengine.Options{
 		Adapter:                    claudecode.AdapterName,
@@ -103,7 +103,7 @@ func TestReplayTranscript_emptyTranscript(t *testing.T) {
 // LiteLLM pricing cache may be absent in a bare `go test`.
 func TestReplayTranscript_metricsTimelineClimbs(t *testing.T) {
 	src := filepath.Join(repoRoot(t),
-		"replaydata", "agents", "claudecode", "scenarios", "token-accounting", "transcript.jsonl")
+		"replaydata", "agents", "claudecode", "scenarios", "5-1_token-accounting", "transcript.jsonl")
 
 	res, err := replayengine.ReplayTranscript(src, replayengine.Options{
 		Adapter:                    claudecode.AdapterName,

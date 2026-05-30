@@ -1,0 +1,108 @@
+{
+  "recording_dir": "pi/scenarios/2-20_user-esc-interrupt",
+  "artifacts": {
+    "events": "pi/scenarios/2-20_user-esc-interrupt/events.jsonl",
+    "transcript": "pi/scenarios/2-20_user-esc-interrupt/transcript.jsonl",
+    "manifest": "pi/scenarios/2-20_user-esc-interrupt/manifest.json",
+    "golden": "pi/scenarios/2-20_user-esc-interrupt/transcript.jsonl.replay.json.golden"
+  },
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "pass_rate": "5/5 phases passed",
+    "agent_cli_version": "0.70.0",
+    "daemon_version": "0.4.7+2127898",
+    "confidence": 0.82,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "user-esc-interrupt",
+      "agent": "pi",
+      "assessed_at": "2026-05-25T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.82,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nThis cell is the user-action framing of the same pi behavior captured by the `interrupted-turn` scenario (both share coverage_id `user-esc-interrupt`). The User-observable signal is `ready → working → ready` with state NOT sticking in `working` post-interrupt, and the next prompt proving the parser reset via a fresh `ready → working → ready` arc. Pi binds Escape to \"interrupt the in-flight LLM turn\" (per its startup banner: `escape interrupt · ctrl+c/ctrl+d clear/exit`), so the agent natively supports cancelling a long turn mid-response — agent_supports: yes.\n\nHOW irrlicht observes it (and the IMPORTANT structural nuance): pi's transcript parser (`core/adapters/inbound/agents/pi/parser.go`) emits `turn_done` ONLY when an assistant message carries `stopReason == \"stop\"`. An ESC-cancelled turn never reaches `stopReason=stop`, so the interrupted turn produces NO `turn_done`. Pi's parser also does NOT set `LastWasUserInterrupt` (it has no `[Request interrupted by user]` marker handling — that path is claudecode-specific), so the classifier's rule-3 \"user ESC interrupt while working → ready\" branch does not fire for pi. The interrupt therefore produces no standalone working→ready transition; the session remains `working` after ESC until the RECOVERY prompt's reply lands a `stopReason=stop` (turn_done), which settles working→ready via classifier rule 2b (\"agent finished turn → ready\"). The user-observable end state is still correct — state does not stick in working, it resolves to `ready` once the recovery turn completes — and the recovery arc proves the parser reset cleanly on the next prompt. daemon_capability: full; driver_capability: ready (the spec asserts the observable arc and the no-waiting / no-stick invariant; it does NOT assert a distinct interrupt-triggered transition, which pi does not emit).\n\nNote on the claudecode row of this scenario (`user-esc-interrupt`): its recipe verify items reference `[Request interrupted by user]` and classifier rule 3 directly — that is claudecode-specific transport and does NOT apply to pi. The pi spec for this cell is therefore identical in substance to the pi `interrupted-turn` spec, not to the claudecode `user-esc-interrupt` spec.\n\nConfidence 0.82 (not higher) because the post-interrupt return to `ready` is carried by the recovery turn's `turn_done` rather than by a dedicated interrupt-detection path — a future pi version that emits an explicit cancel marker, or a daemon change adding pi interrupt-marker detection, would change the transition shape (an earlier working→ready right after ESC) and warrant a re-record.",
+      "caveats": [
+        "Pi's parser has no `[Request interrupted by user]` marker handling, so classifier rule 3 (user ESC interrupt → ready) does not fire for pi. The post-interrupt return to ready is carried by the recovery prompt's `stopReason=stop` (turn_done → rule 2b), not by the interrupt itself.",
+        "The driver's `interrupt` step sends Escape to the tmux pane and decrements its internal EXPECTED_TURNS (the cancelled turn produces no stop message), so the recipe must NOT follow `interrupt` directly with `wait_turn` — it sleeps, then sends the recovery prompt and waits on THAT turn.",
+        "Pi cannot accept a pre-assigned UUID; the interactive driver discovers it from the rollout transcript header. A transient `proc-<PID>` pre-session is born ready at launch and bridges the gap until the UUID-keyed transcript appears (same shape as pi/session-start, pi/multi-turn-conversation, pi/interrupted-turn).",
+        "This cell shares coverage_id `user-esc-interrupt` with the pi `interrupted-turn` scenario, which already recorded cleanly (5/5). It captures the same behavior from the user-action framing; the recording is the user-esc-interrupt-named twin of that fixture."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/pi/parser.go",
+          "note": "stopReason==\"stop\" → turn_done; any other stopReason (incl. a cancelled turn) → plain assistant event. No IsUserInterrupt / [Request interrupted by user] handling."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go",
+          "note": "Rule 3 (user ESC interrupt → ready) is gated on LastWasUserInterrupt/LastWasToolDenial, which pi never sets. Rule 2b (agent finished turn → ready) settles working→ready on the recovery turn's turn_done."
+        },
+        {
+          "kind": "file",
+          "ref": ".claude/skills/ir:onboard-agent/scripts/drive-pi-interactive.sh",
+          "note": "step_interrupt sends Escape and decrements EXPECTED_TURNS; the recovery send + wait_turn pair stays in sync."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/pi/scenarios/interrupted-turn/expected.jsonl",
+          "note": "The proven 5/5 pi spec for the same behavior; this cell's spec mirrors it under the user-esc-interrupt scenario id."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "pi CLI on PATH and authenticated; pi binds Escape to 'interrupt the in-flight LLM turn' (startup banner: 'escape interrupt · ctrl+c/ctrl+d clear/exit')",
+        "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+        "PI-SPECIFIC: pi's parser has no '[Request interrupted by user]' marker and never sets LastWasUserInterrupt, so classifier rule 3 (user ESC interrupt → ready) does NOT fire for pi. The interrupt emits no standalone working→ready transition — the post-interrupt return to ready is carried by the RECOVERY prompt's stopReason=stop (turn_done → rule 2b). Unlike the claudecode row above, do NOT verify an interrupt marker or a rule-3 transition."
+      ],
+      "setup": [
+        "Pi cannot accept a pre-assigned UUID; the interactive driver discovers it from the rollout transcript header",
+        "A transient proc-<PID> pre-session is born ready at launch and bridges the gap until the UUID-keyed rollout transcript appears (same shape as pi/session-start, pi/multi-turn-conversation, pi/interrupted-turn)"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Write a long detailed essay about the history of computing, at least 500 words. Take your time."
+        },
+        {
+          "type": "sleep",
+          "seconds": 2
+        },
+        {
+          "type": "interrupt"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly: ok"
+        },
+        {
+          "type": "wait_turn"
+        }
+      ],
+      "verify": [
+        "events.jsonl contains a transcript_new (or presession_created for proc-<PID>) so a session appears in ready within 2s of REPL launch",
+        "events.jsonl contains a state_transition to working on the rollout session after the first (long-essay) prompt lands — this binds the rollout session; the pre-session never enters working",
+        "events.jsonl contains a pid_discovered for the rollout session",
+        "events.jsonl contains a state_transition to ready on the rollout session that the RECOVERY prompt's turn_done carries (NOT a standalone interrupt-triggered transition — pi emits none); state does not stick in working post-interrupt",
+        "events.jsonl never contains a state_transition to waiting",
+        "events.jsonl contains exactly one process_exited on the rollout session; the live state immediately before teardown is ready",
+        "final session state is ready"
+      ],
+      "settings": {},
+      "timeout_seconds": 360
+    }
+  },
+  "scenario_id": "user-esc-interrupt"
+}

@@ -1,0 +1,109 @@
+{
+  "recording_dir": "pi/scenarios/2-4_self-correction-iteration",
+  "artifacts": {
+    "events": "pi/scenarios/2-4_self-correction-iteration/events.jsonl",
+    "transcript": "pi/scenarios/2-4_self-correction-iteration/transcript.jsonl",
+    "manifest": "pi/scenarios/2-4_self-correction-iteration/manifest.json",
+    "golden": "pi/scenarios/2-4_self-correction-iteration/transcript.jsonl.replay.json.golden"
+  },
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "pass_rate": "5/5 phases passed",
+    "agent_cli_version": "0.70.0",
+    "daemon_version": "0.4.7+9aa9a2e",
+    "confidence": 0.78,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "self-correction-iteration",
+      "agent": "pi",
+      "assessed_at": "2026-05-25T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.78,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\n`self-correction-iteration` (scenario-meanings.md): within ONE turn the agent runs a tool call that fails, interprets the failure, and retries with corrected input — multiple tool-call/result cycles — and the whole arc must show a single contiguous `working` span with no flicker to `ready` or `waiting` between attempts, settling to `ready` only at the single turn end. Primitive `tool_calls` + iterative retry within a single turn; requires `headless_mode` and `tool_calls`.\n\n**agent_supports: yes.** Pi invokes its shell/read tool autonomously and runs it without an approval gate. A prompt that runs a failing shell command (`cat` of a nonexistent file) and then a corrective command (`ls`) in the same turn produces a real failing toolResult followed by a successful one, all before the turn's final assistant message — exactly the self-correction cycle the scenario names.\n\n**daemon_capability: full; driver_capability: ready.** The pi parser translates `toolCall` / `toolResult` events (including a FAILING toolResult) into the tailer's tool-use / tool-result records WITHOUT closing the turn: for pi, a turn ends only when the final assistant message carries `stopReason=stop`. So within one turn pi may make several tool calls / assistant steps and keep working — only `stopReason=stop` ends the turn. The whole multi-step self-correction is therefore a SINGLE `working → ready` arc: exactly one terminal `working → ready` settle, no intermediate `ready` flap, and (pi has no permission hook) no `waiting` transition. Confirmed against the committed pi tool-call fixtures (auto-executed-tool-call, full-lifecycle-toolcall, same primitive): the transcript carries toolCall + toolResult events and the events arc is `ready → working → ready` with zero `waiting` transitions; the parser sustains `working` across intermediate tool-result lines.\n\n**Confidence 0.78** (not higher): the failing-then-recovery shape depends on the model actually retrying within one turn rather than asking the user or ending the turn early; the recipe pins the behavior with an explicit failing-then-corrective prompt, but exact tool sequencing is model-dependent. The state topology (one sustained working span, no waiting, single process_exited) is robust regardless of how many intermediate tool cycles the model emits.\n\n## Recipe-shape note (SCRIPT / interactive)\n\nRecorded with the INTERACTIVE pi driver (drive-pi-interactive.sh, a tmux REPL) rather than headless `pi --print`. WHY: headless `pi --print` exits the instant it emits the final reply, so the daemon's scanner can miss the terminal working→ready settle before process_exited (concern C6). Keeping pi alive in the REPL across one send + wait_turn lets the daemon observe the settle cleanly; the single tmux teardown then yields one clean process_exited. The prompt forces a failing shell call followed by a corrective call inside the same working span, so a real failing toolResult sits between attempts and exercises the parser's terminal-stop_reason gate. C7 / session-identity: the live REPL emits a transient proc-<PID> pre-session born ready at launch (it bridges the gap until the UUID-keyed rollout transcript appears), so session_birth — which only asserts 'a session appears in ready within 2s of launch' — legitimately matches that pre-session. The turn arc, pid_bind and teardown all pin to the rollout session via the first-working anchor + same_session_as, so the pre-session can never satisfy them. The phase DSL has no tool-event form, so the retry cycle is asserted via the single sustained working span plus the transcript's toolCall/toolResult pairs, not a dedicated phase.",
+      "caveats": [
+        "The multi-step self-correction is a SINGLE working→ready arc: within one turn pi may make several tool calls / assistant steps and keep working — only stopReason=stop on the final assistant message ends the turn. The spec asserts exactly one turn_end ready, no intermediate ready, no waiting.",
+        "Pi has no permission hook, so a failing tool result never produces a waiting transition (unlike a claudecode variant that could gate via a PostToolUse hook); the pi arc is ready→working→ready and the spec asserts a no-waiting invariant.",
+        "Pi cannot accept a pre-assigned UUID — it generates one itself. The interactive driver discovers the UUID from the session header on line 1 of the freshly-created rollout transcript.",
+        "Because the live REPL bridges with a transient proc-<PID> pre-session, the turn phase anchors to recording start with NO session pin so the matcher binds the FIRST working (necessarily the rollout session; the pre-session never goes working); every later phase pins to it via same_session_as.",
+        "Confidence 0.78: whether the model retries within one turn (vs. asking the user or ending early) is model-dependent; the explicit failing-then-corrective prompt pins it, but the exact intermediate tool sequence may vary between runs — only the state topology is asserted."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/pi/agent.go",
+          "note": "Identity.Name=pi, Source variant FilesUnderRoot under ~/.pi/agent/sessions/, ExactName{Name: \"pi\"} process matcher."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/pi/parser.go",
+          "note": "toolCall/toolResult → tool-use/tool-result; intermediate (incl. failing) toolResult does NOT close the turn; only the final assistant event with stopReason=stop maps to turn_done (working→ready). No permission gate → no waiting."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/pi/scenarios/auto-executed-tool-call/transcript.jsonl",
+          "note": "Sibling cell (tool_calls primitive): carries toolCall + toolResult events; events arc is ready→working→ready with no waiting transition; parser sustains working across tool-result lines."
+        },
+        {
+          "kind": "file",
+          "ref": ".claude/skills/ir:onboard-agent/scenario-meanings.md",
+          "note": "self-correction-iteration: state stays continuously working across all retry cycles within one turn; no flicker to ready or waiting between attempts; final state ready."
+        },
+        {
+          "kind": "file",
+          "ref": ".claude/skills/ir:onboard-agent/scripts/drive-pi-interactive.sh",
+          "note": "Interactive tmux REPL driver; supports send / wait_turn / interrupt / sleep, keeps the rollout alive so the daemon observes the working→ready settle before teardown."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "pi CLI on PATH and authenticated (pi runs against its configured model out-of-band)",
+        "tmux available — the interactive driver runs pi in a tmux REPL so it stays alive across the whole self-correction turn",
+        "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+      ],
+      "setup": [
+        "The interactive driver (drive-pi-interactive.sh) launches pi in a fresh per-run cwd inside a tmux session, waits for the REPL prompt, then sends the prompt",
+        "pi writes one JSONL rollout file per session under ~/.pi/agent/sessions/<cwd-slug>/ on launch (FilesUnderRoot, non-lazy); the driver resolves that file and extracts the UUID from line 1",
+        "No auto-mode/permission step is needed: pi has no permission gate (toolCall/toolResult parse straight through), so its shell tool runs autonomously — both the failing command and the corrective command auto-execute, so neither triggers a waiting transition",
+        "WHY interactive, not headless: headless `pi --print` exits the instant it emits the final reply, so the daemon can miss the terminal working→ready settle before process_exited (concern C6). Keeping pi alive in the REPL across one send + wait_turn lets the daemon observe the settle cleanly, and the single tmux teardown then yields one clean process_exited",
+        "The send bumps the expected-turn counter; wait_turn blocks until the rollout shows a completed assistant turn, so the trailing sleep never races a still-running retry round-trip"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Run the shell command 'cat /nonexistent_file_xyz.txt' using your bash tool. If it fails, do NOT retry that command — instead run 'ls' in the same turn and report the file names it printed. Then reply with exactly: done"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        }
+      ],
+      "verify": [
+        "events.jsonl contains a transcript_new for the rollout session born ready within ~2s of REPL launch (a transient proc-<PID> pre-session may also appear; the turn arc, pid_discovered and teardown land on the UUID-keyed rollout session)",
+        "events.jsonl contains a pid_discovered event bound to the rollout session_id",
+        "events.jsonl shows exactly one ready→working transition for the rollout session_id when the prompt is sent",
+        "transcript.jsonl contains at least two toolCall / toolResult pairs inside the single working span — the failing cat (its toolResult carries an error result) and the corrective ls (the auto-executed, ungated retry — pi has no permission hook)",
+        "events.jsonl contains NO state_transition to ready between the failing toolResult and the corrective toolCall — the session stays continuously working across the retry (the parser's terminal-stop_reason gate: intermediate tool pairs do not close the turn)",
+        "events.jsonl contains NO state_transition to waiting at any point during the working span (both commands auto-execute; pi never gates)",
+        "events.jsonl shows exactly one working→ready transition at the single turn end (pi's stopReason=stop maps to turn_done)",
+        "the rollout session's final live state is ready before the driver tears the REPL down",
+        "events.jsonl contains exactly one process_exited on the rollout session at REPL teardown",
+        "Do not assert the bash tool's error text — it is model/OS-dependent; assert only the state topology and the tool-call pairing"
+      ],
+      "settings": {},
+      "timeout_seconds": 300
+    }
+  },
+  "scenario_id": "self-correction-iteration"
+}

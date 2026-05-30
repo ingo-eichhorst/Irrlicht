@@ -1,0 +1,70 @@
+{
+  "artifacts": {},
+  "metadata": {
+    "agent_supports": "partial",
+    "daemon_capability": "incapable",
+    "driver_capability": "ready",
+    "confidence": 0.85,
+    "notes": "agent_supports: partial\ndaemon_capability: incapable\ndriver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "checkpoint-rewind",
+      "agent": "aider",
+      "assessed_at": "2026-05-25T00:00:00Z",
+      "agent_supports": "partial",
+      "daemon_capability": "incapable",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: partial\ndaemon_capability: incapable\ndriver_capability: ready\n\n## Reasoning\n\nThe canonical primitive is a *checkpoint/branch* capability: rewind to an EARLIER checkpoint (one of several), restoring files and/or conversation, then continue cleanly from the rewound point. Aider 0.86.2 has no such primitive. Enumerating every slash command in the installed package (`aider/commands.py`, all `def cmd_*` methods) yields `/undo`, `/reset`, `/clear` — and NO `/rewind`, `/checkpoint`, or `/fork`. The aider docs confirm the same surface (https://aider.chat/docs/usage/commands.html).\n\nWhat aider DOES have, and why this is `partial` rather than `no`:\n\n- **`/undo`** — \"Undo the last git commit if it was done by aider\" (`raw_cmd_undo`). It reverts ONLY the single most-recent aider commit (it bails with `tool_error` if the last commit isn't in `self.coder.aider_commit_hashes`, if it was already pushed, or has >1 parent). This is a degenerate one-step case of the rewind primitive: it restores FILES to the previous commit, but does not touch conversation state and offers no multi-point picker.\n- **`/reset`** — drops all files AND clears chat history. That is the `session-reset` neighbour (explicitly called out under \"Not to be confused with\"), not a rewind.\n- **`/clear`** — clears chat history only. Also session-reset territory.\n\nBecause the closest match (`/undo`) covers only files, only the last commit, and only when aider made it, aider partially supports the primitive. There is no branch/fork and no arbitrary-checkpoint restore.\n\n## daemon_capability: incapable\n\nThe split puts the blocker on the daemon-observability axis, not the driver. The aider adapter is `FilesUnderCWD{Filename: \".aider.chat.history.md\", Parser: RawLineParser}` (core/.../aider/agent.go). One markdown transcript per project CWD; there is NO session_id rotation and no second transcript file — so a \"linked new session_id\" (the fork branch of the scenario's observable signal) is structurally impossible for aider.\n\nThe in-place branch of the signal also produces no distinguishing event. Aider's `InputOutput.get_input()` logs EVERY raw line — including slash commands — to the chat history via `self.user_input(inp)` (io.py:733) before dispatching, so a `/undo` lands in the transcript as a `#### /undo` line. The irrlicht parser maps any `#### …` line to a turn-opening `user_message` event (parser.go ParseLineRaw, line 94); the `/undo` success blockquote (`io.tool_output` → `> …`) falls through to the ignored-status branch (parser.go line 126); IdleFlush then synthesizes `turn_done` (parser.go line 216). Net effect: `/undo` surfaces as an ordinary `ready → working → ready` arc on the SAME session, identical in shape to a normal turn. The git HEAD movement is invisible because the adapter watches the markdown transcript, not the repo. The only trace that a rewind happened is the literal string `/undo` inside a `####` line — and the parser does not classify slash-command markers as a distinct lifecycle event.\n\nSo none of the scenario's user-observable signals (rewound-state reflection, same-vs-new session_id distinction, a detectable rewind) can be represented: the rewind leaves no trace the daemon classifies as a rewind, and the 3-state model has no event to express the rollback. That is the `incapable` bucket — no trace / no representation — NOT `bug`: there is no spec-required observable that the parser receives and mis-handles; the distinguishing signal genuinely never reaches the watched Source. (Same precedent as the claudecode checkpoint-rewind caveat: a rewind is invisible to file-watching.)\n\n## driver_capability: ready\n\nThe interactive driver (scripts/drive-aider-interactive.sh) implements `send`, `slash`, `wait_turn`, `interrupt`, `sleep`. The `/undo` recipe needs only `send` (drive a turn that produces a file edit + aider commit) plus `slash` (issue `/undo`) plus `wait_turn`/`sleep` — all present. None of the driver's gap primitives (restart, reset_session, resume, start_session, exit_clean, sigkill, keys, session, fork) is required for the `/undo` path, so the driver is `ready`. The blocker is purely the daemon-observability axis above.\n\n## Capability key\n\nThe Primitive exercised (\"Checkpoint/branch capability … maps to `checkpoint_rewind` in `capabilities.json` when present\") maps to a `checkpoint_rewind` key. Aider's `replaydata/agents/aider/capabilities.json` has NO `checkpoint_rewind` key (and correctly so) — confirming the absence of a checkpoint primitive at the capability level. The `/undo` mechanism rides on the existing `git_integration: true` key, not a dedicated checkpoint primitive.\n\n## Matrix agreement\n\nThis ratifies the existing coverage cell (`agent_supports: partial`, `daemon_capability: incapable`, `driver_capability: ready`) and the `scenarios.json` recipe scope note (`applicable: false`, recording deferred). No drift.",
+      "caveats": [
+        "`/undo` is files-only and single-step: it reverts just the last aider-authored git commit (refuses if not aider's, already pushed, or a merge). It is NOT a multi-point checkpoint picker and does not restore conversation state — so even the supported slice is a narrow, degenerate case of the rewind primitive.",
+        "feature-invisible-but-spec-compliant: a `/undo` is observable only as the literal `#### /undo` text inside an otherwise normal ready→working→ready turn; irrlicht emits no rewind-specific lifecycle event and never sees the git HEAD movement, because the FilesUnderCWD adapter watches the markdown transcript, not the repo.",
+        "A forked/new-session_id rewind (the codex-style branch of the observable signal) is structurally impossible for aider: FilesUnderCWD binds one fixed transcript file per project CWD, so there is no second session row to link to."
+      ],
+      "sources": [
+        {
+          "kind": "url",
+          "ref": "https://aider.chat/docs/usage/commands.html",
+          "note": "Command reference: /undo = 'Undo the last git commit if it was done by aider' (git-only, last commit); no /rewind, /checkpoint, or /fork documented"
+        },
+        {
+          "kind": "file",
+          "ref": "~/.local/share/uv/tools/aider-chat/lib/python3.12/site-packages/aider/commands.py",
+          "note": "aider 0.86.2 full slash-command enumeration (def cmd_*): /undo, /reset, /clear present; no rewind/checkpoint/fork. raw_cmd_undo reverts only the last aider commit and bails otherwise"
+        },
+        {
+          "kind": "file",
+          "ref": "~/.local/share/uv/tools/aider-chat/lib/python3.12/site-packages/aider/io.py",
+          "note": "get_input() at line 733 logs every raw line (incl. slash commands) to .aider.chat.history.md via user_input(); tool_output() writes blockquote status lines — so /undo enters the transcript as a #### line"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/aider/agent.go",
+          "note": "Source = FilesUnderCWD{.aider.chat.history.md, RawLineParser}: one fixed transcript per project CWD, no session_id rotation — a linked-new-session_id fork is structurally impossible (daemon_capability incapable, not a driver gap)"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/aider/parser.go",
+          "note": "ParseLineRaw (line 94) maps any '#### …' line to a turn-opening user_message; blockquotes are ignored status (line 126); IdleFlush (line 216) synthesizes turn_done. /undo therefore yields a vanilla ready→working→ready arc indistinguishable from a normal turn — the rewind leaves no representable trace (incapable, not bug)"
+        },
+        {
+          "kind": "file",
+          "ref": ".claude/skills/ir:onboard-agent/scripts/drive-aider-interactive.sh",
+          "note": "Driver implements send/slash/wait_turn/interrupt/sleep; the /undo recipe needs only send+slash+wait_turn — no gapped primitive required, so driver_capability is ready"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/aider/capabilities.json",
+          "note": "No checkpoint_rewind key (closest is git_integration:true) — confirms aider has no checkpoint primitive at the capability level"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "scope_note": "Coverage matrix marks aider supports=partial, observes=no. /undo reverts the last aider git commit and surfaces as a normal chat turn in the transcript; there is no multi-point checkpoint picker. Capturing it requires aider to first make a file edit and commit, then /undo — a recipe shape that needs file-tool granularity the current driver doesn't deterministically produce. Recording deferred."
+    }
+  },
+  "scenario_id": "checkpoint-rewind"
+}

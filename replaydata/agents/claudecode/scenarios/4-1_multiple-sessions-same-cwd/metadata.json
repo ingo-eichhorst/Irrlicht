@@ -1,0 +1,127 @@
+{
+  "recording_dir": "claudecode/scenarios/4-1_multiple-sessions-same-cwd",
+  "artifacts": {
+    "events": "claudecode/scenarios/4-1_multiple-sessions-same-cwd/events.jsonl",
+    "transcript": "claudecode/scenarios/4-1_multiple-sessions-same-cwd/transcript.jsonl",
+    "manifest": "claudecode/scenarios/4-1_multiple-sessions-same-cwd/manifest.json",
+    "golden": "claudecode/scenarios/4-1_multiple-sessions-same-cwd/transcript.jsonl.replay.json.golden"
+  },
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "pass_rate": "7/7 phases passed",
+    "agent_cli_version": "2.1.150",
+    "daemon_version": "0.4.7+c979655",
+    "confidence": 0.9,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "multiple-sessions-same-cwd",
+      "agent": "claudecode",
+      "assessed_at": "2026-05-23T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.9,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n(Re-evaluation of the 2026-05-18 assessment. Verdict unchanged: yes/yes. The reasoning is reaffirmed against the current adapter source, and the prior assessment's PID-race caveat is REVISED — the source no longer matches the heuristic it described.)\n\n## Reasoning\n\nClaude Code supports launching multiple concurrent CLI sessions in the same cwd as-shipped. Each `claude` invocation mints (or accepts via `--session-id`) a fresh UUID and writes to its own transcript at `~/.claude/projects/<slug>/<UUID>.jsonl`. Two sessions in the same cwd produce two distinct transcripts because the path is keyed by UUID, not cwd.\n\nirrlicht observes both sessions via the standard transport. `agent.go` declares `Source: FilesUnderRoot{Dir: ~/.claude/projects/, Parser: JSONLineParser{NewParser: () => &Parser{}}}`. The fswatcher on `~/.claude/projects/` picks up two new files (one per UUID); the JSONL tailer instantiates a FRESH stateful `Parser{}` per file via `NewParser`, so the two sessions never share parser state. The process scanner uses `ExactName{Name: \"claude\"}` (pgrep -x), which returns every running `claude` PID; `DiscoverPID` in `pid.go` reconciles transcript ↔ PID and ties each session row to its own PID.\n\nSpec bullets map cleanly:\n- 'Two distinct session rows appear, each with its own session_id and PID' — two transcripts → two SessionState rows; each row's PID comes from independent DiscoverPID resolution keyed on the transcript's UUID.\n- 'Each session transitions state independently — no flapping between rows' — the tailer is per-file (one goroutine, one Parser) so a turn on session A's transcript only updates session A's metrics. There is no shared-cwd state on the session domain object.\n- 'PID-to-session binding is stable and does not cross-contaminate' — once `DiscoverPID` binds, the binding persists until process_exited; the dispatcher keys per-session, not per-cwd. The current DiscoverPID actively defends this invariant (see below).\n\n## PID discovery has been HARDENED — the prior race caveat no longer applies\n\nThe 2026-05-18 assessment described DiscoverPID as a 'cwd+start-time heuristic' that 'can briefly swap PID-to-session assignment when two sessions start within the same scanner tick.' Reading the current `pid.go`, that description is no longer accurate (and, by commit dates, was already stale when written):\n\n- **Layer 1 (authoritative):** Claude writes `~/.claude/sessions/<pid>.json` containing `{pid, sessionId, cwd}` for every live process. DiscoverPID scans this directory and, on an exact `sessionId == wantSessionID` match (derived from the transcript filename), returns that PID directly — no cwd or start-time reasoning at all. This is the normal path once metadata exists.\n- **Layer 2 (restricted cwd fallback):** Used only during the brief startup window before a session's metadata file appears. It first excludes PIDs already claimed by OTHER sessions' metadata (`claimedByOthers`), then binds only if exactly one candidate remains; if two live `claude` processes share the cwd with no disambiguating metadata, it returns 0 so `DiscoverPIDWithRetry` retries — it never guesses. The caller's 'prefer unclaimed else highest PID' disambiguator is deliberately ignored precisely because that strategy let a new session steal a rival's PID (issue #109).\n- There is NO start-time logic anywhere — the only `startedAt` reference is a comment documenting the on-disk schema; `claudeSessionMeta` reads only `pid` and `sessionId`.\n\nThis hardening landed in #109 (2026-04-09) and #169 (2026-04-19), both BEFORE the 2026-05-18 assessment. The two-sessions-same-tick swap the old caveat warned about cannot occur on the metadata path, and on the fallback path the daemon returns 0-and-retries rather than mis-binding. The residual seam is benign: a session may sit at PID=0 for a tick or two until either its metadata file lands or the rival's metadata disambiguates it — observable only as a momentarily-late PID, never as a cross-contaminated binding.\n\n## Status of this cell\n\nThe verdict is unchanged (yes/yes, confidence 0.9) and the matrix already records yes/yes. The cell's real blocker is NOT an assessment gap — it is Stage 4 (recording): the catalog shows `measurement.status: no_recording`, recipe `authored: false`, `archive_count: 0`. The next action to finish this cell is recipe + record, not re-assessment.",
+      "caveats": [
+        "Recording recipe must launch two `claude` processes in the same cwd with distinct `--session-id` UUIDs and drive them in parallel (tmux split windows or two background sends). A naive single-shell recipe will serialize the turns.",
+        "During the brief startup window before a session's ~/.claude/sessions/<pid>.json metadata appears, two concurrent sessions in the same cwd may each sit at PID=0 for a tick or two while DiscoverPID returns 0-and-retries rather than guess. This is observable as a momentarily-late PID, never as a swapped/cross-contaminated binding. Anchor PID-to-session phase checks at a moment after both transcripts have written at least one line.",
+        "DiscoverPID hardcodes ~/.claude/sessions/ for the authoritative metadata lookup and does not follow CLAUDE_CONFIG_DIR (per the comment in adapter.go). A recipe that relocates the config root via that env var would fall back to the Layer-2 cwd path and could leave concurrent same-cwd sessions at PID=0 longer; record under the default config root."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/claudecode/agent.go",
+          "note": "Source: FilesUnderRoot{Dir: transcriptsDir(), Parser: JSONLineParser{NewParser: () => &Parser{}}} — a fresh stateful Parser per transcript file means two sessions in one cwd do not share parser state; Process.Match = ExactName{ProcessName \"claude\"} (pgrep -x) returns every live claude PID."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/claudecode/pid.go",
+          "note": "DiscoverPID is now metadata-first: Layer 1 returns the PID whose ~/.claude/sessions/<pid>.json sessionId exactly matches the transcript UUID; Layer 2 cwd fallback excludes PIDs claimed by other sessions and returns 0 (retry) when ambiguous rather than guessing. No start-time heuristic exists. Hardened in #109 and #169, both predating the 2026-05-18 assessment."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/processlifecycle/discovery.go",
+          "note": "narrowByCWD / DiscoverPIDByCWD: the underlying cwd matcher. claudecode wraps its disambiguate callback to enforce the strict unambiguous-or-zero rule rather than the default highest-PID pick."
+        },
+        {
+          "kind": "url",
+          "ref": "https://github.com/ingo-eichhorst/Irrlicht/pull/174",
+          "note": "Commit history on pid.go: #109 (fa6180c, 2026-04-09) introduced ~/.claude/sessions metadata-based PID discovery to fix the flap loop; #169 (0012099, 2026-04-19) gated the negative filter on metadata mtime; e3cc0b9 (PR #174) tightened review findings. All predate 2026-05-18."
+        },
+        {
+          "kind": "file",
+          "ref": ".claude/skills/ir:onboard-agent/scenario-meanings.md",
+          "note": "### multiple-sessions-same-cwd — Primitive exercised: 'PID-based session isolation — daemon correctly binds each session to its own PID even when multiple agents share the same transcript directory and filename pattern.' Maps to capabilities.json key session_id_assignment (true). User-observable signal: two distinct session rows with separate session_ids and PIDs, independent transitions, no flapping."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "claude CLI on PATH and authenticated (subscription or API key)",
+        "irrlichd is recording — run-cell.sh isolated mode (spawns its own --record daemon on 7837), or --attach against a daemon started with --record",
+        "no other claudecode session uses the recipe UUIDs"
+      ],
+      "setup": [
+        "Driver auto-starts session 1 (slot 1) in <staging>/cwd with the staging-supplied UUID and accepts the trust dialog",
+        "The start_session step launches session 2 (slot 2) in the SAME <staging>/cwd; claude caches trust per directory so no second trust dialog fires",
+        "Steps carrying {\"session\":1} route send/wait_turn back to session 1 while session 2 stays alive — exercising the concurrent, independent arcs"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: alpha"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "start_session"
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: bravo"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: alpha2",
+          "session": 1
+        },
+        {
+          "type": "wait_turn",
+          "session": 1
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        }
+      ],
+      "verify": [
+        "events.jsonl contains 2 distinct UUID session_ids, both keyed to the same cwd slug",
+        "each UUID has its own independent working->ready arc; no transition on one UUID is attributed to the other",
+        "session 1 shows TWO working->ready arcs (turn1 + the post-start_session re-drive); session 2 shows ONE — proving session 1 stayed bound and independent while session 2 was alive",
+        "no state flapping: the daemon never swaps the PID-to-session binding between the two rows",
+        "transcript.jsonl concatenates both sessions: 3 user lines + 3 assistant lines total across the two UUIDs"
+      ],
+      "settings": {},
+      "timeout_seconds": 180
+    }
+  },
+  "scenario_id": "multiple-sessions-same-cwd"
+}

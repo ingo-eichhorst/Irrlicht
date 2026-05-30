@@ -1,0 +1,128 @@
+{
+  "recording_dir": "aider/scenarios/2-21_streaming-partial-writes",
+  "artifacts": {
+    "events": "aider/scenarios/2-21_streaming-partial-writes/events.jsonl",
+    "transcript_md": "aider/scenarios/2-21_streaming-partial-writes/transcript.md",
+    "manifest": "aider/scenarios/2-21_streaming-partial-writes/manifest.json",
+    "recordings": [
+      "aider/scenarios/2-21_streaming-partial-writes/recordings/2026-05-25-18-38-39_irrlichd-0.4.7+9607a66"
+    ]
+  },
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "pass_rate": "6/6 phases passed",
+    "agent_cli_version": "0.86.2",
+    "daemon_version": "0.4.7+9607a66",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes\ndaemon_capability: full\ndriver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "streaming-partial-writes",
+      "agent": "aider",
+      "assessed_at": "2026-05-25T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Primitive\n\nThe scenario exercises `streaming_output` — the agent emits assistant content across multiple partial flushes before a final turn-end signal, and the irrlicht invariant is that those partial flushes must NOT trigger a premature `→ ready` (no `ready → working → ready → working` flicker). The canonical signal is `ready → working → ready` with state pinned at `working` across every flush. The matching `replaydata/agents/aider/capabilities.json` key is `streaming_output` (= true).\n\n## agent_supports: yes\n\nAider supports streaming output. `capabilities.json` records `streaming_output: true`, and aider's docs confirm `--stream` (streaming pretty LLM responses) is enabled by default and only auto-disabled for models that lack support. In aider's transcript shape the relevant 'partial flush' unit is per-model-call: under `--yes-always`, a single `####` user turn drives multiple model calls (e.g. an initial reply, then auto-accepted file-adds, then a follow-up analysis), each delimited by a `> Tokens: …` line. The committed regression transcript `replaydata/agents/aider/regression/yes-always-multi-step/transcript.md` shows exactly this: two prose blocks (lines 12–20 and 30–34), each terminated by its own `> Tokens:` line within one `####` turn.\n\n## daemon_capability: full\n\nThe aider adapter is `FilesUnderCWD` + `RawLineParser` over `.aider.chat.history.md` (`agent.go:45-51`). The parser buffers plain prose lines silently (`parser.go:137-143`, returns nil) and emits `assistant_message` — NOT `turn_done` — at each `> Tokens:` line (`closeModelCall`, `parser.go:153-188`), keeping `turnOpen` true across model calls (verified by `TestParser_MultiModelCall_KeepsTurnOpen`). `IsAgentDone()` (`session.go:461-496`) treats only `turn_done` (and the Claude-specific `assistant`/`assistant_output` fallback) as done — aider's `assistant_message` is NOT matched, so per-call flushes cannot flip the session to `ready`. The session holds `working` across every back-to-back flush, which is exactly the no-flicker invariant the scenario pins. For the common case the daemon emits the lifecycle events the spec requires (`ready → working`, no intermediate `→ ready`, then a single `working → ready` at turn end), so the daemon axis is `full`.\n\nThe spec invariant — \"partial flushes must NOT flip the session to ready mid-turn\" — is met by the parser as it exists today for completed per-model-call prose blocks. aider has no token-level streaming trace at all (terminal streaming is TUI-only; the markdown history is written as completed message blocks — confirmed against aider's `--stream` / `--chat-history-file` docs), so there is no spec-required streaming-chunk event for the daemon to mis-handle. There is no recorded `events.jsonl` line showing the daemon mis-parsing a real trace, so this is NOT a `bug`; the residual timing hazard is captured as a caveat (below) rather than a downgrade.\n\n## driver_capability: ready\n\nThe recipe needs only `send`, `wait_turn` (×2, to span a genuine multi-model-call turn driven by the `--auto-test --test-cmd false` reflection loop), and `sleep` — all implemented by `scripts/drive-aider-interactive.sh`. No gapped primitive (restart / reset_session / resume / start_session / exit_clean / sigkill / keys / session / fork) is required, so the driver is `ready`.\n\n## Why not daemon_capability: bug\n\nThe one carve-out is timing, not mis-handling of a trace: aider's only clean end-of-turn signal is `IdleFlush`, which synthesizes `turn_done` after the history is quiet for `aiderIdleTurnDoneAfter` = 1500ms (`parser.go:54`, `216-229`). A slow remote model call that leaves the file quiet >1500ms BETWEEN flushes can make IdleFlush synthesize a premature `turn_done` → premature `→ ready` → flicker. But this is a timing-window artifact of the IdleFlush heuristic for non-spec-representable token streaming, not the daemon mis-parsing a trace it should handle; no cited `events.jsonl` line demonstrates a real mis-handling. Per the authoring rule (caveats over downgrades; reserve `bug` for a spec-required observable the daemon mis-handles), this stays `daemon_capability: full` with the hazard recorded as a caveat. The recipe targets the no-flicker IDEAL and the `streaming_window` invariant in a recording is what would surface any such premature-ready drift.\n\n## Matrix\n\nThe coverage row already carries the two-axis schema (`agent_supports: yes`, `daemon_capability: unknown`, `driver_capability: ready`). This assessment resolves the `unknown` daemon axis to `full`; the maintainer should update the coverage row's `daemon_capability` from `unknown` → `full`.",
+      "caveats": [
+        "metric-drift-downstream: aider's end-of-turn is synthesized by IdleFlush after 1500ms of transcript quiet (parser.go:54, 216-229); a slow remote model call that goes quiet >1500ms BETWEEN flushes can fire a premature turn_done → premature ready, flickering the no-flicker invariant the scenario pins. Holds for normal back-to-back flushes (the common case) but is not airtight against a slow remote call.",
+        "feature-invisible-but-spec-compliant: the scenario's canonical text describes Claude/JSONL assistant_streaming chunks (parser.go:288, non-terminal stop_reason); aider has no equivalent JSONL streaming event — its 'partial flush' unit is the per-model-call prose block terminated by a `> Tokens:` line, so the recipe must drive multi-model-call prose within one turn (via the --auto-test reflection loop), not token-level streaming."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/aider/capabilities.json",
+          "note": "streaming_output: true — confirms the primitive-exercised capability key"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/aider/parser.go",
+          "note": "closeModelCall emits assistant_message (not turn_done) per `> Tokens:` line; turnOpen stays true; IdleFlush (aiderIdleTurnDoneAfter=1500ms) is the only clean end-of-turn signal (lines 54, 153-188, 216-229)"
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/session.go",
+          "note": "IsAgentDone (461-496): only turn_done (or Claude's assistant/assistant_output fallback) is 'done'; aider's assistant_message is NOT matched, so per-call flushes keep the session working — the no-flicker invariant holds for back-to-back flushes (daemon_capability: full)"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/aider/parser_test.go",
+          "note": "TestParser_MultiModelCall_KeepsTurnOpen + TestParser_IdleFlush_AfterMultipleModelCalls_EmitsTurnDone: turn stays open across multiple `> Tokens:` lines, closes only on idle flush"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/aider/regression/yes-always-multi-step/transcript.md",
+          "note": "real transcript: two prose blocks within one #### turn, each terminated by its own `> Tokens:` line — the aider analog of partial flushes"
+        },
+        {
+          "kind": "url",
+          "ref": "https://aider.chat/docs/config/options.html",
+          "note": "--stream enabled by default (TUI streaming); --chat-history-file defaults to .aider.chat.history.md — file is written as completed message blocks, not token-by-token"
+        },
+        {
+          "kind": "url",
+          "ref": "https://aider.chat/docs/faq.html",
+          "note": "aider streaming behaviour and chat-history markdown logging"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "aider CLI on PATH and authenticated against a model out-of-band (IRRLICHT_AIDER_MODEL plus the matching provider key/endpoint — e.g. a local LM Studio / OpenAI-compatible server). Headless aider with no reachable provider hangs on the model-auth prompt; the live REPL needs a model that actually answers the prompt and streams a multi-part reply.",
+        "tmux available — the interactive driver runs aider in a tmux REPL so the streamed turn is observed across its partial flushes while the process stays alive",
+        "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+        "OBSERVES:PARTIAL CARVE-OUT (mirror of the coverage note): aider's end-of-turn is synthesized by IdleFlush after 1500ms of transcript quiet (parser.go:54); a SLOW remote model call that leaves the history file quiet >1500ms BETWEEN flushes (mid-turn) can fire a premature turn_done → premature working→ready, flickering the no-flicker invariant this cell pins. The no-flicker property holds for normal back-to-back flushes (the common case) but is NOT airtight against a slow remote call; this recipe targets the no-flicker IDEAL, and the streaming_window invariant is what surfaces any such premature-ready drift in a recording."
+      ],
+      "setup": [
+        "The interactive driver (drive-aider-interactive.sh) git-inits a fresh per-run cwd under <staging>/cwd/, launches `aider --no-auto-commits --yes-always --no-gitignore` (plus --model if IRRLICHT_AIDER_MODEL is set) inside a tmux session, and waits for the `> Repo-map:` banner line in the transcript before sending the prompt",
+        "aider's transcript .aider.chat.history.md is LAZY (FilesUnderCWD): it materializes only once the first user input lands, so the live REPL is observable from launch as a transient proc-<PID> pre-session born ready (the process scanner) until the per-cwd transcript appears. aider is keyed by proc-<PID> — there is no transcript UUID rollout session; the whole arc stays on the one proc-<PID> row",
+        "AIDER'S PARTIAL-FLUSH UNIT IS THE PER-MODEL-CALL PROSE BLOCK, NOT TOKEN-LEVEL STREAMING: aider has no JSONL streaming event and the markdown history is written as completed message blocks (incremental token rendering is terminal-UI only and never reaches the file). The partial-flush analog is the per-model-CALL prose block closed by its own `> Tokens:` line. closeModelCall (parser.go:153-188) emits assistant_message — NOT turn_done — at each `> Tokens:` line and leaves the turn open, and IsAgentDone (session.go:461-496) does not treat aider's assistant_message as done, so no per-call flush can flip the session to ready: the session holds working across every partial flush (TestParser_MultiModelCall_KeepsTurnOpen)",
+        "ELICITING A MULTI-MODEL-CALL TURN DETERMINISTICALLY (the fix for the single-flush failure mode): a plain reply prompt — even a long 'walk through these files' one — can be answered by the model in ONE model call (one `> Tokens:` flush), so there are NO intermediate partial flushes to observe and the streaming_window has nothing to assert (the prior recording reproduced exactly this: one `> Tokens:` line, then a late --yes-always file-write reopened working AFTER the turn settled, exiting while working). Instead, borrow the aider/self-correction-iteration mechanism: settings.aider_extra_args launches aider with `--auto-test --test-cmd false`. The send asks aider to create one small Python file (an edit it can reliably perform); `false` always exits non-zero, so EVERY edit trips a test failure and forces a reflection re-call within the SAME `#### ` turn (run_one's max_reflections=3 loop, base_coder.py:860/879/924-944, never re-emits a `#### ` header). Each reflection round closes its own `> Tokens:` line, so one user turn deterministically produces ≥2 model calls — a genuine multi-flush span the session must hold working across, independent of what gpt-5-nano writes. The loop self-limits at max_reflections=3 so the turn always settles to ready; no permission gate (--yes-always, permission_hooks:false) so the edit + auto-test auto-execute and the session never enters waiting.",
+        "wait_turn blocks until a new `> Tokens:` line appears (one model call finished). The recipe waits TWICE: the FIRST wait_turn returns on the initial edit's `> Tokens:`, the SECOND returns on the first reflection round's `> Tokens:` (the auto-test failed and aider re-called the model) — this guarantees a genuine multi-call streaming span completed before teardown; a single wait_turn returns while the reflection call is still in flight and truncates the turn. aider has NO turn-end transcript marker — end-of-turn is synthesized by IdleFlush after 1.5s quiet (parser.go:54,216-229), surfaced as working→ready behind the daemon's 5s SessionDetector poll (~5s effective latency); the trailing sleep (≥10s; here 20s) absorbs all reflection rounds (max_reflections=3 — gpt-5-nano needs >12s to complete them, so 12s teardown-interrupted an in-flight third round) plus one full ~5s IdleFlush cycle so the final working→ready settle fires AND is observed before teardown — a teardown race bit a sibling cell at 8s, so the final settle + teardown needs ≥10s of headroom before the tmux kill",
+        "After the trailing sleep the driver kills the tmux session once — aider exits and the daemon emits a single process_exited for the session"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Create a new file solution.py containing a single Python function add(a, b) that returns a + b. Make the edit now; do not ask me anything."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 20
+        }
+      ],
+      "verify": [
+        "events.jsonl contains a presession (proc-<PID>) event in ready within ~2s of REPL launch (aider's transcript is lazy, so the pre-session is the launch-time observable)",
+        "events.jsonl contains a pid_discovered event bound to the live aider session_id",
+        "events.jsonl shows exactly one ready→working transition for the session when the prompt lands — the streaming window opens here",
+        "across the streaming window (the --auto-test reflection loop drives MULTIPLE model calls within the one `####` turn — each per-model-call prose block closed by its own `> Tokens:` line emits assistant_message, not turn_done), NO state_transition to ready fires before the synthesized end-of-turn; the session holds working solidly across all flushes (the no-flicker invariant)",
+        "NO state_transition to waiting fires during the streaming window",
+        "events.jsonl shows exactly one working→ready transition at the synthesized turn end (IdleFlush after the history goes quiet, ~5s effective latency)",
+        "the session's final live state is ready before the driver tears the REPL down",
+        "events.jsonl contains exactly one process_exited on the session at REPL teardown (one long-lived session)",
+        "transcript .aider.chat.history.md contains 1 `####` user line and at least 2 `> Tokens:` lines (the initial edit plus ≥1 reflection re-edit — the multiple partial flushes within the one turn)"
+      ],
+      "settings": {
+        "aider_extra_args": [
+          "--auto-test",
+          "--test-cmd",
+          "false"
+        ]
+      },
+      "timeout_seconds": 300
+    }
+  },
+  "scenario_id": "streaming-partial-writes"
+}

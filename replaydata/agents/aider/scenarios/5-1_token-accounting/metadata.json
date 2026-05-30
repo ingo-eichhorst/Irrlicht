@@ -1,0 +1,145 @@
+{
+  "recording_dir": "aider/scenarios/5-1_token-accounting",
+  "artifacts": {
+    "events": "aider/scenarios/5-1_token-accounting/events.jsonl",
+    "transcript_md": "aider/scenarios/5-1_token-accounting/transcript.md",
+    "manifest": "aider/scenarios/5-1_token-accounting/manifest.json"
+  },
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "incapable",
+    "driver_capability": "ready",
+    "pass_rate": "7/7 phases passed",
+    "agent_cli_version": "0.86.2",
+    "daemon_version": "0.4.7+15fbf14",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes\ndaemon_capability: incapable\ndriver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "token-accounting",
+      "agent": "aider",
+      "assessed_at": "2026-05-25T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "incapable",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: incapable\ndriver_capability: ready\n\n(#476 re-derivation of the prior `irrlicht_observes: partial`. The old `partial` conflated a fully-observable half with a structurally-unobservable half; splitting onto the two axes: the blocking fact is a spec-required signal that leaves NO trace in the watched Source — `daemon_capability: incapable`, NOT `bug` — while the driver has every step the recipe needs — `driver_capability: ready`.)\n\n## Reasoning\n\n### agent_supports: yes\n\nThe token-accounting primitive is *token reporting*: per-turn token counts (input, output, cache read/write) in a field the parser can extract, requiring `headless_mode` (`replaydata/agents/aider/capabilities.json` → `headless_mode: true`). Aider satisfies both halves of the scenario at the agent layer:\n\n1. **Per-turn counts that accumulate.** After every model call aider prints `Tokens: <sent> sent, <received> received.` and persists a `> Tokens: …` blockquote to `.aider.chat.history.md` in the project CWD (https://aider.chat/docs/faq.html). Three back-to-back one-message turns yield three such lines, each carrying that call's real usage — exactly the multi-turn accumulator the scenario locks down.\n2. **Cache buckets exist at the agent layer.** With `--cache-prompts` (and `--no-stream`, since provider APIs don't surface cache stats while streaming — https://aider.chat/docs/usage/caching.html), aider additionally reports cache segments. `calculate_and_show_tokens_and_cost` in `aider/coders/base_coder.py` builds the report conditionally: `\"Tokens: {sent} sent\"`, then `\", {cache_write} cache write\"` if `cache_write_tokens`, then `\", {cache_hit} cache hit\"` if `cache_hit_tokens`, then `\", {received} received.\"` — so a fully-cached turn shows e.g. `Tokens: 21k sent, 19k cache hit, 964 received` (https://github.com/Aider-AI/aider/blob/main/aider/coders/base_coder.py).\n\n### daemon_capability: incapable\n\nThe aider adapter is `FilesUnderCWD{Filename: \".aider.chat.history.md\", Parser: RawLineParser}` (`core/adapters/inbound/agents/aider/agent.go`). irrlicht observes only what lands in that markdown history. Judging the named User-observable signals against the parser as it exists today splits cleanly into an observable half and a blind half — and the blind half is one of the scenario's own User-observable signals, with no trace in the Source. That is `incapable` (architecture: no trace), not `bug` (which would require a trace the daemon mis-handles).\n\n**Observable half — the multi-turn accumulator (the scenario's primary assertion):** `TotalTokens > 0` after turn 1, non-decreasing after turn 2 is fully met. Each `> Tokens:` line matches `tokensRE` and routes through `closeModelCall` (`parser.go`), emitting an `assistant_message` carrying `PerTurnContribution{Usage:{Input:sent, Output:received}}` and `TokenSnapshot{Input, Output, Total: sent+received}`. The cumulative accumulator in `core/pkg/tailer/tailer_metrics.go` sums per-turn contributions, so `TotalTokens` rises monotonically across turns. `parser_test.go` (`TestParser_MultipleTokensLines`, `TestParser_MultiTurn_EmitsAssistantMessagePerTurn`) pins one `assistant_message` per `> Tokens:` line and monotonic accumulation across consecutive turns. The recorded cell's transcript carries the two `> Tokens: 2.5k sent, 1 received. Cost: $…` lines that drive this. (Note: per `scenarios.json`, this accumulator is observable in the parser's events but NOT expressible in the `expected.jsonl` phase DSL — it's covered out-of-band by those parser unit tests; the recording asserts only the lifecycle arc it rides on.)\n\n**Blind half — the cache distinction (`CacheReadTokens > 0`; fresh input = 0 for a fully-cached turn) — NO TRACE in the Source:** Two independent walls, the first of which is decisive for `incapable`:\n\n  1. **Transport: no trace.** Aider's cache-bucket report is emitted via `self.io.tool_output(self.usage_report)` in `show_usage_report` — terminal only; it is never passed to `append_chat_history`. Every `> Tokens:` line that lands in `.aider.chat.history.md` is the bare `N sent, M received[. Cost: …]` form. Empirically, all 11 distinct `> Tokens:` lines across irrlicht's own recorded aider transcripts (incl. this cell's two) carry zero `cache hit` / `cache write` segments. Because the cache signal leaves no trace in the watched Source, no `FilesUnderCWD` watch and no parser can ever emit it — the `daemon_capability: incapable` definition exactly (\"the behavior leaves no trace in the Source\").\n  2. **Parser: would-also-be-dropped.** Even if a cache segment did reach the markdown, `tokensRE` (`^>\\s*Tokens:\\s*([\\d.]+\\s*[kKmM]?)\\s*sent,\\s*([\\d.]+\\s*[kKmM]?)\\s*received(.*)$`, `parser.go:58`) captures only `sent`/`received`; cache text falls into the unused `(.*)$` rest group, which `closeModelCall` scans only for a `$… message` cost suffix. `UsageBreakdown.CacheRead`/`CacheCreation` are never populated, so `metrics.CacheReadTokens` stays 0. This is a second-order observation, not the verdict driver — the trace already doesn't exist (wall 1), so the cell is `incapable` regardless. (`parser.go` carries the `CacheRead`/`CacheCreation` fields, ~lines 223-237; the aider parser leaves them zero.)\n\nThe scenario's core multi-turn accumulator is observed accurately; the cache-bucket sub-assertion — itself a named User-observable signal — is structurally unobservable through aider's file-watching transport. Routing on the blocking axis: a spec-required signal with no trace in the Source → `daemon_capability: incapable`.\n\n### driver_capability: ready\n\nThe recorded recipe needs only `send` + `wait_turn` + `sleep`, all implemented by `scripts/drive-aider-interactive.sh` (tmux REPL driver; `wait_turn` blocks on a new `> Tokens:` line; keeps one aider session alive across all send/wait_turn cycles). No gapped primitive (`restart`/`reset_session`/`resume`/`keys`/`sigkill`/…) is required for token-accounting — `driver_capability: ready`.\n\n## Routing note\n\nWith `daemon_capability: incapable`, the cell routes **frozen** — no recording could ever prove the cache distinction. In practice the maintainer has recorded the OBSERVABLE half (multi-turn accumulator) and explicitly carved the cache sub-assertion out of `verify` (`scenarios.json` → \"NO cache-bucket assertion\"); that recording documents what IS observable, while this assessment documents that the spec's cache signal is fundamentally unobservable for aider.\n\n## Matrix\n\nRefines the coverage cell (`agent-scenarios-coverage.json` → aider/token-accounting), which currently reads `daemon_capability: unknown`, `driver_capability: ready`, \"regex-parsed '> Tokens: N sent, M received'; no cache-bucket distinction\". This assessment resolves `unknown` → `incapable` (cache signal has no trace in the Source); `driver_capability: ready` unchanged; `agent_supports: yes` unchanged.\n\nPrimitive → capability key: the primitive is *token reporting*; the matching key in `replaydata/agents/aider/capabilities.json` is `cost_tracking: false`, which is consistent — aider carries sent/received token counts but no per-bucket cache accounting reaching the transcript.",
+      "caveats": [
+        "feature-invisible-but-spec-compliant: aider's cache-bucket usage report (`Tokens: … cache write … cache hit …`) is written via io.tool_output to the terminal only — never appended to .aider.chat.history.md — so irrlicht's file-watching transport never sees it. The multi-turn token accumulator IS fully observed; only the cache distinction is unobservable.",
+        "Even if a cache segment reached the markdown, the parser's tokensRE captures only sent/received; closeModelCall never sets UsageBreakdown.CacheRead/CacheCreation, so CacheReadTokens stays 0. Closing this would need BOTH a transcript-level cache line AND a regex/parser change — but the transport gap (no trace) is the binding one.",
+        "aider's cache-hit tokens are reported separately from `sent` (sent stays non-zero on a cached turn), so the scenario's 'fresh input tokens = 0 for a fully-cached turn' assertion does not map onto aider's reporting shape even at the agent layer.",
+        "The token-accumulation claim (TotalTokens > 0 / non-decreasing) is NOT expressible in the expected.jsonl phase DSL; it is covered out-of-band by parser_test.go (TestParser_MultipleTokensLines, TestParser_MultiTurn_EmitsAssistantMessagePerTurn). The recording asserts only the two-turn lifecycle arc the accounting rides on."
+      ],
+      "sources": [
+        {
+          "kind": "url",
+          "ref": "https://aider.chat/docs/usage/caching.html",
+          "note": "--cache-prompts enables provider prompt caching; cache statistics/costs unavailable while streaming, so --no-stream is required to surface them"
+        },
+        {
+          "kind": "url",
+          "ref": "https://github.com/Aider-AI/aider/blob/main/aider/coders/base_coder.py",
+          "note": "calculate_and_show_tokens_and_cost builds 'Tokens: {sent} sent[, {cache_write} cache write][, {cache_hit} cache hit], {received} received.'; show_usage_report emits it via io.tool_output (terminal) — NOT append_chat_history. Proves the cache report leaves no trace in the transcript (daemon_capability: incapable)."
+        },
+        {
+          "kind": "url",
+          "ref": "https://aider.chat/docs/faq.html",
+          "note": "aider writes per-project chat history to .aider.chat.history.md including the `> Tokens:` blockquote lines (the observable multi-turn accumulator)"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/aider/agent.go",
+          "note": "Source = FilesUnderCWD{.aider.chat.history.md, RawLineParser} — irrlicht observes only what lands in the markdown history, not terminal output; grounds the no-trace / daemon_capability: incapable verdict for the cache signal"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/aider/parser.go",
+          "note": "tokensRE (line 58) captures sent/received only (cache text falls in the unused rest group); closeModelCall sets UsageBreakdown.Input/Output + TokenSnapshot{Input,Output,Total} but never CacheRead/CacheCreation; one assistant_message per `> Tokens:`. Even with a trace the parser would drop the cache buckets."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer_metrics.go",
+          "note": "accumulates per-turn contributions into cumulative TotalTokens (monotonic across turns — the observable half is full); CumCacheReadTokens sourced from UsageBreakdown.CacheRead, which aider never populates → stays 0"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/aider/parser_test.go",
+          "note": "TestParser_MultipleTokensLines / TestParser_MultiTurn_EmitsAssistantMessagePerTurn pin one assistant_message per `> Tokens:` line and monotonic accumulation across turns; every fixture uses the bare `N sent, M received.` form — no cache segment"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/aider/scenarios/token-accounting/transcript.md",
+          "note": "recorded transcript carries two `> Tokens: 2.5k sent, 1 received. Cost: $…` lines (no cache segment) — empirical confirmation the cache report never reaches .aider.chat.history.md; together with the other 9 distinct recorded aider `> Tokens:` lines, zero carry a cache hit/write segment"
+        },
+        {
+          "kind": "file",
+          "ref": ".claude/skills/ir:onboard-agent/scripts/drive-aider-interactive.sh",
+          "note": "tmux REPL driver implements send + wait_turn + sleep (wait_turn blocks on a new `> Tokens:` line); the token-accounting recipe needs only these — no gapped primitive → driver_capability: ready"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/aider/capabilities.json",
+          "note": "headless_mode: true (primitive's required capability); cost_tracking: false — token counts present, no per-bucket cache accounting reaches the transcript"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "aider CLI on PATH and authenticated against a model out-of-band (IRRLICHT_AIDER_MODEL plus the matching provider key/endpoint — e.g. a local LM Studio / OpenAI-compatible server). Headless aider with no reachable provider hangs ~5min on the model-auth/OAuth prompt; the live REPL needs a model that actually answers each prompt.",
+        "tmux available — the interactive driver runs aider in a tmux REPL so it can send two prompts to one long-lived session",
+        "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+        "OBSERVES:PARTIAL scope_note — this cell proves only the OBSERVABLE half of token-accounting: the multi-turn TotalTokens accumulator (TotalTokens > 0 after turn 1, non-decreasing after turn 2). The cache-bucket distinction (CacheReadTokens > 0; fresh input = 0 on a fully-cached turn) is UNOBSERVABLE for aider and is deliberately NOT asserted: aider's `Tokens: … cache write … cache hit …` report goes to the terminal via io.tool_output, never to .aider.chat.history.md, and the parser's tokensRE captures only sent/received — so CacheRead/CacheCreation stay 0. See replaydata/agents/aider/scenarios/token-accounting/assessment.json."
+      ],
+      "setup": [
+        "The interactive driver (drive-aider-interactive.sh) git-inits a fresh per-run cwd under <staging>/cwd/, launches `aider --no-auto-commits --yes-always --no-gitignore` (plus --model if IRRLICHT_AIDER_MODEL is set) inside a tmux session, and waits for the `> Repo-map:` banner line in the transcript before sending the first prompt",
+        "aider's transcript .aider.chat.history.md is LAZY (FilesUnderCWD): it materializes only once the first user input lands, so the live REPL is observable from launch as a transient proc-<PID> pre-session born ready (the process scanner) until the per-cwd transcript appears",
+        "Each send bumps the turn counter; wait_turn blocks until a new `> Tokens:` line appears (signals aider finished one model call and wrote the per-turn token snapshot). aider has NO turn-end transcript marker — end-of-turn is synthesized by IdleFlush after 1.5s quiet, surfaced as working→ready behind the daemon's 5s SessionDetector poll (~5s effective latency), which is why the inter-turn sleep is ≥12s and the trailing sleep ≥10s — gpt-5-nano answers fast enough that a shorter gap risks the next prompt re-entering working before IdleFlush fires (turn coalescing), losing the per-turn reset",
+        "Two turns give exactly one accumulation boundary (T1→T2) to witness the non-decreasing TotalTokens invariant — the minimum that exercises cross-turn accumulation. After the second wait_turn + trailing sleep the driver kills the tmux session once — aider exits and the daemon emits a single process_exited for the session",
+        "No special model or context flags beyond IRRLICHT_AIDER_MODEL — the assertion is about token accumulation, not which model produced the tokens"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 12
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 10
+        }
+      ],
+      "verify": [
+        "events.jsonl contains a presession (proc-<PID>) event in ready within ~2s of REPL launch (aider's transcript is lazy, so the pre-session is the launch-time observable)",
+        "events.jsonl contains a pid_discovered event bound to the live aider session_id",
+        "events.jsonl contains two state_transition→working / →ready arcs on the SAME session_id, one per prompt — the per-turn working→ready flip is synthesized by IdleFlush and must be observed before the next prompt re-enters working (this is why the inter-turn sleep is ≥12s, covering the ~5s effective latency with headroom for gpt-5-nano's fast replies)",
+        "events.jsonl carries a PerTurnContribution / UsageBreakdown for each turn from its `> Tokens: N sent, M received.` snapshot; input + output tokens > 0 on each turn (the aider parser routes each `> Tokens:` line through closeModelCall → assistant_message with TokenSnapshot{Input:sent,Output:received})",
+        "SessionMetrics.TotalTokens after turn 1 > 0",
+        "SessionMetrics.TotalTokens after turn 2 ≥ TotalTokens after turn 1 (monotonic accumulation across the one T1→T2 boundary)",
+        "the session's final live state is ready before the driver tears the REPL down",
+        "events.jsonl contains exactly one process_exited on the session at REPL teardown (one long-lived session, not two exits)",
+        "no state_transition to waiting appears for the session at any point",
+        "NO cache-bucket assertion — CacheReadTokens stays 0 for aider (the cache report is terminal-only, never in .aider.chat.history.md, and tokensRE captures only sent/received). The cache-distinction signal is the observes:partial carve-out and is NOT verified here.",
+        "the token-accumulation claim (TotalTokens > 0 / non-decreasing) is observable in the parser's assistant_message events but NOT expressible in the expected.jsonl phase DSL (no metric form); it is covered out-of-band by parser unit tests (parser_test.go: TestParser_MultipleTokensLines, TestParser_MultiTurn_EmitsAssistantMessagePerTurn). expected.jsonl asserts only the two-turn lifecycle arc the accounting rides on."
+      ],
+      "settings": {},
+      "timeout_seconds": 300
+    }
+  },
+  "scenario_id": "token-accounting"
+}

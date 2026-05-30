@@ -1,0 +1,91 @@
+{
+  "recording_dir": "claudecode/scenarios/5-2_model-identification",
+  "artifacts": {
+    "events": "claudecode/scenarios/5-2_model-identification/events.jsonl",
+    "transcript": "claudecode/scenarios/5-2_model-identification/transcript.jsonl",
+    "manifest": "claudecode/scenarios/5-2_model-identification/manifest.json",
+    "golden": "claudecode/scenarios/5-2_model-identification/transcript.jsonl.replay.json.golden"
+  },
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "pass_rate": "3/3 phases passed",
+    "agent_cli_version": "2.1.143",
+    "daemon_version": "0.4.5+73f31ff",
+    "confidence": 0.9,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "model-identification",
+      "agent": "claudecode",
+      "assessed_at": "2026-05-18T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.9,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nClaude Code records the active model on every assistant event under `message.model` (and on some system/metadata events under `model` / `request.model` / `metadata.model`). The parser's `extractClaudeCodeModel` walks these paths and runs the value through `tailer.NormalizeModelName` (lowercases, strips provider prefixes), producing a stable string like `claude-sonnet-4-5` or `claude-opus-4-7[1m]`.\n\nThe context window comes from two sources, in priority order:\n1. `raw.context_management.context_window` — the most accurate, server-reported value.\n2. The `[1m]` suffix heuristic — sets ContextWindow to 1_000_000 for opted-in extended-context models.\n3. Fallback: the LiteLLM-derived alias table (downstream of the parser) supplies a default per model name.\n\nLaunching with `--model claude-opus-4-7` puts that model into the first assistant event's `message.model` field; the parser captures it before any other event and `SessionMetrics.ModelName` is populated from the first turn onward.\n\nSpec bullets:\n- 'ModelName = <launch model> (not \"unknown\")' — extractClaudeCodeModel returns the normalized launch model from `message.model`. The default-unknown path only triggers when no event has yet carried a model field; once the first assistant event arrives, ModelName is set.\n- 'ContextWindow matches the model's published window' — context_management.context_window takes precedence when present; otherwise the alias table fills it.\n\n## What irrlicht does NOT see (and why that's OK)\n\nIf the recording cuts off before the first assistant event, ModelName will be 'unknown' — but that's a zero-turn session, not a real assertion of identification. The recipe must complete at least one turn.\n\nThe `[1m]` suffix detection is a string-match on the model name, which works for Claude's current opt-in extended-context flavour. Other providers may use a different convention; irrlicht's normalization layer would need extension for those — out of scope for the claudecode cell.",
+      "caveats": [
+        "ContextWindow may briefly read 0 between session detection and the first assistant event. The phase contract should assert ModelName/ContextWindow only after wait_turn, not at presession_created.",
+        "If LiteLLM aliases lag behind a newly released model name, ContextWindow falls back to the 32k sentinel and ContextWindowUnknown=true. This is a separable concern from model identification per se — ModelName will still be correct."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/claudecode/parser.go L410-452",
+          "note": "extractClaudeCodeModel walks raw.model / raw.request.model / raw.metadata.model / raw.message.model and pulls ContextWindow from raw.context_management.context_window (or the [1m] suffix)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/session.go L31-44",
+          "note": "SessionMetrics.ModelName, ContextWindow, ContextWindowUnknown — the merge logic at L627-628 keeps a known ModelName sticky across transient zero passes."
+        },
+        {
+          "kind": "spec",
+          "ref": ".specs/agent-scenarios.md L424-429",
+          "note": "Feature: Model identification — single-turn non-default model launch, ModelName != \"unknown\" and ContextWindow matches published window."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "claude CLI on PATH and authenticated (subscription or API key)",
+        "irrlichd is recording (--attach against a daemon with --record, or isolated mode)",
+        "no other claudecode session uses the recipe's UUID",
+        "the chosen non-default model name is available on the maintainer's account (e.g. claude-opus-4-7 or claude-sonnet-4-5)"
+      ],
+      "setup": [
+        "Driver generates a fresh lowercased session UUID and a fresh cwd under <staging>/cwd/",
+        "Driver launches claude with --model <non-default-model> so the first assistant event's message.model field carries that name from turn 1",
+        "Assertions on ModelName/ContextWindow are checked AFTER turn_end — ContextWindow may briefly read 0 between session detection and the first assistant event (per assessment caveat)"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        }
+      ],
+      "verify": [
+        "events.jsonl shows one ready→working→ready cycle on the UUID",
+        "events.jsonl carries a model_name on the post-turn state_transition / metric snapshot equal to the normalized launch model (e.g. 'claude-opus-4-7' or 'claude-sonnet-4-5'), NOT 'unknown'",
+        "SessionMetrics.ContextWindow after turn_end matches the launch model's published window (1_000_000 for [1m] flavours; per-model default from the alias table otherwise)",
+        "SessionMetrics.ContextWindowUnknown is false after turn_end (unless the alias table is lagging — see assessment caveat 2)",
+        "transcript.jsonl contains 1 user line and ≥ 1 assistant line",
+        "final session state is ready"
+      ],
+      "settings": {},
+      "timeout_seconds": 120
+    }
+  },
+  "scenario_id": "model-identification"
+}

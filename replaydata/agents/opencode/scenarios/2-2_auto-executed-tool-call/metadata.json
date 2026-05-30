@@ -1,0 +1,99 @@
+{
+  "recording_dir": "opencode/scenarios/2-2_auto-executed-tool-call",
+  "artifacts": {
+    "events": "opencode/scenarios/2-2_auto-executed-tool-call/events.jsonl",
+    "transcript": "opencode/scenarios/2-2_auto-executed-tool-call/transcript.jsonl",
+    "manifest": "opencode/scenarios/2-2_auto-executed-tool-call/manifest.json",
+    "golden": "opencode/scenarios/2-2_auto-executed-tool-call/transcript.jsonl.replay.json.golden"
+  },
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "pass_rate": "4/4 phases passed",
+    "agent_cli_version": "unknown",
+    "daemon_version": "0.4.7+5c1ede3",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes\ndaemon_capability: full\ndriver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "auto-executed-tool-call",
+      "agent": "opencode",
+      "assessed_at": "2026-05-26T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Reasoning\n\nauto-executed-tool-call asserts the auto-approved happy path: the agent uses one or more tools mid-turn and completes WITHOUT ever blocking on user input — the canonical arc is `ready → working → ready` with a tool_use inside the working span and the invariant that state never enters `waiting`. Distinct from the sibling full-lifecycle-toolcall (same coverage_id), which deliberately surfaces waiting via a permission gate.\n\nOpenCode supports tool calls (capabilities.json tool_calls:true). In headless default (`opencode run`), tools auto-execute inside OpenCode's own sandbox with no interactive permission prompt, so a single tool-using turn produces exactly the ungated ready→working→ready arc. Session state lives in OpenCode's SQLite store (~/.local/share/opencode/opencode.db); the daemon's ProcessOwnedStore source polls the UUID-keyed ses_… session.\n\nThe tool call leaves an observable trace: OpenCode writes a `tool` part to the part table that progresses pending → running → completed/error, and the opencode parser maps it to function_call (pending/running) and function_call_output (completed/error) events (parser.go parseToolPart). The turn settles working→ready when the parser sees a step-finish part with reason=\"stop\" → turn_done (parser.go parseStepFinish). The phase DSL has no tool-event form, so the auto-executed tool call is asserted via the single sustained working span plus the `no state_transition to waiting` invariant, and verified out-of-band in the SQLite store / transcript.\n\nMODEL note: opencode's default model is the local LM Studio model lmstudio/gemma-4-e2b-it-uncensored (set in ~/.config/opencode/opencode.json). The driver (drive-opencode-interactive.sh) runs blocking `opencode run` with NO --model flag, so it uses that default. gemma is a small (2B) model that is slow (~30–45s/turn) and may be unreliable at function calling; the recipe uses a crisp tool-forcing prompt and a generous timeout. If gemma simply will not emit a tool call this becomes an infra/model limitation, not an opencode/daemon incapability.\n\nThe interactive driver launches a blocking `opencode run` per send and chains --session for continuity; wait_turn is a no-op because the run already blocks. A single tool-using turn (one send + wait_turn + trailing sleep) is within this grammar, so driver_capability: ready.",
+      "caveats": [
+        "OpenCode does not expose CLI-assignable session IDs; the driver discovers the ses_… session id by querying SQLite for the most recent row keyed on directory after the first `opencode run` returns.",
+        "The local gemma 2B model is slow (~30–45s per turn) and may be unreliable at function calling; the cell records normally if it emits a tool call, otherwise the limitation is the model, not opencode (capabilities.json tool_calls:true).",
+        "The phase DSL has no tool-event form, so the auto-executed tool call is asserted via the sustained working span + the no-waiting invariant; the tool part itself is verified in the SQLite store / transcript out-of-band."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/opencode/parser.go",
+          "note": "parseToolPart: tool part status pending/running → function_call (ToolUses), completed/error → function_call_output (ToolResultIDs); parseStepFinish: reason=\"stop\" → turn_done settles working→ready. tool-calls reason stays in working (mid-turn pause)."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/opencode/capabilities.json",
+          "note": "tool_calls:true; opencode can invoke tools. Headless default `opencode run` auto-executes tools with no interactive gate, so the auto-approved arc never enters waiting."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/opencode/agent.go",
+          "note": "Source variant ProcessOwnedStore (SQLite at ~/.local/share/opencode/opencode.db) with ExactName{Name:\"opencode\"}; daemon polls the session table for the ses_… session."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/opencode/scenarios/turn-end-terminal-text/expected.jsonl",
+          "note": "Sibling committed opencode spec proving the ProcessOwnedStore ready→working→ready arc with session_birth anchored UNPINNED to start (so a transient proc-<PID> presession can't steal identity) and the no-waiting invariant — the exact shape this cell extends with a mid-turn tool call."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "opencode CLI on PATH and authenticated/configured (the default model is set in ~/.config/opencode/opencode.json; auth is out-of-band)",
+        "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+        "the configured default model must be capable of function calling — if the model emits no tool call this cell is unrecordable for a MODEL reason (opencode capabilities.json tool_calls:true), not an opencode/daemon incapability"
+      ],
+      "setup": [
+        "The driver (drive-opencode-interactive.sh) launches a blocking `opencode run -- \"<prompt>\"` in a fresh per-run cwd under <staging>/cwd/ with NO --model flag, so it uses the config default; each send is its own `opencode run` subprocess that exits when the turn completes",
+        "No auto-mode / permission step is needed: in headless default `opencode run` auto-executes tools inside opencode's own sandbox with no interactive gate, so the tool call runs autonomously and the session never enters waiting — unlike the claudecode recipe, which must enable auto mode to keep a Bash call from tripping a gate",
+        "Session state lives in opencode's SQLite store (~/.local/share/opencode/opencode.db, FilesUnderRoot→ProcessOwnedStore), keyed on the UUID ses_… session; the daemon's ProcessOwnedStore source polls the session table. The tool call lands in the part table as a `tool` part (status pending→running→completed), which the parser maps to function_call / function_call_output (parser.go parseToolPart)",
+        "wait_turn is a no-op because `opencode run` already blocks until the turn ends; the ≥4s trailing sleep gives the daemon's poller one full tick to observe the working→ready settle before the run process exits",
+        "The send is a crisp single-tool-forcing prompt so the small/slow local default model reliably emits exactly one auto-executed write tool call inside the working span, then replies done"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Create a file named hello.txt containing exactly the text: hello — use your write tool. Then reply with exactly: done"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        }
+      ],
+      "verify": [
+        "events.jsonl contains the ses_… session born ready within ~2s of agent launch (a transient proc-<PID> presession may also appear; the turn arc and pid_discovered land on the UUID-keyed ses_… session)",
+        "events.jsonl contains a pid_discovered event bound to the ses_… session_id",
+        "events.jsonl contains a state_transition→working on the ses_… session_id when the tool-using prompt is sent, sustained across the auto-executed write tool call",
+        "the opencode SQLite store / transcript.jsonl contains a tool part (function_call / function_call_output) for the write call — the auto-executed, ungated tool call (opencode has no interactive gate in headless default)",
+        "events.jsonl contains a state_transition→ready on the same ses_… session_id once the tool resolves and the turn completes (step-finish reason=stop → turn_done)",
+        "events.jsonl contains NO state_transition to waiting for the ses_… session at any point (the call auto-executes; no permission window)",
+        "final session state is ready"
+      ],
+      "settings": {},
+      "timeout_seconds": 240
+    }
+  },
+  "scenario_id": "auto-executed-tool-call"
+}

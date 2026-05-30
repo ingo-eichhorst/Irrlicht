@@ -1,9 +1,11 @@
-// Package shard is the per-scenario "shard" data model (#510): one unified
-// object per matrix row at replaydata/scenarios/<name>.json, plus a global
-// replaydata/scenarios/_meta.json. It lives in its own package (rather than
-// under internal/viewer) so BOTH the viewer AND the matrix model can import it
-// — viewer imports matrix, so the shared shard types can live in neither and
-// must sit in a third package both depend on.
+// Package shard is the onboarding-matrix data model. The scenario catalog is a
+// single file replaydata/scenarios.json = {"meta": {...}, "scenarios": [...]};
+// each (scenario, adapter) cell is a metadata.json at
+// replaydata/agents/<adapter>/scenarios/<id>_<name>/metadata.json (folders are
+// prefixed by the scenario's dashed id). It lives in its own package (rather
+// than under internal/viewer) so BOTH the viewer AND the matrix model can
+// import it — viewer imports matrix, so the shared types sit in a third package
+// both depend on.
 package shard
 
 import (
@@ -15,15 +17,13 @@ import (
 	"strings"
 )
 
-// Shard is one scenario's unified object, the single home for a matrix row
-// (#510). It lives at replaydata/scenarios/<name>.json and replaces the old
-// split across scenarios.json (catalog[]+scenarios[]),
-// agent-scenarios-coverage.json, and per-cell assessment.json.
+// Shard is one scenario's unified object: the scenario-global spec for one
+// matrix row. It lives at replaydata/scenarios/<name>.json. Agent-specific
+// cell data (assessment, recipe, artifacts, verdict) moved to
+// replaydata/agents/<adapter>/scenarios/<folder>/metadata.json (#split-shards).
 //
-// Recording artifacts (events.jsonl, transcript.jsonl, manifest.json,
-// recordings/, *.golden) and the spec-grounded expected.jsonl stay on disk
-// under replaydata/agents/<adapter>/{scenarios,regression}/<name>/ and are
-// referenced from each agent's Artifacts block.
+// Recording artifacts stay on disk under
+// replaydata/agents/<adapter>/{scenarios,regression}/<name>/.
 type Shard struct {
 	ID          string          `json:"id"`   // stable section.index, e.g. "2.19"
 	Name        string          `json:"name"` // row identity / filename / coverage_id
@@ -36,14 +36,15 @@ type Shard struct {
 	// CrossAdapter, when set, is the list of adapters a cross-adapter cell drives
 	// concurrently in one shared workspace (read by run-cell-multi.sh). Only the
 	// multiple-agents-same-workspace cell uses it.
-	CrossAdapter []string              `json:"cross_adapter,omitempty"`
-	Agents       map[string]ShardAgent `json:"agents"`
+	CrossAdapter []string `json:"cross_adapter,omitempty"`
 }
 
-// ShardAgent is one (scenario, adapter) cell, split into an overview-tier
-// Metadata block and a detail-tier Details block, plus explicit Artifacts
-// refs to the on-disk recording files.
+// ShardAgent is one (scenario, adapter) cell. It lives at
+// replaydata/agents/<adapter>/scenarios/<folder>/metadata.json. ScenarioID
+// ties variant-folder cells (where folder ≠ scenario name) back to their
+// parent scenario shard.
 type ShardAgent struct {
+	ScenarioID   string         `json:"scenario_id,omitempty"` // coverage_id; set when folder ≠ scenario name
 	RecordingDir string         `json:"recording_dir,omitempty"`
 	Artifacts    ShardArtifacts `json:"artifacts,omitempty"`
 	Metadata     ShardMetadata  `json:"metadata,omitempty"`
@@ -98,66 +99,146 @@ type Meta struct {
 	CapabilityVocab json.RawMessage `json:"capability_vocab,omitempty"`
 }
 
-// Dir is the directory holding the scenario shards.
-func Dir(repoRoot string) string {
-	return filepath.Join(repoRoot, "replaydata", "scenarios")
+// AgentCellDir returns the directory that holds one (adapter, scenario) cell:
+// replaydata/agents/<adapter>/scenarios/<folder>. Folder is the on-disk
+// recording folder — the dashed-id-prefixed scenario name for standard cells
+// (e.g. 5-4_architect-editor-pair), or a prefixed variant name otherwise.
+func AgentCellDir(repoRoot, adapter, folder string) string {
+	return filepath.Join(repoRoot, "replaydata", "agents", adapter, "scenarios", folder)
 }
 
-// LoadAll reads every replaydata/scenarios/<name>.json shard (skipping the
-// global _meta.json), sorted by stable id (section, then index). A malformed
-// shard is skipped rather than failing the whole load.
-func LoadAll(repoRoot string) []Shard {
-	dir := Dir(repoRoot)
-	entries, err := os.ReadDir(dir)
+// LoadAgentCell reads replaydata/agents/<adapter>/scenarios/<folder>/metadata.json
+// by its on-disk folder name. ok is false when the file is absent or malformed.
+// Use this when you already know the folder (e.g. the viewer detail endpoint,
+// keyed by the on-disk folder).
+func LoadAgentCell(repoRoot, adapter, folder string) (*ShardAgent, bool) {
+	b, err := os.ReadFile(filepath.Join(AgentCellDir(repoRoot, adapter, folder), "metadata.json"))
 	if err != nil {
-		return nil
+		return nil, false
 	}
-	var out []Shard
+	var cell ShardAgent
+	if json.Unmarshal(b, &cell) != nil {
+		return nil, false
+	}
+	return &cell, true
+}
+
+// LoadAdapterCells scans one adapter's scenarios/ tree once and returns its
+// cells keyed by ScenarioID (coverage_id). Every metadata.json carries a
+// scenario_id, so folder names (now id-prefixed) don't need to be guessed.
+// Empty map on any error; never returns an error.
+func LoadAdapterCells(repoRoot, adapter string) map[string]*ShardAgent {
+	out := map[string]*ShardAgent{}
+	scenDir := filepath.Join(repoRoot, "replaydata", "agents", adapter, "scenarios")
+	entries, err := os.ReadDir(scenDir)
+	if err != nil {
+		return out
+	}
 	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") || e.Name() == "_meta.json" {
+		if !e.IsDir() {
 			continue
 		}
-		b, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		b, err := os.ReadFile(filepath.Join(scenDir, e.Name(), "metadata.json"))
 		if err != nil {
 			continue
 		}
-		var s Shard
-		if json.Unmarshal(b, &s) != nil {
+		var cell ShardAgent
+		if json.Unmarshal(b, &cell) != nil {
 			continue
 		}
-		out = append(out, s)
+		key := cell.ScenarioID
+		if key == "" {
+			key = e.Name() // defensive: a cell without scenario_id keys on its folder
+		}
+		out[key] = &cell
 	}
+	return out
+}
+
+// LoadAllCells loads every onboarded adapter's cell for the given scenario
+// (coverage_id), keyed by adapter. Convenience wrapper over LoadAdapterCells.
+func LoadAllCells(repoRoot, scenarioName string) map[string]*ShardAgent {
+	out := map[string]*ShardAgent{}
+	for _, adapter := range Agents(repoRoot) {
+		if cell, ok := LoadAdapterCells(repoRoot, adapter)[scenarioName]; ok {
+			out[adapter] = cell
+		}
+	}
+	return out
+}
+
+// File is the path to the consolidated scenario catalog.
+func File(repoRoot string) string {
+	return filepath.Join(repoRoot, "replaydata", "scenarios.json")
+}
+
+// catalog is the on-disk shape of replaydata/scenarios.json.
+type catalog struct {
+	Meta      Meta    `json:"meta"`
+	Scenarios []Shard `json:"scenarios"`
+}
+
+// loadCatalog reads + parses replaydata/scenarios.json. ok is false on any
+// error (missing file, malformed JSON).
+func loadCatalog(repoRoot string) (catalog, bool) {
+	var c catalog
+	b, err := os.ReadFile(File(repoRoot))
+	if err != nil {
+		return c, false
+	}
+	if json.Unmarshal(b, &c) != nil {
+		return c, false
+	}
+	return c, true
+}
+
+// LoadAll reads every scenario from replaydata/scenarios.json, sorted by stable
+// id (section, then index). Returns nil on any error.
+func LoadAll(repoRoot string) []Shard {
+	c, ok := loadCatalog(repoRoot)
+	if !ok {
+		return nil
+	}
+	out := c.Scenarios
 	sort.SliceStable(out, func(i, j int) bool { return lessShardID(out[i].ID, out[j].ID) })
 	return out
 }
 
-// Load reads a single shard by name (the filename IS the name) without
-// scanning the whole catalog. Returns ok=false when absent or malformed.
+// Load reads a single scenario by name. Returns ok=false when absent.
 func Load(repoRoot, name string) (Shard, bool) {
-	var s Shard
-	b, err := os.ReadFile(filepath.Join(Dir(repoRoot), name+".json"))
-	if err != nil {
-		return s, false
+	c, ok := loadCatalog(repoRoot)
+	if !ok {
+		return Shard{}, false
 	}
-	if json.Unmarshal(b, &s) != nil {
-		return s, false
+	for _, s := range c.Scenarios {
+		if s.Name == name {
+			return s, true
+		}
 	}
-	return s, true
+	return Shard{}, false
 }
 
-// LoadMeta reads replaydata/scenarios/_meta.json. Returns an empty Meta on any
-// error (missing dir, unreadable file, malformed JSON) — callers tolerate an
-// empty column set and fall back to other sources.
-func LoadMeta(repoRoot string) Meta {
-	var m Meta
-	b, err := os.ReadFile(filepath.Join(Dir(repoRoot), "_meta.json"))
-	if err != nil {
-		return m
+// FolderForScenario returns the on-disk recording folder for a standard cell:
+// the scenario's dashed id, an underscore, then the scenario name
+// (e.g. "5-4_architect-editor-pair"). Empty when the scenario is unknown.
+// Variant-folder cells don't follow this rule — resolve those from a loaded
+// cell's RecordingDir instead.
+func FolderForScenario(repoRoot, name string) string {
+	s, ok := Load(repoRoot, name)
+	if !ok {
+		return ""
 	}
-	if json.Unmarshal(b, &m) != nil {
+	return strings.ReplaceAll(s.ID, ".", "-") + "_" + name
+}
+
+// LoadMeta reads the `meta` block of replaydata/scenarios.json. Returns an
+// empty Meta on any error — callers tolerate an empty column set.
+func LoadMeta(repoRoot string) Meta {
+	c, ok := loadCatalog(repoRoot)
+	if !ok {
 		return Meta{}
 	}
-	return m
+	return c.Meta
 }
 
 // Agents returns the SORTED keys of LoadMeta().MinVersions — the onboarded

@@ -1,0 +1,121 @@
+{
+  "recording_dir": "pi/scenarios/5-1_token-accounting",
+  "artifacts": {
+    "events": "pi/scenarios/5-1_token-accounting/events.jsonl",
+    "transcript": "pi/scenarios/5-1_token-accounting/transcript.jsonl",
+    "manifest": "pi/scenarios/5-1_token-accounting/manifest.json",
+    "golden": "pi/scenarios/5-1_token-accounting/transcript.jsonl.replay.json.golden"
+  },
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "pass_rate": "9/9 phases passed",
+    "agent_cli_version": "0.70.0",
+    "daemon_version": "0.4.7+ec7acf6",
+    "confidence": 0.9,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "token-accounting",
+      "agent": "pi",
+      "assessed_at": "2026-05-25T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.90,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nThe scenario's User-observable signals are token counts accumulating across turns: `TotalTokens > 0` after turn 1, `TotalTokens` non-decreasing after turn 2, and cache-read tokens reflected for a cached turn. Pi's JSONL transcript carries per-turn `usage.input` / `usage.output` / `usage.cacheRead` / `usage.cacheWrite` plus `cost` on each assistant event, which the pi parser extracts into a per-turn UsageBreakdown and accumulates monotonically into SessionMetrics.TotalTokens. Single-turn token & cost extraction is already exercised by basic-turn; this cell locks down the MULTI-turn accumulator (the non-decreasing claim across requestId boundaries).\n\nThe accumulation requires more than one turn on one live session, so the cell is recorded with the INTERACTIVE pi driver (drive-pi-interactive.sh): three back-to-back `Reply with exactly: ok` no-op turns in one tmux REPL via send+wait_turn, then a single teardown. Headless `pi --print` is single-shot (one reply → process_exited) so it cannot accumulate across turn boundaries; the interactive driver keeps the rollout alive for all three turns. The daemon observes a transient `proc-<PID>` pre-session born ready, the UUID-keyed rollout's `transcript_new`, three `working→ready` arcs (one per prompt) on the rollout session, `pid_discovered`, and one `process_exited` at teardown.\n\nThe TotalTokens accumulation itself is NOT expressible in the phase DSL today (the invariant DSL has no metric form — a `TotalTokens > 0` assertion is not a phase). It is covered by the pi parser unit tests. The expected.jsonl therefore asserts only the observable lifecycle scaffolding the accounting rides on (the standard three-turn arc, no waiting, a single process_exited).",
+      "caveats": [
+        "Pi cannot accept a pre-assigned UUID — it generates one itself. The interactive driver discovers the UUID from the session header on line 1 of the freshly-created rollout transcript.",
+        "The token-accounting claim (TotalTokens > 0 / non-decreasing / cache-read reflected) is not phase-expressible; it is covered by the pi parser unit tests, not by the recording's expected.jsonl phases.",
+        "Cache-read counts vary run-to-run (cold-start cache vs warm), and per-turn token counts vary with model-output variance; only the structural three-turn arc, single process_exited, and final ready state are stable across re-records."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/pi/agent.go",
+          "note": "Identity.Name=pi, Source variant FilesUnderRoot under ~/.pi/agent/sessions/, ExactName{Name: \"pi\"} process matcher."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/pi/parser.go",
+          "note": "Extracts usage.input/output/cacheRead/cacheWrite + cost per assistant event into a per-turn UsageBreakdown; accumulates into SessionMetrics.TotalTokens."
+        },
+        {
+          "kind": "file",
+          "ref": ".claude/skills/ir:onboard-agent/scripts/drive-pi-interactive.sh",
+          "note": "Interactive tmux REPL driver supporting send/slash/wait_turn/interrupt/sleep; keeps the rollout session alive across multiple turns so token totals accumulate."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "pi CLI on PATH and authenticated (pi runs against its configured model out-of-band)",
+        "tmux available — the interactive driver runs pi in a tmux REPL so it can send three prompts to one long-lived session",
+        "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+      ],
+      "setup": [
+        "The interactive driver (drive-pi-interactive.sh) launches pi in a fresh per-run cwd inside a tmux session, waits for the REPL prompt, then sends the first prompt",
+        "pi writes one JSONL rollout file per session under ~/.pi/agent/sessions/<cwd-slug>/ on launch (FilesUnderRoot, non-lazy); the driver resolves that file and extracts the UUID from line 1",
+        "Each send bumps the expected-turn counter; wait_turn blocks until the rollout shows a completed assistant turn, so prompts never race a still-running turn",
+        "No special model or context flags — pi's configured model is fine; the assertion is about token accumulation, not which model produced the tokens",
+        "After the third wait_turn + trailing sleep the driver kills the tmux session once — pi exits and the daemon emits a single process_exited for the rollout session"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        }
+      ],
+      "verify": [
+        "events.jsonl contains a transcript_new for the rollout session born ready within ~2s of REPL launch (a transient proc-<PID> pre-session may also appear; the turns and pid_discovered land on the UUID-keyed rollout session)",
+        "events.jsonl contains a pid_discovered event bound to the rollout session_id",
+        "events.jsonl contains three state_transition→working / →ready arcs on the SAME rollout session_id, one per prompt (state resets to ready between turns)",
+        "events.jsonl carries a PerTurnContribution / UsageBreakdown on each turn boundary; the pi parser pulls usage.input/output/cacheRead/cacheWrite + cost from each assistant event, so input + output tokens > 0 across the turns",
+        "SessionMetrics.TotalTokens after turn 1 > 0",
+        "SessionMetrics.TotalTokens after turn 2 ≥ TotalTokens after turn 1 (monotonic)",
+        "SessionMetrics.TotalTokens after turn 3 ≥ TotalTokens after turn 2 (monotonic accumulation across 3 turns)",
+        "if pi reports cacheRead on a cached turn it populates the cache bucket and is deducted from fresh input; on these tiny turns cache buckets may stay 0 — do not assert a nonzero cache",
+        "the rollout session's final live state is ready before the driver tears the REPL down",
+        "events.jsonl contains exactly one process_exited on the rollout session at REPL teardown (one long-lived session, not three exits)",
+        "no state_transition to waiting appears for the rollout session at any point",
+        "NOTE: the token-accumulation claim (TotalTokens > 0 / non-decreasing / cacheRead) is not expressible in the expected.jsonl phase DSL (no metric form); it is covered by the pi parser unit tests. expected.jsonl asserts only the three-turn lifecycle arc the accounting rides on."
+      ],
+      "settings": {},
+      "timeout_seconds": 300
+    }
+  },
+  "scenario_id": "token-accounting"
+}

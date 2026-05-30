@@ -1,0 +1,91 @@
+{
+  "recording_dir": "opencode/scenarios/2-21_streaming-partial-writes",
+  "artifacts": {
+    "events": "opencode/scenarios/2-21_streaming-partial-writes/events.jsonl",
+    "transcript": "opencode/scenarios/2-21_streaming-partial-writes/transcript.jsonl",
+    "manifest": "opencode/scenarios/2-21_streaming-partial-writes/manifest.json",
+    "golden": "opencode/scenarios/2-21_streaming-partial-writes/transcript.jsonl.replay.json.golden"
+  },
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "pass_rate": "5/5 phases passed",
+    "agent_cli_version": "unknown",
+    "daemon_version": "0.4.7+0d6720b",
+    "confidence": 0.75
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "agent": "opencode",
+      "scenario": "streaming-partial-writes",
+      "agent_version": "1.14.50",
+      "assessed_at": "2026-05-25",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.75,
+      "verdict": "record",
+      "notes": "opencode streams assistant output as incremental text parts; parseTextPart maps assistant text to assistant_message (no turn boundary, excluded from IsAgentDone) and step-finish reason=tool-calls also stays working — only step-finish reason=stop emits turn_done. The WAL-fsnotify ProcessOwnedStore watcher observes the SQLite part rows for the ses_… session, so partial flushes that reach the WAL across multiple scan windows do not flicker to ready. Driver: a single send producing a longer multi-line reply (opencode run blocks; wait_turn no-op). OBSERVABILITY RISK to confirm at record time: a no-tool prose turn run headlessly can flush all assistant text + the terminal step-finish to the WAL in one scan window (basic-turn collapsed working→ready in ~0.3ms), giving the streaming_window nothing intermediate to assert; if so this is an observability gap to surface, not a spec rebase.",
+      "sources": [
+        {
+          "kind": "source_code",
+          "ref": "core/adapters/inbound/agents/opencode/parser.go",
+          "excerpt": "parseTextPart assistant -> assistant_message (no turn boundary); only step-finish reason=stop -> turn_done"
+        },
+        {
+          "kind": "source_code",
+          "ref": "core/adapters/inbound/agents/opencode/watcher.go",
+          "excerpt": "WAL-fsnotify-driven scanParts: part rows with time_updated >= cursor emitted as EventActivity"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/opencode/capabilities.json",
+          "excerpt": "\"streaming_output\": true"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "opencode CLI on PATH and authenticated against its default model (run a single message in the opencode TUI to confirm; the default is a local LM Studio model so no remote key is needed)",
+        "irrlichd is recording with the opencode SQLite watcher enabled — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+        "OBSERVABILITY CAVEAT (mirror of the spec's notes): opencode persists session parts to SQLite, observed by the daemon's WAL-fsnotify-driven ProcessOwnedStore watcher (scanParts, time_updated cursor). A no-tool prose turn run headlessly via blocking `opencode run` can flush its assistant text part(s) AND the terminal step-finish reason=stop to the WAL inside one scan window at turn completion — basic-turn collapsed working→ready in ~0.3ms for exactly this reason. The multi-line prompt aims to spread the assistant text across several WAL flushes so the working dwell is genuinely observable; but if opencode writes the whole reply atomically the streaming_window has nothing intermediate to assert over. If a live recording confirms the atomic-write behavior, that is an inherent ProcessOwnedStore observability gap (surface it as observability_correction → daemon_capability:incapable), NOT a flaky recipe and NOT a reason to rebase expected.jsonl."
+      ],
+      "setup": [
+        "The interactive driver (drive-opencode-interactive.sh) creates a fresh per-run cwd under <staging>/cwd/ and launches a blocking `opencode run -- \"<prompt>\"` for the single send (no --model flag, so opencode uses its configured default model); the run blocks until the assistant turn finishes, so wait_turn is a no-op",
+        "OpenCode session state lives in its SQLite store (~/.local/share/opencode/opencode.db), not per-cwd transcript files; the daemon's ProcessOwnedStore source polls the part table (WAL-fsnotify-driven, debounced by minScanGap) and observes the UUID-keyed ses_… session for this cwd. The driver discovers that session id from SQLite after the run returns (opencode does not expose CLI-assignable session IDs)",
+        "OPENCODE'S STREAMED UNIT IS THE ASSISTANT TEXT PART: parseTextPart maps every assistant text part to assistant_message (parser.go:178-197 — no turn boundary, excluded from IsAgentDone), and step-finish reason=tool-calls also maps to assistant_message (parser.go:155-157). Only step-finish reason=stop emits turn_done (parser.go:152-154) and settles the turn working→ready. So no intermediate part flush can flip the session to ready: the session holds working across every text/non-stop flush that reaches the WAL — the no-flicker invariant the streaming_window pins",
+        "ELICITING A MULTI-FLUSH WORKING DWELL: the send asks for a moderately long multi-line prose answer (a short numbered list, one item per line) so the assistant emits its content as several text parts that flush to the WAL across multiple scan windows, giving the daemon an observable working dwell BEFORE the terminal step-finish reason=stop. This is the no-tool analog of opencode/self-correction-iteration's multi-step turn — but with tool_calls_max:0 there is no permission gate, so the session never enters waiting",
+        "The default model is a small, slow local LM Studio model (~30–45s per turn), so the trailing sleep and timeout are generous: a slow multi-line turn must not trip a false timeout, and the trailing sleep must outlast the turn_done settle so the step-finish-driven working→ready is observed before teardown"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Write a 5-step guide for making a cup of tea. Number each step 1 through 5, and put each step on its own line. Write at least one full sentence per step."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        }
+      ],
+      "verify": [
+        "events.jsonl contains a transcript_new (or session_created) for the ses_… session, born ready, within ~2s of agent launch (a transient proc-<PID> pre-session may also appear; the turn arc and pid_discovered land on the ses_… session)",
+        "events.jsonl contains a pid_discovered event bound to the ses_… session_id",
+        "events.jsonl shows exactly one state_transition→working on the ses_… session_id when the multi-line prompt is sent — the streaming window opens here",
+        "across the streaming window (opencode emits the assistant content as incremental text parts, each mapped to assistant_message — non-terminal), NO state_transition to ready fires before the terminal step-finish reason=stop; the session holds working solidly across all flushes (the no-flicker invariant)",
+        "NO state_transition to waiting fires during the streaming window (tool_calls_max:0 — no tool call, no permission gate)",
+        "events.jsonl shows exactly one state_transition→ready on the same ses_… session_id at turn end (step-finish reason=stop → turn_done closes the turn)",
+        "the session's final live state is ready",
+        "transcript.jsonl contains 1 user line and at least 1 assistant text line plus the terminal step-finish (if the reply lands as multiple text parts, multiple assistant lines appear — the observable multi-flush span)"
+      ],
+      "settings": {},
+      "timeout_seconds": 180
+    }
+  },
+  "scenario_id": "streaming-partial-writes"
+}

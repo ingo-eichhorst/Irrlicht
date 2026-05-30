@@ -92,11 +92,11 @@ fi
 OUT_EVENTS="$SCENARIO_DIR/events.jsonl"
 OUT_SUBAGENTS_DIR="$SCENARIO_DIR/subagents"
 
-# Adapter declares its native transcript extension in _meta.json (#511; was the
-# per-adapter capabilities.json). Default "jsonl"; preserve it so the parser can
-# ingest the file verbatim during replay.
-META_JSON="$REPO_ROOT/replaydata/scenarios/_meta.json"
-TRANSCRIPT_EXT="$(jq -r --arg a "$ADAPTER" '.transcript_extensions[$a] // "jsonl"' "$META_JSON")"
+# Adapter declares its native transcript extension in scenarios.json's meta
+# block. Default "jsonl"; preserve it so the parser can ingest the file verbatim
+# during replay.
+CATALOG_JSON="$REPO_ROOT/replaydata/scenarios.json"
+TRANSCRIPT_EXT="$(jq -r --arg a "$ADAPTER" '.meta.transcript_extensions[$a] // "jsonl"' "$CATALOG_JSON")"
 OUT_TRANSCRIPT="$SCENARIO_DIR/transcript.$TRANSCRIPT_EXT"
 
 # Discover child session IDs by scanning parent_linked events in the

@@ -1,0 +1,105 @@
+{
+  "recording_dir": "claudecode/scenarios/2-5_synchronous-slash-command",
+  "artifacts": {
+    "events": "claudecode/scenarios/2-5_synchronous-slash-command/events.jsonl",
+    "transcript": "claudecode/scenarios/2-5_synchronous-slash-command/transcript.jsonl",
+    "manifest": "claudecode/scenarios/2-5_synchronous-slash-command/manifest.json",
+    "golden": "claudecode/scenarios/2-5_synchronous-slash-command/transcript.jsonl.replay.json.golden"
+  },
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "pass_rate": "4/4 phases passed",
+    "agent_cli_version": "2.1.143",
+    "daemon_version": "0.4.5+7af4212",
+    "confidence": 0.9,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "synchronous-slash-command",
+      "agent": "claudecode",
+      "assessed_at": "2026-05-17T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.9,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nClaude Code has a family of synchronous, local-only slash commands that never round-trip to the model: `/help`, `/cost`, `/status`, `/model` (the picker), `/context`, `/clear` (UI-side), `/config`, etc. When the user invokes one of these, the TUI renders the response locally; if anything lands in the JSONL transcript at all, it's a local-command wrapper, not a real user turn or assistant message.\n\nThe parser explicitly recognises and discards these wrappers. `isLocalCommandContent` (parser.go:216-225) returns true for content starting with `<local-command`, `<command-name>`, `<bash-input>`, or `<bash-stdout>`, and callers drop the event before it reaches state machinery. That's exactly the right behaviour for this scenario.\n\nThe spec's two Expected bullets:\n\n**Bullet 1 — state stays `ready` throughout.** Because no genuine `user` message is appended (only the local-command wrapper, which the parser filters), the daemon emits no state_transition for the slash command. The session sits in `ready` before, during, and after. The phase contract for this scenario asserts a `ready` invariant across the slash-command phase.\n\n**Bullet 2 — no `→ working` transition recorded for the slash command itself.** Direct consequence of the above. The parser's local-command filter is the load-bearing piece here, and `parser_test.go` covers it as a regression test.\n\n## What irrlicht does NOT see (and why that's OK)\n\nThe slash command's textual response (e.g. `/cost` output, `/help` text) is rendered in the TUI but never appears as a transcript event, so the daemon has nothing to surface. This is correct: the scenario's premise is precisely that there's no model call to observe.\n\n## Caveat on which commands count\n\nNot every slash command is synchronous. `/compact` triggers a real model call (context summarisation) and belongs to `Context compaction`. `/init` writes files via tool calls. The recipe must restrict itself to genuinely local commands (`/help`, `/cost`, `/status`, `/model`) to satisfy the spec's no-LLM-call premise.",
+      "caveats": [
+        "`/clear` resets the conversation and mints a fresh session UUID — observable as a `session_birth` event. That belongs to the `Session reset` scenario, not this one. The recipe must avoid it.",
+        "`/compact` and `/init` call the model and would invalidate this scenario. Stick to `/help`, `/cost`, `/status`, `/model`.",
+        "If Anthropic changes the TUI to log slash-command invocations as real user messages, this scenario would start failing. The parser's local-command filter is the contract that catches such regressions."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": ".specs/agent-scenarios.md",
+          "note": "Section 'Feature: Synchronous slash command (no LLM call)' (lines 140-145) — two Expected bullets."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/claudecode/parser.go",
+          "note": "isLocalCommandContent (216-225) filters <local-command>, <command-name>, <bash-input>, <bash-stdout> wrappers so they don't drive state."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/claudecode/parser_test.go",
+          "note": "Parser test suite covers local-command filtering — regression guard for this scenario."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "claude CLI on PATH and authenticated (subscription or API key)",
+        "irrlichd is recording (--attach against a daemon with --record, or isolated mode)",
+        "The slash commands chosen (/cost, /help) must remain local-only in the running claude CLI version — if Anthropic ever routes /cost through the model the scenario premise breaks"
+      ],
+      "setup": [
+        "Driver generates a fresh lowercased session UUID and a fresh cwd under <staging>/cwd/",
+        "Avoid /clear (mints a fresh session UUID — different scenario) and /compact, /init (real model calls — different scenarios)"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly: warm"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        },
+        {
+          "type": "keys",
+          "keys": "/ c o s t Enter"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "keys",
+          "keys": "/ h e l p Enter"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the UUID session entering ready at session birth and staying ready throughout the /cost + /help window (no state_transition to working fires until the final 'Reply with...' send)",
+        "events.jsonl contains NO state_transition to waiting at any point during the slash-command window",
+        "events.jsonl shows exactly one ready→working→ready cycle for the entire run — driven by the final normal turn only",
+        "transcript.jsonl contains exactly 1 user line and 1 assistant line (the slash commands do NOT appear as user turns; their <local-command> wrappers are filtered by the parser)",
+        "final session state is ready"
+      ],
+      "settings": {},
+      "timeout_seconds": 120
+    }
+  },
+  "scenario_id": "synchronous-slash-command"
+}

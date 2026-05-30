@@ -1,0 +1,101 @@
+{
+  "recording_dir": "claudecode/scenarios/3-3_background-process",
+  "artifacts": {
+    "events": "claudecode/scenarios/3-3_background-process/events.jsonl",
+    "transcript": "claudecode/scenarios/3-3_background-process/transcript.jsonl",
+    "manifest": "claudecode/scenarios/3-3_background-process/manifest.json",
+    "golden": "claudecode/scenarios/3-3_background-process/transcript.jsonl.replay.json.golden"
+  },
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "pass_rate": "5/5 phases passed",
+    "agent_cli_version": "2.1.150",
+    "daemon_version": "0.4.7+265ebf2",
+    "confidence": 0.95,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "background-process",
+      "agent": "claudecode",
+      "assessed_at": "2026-05-23T21:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.95,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Re-evaluation (2026-05-23, post-#445)\n\nThis supersedes the 2026-05-18 / earlier 2026-05-23 verdict of yes/no. The gap is now CLOSED: irrlicht tracks Bash background processes and holds the session working until they exit. Two landed changes, both present in this worktree (branch feat/record-background-process-fixture):\n\n1. **#450 (commit b8d8e2dc) — background-process tracking.** The parser snapshots each background process from the structured `toolUseResult.backgroundTaskId` (+ its `tasks/<id>.output` path) and surfaces it as `SessionMetrics.BackgroundProcessCount`. The daemon gates `IsAgentDone` on `HasLiveBackgroundProcess`, holding the session `working` past `end_turn` until the process exits; an `lsof` probe on the output file is the authoritative liveness check, and a `BashOutput`-terminated status or `KillShell` drops the process.\n\n2. **265ebf22 — transcript-level completion via `<task-notification>`.** The #450 completion path was written against a `queued_command` attachment shape; a claude launched under the Agent SDK harness (exactly what irrlicht's recording agent uses) suppresses BashOutput/KillShell and instead reports completion via TaskOutput + a terminal `<task-notification>` whose `<task-id>` is the `backgroundTaskId`. 265ebf22 teaches the parser to drop the tracked process on that terminal notification (both on-disk shapes: the `origin.kind` user line AND the queued_command attachment), keyed on the same `openBackgroundProcs` map. This makes the scenario recordable from inside the SDK harness — the daemon observes the transcript-level completion and the session settles `working → ready` with no env-unset needed.\n\n## How it was validated\n\nRecorded against a live `claude` v2.1.150 driven through the committed recipe, observed by an `irrlichd` built from THIS worktree (version `0.4.7+265ebf2`, includes 265ebf22). The captured transcript carries: a `Bash` tool_use with `run_in_background:true` (`sleep 8 && echo BG_DONE`), a `toolUseResult.backgroundTaskId`, BashOutput polls reporting `<status>completed</status>`, and the terminal `<task-notification>`. The events.jsonl shows the exact spec arc for the primary session: `ready` at birth (+21 ms), `ready → working` on the prompt, an extended `working` dwell of ~25.3 s with NO intermediate transition to ready/waiting while the bg process was alive, then a single `working → ready` once it completed. `expected-validate` passes 5/5 phases.\n\n## Why this is a clean yes (not partial)\n\nThe transcript-level completion path means the daemon no longer depends solely on the lsof liveness fallback to release the session — the SDK-harness `<task-notification>` is an actual transcript signal that decrements the count and re-classifies. All three user-observable spec signals are now real: `BackgroundProcessCount > 0` while alive, session held `working` past end_turn, and a single `working → ready` once the last bg process exits.",
+      "caveats": [
+        "agent_supports is yes — confirmed against the live claude v2.1.150 binary: run_in_background Bash parameter + BashOutput + KillShell + backgroundTaskId all present in the strings scan.",
+        "irrlicht_observes flipped no → yes: #450 (b8d8e2dc) added BackgroundProcessCount + the working-hold gated on HasLiveBackgroundProcess, and 265ebf22 added recognition of the terminal <task-notification> completion shape the SDK-harnessed claude actually emits. Validated 5/5 by a fresh recording from a daemon built from this worktree (0.4.7+265ebf2).",
+        "The recording was captured in isolated mode (run-cell.sh without --attach) so the observing daemon was built from THIS worktree (265ebf22), not the user's separately-running daemon. Daemon version baked into manifest.json is 0.4.7+265ebf2.",
+        "Re-record variance: exact working dwell length and BashOutput poll count vary with model pacing; the spec's bg_alive_working assertion is a ≥4s lower bound well inside the 8s sleep, so timing jitter never trips it."
+      ],
+      "sources": [
+        {
+          "kind": "commit",
+          "ref": "b8d8e2dc (#450)",
+          "note": "Adds background-process tracking: parser snapshots backgroundTaskId into BackgroundProcessCount; daemon gates IsAgentDone on HasLiveBackgroundProcess (lsof liveness probe on tasks/<id>.output) to hold the session working past end_turn; BashOutput-terminated / KillShell drop the process."
+        },
+        {
+          "kind": "commit",
+          "ref": "265ebf22 (#445)",
+          "note": "Recognizes the SDK-harness completion shape: a terminal <task-notification> (both the origin.kind user-line shape and the queued_command attachment shape) whose <task-id> == backgroundTaskId drops the tracked process from the open set, so the session settles working→ready via a transcript signal — no lsof-only dependency, replay-compatible. This is what makes the scenario recordable from inside the recording agent's own SDK harness."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/background-process/manifest.json",
+          "note": "Fresh recording: daemon_version 0.4.7+265ebf2 (built from this worktree, includes 265ebf22), expected_pass_rate 5/5 phases passed."
+        },
+        {
+          "kind": "command",
+          "ref": "go run ./tools/agent-onboarding/cmd/expected-validate replaydata/agents/claudecode/scenarios/background-process",
+          "note": "5/5 phases pass: session_birth (ready +21ms), pid_bind (+21ms), turn_start (ready→working), bg_alive_working (~25.3s working dwell, no transition to ready/waiting while alive), turn_end (working→ready at +25265ms, under the 60s max and after the 8s sleep)."
+        },
+        {
+          "kind": "command",
+          "ref": "strings ~/.local/share/claude/versions/2.1.150 | grep -iE 'run_in_background|BashOutput|KillShell|backgroundTaskId'",
+          "note": "Confirms agent_supports: yes — claude v2.1.150 ships run_in_background (Bash param), backgroundTaskId (34 hits), BashOutput (14 hits), KillShell (8 hits)."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "claude CLI on PATH and authenticated (v2.1.x ships the run_in_background Bash parameter plus the BashOutput and KillShell tools)",
+        "irrlichd is recording (--attach or isolated) and built from a tree that includes PR #450 — the daemon must have BackgroundProcessCount tracking and the lsof liveness probe, else it cannot observe the background process at all",
+        "lsof is on PATH (the daemon's authoritative background-process liveness check shells out to `lsof -t` on each tasks/<id>.output file)"
+      ],
+      "setup": [
+        "Driver launches claude in a fresh trusted cwd under <staging>/cwd as usual; no seed files needed — the background process is a self-contained `sleep && echo`."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Do exactly this and nothing else. (1) Use the Bash tool to run the command `sleep 8 && echo BG_DONE` with run_in_background set to true, so it launches in the background and the tool returns immediately. (2) Then repeatedly use the BashOutput tool to poll that background shell, waiting about 2 seconds between polls, until BashOutput reports the process status as completed. (3) Only after BashOutput shows it completed, reply with exactly the word: done. Do not run any other commands."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        }
+      ],
+      "verify": [
+        "events.jsonl contains a transcript_new + pid_discovered for the primary session UUID within ~2s of launch (session born in ready)",
+        "events.jsonl shows the primary session transition ready -> working when the prompt lands",
+        "the primary session stays working for at least ~4s after the turn-start working transition with NO state_transition to ready while the background process is alive — this is the #450 hold-past-end_turn behavior (without #450 the session would flip to ready as soon as the Bash tool_use returns)",
+        "transcript.jsonl contains a Bash tool_use whose input has run_in_background:true and a following tool_result whose toolUseResult carries a backgroundTaskId",
+        "transcript.jsonl contains one or more BashOutput tool_use blocks, and a BashOutput tool_result whose text reports a terminated status (e.g. <status>completed</status>)",
+        "events.jsonl shows exactly one working -> ready transition for the primary session, occurring AFTER the background process exits (not at the bare end_turn)",
+        "final session state for the primary session is ready"
+      ],
+      "settings": {},
+      "timeout_seconds": 240
+    }
+  },
+  "scenario_id": "background-process"
+}

@@ -1,0 +1,103 @@
+{
+  "recording_dir": "pi/scenarios/2-2_auto-executed-tool-call",
+  "artifacts": {
+    "events": "pi/scenarios/2-2_auto-executed-tool-call/events.jsonl",
+    "transcript": "pi/scenarios/2-2_auto-executed-tool-call/transcript.jsonl",
+    "manifest": "pi/scenarios/2-2_auto-executed-tool-call/manifest.json",
+    "golden": "pi/scenarios/2-2_auto-executed-tool-call/transcript.jsonl.replay.json.golden"
+  },
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "pass_rate": "5/5 phases passed",
+    "agent_cli_version": "0.70.0",
+    "daemon_version": "0.4.7+a9a0ab4",
+    "confidence": 0.92,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "auto-executed-tool-call",
+      "agent": "pi",
+      "assessed_at": "2026-05-25T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.92,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\n`auto-executed-tool-call` (scenario-meanings.md): the agent invokes one or more tools mid-turn, every call auto-resolves with no user approval, and the turn completes — the user-observable arc is `ready → working → ready` and state NEVER enters `waiting`. Primitive `tool_calls`; requires `headless_mode` and `tool_calls`. The coverage matrix records pi/auto-executed-tool-call as yes/yes.\n\n**agent_supports: yes.** Pi invokes its read/shell tool autonomously and runs it without an approval gate. A prompt that asks pi to read a file produces a real tool round-trip (toolCall + toolResult) that auto-resolves without ever blocking on the user, then completes the turn.\n\n**daemon_capability: full; driver_capability: ready.** The pi parser translates `toolCall` / `toolResult` message events into the tailer's tool-use / tool-result records and keeps the session `working` across them; the final assistant message's `stopReason=stop` maps to `turn_done`, settling `working → ready` via the primary turn-end path. Pi has no permission hooks, so no `waiting` transition is emitted — matching the scenario's negative invariant. Confirmed against the committed pi regression fixture for the sibling cell (full-lifecycle-toolcall, same coverage_id): the transcript carries toolCall + toolResult events and the events arc is `ready → working → ready` with zero `waiting` transitions.\n\n## Recipe-shape note (SCRIPT / interactive)\n\nRecorded with the INTERACTIVE pi driver (drive-pi-interactive.sh, a tmux REPL) rather than headless `pi --print`. WHY: the sibling headless cell full-lifecycle-toolcall (same coverage_id) drifted 2/5 because `pi --print` exits the moment it emits the final reply, so the daemon's scanner can miss the terminal working→ready settle before process_exited (concern C6). Keeping pi alive in the REPL across one send + wait_turn lets the daemon observe the settle cleanly; the single tmux teardown then yields one clean process_exited. The prompt asks pi to read a file created in setup and report its first line, forcing exactly one auto-executed read tool call inside the working span. C7 / session-identity: the live REPL emits a transient proc-<PID> pre-session born ready at launch (it bridges the gap until the UUID-keyed rollout transcript appears), so session_birth — which only asserts 'a session appears in ready within 2s of launch' — legitimately matches that pre-session. The turn arc, pid_bind and teardown all pin to the rollout session via the first-working anchor + same_session_as, so the pre-session can never satisfy them. The phase DSL has no tool-event form, so the tool call is asserted via the working span it sustains plus the transcript's toolCall/toolResult events, not a dedicated phase.",
+      "caveats": [
+        "claudecode's variant of this scenario can end in waiting via a PostToolUse permission hook (the top-level scenarios.json verify.has_waiting_state is claudecode-shaped); pi has no such hook, so the pi arc is ready→working→ready and the spec asserts a no-waiting invariant rather than has_waiting_state.",
+        "Pi cannot accept a pre-assigned UUID — it generates one itself. The interactive driver discovers the UUID from the session header on line 1 of the freshly-created rollout transcript.",
+        "Because the live REPL bridges with a transient proc-<PID> pre-session, the turn phase anchors to recording start with NO session pin so the matcher binds the FIRST working (necessarily the rollout session; the pre-session never goes working); every later phase pins to it via same_session_as."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/pi/agent.go",
+          "note": "Identity.Name=pi, Source variant FilesUnderRoot under ~/.pi/agent/sessions/, ExactName{Name: \"pi\"} process matcher."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/pi/parser.go",
+          "note": "toolCall/toolResult → tool-use/tool-result; stopReason=stop on the final assistant event maps to turn_done (working→ready). No permission gate → no waiting."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/pi/scenarios/full-lifecycle-toolcall/transcript.jsonl",
+          "note": "Sibling cell (same coverage_id): carries toolCall + toolResult events; events arc is ready→working→ready with no waiting transition."
+        },
+        {
+          "kind": "file",
+          "ref": ".claude/skills/ir:onboard-agent/scenario-meanings.md",
+          "note": "auto-executed-tool-call canonical flow: ready→working→ready, never enters waiting."
+        },
+        {
+          "kind": "file",
+          "ref": ".claude/skills/ir:onboard-agent/scripts/drive-pi-interactive.sh",
+          "note": "Interactive tmux REPL driver; supports send / wait_turn / interrupt / sleep, keeps the rollout alive so the daemon observes the working→ready settle before teardown."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "pi CLI on PATH and authenticated (pi runs against its configured model out-of-band)",
+        "tmux available — the interactive driver runs pi in a tmux REPL so it stays alive across the turn",
+        "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+      ],
+      "setup": [
+        "The interactive driver (drive-pi-interactive.sh) launches pi in a fresh per-run cwd inside a tmux session, waits for the REPL prompt, then sends the prompt",
+        "pi writes one JSONL rollout file per session under ~/.pi/agent/sessions/<cwd-slug>/ on launch (FilesUnderRoot, non-lazy); the driver resolves that file and extracts the UUID from line 1",
+        "WHY interactive, not headless: the sibling headless cell full-lifecycle-toolcall (same coverage_id) drifts because `pi --print` exits the instant it emits the final reply, so the daemon can miss the terminal working→ready settle before process_exited (concern C6). Keeping pi alive in the REPL across one send + wait_turn lets the daemon observe the settle cleanly, and the single tmux teardown then yields one clean process_exited",
+        "The send bumps the expected-turn counter; wait_turn blocks until the rollout shows a completed assistant turn, so the trailing sleep never races a still-running tool round-trip"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Run the shell command 'echo hello' using your bash tool, then reply with exactly: done"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        }
+      ],
+      "verify": [
+        "events.jsonl contains a transcript_new for the rollout session born ready within ~2s of REPL launch (a transient proc-<PID> pre-session may also appear; the turn arc, pid_discovered and teardown land on the UUID-keyed rollout session)",
+        "events.jsonl contains a pid_discovered event bound to the rollout session_id",
+        "events.jsonl contains exactly one state_transition→working / →ready arc on the rollout session_id, sustained across the auto-executed bash call",
+        "transcript.jsonl contains a toolCall / toolResult pair for the echo command (the auto-executed, ungated tool call — pi has no permission hook)",
+        "events.jsonl contains NO state_transition to waiting for the rollout session at any point (the call auto-executes; pi never gates)",
+        "the rollout session's final live state is ready before the driver tears the REPL down",
+        "events.jsonl contains exactly one process_exited on the rollout session at REPL teardown"
+      ],
+      "settings": {},
+      "timeout_seconds": 300
+    }
+  },
+  "scenario_id": "auto-executed-tool-call"
+}

@@ -76,8 +76,9 @@ export IRRLICHT_ONBOARD_BIND_ADDR="$ONBOARD_BIND"
 export IRRLICHT_ONBOARD_MULTI=1
 
 # --- Resolve the cross-adapter cell -------------------------------------
-# The cross-adapter cell is one shard (its `cross_adapter` list + per-adapter
-# recipes under .agents[$a].details.recipe). #511: read it from the shard.
+# The cross-adapter cell is one scenario shard (its `cross_adapter` list) plus
+# a per-adapter recipe in each adapter's metadata.json (.details.recipe), read
+# through shard-lib's shard_recipe().
 SHARD="$REPO_ROOT/replaydata/scenarios/$SCENARIO.json"
 SCEN_JSON="$(jq -e . "$SHARD" 2>/dev/null)" \
   || { echo "scenario not found: $SCENARIO (no shard at $SHARD)" >&2; exit 1; }
@@ -92,11 +93,13 @@ if [[ "${#ADAPTERS[@]}" -lt 2 ]]; then
 fi
 echo "cross-adapter cell: $SCENARIO  adapters=[${ADAPTERS[*]}]"
 
-# Each adapter must be applicable + carry a script.
+# Each adapter must be applicable + carry a script (recipe from its metadata.json).
 for a in "${ADAPTERS[@]}"; do
-  applic="$(jq -r --arg a "$a" 'if .agents[$a].details.recipe.applicable==true then "true" else "false" end' <<<"$SCEN_JSON")"
+  recipe="$(shard_recipe "$SCENARIO" "$a")"
+  [[ -n "$recipe" ]] || { echo "adapter $a has no recipe for $SCENARIO" >&2; exit 1; }
+  applic="$(jq -r 'if .applicable==true then "true" else "false" end' <<<"$recipe")"
   [[ "$applic" == "true" ]] || { echo "adapter $a is not applicable:true for $SCENARIO" >&2; exit 1; }
-  has_script="$(jq -r --arg a "$a" '.agents[$a].details.recipe.script | if (.|type)=="array" then "yes" else "no" end' <<<"$SCEN_JSON")"
+  has_script="$(jq -r '.script | if (.|type)=="array" then "yes" else "no" end' <<<"$recipe")"
   [[ "$has_script" == "yes" ]] || { echo "adapter $a has no script for $SCENARIO" >&2; exit 1; }
   # Driver-gap backstop (#476): refuse a step type this adapter's driver lacks
   # before launching any daemon/CLI, mirroring run-cell.sh's exit 3.
@@ -208,9 +211,10 @@ declare -a DRV_PIDS=() DRV_ADAPTERS=()
 for a in "${ADAPTERS[@]}"; do
   sub="$STAGING/$a"
   mkdir -p "$sub"
-  jq --arg a "$a" '.agents[$a].details.recipe.settings // {}' <<<"$SCEN_JSON" > "$sub/settings.json"
-  script_json="$(jq -c --arg a "$a" '.agents[$a].details.recipe.script' <<<"$SCEN_JSON")"
-  timeout_s="$(jq -r --arg a "$a" '.agents[$a].details.recipe.timeout_seconds // 240' <<<"$SCEN_JSON")"
+  recipe="$(shard_recipe "$SCENARIO" "$a")"
+  jq '.settings // {}' <<<"$recipe" > "$sub/settings.json"
+  script_json="$(jq -c '.script' <<<"$recipe")"
+  timeout_s="$(jq -r '.timeout_seconds // 240' <<<"$recipe")"
   uuid="$(uuidgen | tr '[:upper:]' '[:lower:]')"
   driver="$SCRIPT_DIR/drive-$a-interactive.sh"
   [[ -x "$driver" ]] || { echo "driver missing: $driver" >&2; exit 1; }

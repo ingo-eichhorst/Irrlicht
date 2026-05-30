@@ -19,94 +19,82 @@ command -v jq >/dev/null || { echo "cell-integrity_test: jq is required" >&2; ex
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-# #511: cell-integrity reads per-scenario shards (replaydata/scenarios/) via
-# shard-lib. Legitimate dir names = each shard's name PLUS its recording_dir
-# basename, so the variant-folder split (coverage `cov` recorded under the
-# `cov-variant` folder) falls straight out of the shard's recording_dir.
-# Build shard fixtures and point shard-lib at them with IR_SHARD_DIR.
-export IR_SHARD_DIR="$TMP/replaydata/scenarios"
-mkdir -p "$IR_SHARD_DIR"
-# Coverage `cov` is recorded under the `cov-variant` folder; `md`/`half` record
-# under their own name; `orphan-cov` has no `fake` cell at all (a recording
-# under it would be orphaned).
-# details carries both the recipe and the assessment (the assessment moved into
-# the shard in #511; cell-integrity checks it there, not an on-disk file).
-cat > "$IR_SHARD_DIR/cov.json" <<'JSON'
-{"name":"cov","agents":{"fake":{"recording_dir":"fake/scenarios/cov-variant","details":{"assessment":{"agent_supports":"yes"},"recipe":{"script":[{"type":"send"}]}}}}}
-JSON
-cat > "$IR_SHARD_DIR/md.json" <<'JSON'
-{"name":"md","agents":{"fake":{"recording_dir":"fake/scenarios/md","details":{"assessment":{"agent_supports":"yes"},"recipe":{"script":[{"type":"send"}]}}}}}
-JSON
-cat > "$IR_SHARD_DIR/half.json" <<'JSON'
-{"name":"half","agents":{"fake":{"recording_dir":"fake/scenarios/half","details":{"assessment":{"agent_supports":"yes"},"recipe":{"script":[{"type":"send"}]}}}}}
-JSON
-cat > "$IR_SHARD_DIR/orphan-cov.json" <<'JSON'
-{"name":"orphan-cov","agents":{}}
-JSON
+# cell-integrity reads the catalog + per-agent metadata.json via shard-lib.
+# Post-restructure, metadata.json is COLOCATED with the recording it describes:
+# replaydata/agents/<a>/scenarios/<id>_<name>/{metadata.json, events.jsonl, ...}.
+# Legitimate dir names = every folder that holds a metadata.json; an orphan is a
+# recording folder WITHOUT one. Point shard-lib at the tree via IR_AGENTS_DIR.
+export IR_SCENARIOS_FILE="$TMP/replaydata/scenarios.json"
+export IR_AGENTS_DIR="$TMP/replaydata/agents"
+mkdir -p "$(dirname "$IR_SCENARIOS_FILE")"
+printf '{"meta":{},"scenarios":[]}\n' > "$IR_SCENARIOS_FILE"
 
-S="$TMP/scenarios"; mkdir -p "$S"
+S="$IR_AGENTS_DIR/fake/scenarios"
 touchf() { mkdir -p "$(dirname "$1")"; printf '%s\n' "${2:-{}}" > "$1"; }
+cell_meta() { # cell_meta <folder> <scenario_id>
+  touchf "$S/$1/metadata.json" "{\"scenario_id\":\"$2\",\"recording_dir\":\"fake/scenarios/$1\",\"details\":{\"assessment\":{\"agent_supports\":\"yes\"},\"recipe\":{\"script\":[{\"type\":\"send\"}]}}}"
+}
 
-# cov/ — coverage_id dir, assessment only (NOT recorded → skipped).
-touchf "$S/cov/assessment.json"
-# cov-variant/ — recipe-name dir, complete recording; assessment in cov/ sibling.
-touchf "$S/cov-variant/expected.jsonl"
-touchf "$S/cov-variant/events.jsonl"
-touchf "$S/cov-variant/transcript.jsonl"
-touchf "$S/cov-variant/transcript.jsonl.replay.json.golden"
-# md/ — markdown transcript, complete, NO golden expected.
-touchf "$S/md/assessment.json"
-touchf "$S/md/expected.jsonl"
-touchf "$S/md/events.jsonl"
-touchf "$S/md/transcript.md"
-# half/ — recorded (transcript) but NO events.jsonl (the task-list defect).
-touchf "$S/half/assessment.json"
-touchf "$S/half/expected.jsonl"
-touchf "$S/half/transcript.jsonl"
-touchf "$S/half/transcript.jsonl.replay.json.golden"
-# orphan-rec/ — complete recording but its dir maps to no fake recipe.
-mkdir -p "$S/orphan-rec"
-for f in assessment.json expected.jsonl events.jsonl transcript.jsonl transcript.jsonl.replay.json.golden; do
-  touchf "$S/orphan-rec/$f"
-done
+# 5-1_cov — variant folder (folder != scenario name); complete jsonl recording.
+cell_meta 5-1_cov cov
+touchf "$S/5-1_cov/expected.jsonl"
+touchf "$S/5-1_cov/events.jsonl"
+touchf "$S/5-1_cov/transcript.jsonl"
+touchf "$S/5-1_cov/transcript.jsonl.replay.json.golden"
+# 5-2_md — standard folder, markdown transcript, complete, NO golden expected.
+cell_meta 5-2_md md
+touchf "$S/5-2_md/expected.jsonl"
+touchf "$S/5-2_md/events.jsonl"
+touchf "$S/5-2_md/transcript.md"
+# 5-3_half — recorded (transcript) but NO events.jsonl (the task-list defect).
+cell_meta 5-3_half half
+touchf "$S/5-3_half/expected.jsonl"
+touchf "$S/5-3_half/transcript.jsonl"
+touchf "$S/5-3_half/transcript.jsonl.replay.json.golden"
+# 5-4_orphan — complete recording but NO metadata.json (orphan).
+touchf "$S/5-4_orphan/expected.jsonl"
+touchf "$S/5-4_orphan/events.jsonl"
+touchf "$S/5-4_orphan/transcript.jsonl"
+touchf "$S/5-4_orphan/transcript.jsonl.replay.json.golden"
 
 fails=0
 pass() { echo "  PASS: $1"; }
 fail() { echo "  FAIL: $1 — expected [$2] got [$3]"; fails=$((fails + 1)); }
 assert_eq() { [[ "$2" == "$3" ]] && pass "$1" || fail "$1" "$2" "$3"; }
 
-echo "== ci_recipe_dir_names: shard names ∪ recording_dir basenames =="
-assert_eq "fake recipe dirs (orphan-cov excluded — no fake cell)" \
-  "$(printf 'cov\ncov-variant\nhalf\nmd')" \
+echo "== ci_recipe_dir_names: folders that hold a metadata.json =="
+assert_eq "fake recipe dirs (orphan excluded — no metadata.json)" \
+  "$(printf '5-1_cov\n5-2_md\n5-3_half')" \
   "$(ci_recipe_dir_names fake)"
 
 echo "== ci_coverage_id_for_dir =="
-assert_eq "variant folder → its coverage_id" cov "$(ci_coverage_id_for_dir cov-variant fake)"
-assert_eq "unknown dir → itself"             md  "$(ci_coverage_id_for_dir md fake)"
+assert_eq "variant folder → its scenario_id" cov "$(ci_coverage_id_for_dir 5-1_cov fake)"
+assert_eq "no-metadata dir → itself"          5-4_orphan "$(ci_coverage_id_for_dir 5-4_orphan fake)"
 
 echo "== ci_is_recorded =="
-ci_is_recorded "$S/cov" && r=rec || r=no; assert_eq "assessment-only dir → not recorded" no "$r"
-ci_is_recorded "$S/cov-variant" && r=rec || r=no; assert_eq "recording dir → recorded" rec "$r"
+ci_is_recorded "$S/5-1_cov" && r=rec || r=no; assert_eq "recording dir → recorded" rec "$r"
+mkdir -p "$S/_empty"
+ci_is_recorded "$S/_empty" && r=rec || r=no; assert_eq "empty dir → not recorded" no "$r"
+rm -rf "$S/_empty"
 
 echo "== ci_missing_artifacts =="
-ci_missing_artifacts fake cov-variant "$S/cov-variant" "$S" >/dev/null
-assert_eq "complete variant (assessment in sibling cov/) → rc 0" 0 "$?"
-ci_missing_artifacts fake md "$S/md" "$S" >/dev/null
+ci_missing_artifacts fake 5-1_cov "$S/5-1_cov" "$S" >/dev/null
+assert_eq "complete variant → rc 0" 0 "$?"
+ci_missing_artifacts fake 5-2_md "$S/5-2_md" "$S" >/dev/null
 assert_eq "complete md cell (no golden needed) → rc 0" 0 "$?"
-probs="$(ci_missing_artifacts fake half "$S/half" "$S")"; rc=$?
+probs="$(ci_missing_artifacts fake 5-3_half "$S/5-3_half" "$S")"; rc=$?
 assert_eq "half cell → rc 1" 1 "$rc"
 assert_eq "half cell → flags events.jsonl" events.jsonl "$probs"
-probs="$(ci_missing_artifacts fake orphan-rec "$S/orphan-rec" "$S")"; rc=$?
+probs="$(ci_missing_artifacts fake 5-4_orphan "$S/5-4_orphan" "$S")"; rc=$?
 assert_eq "orphan recording → rc 1" 1 "$rc"
 [[ "$probs" == recipe-row* ]] && pass "orphan → flags recipe-row" || fail "orphan → flags recipe-row" "recipe-row*" "$probs"
 
 echo "== CLI exit code =="
-ROOT="$TMP/root"; mkdir -p "$ROOT/agents/fake"; cp -R "$S" "$ROOT/agents/fake/scenarios"
-bash "$DIR/cell-integrity.sh" fake "$ROOT" >/dev/null 2>&1
+bash "$DIR/cell-integrity.sh" fake "$TMP/replaydata" >/dev/null 2>&1
 assert_eq "half + orphan present → exit 1" 1 "$?"
 # Remove the two bad cells; the gate should pass.
-rm -rf "$ROOT/agents/fake/scenarios/half" "$ROOT/agents/fake/scenarios/orphan-rec"
-bash "$DIR/cell-integrity.sh" fake "$ROOT" >/dev/null 2>&1
+rm -rf "$S/5-3_half" "$S/5-4_orphan"
+bash "$DIR/cell-integrity.sh" fake "$TMP/replaydata" >/dev/null 2>&1
 assert_eq "all recorded cells complete → exit 0" 0 "$?"
 
 echo ""

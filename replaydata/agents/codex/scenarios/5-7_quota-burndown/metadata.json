@@ -1,0 +1,135 @@
+{
+  "artifacts": {
+    "events": "codex/scenarios/5-7_quota-burndown/events.jsonl",
+    "transcript": "codex/scenarios/5-7_quota-burndown/transcript.jsonl",
+    "manifest": "codex/scenarios/5-7_quota-burndown/manifest.json",
+    "golden": "codex/scenarios/5-7_quota-burndown/transcript.jsonl.replay.json.golden"
+  },
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "quota-burndown",
+      "agent": "codex",
+      "assessed_at": "2026-05-29T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning (re-judged 2026-05-29)\n\n**Emission confirmed by a real recording, not just a parser read.** Codex emits a `rate_limits` map inside the `payload` of every `token_count` event (an `event_msg`). Existing codex transcripts under `replaydata/agents/codex/` carry it: e.g. `model-switch-midsession/transcript.jsonl` shows `rate_limits.primary.used_percent` (`plan_type: plus`, `window_minutes: 300`, `resets_at` set) on each `token_count`. This settles the observation-vs-emission question — the quota window is something the agent actually writes to its transcript, so `daemon_capability: full` is not provisional.\n\n**Daemon path (full):** `extractCodexRateLimits()` (parser.go:355) reads `payload.rate_limits` only on `token_count` events and builds a `RateLimitSnapshot{Windows[], SampledAt}`. `extractCodexRateLimitWindow()` (parser.go:398) reads `used_percent` DIRECTLY into `RateLimitWindow.UsedPercent` (it is NOT derived from used/limit), plus `window_minutes` and `resets_at`/`resets_in_seconds`; `SampledAt` is the event wall-clock time (parser.go:360). The tailer stores the latest snapshot (`t.rateLimit = snap`) and appends a sample-on-change history keyed on `(UsedPercent, WindowMinutes, ResetsAt)` per window (`ingestRateLimit`, tailer_metrics.go:48-59), exposed as `RateLimit` + `RateLimitHistory` on the session metrics (tailer.go:165,172). No caching or coalescing masks a rising `used_percent`; `SampledAt` advances on each event. This is exactly the scenario's user-observable signal: UsedPercent after turn N >= after turn N-1, and SampledAt updates each turn (no stale snapshot replay).\n\n**Driver (ready):** the recipe only needs multi-turn `send` + `wait_turn` (and optional `sleep`) to let `used_percent` accumulate across turns — no special primitive (no keys/sigkill). The codex interactive driver (`scripts/drive-codex-interactive.sh`) advertises `send slash wait_turn interrupt keys sleep ...` in `DRIVE_ELICITS`, so every step the recipe needs already exists.\n\nA multi-turn fixture that approaches but does not cross a quota boundary is the target: we want UsedPercent rising without triggering `token-quota-exhausted` state behavior (a separate scenario, scenario-meanings `### token-quota-exhausted`).\n\n## Plan-mode is a caveat, not a downgrade\n\nThe prior assessment carried a leftover '**Why partial**' paragraph (pre-#476 framing) citing #322/#325 plan-mode quota gaps. Per the #476 authoring rule that is a caveat, not a `bug`: the canonical signal is asserted on regular (non-plan) turns, which are fully covered, and the recipe exercises the non-plan path. Plan-mode token_count suppression is tracked separately and does not block the canonical observable, so `daemon_capability` stays `full`.\n\n## What irrlicht does NOT see (and why that's OK)\n\nirrlicht does not compute a 'remaining forecast' of absolute tokens from `rate_limits` — it surfaces UsedPercent and ResetsAt as given. Forecasting remaining tokens would require the session's total per-window budget, which is not in the Codex transcript. The assertion is therefore on non-decreasing UsedPercent, not on an absolute remaining estimate.",
+      "caveats": [
+        "The fixture requires a multi-turn Codex Plus/Pro session that stays within its quota window (does not exhaust it). 3-5 moderate turns typically increment UsedPercent enough to assert the monotonic property.",
+        "Codex plan-mode sessions (#322, #325): plan-mode may suppress token_count events during the planning phase, making quota progression invisible mid-turn. This is a known gap tracked separately, NOT a daemon bug for this cell — non-plan turns carry the canonical signal and the recipe uses them.",
+        "If the session is early in a quota window, UsedPercent may be low and numerically equal across turns due to rounding (observed: a real short fixture held used_percent flat at 17.0 across four token_count events). Use at least 2 substantial turns to ensure a detectable delta; the spec asserts UsedPercent N >= N-1, so an equal value still passes but a rising value is the stronger fixture."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/codex/parser.go:398-418",
+          "note": "extractCodexRateLimitWindow() reads used_percent DIRECTLY into RateLimitWindow.UsedPercent (corrected: it is not derived from used/limit), plus window_minutes and resets_at/resets_in_seconds. extractCodexRateLimits() (parser.go:355) gates on token_count events and sets SampledAt to the event timestamp (parser.go:360)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer_metrics.go:48-59",
+          "note": "ingestRateLimit() stores the latest RateLimitSnapshot and appends a sample-on-change history keyed on (UsedPercent, WindowMinutes, ResetsAt); RateLimit + RateLimitHistory are exposed on session metrics (tailer.go:165,172) — proving the daemon surfaces the rising UsedPercent the spec asserts."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/codex/scenarios/model-switch-midsession/transcript.jsonl",
+          "note": "Real codex transcript carrying rate_limits.primary.used_percent (=17.0, plan_type=plus, window_minutes=300, resets_at set) on token_count events — confirms the quota window is genuinely emitted to the transcript (observation-vs-emission settled), not just handled by the parser."
+        },
+        {
+          "kind": "file",
+          "ref": ".claude/skills/ir:onboard-agent/scripts/drive-codex-interactive.sh",
+          "note": "DRIVE_ELICITS advertises send/slash/wait_turn/interrupt/keys/sleep — the multi-turn send+wait_turn the quota-burndown recipe needs is present, so driver_capability: ready."
+        },
+        {
+          "kind": "issue",
+          "ref": "#322",
+          "note": "Codex plan-mode quota detection gap — plan-mode turns may not emit token_count events. Tracked separately; a caveat for this cell, not a daemon bug, since the canonical signal lives on non-plan turns."
+        },
+        {
+          "kind": "issue",
+          "ref": "#325",
+          "note": "Related plan-mode rate-limit gap; partially addressed. Same caveat status as #322."
+        },
+        {
+          "kind": "spec",
+          "ref": ".specs/agent-scenarios.md -> Feature: Quota burndown",
+          "note": "UsedPercent after turn N >= after turn N-1; SampledAt updates on each turn (no stale snapshot replay)."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "codex CLI on PATH and authenticated against an OpenAI ChatGPT subscription (Plus/Pro/etc.) — the maintainer's normal ~/.codex auth qualifies; no special key. The session must be v2+ (Nov 2025 onward) so the rate_limits map (plan_type, primary.used_percent, window_minutes, resets_at) is present on token_count events.",
+        "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+        "The session must stay WITHIN its quota window across the run — do NOT try to exhaust it. Hitting the cap (429 / unable to produce a turn) is the separate sibling cell token-quota-exhausted (gap:429-mock); this cell only watches used_percent rise inside an un-exhausted window. 3 moderate non-plan turns are well below the cap.",
+        "Codex plan-mode sessions may suppress token_count during planning (#322/#325) — a known caveat, not a daemon bug. The recipe uses ordinary (non-plan) turns where the rate_limits signal is emitted; do not enter plan mode."
+      ],
+      "setup": [
+        "The interactive driver launches `codex --no-alt-screen` in a fresh per-run cwd under <staging>/cwd/, accepts the trust dialog, and waits for the TUI banner + MCP boot before sending the first prompt",
+        "Each send bumps the expected-turn counter; wait_turn blocks until a new event_msg/task_complete line appears in the rollout, so prompts never race a still-running turn and each turn's token_count (carrying the rate_limits window) lands before the next prompt",
+        "No special model or context flags — the default model is fine; the assertion is about the rate-limit usage window rising, not which model produced the tokens. Prompts are deliberately substantive (each asks codex to actually generate a few hundred tokens of prose) so used_percent has a real chance to tick up across turns rather than holding flat on no-op one-word replies"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Write a concise three-paragraph explanation of how a B-tree index speeds up database lookups, including the role of node fan-out. Keep it under 250 words."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "send",
+          "text": "Now write a short Python function that does an iterative in-order traversal of a binary search tree using an explicit stack, with a docstring and one example call. Explain the time and space complexity in two sentences."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "send",
+          "text": "Finally, summarize the trade-offs between optimistic and pessimistic locking in a multi-paragraph answer, and give one concrete example scenario for each. Keep it under 300 words."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        }
+      ],
+      "verify": [
+        "events.jsonl contains a presession_created (proc-<PID>) event in ready within ~2000 ms of agent launch",
+        "events.jsonl contains a transcript_new for the rollout session with a distinct session_id, born ready, followed by a pid_discovered bound to that session_id",
+        "events.jsonl contains three state_transition→working / →ready arcs on the SAME rollout session_id, one per prompt (state resets to ready between turns)",
+        "events.jsonl carries a rate_limit metric event on each turn boundary whose Windows[0] is the primary rate-limit window (UsedPercent ≥ 0, WindowMinutes and ResetsAt set), projected from rate_limits.primary on that turn's token_count payload",
+        "Windows[0].UsedPercent after turn 2 ≥ after turn 1, and after turn 3 ≥ after turn 2 — the usage percentage is non-decreasing turn-over-turn (the burndown signal); it never resets to 0 mid-session",
+        "each rate_limit event's SampledAt advances turn-over-turn (T3 > T2 > T1) — the snapshot is re-read each turn, not replayed stale; an equal UsedPercent with an advancing SampledAt still proves the burndown path",
+        "the session never hits the quota cap — every prompt produces a normal completed turn, so this is in-window burndown, NOT token-quota-exhausted",
+        "the rollout session's final live state is ready before the driver tears the REPL down",
+        "events.jsonl contains a process_exited on the rollout session at REPL teardown (single live session, not three exits)",
+        "no state_transition to waiting appears for the rollout session at any point"
+      ],
+      "settings": {},
+      "timeout_seconds": 300
+    }
+  },
+  "scenario_id": "quota-burndown",
+  "recording_dir": "codex/scenarios/5-7_quota-burndown"
+}

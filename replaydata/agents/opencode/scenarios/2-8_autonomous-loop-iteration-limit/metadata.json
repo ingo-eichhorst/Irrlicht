@@ -1,0 +1,65 @@
+{
+  "artifacts": {},
+  "metadata": {
+    "agent_supports": "unknown",
+    "daemon_capability": "n/a",
+    "driver_capability": "ready",
+    "confidence": 0.78,
+    "notes": "agent_supports: unknown\ndaemon_capability: n/a\ndriver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "autonomous-loop-iteration-limit",
+      "agent": "opencode",
+      "assessed_at": "2026-05-26T00:00:00Z",
+      "agent_supports": "unknown",
+      "daemon_capability": "n/a",
+      "driver_capability": "ready",
+      "confidence": 0.78,
+      "body": "## Verdict\n\nagent_supports: unknown\ndaemon_capability: n/a\ndriver_capability: ready\n\n## Reasoning\n\n`autonomous-loop-iteration-limit` is the autonomous self-prompting loop that STOPS at a configured iteration cap. It PRESUPPOSES the `autonomous-loop` primitive — an agent-native mode that self-prompts across internally-generated turn boundaries with no user message between iterations — and then asserts that the loop terminates gracefully when it reaches a max-iterations limit. With no autonomous loop, there is no iteration limit to observe.\n\nStock OpenCode has no such autonomous self-prompting / goal-loop mode (this is the same root finding as the sibling `autonomous-loop` cell, just confirmed):\n\n- OpenCode's documented model is turn-based: a turn ends at `session.idle` (step-finish) and the REPL waits for the next user prompt. There is no `/goal`, no `/loop`, and no `--auto` flag — and therefore no built-in iteration counter or max-iterations cap to hit.\n- A `strings $(which opencode)` scan for `autonomous`, `goal`, `self-prompt`, `full-auto`, `max_iterations`, `iteration limit`, and slash-command markers came up empty — the only `loop` hits are bundler / WASI / HTTP-508 (\"Loop Detected\") / Node event-loop noise from the bun-compiled binary, not a feature surface.\n- The only autonomous self-prompting behaviors that exist (\"Ralph Loop\", \"Ultrawork\"/\"Beast Mode\") are THIRD-PARTY plugins (oh-my-opencode) that hook `session.idle` and re-call `session.prompt` — they are not part of stock opencode, and the upstream built-in `/loop` feature request (anomalyco/opencode#23578) is still OPEN.\n\nBecause the agent lacks the autonomous-loop primitive this cell is built on, there is no native iteration cap, no cap-hit termination shape to record, and `agent_supports` is `unknown` (a plugin-only path is not a stock-agent capability). The driver itself (send/sleep/wait_turn) is `ready` but has no self-loop to drive and no cap to reach. With no agent-native loop to observe, the observability question is moot, so `daemon_capability` is `n/a`.\n\n## Driver / observability note\n\nIf a future opencode version (or a sanctioned plugin) shipped a real headless-drivable loop WITH a configurable iteration cap, the daemon's observability would still need re-checking: opencode's adapter is `ProcessOwnedStore` (SQLite, `core/adapters/inbound/agents/opencode/agent.go`), where the daemon polls a structured store rather than tailing JSONL, so whether the cap-hit settles cleanly to a terminal ready (vs. sticking in working or spuriously re-prompting) is empirically uncertain and must be measured from a live recording — not predicted from docs. That re-assessment is out of scope while the agent itself lacks the mode.\n",
+      "caveats": [
+        "iteration-limit presupposes the autonomous-loop primitive opencode lacks; with no loop there is no max-iterations cap to hit and no graceful cap-termination shape to record.",
+        "Autonomous self-prompting in opencode exists only via third-party plugins (oh-my-opencode Ralph Loop / Ultrawork / Beast Mode), not stock opencode.",
+        "An upstream feature request for a built-in /loop command (anomalyco/opencode#23578) is still open — re-assess if it merges, and note that even then a configurable iteration CAP would need to exist for this specific cell."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/opencode/scenarios/autonomous-loop/assessment.json",
+          "note": "sibling autonomous-loop cell — same root finding: stock opencode has no autonomous self-prompting loop; this cell presupposes that primitive"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/opencode/capabilities.json",
+          "note": "features.headless_mode=false; no autonomous_mode key — stock opencode declares no autonomous-loop capability, so no iteration cap on one"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/opencode/agent.go",
+          "note": "Source is ProcessOwnedStore (SQLite); observability of a cap-hit terminal-ready settle would need a live recording, not doc inference"
+        },
+        {
+          "kind": "url",
+          "ref": "https://opencode.ai/docs/cli/",
+          "note": "official CLI docs — turn-based REPL, no /goal, no /loop, no --auto, no max-iterations cap"
+        },
+        {
+          "kind": "url",
+          "ref": "https://github.com/anomalyco/opencode/issues/23578",
+          "note": "open feature request to ADD a /loop command — confirms core opencode has no built-in autonomous loop, hence no iteration limit"
+        },
+        {
+          "kind": "url",
+          "ref": "https://deepwiki.com/opensoft/oh-my-opencode/3.4-ralph-loop-and-ultrawork-mode",
+          "note": "autonomous self-prompting is a third-party oh-my-opencode plugin hooking session.idle to re-prompt — not stock opencode"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "notes": "scope_note: opencode has no autonomous self-prompting loop, so no iteration-limit stop to observe; presupposes the autonomous-loop primitive opencode lacks. Stock opencode is turn-based (a turn ends at session.idle awaiting the next user message), with no /goal, /loop, --auto, or max-iterations cap; self-prompting is plugin-only (oh-my-opencode Ralph Loop / Ultrawork) and the upstream built-in /loop request (anomalyco/opencode#23578) is still open. With no native loop there is no iteration cap to hit. agent_supports=unknown (see assessment.json)."
+    }
+  },
+  "scenario_id": "autonomous-loop-iteration-limit"
+}

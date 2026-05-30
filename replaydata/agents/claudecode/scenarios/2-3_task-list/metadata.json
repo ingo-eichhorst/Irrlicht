@@ -1,0 +1,62 @@
+{
+  "recording_dir": "claudecode/scenarios/2-3_task-list",
+  "artifacts": {
+    "events": "claudecode/scenarios/2-3_task-list/events.jsonl",
+    "transcript": "claudecode/scenarios/2-3_task-list/transcript.jsonl",
+    "manifest": "claudecode/scenarios/2-3_task-list/manifest.json",
+    "golden": "claudecode/scenarios/2-3_task-list/transcript.jsonl.replay.json.golden"
+  },
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "pass_rate": "5/5 phases passed",
+    "agent_cli_version": "2.1.150",
+    "daemon_version": "0.4.7+df8122a",
+    "confidence": 0.9,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "task-list",
+      "agent": "claudecode",
+      "assessed_at": "2026-05-24T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.9,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nClaude Code maintains a todo/task list within the agent's own session via the `Task*` tool family — `TaskCreate` adds an item (subject + description + activeForm), `TaskUpdate` moves an item between `pending` / `in_progress` / `completed`. These are internal to the session: no child session is spawned, no `ParentSessionID` link is created, and `SubagentCount` stays 0. That distinguishes this scenario from `foreground-subagent` / `background-subagent`, which use the Agent tool to spawn real child sessions — despite the shared 'Task tool' name.\n\nWhat irrlicht observes: both the session state arc and the task-list contents. The claudecode parser emits a `TaskDelta` for each TaskCreate/TaskUpdate (`core/adapters/inbound/agents/claudecode/parser.go`), which the tailer folds into its running task list and reconciles against the `task_reminder` attachment snapshot (Claude Code's authoritative view of currently-tracked task IDs, issue #282). The result surfaces as `SessionMetrics.Tasks` (subject + status per item), and the replay golden now pins it via `summary.tasks`. The standard turn arc — user-line append drives ready → working, terminal `stop_reason: end_turn` drives working → ready — is load-bearing in the parser and unaffected by the task tools, which are auto-executed without a permission gate.",
+      "caveats": [
+        "The tasks assertion lives in the replay byte-identity golden (summary.tasks), not the phase DSL — the validator's phase grammar has no task-form invariant, mirroring how basic-turn's TotalTokens assertion is verified structurally rather than by expected-validate.",
+        "The recording must end with a non-empty task_reminder snapshot for the items to surface — claudecode reconciles the running task list against the latest reminder, so a session that clears its list before the turn ends would leave summary.tasks empty."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/claudecode/parser.go",
+          "note": "TaskCreate/TaskUpdate → TaskDelta; handleAttachmentEvent reconciles against the task_reminder snapshot."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/session.go",
+          "note": "SessionMetrics.Tasks []Task — the API surface this scenario asserts on."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "prompt": "Use your task-list tool to create exactly three todo items, in this order: 'read README', 'summarize README', 'reply done'. Then work them one at a time: mark each item in_progress and then completed via the task-list tool before moving to the next. Do NOT use the Task/Agent tool to spawn any subagent — keep everything in this one session. When all three items are completed, reply with exactly the word: done",
+      "verify": [
+        "transcript.jsonl contains three TaskCreate tool_use blocks (the three todo items) plus the TaskUpdate blocks that drive each to completed",
+        "transcript.jsonl contains NO tool_use block with name=Agent (no subagent spawned)",
+        "no parent_linked events appear and no subagent transcripts are written (SubagentCount stays 0)",
+        "the session API's tasks field lists the three items with matching subjects, all ending completed",
+        "state follows ready -> working -> ready; final session state is ready"
+      ],
+      "settings": {},
+      "timeout_seconds": 180
+    }
+  },
+  "scenario_id": "task-list"
+}

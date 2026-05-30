@@ -138,22 +138,16 @@ func repoRootFromScenarioDir(scenarioDir string) string {
 }
 
 // shardCellForFolder finds the (agent) cell whose recording folder is `folder`.
-// The detail endpoint is keyed by the on-disk recording folder, which may be a
-// recipe-variant name (e.g. agent-question-pending) rather than the catalog id
-// (user-blocking-question), so we match the shard's recording_dir basename
-// first, then fall back to the shard name. ok=false when no shard names the
-// agent at that folder.
+// The detail endpoint is keyed by the on-disk recording folder, which equals
+// the coverage_id for standard cells and the recording_dir basename for
+// variant-folder cells. metadata.json lives in the same directory as the
+// recordings, so a direct load by folder name is always correct.
 func shardCellForFolder(repoRoot, agent, folder string) (shard.ShardAgent, bool) {
-	for _, sh := range shard.LoadAll(repoRoot) {
-		cell, ok := sh.Agents[agent]
-		if !ok {
-			continue
-		}
-		if filepath.Base(cell.RecordingDir) == folder || sh.Name == folder {
-			return cell, true
-		}
+	cell, ok := shard.LoadAgentCell(repoRoot, agent, folder)
+	if !ok {
+		return shard.ShardAgent{}, false
 	}
-	return shard.ShardAgent{}, false
+	return *cell, true
 }
 
 // buildLatestManifest produces a RecordingArchive-shaped manifest for the
@@ -194,11 +188,10 @@ func buildLatestManifest(scenarioDir, agent string, d *ScenarioDetail, repoRoot 
 }
 
 // computeRecipeHash mirrors promote-recording.sh's recipe_hash: sha256 of the
-// compact-JSON recipe block. Post-#510 the recipe lives in the per-scenario
-// shard's agents.<agent>.details.recipe (was scenarios.json by_adapter[agent]).
+// compact-JSON recipe block. The recipe lives in the cell's metadata.json.
 // scenarioName is the on-disk recording folder. Empty string on any failure.
 func computeRecipeHash(repoRoot, agent, scenarioName string) string {
-	cell, ok := shardCellForFolder(repoRoot, agent, scenarioName)
+	cell, ok := shard.LoadAgentCell(repoRoot, agent, scenarioName)
 	if !ok {
 		return ""
 	}

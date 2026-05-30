@@ -98,7 +98,7 @@ func TestScenarioDetail_404OnMissing(t *testing.T) {
 
 func TestSynthesizeMetaFromEvents_seedScenario(t *testing.T) {
 	path := filepath.Join("..", "..", "..", "..", "replaydata", "agents",
-		"claudecode", "scenarios", "multi-turn-conversation", "events.jsonl")
+		"claudecode", "regression", "multi-turn-conversation", "events.jsonl")
 	if _, err := os.Stat(path); err != nil {
 		t.Skipf("seed corpus not present: %v", err)
 	}

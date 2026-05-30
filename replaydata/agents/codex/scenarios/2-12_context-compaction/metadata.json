@@ -1,0 +1,99 @@
+{
+  "recording_dir": "codex/scenarios/2-12_context-compaction",
+  "artifacts": {
+    "events": "codex/scenarios/2-12_context-compaction/events.jsonl",
+    "transcript": "codex/scenarios/2-12_context-compaction/transcript.jsonl",
+    "manifest": "codex/scenarios/2-12_context-compaction/manifest.json",
+    "golden": "codex/scenarios/2-12_context-compaction/transcript.jsonl.replay.json.golden"
+  },
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "pass_rate": "8/8 phases passed",
+    "agent_cli_version": "0.130.0",
+    "daemon_version": "0.4.7+c56a24a",
+    "confidence": 0.9,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "context-compaction",
+      "agent": "codex",
+      "assessed_at": "2026-05-23T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.9,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nCodex 0.130.0 ships a `/compact` slash command. The native binary (codex-darwin-arm64 vendor build) contains the user-facing help string \"Use /compact when the conversation gets long to summarize history and free up context.\", a `thread/compact/start` app-server method, a `thread/compacted` notification, and a `contextCompaction` thread-item type. So agent_supports is unambiguously yes.\n\n### What irrlicht observes (confirmed by live probe)\n\nA live probe (codex driven via tmux, 2026-05-23) sent a normal prompt, waited for the turn, then sent `/compact` as a plain send (text + Enter). The rollout JSONL showed `/compact` runs as a SECOND, ordinary turn in the SAME rollout file (same session_id):\n\n- Turn 1 (normal): `event_msg/task_started` (21:34:17.190Z) → assistant message → `event_msg/task_complete` (21:34:18.779Z). ~1.6s.\n- Compaction turn: `event_msg/task_started` (21:34:39.814Z) → `type:\"compacted\"` history-replacement record → `event_msg/context_compacted` → `event_msg/task_complete` (21:34:48.110Z). ~8.3s.\n\nThe codex parser (parser.go:155-172) maps `event_msg/task_complete` → `turn_done`, which makes `IsAgentDone()` fire and the classifier emit `working → ready`. The intermediate `type:\"compacted\"` and `event_msg/context_compacted` lines are NOT `task_complete` and are skipped by the parser (the `compacted` record has no recognized `type`/`role` mapping; `context_compacted` falls through the `event_msg` switch's skip branch), so they produce no spurious assistant_message and therefore no working→ready→working flicker. The session sits in `working` for the full ~8.3s compaction round and lands cleanly in `ready` at `task_complete`.\n\n### Same-session continuity (vs claudecode)\n\nUnlike newer Claude Code (≥2.1.x), which opens a NEW transcript file at the compaction boundary, codex APPENDS the compaction turn to the existing rollout — the boundary stays within one session_id. So the spec asserts one continuous session, two turns (pre- and post-compaction), with no new_session and no session-stitching dependency.\n\n### Why irrlicht_observes is `yes`, not `partial`\n\nThe scenario's user-observable signal is the state arc (`ready → working → ready` across the compaction turn, no intervening waiting/flicker). The probe confirms the daemon emits exactly that arc via the same `task_complete`→`turn_done` path it uses for any normal codex turn. The compaction turn is ~8.3s — well above any sub-second debounce-coalescing window, so the working blip is visibly observable. The matrix's prior `daemon_capability: full; driver_capability: ready` is resolved upward to `yes`.\n\nResidual caveat: irrlicht cannot LABEL the turn as a compaction (the domain CompactionState field is dead code; the `context_compacted` event is skipped rather than recorded). The dashboard shows compaction as an ordinary working turn. The spec only asserts the state arc, which is fully observed, so this is a caveat — not a downgrade.",
+      "caveats": [
+        "irrlicht cannot distinguish a compaction turn from a normal long working turn: the parser skips the `type:\"compacted\"` and `event_msg/context_compacted` records, and the domain CompactionState field has no production writer. This is fine for the spec contract (state arc only); a 'show compaction in UI' feature would be a separate ticket.",
+        "codex's capabilities.json lists `context_curation: \"unknown\"`. The live probe proves the feature ships and emits structured turn events, so the honest discovery value is `true`. capabilities.json is maintainer-owned discovery data and is not edited by this assessment."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/codex/parser.go",
+          "note": "Lines 155-172: event_msg/task_complete is the one event_msg type the parser maps to turn_done (firing IsAgentDone via the primary path); all other event_msg payloads (task_started, token_count, context_compacted) are skipped, so the compaction turn produces no flicker — just one clean working→ready arc at task_complete."
+        },
+        {
+          "kind": "file",
+          "ref": ".codex/sessions/2026/05/23/rollout-2026-05-23T23-34-11-019e56c2-8e21-79a1-922b-174ae1f97071.jsonl",
+          "note": "Live-probe rollout: /compact emitted task_started (21:34:39.814Z) → compacted/context_compacted → task_complete (21:34:48.110Z), a ~8.3s turn appended to the SAME rollout/session as the prior normal turn."
+        },
+        {
+          "kind": "file",
+          "ref": "codex-darwin-arm64 vendor binary (codex 0.130.0)",
+          "note": "strings scan found 'Use /compact when the conversation gets long to summarize history and free up context.', method 'thread/compact/start', notification 'thread/compacted', and thread-item type 'contextCompaction' — primary evidence the feature ships in this build."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "codex CLI on PATH and authenticated (ChatGPT login or API key)",
+        "irrlichd is recording (--attach against a daemon with --record, or isolated mode)",
+        "codex version supports /compact (≥ 0.130.0 ships it as a slash command)"
+      ],
+      "setup": [
+        "Driver launches the codex TUI in tmux under a fresh per-run cwd (<staging>/cwd) and accepts the trust dialog; codex assigns its own rollout session UUID."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        },
+        {
+          "type": "send",
+          "text": "/compact"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the rollout session reconciling into ready after launch (pre-session proc-PID, then the rollout session_id)",
+        "events.jsonl shows ready→working→ready for the priming turn",
+        "/compact runs as a turn: events.jsonl shows a single ready→working→ready arc on the SAME rollout session_id (codex appends compaction to the existing rollout — no new session)",
+        "no state_transition to waiting appears anywhere in the recording (no waiting/flicker around compaction)",
+        "final session state is ready; process_exited fires on the rollout session at REPL teardown",
+        "transcript.jsonl contains the priming turn (task_started/task_complete) and the compaction turn whose terminal task_complete is preceded by a context_compacted event_msg; the compaction-vs-normal-turn distinction is not surfaced by the daemon"
+      ],
+      "settings": {},
+      "timeout_seconds": 240
+    }
+  },
+  "scenario_id": "context-compaction"
+}

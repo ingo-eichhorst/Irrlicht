@@ -1,0 +1,60 @@
+{
+  "artifacts": {},
+  "metadata": {
+    "agent_supports": "partial",
+    "daemon_capability": "incapable",
+    "driver_capability": "ready",
+    "confidence": 0.8,
+    "notes": "agent_supports: partial\ndaemon_capability: incapable; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "streaming-partial-writes",
+      "agent": "codex",
+      "assessed_at": "2026-05-23T00:00:00Z",
+      "agent_supports": "partial",
+      "daemon_capability": "incapable",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: partial\ndaemon_capability: incapable; driver_capability: ready\n\napplicable: n/a — frozen. The scenario's invariant cannot be exercised by a live codex recording; it is a parser-agnostic tailer-robustness property already covered by synthetic unit tests.\n\n## What the scenario pins\n\n`scenario-meanings.md` defines `streaming-partial-writes` by the `streaming_output` primitive: the assistant message arrives in multiple partial flushes before the turn-end signal, and state must stay `working` across all flushes with no premature `→ ready`. The canonical claudecode recipe (the row template) maps this onto a very specific mechanism: claudecode writes multiple intermediate assistant JSONL lines carrying NON-TERMINAL `stop_reason` values, and `resolveAssistantStreaming` (claudecode parser.go:288) downgrades those to `assistant_streaming`, which `IsAgentDone()` excludes. The `streaming_window` phase asserts no `→ ready` flicker fires across that window until the terminal `end_turn` line lands.\n\n## Why codex can't reproduce the live signal\n\nCodex's rollout transcript model is structurally different. Inspecting a real session (`~/.codex/sessions/2026/05/23/rollout-…019e568a….jsonl`):\n\n- Assistant content is written as `response_item` / `payload.type == \"message\"` / `role == \"assistant\"` records whose payload keys are exactly `content, phase, role, type` — there is NO `stop_reason` field, and zero occurrences of `assistant_streaming`, `\"stop_reason\":\"null\"`, or `\"partial\":true` anywhere in the file.\n- Each assistant `message` line is appended atomically as one complete JSONL event. There is no non-terminal-stop-reason streaming-chunk family for the parser to downgrade.\n- The codex parser (parser.go) has no `assistant_streaming` concept at all. The `working → ready` flip is driven by the discrete `event_msg` / `payload.type == \"task_complete\"` signal, which parser.go:166-169 maps to `turn_done` (the comment there explicitly notes this exists to AVOID working→ready→working flicker on intermediate assistant messages). So codex has no `resolveAssistantStreaming` invariant to pin.\n\nA true \"partial write\" — assistant bytes flushed mid-line with no trailing `\\n` — is a byte-level filesystem-timing artifact. An interactive driver (`tmux send-keys` + transcript tail) cannot deterministically force codex to leave a JSONL line half-written at the moment the daemon ticks; codex flushes whole append-only lines. Forcing it would be a contrived recording that does not actually test the property.\n\n## Where the real property lives (and is already tested)\n\nTolerating a partial trailing line is the SHARED tailer's job, not codex-specific. `core/pkg/tailer/tailer.go:414-426` reads with a `bufio.Reader` and, on `errPartialAtEOF`, stops WITHOUT advancing the offset past the partial bytes, so they are re-read next tick once the writer flushes the rest. This is locked down by synthetic unit tests in `core/pkg/tailer/large_line_test.go`: `TestTailAndProcess_PartialTrailingLine` (line 73) writes a complete line followed by partial bytes of an assistant event with no `\\n`, asserts the offset does not advance past the partial bytes, then appends the remainder and confirms the line is parsed and the session settles. `TestReadLineCapped_PartialAtEOF` (line 171) covers the same at the reader layer.\n\nBecause this invariant is (a) parser-agnostic, (b) a byte-timing artifact a live driver can't deterministically force, and (c) already covered by deterministic synthetic fixtures, a live codex recording adds no fidelity. `daemon_capability: incapable; driver_capability: ready` — there is no codex-specific lifecycle event that would prove the partial-write invariant, and the daemon's robustness here is exercised by the tailer unit tests, not by a per-adapter recording.\n\n## Conclusion\n\nCell frozen at `applicable: n/a`. No recipe, no recording. To unblock would require codex to ship an observable non-terminal streaming-chunk family in its rollout JSONL (none today), or a reframing of the scenario from \"live streaming flicker\" to \"tailer partial-line robustness\" — the latter is already green under `go test ./core/pkg/tailer/...`.",
+      "caveats": [
+        "agent_supports is partial, not yes: codex does stream output to the terminal, but the on-disk rollout transcript records whole assistant message lines atomically with no non-terminal stop_reason / streaming-chunk family — so the specific resolveAssistantStreaming invariant this scenario pins has no codex analogue to observe.",
+        "The partial-write tolerance the scenario cares about is a shared-tailer property (tailer.go errPartialAtEOF path) covered by synthetic unit tests (large_line_test.go TestTailAndProcess_PartialTrailingLine), not a codex-recordable behavior; a live driver cannot deterministically force a mid-line flush."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": ".claude/skills/ir:onboard-agent/scenario-meanings.md",
+          "note": "streaming-partial-writes definition: streaming_output primitive, no premature →ready across partial flushes."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/codex/parser.go",
+          "note": "No assistant_streaming / stop_reason handling; turn-end flip driven by task_complete→turn_done (lines 155-170). Comment notes this exists to avoid working→ready→working flicker."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/codex/agent.go",
+          "note": "Source is FilesUnderRoot{Dir: sessionsDir(), Parser: JSONLineParser} — append-only rollout JSONL under ~/.codex/sessions."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer.go",
+          "note": "Lines 414-426: bufio.Reader; on errPartialAtEOF stops without advancing offset past partial bytes, re-read next tick. This is the actual partial-write robustness mechanism, parser-agnostic."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/large_line_test.go",
+          "note": "TestTailAndProcess_PartialTrailingLine (line 73) and TestReadLineCapped_PartialAtEOF (line 171): synthetic unit tests that already lock down partial-line tolerance and re-read-once-flushed settling."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.codex/sessions/2026/05/23/rollout-2026-05-23T22-33-15-019e568a-c68d-7801-99f9-1267eccf8793.jsonl",
+          "note": "Real codex session: assistant message payload keys are content/phase/role/type only (no stop_reason); zero occurrences of assistant_streaming / partial flags; one complete assistant line appended per turn segment, terminated by task_complete."
+        }
+      ]
+    }
+  },
+  "scenario_id": "streaming-partial-writes"
+}

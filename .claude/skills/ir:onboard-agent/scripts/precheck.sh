@@ -86,15 +86,15 @@ if [[ -n "$(cd "$REPO_ROOT" && git status --porcelain replaydata/agents/ 2>/dev/
   fail "replaydata/agents/ has uncommitted changes; commit or stash first"
 fi
 
-# 4. Adapter CLI present + version check against min_versions in _meta.json.
+# 4. Adapter CLI present + version check against meta.min_versions in scenarios.json.
 if ! command -v jq >/dev/null 2>&1; then
   fail "jq is required (brew install jq)"
 fi
-META_JSON="$REPO_ROOT/replaydata/scenarios/_meta.json"
-if [[ ! -f "$META_JSON" ]]; then
-  fail "_meta.json not found at $META_JSON"
+CATALOG_JSON="$REPO_ROOT/replaydata/scenarios.json"
+if [[ ! -f "$CATALOG_JSON" ]]; then
+  fail "scenarios.json not found at $CATALOG_JSON"
 fi
-MIN_VERSION="$(jq -r --arg a "$ADAPTER" '.min_versions[$a] // empty' "$META_JSON")"
+MIN_VERSION="$(jq -r --arg a "$ADAPTER" '.meta.min_versions[$a] // empty' "$CATALOG_JSON")"
 
 # Version-string layout per adapter: <bin>:<awk-field-of-version-token>.
 # claude --version → "X.Y.Z (...)"; codex --version → "codex-cli X.Y.Z";

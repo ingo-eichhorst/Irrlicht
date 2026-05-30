@@ -8,33 +8,38 @@ import (
 	"testing"
 )
 
-// fixture writes a minimal shard repo under t.TempDir() (#510) and returns its
-// root for --repo-root. It plants one terminal (applicable:false) cell and one
-// non-terminal (assessed-not-recorded) cell so the completeness gate has both a
-// passing and a failing row to report.
+// fixture writes a minimal shard repo under t.TempDir() and returns its root
+// for --repo-root. Scenario shards hold only scenario-global data; agent cell
+// data goes to replaydata/agents/<adapter>/scenarios/<name>/metadata.json.
+// It plants one terminal (applicable:false) cell and one non-terminal
+// (assessed-not-recorded) cell so the completeness gate has both a passing and
+// a failing row to report.
 func fixture(t *testing.T) (repoRoot string) {
 	t.Helper()
 	tmp := t.TempDir()
-	scen := filepath.Join(tmp, "replaydata", "scenarios")
-	if err := os.MkdirAll(scen, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	write(t, filepath.Join(scen, "_meta.json"), `{"min_versions":{"ag":"1.0.0"}}`)
+	write(t, filepath.Join(tmp, "replaydata", "scenarios.json"), `{
+  "meta": {"min_versions": {"ag": "1.0.0"}},
+  "scenarios": [
+    {"id": "1.1", "name": "recd", "section": "S", "feature": "Recd"},
+    {"id": "1.2", "name": "unrec", "section": "S", "feature": "Unrec"}
+  ]
+}`)
+
 	// recd: applicable:false → terminal (the completeness gate's "ok" row).
-	write(t, filepath.Join(scen, "recd.json"), `{
-  "id": "1.1", "name": "recd", "section": "S", "feature": "Recd",
-  "agents": {"ag": {"details": {
+	write(t, filepath.Join(tmp, "replaydata", "agents", "ag", "scenarios", "1-1_recd", "metadata.json"), `{
+  "scenario_id": "recd",
+  "details": {
     "assessment": {"agent_supports":"yes","daemon_capability":"full","driver_capability":"ready"},
     "recipe": {"applicable": false}
-  }}}
+  }
 }`)
 	// unrec: assessed recordable, no recording → completeness non-terminal.
-	write(t, filepath.Join(scen, "unrec.json"), `{
-  "id": "1.2", "name": "unrec", "section": "S", "feature": "Unrec",
-  "agents": {"ag": {"details": {
+	write(t, filepath.Join(tmp, "replaydata", "agents", "ag", "scenarios", "1-2_unrec", "metadata.json"), `{
+  "scenario_id": "unrec",
+  "details": {
     "assessment": {"agent_supports":"yes","daemon_capability":"full","driver_capability":"ready"},
     "recipe": {"script": [{"type":"send"}]}
-  }}}
+  }
 }`)
 	return tmp
 }

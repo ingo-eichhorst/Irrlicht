@@ -1,0 +1,115 @@
+{
+  "recording_dir": "aider/scenarios/2-14_turn-aborted-by-error",
+  "artifacts": {
+    "events": "aider/scenarios/2-14_turn-aborted-by-error/events.jsonl",
+    "transcript_md": "aider/scenarios/2-14_turn-aborted-by-error/transcript.md",
+    "manifest": "aider/scenarios/2-14_turn-aborted-by-error/manifest.json"
+  },
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "pass_rate": "5/5 phases passed",
+    "agent_cli_version": "0.86.2",
+    "daemon_version": "0.4.7+689e190",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes\ndaemon_capability: full\ndriver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "turn-aborted-by-error",
+      "agent": "aider",
+      "assessed_at": "2026-05-25T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Reasoning\n\nThe scenario asks whether aider can fail a model call mid-turn with no normal turn-end signal, and whether irrlicht returns the session to `ready` rather than leaving it stuck in `working`.\n\n**agent_supports: yes.** Aider routes every model call through litellm, and a provider failure (network error, 5xx, timeout, bad request, unsupported model) surfaces as an error/exception that aider prints to the chat and appends to its per-project history file `.aider.chat.history.md` as a blockquote line — e.g. `> litellm.BadRequestError: OpenAIException - …`. No `> Tokens: …` accounting line is emitted in this case, so there is no normal end-of-call marker; the turn simply aborts. This is the canonical Bucket-A shape from the scenario description (transcript epilogue carrying synthesized error text). The recipe drives this deterministically with a bogus model id (`IRRLICHT_AIDER_MODEL=<bogus>` → `aider --model <bogus>`): litellm rejects the model rather than retrying it, so the abort is reproducible rather than transient.\n\n**daemon_capability: full.** The aider adapter is `Source: FilesUnderCWD` over the markdown history file, parsed by a `RawParser` (`core/adapters/inbound/agents/aider/parser.go`). This is aider's NATIVE error path — not just an idle backstop: the parser's `flushErrorTurn` matches the error blockquote via `errorRE` (`^>\\s*\\S*(?:Error|Exception)(?:[: ]|$)`, parser.go:75), gated on `turnOpen` at the call site (parser.go:127-128), and emits a synthetic `turn_done` carrying the error text as `AssistantText` and flipping `turnOpen` false (parser.go:196-206). That is a real in-band end-of-turn signal landing in the watched Source. The state classifier maps a `turn_done` with no trailing question to `ready` (`state_classifier_test.go`: \"working → ready (turn_done, no question)\"). So the user-observable arc `ready → working → ready` holds: the session does not stick in `working`. A trace exists in the watched Source AND the parser handles it today → `daemon_capability: full`. This is the #262 fix, pinned by `TestParser_LLMError_EndsTurn` (synthetic turn_done with error text) and `TestParser_ErrorTurn_RecoversOnNextPrompt` (a subsequent `####` prompt reopens a fresh turn).\n\n**Defense in depth via IdleFlush.** Even setting the error blockquote aside, aider's clean turn-end is synthesized by `IdleFlush` after `aiderIdleTurnDoneAfter` (1500ms, parser.go:54) of transcript quiet (parser.go:216-228), and the SessionDetector re-polls working sessions every ~5s. So any turn that opened (`####` seen) and then went quiet — including an aborted one — is flushed to `turn_done` → `ready` within roughly one sweep interval, exactly the primitive the scenario names (\"sweep-based stall detection\").\n\n**driver_capability: ready.** The recipe needs only `send` (the prompt) + `sleep` (the ≥6–12s post-error settle window), plus the bogus-model trigger which the driver reads from `IRRLICHT_AIDER_MODEL` and passes as `aider --model <bogus>` (`drive-aider-interactive.sh:90-91`). All of those step types are implemented (`send`, `slash`, `wait_turn`, `interrupt`, `sleep` — driver case block lines 195-208). No gapped primitive (restart / reset_session / resume / sigkill / keys / fork) is required for this error-abort recipe, so `driver_capability: ready`.\n\n## What irrlicht does NOT see (and why it does not change the verdict)\n\nThe scenario splits failures into three buckets. Bucket A (error epilogue in the transcript) is the observable path covered above. Bucket B — a pure mid-stream network failure where aider writes NOTHING further to the markdown file and the turn never even opened a visible line — is the residual gap: aider has no working-state inactivity timer of its own that lands in the transcript, and PR #106 removed the daemon's stale-tool timer. In that narrow case the parser has no error line to match. In practice the turn has almost always already opened on a `####` user-prompt line, so `IdleFlush` still fires and resolves the session; the truly-silent variant is the residual caveat. The canonical spec asserts only the user-observable arc (`ready → working → ready`, final `ready`), which the Bucket-A + IdleFlush paths satisfy — so this is a narrow NON-spec gap kept as a caveat, not a `daemon_capability` downgrade.\n\n## Capability anchor\n\nPrimitive exercised: \"Sweep-based stall detection — daemon's periodic sweep identifies sessions stuck in `working` after a process event or timeout and forces a `→ ready` transition.\" The scenario's declared `requires` is `headless_mode`, and the matching key in `replaydata/agents/aider/capabilities.json` is `headless_mode: true` (confirmed present and true). Aider also exposes `streaming_output: true`, which is what makes a mid-stream provider failure reachable in the first place.",
+      "caveats": [
+        "Bucket B (pure mid-stream network failure that writes no further line to `.aider.chat.history.md` and never opens a `####` turn) is unobservable: there is no working-state inactivity sweep landing in the transcript since PR #106 removed the stale-tool timer, and no error blockquote for the parser to match. In practice the turn has usually already opened, so IdleFlush still resolves it; the truly-silent variant is the residual gap. This is a narrow NON-spec gap — the spec asserts only the user-observable `ready → working → ready` arc — so it stays a caveat, not a daemon downgrade.",
+        "The error blockquote must match `errorRE` (`Error`/`Exception` token after `>`). A provider failure surfaced under a different word (e.g. a bare `> Timed out` with no `Error`/`Exception` token) would not trigger flushErrorTurn directly and would instead rely on the slower IdleFlush path (1500ms quiet + ~5s detector poll) to reach `ready`.",
+        "End-of-turn is always synthesized, never in-band-clean: a clean turn settles via IdleFlush after 1500ms of transcript quiet, so working→ready trails file quiet. The error path is the one in-band signal; the recipe needs a trailing sleep ≥6s so the REPL outlives the settle + teardown window."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/aider/parser.go",
+          "note": "errorRE (line 75) + flushErrorTurn (lines 196-206) emit a synthetic in-band turn_done on an LLM error blockquote with no `> Tokens:` line, gated on turnOpen (line 127-128); IdleFlush (lines 216-228) synthesizes turn_done after aiderIdleTurnDoneAfter=1500ms quiet (line 54) — grounds daemon_capability: full"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/aider/parser_test.go",
+          "note": "TestParser_LLMError_EndsTurn (#262) and TestParser_ErrorTurn_RecoversOnNextPrompt pin the abort + recovery paths"
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier_test.go",
+          "note": "'working → ready (turn_done, no question)' confirms turn_done with error text resolves the session to ready"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/aider/agent.go",
+          "note": "Source: FilesUnderCWD over .aider.chat.history.md via RawLineParser — transport that carries the error epilogue"
+        },
+        {
+          "kind": "file",
+          "ref": ".claude/skills/ir:onboard-agent/scripts/drive-aider-interactive.sh",
+          "note": "driver implements send/slash/wait_turn/interrupt/sleep (lines 195-208) and reads IRRLICHT_AIDER_MODEL → `aider --model` (lines 90-91); recipe needs only send+sleep+bogus-model, no gapped primitive — grounds driver_capability: ready"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/aider/capabilities.json",
+          "note": "headless_mode: true (scenario's requires / Primitive-exercised anchor) and streaming_output: true make a mid-turn provider failure reachable"
+        },
+        {
+          "kind": "file",
+          "ref": ".claude/skills/ir:onboard-agent/agent-scenarios-coverage.json",
+          "note": "current cell already two-axis: daemon_capability=full, driver_capability=ready, note '#262 fixed — error blockquote emits turn_done early' — this assessment ratifies it"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "aider CLI on PATH and authenticated for the model the bogus id routes through (e.g. ANTHROPIC_API_KEY / OPENAI_API_KEY, or a reachable OpenAI-compatible endpoint). The cell deliberately requests an UNSUPPORTED/INVALID model id, so auth must already work for normal aider recordings — the provider must accept the connection and then reject the model, not hang on a missing key. Headless aider with no reachable provider hangs ~5 min on the model-auth prompt (e.g. OpenRouter OAuth); that is an infra/auth failure, not a cell failure.",
+        "tmux available — the interactive driver runs aider in a tmux REPL so the process outlives the post-error settle window (see AIDER-SPECIFIC note in setup)",
+        "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+        "AIDER-SPECIFIC ELICITATION (mirrors the pi sibling — a bogus model id, NO mock/proxy/faked transcript line): the operator must export IRRLICHT_AIDER_MODEL=<bogus-model> when invoking run-cell.sh. The driver passes it via `aider --model <bogus>`; the provider returns an unsupported/invalid-model error whose litellm message does NOT match aider's retry class, so aider does NOT retry, prints a `> …Error`/`> …Exception` blockquote to .aider.chat.history.md, and the turn aborts with no `> Tokens:` end-of-call line. Do NOT use a 5xx/rate-limit/timeout-class trigger — litellm would retry it and the abort would be non-deterministic. The claudecode mock-anthropic-5xx path does NOT transfer here: that path is `claude --bare` + ANTHROPIC_BASE_URL against a local Go mock; aider routes through litellm and needs the bogus-model trigger instead."
+      ],
+      "setup": [
+        "WIRING NOTE (differs from the pi sibling): drive-aider-interactive.sh reads the bogus model ONLY from the IRRLICHT_AIDER_MODEL env var — it accepts the settings-blob path for ABI parity but ignores it, unlike drive-pi.sh which reads `.model` from the blob. settings.model below is recorded for documentation parity, but the OPERATIVE mechanism for aider is the env var; export IRRLICHT_AIDER_MODEL=<bogus-model> before run-cell.sh.",
+        "The interactive driver (drive-aider-interactive.sh) git-inits a fresh per-run cwd under <staging>/cwd/, launches `aider --no-auto-commits --yes-always --no-gitignore --model <bogus>` inside a tmux session, and waits for the `> Repo-map:` banner line before sending the prompt.",
+        "aider's transcript .aider.chat.history.md is LAZY (FilesUnderCWD): it materializes only once the first user input lands, so the live REPL is observable from launch as a transient proc-<PID> pre-session born ready (the process scanner) until the per-cwd transcript appears.",
+        "INTERACTIVE not headless: aider's working→ready error settle rides flushErrorTurn (the error blockquote) with IdleFlush (1500ms transcript-quiet) as the inactivity backstop, behind the daemon's 5s SessionDetector staleWorking poll. A headless `aider --message` would exit non-zero the instant it writes the error blockquote and truncate that settle and the teardown observation. The REPL must outlive the window — hence the trailing sleep ≥6s after the prompt before the driver tears the tmux session down once (one process_exited)."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "sleep",
+          "seconds": 12
+        }
+      ],
+      "verify": [
+        "events.jsonl contains a presession (proc-<PID>) event in ready within ~2s of REPL launch (aider's transcript is lazy, so the pre-session is the launch-time observable for 'session appears in ready')",
+        "events.jsonl shows a state_transition→working on the per-cwd rollout session_id when the prompt lands (the first working in the whole recording — the pre-session never enters working)",
+        "events.jsonl contains a pid_discovered event bound to the rollout session_id",
+        "events.jsonl shows a state_transition→ready on the SAME rollout session_id after the model call aborts: aider writes a `> …Error`/`> …Exception` blockquote with no `> Tokens:` line, and the parser's flushErrorTurn (#262) synthesizes a turn_done carrying the error text (IdleFlush is the inactivity backstop) → the classifier's 'agent finished turn → ready' rule settles working→ready; state does NOT stick in working",
+        "events.jsonl never contains a state_transition to waiting for the session",
+        "events.jsonl contains exactly one process_exited on the rollout session at REPL teardown; the live state immediately before teardown is ready",
+        "final session state is ready"
+      ],
+      "settings": {
+        "model": "openai/nonexistent-model-zzz",
+        "aider_extra_args": [
+          "--no-show-model-warnings"
+        ]
+      },
+      "timeout_seconds": 120
+    }
+  },
+  "scenario_id": "turn-aborted-by-error"
+}

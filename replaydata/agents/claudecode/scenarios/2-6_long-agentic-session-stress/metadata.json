@@ -1,0 +1,128 @@
+{
+  "recording_dir": "claudecode/scenarios/2-6_long-agentic-session-stress",
+  "artifacts": {
+    "events": "claudecode/scenarios/2-6_long-agentic-session-stress/events.jsonl",
+    "transcript": "claudecode/scenarios/2-6_long-agentic-session-stress/transcript.jsonl",
+    "manifest": "claudecode/scenarios/2-6_long-agentic-session-stress/manifest.json",
+    "golden": "claudecode/scenarios/2-6_long-agentic-session-stress/transcript.jsonl.replay.json.golden",
+    "recordings": [
+      "claudecode/scenarios/2-6_long-agentic-session-stress/recordings/2026-05-18-00-39-25_irrlichd-0.4.5+ea5752f"
+    ]
+  },
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "pass_rate": "9/9 phases passed",
+    "agent_cli_version": "2.1.143",
+    "daemon_version": "0.4.5+ea5752f",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "long-agentic-session-stress",
+      "agent": "claudecode",
+      "assessed_at": "2026-05-17T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nClaude Code is designed precisely for long, multi-turn engineering sessions: many turns, each turn streaming several assistant text fragments and multiple tool calls (Read, Edit, Bash, Grep, WebFetch). The daily-driver workload of this very codebase is the canonical example, and irrlicht's claudecode adapter is the most-exercised adapter in production. The four Expected bullets are all within transport.\n\n**Bullet 1 — within each turn: state stays `working` continuously.** This is the core anti-flicker invariant. The parser's terminal-stop_reason gate (parser.go:286-298) only flips state back to `ready` when an assistant message lands with `end_turn` / `stop_sequence` / `refusal` AND no further open tool_use. Intermediate streaming assistant messages, intermediate tool_use/tool_result pairs, and intra-turn user-role messages (tool_result wrappers) are all absorbed without state churn — `scanMessageContent` (parser.go:305-329) accumulates them onto the parsed event but does not emit a state_transition. Issue #102 history (referenced from parser.go around the interrupt-flag logic) and the live recording fixtures show this works at scale.\n\n**Bullet 2 — between turns: `working → ready` at turn end, `ready → working` on next prompt.** Standard turn-arc behaviour; one `state_transition` pair per turn boundary.\n\n**Bullet 3 — state never gets stuck in any single state across the entire session.** The phase contract for this scenario asserts a per-turn arc invariant across N turns. As long as each turn's transcript closes with a terminal stop_reason (which Claude Code does for healthy turns) and a fresh `user` message lands for the next turn, neither stickiness mode is reachable.\n\n**Bullet 4 — after the final turn: state reaches `ready`.** Follows from bullet 2 applied to the final turn. The phase contract closes on a `ready` assertion.\n\n## What irrlicht does NOT see (and why that's OK)\n\nThe spec asks about state-level continuity, not about counting tool calls or assistant fragments. irrlicht does record `ToolUses` and `ToolResultIDs` on each parsed event (parser.go:305-329), and the `PendingContributor` interface surfaces in-progress turn cost — both available as metrics if the recipe wants them. But the four Expected bullets are exclusively state-level and fully covered.\n\n## Notes on stress sizing\n\nThe recording is necessarily a compressed proxy for a real long session: a handful of turns with two-to-five tool calls each is enough to exercise the no-flicker code paths. A truly long capture (hours, hundreds of turns) is impractical to record deterministically; the phase contract's per-turn invariants generalise.",
+      "caveats": [
+        "The recording cannot reproduce a hours-long real engineering session deterministically; the recipe uses a compressed proxy (several turns × several tool calls). The no-flicker invariant generalises from the proxy because it's a property of every individual turn.",
+        "If a turn hits a permission prompt or AskUserQuestion mid-flight, state will legitimately enter `waiting` and the no-flicker assertion must allow `working ↔ waiting` (not just exclude `ready`). The recipe should either pre-approve tools or scope the invariant to exclude `waiting`.",
+        "If a tool result is dropped or the transcript truncates mid-turn, state could stick in `working` — issue #321-class regressions. The 'never stuck' invariant is the regression guard for that family."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": ".specs/agent-scenarios.md",
+          "note": "Section 'Feature: Long agentic session (stress)' (lines 149-156) — four Expected bullets covering per-turn and session-wide invariants."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/claudecode/parser.go",
+          "note": "Terminal stop_reason gate (286-298) and scanMessageContent (305-329) implement the no-flicker contract across intra-turn tool/text streaming."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/claudecode/agent.go",
+          "note": "PendingContributor + JSONL source — in-progress turn cost and tool-call counts available if the scenario wants supplementary metrics."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "claude CLI on PATH and authenticated (subscription or API key)",
+        "irrlichd is recording (--attach against a daemon with --record, or isolated mode)",
+        "Claude Code launched in auto mode (Read/Bash/Write pre-approved) so no turn trips a permission gate — otherwise state would legitimately enter waiting and the no-flicker invariant would need to allow it",
+        "cwd under <staging>/cwd/ contains a CHANGELOG.md file (driver writes a stub if not present)"
+      ],
+      "setup": [
+        "Driver generates a fresh lowercased session UUID and a fresh cwd under <staging>/cwd/",
+        "Driver seeds CHANGELOG.md in cwd with a small fixture (e.g. '## 0.4.0 - 2026-05-01\\n- initial') so turn 1's Read finds something",
+        "Auto mode is enabled by the driver (Shift+Tab until 'auto mode on' appears in the footer) so Bash/Read/Write are auto-classified"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: alpha"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: beta"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: gamma"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: delta"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the UUID session entering ready after launch",
+        "for EACH of the 4 turns: exactly one ready→working transition, at least one tool_use event inside the working span, exactly one working→ready transition at turn end",
+        "across the entire session, NO state_transition to ready fires inside any turn's working span (no flicker between failing/succeeding tool_use and the next tool_use inside the same turn)",
+        "across the entire session, NO state_transition to waiting fires (auto mode means no permission gate)",
+        "final session state is ready",
+        "transcript.jsonl contains exactly 4 user lines and at least 8 assistant lines (tool_use + final reply per turn)"
+      ],
+      "settings": {},
+      "timeout_seconds": 600
+    }
+  },
+  "scenario_id": "long-agentic-session-stress"
+}

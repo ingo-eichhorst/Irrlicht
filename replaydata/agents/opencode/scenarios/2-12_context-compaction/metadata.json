@@ -1,0 +1,125 @@
+{
+  "recording_dir": "opencode/scenarios/2-12_context-compaction",
+  "artifacts": {
+    "events": "opencode/scenarios/2-12_context-compaction/events.jsonl",
+    "transcript": "opencode/scenarios/2-12_context-compaction/transcript.jsonl",
+    "manifest": "opencode/scenarios/2-12_context-compaction/manifest.json",
+    "golden": "opencode/scenarios/2-12_context-compaction/transcript.jsonl.replay.json.golden"
+  },
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "pass_rate": "8/8 phases passed",
+    "agent_cli_version": "unknown",
+    "daemon_version": "0.4.7+2f1f7e5",
+    "confidence": 0.82,
+    "notes": "agent_supports: yes\ndaemon_capability: full\ndriver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "context-compaction",
+      "agent": "opencode",
+      "assessed_at": "2026-05-26T20:56:09Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.82,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n(Reassessment of opencode CLI v1.14.50 against the current daemon and the current `drive-opencode-interactive.sh`. The prior verdict was `driver_capability: gap:slash-command`; that gap has since been closed — see \"Driver\" below. This flips the cell from driver-gap to record.)\n\n## Reasoning\n\n### Agent supports it (agent_supports: yes)\n\nopencode v1.14.50 ships in-session compaction in two forms:\n\n- **Manual** — a compaction command registered as `command.session.compact` (found verbatim in the v1.14.50 binary strings), with the `/summarize` slash alias also present as a literal, and a `session_compact` keybind (default `<leader>c`) documented on the official keybinds page. So the user can run one normal turn to populate context, then trigger compaction in place, then continue a second turn on the same session — exactly the `context_curation` primitive the scenario exercises.\n- **Automatic** — on token overflow, opencode's `isOverflow` check (model context limit minus a reserved buffer) fires after an LLM step and the session loop inserts a `CompactionPart` into a new user message to queue summarization (`experimental.compaction.autocontinue` / `\"compaction\": { \"auto\": true }` config keys are present in the binary). This is the auto path the scenario lists as a co-trigger.\n\nEither way compaction is an in-place LLM summarization round on the SAME session — no new session is minted (cf. the session-resume cell, which IS a fresh-transcript boundary; compaction is not).\n\n### Daemon observes it (daemon_capability: full)\n\nopencode is the lone `ProcessOwnedStore` adapter (`core/adapters/inbound/agents/opencode/agent.go`): the daemon reads session state straight from the SQLite store via the dedicated watcher (`watcher.go`) rather than tailing a transcript. The watcher subscribes to `opencode.db-wal` writes and, on each write, queries the `part` table for new/updated rows in known sessions and emits `EventActivity`; `isTerminalPart` recognizes a `step-finish` part and the parser maps `reason=\"stop\"` to `turn_done` (`parser.go` `parseStepFinish`). A compaction round runs a summarization LLM step that lands a `step-finish` part on the existing session, so it surfaces to irrlicht as an ordinary `ready → working → ready` arc on that session — precisely the User-observable signal the scenario asserts (`ready → working` at compaction start; stays `working`; `working → ready` when done; no further transitions). The `CompactionPart` itself is an unrecognized part type, and the parser's `default` arm (`parser.go` lines 81-85) sets `Skip = true`, so it is harmless — it neither breaks the scan nor adds a spurious transition. The daemon cannot LABEL the turn as compaction (irrlicht's `CompactionState` domain field has no production writer), but the scenario asserts only the lifecycle arc, which IS observable. The daemon is not the blocker.\n\n### Driver can drive it (driver_capability: ready) — THE CHANGE THIS REASSESSMENT MAKES\n\nThe prior assessment set `driver_capability: gap:slash-command` because `drive-opencode-interactive.sh` then handled only `send|wait_turn|sleep` over headless `opencode run`, and headless `opencode run` stores a `/summarize` as literal user text rather than executing it. That unblock action — \"add a live-REPL/slash primitive to the opencode driver (tmux send-keys, like claudecode/codex/pi)\" — has been implemented. The current driver has a `run_live()` path (lines 99-294) that launches the opencode TUI under tmux, waits for the \"Ask anything\" input affordance, and drives it with `tmux send-keys`. It implements a `slash` step type (lines 205-210: `tmux send-keys -l -- \"$s\"` then Enter) and a `reset_session` step, and the top-level router (lines 354-357) sends any script containing a `slash` (or `reset_session`) step to that live-TUI path. A recipe for this cell can therefore: `send` a priming turn (live path's `oc_send` + `oc_wait_turn` polling `step-finish` totals), then issue a `slash` step delivering `/summarize` (or the leader keybind via a `keys`-style send) inside the running REPL, then `send` a second turn — all on one session. The driver now has every step type the recipe needs; the gap is closed.\n\n## What changed vs. the prior verdict\n\n- agent_supports: yes → yes (unchanged; v1.14.50 confirmed `/summarize` + `command.session.compact` + `<leader>c` keybind + auto-compaction).\n- daemon_capability: full → full (unchanged; re-grounded in watcher.go + parser.go for v1.14.50).\n- driver_capability: gap:slash-command → **ready** (the live-TUI tmux `slash`/`reset_session` path now exists in drive-opencode-interactive.sh).\n\nRoute moves from `driver-gap` to `record`. The committed `expected.jsonl` already documents the target arc.\n\n## Confidence\n\n0.82: the driver's live-TUI `slash` primitive is read directly from the current driver source (router at lines 354-357, `slash` case at 205-210); daemon observability is grounded in watcher.go/parser.go; v1.14.50 ships `/summarize` + `command.session.compact` per the binary strings and the keybinds doc. Not higher only because the end-to-end live `/summarize` round has not yet been recorded against the small local model, and the exact in-TUI trigger (slash vs leader keybind) the recipe will fire is a recipe-stage detail — both forms are drivable by the live path.",
+      "caveats": [
+        "irrlicht's CompactionState domain field is dead code (no production writer) — the daemon cannot distinguish a compaction turn from a normal long turn. The scenario asserts only the visible state arc, which IS observable; the compaction-vs-normal-turn label is not.",
+        "Manual compaction may surface as the `/summarize` slash command, the `command.session.compact` palette entry, or the `<leader>c` (session_compact) keybind. The driver's live-TUI path can deliver a `/summarize` slash via send-keys; if the running v1.14.50 build maps manual compaction only to the leader keybind, the recipe must send that key chord instead (still within the existing live-TUI send-keys primitive — not a new gap).",
+        "headless `opencode run` still cannot deliver in-TUI compaction (it stores slash text literally), so the recipe MUST carry a `slash` (or `reset_session`) step to force the driver onto the live-TUI tmux path; a send-only recipe would not trigger compaction."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": ".claude/skills/ir:onboard-agent/scripts/drive-opencode-interactive.sh",
+          "note": "run_live() (lines 99-294) drives the opencode TUI under tmux; implements a `slash` step (lines 205-210: tmux send-keys -l + Enter) and reset_session; router (lines 354-357) sends any slash/reset_session script to the live path. This is the live-REPL/slash primitive whose absence drove the prior gap:slash-command verdict — it now exists, so driver_capability: ready."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/opencode/watcher.go",
+          "note": "lone ProcessOwnedStore adapter; watcher subscribes to opencode.db-wal and emits EventActivity from new `part` rows; isTerminalPart recognizes step-finish. A compaction summarization step lands a step-finish on the SAME session → ready→working→ready arc observed."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/opencode/parser.go",
+          "note": "parseStepFinish maps reason=stop → turn_done (working→ready); the default arm (lines 81-85) Skips unrecognized part types, so a CompactionPart is harmless and adds no spurious transition — daemon_capability: full."
+        },
+        {
+          "kind": "probe",
+          "ref": "strings $(which opencode) v1.14.50 (2026-05-26)",
+          "note": "binary contains `command.session.compact`, the `/summarize` literal, `experimental.compaction.autocontinue`, `\"compaction\": { \"auto\": true`, and compaction-part DOM slots — manual + auto compaction both shipped in v1.14.50."
+        },
+        {
+          "kind": "url",
+          "ref": "https://opencode.ai/docs/keybinds/",
+          "note": "session_compact keybind (default <leader>c) — official confirmation manual compaction is a triggerable in-TUI command, deliverable via the driver's live-TUI send-keys path."
+        },
+        {
+          "kind": "url",
+          "ref": "https://deepwiki.com/sst/opencode/2.4-context-management-and-compaction",
+          "note": "auto-compaction via isOverflow (context limit minus reserved buffer); inserts a CompactionPart into a new user message to queue summarization — confirms the auto path and the compaction-part storage shape the parser Skips."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "opencode on PATH and authenticated (~/.local/share/opencode/auth.json) — verified opencode 1.14.50. The compaction arc is model-agnostic; the dev env's default is a local LM Studio model (gemma-4-e2b), which is fine but slow (~30-60s/turn).",
+        "irrlichd is recording — run-cell.sh isolated/coexist mode, or --attach against a daemon started with --record.",
+        "LIVE-TUI cell: drive-opencode-interactive.sh routes any recipe carrying a `slash` step to its tmux TUI path (run_live), because headless `opencode run` stores a slash command as literal prompt text. /summarize must execute IN the live REPL to run the summarization round. tmux must be on PATH.",
+        "opencode version with /summarize manual compaction — confirmed v1.14.50 (command.session.compact + /summarize slash literal + session_compact keybind in the binary)."
+      ],
+      "setup": [
+        "Driver launches the opencode TUI in a fresh per-run cwd under <staging>/cwd/; opencode keys sessions on the cwd in its SQLite store, isolating this run's rows even alongside other opencode use.",
+        "opencode mints its own ses_… for the session; both priming turns AND the /summarize compaction round happen IN PLACE on that one ses_… (no new session — distinct from session-reset's /new). The driver enumerates the cwd's top-level ses_… rows; in-place compaction leaves exactly one, so the multi-session contract (session.uuids / transcript.paths) carries a single session."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: one"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: two"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        },
+        {
+          "type": "slash",
+          "text": "/summarize"
+        },
+        {
+          "type": "sleep",
+          "seconds": 75
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the ses_… session entering ready after launch, then two priming turns (working→ready, 'one' then 'two') on the SAME ses_…",
+        "after /summarize runs, events.jsonl shows ANOTHER ready→working→ready arc on the SAME ses_… (the summarization round is an in-place LLM turn that lands a step-finish reason=stop part — opencode compacts in place, NO new session)",
+        "no state_transition to waiting appears anywhere in the recording",
+        "after the compaction arc the session holds ready (no stuck working); final live state is ready",
+        "exactly ONE distinct ses_… session_id appears (in-place compaction mints no new session — distinct from session-reset's /new)"
+      ],
+      "settings": {},
+      "timeout_seconds": 360,
+      "notes": "opencode in-place compaction via the /summarize slash command. The whole observable is THREE working→ready arcs on ONE ses_…: two priming turns ('one','two') populate context, then /summarize runs an in-place LLM summarization round that surfaces as a third working→ready arc. opencode is the lone ProcessOwnedStore adapter — the daemon reads per-turn state from the SQLite store (watcher.go scanParts), and parser.go's parseStepFinish maps the summarization step-finish (reason=stop) to turn_done, so the daemon sees an ordinary working→ready arc on the SAME session. irrlicht's CompactionState field is dead code, so the compaction-vs-normal-turn LABEL is not surfaced — the recipe asserts only the visible state arc. WHY a `slash` step and NOT a `send`: headless `opencode run -- \"/summarize\"` stores /summarize as literal user prompt text (no command effect); the driver routes any `slash` step to run_live() which delivers it to the live TUI via tmux send-keys -l + Enter (oc_flush composer-clear confirmation). WHY NO wait_turn AFTER /summarize: the driver's `slash` arm does NOT re-snapshot TURN_BASELINE (only `send` does), so a wait_turn after a slash would compare the terminal step-finish total against the SECOND priming turn's baseline — already exceeded — and return immediately (a no-op), never actually waiting for the summarization round. Worse, embedding a send-after-slash re-introduces the slash→send composer-coalescing race that degraded checkpoint-rewind to applicable:false. So /summarize is the LAST input and is followed by a generous 75s trailing sleep — long enough for the slow local model's summarization round to complete (~30-60s) and for the daemon to observe the full working→ready arc plus the post-compaction ready dwell before tmux teardown. WHY manual /summarize (not auto-compaction): auto-compaction fires only on context-window overflow (isOverflow) and is not deterministically reproducible in a bounded recording; manual /summarize runs the identical summarization round deterministically. SINGLE session, no multi-session chain (unlike session-reset's /new): in-place compaction leaves exactly one ses_… for the cwd. What differs between runs: PID/timestamps/token counts, the assistant wording of the priming replies, the summary text, and the per-turn wall-clock latency (~30-60s on the local model). What must NOT differ: three working→ready arcs on one ses_… session (two priming + one compaction), no waiting, ending ready. Where to look if it broke: core/adapters/inbound/agents/opencode/parser.go (parseStepFinish reason=stop → turn_done) and watcher.go (scanParts step-finish detection); if /summarize stopped producing a terminal step-finish (e.g. an opencode update routed it through CompactionPart without a stop reason), the compaction arc would not register and the cell would need re-assessment."
+    }
+  },
+  "scenario_id": "context-compaction"
+}

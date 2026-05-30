@@ -1,0 +1,141 @@
+{
+  "recording_dir": "aider/scenarios/5-3_model-switch-midsession",
+  "artifacts": {
+    "events": "aider/scenarios/5-3_model-switch-midsession/events.jsonl",
+    "transcript_md": "aider/scenarios/5-3_model-switch-midsession/transcript.md",
+    "manifest": "aider/scenarios/5-3_model-switch-midsession/manifest.json"
+  },
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "pass_rate": "7/7 phases passed",
+    "agent_cli_version": "0.86.2",
+    "daemon_version": "0.4.7+67feba0",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes\ndaemon_capability: full\ndriver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "model-switch-midsession",
+      "agent": "aider",
+      "assessed_at": "2026-05-25T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Reasoning\n\n### Agent supports it\n\nAider exposes `/model <name>` as a first-class in-chat slash command that swaps the **Main Model** mid-session; the official command reference lists it as \"Switch the Main Model to a new LLM\" (https://aider.chat/docs/usage/commands.html). A subsequent turn then runs on the new model. This maps to the capability key `features.multi_model_orchestration` in `replaydata/agents/aider/capabilities.json` (already `true`), which is the primitive the scenario exercises (\"per-turn model selection — agent can change models between turns\").\n\n### Daemon can observe it (daemon_capability: full)\n\nThe scenario's three user-observable signals are:\n1. After turn 1, `ModelName = <model A>`.\n2. After turn 2 (post-switch), `ModelName = <model B>`.\n3. `TotalTokens` after turn 2 > after turn 1 (accumulates across the switch).\n\nAll three fall out of the aider parser and tailer as they exist today — a trace exists in the watched Source AND the parser handles it:\n\n- When aider applies a `/model` switch it writes a `> Main model: <name> …` blockquote to `.aider.chat.history.md`. The parser's `modelRE` (`core/adapters/inbound/agents/aider/parser.go:66`) matches **both** `> Model:` and `> Main model:`, updates `p.model`, and emits a `Skip` event carrying the new `ModelName`. This is pinned by `TestParser_MainModel_AfterSlashCommand` (`parser_test.go:210`), whose own comment states the case exists precisely so \"model_changed scenarios\" don't \"silently fail because post-switch turns keep the original model name on Contribution.Model.\"\n- Every model call closes on a `> Tokens: …` line, emitting an `assistant_message` that stamps the current `p.model` onto both `ModelName` and `Contribution.Model` (`closeModelCall`, parser.go:153). So turn 2's usage is attributed to model B.\n- `TranscriptTailer.applyModelMetadata` (`core/pkg/tailer/tailer_metrics.go:105`) sets `t.metrics.ModelName` on **any** event with a non-empty `ModelName`, which flows to `session.ModelName` and the dashboard. There is no \"first model wins\" latch — the latest non-empty model always overwrites. The merge guard at `session.go:653` only *retains* the old model when the new one is empty/`unknown`; a real model-B name is never blocked, so the inter-turn switch refreshes the displayed `ModelName`.\n- Token snapshots/contributions accumulate cumulatively across turns regardless of model, so `TotalTokens` after turn 2 strictly exceeds turn 1.\n\nTransport is `FilesUnderCWD{ .aider.chat.history.md, RawLineParser }` (`agent.go:45`) — a real local transcript exists, so there is no transport gap of the kind that blocks cloud-only scenarios. The mid-session model change is representable as a distinct observable: the post-switch turn's `assistant_message` carries model B's `ModelName`, which promotes `session.ModelName` to B at the message level even though aider emits no discrete `model_switch` event (the `> Main model:` blockquote is `Skip=true` state-only; the switch rides on the next turn's metadata). The scenario asserts the *resulting* model name and token totals, not a discrete switch event, so the daemon represents every required signal — daemon_capability: full.\n\n### Driver can record it (driver_capability: ready)\n\nThe recipe's step types are `send`, `slash`, `wait_turn`, and `sleep` — every one is implemented by `scripts/drive-aider-interactive.sh` (the `send|slash)` case types text + Enter). Crucially, aider's `/model <name>` accepts an **inline argument**: `cmd_model` (aider `commands.py`, \"Switch the Main Model to a new LLM\") raises `SwitchCoder(main_model=…)` and switches directly with **no arrow-key picker**, so the switch is sendable via the existing `slash` step — there is no `keys` gap (unlike the claudecode/codex picker recipes for this same coverage_id, which need a model-picker driver primitive). No `wait_turn` follows the `/model` slash (it produces a `> Main model:` blockquote with no `> Tokens:` close, i.e. no assistant turn); a fixed inter-turn `sleep` covers the switch window. Every step type this recipe needs is supported → driver_capability: ready.\n\n### Matrix drift\n\nThe coverage cell currently records `daemon_capability: unknown` / `driver_capability: ready` with the legacy note \"architect/editor pair detected per turn but inter-turn switch may not refresh.\" That `unknown` is resolved upward: the code path above plus the dedicated regression test (`TestParser_MainModel_AfterSlashCommand`) guarantee the post-switch refresh, so `daemon_capability` should move from `unknown` to `full`. `driver_capability` already reads `ready` and is confirmed (inline `/model <name>`, no picker). The maintainer should update the coverage row's `daemon_capability` to `full` and refresh the stale note.\n\n## Confidence\n\n0.85: the `/model` command is documented by the vendor, and the daemon-capability claim is grounded directly in the adapter source plus a pinning unit test; the driver-capability claim is grounded in the inline-argument `/model` form and the driver's step grammar. Held below 0.9 because the verdict is confirmed at the parser/unit level rather than by an end-to-end recording of an actual `/model` swap (no recording exists for this cell yet — that's Stage 4's job, deferred pending aider provider auth in-env).",
+      "caveats": [
+        "Aider does not emit per-turn cost in a form the adapter tracks (capabilities `cost_tracking: false`); the model name and token counts refresh across the switch, but cumulative cost attribution per model is not asserted by this scenario and is not tracked.",
+        "The `> Weak model: …` line aider may also print is intentionally NOT matched by `modelRE` (parser.go:65) — only `Model:` / `Main model:` drive `ModelName`. This is correct for this scenario (the weak/summary model is not the turn's main model) but means a switch that only changed the weak model would be invisible.",
+        "There is no discrete model_switch event: the `> Main model:` blockquote is Skip-only (state update), and the new model becomes visible only on the next assistant_message's ModelName. The scenario asserts the resulting ModelName + token totals (not a switch event), so this is spec-compliant — but a switch with no following turn would leave the new model unrepresented in metrics until the next call.",
+        "End-of-turn is always synthesized via the parser's ~1500ms IdleFlush clamped to the SessionDetector poll (no in-band turn-end marker in the markdown transcript), so the working→ready edge trails file quiet by ~5s; the recipe's 12s inter-turn sleeps exist to let each turn settle before the next prompt re-enters working."
+      ],
+      "sources": [
+        {
+          "kind": "url",
+          "ref": "https://aider.chat/docs/usage/commands.html",
+          "note": "official in-chat command reference: `/model` = \"Switch the Main Model to a new LLM\"; `/architect`, `/editor-model` also listed"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/aider/parser.go",
+          "note": "modelRE (L66) matches `> Main model: …` (emitted after a /model switch) identically to `> Model:`, updates p.model; closeModelCall (L153) stamps p.model onto each assistant_message ModelName + Contribution.Model — daemon_capability: full grounds here"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/aider/parser_test.go",
+          "note": "TestParser_MainModel_AfterSlashCommand (L210) pins that the post-/model-switch turn carries the new model — exists so model_changed scenarios don't silently keep model A"
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer_metrics.go",
+          "note": "applyModelMetadata (L105) sets t.metrics.ModelName on any event with a non-empty ModelName — latest-wins, no first-model latch; flows to session.ModelName → dashboard"
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/session.go",
+          "note": "merge guard L653 only retains old ModelName when the new one is empty/unknown; a valid model-B name is never blocked, so the inter-turn switch refreshes"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/aider/agent.go",
+          "note": "Source = FilesUnderCWD{ .aider.chat.history.md, RawLineParser } (L45) — a real local transcript exists; no transport gap"
+        },
+        {
+          "kind": "file",
+          "ref": ".claude/skills/ir:onboard-agent/scripts/drive-aider-interactive.sh",
+          "note": "implements send/slash/wait_turn/sleep; the `send|slash)` case types text + Enter — every recipe step type is supported, and inline `/model <name>` needs no `keys` picker → driver_capability: ready"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/aider/capabilities.json",
+          "note": "features.multi_model_orchestration: true (the primitive this scenario exercises); features.cost_tracking: false (basis for caveat 1)"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "aider CLI on PATH and authenticated against a provider out-of-band; the driver does not handle a login/OAuth prompt.",
+        "tmux available — the interactive driver runs aider in a tmux REPL so it can send two prompts to one long-lived session, switch the main model between them MID-SESSION with `/model`, and tear it down cleanly.",
+        "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record.",
+        "BOTH models reachable on the account: turn 1 runs on model A = gpt-5-nano (pinned via IRRLICHT_AIDER_MODEL → aider --model at boot) and the `/model gpt-4o-mini` switch target (model B) must resolve. The concrete model values are environment-dependent (issue #440): the durable assertion is that the model CHANGES mid-session and a non-empty model_name (model B) is present at session end, NOT a hardcoded pair.",
+        "feature-invisible caveat: aider's `> Weak model:` line is intentionally NOT matched by the parser's modelRE (only `Model:`/`Main model:` drive ModelName), so a switch that changed only the weak/summary model would be invisible; this recipe switches the MAIN model, which is observable."
+      ],
+      "setup": [
+        "Canonical agent-agnostic model-switch-midsession cell for aider; shares coverage_id model-switch-midsession with aider/model-switch (same /model main-model swap mechanism, same observability) — the DISTINCTION from that sibling is emphasis, not mechanism. This cell leans on MID-SESSION CONTINUITY: every turn phase in expected.jsonl pins same_session_as the proc-<PID> session_birth, so the recording proves the switch happened DURING one live session, in place, not via a restart.",
+        "The interactive driver (drive-aider-interactive.sh) launches aider in a fresh per-run cwd inside a tmux session and waits for the REPL prompt.",
+        ".aider.chat.history.md (FilesUnderCWD) materializes lazily once the first user input lands; before that the live REPL is observable as a transient proc-<PID> pre-session born ready (the process scanner). The daemon keys the WHOLE session by proc-<PID> — there is no separate transcript-UUID rollout session, so ONE session_id stays live across the mid-session switch.",
+        "The `/model gpt-4o-mini` slash uses aider's one-shot inline `/model <name>` form: cmd_model raises SwitchCoder(main_model=…), the new coder emits a `> Main model: <name> …` blockquote (parser modelRE → latest-wins ModelName), and NO assistant turn is produced — so no `keys` picker and no `wait_turn` after the slash. The /model re-banner can produce an extra working→ready arc in aider — that is expected and fine (spec asserts ordering + no-waiting + single proc-<PID>, not exact arc count).",
+        "Turn 1 runs on model A; the mid-session /model slash switches to model B; turn 2 runs on model B. message-level ModelName follows latest-non-unknown-wins so SessionMetrics.ModelName promotes to B by t2_done, and token snapshots accumulate across the switch.",
+        "After both turns + trailing sleep the driver kills the tmux session once — aider exits and the daemon emits a SINGLE process_exited for the proc-<PID> session (a mid-session model switch does NOT mint a new session)."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: first"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 12
+        },
+        {
+          "type": "slash",
+          "text": "/model gpt-4o-mini"
+        },
+        {
+          "type": "sleep",
+          "seconds": 12
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: second"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 12
+        }
+      ],
+      "verify": [
+        "events.jsonl shows a proc-<PID> session born ready within 2s of launch (the lazy transcript has not materialized yet).",
+        "events.jsonl shows TWO ready→working→ready arcs on the SAME proc-<PID> session_id — turn 1 (model A) and turn 2 (model B) — with no state_transition to waiting between them, proving session continuity across the mid-session switch.",
+        "the mid-session /model slash produces NO additional working/waiting transition between t1_done and t2_start — it writes only a `> Main model:` blockquote with no `> Tokens:` close (no assistant turn) and mints no new session. (NB: the /model re-banner can produce an extra working→ready arc in aider — that is expected and fine; the spec asserts ordering + no-waiting + a single proc-<PID>, not an exact arc count.)",
+        "events.jsonl contains a pid_discovered bound to the proc-<PID> session, and exactly one process_exited on it at REPL teardown (a mid-session model switch does NOT create a second session).",
+        "no state_transition to waiting appears for the session at any point; final live state is ready before teardown.",
+        "the .replay.json.golden carries summary.model_name == model B (gpt-4o-mini, latest-wins) — NOT model A (gpt-5-nano) and NOT 'unknown'; this is where the model A→B switch is asserted, since the events.jsonl phase DSL has no model field. The concrete value is environment-dependent (issue #440); assert change + presence, not a hardcoded string."
+      ],
+      "notes": "Canonical model-switch-midsession cell for aider — SAME mechanism as the aider/model-switch sibling (both share coverage_id model-switch-midsession); the emphasis here is MID-SESSION CONTINUITY: every turn phase in expected.jsonl is pinned same_session_as the proc-<PID> session_birth, so the recording proves the swap happened DURING one live session, in place, not via a restart. RECORDABILITY (no driver_gap): aider's `/model <name>` accepts an INLINE ARGUMENT — cmd_model (aider/commands.py:87, \"Switch the Main Model to a new LLM\") raises SwitchCoder(main_model=…) and switches DIRECTLY, no arrow-key picker — so the switch is sendable via the existing `slash` step (NOT a `keys` gap, unlike the claudecode/codex picker recipes for this same scenario). The aider interactive driver implements send/slash/wait_turn/sleep (case `send|slash)` types text + Enter), so every step type this recipe needs is supported. WHY interactive (not headless `aider --message`): the /model slash only exists inside the REPL and the scenario needs two turns; the interactive driver keeps the REPL alive across both turns and kills the tmux session once → a SINGLE process_exited (headless aider is single-shot and would exit after one reply, missing the per-turn reset and the terminal working→ready settle). WHY NO wait_turn after the /model slash: the driver's `slash` step bumps the expected-turn counter exactly like `send`, but a /model switch writes a `> Main model:` blockquote with NO `> Tokens:` close (no assistant turn), so a wait_turn after it would hang on the unchanged turn count; the recipe covers the switch with a fixed 8s sleep instead. AIDER TURN-END IS SYNTHESIZED, NOT MARKED: the markdown transcript has no turn-end marker — `> Tokens:` closes one model CALL, not the turn; end-of-turn is synthesized by IdleFlush after ~1.5s quiet, clamped to the SessionDetector's ~5s working-refresh poll, so the EFFECTIVE working→ready latency is ~5s. The 12s inter-turn sleeps (after turn 1, after the slash, and trailing) let each turn's working→ready flip fire AND be observed before the next prompt re-enters working — bumped from the original 7s/8s because gpt-5-nano replies fast and aider's IdleFlush→poll settle is ~5s, so a too-short gap races the synthesized turn-end; with shorter sleeps the next `####` prompt lands before IdleFlush and the parser opens the new turn WITHOUT an intervening turn_done, losing the per-turn reset (TestParser_NewUserPromptAfterMultiCall_StaysWorking). The /model re-banner can also produce an extra working→ready arc — expected and fine (spec asserts ordering + no-waiting + single proc-<PID>, not exact arc count). The model A→B assertion is NOT expressible in the events.jsonl phase DSL (no model field), so expected.jsonl asserts only the two-turn mid-session lifecycle skeleton and the switch is asserted at summary.model_name in the .replay.json.golden plus the aider parser unit test TestParser_MainModel_AfterSlashCommand (parser_test.go:214). model A = gpt-5-nano (via IRRLICHT_AIDER_MODEL at boot), model B = gpt-4o-mini (via the mid-session `/model gpt-4o-mini` slash). SESSION IDENTITY: aider stores its transcript in the cwd (FilesUnderCWD), so the daemon keys the whole session by proc-<PID> — no separate UUID rollout session and no handoff phase; the turn arcs, pid_bind (anchored at start — aider binds the PID at REPL birth, matching aider/basic-turn), and teardown all pin to session_birth via same_session_as, which is what proves one session_id from birth to teardown across the switch. What differs between runs: token counts, PID/timestamps, assistant wording (pinned with `Reply with exactly the word: first/second` to keep turns short and deterministic), and the working→ready edge lands with ~5s idle-flush latency. What must NOT differ: two working→ready arcs on ONE proc-<PID> session, summary.model_name == model B in the golden, and a single process_exited at teardown. multi_model_orchestration=yes. NOTE: the agent-scenarios-coverage.json cell currently reads irrlicht_observes:partial (\"architect/editor pair detected per turn but inter-turn switch may not refresh\"); the committed assessment.json reassesses this yes/yes (0.85), grounded in the aider parser's modelRE matching `> Main model:` and the pinning TestParser_MainModel_AfterSlashCommand. Surfacing the matrix drift here per the skill's 'don't edit the coverage matrix' rule — a maintainer should flip the cell from partial to yes. RECORDING DEFERRED: validated when aider auth is available in-env — at authoring time there is no provider key present and headless aider hangs on OpenRouter OAuth, so this recipe + spec are the DOCUMENTED TARGET pending a recording.",
+      "settings": {},
+      "timeout_seconds": 300
+    }
+  },
+  "scenario_id": "model-switch-midsession"
+}

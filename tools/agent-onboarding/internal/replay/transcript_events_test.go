@@ -19,7 +19,7 @@ func repoRoot(t *testing.T) string {
 	return filepath.Join(filepath.Dir(thisFile), "..", "..", "..", "..")
 }
 
-const ublockingQuestion = "replaydata/agents/claudecode/scenarios/user-blocking-question"
+const ublockingQuestion = "replaydata/agents/claudecode/scenarios/2-17_user-blocking-question"
 
 // TestLoadEventsOrSynthesize_prefersSidecar: when events.jsonl exists the
 // loader consumes the daemon-recorded sidecar verbatim and reports the

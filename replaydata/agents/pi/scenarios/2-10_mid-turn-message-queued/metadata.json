@@ -1,0 +1,109 @@
+{
+  "recording_dir": "pi/scenarios/2-10_mid-turn-message-queued",
+  "artifacts": {
+    "events": "pi/scenarios/2-10_mid-turn-message-queued/events.jsonl",
+    "transcript": "pi/scenarios/2-10_mid-turn-message-queued/transcript.jsonl",
+    "manifest": "pi/scenarios/2-10_mid-turn-message-queued/manifest.json",
+    "golden": "pi/scenarios/2-10_mid-turn-message-queued/transcript.jsonl.replay.json.golden",
+    "recordings": [
+      "pi/scenarios/2-10_mid-turn-message-queued/recordings/2026-05-25-03-03-21_irrlichd-0.4.7+2f5b484"
+    ]
+  },
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "pass_rate": "5/5 phases passed",
+    "agent_cli_version": "0.70.0",
+    "daemon_version": "0.4.7+2f5b484",
+    "confidence": 0.7,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "mid-turn-message-queued",
+      "agent": "pi",
+      "assessed_at": "2026-05-25T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.7,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\n**Agent supports (yes).** Pi's REPL lets the user type a follow-up message WHILE a turn is in flight and queues it: Enter steers/queues the buffered text, Alt+Enter inserts a newline. The queued text is not dropped — it is consumed after the current turn settles. This satisfies the scenario's essence (user sends a follow-up mid-turn; the runtime buffers it without dropping it).\n\n**Irrlicht observes (partial).** The pi adapter is `FilesUnderRoot` over `~/.pi/agent/sessions/**.jsonl`, and the parser (`core/adapters/inbound/agents/pi/parser.go`) only flips the session back to `ready` on a `turn_done` event — i.e. a `{\"type\":\"message\",\"message\":{\"role\":\"assistant\",\"stopReason\":\"stop\"}}` line. A `user` line is classified as `user_message` and does NOT by itself emit a turn boundary or a ready transition. So a queued user line landing mid-turn cannot inject a working→ready flicker: the in-flight turn stays `working` until its own `stopReason:stop`.\n\nIn the live recording (pi 0.70.0), pi wrote the queued follow-up's `user` line within ~1ms of the first turn's `stopReason:stop` and began the next turn immediately, so the daemon never observed an intervening ready — the two back-to-back transcript turns COLLAPSED into a SINGLE contiguous working span (recorded: one ready→working→ready arc on the rollout session whose working span covers both turns, then a single process_exited). This is the canonical scenario observable, the same single-span shape claudecode/codex produce. The verdict is `partial` rather than `yes` because that single-span observability hinges on the sub-ms queue→consume timing: pi consumes the queued message as a distinct transcript turn (two `stop` lines, not one folded turn like codex), so if its consumption were delayed past the classifier's debounce window the queued message could instead surface as a separate working→ready arc. The negative invariant the scenario cares about (no mid-turn ready flicker, no waiting, ends ready) holds regardless. Hence `partial`, confidence 0.7.\n\n## What proves each signal\n\n- \"State stays working when the queued message arrives; no →ready flicker\": the working span is contiguous through the queued user line because only `stopReason:stop` flips to ready and the queued `user` line is not a stop; in the recording no ready transition appears between the first working and the cycle's end. Observable.\n- \"Cycle eventually ends at ready\": final `turn_done` on the rollout session → ready; single `process_exited` at REPL teardown. Observable.\n- \"No turn boundary on queued arrival\": the queued message is a `user_message`, which the parser does not treat as a turn boundary; the boundary is each turn's own `stop`. Observable.",
+      "caveats": [
+        "feature-invisible-but-spec-compliant: pi records the queued follow-up as a SEPARATE transcript turn (two stopReason==stop lines, not folded into one turn like codex), but consumes it within ~1ms of the first turn's stop, so the daemon observes a SINGLE contiguous working span rather than two arcs. The single-span observable depends on that sub-ms queue→consume timing; a delayed consumption could instead surface a second working→ready arc — the negative invariant (no mid-turn ready flicker, no waiting, ends ready) holds either way."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/pi/parser.go",
+          "note": "Only stopReason==\"stop\" maps to turn_done; a user line is user_message and emits no turn boundary, so a queued user line cannot inject a working→ready flicker."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/pi/agent.go",
+          "note": "Source is FilesUnderRoot over ~/.pi/agent/sessions — append-only JSONL transcript the daemon tails for state classification."
+        },
+        {
+          "kind": "file",
+          "ref": ".claude/skills/ir:onboard-agent/scripts/drive-pi-interactive.sh",
+          "note": "pi REPL banner documents Enter (steer/queue) vs Alt+Enter (newline); a second send before the first wait_turn types the follow-up while the turn is in flight."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/codex/scenarios/mid-turn-message-queued/expected.jsonl",
+          "note": "Cross-adapter contrast: codex folds the queued message into one task_complete; pi does not, hence the partial."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "pi CLI on PATH and authenticated (pi runs against its configured model out-of-band)",
+        "tmux available — the interactive driver runs pi in a tmux REPL so a follow-up can be typed while the first turn is still in flight",
+        "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+        "PARTIAL caveat (mirrored from the coverage assessment): pi queues the mid-turn follow-up (Enter steers/queues) and consumes it immediately after the in-flight turn — the queued user line is written to the transcript within ~1ms of the first turn's stopReason==stop and the next turn begins at once, so the daemon never observes an intervening ready and the two back-to-back transcript turns COLLAPSE into ONE contiguous working span (the canonical observable, same shape claudecode/codex produce). It is PARTIAL rather than yes because this single-span observability hinges on that sub-ms queue→consume timing; if pi's consumption were delayed past the classifier's debounce window the queued message could instead surface as a separate working→ready arc."
+      ],
+      "setup": [
+        "The interactive driver (drive-pi-interactive.sh) launches pi in a fresh per-run cwd inside a tmux session and waits for the REPL prompt",
+        "pi writes one JSONL rollout file per session under ~/.pi/agent/sessions/<cwd-slug>/ on first user input (FilesUnderRoot); the driver resolves that file and extracts the UUID from line 1",
+        "QUEUE MECHANICS via the driver's existing primitives (no new step type): the first send bumps the expected-turn counter to 1 and starts a slow count-to-10 that keeps pi busy for several seconds; a short sleep (NOT wait_turn) keeps the turn in flight; a SECOND send then types the follow-up while pi is still mid-turn — pi's REPL queues the buffered line (Enter steers/queues) and the second send bumps the expected-turn counter to 2; a single final wait_turn then blocks until the rollout shows ≥2 completed assistant turns (the in-flight turn THEN the queued message's turn)",
+        "WHY two sends rather than a `keys` injection: pi's interactive driver implements send/slash/wait_turn/interrupt/sleep but not `keys`; pi consumes a queued message as a full extra turn (unlike codex which folds it into one task_complete), so two sends with one final wait_turn is the natural, bookkeeping-correct expression — the EXPECTED_TURNS counter resolves at count≥2",
+        "After the final wait_turn + trailing sleep the driver kills the tmux session once — pi exits and the daemon emits a single process_exited for the rollout session"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Count slowly from 1 to 10, one number per line, with a brief pause between each. After 10, reply with exactly the word: done"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "send",
+          "text": "Also, after you finish counting, reply with exactly the word: followup"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        }
+      ],
+      "verify": [
+        "events.jsonl contains a transcript_new for the rollout session born ready within ~2s of REPL launch (a transient proc-<PID> pre-session may also appear; the turns and pid_discovered land on the UUID-keyed rollout session)",
+        "events.jsonl contains a pid_discovered event bound to the rollout session_id",
+        "events.jsonl shows a single CONTIGUOUS working span on the rollout session: NO state_transition to ready between the first ready→working and the cycle's completion, even though the follow-up was typed (queued) mid-turn — pi folds the queued turn in within ~1ms of the first turn's stop so no intervening ready is observed",
+        "events.jsonl contains NO state_transition to waiting at any point on the rollout session",
+        "the rollout session's final live state is ready before the driver tears the REPL down (the cycle ends at ready once both the count and the queued follow-up are consumed)",
+        "events.jsonl contains exactly one process_exited on the rollout session at REPL teardown (one long-lived session)",
+        "transcript.jsonl contains at least two user lines (initial prompt + queued follow-up) and two assistant stopReason==stop lines; the queued user line introduces no turn boundary itself — only stopReason==stop flips state to ready, so the queued arrival cannot inject a synthetic working→ready flicker"
+      ],
+      "settings": {},
+      "timeout_seconds": 240
+    }
+  },
+  "scenario_id": "mid-turn-message-queued"
+}

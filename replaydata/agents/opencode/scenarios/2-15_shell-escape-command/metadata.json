@@ -1,0 +1,60 @@
+{
+  "artifacts": {},
+  "metadata": {
+    "agent_supports": "unknown",
+    "daemon_capability": "n/a",
+    "driver_capability": "n/a",
+    "confidence": 0.8,
+    "notes": "agent_supports: unknown (leaning no) — opencode has NO user-level shell-ESCAPE primitive.\ndaemon_capability: n/a; driver_capability: n/a. STOP / applicable_false."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "shell-escape-command",
+      "agent": "opencode",
+      "assessed_at": "2026-05-26T00:00:00Z",
+      "agent_supports": "unknown",
+      "daemon_capability": "n/a",
+      "driver_capability": "n/a",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: unknown (leaning no) — opencode has NO user-level shell-ESCAPE primitive.\ndaemon_capability: n/a; driver_capability: n/a. STOP / applicable_false.\n\n## Scenario\n\nshell-escape-command asserts a USER-TYPED shell ESCAPE: a `!cmd`-style prefix (claudecode `!echo hello`, codex `!ls`, pi `!echo hi`) or aider's `/run <cmd>` alias `!<cmd>` that runs a shell command LOCALLY, OUTSIDE a model turn, as a distinct local-exec event — no LLM round-trip at escape time. The cell-distinguishing signal is precisely that the command is dispatched by the USER (not the model) and runs as its own local-exec event; how the parser then treats the resulting wrapper (claudecode/pi skip it → stay ready; codex synthesizes an arc; aider folds it into a turn-state arc with no tool_result) is per-adapter, but every sibling row has a real `!cmd`/`/run` escape primitive to drive.\n\n## Why opencode has no such primitive (agent_supports: unknown/no)\n\nopencode exposes shell access ONLY as the FORMAL `bash` TOOL invoked BY THE MODEL inside a turn — not as a user-typed `!cmd` escape that runs outside a model turn. There is no `!`-prefix REPL affordance and no `/run`-style local-exec command that bypasses the LLM. The model-invoked bash tool is already covered by the recordable opencode/auto-executed-tool-call cell (gemma's tool running inside the working span, ready→working→ready). So the user-level shell-ESCAPE the scenario asserts simply does not exist in opencode: there is nothing distinct from auto-executed-tool-call to elicit, and capabilities.json declares no shell_escape feature (only tool_calls:true — the model-invoked tool). Marked agent_supports:unknown rather than a hard no because opencode's TUI affordances were assessed from the headless `opencode run` path and the adapter source, not exhaustively from the live TUI; but no `!cmd`-style user escape is documented or surfaced, and the recording rig has no way to drive one.\n\n## Why not recordable (daemon/driver n/a)\n\nPer the #476 routing decision, agent_supports ∈ {unknown} routes to applicable_false — STOP, no recipe, no recording, no live CLI. daemon_capability and driver_capability are n/a because there is no behavior to observe or drive: the daemon side is moot (a model-invoked bash tool is the auto-executed-tool-call arc, not a shell escape), and the headless `opencode run` driver (drive-opencode-interactive.sh, case \"$TYPE\" handles only send|wait_turn|sleep) has no escape / `!` / `keys` step to issue a user shell escape — but that driver gap is downstream of the agent gap, not the blocker, so this is NOT a driver_gap verdict.\n\n## Confidence\n\n0.8: opencode's shell-as-model-tool model is read directly from the adapter parser (type:\"tool\" parts only) and capabilities.json (no shell_escape feature, tool_calls:true is the model-invoked tool); the auto-executed-tool-call recording proves the model-invoked bash tool is already the covered shape. Not higher because the live TUI was not exhaustively probed for an undocumented `!`-style affordance — hence agent_supports:unknown rather than a hard no.",
+      "caveats": [
+        "opencode shell access is the model-invoked `bash` TOOL, not a user-typed `!cmd` shell ESCAPE. The model-invoked tool is already covered by the recordable opencode/auto-executed-tool-call cell; there is nothing distinct for this scenario to elicit.",
+        "agent_supports:unknown (not a hard no) because the live TUI was not exhaustively probed for an undocumented `!`-style affordance — but none is documented, capabilities.json declares no shell_escape feature, and the headless `opencode run` driver has no escape step.",
+        "This is applicable_false (agent_supports:unknown → STOP per #476), NOT driver_gap: the headless driver's lack of an escape/`!`/keys step is downstream of the agent gap — there is no user-level shell-escape primitive to drive in the first place."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/opencode/parser.go",
+          "note": "shell access surfaces only as type:\"tool\" parts (parseToolPart, parser.go:199-226) — the MODEL-invoked bash tool, tracked as a tool call inside a turn. No user-typed shell-escape / local-exec branch exists."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/opencode/capabilities.json",
+          "note": "declares tool_calls:true (the model-invoked tool) and NO shell_escape feature — opencode has no user-level `!cmd` escape that runs outside a model turn."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/opencode/scenarios/auto-executed-tool-call/assessment.json",
+          "note": "the recordable sibling that ALREADY covers opencode's shell access: the model-invoked bash/write tool running auto-executed inside the working span (ready→working→ready). A shell-escape recording would either be indistinguishable from this or have nothing to drive."
+        },
+        {
+          "kind": "file",
+          "ref": ".claude/skills/ir:onboard-agent/scripts/drive-opencode-interactive.sh",
+          "note": "headless `opencode run` driver: case \"$TYPE\" handles only send|wait_turn|sleep — no escape / `!` / keys step. (Downstream of the agent gap, not the blocker.)"
+        },
+        {
+          "kind": "file",
+          "ref": ".claude/skills/ir:onboard-agent/scenarios.json",
+          "note": "the scenario's sibling recipes all drive a real user `!cmd`/`/run` escape: claudecode `!echo hello` (keys), codex `!ls`/`!sleep 5` (keys), pi `!echo hi` (send), aider `/run echo hello` (slash). opencode has no analog primitive."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "notes": "scope_note: opencode has no user-level shell-escape (`!cmd`) that runs outside a model turn; shell is the model-invoked bash tool, already covered by auto-executed-tool-call. agent_supports:unknown (per assessment.json) → applicable_false (#476): no recipe script, no recording. The headless `opencode run` driver also has no escape/`!` step, but that gap is downstream of the missing agent primitive (not a driver_gap)."
+    }
+  },
+  "scenario_id": "shell-escape-command"
+}

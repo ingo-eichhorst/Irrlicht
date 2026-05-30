@@ -55,7 +55,7 @@ func (s *Server) handleCatalog(w http.ResponseWriter, r *http.Request) {
 func (s *Server) buildCatalogJSON() ([]byte, string, error) {
 	shards := shard.LoadAll(s.RepoRoot)
 	if len(shards) == 0 {
-		return nil, "", fmt.Errorf("no shards under %s", shard.Dir(s.RepoRoot))
+		return nil, "", fmt.Errorf("no scenarios in %s", shard.File(s.RepoRoot))
 	}
 
 	// Agents list from the daemon's adapter registry. normalizeAdapter maps
@@ -64,17 +64,19 @@ func (s *Server) buildCatalogJSON() ([]byte, string, error) {
 	allAgents := agents.All()
 	agentEntries := make([]map[string]any, 0, len(allAgents))
 	agentSlugs := make([]string, 0, len(allAgents))
+	adapterCells := make(map[string]map[string]*shard.ShardAgent, len(allAgents))
 	for _, a := range allAgents {
 		slug := normalizeAdapter(a.Identity.Name)
 		agentEntries = append(agentEntries, map[string]any{"id": slug, "onboarded": true})
 		agentSlugs = append(agentSlugs, slug)
+		adapterCells[slug] = shard.LoadAdapterCells(s.RepoRoot, slug) // one scan per adapter
 	}
 
 	scenarios := make([]map[string]any, 0, len(shards))
 	for _, sh := range shards {
 		coverage := make(map[string]any, len(agentSlugs))
 		for _, slug := range agentSlugs {
-			coverage[slug] = buildCellVerdict(sh, slug)
+			coverage[slug] = buildCellVerdict(adapterCells[slug][sh.Name])
 		}
 		scenarios = append(scenarios, map[string]any{
 			"id":       sh.Name,
@@ -88,7 +90,7 @@ func (s *Server) buildCatalogJSON() ([]byte, string, error) {
 	out := map[string]any{
 		"version":        1,
 		"generated_at":   time.Now().UTC().Format("2006-01-02"),
-		"source_catalog": "replaydata/scenarios/ (shards)",
+		"source_catalog": "replaydata/scenarios.json",
 		"agents":         agentEntries,
 		"scenarios":      scenarios,
 	}
@@ -99,19 +101,17 @@ func (s *Server) buildCatalogJSON() ([]byte, string, error) {
 	return b, "shards", nil
 }
 
-// buildCellVerdict produces one coverage[agent] entry from the shard's per-agent
-// Metadata overview block. Defaults to "unknown"/"unknown"/"ready"/"" when the
-// shard lacks the agent or leaves an axis empty — the same defaults the old
-// per-cell reader used. Notes is the migrator-computed first-paragraph excerpt.
-func buildCellVerdict(sh shard.Shard, agentSlug string) map[string]any {
+// buildCellVerdict produces one coverage[agent] entry from the cell's Metadata
+// overview block. Defaults to "unknown"/"unknown"/"ready"/"" when the cell is
+// nil or leaves an axis empty — the same defaults the old per-cell reader used.
+func buildCellVerdict(ag *shard.ShardAgent) map[string]any {
 	cell := map[string]any{
 		"agent_supports":    "unknown",
 		"daemon_capability": "unknown",
 		"driver_capability": "ready",
 		"notes":             "",
 	}
-	ag, ok := sh.Agents[agentSlug]
-	if !ok {
+	if ag == nil {
 		return cell
 	}
 	md := ag.Metadata

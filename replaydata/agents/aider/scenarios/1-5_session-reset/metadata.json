@@ -1,0 +1,63 @@
+{
+  "artifacts": {},
+  "metadata": {
+    "agent_supports": "no",
+    "daemon_capability": "n/a",
+    "driver_capability": "n/a",
+    "confidence": 0.92,
+    "notes": "agent_supports: no\ndaemon_capability: n/a\ndriver_capability: n/a"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "session-reset",
+      "agent": "aider",
+      "assessed_at": "2026-05-25T00:00:00Z",
+      "agent_supports": "no",
+      "daemon_capability": "n/a",
+      "driver_capability": "n/a",
+      "confidence": 0.92,
+      "body": "## Verdict\n\nagent_supports: no\ndaemon_capability: n/a\ndriver_capability: n/a\n\n## Scenario\n\n`session-reset` requires the agent's in-process reset command to **end the current session and start a fresh one with a different `session_id`** without relaunching the binary. The user-observable signal is: the old session row disappears and a new row appears with a *different* `session_id` in `ready`. Primitive exercised: `slash_commands` (`capabilities.json` key `slash_commands`, true for aider).\n\n## Reasoning\n\n### aider has reset slash commands, but they clear context — they do not mint a session\n\nThe coverage note's stated reason (\"aider has no /clear analogue\") is factually wrong: aider 0.86.2 ships both `/clear` and `/reset`. But the verdict it lands on (`no`) is still correct, for the reason the `scenarios.json` scope_note already records.\n\n- `Commands.cmd_clear` → `_clear_chat_history()` sets `self.coder.done_messages = []` and `self.coder.cur_messages = []` — in-memory Python lists only.\n- `Commands.cmd_reset` drops added files and clears chat history — also purely in-memory.\n\nNeither command touches the on-disk `.aider.chat.history.md`, and neither creates any new identity. They wipe the LLM context window the next turn is sent, nothing more.\n\n### aider has no `session_id` concept at all\n\nA repo-wide grep of the aider source for `session_id` / `session id` returns zero hits. aider has no per-conversation session identity to change — `session_id_assignment: false` in `capabilities.json`. There is nothing for a reset command to re-mint, so the scenario's defining signal (a *different* `session_id`) is structurally impossible. Compared to the codex `/new` supersession case — where a NEW session row supersedes the old on the same PID — aider's `/reset` produces NO session boundary at all: one PID continues, one append-only transcript continues. There is no two-row event to represent.\n\n### Why this is `agent_supports: no` (axis routing under #476)\n\nThe blocking axis is the AGENT, not the daemon parser or the driver. aider lacks the feature the scenario exercises — a reset that mints a new session identity — so `agent_supports: no`. With the feature absent there is no observation question (`daemon_capability: n/a`) and no recipe to drive (`driver_capability: n/a`). This is NOT a daemon `incapable` (the daemon isn't being asked to observe a real boundary aider produces but can't represent — aider produces no boundary), and NOT a driver `gap:reset_session` (the driver's missing `reset_session` step is moot when there is no session to reset into a new identity). Per the Step 6 routing table, `no` → `n/a` / `n/a` → **frozen**.\n\n### The transport keys identity on the file path, which is invariant\n\nThe adapter is `FilesUnderCWD{Filename: \".aider.chat.history.md\"}`. aider opens this single file in append mode (`open(\"a\")` in `io.py:1131`) for the life of the project — one file per project, written to forever. The daemon's session identity for aider is therefore the transcript file path, and `/clear` / `/reset` do not change it. The parser's only file-level marker, the `# aider chat started` header line, is an explicit no-op (`parser.go` returns `nil` for it).\n\nQuitting and relaunching aider does append a fresh `# aider chat started` banner to the *same* file — that is `session-end` + `session-start` on one identity, the \"Not to be confused with\" case the scenario explicitly excludes, not a session-reset.\n\n## Conclusion\n\nWith no session-id primitive and a single append-only transcript per project, aider cannot produce the old-row-disappears / new-`session_id`-appears signal in-process. `agent_supports: no` ⇒ `daemon_capability: n/a` (nothing to observe) and `driver_capability: n/a` (no recipe to drive). Pipeline frozen; no recipe, no recording.",
+      "caveats": [
+        "Coverage note text is inaccurate: aider DOES have /clear and /reset (aider 0.86.2). The verdict (no) is correct — those commands clear in-memory chat context without minting a session id — but the maintainer should fix the note to say 'reset commands clear chat history but mint no session id; aider has no session_id concept'."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/aider/agent.go",
+          "note": "Source is FilesUnderCWD with Filename .aider.chat.history.md — one transcript per project CWD; identity is the file path."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/aider/parser.go",
+          "note": "Parser emits user_message / assistant_message / tool_result / turn_done; '# aider chat started' header is an explicit no-op (line 88). No session_id handling anywhere."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/aider/capabilities.json",
+          "note": "session_id_assignment: false, session_resume: false; slash_commands: true (the Primitive-exercised key — present, but reset commands mint no session id)."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.local/share/uv/tools/aider-chat/lib/python3.12/site-packages/aider/commands.py:411-443",
+          "note": "cmd_clear -> _clear_chat_history() resets done_messages/cur_messages in memory; cmd_reset drops files + clears history. Neither touches the transcript file or mints an id. aider 0.86.2."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.local/share/uv/tools/aider-chat/lib/python3.12/site-packages/aider/io.py:1117-1134",
+          "note": "append_chat_history opens chat_history_file in append mode; single per-project file written for the whole run."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.local/share/uv/tools/aider-chat/lib/python3.12/site-packages/aider/args.py:274-287",
+          "note": "default_chat_history_file = <git_root>/.aider.chat.history.md — one file per project, no per-session variant."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "scope_note": "Coverage matrix declares aider supports=no for session-reset: aider has /clear (clears chat history) but it does NOT mint a new session id — there is no aider session-id concept. Closing aider creates a fresh `.aider.chat.history.md` on next launch but that's session-end + session-start, not session-reset."
+    }
+  },
+  "scenario_id": "session-reset"
+}

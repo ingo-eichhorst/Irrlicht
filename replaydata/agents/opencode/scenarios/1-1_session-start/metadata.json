@@ -1,0 +1,75 @@
+{
+  "recording_dir": "opencode/scenarios/1-1_session-start",
+  "artifacts": {
+    "events": "opencode/scenarios/1-1_session-start/events.jsonl",
+    "transcript": "opencode/scenarios/1-1_session-start/transcript.jsonl",
+    "manifest": "opencode/scenarios/1-1_session-start/manifest.json",
+    "golden": "opencode/scenarios/1-1_session-start/transcript.jsonl.replay.json.golden"
+  },
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "pass_rate": "2/2 phases passed",
+    "agent_cli_version": "unknown",
+    "daemon_version": "0.4.7+90282f9.dirty",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "session-start",
+      "agent": "opencode",
+      "assessed_at": "2026-05-23T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nThe scenario's two Expected bullets are (1) the session appears in `ready` within 1s of agent launch and (2) the PID is bound within 1s. Both are directly observable for the opencode adapter. Unlike file-tailing adapters, opencode uses a SQLite database (`~/.local/share/opencode/opencode.db`) — the daemon's ProcessOwnedStore source polls the session table and emits transcript_new + state_transition→ready for the UUID-keyed (`ses_…`) session.\n\nIn the recording, the `proc-<PID>` pre-session row is born at +72 ms (well under the 1000 ms budget) and pid_discovered fires at +74 ms; the SQLite-backed `ses_…` session reconciles at +528 ms when opencode's first part lands.",
+      "caveats": [
+        "OpenCode does not expose CLI-assignable session IDs; the driver discovers the session id by querying SQLite for the most recent row keyed on directory after the first `opencode run` returns.",
+        "OpenCode shares its SQLite store across all opencode runs system-wide; per-cwd isolation only holds because the driver creates a fresh staging cwd per recording."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/opencode/agent.go",
+          "note": "Identity.Name=opencode, Source variant ProcessOwnedStore with PathForPID resolving to ~/.local/share/opencode/opencode.db, ExactName{Name: \"opencode\"} process matcher."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "opencode CLI on PATH and authenticated (run a single message in opencode TUI to confirm)",
+        "irrlichd is recording with the opencode SQLite watcher enabled"
+      ],
+      "setup": [
+        "Create an empty cwd under <staging>/cwd/"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        }
+      ],
+      "verify": [
+        "events.jsonl contains an opencode session_created or transcript_new event within 1000 ms of agent launch",
+        "events.jsonl contains a state_transition to ready within 500 ms of session birth",
+        "events.jsonl contains a pid_discovered event within 1000 ms",
+        "final session state is ready"
+      ],
+      "settings": {},
+      "timeout_seconds": 120
+    }
+  },
+  "scenario_id": "session-start"
+}

@@ -1,0 +1,140 @@
+{
+  "artifacts": {
+    "events": "codex/scenarios/1-6_checkpoint-rewind/events.jsonl",
+    "transcript": "codex/scenarios/1-6_checkpoint-rewind/transcript.jsonl",
+    "manifest": "codex/scenarios/1-6_checkpoint-rewind/manifest.json",
+    "golden": "codex/scenarios/1-6_checkpoint-rewind/transcript.jsonl.replay.json.golden"
+  },
+  "metadata": {
+    "agent_supports": "partial",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "confidence": 0.82,
+    "notes": "agent_supports: partial\ndaemon_capability: full\ndriver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "checkpoint-rewind",
+      "agent": "codex",
+      "assessed_at": "2026-05-29T00:00:00Z",
+      "agent_supports": "partial",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.82,
+      "body": "## Verdict\n\nagent_supports: partial\ndaemon_capability: full\ndriver_capability: ready\n\nThis re-judges from primary evidence on the installed codex-cli 0.130.0 and confirms the 2026-05-28 reconciled verdict. The older `no / n.a.` block that previously sat beneath the reconciled verdict in the shard is dropped — it was wrong (see \"Why not `no`\" below).\n\n## What the scenario asks\n\nThe scenario-meaning's User-observable signal is explicit that adapters exercise checkpoint-rewind differently: \"same `session_id` if rewound in place, **or a linked new `session_id` if the adapter forks**; turns after the rewind follow a clean arc.\" codex is the fork variant. The signal to observe is therefore a NEW session row in `ready` after the rewind, with a clean `ready → working → ready` arc on the next turn.\n\n## agent_supports: partial\n\ncodex 0.130.0 DOES ship a rewind affordance, but a conversation-only one:\n\n- `/fork` is a live TUI slash command. The live command palette (codex v0.130.0, captured this session) shows `/fork  fork the current chat`, and `--help` lists a top-level `codex fork` subcommand (\"Fork a previous interactive session\"). Official docs: `/fork` \"Clone the current conversation into a new thread with a fresh ID, leaving the original transcript untouched.\"\n- Esc-Esc on an empty composer walks the transcript back to edit a prior user message (TUI backtrack), then Enter forks from that point.\n\nIt is `partial` (not `yes`) because the fork reverts CONVERSATION state only — prior file edits remain in the working tree (\"the conversation rewinds, but prior file edits remain\"). Native file-edit checkpoint restore is an OPEN feature request (#11626, #12558), not shipped. So codex covers the conversation half of \"files and/or conversation\" but not the file half.\n\n## Why not `no`\n\nThe superseded `no / n.a.` verdict argued checkpoint-rewind \"means rolling back FILE and/or conversation state\" and that `/fork` is \"branching, not rollback.\" That overreaches: (1) the scenario-meaning explicitly includes the fork case as a valid variant (\"a linked new `session_id` if the adapter forks\"); (2) \"files AND/OR conversation\" is satisfied by the conversation arm alone. A conversation fork that restores the pre-fork history into a fresh session IS the rewind this cell is about for a forking adapter. The honest downgrade is `partial` (no file revert), not `no`.\n\nFurther confirmations that there is no SECOND, file-reverting rewind being missed: the live palette returns no completion for `/rewind` or `/undo` in 0.130.0; `/undo` was removed (discussion #9618). The `/rewind` token present in the native binary's string table is dormant — it is not a live TUI command.\n\n## daemon_capability: full\n\nThe codex Source is `FilesUnderRoot{Dir: sessionsDir()}` watching `~/.codex/sessions/**.jsonl` (adapter.go:21, agent.go:32). A `/fork` EAGERLY materializes a NEW rollout-<ts>-<uuid2>.jsonl under that watched root — confirmed by a real on-disk rollout (`019e5615-9632-...`) whose first line is `{\"type\":\"session_meta\",\"payload\":{\"id\":\"019e5615-9632-...\",\"forked_from_id\":\"019e5615-1ef8-...\"}}`. A new file under the watched root is exactly what produces a new session row in `ready`, and the post-fork turn's `working→ready` cycle is on that new rollout. The user-observable signal — a linked new session_id with a clean arc — is therefore emitted by the daemon as it exists today. The original rollout is NOT removed at fork time (codex emits no transcript_removed; the old file lingers), so the original row stays `ready` until process_exited; the scenario verify[] already accounts for this.\n\nThe `forked_from_id` provenance is dropped: the codex parser skips `session_meta`/`turn_context` (parser.go:179-180) and nothing in the codex adapter populates `ParentSessionID`. This means the daemon surfaces the fork as an INDEPENDENT new session, not as a parent-linked child. Under the caveats-over-downgrades rule this stays `full` + caveat, NOT `bug`: the scenario's spec-required observable is \"a (linked) new session_id appears with a clean arc,\" which IS satisfied — the new row appears and transitions correctly. The lost linkage LABEL is a narrow provenance gap the spec does not require, so it is a caveat. (Same provenance-drop shape as codex/session-reset, where supersession is still observed.)\n\n## driver_capability: ready\n\nThe shard recipe drives the fork with `send` / `fork` / `wait_turn` / `sleep` steps only — every one of which the codex interactive driver implements (fork is sent as text+Enter; no keys/restart/resume/sigkill primitives are needed). Esc-Esc backtrack is deliberately avoided in the recipe because the driver's interrupt step desyncs the turn counter, but that is a recipe choice, not a missing primitive. No `gap:*`.\n\n## Primitive / capability key\n\nPrimitive exercised: \"Checkpoint/branch capability ... Maps to `checkpoint_rewind` in `capabilities.json` when present.\" The legacy per-adapter `capabilities.json` was deleted in the #511 shard migration, so there is no key file to confirm against; the canonical primitive name is `checkpoint_rewind`.",
+      "caveats": [
+        "feature-invisible-but-spec-compliant (provenance only): the parser skips session_meta (parser.go:179-180) and nothing sets ParentSessionID, so the daemon shows the fork as an independent new session_id, not a parent-linked child — the new row + clean arc are observed, only the forked_from_id linkage label is lost.",
+        "/fork reverts conversation state only; prior file edits stay in the working tree (file-revert checkpoint restore is open request #11626/#12558, unshipped) — hence agent_supports: partial, not yes.",
+        "known capture gap (driver): drive-codex-interactive.sh caches the first rollout and curate-lifecycle-fixture.sh filters to UUID-1, so the post-/fork (UUID-2) phases may be absent from the single-session curated fixture and surface as validation drift until the driver tracks /fork-spawned sessions — same gap as codex/session-reset, a developer task, not an observability limit."
+      ],
+      "sources": [
+        {
+          "kind": "url",
+          "ref": "https://developers.openai.com/codex/cli/slash-commands",
+          "note": "/fork 'Clone the current conversation into a new thread with a fresh ID, leaving the original transcript untouched'; no /rewind or /undo documented; conversation-only scope."
+        },
+        {
+          "kind": "url",
+          "ref": "https://github.com/openai/codex/issues/11626",
+          "note": "OPEN request to add /rewind checkpoint restore that reverts BOTH chat context and Codex-applied code edits — proves file-revert is not shipped (basis for partial, not yes)."
+        },
+        {
+          "kind": "url",
+          "ref": "https://github.com/openai/codex/discussions/9618",
+          "note": "Discussion confirming the experimental /undo was removed and there is no /rewind/revert; rules out a second file-reverting rewind being missed."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/codex/agent.go",
+          "note": "Source is FilesUnderRoot{Dir: sessionsDir()}; a /fork's new rollout file lands under the watched root → new session row observable (daemon_capability: full)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/codex/parser.go",
+          "note": "Line 179-180 skips session_meta/turn_context; nothing sets ParentSessionID — forked_from_id provenance is dropped (the caveat behind partial, not a bug)."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.codex/sessions/2026/05/23/rollout-2026-05-23T*-019e5615-9632-7740-b2cf-3061e4ff06e2.jsonl",
+          "note": "Real codex rollout: first line is session_meta with payload.forked_from_id pointing at the parent — direct evidence the fork writes a new watched file carrying linkage the parser then drops."
+        },
+        {
+          "kind": "url",
+          "ref": "live: codex v0.130.0 TUI command palette (captured 2026-05-29 via tmux)",
+          "note": "Palette shows '/fork  fork the current chat'; '/rewind' and '/undo' yield no completion — confirms /fork is the only live rewind affordance in the installed build."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "codex CLI on PATH and authenticated (~/.codex/config.toml or OPENAI_API_KEY) — verified codex 0.130.0",
+        "codex version with /fork support — verified in 0.130.0 (TUI prints 'Thread forked from <uuid>')",
+        "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+        "STALE-VERDICT OVERRIDE: the prior by_adapter.codex was applicable:false on the false belief codex 0.130 has no rewind. Codex DOES support rewind/fork: /fork clones the conversation into a NEW thread (fresh session id; original intact), and Esc-Esc on an empty composer walks the transcript back to edit a prior message. Feature requests #11626/#12558 ask codex to ALSO revert code edits — orthogonal to the conversation fork that already ships. See assessment.json.",
+        "PARTIAL observability (per assessment.json): codex forks rather than rewinding in place, so the observable is a NEW linked session_id (not the same session_id with a truncated transcript like claudecode). The codex parser skips session_meta lines, so the forked_from_id provenance is dropped and the daemon sees the fork as an independent fresh session, not a linked child. codex emits NO transcript_removed for the original at fork time (the old rollout lingers frozen until process_exited).",
+        "KNOWN CAPTURE GAP: drive-codex-interactive.sh caches the first rollout and writes a single session.uuid, so curate-lifecycle-fixture.sh filters the fixture to UUID-1 only. The v2_* (post-/fork) phases assert what the daemon observes LIVE; they may be absent from the single-session curated fixture, surfacing as validation drift until the codex driver tracks /fork-spawned sessions (a developer task). SAME gap as codex/session-reset."
+      ],
+      "setup": [
+        "Driver launches codex in a fresh per-run cwd under <staging>/cwd/ (isolates the trust dialog).",
+        "Codex assigns its own session UUID per rollout; there is no --session-id flag. The first prompt materializes rollout-<ts>-<uuid1>.jsonl; /fork EAGERLY materializes a second rollout-<ts>-<uuid2>.jsonl carrying a fresh session_id, a session_meta forked_from_id=uuid1, and the replayed pre-fork history. UNLIKE /clear (lazy: second rollout appears only on the first post-clear prompt), /fork is eager — the new rollout appears the instant the command runs.",
+        "/fork is sent as a plain send/slash step (text + Enter): the codex driver handles send/slash as text+Enter. NO keys/restart/resume step types are used — the codex driver does not implement them. Esc-Esc rewind is deliberately avoided because the driver's interrupt step decrements the turn counter, which would desync wait_turn."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: one"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: two"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        },
+        {
+          "type": "fork"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: three"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        }
+      ],
+      "verify": [
+        "events.jsonl shows a proc-<PID> pre-session entering ready, handing off to the FIRST rollout-keyed session in ready",
+        "events.jsonl shows the FIRST rollout session running two working→ready turns (turn 1 'one', turn 2 'two') — the checkpoints to fork back from",
+        "after /fork, a DIFFERENT rollout session_id appears in ready (new linked session row, restored from the rewound point) — the 'a linked new session_id if the adapter forks' signal from scenario-meanings, observed live on the dashboard",
+        "the post-fork turn's working→ready cycle is on the NEW rollout session, not the original — a clean ready → working → ready arc from the rewound point",
+        "codex does NOT emit transcript_removed for the original session at /fork time (the old rollout lingers frozen) — the original row stays ready until process_exited; do not assert a removal event, and do not assert a same-session_id in-place rewind (codex forks)",
+        "final live state is ready"
+      ],
+      "settings": {},
+      "timeout_seconds": 180
+    }
+  },
+  "scenario_id": "checkpoint-rewind",
+  "recording_dir": "codex/scenarios/1-6_checkpoint-rewind"
+}

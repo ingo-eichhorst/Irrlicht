@@ -1,0 +1,128 @@
+{
+  "recording_dir": "pi/scenarios/2-17_agent-question-pending",
+  "artifacts": {
+    "events": "pi/scenarios/2-17_agent-question-pending/events.jsonl",
+    "transcript": "pi/scenarios/2-17_agent-question-pending/transcript.jsonl",
+    "manifest": "pi/scenarios/2-17_agent-question-pending/manifest.json",
+    "golden": "pi/scenarios/2-17_agent-question-pending/transcript.jsonl.replay.json.golden"
+  },
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "pass_rate": "5/5 phases passed",
+    "agent_cli_version": "0.70.0",
+    "daemon_version": "0.4.7+730a676",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "agent-question-pending",
+      "agent": "pi",
+      "assessed_at": "2026-05-25T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## What this scenario actually is\n\nThe coverage id is `user-blocking-question`, whose scenario-meanings block describes the *structured-tool* form (\"Agent calls AskUserQuestion and pauses\"). But the canonical `agent-question-pending` entry in `scenarios.json` is explicitly the **trailing-`?` text-classifier path**, not the structured tool: \"Validates the trailing-? path through the state classifier (session.IsWaitingForUserInput → state_classifier.go decision 2a): at turn end the session transitions working→waiting instead of working→ready because the last assistant message ends in `?`. This is the text classifier path, not a structured AskUserQuestion tool.\" The verdict must be judged against the behaviour the scenario exercises — agent emits a question, session enters waiting — not against whether pi ships an AskUserQuestion primitive.\n\nThe prior column reassessment (`.specs/agent-assess-pi.json → user-blocking-question = agent_supports:no`) judged the structured-tool reading: \"pi has no dedicated AskUserQuestion-style structured question tool.\" That observation is correct (see below) but it answers the wrong question for `agent-question-pending`. This single-cell assessment refines it to `yes/yes`.\n\n## Why agent_supports: yes\n\npi (v0.70.0, `@mariozechner/pi-coding-agent`) is an ordinary LLM coding agent that produces free-form assistant text turns. A prompt like the existing recipe — \"Reply with exactly one short clarifying question, ending in a question mark. No other text.\" — yields an assistant turn whose terminal text ends in `?`. The behaviour the scenario asserts (the reply ends in a question mark, signalling the agent is waiting for the user) is intrinsic to any text-producing agent; it needs no structured question tool.\n\nThe pi binary scan confirms the transcript shape: assistant messages carry `stopReason` (`stop` at end-of-turn vs `toolUse` mid-turn) with role `assistant` and text content blocks (matched in `dist/core/export-html/template.js`, `dist/modes/interactive/components/tree-selector.js`). The pi parser_test.go already exercises a text-only `stopReason:stop` turn whose text is a question (\"Hi! What would you like to work on?\"). The Step 2.5 keyword guard found NO `askUserQuestion` / `ask_user` / structured-question primitive — so the *structured-tool* form is genuinely absent, which is why this is the text-classifier path and not the tool-gate path.\n\n## Why daemon_capability: full; driver_capability: ready\n\nThe working→waiting transition is computed entirely from agent-agnostic `SessionMetrics`, and pi feeds it correctly:\n\n1. pi persists each message append-only to its session JSONL (`dist/core/session-manager.js` uses `appendFileSync`), under `~/.pi/agent/sessions/--<cwd>--/*.jsonl`. The pi adapter watches this via `FilesUnderRoot` (`agent.go`, `adapter.go`), so the assistant question line is on disk and readable — it does not vanish on process exit the way a CWD-scoped transcript could.\n2. The pi parser maps an assistant message with `stopReason == \"stop\"` to `EventType: \"turn_done\"` and, in the same branch, sets `ev.AssistantText` from the message text blocks via `extractPiAssistantText` (`parser.go` lines 77-101).\n3. `turn_done` → `SessionMetrics.LastEventType == \"turn_done\"` → `IsAgentDone()` returns true (`session.go` line 483). `AssistantText` flows `parsed.AssistantText` → `tailer.go:886 t.lastAssistantText` → `tailer_metrics.go:387 metrics.LastAssistantText`.\n4. `IsWaitingForUserInput()` runs `ExtractQuestionSnippet(LastAssistantText)`; a literal trailing `?` returns a non-empty snippet → true (`session.go` lines 241-249).\n5. `ClassifyState` decision 2a fires: `working → waiting` with reason \"turn ended with question or cue → waiting\" (`state_classifier.go` lines 48-56). The recipe stops there, so final state is `waiting`, satisfying the scenario's verify block (`has_waiting_state: true`, `final_state: waiting`).\n\nEvery step on this path is shared with claudecode (which is `yes/yes` for the same coverage id) and is driven by transcript content, not by any claudecode- or pi-specific event kind. pi satisfies `requires: [headless_mode]` (capabilities `headless_mode: true`) and additionally ships an interactive TUI mode (`dist/modes/interactive/`, capabilities `tui: true`), so the live-REPL-stays-alive path the scenario notes for codex is also available — the waiting episode is not lost to a process_exited race.\n\n## Primitive / capability note\n\nThe scenario-meanings **Primitive exercised** is `tool_calls + AskUserQuestion (or adapter equivalent)`. For pi the \"adapter equivalent\" is the text-classifier path, which depends on no tool capability. The relevant capabilities.json key is therefore not a question-tool flag (pi has none) but the generic turn/headless surface: `headless_mode: true` is the gating capability the scenario `requires`, and it is satisfied.\n\nThis re-opens implementation for the cell: applicable = yes, proceed to recipe/record (the prompt-mode recipe already exists in scenarios.json).",
+      "caveats": [
+        "The coverage_id scenario-meanings describes the structured AskUserQuestion-tool form; pi has no such tool (Step 2.5 binary scan found no askUserQuestion/ask_user primitive). The `yes` verdict is for the trailing-? text-classifier path that the `agent-question-pending` scenario actually exercises, NOT a structured question tool.",
+        "In headless print-mode pi writes the assistant question turn then exits the process; like the codex note in the scenario description, a recorder must read the persisted assistant line (it remains on disk under FilesUnderRoot) — the waiting state is derived from the transcript, so it survives, but the recording should confirm no process_exited→ready race overwrites the waiting episode. The interactive TUI mode avoids the race entirely by keeping the session alive past turn end.",
+        "The prior column reassessment verdict (agent_supports:no) judged the structured-tool reading and should be updated in the coverage matrix to yes/yes for the agent-question-pending text-classifier path."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": ".claude/skills/ir:onboard-agent/scenarios.json",
+          "note": "agent-question-pending description: explicitly the trailing-? text-classifier path through state_classifier.go decision 2a, NOT a structured AskUserQuestion tool; existing pi prompt-mode recipe present."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go",
+          "note": "Decision 2a (lines 48-56): IsAgentDone && IsWaitingForUserInput → working→waiting. Agent-agnostic; operates on SessionMetrics."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/session.go",
+          "note": "IsWaitingForUserInput (241-249) calls ExtractQuestionSnippet on LastAssistantText; IsAgentDone (465-500) returns true on LastEventType==turn_done."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/pi/parser.go",
+          "note": "stopReason==stop → EventType turn_done; same branch sets ev.AssistantText via extractPiAssistantText (lines 77-101) — feeds both IsAgentDone and IsWaitingForUserInput."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer.go",
+          "note": "lines 886-890: parsed.AssistantText → t.lastAssistantText, then surfaced as metrics.LastAssistantText (tailer_metrics.go:387)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/pi/parser_test.go",
+          "note": "Existing test (~lines 290-305): text-only pi turn stopReason:stop with question text 'Hi! What would you like to work on?' yields LastEventType turn_done."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/pi/agent.go",
+          "note": "Source: FilesUnderRoot over ~/.pi/agent/sessions — append-only transcript persists past process exit, so the assistant question line stays readable."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/pi/capabilities.json",
+          "note": "headless_mode:true (scenario requires it) and tui:true (interactive REPL stays alive past turn end); permission_hooks/subagents false (irrelevant to the text-classifier path)."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@mariozechner/pi-coding-agent/dist",
+          "note": "Step 2.5 binary scan of pi v0.70.0 dist: message shape has role:assistant + stopReason(stop/toolUse) + text content (export-html/template.js, tree-selector.js); session-manager.js appendFileSync per message; NO askUserQuestion/ask_user/structured-question primitive — confirms text-classifier path, not structured tool."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "pi CLI on PATH and authenticated (pi runs against its configured model out-of-band)",
+        "tmux available — the interactive driver runs pi in a tmux REPL so the session stays alive past turn end and the waiting episode is observable",
+        "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+      ],
+      "setup": [
+        "The interactive driver (drive-pi-interactive.sh) launches pi in a fresh per-run cwd inside a tmux session, waits for the REPL prompt, then sends the single prompt",
+        "pi writes one JSONL rollout file per session under ~/.pi/agent/sessions/<cwd-slug>/ on launch (FilesUnderRoot, non-lazy); the driver resolves that file and extracts the UUID from line 1",
+        "Unlike the headless `pi --print` path (single-shot, the process exits at turn end so the waiting episode is lost to a process_exited race — see the basic-turn recipe), the interactive driver keeps the rollout session ALIVE after the turn; the REPL is torn down only when the script ends, so the daemon can observe the post-turn waiting state dwell",
+        "No reply is sent to the question — after wait_turn + a trailing sleep (the session dwells in waiting) the driver kills the tmux session once, so pi exits and the daemon emits a single process_exited for the rollout session while it is still waiting"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "I want to add a feature to my project but I'm not sure which file it should go in. Ask me exactly ONE short clarifying question to scope it, ending in a question mark, and then stop and wait for my answer. Output only that one question and nothing else."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        }
+      ],
+      "verify": [
+        "events.jsonl contains a transcript_new for the rollout session born ready within ~2s of REPL launch (a transient proc-<PID> pre-session may also appear; the turn arc and pid_discovered land on the UUID-keyed rollout session)",
+        "events.jsonl contains a pid_discovered event bound to the rollout session_id",
+        "events.jsonl contains a state_transition→working on the rollout session_id when the prompt is sent",
+        "events.jsonl contains a state_transition→waiting on the SAME rollout session_id when the turn ends (the reply ends in a question mark; the classifier takes the trailing-? path rather than →ready)",
+        "the rollout session's final live state is waiting and it persists ≥4s — no state_transition to ready appears before the REPL is torn down",
+        "events.jsonl contains exactly one process_exited on the rollout session at REPL teardown while the session is still waiting (one long-lived session, not a per-turn exit)"
+      ],
+      "settings": {},
+      "timeout_seconds": 120,
+      "_prior_prompt_mode": {
+        "note": "Superseded by the script-mode recipe above. The prior headless prompt-mode recipe (`pi --print -p`) could not observe the waiting episode: in print-mode pi answers the question and the process exits immediately at turn end, so a process_exited race overwrites the working→waiting transition before it can dwell. Script mode keeps the REPL alive so the waiting state is observable.",
+        "prompt": "Reply with exactly one short clarifying question, ending in a question mark. No other text.",
+        "settings": {},
+        "timeout_seconds": 90
+      }
+    }
+  },
+  "scenario_id": "user-blocking-question"
+}

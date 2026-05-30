@@ -1,0 +1,60 @@
+{
+  "artifacts": {},
+  "metadata": {
+    "agent_supports": "no",
+    "daemon_capability": "n/a",
+    "driver_capability": "n/a",
+    "confidence": 0.85,
+    "notes": "agent_supports: no\ndaemon_capability: n/a; driver_capability: n/a"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "autonomous-loop-iteration-limit",
+      "agent": "pi",
+      "assessed_at": "2026-05-25T00:00:00Z",
+      "agent_supports": "no",
+      "daemon_capability": "n/a",
+      "driver_capability": "n/a",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: no\ndaemon_capability: n/a; driver_capability: n/a\n\n## Reasoning\n\nThis scenario exercises **iteration-cap enforcement** (per scenario-meanings: the agent CLI has a configurable max-step limit and emits a clean turn-end signal when it hits the cap; maps to `autonomous_mode` in `capabilities.json`). It is the bounded-termination variant of `autonomous-loop` — same precondition (the agent is running in a self-prompting autonomous loop), and it only becomes meaningful if that loop exists. The canonical recipe is Claude-Code-specific: it drives `/goal <unsatisfiable-condition>`, lets the loop run, then sends `/goal clear` as a stand-in for the `max_iterations` cap.\n\npi 0.70.0 has **no autonomous / self-prompting loop at all**, so there is no max-step cap to hit. Three independent confirmations:\n\n1. **Binary/source keyword scan (Step 2.5).** `pi` resolves to a Node package whose real source is the bundled `dist/` JS at `@mariozechner/pi-coding-agent@0.70.0`. A recursive scan of that dist for `autonomous|maxIteration|max_iteration|maxSteps|maxTurns|iterationLimit|iteration.?cap|--goal|self.?prompt|max.?loop|stepLimit` returned **zero matches**. (The `strings $(which pi)` scan on the launcher shim is empty by construction — pi is a Node script, not a compiled binary — so the dist JS scan is the authoritative equivalent and it is also empty.)\n\n2. **Slash-command enumeration.** The full set of in-REPL slash commands extracted from the dist is `/changelog /clone /colors /compact /copy /debug /export /fork /hotkeys /import /login /logout /model /modes /name /new /quit /reload /resume /session /settings /share /theme /tree /versions` (plus easter-egg names). There is **no `/goal`-style command** and nothing that arms a self-re-prompting loop. This is the same guard that flipped Claude Code's verdict to `yes` (the `/goal` slash command was REPL-only and missed by `--help`); pi has no such hidden command.\n\n3. **`pi --help` flags + README.** No `--goal` / `--auto` / autonomous / iteration / step / loop / max-turn flag exists; flags are model/session/tools/thinking-oriented. The README explicitly lists features pi deliberately does NOT build — sub-agents, plan mode, background bash — framing pi as a turn-driven, human-in-the-loop terminal agent.\n\n## irrlicht_observes\n\nMarked **n/a** rather than no: because the agent lacks the underlying autonomous loop, there is no max-iteration cap-hit arc for the daemon to observe in the first place. The pi adapter is `FilesUnderRoot` + a JSONL `Parser` whose turn boundary is `stopReason == \"stop\"` → `turn_done`; a single bounded turn would resolve `working → ready` normally, but that is just a plain turn, not the cap-on-an-autonomous-loop primitive this scenario asserts. Per the Step 6 table, `agent_supports: no` makes the cell `applicable: no` regardless of the observe axis. The capability key `autonomous_mode` does not exist in pi's `capabilities.json` (which has no autonomy/loop key at all), consistent with the verdict.\n\n## Relationship to sibling cells\n\nThis tracks the `autonomous-loop` cell (also `no`, conf 0.82) one-for-one. Distinct from `token-quota-exhausted` (a cost/budget limit, partial for pi) and `turn-aborted-by-error` (an unplanned provider error, yes for pi) — both of those are different primitives and are NOT blocked by the missing autonomous loop.",
+      "caveats": [
+        "If a third-party pi extension/package adds a self-prompting loop (pi's stated extension model), that is not stock pi 0.70.0 and would require re-assessment plus an `autonomous_mode` capability key.",
+        "The `strings $(which pi)` launcher scan is empty because pi is a Node script; the authoritative scan is the recursive grep over the package's `dist/` JS, which is also empty."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@mariozechner/pi-coding-agent/dist",
+          "note": "recursive grep for autonomous|maxIteration|maxSteps|maxTurns|iterationLimit|--goal|self-prompt|stepLimit across pi 0.70.0 dist JS returned zero matches (Step 2.5 keyword guard, authoritative for a Node-script agent)"
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@mariozechner/pi-coding-agent/dist (slash-command set)",
+          "note": "full slash list /changelog /clone /compact /export /fork /model /new /quit /resume /session /tree ... — no /goal or any autonomous-loop command"
+        },
+        {
+          "kind": "docs",
+          "ref": "pi --help (pi 0.70.0)",
+          "note": "no --goal / --auto / iteration / step / loop / max-turn flag; flags are model/session/tools/thinking oriented"
+        },
+        {
+          "kind": "docs",
+          "ref": "@mariozechner/pi-coding-agent README.md (lines 23, 343, 452, 456, 460)",
+          "note": "pi 'skips features like sub agents and plan mode'; turn-driven human-in-the-loop agent; no autonomous/goal mode documented"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/pi/agent.go",
+          "note": "Source: FilesUnderRoot + JSONLineParser{Parser}, Match: ExactName{pi} — transport is local JSONL turns; no autonomous-loop event kind to observe"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/pi/capabilities.json",
+          "note": "no autonomous_mode / iteration-cap capability key present for pi"
+        }
+      ]
+    }
+  },
+  "scenario_id": "autonomous-loop-iteration-limit"
+}

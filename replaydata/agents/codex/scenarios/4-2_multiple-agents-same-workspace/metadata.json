@@ -1,0 +1,98 @@
+{
+  "recording_dir": "codex/scenarios/4-2_multiple-agents-same-workspace",
+  "artifacts": {
+    "events": "codex/scenarios/4-2_multiple-agents-same-workspace/events.jsonl",
+    "transcript": "codex/scenarios/4-2_multiple-agents-same-workspace/transcript.jsonl",
+    "manifest": "codex/scenarios/4-2_multiple-agents-same-workspace/manifest.json",
+    "golden": "codex/scenarios/4-2_multiple-agents-same-workspace/transcript.jsonl.replay.json.golden"
+  },
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "pass_rate": "4/4 phases passed",
+    "agent_cli_version": "0.130.0",
+    "daemon_version": "0.4.7+7bdc06c.dirty",
+    "confidence": 0.95,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "multiple-agents-same-workspace",
+      "agent": "codex",
+      "assessed_at": "2026-05-24T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.95,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nThis scenario is about COEXISTENCE: one Codex session and one different-adapter session (e.g. claudecode) running concurrently in the SAME project directory, each shown with its correct adapter label and fully independent state + metrics.\n\n### agent_supports: yes\n\nCodex has no notion of, and imposes no constraint on, what other agent CLIs run in the same cwd. A `codex` process is an ordinary CLI that materializes its own transcript under `~/.codex/sessions/YYYY/MM/DD/*.jsonl` (see `core/adapters/inbound/agents/codex/adapter.go`, `defaultRootDir = \".codex/sessions\"`). Nothing about launching a second, unrelated agent (claude, pi, aider) in the same directory interferes with a running Codex session. So the agent trivially \"supports\" coexistence — there is nothing for it to support or block.\n\n### daemon_capability: full; driver_capability: ready\n\nThe daemon labels each session by its adapter INDEPENDENTLY, by construction:\n\n1. **Per-adapter process matching.** Codex registers `Process.Match = ExactName{Name: \"codex\"}` (`core/adapters/inbound/agents/codex/agent.go`), while claudecode/pi/aider each register their own distinct matcher. The process scanner runs every adapter's matcher separately, so a `codex` process is tagged `codex` and a `claude` process is tagged `claudecode` — the adapter label is derived from which matcher hit, never from the cwd. Two different agents in one directory therefore get two correct, distinct labels.\n\n2. **Disjoint transcript roots.** Codex's `Source` is `FilesUnderRoot{Dir: \".codex/sessions\", ...}` (`agent.go`), whereas claudecode watches `~/.claude/projects/`. The fswatcher roots are per-adapter (derived from the `allAgents` slice), so a Codex transcript and a Claude transcript never land in the same watch root and cannot be confused or merged, regardless of sharing a cwd.\n\n3. **Per-(adapter, session_id) metrics.** Each session's tokens / model / cost / state come from that adapter's own parser applied to that session's own transcript file. There is no cwd-keyed merging — sessions are keyed by their own UUID under their own adapter. A turn in the Codex session drives only the Codex transcript and thus only the Codex session's state arc; the claudecode session's state is unaffected, and vice versa.\n\nThis is the same independence the existing `multiple-sessions-same-cwd` capability relies on, generalized across DIFFERENT adapters rather than two instances of the same one. Because each adapter's matcher + watch root + parser are wired separately off the `allAgents` projections (`core/adapters/inbound/agents/maps.go`), independent labeling and metrics fall out of the architecture rather than needing special-case code.\n\n## Recording (2026-05-24)\n\nRecorded by scripts/run-cell-multi.sh: it launches the codex and claudecode interactive drivers concurrently against ONE shared cwd (IRRLICHT_ONBOARD_CWD) under a single isolated --record daemon, then curates one per-adapter fixture each. The workspace events.jsonl (shared by both cells) shows the two-row independence above: a codex rollout session and a claudecode session, each keyed to the same cwd slug, each with its own working->ready arc, no cross-contamination or merge. ONE recording satisfies both the codex and the claudecode rows — they share events.jsonl + expected.jsonl and differ only in which transcript each stores for its replay golden. The scenario's requires:[headless_mode] gate is satisfied (capabilities.json → headless_mode: true).",
+      "caveats": [
+        "Recorded by run-cell-multi.sh, which launches both adapters' drivers concurrently against one shared cwd under a single isolated --record daemon. The daemon observes claudecode via its transcript fswatcher (the isolated daemon is not on :7837 where claudecode's hooks POST), which suffices for this scenario's per-session working->ready arcs.",
+        "Independent labeling/metrics rely on the daemon scanning each adapter's process matcher and transcript root separately. If a future adapter ever shared a transcript root or process name with another, that assumption would need re-checking — not the case for codex today."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/codex/agent.go",
+          "note": "Codex registers Process.Match = ExactName{Name: \"codex\"} and Source = FilesUnderRoot{Dir: \".codex/sessions\"} — per-adapter matcher + disjoint watch root"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/codex/adapter.go",
+          "note": "defaultRootDir = \".codex/sessions\"; ProcessName = \"codex\" — distinct from claudecode's ~/.claude/projects/ root and process name"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/maps.go",
+          "note": "fswatcher roots, process scanners, and parser-factory map are all per-adapter projections of the allAgents slice — independent labeling/metrics fall out of the wiring"
+        },
+        {
+          "kind": "file",
+          "ref": ".claude/skills/ir:onboard-agent/scripts/run-cell-multi.sh",
+          "note": "Cross-adapter recorder: launches both adapters' interactive drivers concurrently against one shared cwd (IRRLICHT_ONBOARD_CWD) under a single isolated --record daemon, then curates one per-adapter fixture each (shared workspace events.jsonl, per-adapter transcript). This is the rig that unblocked the recording."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/codex/capabilities.json",
+          "note": "headless_mode: true — the scenario's requires gate is satisfied"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "partner_adapter": "claudecode",
+      "preconditions": [
+        "claude AND codex CLIs on PATH and authenticated",
+        "irrlichd is recording — run-cell-multi.sh isolated coexist mode (spawns its own --record daemon on an alternate port with its own IRRLICHT_HOME, so production keeps running)",
+        "no other claudecode/codex session is live in the run cwd"
+      ],
+      "setup": [
+        "run-cell-multi.sh creates ONE shared cwd and launches the claudecode and codex interactive drivers concurrently, both pointed at it via IRRLICHT_ONBOARD_CWD",
+        "codex registers Process.Match=ExactName{Name:codex} + Source=FilesUnderRoot{Dir:.codex/sessions}, disjoint from claudecode's matcher and ~/.claude/projects root, so the daemon keys the two sessions independently",
+        "this cell stores the codex rollout for the replay golden; its events.jsonl and expected.jsonl span the whole workspace (both adapters)"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: bravo"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        }
+      ],
+      "verify": [
+        "events.jsonl contains TWO distinct session_ids from two different adapters, both keyed to the same cwd slug",
+        "each session has its own independent working->ready arc; no transition on one is attributed to the other",
+        "no cross-contamination: the daemon never merges or flaps the two adapters' rows"
+      ],
+      "settings": {},
+      "timeout_seconds": 240
+    }
+  },
+  "scenario_id": "multiple-agents-same-workspace"
+}

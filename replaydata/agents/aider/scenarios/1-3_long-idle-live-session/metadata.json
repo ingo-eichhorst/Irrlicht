@@ -1,0 +1,123 @@
+{
+  "recording_dir": "aider/scenarios/1-3_long-idle-live-session",
+  "artifacts": {
+    "events": "aider/scenarios/1-3_long-idle-live-session/events.jsonl",
+    "transcript_md": "aider/scenarios/1-3_long-idle-live-session/transcript.md",
+    "manifest": "aider/scenarios/1-3_long-idle-live-session/manifest.json",
+    "recordings": [
+      "aider/scenarios/1-3_long-idle-live-session/recordings/2026-05-25-17-54-35_irrlichd-0.4.7+e934713"
+    ]
+  },
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "pass_rate": "7/7 phases passed",
+    "agent_cli_version": "0.86.2",
+    "daemon_version": "0.4.7+e934713",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes\ndaemon_capability: full\ndriver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "long-idle-live-session",
+      "agent": "aider",
+      "assessed_at": "2026-05-25T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Reasoning\n\nThe scenario asserts three user-observable signals: (1) the session row persists in `ready` past `readyTTL`, (2) it is NOT pruned during the idle window because its process is still alive, and (3) the next user prompt resumes `ready → working` normally. The primitive exercised is the daemon's process-liveness check — `kill(pid, 0)` against the session's PID to distinguish \"idle but alive\" from \"dead and eligible for pruning.\" This is agent-agnostic daemon logic that applies to any adapter with a discoverable, persistent PID. The discriminator across the matrix row is therefore whether the adapter has a real PID binding: claudecode/codex/pi land at `full`, opencode is the contrast because its ProcessOwnedStore over SQLite has no persistent PID. Aider patterns with the former group.\n\n**agent_supports.** Aider declares `headless_mode: true` (capabilities.json), satisfying the scenario's `requires: [headless_mode]`. More importantly for this scenario, aider runs as a long-lived interactive REPL. The recording's `drive-aider-interactive.sh` launches a single aider TUI under `tmux new-session` (NOT the single-shot `--message`/`--print` path) and keeps that one process alive across both `send`s and the idle `sleep` between them — the tmux session is only killed at the very end of the step script. So the aider process is genuinely alive throughout the idle window, which is what the scenario requires.\n\n**daemon_capability (full).** Aider's transport is `FilesUnderCWD` over the per-project `.aider.chat.history.md`, with a real PID binding: `DiscoverPID` matches command lines containing `/aider` whose CWD equals the session's working directory (the OS process is `python` invoking the aider script, so a bare `pgrep -x aider` finds nothing — the `/aider` command-line regex is what binds the PID). With that PID bound, the daemon's sweep at `pid_manager.go` first filters to stale sessions via `IsStale(readyTTL)`, then explicitly skips deletion when `state.PID > 0 && syscall.Kill(state.PID, 0) == nil` — i.e. the live aider process keeps the `ready` session out of the readyTTL sweep, exactly as it does for claudecode. No `transcript_removed` fires during the idle window. A trace exists in the watched Source and the daemon handles it correctly today, so this is `full`, not `bug`/`incapable`.\n\nThe parser emits the lifecycle events the spec asserts. Turn 1 lands in `ready` via `IdleFlush`, which synthesizes a `turn_done` once `.aider.chat.history.md` has been quiet for `aiderIdleTurnDoneAfter` (1500ms) — aider's idle TUI prompt never lands in the markdown history, so this synthetic flush is the canonical working→ready signal. The second `send` writes a `#### ` line, which the parser maps to `user_message` (reopening the turn → `working`); the subsequent `> Tokens:`/IdleFlush pair settles back to `ready`. The recipe's `tool_calls_max: 0` holds because both prompts are pure text replies with no `Applied edit`/`Running` lines.\n\nThe recording shortens the TTL via `IRRLICHT_READY_SESSION_TTL=15s` so the \"stayed past readyTTL\" assertion is testable in ~45s rather than 30min; this only affects the recording, not production behavior.\n\n**driver_capability (ready).** The recipe needs three step types — `send`, `wait_turn`, and `sleep`. All three are implemented by `drive-aider-interactive.sh` (its `case` dispatches `send|slash`, `wait_turn`, `interrupt`, `sleep`). The long-idle scenario keeps the session alive and quiet, so the driver needs no `restart`/`sigkill`/`session`/`keys` primitive — only send + sleep, both present. No driver gap.\n\n## Matrix drift\n\nThe coverage row currently reads `agent_supports: yes / daemon_capability: unknown / driver_capability: ready` for aider. This assessment resolves the `unknown` to `daemon_capability: full` — the `unknown` predated confirming that aider's `/aider` PID binding feeds the same liveness path (`pid_manager.go` kill(pid,0) skip) the other PID-backed adapters use. The maintainer should transcribe `daemon_capability: full` (note: \"PID liveness via /aider command-line match holds session past readyTTL — same path as claudecode\"). `driver_capability` stays `ready`.",
+      "caveats": [
+        "Aider's idle-flush window (~1500ms parser floor, ~5s effective once the SessionDetector's 5s working-refresh tick is included) means the post-turn ready transition lags actual LLM completion; the recipe budgets sleeps around each turn to let the classifier settle.",
+        "Recording exercises a ~25s idle window against a 15s readyTTL; production sessions sit idle for hours. The assertion is a floor (stayed past TTL), so longer real-world idles still pass."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/application/services/pid_manager.go",
+          "note": "Lines ~634-642: IsStale(readyTTL) filter then the kill(pid,0)==nil skip — the process-liveness check this scenario exercises; agent-agnostic, applies to any PID-bound adapter. Grounds daemon_capability: full (trace handled today)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/aider/agent.go",
+          "note": "FilesUnderCWD over .aider.chat.history.md; CommandPattern matches /aider so a persistent PID is discoverable."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/aider/pid.go",
+          "note": "DiscoverPID binds the aider PID by /aider command line + CWD — the binding the liveness check polls."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/aider/parser.go",
+          "note": "IdleFlush synthesizes turn_done (working→ready) after 1500ms quiet; #### lines map to user_message (ready→working) for the second turn."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/aider/capabilities.json",
+          "note": "headless_mode: true — the Primitive-exercised key; satisfies the scenario's requires: [headless_mode]."
+        },
+        {
+          "kind": "file",
+          "ref": ".claude/skills/ir:onboard-agent/scripts/drive-aider-interactive.sh",
+          "note": "Launches ONE aider TUI via tmux and keeps it alive across both sends and the idle sleep; case dispatch implements send|slash, wait_turn, interrupt, sleep — the recipe's send+wait_turn+sleep are all present, so driver_capability: ready."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/opencode/scenarios/long-idle-live-session/assessment.json",
+          "note": "Contrast: opencode's ProcessOwnedStore has no persistent PID; aider's PID binding is why its daemon_capability lands full."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "aider CLI on PATH and authenticated (ANTHROPIC_API_KEY or OPENAI_API_KEY)",
+        "irrlichd is running with IRRLICHT_READY_SESSION_TTL=15s in its environment (the daemon's default 30 min would force a 32+ min recording); the shortened TTL only affects the recording, not production",
+        "irrlichd is recording (--attach against a --record daemon)"
+      ],
+      "setup": [
+        "Create an empty cwd under <staging>/cwd/ (drive-aider-interactive.sh git-inits it)",
+        "Aider's TUI launched via drive-aider-interactive.sh stays ONE live process across both sends and the idle sleep — the tmux session is killed only at the end, so the aider PID is genuinely alive throughout the idle window (that liveness is what keeps the session out of the readyTTL sweep)",
+        "Daemon's effective readyTTL is 15 s; the idle sleep (25 s) is calibrated to clearly exceed it even after aider's ~5 s idle-flush settle eats into the front of the window — so the clean ready dwell is ~20 s, well past the 15 s TTL"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Answer in chat only as plain prose — do NOT create, edit, or modify any file, and do NOT output a SEARCH/REPLACE block. In one short sentence: what is the capital of France?"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 25
+        },
+        {
+          "type": "send",
+          "text": "Answer in chat only as plain prose — do NOT create, edit, or modify any file, and do NOT output a SEARCH/REPLACE block. In one short sentence: what is the capital of Japan?"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 12
+        }
+      ],
+      "verify": [
+        "events.jsonl shows aider entering ready after turn 1 completes (IdleFlush synthesizes the working→ready settle; effective latency ~5 s)",
+        "no transcript_removed event fires for the live aider session during the idle window (the session must NOT be swept past readyTTL while the aider process is alive)",
+        "no state_transition to working or waiting fires during the idle window (state stays ready while idle)",
+        "after the second send, events.jsonl shows ready → working → ready for the same live session (the long-idle session resumes normally)",
+        "final session state is ready"
+      ],
+      "settings": {},
+      "timeout_seconds": 180,
+      "scope_note": "Proves aider's PID-liveness keeps a ready session alive PAST readyTTL: aider's PID is discoverable via the /aider command-line match, so the daemon's sweep skips deletion while kill(pid,0)==nil — exactly as for claudecode. Recording uses IRRLICHT_READY_SESSION_TTL=15s so the 'past TTL' assertion is testable in ~45 s. Aider's idle-flush window (~5 s) means the post-turn ready transition lags actual LLM completion; the recipe budgets a 25 s idle sleep (≥20 s, clearly past the 15 s TTL) and a 12 s trailing sleep (gpt-5-nano is fast + aider's ~5 s settle) so each per-turn working→ready settles cleanly and the dwell clearly exceeds the TTL. PROMPT DESIGN (resolved drift): both prompts are PURE-CONVERSATIONAL factual asks (capital of France / Japan) that explicitly forbid file creation/edits and SEARCH/REPLACE blocks — same forbid-edits shape as aider/turn-end-terminal-text. This avoids the earlier 4/7 drift where 'Reply with exactly the word: ok' was non-deterministically interpreted by gpt-5-nano as a file-edit request, producing a post-turn `Applied edit to notes/ok.txt` write that landed ~8 s into the idle dwell and flicked ready→working, failing idle_window. With no file edit, the transcript goes quiet during the dwell so the ≥15 s held-ready window holds."
+    }
+  },
+  "scenario_id": "long-idle-live-session"
+}

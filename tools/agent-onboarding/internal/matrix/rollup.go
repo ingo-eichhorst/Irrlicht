@@ -88,7 +88,7 @@ func (m *Matrix) BuildRollup(overlay RollupOverlay) RollupDoc {
 		Legend:        overlay.Legend,
 	}
 	if doc.SourceCatalog == "" {
-		doc.SourceCatalog = "replaydata/scenarios/*.json (per-scenario shards)"
+		doc.SourceCatalog = "replaydata/scenarios.json"
 	}
 
 	for _, a := range agents {
@@ -139,8 +139,8 @@ func (m *Matrix) BuildRollup(overlay RollupOverlay) RollupDoc {
 // byte-for-byte. Works for any catalog id, applicable or not — the rollup covers
 // every catalog row × every agent.
 func (m *Matrix) rollupAxes(agent, coverageID string) (supports, daemon, driver, assessedAt string) {
-	if sh, ok := m.shards[coverageID]; ok {
-		if c, ok := sh.Agents[agent]; ok {
+	if cells, ok := m.agentCells[agent]; ok {
+		if c, ok := cells[coverageID]; ok {
 			if _, rep := cellAssessment(c); rep != nil {
 				return rep.AgentSupports, rep.DaemonCapability, rep.DriverCapability, rep.AssessedAt
 			}
