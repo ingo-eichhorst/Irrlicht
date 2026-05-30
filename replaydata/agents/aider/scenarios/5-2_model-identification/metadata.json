@@ -1,0 +1,117 @@
+{
+  "recording_dir": "aider/scenarios/5-2_model-identification",
+  "artifacts": {
+    "events": "aider/scenarios/5-2_model-identification/events.jsonl",
+    "transcript_md": "aider/scenarios/5-2_model-identification/transcript.md",
+    "manifest": "aider/scenarios/5-2_model-identification/manifest.json"
+  },
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "pass_rate": "5/5 phases passed",
+    "agent_cli_version": "0.86.2",
+    "daemon_version": "0.4.7+6fcf3d4",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes\ndaemon_capability: full\ndriver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "model-identification",
+      "agent": "aider",
+      "assessed_at": "2026-05-25T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Primitive\n\nModel metadata reporting: the agent's transcript records the active model name in a field the parser can extract, so the dashboard shows the launch model rather than 'unknown', and the context window matches the model's published window. The capability key is `multi_model_orchestration` in `replaydata/agents/aider/capabilities.json` (already `true`) — aider's first-class model selection is the surface that puts the launch model into the transcript.\n\n## Reasoning\n\n### Agent supports it\n\nAider is launched with a specific model via `--model <name>` (or the default config model), documented on the official model-selection page (https://aider.chat/docs/usage/commands.html and https://aider.chat/docs/llms.html). On the first assistant block of every session aider writes a `> Model: <name> with <edit format>` blockquote into `.aider.chat.history.md` — confirmed in committed recordings, e.g. `replaydata/agents/aider/regression/multi-turn-conversation/transcript.md:10` (`> Model: openai/google/gemma-4-26b-a4b with whole edit format`). So the launch model is recorded explicitly in the transcript from turn one.\n\n### daemon_capability: full\n\nThe scenario's two user-observable signals are:\n1. `ModelName = <launch model>` (not `\"unknown\"`).\n2. `ContextWindow` matches the model's published window.\n\nBoth resolve through the aider transport as it exists today, so a recording + working driver yields these observables:\n\n- **ModelName.** The parser's `modelRE` (`core/adapters/inbound/agents/aider/parser.go:66`) matches the `> Model: <name>` blockquote, captures the name, runs it through `tailer.NormalizeModelName`, sets `p.model`, and emits a `Skip` event carrying `ModelName` (parser.go:110-113). Every subsequent `> Tokens:` line then stamps that same `p.model` onto each `assistant_message` (`closeModelCall`, parser.go:153-187). The tailer's `applyModelMetadata` (`core/pkg/tailer/tailer_metrics.go:110`) sets `t.metrics.ModelName` on any event with a non-empty `ModelName`, including the `Skip` event — so `SessionMetrics.ModelName` is populated from the first assistant block and is never `\"unknown\"` for a model aider actually names. Transport is `FilesUnderCWD{ .aider.chat.history.md, RawLineParser }` (`agent.go:45`), a real local transcript, so there is no transport gap of the cloud-only kind that would make the daemon `incapable`.\n- **ContextWindow.** Unlike codex (which writes `payload.model_context_window`) or claudecode (`raw.context_management.context_window`), aider's markdown transcript carries NO context-window field — the parser never sets `parsed.ContextWindow`, so `contextWindowOverride` stays 0. `ContextWindow` is therefore derived entirely from the capacity manager: `ComputeContextUtilization` falls through to `capacityMgr.GetModelCapacity(modelName).ContextWindow` (`tailer_metrics.go:453-454`), i.e. exactly the scenario's third resolution path (\"the LiteLLM alias-table fallback\"). For any model present in the LiteLLM table (after the `modelAliases` rewrite in `core/pkg/capacity/capacity.go:104` and `aliases.go`), `ContextWindow` is the model's published window. For a model absent from LiteLLM, `GetModelCapacity` returns a zero window and the tailer sets `ContextWindowUnknown: true` (`tailer_metrics.go:457-458, 487`) — see caveats.\n\nSo both signals fall out of the parser + capacity manager for any LiteLLM-known launch model — the daemon handles the spec-required observables today, hence `full` (not `bug`: nothing mis-handled; not `incapable`: a real local transcript carries the model name). The `model_present: true` and basic-turn state arc (`ready→working→ready`, `tool_calls_max: 0`) in the scenario verify block are satisfied by a single no-op turn (the `> Tokens:` line plus `IdleFlush`-synthesized `turn_done`, parser.go:216).\n\n### driver_capability: ready\n\nThe recipe drives one live aider REPL with a single `send` + `wait_turn` + trailing `sleep`. The aider interactive driver (`scripts/drive-aider-interactive.sh`) implements all three step types (`send|slash)`, `wait_turn)`, `sleep)`). No gapped primitive (no restart / reset_session / resume / keys / sigkill etc.) is required, so the driver can record this cell as-is — `ready`.\n\n### Matrix drift\n\nThe coverage matrix already records `agent_supports: yes`, `daemon_capability: full`, `driver_capability: ready` with the note \"regex-parsed '> Model:' / '> Main model:'\". This assessment ratifies that verdict — no drift.\n\n## Confidence\n\n0.85: the `> Model:` line is documented and visible in committed aider recordings, and the ModelName path is grounded in the adapter source plus pinning tests (`parser_test.go`); the driver step types are confirmed in the driver script. Held below 0.9 because `ContextWindow` correctness depends on the launch model being present in the LiteLLM capacity table — true for mainstream models (claude-*, gpt-5) but not for the exotic/local gemma models aider's existing fixtures happen to use, and no end-to-end recording of this specific cell exists yet (that is Stage 4's job).",
+      "caveats": [
+        "ContextWindow correctness is contingent on the LiteLLM capacity table: aider's markdown transcript carries no context-window field, so the value comes solely from `capacityMgr.GetModelCapacity(modelName)`. A model absent from LiteLLM (e.g. the local/exotic `openai/gemma-*` models used in aider's current fixtures) resolves to a zero window with `ContextWindowUnknown: true` — the ModelName is still correct, but the published-window assertion only holds for LiteLLM-known launch models.",
+        "The `> Weak model: …` line aider may also print is intentionally NOT matched by `modelRE` (parser.go:65) — only `Model:` / `Main model:` drive `ModelName`, which is correct here since the weak/summary model is not the turn's main model.",
+        "End-of-turn is always synthesized via the 1500ms IdleFlush (clamped to the SessionDetector working-refresh window), never marked in-band — so the working→ready flip trails file quiet and ContextWindow may briefly read 0 between session detection and the first assistant block; assert ModelName/ContextWindow only after turn_end."
+      ],
+      "sources": [
+        {
+          "kind": "url",
+          "ref": "https://aider.chat/docs/llms.html",
+          "note": "official model-selection docs: aider launches against a specific model via --model / config; the chosen model is the Main Model recorded in the session"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/aider/parser.go",
+          "note": "modelRE (L66) matches `> Model: <name>`; sets p.model via NormalizeModelName and emits Skip event with ModelName (L110-113); closeModelCall (L153) stamps p.model on each assistant_message; parser never sets ContextWindow — grounds daemon_capability: full"
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer_metrics.go",
+          "note": "applyModelMetadata (L110) sets metrics.ModelName from any non-empty ModelName event incl. the Skip event; ComputeContextUtilization (L447-458) derives ContextWindow from capacityMgr.GetModelCapacity when no override, sets ContextWindowUnknown when the model is absent (caveat 1)"
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/capacity/capacity.go",
+          "note": "GetModelCapacity (L101) applies modelAliases then looks up the LiteLLM table; returns zero ContextWindow for unknown models — the alias-table fallback path the scenario names"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/aider/regression/multi-turn-conversation/transcript.md",
+          "note": "L10 shows the real first-assistant `> Model: openai/google/gemma-4-26b-a4b with whole edit format` blockquote aider writes — confirms the line shape modelRE parses"
+        },
+        {
+          "kind": "file",
+          "ref": ".claude/skills/ir:onboard-agent/scripts/drive-aider-interactive.sh",
+          "note": "interactive driver implements send|slash / wait_turn / sleep — the only step types this recipe needs — grounds driver_capability: ready"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/aider/capabilities.json",
+          "note": "multi_model_orchestration: true (the capability key for this primitive); headless_mode: true (the scenario's requires:)"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "aider CLI on PATH and authenticated against a provider out-of-band; the driver does not handle a login/OAuth prompt (headless aider hangs ~5min on OpenRouter OAuth if no key is present).",
+        "tmux available — the interactive driver runs aider in a tmux REPL so it can send one prompt to a long-lived session and tear it down cleanly.",
+        "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record.",
+        "the launch model is reachable on the account AND present in the LiteLLM capacity table so ContextWindow resolves to the published window. Set IRRLICHT_AIDER_MODEL to a known model name (e.g. a mainstream claude-* / gpt-* the alias table covers) for a deterministic ModelName and a non-zero ContextWindow; for a model absent from LiteLLM, ModelName is still correct but ContextWindow resolves to 0 / ContextWindowUnknown=true (assessment caveat 1).",
+        "feature-invisible caveat: aider's `> Weak model:` line is intentionally NOT matched by the parser's modelRE (only `Model:`/`Main model:` drive ModelName), so the weak/summary model is never the asserted ModelName; this recipe runs on the MAIN model, which is what aider writes as `> Model:` on the first assistant block."
+      ],
+      "setup": [
+        "The interactive driver (drive-aider-interactive.sh) launches aider in a fresh per-run cwd inside a tmux session against the configured main model (IRRLICHT_AIDER_MODEL) and waits for the REPL prompt.",
+        ".aider.chat.history.md (FilesUnderCWD) materializes lazily once the first user input lands; before that the live REPL is observable as a transient proc-<PID> pre-session born ready (the process scanner). The daemon keys the WHOLE session by proc-<PID> — there is no separate transcript-UUID rollout session.",
+        "On the first assistant block aider writes `> Model: <name> with <edit format>`; the parser's modelRE captures the name → NormalizeModelName → a Skip event carrying ModelName, which applyModelMetadata stamps onto SessionMetrics.ModelName from turn one (never 'unknown' for a model aider names).",
+        "ContextWindow is NOT in aider's transcript — it is derived entirely from the capacity manager's LiteLLM alias-table fallback (ComputeContextUtilization → capacityMgr.GetModelCapacity(modelName)); a LiteLLM-known launch model yields the published window with ContextWindowUnknown=false.",
+        "Assertions on ModelName/ContextWindow are checked AFTER turn_end — ContextWindow may briefly read 0 between session detection and the first assistant block (per assessment caveat).",
+        "After the turn + trailing sleep the driver kills the tmux session once — aider exits and the daemon emits a SINGLE process_exited for the proc-<PID> session."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "What is the capital of France? Answer in one word, no file edits."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 9
+        }
+      ],
+      "verify": [
+        "events.jsonl shows a proc-<PID> session born ready within 2s of launch (the lazy transcript has not materialized yet).",
+        "events.jsonl shows ONE ready→working→ready arc on that proc-<PID> session_id (the single no-op turn), with no state_transition to waiting.",
+        "events.jsonl contains a pid_discovered bound to the proc-<PID> session, and exactly one process_exited on it at REPL teardown (a single-turn session does NOT mint a second session).",
+        "the .replay.json.golden carries a non-empty summary.model_name equal to the normalized launch model (IRRLICHT_AIDER_MODEL), NOT 'unknown'; this is where model identification is asserted, since the events.jsonl phase DSL has no model field. The concrete value is environment-dependent (issue #440); assert presence + non-'unknown', and for a LiteLLM-known model a populated (non-zero) ContextWindow.",
+        "SessionMetrics.ContextWindowUnknown is false after turn_end when the launch model is in the LiteLLM table (per assessment caveat 1; otherwise ContextWindow reads 0 while ModelName stays correct).",
+        "transcript (.aider.chat.history.md) contains a `> Model: <name>` blockquote on the first assistant block and ≥1 `> Tokens:` close.",
+        "final session state is ready before teardown."
+      ],
+      "notes": "Single no-op turn in ONE live aider REPL launched against a specific main model (IRRLICHT_AIDER_MODEL): captures that the dashboard shows the launch model (ModelName != 'unknown') with a populated ContextWindow, not 'unknown'. TEMPLATED FROM claudecode/model-identification (same single send + wait_turn + trailing sleep shape) and adapted to aider's transport. RECORDABILITY (no driver_gap): the recipe needs only send/wait_turn/sleep — the aider interactive driver implements all three (case `send|slash)`, `wait_turn)`, `sleep)`), so there is no missing step type. WHY interactive (not headless `aider --message`): headless aider is single-shot and exits after one reply — on a short run the process can exit before the daemon classifies the working→ready settle and before the PID scanner ticks, truncating turn_end/teardown; the interactive driver keeps the REPL alive across the turn, then kills the tmux session once → a SINGLE clean process_exited. MODEL/CONTEXT ASSERTION IS OUT-OF-BAND: the events.jsonl phase DSL carries no model field, so expected.jsonl asserts only the basic-turn lifecycle skeleton (one ready→working→ready arc on one proc-<PID> session, a single process_exited, no waiting, final ready); the two user-observable signals (ModelName == launch model, ContextWindow == published window) are asserted at summary.model_name in the .replay.json.golden plus the aider parser unit tests for the `> Model:`/`> Main model:` blockquote. SESSION IDENTITY: aider stores its transcript in the cwd (FilesUnderCWD), so the daemon keys the whole session by proc-<PID> — no separate UUID rollout session and no handoff phase; the turn arc, pid_bind, and teardown all pin to session_birth via same_session_as, while session_birth itself is anchored to start UNPINNED so the transient proc-<PID> birth can't steal session identity. LAZY TRANSCRIPT: .aider.chat.history.md materializes only once the first user input lands, so the live REPL is observable from launch as the proc-<PID> pre-session born ready — session_birth matches that. AIDER TURN-END IS SYNTHESIZED, NOT MARKED: the markdown transcript has no turn-end marker — `> Tokens:` closes one model CALL, not the turn; end-of-turn is synthesized by IdleFlush after ~1.5s quiet, clamped to the SessionDetector's ~5s working-refresh poll, so the EFFECTIVE working→ready latency is ~5s; the trailing 9s sleep (≥8s) lets the turn's working→ready flip fire AND be observed before daemon shutdown (a shorter tail would miss the terminal ready). PROMPT: a pure conversational question (`What is the capital of France? Answer in one word, no file edits.`) — gpt-5-nano writes `> Model: gpt-5-nano` on the first assistant block regardless of whether it edits, and a non-edit prompt avoids the post-turn `Applied edit` write that re-triggers transcript_activity inside the idle dwell (the long-idle cell's known gpt-5-nano edit-flicker). What differs between runs: the concrete model value (set IRRLICHT_AIDER_MODEL for a deterministic, LiteLLM-known name; otherwise issue #440 — assert presence, not a hardcoded string), token counts, PID/timestamps, assistant wording, and the working→ready edge lands with ~5s idle-flush latency. What must NOT differ: one working→ready arc on ONE proc-<PID> session, a non-empty summary.model_name == the launch model in the golden, and a single process_exited at teardown. multi_model_orchestration=yes; headless_mode=yes (the scenario's requires:). RECORDING DEFERRED: validated when aider auth is available in-env — at authoring time there is no provider key present and headless aider hangs on OpenRouter OAuth, so this recipe + spec are the DOCUMENTED TARGET pending a recording.",
+      "settings": {},
+      "timeout_seconds": 180
+    }
+  },
+  "scenario_id": "model-identification"
+}

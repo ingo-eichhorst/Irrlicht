@@ -67,7 +67,7 @@ func TestLoadEvents_realSeedScenario(t *testing.T) {
 	// Smoke test against the real committed seed corpus to confirm the
 	// loader handles the actual on-disk shape produced by irrlichd.
 	path := filepath.Join("..", "..", "..", "..", "replaydata", "agents",
-		"claudecode", "scenarios", "multi-turn-conversation", "events.jsonl")
+		"claudecode", "regression", "multi-turn-conversation", "events.jsonl")
 	if _, err := os.Stat(path); err != nil {
 		t.Skipf("seed corpus not present: %v", err)
 	}

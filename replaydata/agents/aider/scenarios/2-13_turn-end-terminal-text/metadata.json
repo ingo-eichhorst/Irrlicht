@@ -1,0 +1,118 @@
+{
+  "recording_dir": "aider/scenarios/2-13_turn-end-terminal-text",
+  "artifacts": {
+    "events": "aider/scenarios/2-13_turn-end-terminal-text/events.jsonl",
+    "transcript_md": "aider/scenarios/2-13_turn-end-terminal-text/transcript.md",
+    "manifest": "aider/scenarios/2-13_turn-end-terminal-text/manifest.json"
+  },
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "pass_rate": "4/4 phases passed",
+    "agent_cli_version": "0.86.2",
+    "daemon_version": "0.4.7+1e9d01d",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes\ndaemon_capability: full\ndriver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "turn-end-terminal-text",
+      "agent": "aider",
+      "assessed_at": "2026-05-25T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Reasoning\n\nThis is the smallest tool-less round-trip pinning the terminal-text end signal: the user sends a prompt, the assistant produces a final message with no tool use, and the classifier should drive `working → ready`. The scenario's `requires: [headless_mode]`; aider supports headless via `--message`/`--yes-always` and the round-trip completes normally, so `agent_supports: yes`.\n\n### daemon_capability: full (the user-observable signal is surfaced)\n\nThe scenario's **User-observable signal** is mechanism-agnostic by design: \"`ready → working → ready`; state reaches `ready` **regardless of which adapter-specific signal closes the turn**.\" The scenario's `verify` block asserts the `[ready, working, ready]` topology, `tool_calls_max: 0`, `final_state: ready`, and — for `turn-end-terminal-text` specifically — that the agent's final assistant text is captured/surfaced. The daemon meets every one of these for aider:\n\n- **Terminal text is surfaced.** aider's last model call closes with a `> Tokens: …` line, which `Parser.closeModelCall` turns into an `assistant_message` carrying the buffered final prose as `AssistantText` (`parser.go:176-188`). The tailer records that into `lastAssistantText` (`tailer.go:886-887`), exposed as `metrics.LastAssistantText` (`tailer_metrics.go:387`) and on the session (`session.go:115`). The subsequent payload-less `turn_done` from IdleFlush carries no `AssistantText` and does not set `ClearToolNames`, so it does NOT clear the retained text (`tailer.go:886-891`) — the daemon still surfaces the agent's final assistant text at turn end. That same `LastAssistantText` also feeds the waiting-question heuristic (`session.go:282-285`).\n- **State arc is correct.** End-of-turn is reconstructed out-of-band by `Parser.IdleFlush`: once the transcript is quiet for `aiderIdleTurnDoneAfter` (1500ms) the parser synthesizes a payload-less `turn_done`, flipping `LastEventType` so the state classifier returns the session to `ready` (`parser.go:208-229`). The user-observable arc `ready → working → ready` is produced correctly.\n\nThe absent in-band terminal token is an *internal mechanism* detail, not a user-observable signal. Per the authoring rule \"Caveats over downgrades\" and the `feature-invisible-but-spec-compliant` pattern, this stays `daemon_capability: full` with the gap recorded as a caveat — NOT `bug` (no spec-required observable is mis-handled) and NOT `incapable` (the terminal text and the resolved state both leave a trace the daemon parses today).\n\n### Why this is full, not bug/incapable\n\nThe scenario's **Primitive exercised** names \"the correct end-of-turn token (`stop_reason: end_turn`, `task_complete`, etc.)\". For aider **no such token exists in the transcript** — the markdown history (`.aider.chat.history.md`) has no end-of-response marker (confirmed in aider's `io.py`: `####` for user input, newline-spaced prose for assistant output, no terminal marker line). The `> Tokens:` line is explicitly NOT treated as end-of-turn (the parser keeps `turnOpen` true because aider may re-prompt under `--yes-always`; multiple `> Tokens:` lines per `####` turn are normal). But the spec asserts the *outcome* (state resolves to `ready`, final text surfaced) regardless of which signal closes the turn, and the daemon delivers that outcome — so the missing in-band token does not block any user-observable assertion. It is a caveat, not a daemon defect.\n\n### driver_capability: ready\n\nThe recipe for this cell needs only `send` + `wait_turn` + a trailing `sleep`. `drive-aider-interactive.sh` implements all three (`step_send`, `step_wait_turn`, and the `sleep` case in its step dispatch), so the driver can drive and record this cell as-is.\n\n## Latency\n\n1500ms is a floor, not the user-visible delay. `SessionDetector` polls working sessions every `staleWorkingRefreshInterval` (5s, `core/application/services/session_detector.go`), so the effective `working → ready` delay after the last transcript line is roughly `max(1500ms, next refresh tick)` — about 5s in practice when no other fswatcher event arrives.\n\n## Capability anchor\n\nThe **Primitive exercised** (\"adapter emits or parser detects the correct end-of-turn token\") maps to the scenario's required capability `headless_mode`, present in `replaydata/agents/aider/capabilities.json` (`headless_mode: true`). `structured_output_jsonl: false` corroborates the absence of a parseable terminal token — aider has no structured stop_reason to emit, which is exactly why the daemon synthesizes the turn-end signal rather than parsing one.",
+      "caveats": [
+        "Aider's transcript has no end-of-turn token (no stop_reason / task_complete equivalent; structured_output_jsonl=false); the markdown history records `####` prompts and `> Tokens:` per-call lines but nothing marking the response as finished. The daemon synthesizes the terminal signal via a 1500ms idle-flush heuristic rather than parsing an adapter token — so the exact in-band mechanism this cell names does not exist for aider, though the user-observable outcome (final ready state + surfaced terminal text) is correct (feature-invisible-but-spec-compliant).",
+        "Effective working→ready latency is ~5s, not 1500ms: the daemon's 5s working-session refresh tick dominates the 1500ms idle floor. The final state is correct but the transition lags the human-perceived completion (metric-drift-downstream)."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/aider/parser.go",
+          "note": "closeModelCall emits assistant_message carrying the final prose as AssistantText (terminal text); IdleFlush synthesizes payload-less turn_done after aiderIdleTurnDoneAfter (1500ms) to flip LastEventType → working→ready; `> Tokens:` is end-of-model-call NOT end-of-turn"
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer.go",
+          "note": "lines 886-891: AssistantText recorded into lastAssistantText; payload-less turn_done from IdleFlush neither sets AssistantText nor ClearToolNames, so the retained terminal text survives to turn end"
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/session.go",
+          "note": "LastAssistantText (line 115) is the surfaced terminal text and also drives the waiting-question heuristic (lines 282-285)"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/aider/agent.go",
+          "note": "Source variant is FilesUnderCWD with RawLineParser over `.aider.chat.history.md` markdown — no JSONL, no structured stop_reason (grounds the no-in-band-token caveat)"
+        },
+        {
+          "kind": "file",
+          "ref": ".claude/skills/ir:onboard-agent/scripts/drive-aider-interactive.sh",
+          "note": "driver implements step_send, step_wait_turn, and sleep — the only step types this cell's recipe needs → driver_capability: ready"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/aider/capabilities.json",
+          "note": "headless_mode: true (the scenario's required capability, anchors the Primitive-exercised key); structured_output_jsonl: false confirms no parseable terminal token"
+        },
+        {
+          "kind": "url",
+          "ref": "https://github.com/Aider-AI/aider/blob/main/aider/io.py",
+          "note": "aider source: user input written with `####` prefix, assistant output appended with newline spacing only — no explicit end-of-turn/end-of-response marker line"
+        },
+        {
+          "kind": "url",
+          "ref": "https://aider.chat/docs/usage/modes.html",
+          "note": "headless --message mode; transcript examples show no structured terminal token in the chat history"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "aider CLI on PATH and authenticated against a model out-of-band (IRRLICHT_AIDER_MODEL plus the matching provider key/endpoint — e.g. a local LM Studio / OpenAI-compatible server). Headless aider with no reachable provider hangs on the model-auth prompt; the live REPL needs a model that actually answers the prompt.",
+        "tmux available — the interactive driver runs aider in a tmux REPL so the process outlives the daemon's observation window (a one-shot run would exit before the IdleFlush turn-end settle is observed)",
+        "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+        "OBSERVABILITY CAVEAT (assessed observes:partial): aider's markdown transcript carries NO end-of-turn token (no stop_reason / task_complete; structured_output_jsonl=false). The named terminal-token mechanism this cell pins is ABSENT for aider — irrlicht synthesizes turn_done via Parser.IdleFlush after ~1.5s of transcript quiescence, surfaced as working→ready behind the daemon's 5s SessionDetector poll (~5s effective latency). Final state is correct (ready); the gap is the absent in-band token plus the lag."
+      ],
+      "setup": [
+        "The interactive driver (drive-aider-interactive.sh) git-inits a fresh per-run cwd under <staging>/cwd/, launches `aider --no-auto-commits --yes-always --no-gitignore` (plus --model if IRRLICHT_AIDER_MODEL is set) inside a tmux session, and waits for the `> Repo-map:` banner line in the transcript before sending the prompt",
+        "aider's transcript .aider.chat.history.md is LAZY (FilesUnderCWD): it materializes only once the first user input lands, so the live REPL is observable from launch as a transient proc-<PID> pre-session born ready (the process scanner) until the per-cwd transcript appears",
+        "The single send bumps the turn counter; wait_turn blocks until a new `> Tokens:` line appears (signals aider finished the model call). aider has NO turn-end transcript marker — end-of-turn is synthesized by IdleFlush after ~1.5s quiet, surfaced as working→ready behind the daemon's 5s poll",
+        "The prompt explicitly forbids file edits / SEARCH-REPLACE output: under `--yes-always`, aider auto-accepts any edit the model proposes, and small models (gpt-5-nano) reflexively answer even a plain question by writing a file in diff edit format. A file write lands as a SECOND transcript-activity burst AFTER the turn already settled to ready, producing a spurious extra ready→working transition that breaks the 'exactly one working / exactly one ready' assertion (the edit is invisible as a tool_use — aider's RawLineParser emits none — but the re-activation is observable). The forbid-edits framing keeps the turn a single tool-less round-trip",
+        "The trailing sleep is 11s — one full IdleFlush cycle (~1.5s) plus the 5s staleWorking refresh poll plus generous slack — so BOTH the synthesized working→ready settle AND the subsequent teardown process_exited are captured before the driver kills the tmux session"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Answer in chat only as plain prose — do NOT create, edit, or modify any file, and do NOT output a SEARCH/REPLACE block. In one short sentence: what is the capital of France?"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 11
+        }
+      ],
+      "verify": [
+        "events.jsonl contains a presession (proc-<PID>) event in ready within ~2s of REPL launch (aider's transcript is lazy, so the pre-session is the launch-time observable)",
+        "events.jsonl contains a pid_discovered event bound to the live aider session_id",
+        "events.jsonl contains exactly one state_transition to working and exactly one state_transition to ready on the SAME session_id — the working→ready flip is synthesized by IdleFlush (no in-band terminal token) and lands ~5s after the last transcript line; the trailing 11s sleep covers that latency",
+        "events.jsonl contains NO tool_use events for the session (tool-less round-trip)",
+        "no state_transition to waiting appears for the session at any point",
+        "the session's final live state is ready before the driver tears the REPL down",
+        "events.jsonl contains exactly one process_exited on the session at REPL teardown"
+      ],
+      "settings": {},
+      "timeout_seconds": 120
+    }
+  },
+  "scenario_id": "turn-end-terminal-text"
+}

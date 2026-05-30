@@ -32,7 +32,7 @@
 #
 # Example:
 #   tools/linux-parity-check.sh \
-#     replaydata/agents/codex/scenarios/session-reset/events.jsonl \
+#     replaydata/agents/codex/scenarios/1-5_session-reset/events.jsonl \
 #     /tmp/rec/codex/session-reset/events.jsonl
 set -euo pipefail
 

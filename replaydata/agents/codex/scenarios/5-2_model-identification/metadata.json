@@ -1,0 +1,110 @@
+{
+  "recording_dir": "codex/scenarios/5-2_model-identification",
+  "artifacts": {
+    "events": "codex/scenarios/5-2_model-identification/events.jsonl",
+    "transcript": "codex/scenarios/5-2_model-identification/transcript.jsonl",
+    "manifest": "codex/scenarios/5-2_model-identification/manifest.json",
+    "golden": "codex/scenarios/5-2_model-identification/transcript.jsonl.replay.json.golden"
+  },
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "pass_rate": "6/6 phases passed",
+    "agent_cli_version": "0.130.0",
+    "daemon_version": "0.4.7+db0201c",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "model-identification",
+      "agent": "codex",
+      "assessed_at": "2026-05-23T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Primitive\n\nModel metadata reporting: the agent's transcript records the active model name (and context window) in a field the parser can extract, so the dashboard shows the launch model rather than 'unknown'.\n\n## agent_supports — yes\n\ncodex 0.130.0 boots on a concrete model (the TUI footer reads e.g. `model: gpt-5.5 high   /model to change`) and every turn it writes that model into the rollout. There is no way to run a turn without a model, so a single basic turn is enough to exercise this scenario — the model name is present from turn 1.\n\n## irrlicht_observes — yes\n\nThe codex rollout carries the active model on each turn's `turn_context` event at `payload.model`, and `extractCodexMetadata` (parser.go:263) reads `payload.model` for any payload-wrapped event and sets `ev.ModelName = NormalizeModelName(model)` (parser.go:270-278). Context window is read from `payload.info.model_context_window` (token_count) and `payload.model_context_window` (task_started) at parser.go:297-304. The `turn_context` event is marked Skip=true (parser.go:174), but the tailer's Skip branch still calls `applyMetadata` → `applyModelMetadata` (tailer.go / tailer_metrics.go), so the session's ModelName is populated from the skipped event. This was the regression behind issue #361 (codex dropped the model name on token_count events); it is fixed — the model is now sourced from turn_context.payload.model / usage, not from token_count. The replay golden captures the final value at `summary.model_name` (the codex basic-turn golden already carries a non-empty model_name), which `replay-fixtures.sh` diffs.\n\n## Observability caveat — where the assertion lives\n\nThe `expected.jsonl` validator DSL (validate/expected.go Phase struct: phase / expected_state / kind / max_delay_ms / duration_at_least_ms / same_session_as / new_session / invariants) operates over the lifecycle `events.jsonl` stream, which carries NO model_name field — so expected.jsonl cannot directly assert the model name. The model-identification proof is the metrics-level `summary.model_name` in the `.replay.json.golden` snapshot (must be non-empty / not 'unknown'), validated by replay-fixtures. expected.jsonl therefore asserts only the basic-turn lifecycle skeleton (pre-session born ready → rollout reconcile → working → ready → process_exited); the model presence is the golden's job. Per issue #440 the concrete model_name string is environment-dependent (whatever model the account boots on), so the assertion is 'a model_name IS present', not a hardcoded value.\n\n## Conclusion\n\napplicable: yes. This is a thin cell — the basic-turn arc plus the assertion that a model_name was extracted.",
+      "caveats": [
+        "In codex 0.130.0 the model name lives on per-turn turn_context events (Skip=true in the parser); observability relies on the tailer applying ModelName from Skip'd events — correct today (post-#361), but a refactor that drops metadata on skipped events would silently regress this.",
+        "The concrete model_name is environment-dependent (the account's boot default — gpt-5.5 in this worktree); per issue #440 the spec/golden assertion is that a model_name is present (non-empty, not 'unknown'), not a specific hardcoded string, so the cell stays deterministic and worktree-portable.",
+        "ContextWindow may briefly read 0 between session detection and the first turn_context/task_started event; assert model/context only after turn_end."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/codex/parser.go",
+          "note": "extractCodexMetadata reads payload.model (L263-278) and model_context_window (L297-304); turn_context Skip=true (L174)"
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer_metrics.go",
+          "note": "applyModelMetadata sets metrics.ModelName from parsed.ModelName even for Skip'd events"
+        },
+        {
+          "kind": "file",
+          "ref": "tools/agent-onboarding/internal/validate/expected.go",
+          "note": "Phase struct has no model field — DSL asserts state/kind on events.jsonl, not model_name"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/codex/scenarios/basic-turn/transcript.jsonl.replay.json.golden",
+          "note": "golden carries summary.model_name (non-empty) — the metrics-level model artifact replay-fixtures diffs"
+        },
+        {
+          "kind": "issue",
+          "ref": "ingo-eichhorst/Irrlicht#361",
+          "note": "codex dropped model name on token_count events — since fixed; model now sourced from turn_context.payload.model / usage"
+        },
+        {
+          "kind": "issue",
+          "ref": "ingo-eichhorst/Irrlicht#440",
+          "note": "replay-summary model_name is environment-dependent — assert presence, not a hardcoded string"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "codex CLI on PATH and authenticated (~/.codex/config.toml or OPENAI_API_KEY)",
+        "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+        "The concrete model the account boots on is environment-dependent (gpt-5.5 in the maintainer's worktree). Per issue #440 the assertion is that a model_name is PRESENT (non-empty, not 'unknown'), not a specific hardcoded string — do not assert a particular model value."
+      ],
+      "setup": [
+        "The interactive driver launches `codex --no-alt-screen` in a fresh per-run cwd under <staging>/cwd/, accepts the trust dialog, and waits for the TUI banner + MCP boot before sending the prompt",
+        "No special model flag — codex boots on its default model and writes that model into each turn's turn_context.payload.model from turn 1; the scenario is about the daemon extracting that name, not about which model produced the tokens",
+        "Each send bumps the expected-turn counter; wait_turn blocks until a new event_msg/task_complete line appears in the rollout, so the trailing sleep never races a still-running turn",
+        "ModelName is checked AFTER turn_end — ContextWindow may briefly read 0 between session detection and the first turn_context/task_started event (per assessment caveat)"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        }
+      ],
+      "verify": [
+        "events.jsonl contains a presession_created (proc-<PID>) event in ready within 1000 ms of agent launch",
+        "events.jsonl contains a transcript_new for the rollout session with a distinct session_id, born ready",
+        "events.jsonl contains a pid_discovered event bound to the rollout session_id",
+        "events.jsonl shows one working→ready arc on the rollout session_id (the single assistant turn); the interactive REPL returns to ready, unlike headless codex exec which exits",
+        "the .replay.json.golden carries a non-empty summary.model_name (NOT 'unknown') — extractCodexMetadata pulled it from turn_context.payload.model and the tailer applied it via applyModelMetadata even though turn_context is Skip=true. The concrete value is environment-dependent (issue #440); assert presence, not a hardcoded string",
+        "the rollout session's final live state is ready before the driver tears the REPL down",
+        "events.jsonl contains a process_exited on the rollout session at REPL teardown",
+        "no state_transition to waiting appears for the rollout session at any point"
+      ],
+      "notes": "Thin/near-trivial cell: structurally identical to codex/basic-turn (one send + wait_turn + trailing sleep) — the only extra intent over basic-turn is that the daemon extracted a model_name. In codex 0.130.0 the model lives on per-turn turn_context.payload.model (NOT on token_count/usage events — that was the issue #361 regression, since fixed); extractCodexMetadata (parser.go:263-278) reads payload.model and model_context_window, and the tailer applies ModelName via applyModelMetadata even though turn_context is Skip=true. The model assertion is NOT expressible in the events.jsonl phase DSL (no model field in the validator Phase struct), so expected.jsonl covers only the basic-turn lifecycle skeleton and the model presence is asserted at summary.model_name in the .replay.json.golden, which replay-fixtures.sh diffs. What differs between runs: the concrete model_name (account boot default, env-dependent per #440), token counts/cost, rollout UUID/PID/timestamps, assistant wording (pinned with 'Reply with exactly the word: ok'). What must NOT differ: one working→ready arc on one rollout session, a non-empty model_name in the golden, and process_exited at teardown.",
+      "settings": {},
+      "timeout_seconds": 180
+    }
+  },
+  "scenario_id": "model-identification"
+}

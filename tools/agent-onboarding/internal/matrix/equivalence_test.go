@@ -36,10 +36,11 @@ func TestShardCellEquivalence(t *testing.T) {
 		t.Skipf("matrix could not load committed repo data: %v", err)
 	}
 
-	// Expected cell set per agent = every shard that names the agent.
+	// Expected cell set per agent = every scenario that has a metadata.json for
+	// that agent (i.e. LoadAllCells returns a cell).
 	wantByAgent := map[string]map[string]bool{}
 	for _, sh := range shards {
-		for ag := range sh.Agents {
+		for ag := range shard.LoadAllCells(repoRoot, sh.Name) {
 			if wantByAgent[ag] == nil {
 				wantByAgent[ag] = map[string]bool{}
 			}

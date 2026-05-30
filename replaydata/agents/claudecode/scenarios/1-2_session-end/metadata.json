@@ -1,0 +1,136 @@
+{
+  "recording_dir": "claudecode/scenarios/1-2_session-end",
+  "artifacts": {
+    "events": "claudecode/scenarios/1-2_session-end/events.jsonl",
+    "transcript": "claudecode/scenarios/1-2_session-end/transcript.jsonl",
+    "manifest": "claudecode/scenarios/1-2_session-end/manifest.json",
+    "golden": "claudecode/scenarios/1-2_session-end/transcript.jsonl.replay.json.golden"
+  },
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "pass_rate": "11/11 phases passed",
+    "agent_cli_version": "2.1.143",
+    "daemon_version": "0.4.5+e011e88",
+    "confidence": 0.9,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "session-end",
+      "agent": "claudecode",
+      "assessed_at": "2026-05-17T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.9,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nThe Session end spec has three variants, all of which claudecode supports as-shipped and irrlicht observes via committed transport.\n\n**Variant 1 — clean exit (Ctrl-D).** Claude Code's TUI exits gracefully on Ctrl-D after a no-op turn. The OS terminates the `claude` process, irrlicht's process scanner detects the disappearance and emits `process_exited`. Spec bullet 'State is `ready` at exit' is satisfied because the recipe sleeps 2 s after the turn completes before sending Ctrl-D — the state band shows `ready` immediately before `process_exited`. Spec bullet 'Session disappears within readyTTL' is satisfied by the standard ready→removed timer.\n\n**Variant 2 — SIGKILL mid-idle.** `kill -9 claude` terminates the process while it sits idle in `ready`. irrlicht emits `process_exited` within one scanner tick. Spec bullet 'Session disappears within 1s' is satisfied (scanner tick < 1s). Spec bullet 'State never entered working post-exit' is asserted as an invariant on the v2_exit phase (no state_transition to working between v2_turn_done and process_exited).\n\n**Variant 3 — SIGKILL mid-turn (crash analogue).** `kill -9` while the session is `working` on a longer prompt. The agent process disappears with no turn-end signal. irrlicht's process-exit sweep emits `process_exited`. Spec bullet 'State reaches `ready` within sweep interval' is the daemon's sweep-to-ready behaviour; whether the sweep transition lands inside the recording's tail is variant-dependent (see caveat). The dashboard's live sweep handles it correctly regardless.\n\n## What irrlicht does NOT see (and why that's OK)\n\nThe variant-3 sweep-to-ready transition may not appear in the recording's 8-second tail (the recipe documents this). The live dashboard correctly settles to `ready` because the sweep keeps running, but the recording window may close first. The phase contract accommodates this by anchoring v3_exit to v3_turn_start with a 15-second budget instead of requiring an explicit ready phase. Issue #321 (zombie-on-restart) was fixed in irrlichd 0.4.x; the recipe historically passes 11/11 phases.",
+      "caveats": [
+        "Variant 3 (SIGKILL mid-turn): the post-crash sweep-to-ready transition may not land inside the recording's tail window — the live dashboard handles it correctly via the sweep, but the recording can miss it. The spec contract accommodates this by anchoring v3_exit to v3_turn_start, not requiring an explicit post-crash ready phase.",
+        "Each `restart` step mints a fresh cwd (cwd-2, cwd-3, ...) because claudecode caches per-directory trust dialogs; reusing a cwd would hang the driver's wait-for-trust loop. The driver handles this automatically; recipe authors must not 'optimize' by sharing cwds."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/claudecode/agent.go",
+          "note": "ExactName{Name: \"claude\"} process matcher — process_exited fires when pgrep no longer sees the process."
+        },
+        {
+          "kind": "file",
+          "ref": ".claude/skills/ir:onboard-agent/scenarios.json",
+          "note": "by_adapter.claudecode.script for session-end — 16 steps covering 3 variants (clean exit / SIGKILL idle / SIGKILL mid-turn) using exit_clean, restart, sigkill step types."
+        },
+        {
+          "kind": "issue",
+          "ref": "ingo-eichhorst/Irrlicht#321",
+          "note": "Zombie-on-restart fixed in 0.4.x — referenced by the matrix notes for this cell."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "claude CLI on PATH and authenticated (subscription or API key)",
+        "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+        "no other claudecode session uses any of the recipe's UUIDs"
+      ],
+      "setup": [
+        "Driver generates 3 lowercased UUIDs: the staging-supplied one for the first session, and two via `uuidgen | tr '[:upper:]' '[:lower:]'` for the restart steps",
+        "Driver creates 3 fresh cwds under <staging>/cwd, cwd-2, cwd-3 so claudecode shows the trust dialog for each (claude caches trust per directory)"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 2
+        },
+        {
+          "type": "exit_clean"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        },
+        {
+          "type": "restart"
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "sigkill"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        },
+        {
+          "type": "restart"
+        },
+        {
+          "type": "send",
+          "text": "Write a 200 word essay about the history of coffee."
+        },
+        {
+          "type": "sleep",
+          "seconds": 2
+        },
+        {
+          "type": "sigkill"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        }
+      ],
+      "verify": [
+        "events.jsonl contains exactly 3 distinct UUID session_ids (one per variant) plus their proc-<PID> pre-session rows",
+        "events.jsonl contains exactly 3 process_exited events, one per UUID",
+        "variant 1: the first UUID session has a state_transition to ready right after its turn completes, immediately preceding its process_exited",
+        "variant 2: the second UUID session ends in ready (idle) when sigkill fires; no state_transition to working appears after the process_exited",
+        "variant 3: the third UUID session is in working when sigkill fires; irrlichd's sweep-promotes-to-ready behavior may or may not produce a working→ready transition before transcript_removed, depending on the 8 s tail window — accept either shape",
+        "the state band in the viewer shows three colored arcs separated by grey gaps where no session is alive between variants",
+        "transcript.jsonl contains 3 user lines and 3 assistant lines, with the variant-3 assistant message bearing stop_reason=stop_sequence (interrupted)"
+      ],
+      "settings": {},
+      "timeout_seconds": 180
+    }
+  },
+  "scenario_id": "session-end"
+}

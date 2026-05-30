@@ -1,0 +1,59 @@
+{
+  "artifacts": {},
+  "metadata": {
+    "agent_supports": "partial",
+    "daemon_capability": "incapable",
+    "driver_capability": "ready",
+    "confidence": 0.82,
+    "notes": "agent_supports: partial\ndaemon_capability: incapable; driver_capability: ready\napplicable: n/a"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "auto-classified-permission",
+      "agent": "codex",
+      "assessed_at": "2026-05-23T00:00:00Z",
+      "agent_supports": "partial",
+      "daemon_capability": "incapable",
+      "driver_capability": "ready",
+      "confidence": 0.82,
+      "body": "## Verdict\n\nagent_supports: partial\ndaemon_capability: incapable; driver_capability: ready\napplicable: n/a\n\n## Reasoning\n\n`auto-classified-permission` (scenario-meanings.md): the defining behavior is an **internal classifier that auto-approves SAFE tool calls but GATES risky ones**, so within a single turn the user observes `ready → working → ready` for the safe calls (never `waiting`) AND a `working → waiting` for the risky one, then `waiting → working → ready` after explicit user approval. The **Primitive exercised is `permission_hooks`** — the selective safe-vs-risky discrimination is the whole point. It is explicitly *Not to be confused with* `auto-executed-tool-call` (ALL calls auto-approve, never any waiting) or `tool-gate-permission-prompt` (EVERY call requires approval).\n\n**agent_supports: partial.** Codex CLI 0.130.0 has an `approval_policy` (parser_test.go references `\"approval_policy\": \"never\"`) and a sandbox: under its default policy benign shell/exec commands auto-execute with no prompt, while commands that escalate out of the sandbox surface a separate approval. So codex DOES auto-run some commands and gate others — but this is a coarse sandbox/escalation boundary, not the canonical scenario's per-call \"safe vs risky\" classifier that selectively prompts WITHIN one turn. `capabilities.json` records `permission_hooks: false`: codex ships no auto-permission classifier hook of the kind this scenario exercises. Hence `partial`, not `yes`.\n\n**daemon_capability: incapable; driver_capability: ready.** This is the load-bearing verdict. The codex parser (parser.go) has exactly two `waiting`-producing paths, neither of which is a safe-vs-risky classifier signal: (1) a `<proposed_plan>` assistant block mapped to `ExitPlanMode` (that is `user-blocking-plan-mode-approval`), and (2) a `function_call` left without a `function_call_output` at `task_complete` → `HasOpenToolCall=true` → generic open-tool-call waiting (that is the `tool-gate-permission-prompt` / open-call shape — see `TestParser_ProposedPlan_EndToEndWaitingState`). There is NO transcript signal, and no parser branch, that lets the daemon distinguish \"the classifier auto-approved this safe call but gated that risky one\" — `permission_hooks: false`. So irrlicht cannot observe the scenario's defining selective-gating signal for codex.\n\nThe only codex-observable half of this scenario — a benign command auto-executing with no `waiting` (`ready → working → ready`) — is **already fully captured by the committed `codex × auto-executed-tool-call` cell** (and its sibling `full-lifecycle-toolcall`, coverage_id auto-executed-tool-call, recorded 6/6). A codex `auto-classified-permission` recording would be observationally identical to that cell and would assert nothing new, because the distinguishing primitive (selective `working → waiting` for a risky call within the same turn) is exactly what the daemon cannot see for codex. Recording it would prove the wrong thing (the auto-executed happy path, already covered) under the wrong label.\n\n## Conclusion\n\nThe cell is frozen at `applicable: n/a`: codex has an approval mechanism (so not `no` on the agent), but irrlicht observes no signal that distinguishes this scenario from the already-covered `auto-executed-tool-call`. No recipe, no recording. The auto-classified safe/risky discrimination is a `permission_hooks` (claudecode Auto Mode) concept with no codex analogue the daemon can surface. This would unblock only if codex emitted a structured per-call classification event AND the codex parser learned to translate it into a selective `waiting` transition.",
+      "caveats": [
+        "The auto-approved happy-path half of this scenario IS observable for codex, but it is already locked down by the committed `codex × auto-executed-tool-call` cell — a separate `auto-classified-permission` codex recording would duplicate it without exercising the distinguishing selective-gate signal.",
+        "If a future codex version surfaces a structured safe-vs-risky classification event (and the codex parser maps the risky branch to a selective `working → waiting`), re-assess — the verdict could lift to partial/partial and become applicable."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": ".claude/skills/ir:onboard-agent/scenario-meanings.md",
+          "note": "auto-classified-permission: classifier selectively gates risky calls (working→waiting) while safe calls stay working; primitive = permission_hooks; explicitly distinct from auto-executed-tool-call"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/codex/capabilities.json",
+          "note": "permission_hooks: false — codex ships no auto-permission classifier hook of the kind this scenario exercises"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/codex/parser.go",
+          "note": "only waiting-producing paths are <proposed_plan>→ExitPlanMode and open function_call at task_complete; no safe-vs-risky classifier branch"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/codex/parser_test.go",
+          "note": "approval_policy field present in fixtures; TestParser_ProposedPlan_EndToEndWaitingState shows the only generic open-tool-call→waiting path"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/codex/scenarios/auto-executed-tool-call/assessment.json",
+          "note": "the observable (no-waiting) half of this scenario is already captured by the codex auto-executed-tool-call cell — a codex auto-classified-permission recording would be a redundant near-duplicate"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "notes": "applicable: n/a (assessment 2026-05-23: agent_supports=partial, irrlicht_observes=no). This scenario's defining signal is a per-call safe-vs-risky classifier that selectively prompts (working→waiting) for risky calls only — primitive permission_hooks, which codex has set false. Codex has a coarse sandbox/approval_policy that auto-runs benign commands and escalates others, but the codex parser exposes no safe-vs-risky classification: its only waiting paths are <proposed_plan>→ExitPlanMode (plan-mode-approval) and a generic open function_call at task_complete (open-tool-call/gate). The daemon therefore cannot observe the selective-gating signal that distinguishes this cell from auto-executed-tool-call. The only codex-observable half (a benign command auto-running with no waiting, ready→working→ready) is already fully captured by the committed codex × auto-executed-tool-call cell; recording it here would be a redundant near-duplicate that proves the wrong thing. No recipe, no recording. See replaydata/agents/codex/scenarios/auto-classified-permission/assessment.json."
+    }
+  },
+  "scenario_id": "auto-classified-permission"
+}

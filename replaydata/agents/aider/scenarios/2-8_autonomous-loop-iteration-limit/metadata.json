@@ -1,0 +1,132 @@
+{
+  "recording_dir": "aider/scenarios/2-8_autonomous-loop-iteration-limit",
+  "artifacts": {
+    "events": "aider/scenarios/2-8_autonomous-loop-iteration-limit/events.jsonl",
+    "transcript_md": "aider/scenarios/2-8_autonomous-loop-iteration-limit/transcript.md",
+    "manifest": "aider/scenarios/2-8_autonomous-loop-iteration-limit/manifest.json"
+  },
+  "metadata": {
+    "agent_supports": "partial",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "pass_rate": "6/6 phases passed",
+    "agent_cli_version": "0.86.2",
+    "daemon_version": "0.4.7+1f29b8f",
+    "confidence": 0.8,
+    "notes": "agent_supports: partial\ndaemon_capability: full\ndriver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "autonomous-loop-iteration-limit",
+      "agent": "aider",
+      "assessed_at": "2026-05-25T00:00:00Z",
+      "agent_supports": "partial",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: partial\ndaemon_capability: full\ndriver_capability: ready\n\n## Reasoning\n\nThe scenario's **Primitive exercised** is \"iteration cap enforcement — the agent CLI has a configurable max-step limit and emits a clean turn-end signal when it hits the cap\" (maps to `autonomous_mode` in `capabilities.json`). The **User-observable signal** is narrow and is the only thing the spec asserts: state reaches `ready` even though the agent did not fully succeed, and does NOT stick in `working`.\n\n**agent_supports: partial.** Aider DOES have a bounded autonomous iteration loop — the *reflection loop* in `coders/base_coder.py:run_one()`. After `send_message`, if the model's output triggers a follow-up (lint failure, test failure, or an edit/format error), aider auto-generates a `reflected_message` and re-prompts the model WITHOUT user intervention. The loop is hard-capped: `max_reflections = 3` (base_coder.py:101). On hitting the cap it stops with `tool_warning(\"Only 3 reflections allowed, stopping.\")` (base_coder.py:939-941) and returns from the turn. This is a genuine self-prompting loop with a max-step limit and a clean turn-end on cap — the primitive the scenario tests.\n\nIt is `partial` rather than `yes` for two reasons: (1) the cap is hardcoded at 3 and is NOT user-configurable via any CLI flag, env var, or settings key (`aider --help` exposes no `--max-reflections` / `--max-iterations`; the source constant is the only knob). (2) It is a *reflection / error-recovery* loop, not an open-ended goal-pursuit mode like claudecode's `/goal` — aider only iterates when the model's own output fails validation; you cannot direct it to keep working toward an arbitrary condition. Note: `capabilities.json` for aider has no `autonomous_mode` key at all (the Primitive's canonical key is absent), which is itself consistent with `partial` — aider has only this incidental reflection loop, not a first-class autonomous mode. This matches the existing matrix verdict of `partial`.\n\n## daemon_capability: full\n\nThe aider adapter is `FilesUnderCWD` over the markdown transcript `.aider.chat.history.md`, parsed by a `RawParser` (core/adapters/inbound/agents/aider/parser.go). Tracing the capped reflection loop through the parser:\n\n- The whole loop is ONE turn: `io.user_input()` writes the `#### ` history header exactly once per top-level prompt; `run_one`'s `while reflected_message:` loop calls `send_message` directly and never re-emits a `#### ` header. The parser opens the turn on the single `#### ` line (parser.go:94-108, `turnOpen=true`).\n- Each reflection iteration's model call lands as a `> Tokens: …` line, which the parser maps to `assistant_message` and explicitly KEEPS the turn open (`closeModelCall`, parser.go:115-117,153-188; the comment at L150-152/L174 documents that multiple `> Tokens:` per turn is the normal `--yes-always` case). So the session stays continuously `working` across all reflection rounds — no flicker.\n- `> Applied edit to …` and `> Running …` markers synthesize `tool_result` events (parser.go:119-124,231-242) which also do not move state off `working`.\n- The turn ends the same way EVERY normal aider turn ends: the transcript goes quiet, `IdleFlush` fires after 1500ms (parser.go:216-229) and synthesizes a payload-free `turn_done`, flipping `LastEventType` so the state classifier transitions `working → ready`.\n\nThe single spec-required, user-observable signal — \"state reaches `ready`, does not stick in `working`\" — is therefore observed correctly. The daemon emits ≥2 turns of activity (`min_turns: 2` via the per-call `> Tokens:` assistant_messages) and a final `ready` (matching the `verify` block). Because the spec asserts only the termination SHAPE (and our scenarios are user-observable-only — no internal reasons or event kinds), the daemon meets every required observable today: **daemon_capability: full**.\n\nThe one thing the daemon CANNOT do is DISCRIMINATE \"loop hit its cap\" from \"turn completed normally\": both terminate via the identical idle-flush `turn_done`, and the cap-specific `> Only 3 reflections allowed, stopping.` blockquote is silently ignored by the parser (its `errorRE`, parser.go:75, matches only `Error`/`Exception`, so the line falls through to the catch-all blockquote branch at parser.go:126-132 and returns nil). Per #476 / the cell-lifecycle authoring rule, this is NOT a `bug` and NOT `incapable` — the spec does not require a cap-specific signal, so it is a **caveat** (feature-invisible-but-spec-compliant), and `daemon_capability` stays `full`. Reserving `bug` for a spec-required observable the daemon mis-handles is exactly the discipline #476 introduced; downgrading here would re-create the old `partial`-dumping-ground.\n\n## driver_capability: ready\n\nThe recipe's step grammar is `send → wait_turn → wait_turn → sleep`, all of which `scripts/drive-aider-interactive.sh` implements (send / wait_turn / sleep are in the driver's supported set; this cell needs none of the gapped primitives — restart, reset_session, resume, start_session, exit_clean, sigkill, keys, session, fork). The reflection loop is driven to its cap deterministically by `--auto-test --test-cmd false` (every edit trips a non-zero test exit → forced reflected_message until max_reflections=3), with no arrow-key picker or forced-kill step required. **driver_capability: ready** — matching the coverage row.\n\n## #476 re-derivation note\n\nOld schema: `irrlicht_observes: partial`. Split honestly: the blocker was never a missing driver step (driver grammar is complete → `driver_capability: ready`), and the daemon DOES represent the only spec-required observable (the graceful `working → ready`) → `daemon_capability: full`. The cap-vs-normal indistinguishability — the part that drove the old `partial` — is a non-spec-required gap, so it lives in caveats, not in a downgraded axis. This mirrors the canonical anti-pattern guidance: caveats over downgrades.\n\n## What would let irrlicht surface the cap specifically (not required by this scenario)\n\n1. The aider adapter extracts the `Only N reflections allowed, stopping.` blockquote into a first-class daemon signal (e.g. a turn-end reason), letting irrlicht assert \"iteration cap reached\" specifically rather than only \"loop ended.\"\n2. Aider exposes the cap as a CLI knob (`--max-reflections`) so a recording could force the cap deterministically at a low value instead of relying on an auto-test that keeps failing.",
+      "caveats": [
+        "feature-invisible-but-spec-compliant: the cap-hit warning `> Only 3 reflections allowed, stopping.` is written to the transcript but the parser ignores it (its errorRE matches only Error/Exception, so the line returns nil at parser.go:126-132). The daemon observes the graceful working→ready termination but cannot distinguish a cap-hit from a normal turn completion — both terminate via the same idle-flush turn_done. The scenario asserts only the termination shape, so this does not block daemon_capability:full.",
+        "Aider's loop is a reflection / error-recovery loop (re-prompt on lint/test/edit failure), not an open-ended goal-pursuit autonomous mode. max_reflections=3 is hardcoded in base_coder.py with no CLI/env/settings override, so a recording cannot pre-lower the cap; the recipe must drive the loop to its cap via repeated auto-test failures (--auto-test --test-cmd false). This is the reason agent_supports is partial, not yes.",
+        "KNOWN TIMING RISK: end-of-turn is ALWAYS synthesized by the 1500ms IdleFlush (clamped by the SessionDetector ~5s working-refresh poll). If any single inter-reflection model call leaves the transcript silent >~1.5s, IdleFlush can synthesize a premature turn_done (working→ready) and the next `> Tokens:` line reopens it (ready→working) — a flicker. Root cause is timing, not topology; a fast local model avoids it.",
+        "Distinct from token-quota-exhausted (a cost/budget limit) and turn-aborted-by-error (an unplanned provider error). This scenario tests the planned, count-based reflection cap whose terminal signal is a clean turn-end, not an exception."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.local/share/uv/tools/aider-chat/lib/python3.12/site-packages/aider/coders/base_coder.py",
+          "note": "aider 0.86.2. run_one() reflection loop (L922-943): while reflected_message, re-prompt; max_reflections=3 (L101); on cap, tool_warning('Only 3 reflections allowed, stopping.') then return. Confirms the bounded self-prompting iteration loop and its clean turn-end on cap (grounds agent_supports:partial)."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.local/share/uv/tools/aider-chat/lib/python3.12/site-packages/aider/io.py",
+          "note": "tool_warning -> _tool_message -> append_chat_history(blockquote=True): the cap-hit warning lands in .aider.chat.history.md as a `> …` blockquote line. Confirms the cap signal IS written to the watched Source (so the gap is parser-side, not transport-side)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/aider/parser.go",
+          "note": "FilesUnderCWD markdown RawParser. `#### ` opens one turn (L94-108); `> Tokens:` -> assistant_message keeps turn open (L115-117,153-188); errorRE (L75) matches only Error/Exception so the `stopping` line returns nil at the catch-all blockquote branch (L126-132); IdleFlush (L216-229) synthesizes the only end-of-turn turn_done after 1500ms -> working→ready. Grounds daemon_capability:full for the spec-required termination shape AND the caveat that cap-hit is not a distinct signal."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/aider/agent.go",
+          "note": "Confirms aider Source variant is FilesUnderCWD over `.aider.chat.history.md` with a RawLineParser (does not implement PendingContributor/SubagentCounter) — the transport that grounds the daemon_capability claim."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/aider/capabilities.json",
+          "note": "Step 4 Primitive-exercised confirmation: the scenario's primitive maps to `autonomous_mode`, but aider's capabilities.json has NO autonomous_mode key (headless_mode:true is the recipe's `requires`). Absence of a first-class autonomous mode is consistent with agent_supports:partial (only an incidental reflection loop)."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.local/bin/aider --help (aider 0.86.2)",
+          "note": "Step 2.5 surface check: --help exposes --auto-commits/--auto-lint/--auto-test/--auto-accept-architect but NO --max-reflections / --max-iterations / autonomous-loop flag. The cap is the hardcoded base_coder.py constant only — supports the 'partial' (not user-configurable) verdict."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/autonomous-loop-iteration-limit/assessment.json",
+          "note": "Sibling worked example for the same scenario: the cap-hit path is indistinguishable from the normal end-of-loop path. Same reasoning anchors the aider caveat."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "aider CLI on PATH and authenticated against its configured provider/model (auth is set up out-of-band; the rig's precheck delegates auth to the user). The live REPL needs a model that actually answers so the reflection loop really iterates inside one turn; headless aider with no reachable provider hangs ~5min on the model-auth/OAuth prompt — which is why a recording for this cell is deferred until auth is available in the environment.",
+        "tmux available — the interactive driver runs aider in a tmux REPL so the process outlives the whole capped reflection turn (the terminal working→ready settle is idle-flush-bound and must be observed before teardown)",
+        "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+        "agent_supports:partial scope_note (mirror of the coverage matrix): aider's ONLY autonomous self-prompting loop is the reflection loop in coders/base_coder.py run_one() — it auto-re-prompts the model on auto-lint/auto-test/edit failure and is hard-capped at max_reflections=3 (base_coder.py:101). It is partial (not yes) because the cap is a hardcoded constant with NO --max-reflections/--max-iterations CLI/env/settings override (so the recipe must DRIVE the loop to its cap via repeated lint/test failures, it cannot pre-lower the cap), AND it is a reflection/error-recovery loop rather than an open-ended goal-pursuit mode like claudecode's /goal — aider iterates only when its own output fails validation.",
+        "irrlicht_observes:partial scope_note (mirror of the coverage matrix): irrlicht observes the graceful-termination SHAPE (working→ready, no stuck working) but CANNOT distinguish a cap-hit from a normal turn-end — both terminate via the identical 1500ms IdleFlush turn_done. The cap warning `> Only 3 reflections allowed, stopping.` IS written to the transcript but the parser's errorRE matches only Error/Exception (not 'stopping'), so it is ignored; no cap-specific daemon signal is emitted. The recipe therefore asserts only the user-observable termination shape, not 'cap reached' specifically.",
+        "KNOWN TIMING RISK (observes:partial): the reflection loop is genuinely WITHIN one turn (one `#### ` header, run_one's `while reflected_message:` loop, max_reflections=3), so the topology is one contiguous working span. The only thing that can break the no-flicker target is the 1500ms IdleFlush: if any single inter-reflection model call leaves the transcript silent for >~1.5s, IdleFlush synthesizes a premature turn_done (working→ready) and the next `> Tokens:` line reopens it (ready→working). A fast local model avoids this; a slow remote model can trip it. The root cause is timing, not topology — do NOT widen the spec to accept the flicker."
+      ],
+      "setup": [
+        "The interactive driver (drive-aider-interactive.sh) git-inits a fresh per-run cwd under <staging>/cwd/, launches aider in a tmux session, and waits for the `> Repo-map:` banner line in .aider.chat.history.md before sending the prompt",
+        "HOW the reflection is elicited deterministically (mirror of the aider/self-correction-iteration sibling that validated 6/6): settings.aider_extra_args launches aider with `--auto-test --test-cmd false`. `false` always exits non-zero, so EVERY edit aider makes inside the turn trips a test failure and forces a reflected_message — independent of what gpt-5-nano actually writes. The loop re-prompts until it hits max_reflections=3, then stops with `> Only 3 reflections allowed, stopping.` and returns; the turn always settles to ready, so we never depend on the model producing passing code. The driver appends these flags to its fixed arg set (--no-auto-commits --yes-always --no-gitignore [+ --model]); the step grammar (send/wait_turn/sleep) is fully supported (no driver_gap). The send asks for a small file edit aider can reliably perform, which is what arms --auto-test; it deliberately does NOT request a shell command — aider's reflection loop fires on --auto-lint/--auto-test failure, not on a model-invoked shell tool's exit code.",
+        "aider stores its transcript as .aider.chat.history.md in the cwd (FilesUnderCWD, RawLineParser), so the daemon keys the WHOLE session by proc-<PID> — there is no separate transcript-UUID rollout session and no handoff/reconcile; the turn arc, pid_discovered and teardown all land on that one proc-<PID> row. The transcript is LAZY (materializes on first input), but the proc-<PID> pre-session is observable from launch (that is where the spec's session_birth 'ready within 1s' is grounded)",
+        "WHY the capped loop is ONE turn: io.user_input() writes the `#### ` history header exactly once per top-level prompt, before Coder.run_one; run_one's reflection loop sets reflected_message and calls send_message directly, never re-emitting a `#### ` header (base_coder.py:860/879/924-944). The parser treats every `> Tokens:` line as assistant_message (NOT turn_done) so the turn stays open across the multiple capped model calls (parser.go:18-23,146-188), and `> Running <cmd>`→tool_result markers never change state away from working — so the whole capped reflection chain is one contiguous ready→working→ready span",
+        "No auto-mode / permission step is needed and there is no gate to enable: aider runs under --yes-always and has NO permission hook (capabilities.json permission_hooks:false), so any shell-command confirmation auto-answers and the session never enters waiting — unlike the claudecode sibling for this cell, which must enable auto mode to keep its Stop-hook loop alive without tripping a gate",
+        "WHY interactive, not headless `aider --message`: aider emits no end-of-turn marker, so working→ready is synthesized by IdleFlush after a ~1.5s quiet window, clamped to the SessionDetector's ~5s working-refresh poll; a headless --message run can exit promptly after the reply, so the daemon misses the terminal working→ready settle before process_exited and truncates the arc. Keeping aider alive in the REPL across one send + wait_turn lets the daemon observe the full ready→working→ready settle cleanly, and the single tmux kill-session teardown then yields one clean process_exited",
+        "wait_turn blocks until a new `> Tokens:` line appears in the transcript (aider's per-round close marker — one per model call inside the reflection loop). The recipe waits TWICE (same as the self-correction sibling): the FIRST wait_turn returns on the initial edit's `> Tokens:`, the SECOND returns on the first reflection round's `> Tokens:` (the auto-test failed and aider re-called the model). This guarantees the reflection loop actually entered before teardown — a single wait_turn returns too early (the first reflection call is still in flight). The ≥20s trailing sleep then absorbs the remaining capped reflection rounds (max_reflections=3) plus one full ~1.5s IdleFlush cycle so the terminal working→ready settle is observed before the single tmux kill-session teardown"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Create a new file loop.py containing a single Python function add(a, b) that returns a + b. Make the edit now; do not ask me anything."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 20
+        }
+      ],
+      "verify": [
+        "events.jsonl contains a transcript_new + presession_created for the proc-<PID> session born ready within ~1s of REPL launch",
+        "events.jsonl contains a pid_discovered event bound to the same proc-<PID> session_id",
+        "events.jsonl shows exactly one state_transition→working on the proc-<PID> session_id when the prompt is sent, sustained across the capped reflection iterations (auto-lint/auto-test keep failing → up to max_reflections=3 re-prompts, all inside one turn)",
+        "events.jsonl contains NO state_transition to ready between reflection iterations — the session stays continuously working across the loop (the parser holds working across `> Tokens:`/`> Running` runs within one `#### ` turn)",
+        "events.jsonl contains NO state_transition to waiting at any point (aider has no permission hook; runs under --yes-always)",
+        "events.jsonl shows exactly one working→ready transition at the single turn end (synthesized by IdleFlush ~1.5s after the last `> Tokens:` when the loop hits its cap and stops self-prompting) — the user-observable signal: state reaches ready even though the goal was not fully met, and does NOT stick in working",
+        "the session's final live state is ready before the driver tears the REPL down",
+        "events.jsonl contains exactly one process_exited on the proc-<PID> session at REPL teardown",
+        "OBSERVES:PARTIAL — the cap-hit is NOT distinguishable from a normal turn-end: the `> Only 3 reflections allowed, stopping.` warning is written to the transcript but the parser ignores it (errorRE matches only Error/Exception), so do NOT assert a 'cap reached' signal — assert only the graceful working→ready termination shape",
+        "KNOWN TIMING RISK (observes:partial): if any single inter-reflection model call is silent >~1.5s, IdleFlush can fire a premature working→ready then the next `> Tokens:` reopens working→working flicker — flag it as a known timing limitation, do NOT widen the spec to accept it",
+        "Do not assert the auto-lint/auto-test output text — it is model/tool/OS-dependent; assert only the state topology and the single graceful turn end"
+      ],
+      "settings": {
+        "aider_extra_args": [
+          "--auto-test",
+          "--test-cmd",
+          "false"
+        ]
+      },
+      "timeout_seconds": 300
+    }
+  },
+  "scenario_id": "autonomous-loop-iteration-limit"
+}

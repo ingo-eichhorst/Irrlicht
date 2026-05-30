@@ -1,0 +1,88 @@
+{
+  "recording_dir": "pi/scenarios/1-3_long-idle-live-session",
+  "artifacts": {
+    "events": "pi/scenarios/1-3_long-idle-live-session/events.jsonl",
+    "transcript": "pi/scenarios/1-3_long-idle-live-session/transcript.jsonl",
+    "manifest": "pi/scenarios/1-3_long-idle-live-session/manifest.json",
+    "golden": "pi/scenarios/1-3_long-idle-live-session/transcript.jsonl.replay.json.golden"
+  },
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "pass_rate": "5/5 phases passed",
+    "agent_cli_version": "0.70.0",
+    "daemon_version": "0.4.7+d30518a.dirty",
+    "confidence": 0.9,
+    "notes": "Pi's REPL (driven via tmux) is a persistent process; the daemon's PID-liveness check holds the UUID-keyed session across the 20s idle window. Recording shows ready→working→ready before idle and ready→working→ready after the second send."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "long-idle-live-session",
+      "agent": "pi",
+      "assessed_at": "2026-05-23T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.9,
+      "body": "Pi's REPL (driven via tmux) is a persistent process; the daemon's PID-liveness check holds the UUID-keyed session across the 20s idle window. Recording shows ready→working→ready before idle and ready→working→ready after the second send.",
+      "caveats": [
+        "Production daemon readyTTL is 30 min; this recording proves session continuity over 20s but does not exercise the TTL itself."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/pi/agent.go",
+          "note": "Pi adapter."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "pi CLI on PATH and authenticated (PI_API_KEY)",
+        "irrlichd is recording (--attach against a --record daemon)",
+        "no concurrent pi REPL is running in the user's other terminal windows (the interactive driver assumes pi can take exclusive control)"
+      ],
+      "setup": [
+        "Create an empty cwd under <staging>/cwd/",
+        "Pi's REPL launched via drive-pi-interactive.sh stays alive across the recipe's two sends"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 20
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: alive"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the pi UUID session entering ready after turn 1",
+        "no transcript_removed event fires for the UUID session during the 20 s idle window",
+        "after the second send, events.jsonl shows ready → working → ready for the same UUID",
+        "final session state is ready"
+      ],
+      "settings": {},
+      "timeout_seconds": 180,
+      "scope_note": "See codex scope_note for the production readyTTL caveat."
+    }
+  },
+  "scenario_id": "long-idle-live-session"
+}

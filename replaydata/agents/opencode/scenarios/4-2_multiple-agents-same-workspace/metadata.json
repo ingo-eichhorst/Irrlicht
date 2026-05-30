@@ -1,0 +1,115 @@
+{
+  "recording_dir": "opencode/scenarios/4-2_multiple-agents-same-workspace",
+  "artifacts": {
+    "events": "opencode/scenarios/4-2_multiple-agents-same-workspace/events.jsonl",
+    "transcript": "opencode/scenarios/4-2_multiple-agents-same-workspace/transcript.jsonl",
+    "manifest": "opencode/scenarios/4-2_multiple-agents-same-workspace/manifest.json",
+    "golden": "opencode/scenarios/4-2_multiple-agents-same-workspace/transcript.jsonl.replay.json.golden",
+    "recordings": [
+      "opencode/scenarios/4-2_multiple-agents-same-workspace/recordings/2026-05-26-00-58-18_irrlichd-0.4.7+4b0addd"
+    ]
+  },
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "pass_rate": "3/3 phases passed",
+    "agent_cli_version": "unknown",
+    "daemon_version": "0.4.7+4b0addd",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes\ndaemon_capability: full\ndriver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "multiple-agents-same-workspace",
+      "agent": "opencode",
+      "assessed_at": "2026-05-26T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\nReassessment of a previously-`bug` cell against opencode v1.14.50 and the current daemon (opencode/watcher.go `scanSessions`, opencode/metrics.go). **The prior `daemon_capability: bug` was mislabeled and is now stale — it flips to `full`.**\n\n## What this scenario actually tests\n\nThe primitive is *multi-adapter coexistence*: a DIFFERENT-adapter set (claudecode + codex + pi + aider) and one opencode session live in the SAME cwd at once, and the daemon must label each adapter independently with fully independent state/metrics and no cross-contamination. The user-observable signal is: each session appears with its correct adapter label; states transition independently; no merging/flapping of metrics, parent linkage, or subagent counts.\n\n## Why the daemon is `full` here\n\nThe transports are disjoint at the source-variant level, so no shared reader/parser/table can leak state:\n1. **Process matching** — opencode declares `ExactName{Name: opencode}` (agent.go); each adapter's matcher runs independently and tags each PID with its originating adapter.\n2. **Session store** — opencode is the only `ProcessOwnedStore` adapter; its watcher keys every session by the SQLite `session.id` column (`ses_…`), NOT by cwd. `scanSessions` does `SELECT id, directory, … FROM session` and stores `w.cursors[s.id]` per id (watcher.go ~L257–L326); `ComputeMetrics` queries `WHERE p.session_id = ?` (metrics.go ~L67–L73). opencode.db only ever holds opencode rows, disjoint from the partners' FilesUnderRoot (claudecode/codex/pi JSONL) and FilesUnderCWD (aider markdown) transports.\n3. **Per-(adapter, session_id) state** — metrics and parent linkage key off the (adapter, session_id) tuple via the maps.go projections; there is no global per-cwd aggregation.\n\nThe existing recording's `events.jsonl` is direct evidence the coexistence spec is met: five DISTINCT sessions appear, each with its correct adapter label — opencode `ses_19ea3aac2ffe5C0USJRj6zD2gL` (adapter opencode), claude-code `1dddc799-…`, codex `rollout-2026-05-26T00-58-19-…`, pi `2026-05-25T22-58-18-…`, aider `proc-28672` — each with its own independent ready→working transition (seq 735 for opencode, 723/736 for claude-code, 775/776 for codex, 786/787 for pi, 738/780 for aider). The daemon never merges or flaps one adapter's row into another's. This is the load-bearing assertion and it passes cleanly.\n\nThis matches the sibling `multiple-sessions-same-cwd` reassessment, which found the daemon keys opencode sessions by `session.id` (not cwd) and is therefore `daemon_capability: full` — two sessions are independently observable. The same keying makes two DIFFERENT adapters in one cwd trivially independent.\n\n## Why the old `bug` was stale\n\nThe prior verdict downgraded this cell to `bug` over a single failing assertion: `agentB_turn_done` (the opencode session's working→ready settle). The recording shows WHY that one assertion truncated, and it is NOT a multi-adapter bug:\n- opencode `ses_19ea3aac…` last `transcript_activity` at seq 804 (00:59:32.582);\n- `process_exited` pid=28670 at seq 805 (00:59:32.722) — only ~140 ms later;\n- the terminal `step-finish=stop` part is not read by the ProcessOwnedStore poller until seq 807 (00:59:38.094) — 5.5 s after the process already exited.\n\nSo there is no working→ready `state_transition` for the opencode row: the single-shot `opencode run` process exited before the poller's tick read the terminal part. This is opencode's GENERIC headless single-shot fast-exit truncation (the same mechanism captured for pi/turn-aborted-by-error and opencode's own headless settle behaviour), and the standalone `basic-turn` opencode fixture proves the daemon DOES emit working→ready when the poller's tick wins the race (opencode runs alone there → `turn1_done: ready`, no known_failing). It is therefore a settle-timing/driver concern, not a spec-required observable of the multi-adapter primitive — which the SKILL's authoring rule says belongs in `caveats`, keeping `daemon_capability: full`. Parking this generic settle-race in `bug` on the multi-agent cell is exactly the defensive-`bug` mislabel #476 set out to kill.\n\n## Driver\n\nThe opencode interactive driver supports send/wait_turn/sleep and honors `$IRRLICHT_ONBOARD_CWD`, so it shares the run-cell-multi.sh workspace with the partner adapters. The recipe (one short text turn) is exactly the shape this cell needs → `driver_capability: ready`. The agentB settle truncation is a property of single-shot `opencode run` exiting at turn-end; a persistent-session driver mode that outlives the settle would also clear the trailing arc, but it is not required for the coexistence assertions.\n\n## Route\n\nrecord — re-record (or re-promote) the cross-adapter fixture as a PASSING fixture for the load-bearing coexistence assertions and DROP the `known_failing` flag from expected.jsonl. The agentB working→ready settle is a caveat (opencode's headless fast-exit), not a daemon mishandling of this scenario.",
+      "caveats": [
+        "opencode's `agentB_turn_done` working->ready settle can truncate: single-shot `opencode run` exits ~140 ms after the final transcript_activity (events.jsonl seq 805), before the ProcessOwnedStore poller reads the terminal step-finish=stop part (seq 807, +5.5 s). This is opencode's generic headless fast-exit settle race (cf. basic-turn captures it standalone when the poller's tick wins), NOT a multi-adapter merge/cross-contamination bug — the load-bearing coexistence assertions all pass.",
+        "opencode's default model (a slow local LM Studio model, ~30-45 s/turn) means its working span is long and it may enter working AFTER a faster partner; the spec is adapter-agnostic (agentA = first to working, agentB = the other), so either ordering validates.",
+        "Adapter labels are stable wire strings (opencode, claude-code, codex, pi, aider); the assertion is on the wire-level adapter name, not the macOS display string.",
+        "A persistent-session opencode driver mode (the -i TUI, not currently driver-supported) that outlives the turn would also clear the agentB settle arc — but it is not required for the coexistence primitive this cell tests."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/opencode/watcher.go",
+          "note": "scanSessions SELECTs `id, directory, time_updated, parent_id FROM session` and keys cursors by `w.cursors[s.id]` (the SQLite session.id, ses_…), NOT by cwd — so two sessions (or a session next to a different adapter) in one cwd are independently observable. No state shared with any file-based adapter."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/opencode/metrics.go",
+          "note": "ComputeMetrics / querySessionMetrics query `WHERE p.session_id = ?` — metrics are per session.id, no per-cwd aggregation that could merge a partner adapter's tokens/model."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/opencode/scenarios/multiple-agents-same-workspace/events.jsonl",
+          "note": "Five distinct adapter-labeled sessions each take an independent ready->working transition (opencode seq 735, claude-code 736, codex 775/776, pi 786/787, aider 780) with no merge/flap — the load-bearing coexistence assertion passes; daemon_capability=full."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/opencode/scenarios/multiple-agents-same-workspace/events.jsonl",
+          "note": "Proof the single failing assertion is a headless fast-exit race, not a merge bug: opencode session last activity seq 804 (00:59:32.582) -> process_exited seq 805 (00:59:32.722, +140ms) -> terminal step-finish read seq 807 (00:59:38.094, +5.5s), so no working->ready state_transition was emitted for ses_19ea3aac. Belongs in caveats, not bug."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/opencode/scenarios/basic-turn/expected.jsonl",
+          "note": "Standalone opencode turn1_done asserts expected_state=ready with NO known_failing — proves the daemon DOES emit working->ready when opencode runs alone (poller tick wins the race). Confirms the multi-agent settle truncation is a timing/driver concern, not daemon incapacity."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/opencode/scenarios/multiple-sessions-same-cwd/assessment.json",
+          "note": "Sibling reassessment found the daemon keys opencode sessions by session.id (not cwd) -> daemon_capability: full. The same keying makes two DIFFERENT adapters in one cwd independent here."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/maps.go",
+          "note": "Parsers / PIDDiscoverers / ProcessNames / MetricsProviders are keyed by adapter Identity.Name — opencode's MetricsReader is registered only for opencode sessions; disjoint dispatch per adapter."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "partner_adapter": "claudecode",
+      "preconditions": [
+        "opencode AND at least one different-adapter CLI (claude, and the other concurrent adapters codex/pi/aider) on PATH and authenticated; opencode authenticates against its configured default model (a local LM Studio model in ~/.config/opencode/opencode.json, so no remote key is needed)",
+        "irrlichd is recording — run-cell-multi.sh isolated coexist mode (spawns its own --record daemon on an alternate port with its own IRRLICHT_HOME, so production keeps running)",
+        "the opencode SQLite watcher is enabled in the recording daemon (ProcessOwnedStore source polling ~/.local/share/opencode/opencode.db)",
+        "no other opencode/claudecode/codex/pi/aider session is live in the run cwd"
+      ],
+      "setup": [
+        "run-cell-multi.sh creates ONE shared cwd and launches each cross_adapter[] driver concurrently, all pointed at it via IRRLICHT_ONBOARD_CWD (the opencode interactive driver honors $IRRLICHT_ONBOARD_CWD — like the codex/pi/aider drivers — so it shares the workspace with the other adapters; opencode keys its SQLite session on session.directory = that shared cwd)",
+        "opencode registers Process.Match=ExactName{Name:opencode} + Source=ProcessOwnedStore{Reader over ~/.local/share/opencode/opencode.db}, the ONLY structured-store transport here — doubly disjoint from claudecode ~/.claude/projects, codex ~/.codex/sessions, pi ~/.pi/agent/sessions (FilesUnderRoot JSONL) and aider .aider.chat.history.md (FilesUnderCWD markdown). opencode.db never holds another adapter's rows, so the daemon keys the opencode session independently; its single-session driver (send/wait_turn/sleep) is sufficient because opencode runs ONE session next to a DIFFERENT adapter",
+        "this cell stores the opencode transcript (exported from the SQLite store) for the replay golden; its events.jsonl and expected.jsonl span the whole workspace (every coexisting adapter)",
+        "the send is a single short text turn (one word) so opencode's working span carries no tool call and the session never enters waiting; opencode's default model is a small slow local LM Studio model (~30-45s/turn), so the spec's working-anchor windows are generous and the trailing sleep must outlast the turn_done settle so working->ready is observed"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: epsilon"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        }
+      ],
+      "verify": [
+        "events.jsonl contains the opencode session (label opencode, ses_… id) and at least one different-adapter session, each keyed to the same cwd slug",
+        "each session has its own independent working->ready arc; no transition on one is attributed to the other (opencode's structured SQLite store is disjoint from every partner's file-based transport, so no shared state can leak)",
+        "no cross-contamination: the daemon never merges or flaps the opencode row into another adapter's; opencode's turn arc and any pid_discovered land on the ses_… session"
+      ],
+      "settings": {},
+      "timeout_seconds": 240
+    }
+  },
+  "scenario_id": "multiple-agents-same-workspace"
+}

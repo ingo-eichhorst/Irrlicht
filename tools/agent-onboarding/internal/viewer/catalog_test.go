@@ -14,26 +14,30 @@ import (
 // is the shard ID, and the source header advertises "shards".
 func TestCatalogHandler(t *testing.T) {
 	dir := t.TempDir()
-	scen := filepath.Join(dir, "replaydata", "scenarios")
-	if err := os.MkdirAll(scen, 0o755); err != nil {
+	rd := filepath.Join(dir, "replaydata")
+	if err := os.MkdirAll(rd, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	write := func(name, body string) {
-		if err := os.WriteFile(filepath.Join(scen, name), []byte(body), 0o644); err != nil {
-			t.Fatal(err)
-		}
+	if err := os.WriteFile(filepath.Join(rd, "scenarios.json"), []byte(`{
+  "meta": {"min_versions": {"alphaagent": "1.0.0"}},
+  "scenarios": [
+    {"id": "1.1", "name": "alpha", "section": "S", "feature": "Alpha"},
+    {"id": "1.2", "name": "beta", "section": "S", "feature": "Beta"}
+  ]
+}`), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	write("_meta.json", `{"min_versions":{"alphaagent":"1.0.0"}}`)
-	write("alpha.json", `{
-  "id": "1.1",
-  "name": "alpha",
-  "section": "S",
-  "feature": "Alpha",
-  "agents": {
-    "alphaagent": {"metadata": {"agent_supports": "yes", "daemon_capability": "full", "driver_capability": "ready"}}
-  }
-}`)
-	write("beta.json", `{"id": "1.2", "name": "beta", "section": "S", "feature": "Beta", "agents": {}}`)
+
+	// Write alphaagent's cell for alpha as an id-prefixed metadata.json file.
+	cellDir := filepath.Join(dir, "replaydata", "agents", "alphaagent", "scenarios", "1-1_alpha")
+	if err := os.MkdirAll(cellDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cellDir, "metadata.json"),
+		[]byte(`{"scenario_id": "alpha", "metadata": {"agent_supports": "yes", "daemon_capability": "full", "driver_capability": "ready"}}`),
+		0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	srv := &Server{RepoRoot: dir}
 	req := httptest.NewRequest(http.MethodGet, "/api/catalog", nil)

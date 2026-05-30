@@ -1,0 +1,67 @@
+{
+  "artifacts": {},
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "incapable",
+    "driver_capability": "ready",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes\ndaemon_capability: incapable (for the cross-turn burndown PROGRESSION in a recorded fixture)\ndriver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "quota-burndown",
+      "agent": "claudecode",
+      "assessed_at": "2026-05-29T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "incapable",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: incapable (for the cross-turn burndown PROGRESSION in a recorded fixture)\ndriver_capability: ready\n\nroute: frozen\n\n## The scenario, restated for claudecode\n\nquota-burndown asserts that, across ≥2 turns that approach but do NOT cross the quota wall, the rate-limit window's `Windows[0].UsedPercent` is observed non-decreasing (P2 ≥ P1) with `SampledAt` advancing (T2 > T1) and no spurious reset to 0 between turns. The reference codex spec evidences this from \"two rate_limit metric events, each with a later SampledAt and equal-or-higher UsedPercent\" (replaydata/agents/codex/scenarios/quota-burndown/expected.jsonl). The question for claudecode is whether that PROGRESSION is observable from a recorded fixture.\n\n## agent_supports: yes\n\nClaude.ai Pro/Max accounts surface subscription rate-limit windows. A `strings $(which claude)` scan shows `seven_day`, `seven_day_sonnet`, `seven_day_opus`, `rate_limit_tier`, `CLAUDE_CODE_RATE_LIMIT_TIER`, and the `statusLine` / `executeStatusLineCommand` machinery — the subscription quota data and the statusline transport are real and shipped. Claude Code delivers the data via its statusLine hook: a per-tick JSON payload carrying `rate_limits.{five_hour,seven_day}.used_percentage` + `resets_at` (the shape documented in statusline.go's header). API-key / Bedrock / Vertex sessions get no `rate_limits` block. So the agent DOES surface a burning-down quota window — the feature exists.\n\n## daemon_capability: incapable — and WHY it differs from codex\n\nThis is the load-bearing finding, and it hinges on the difference between LIVE metrics state and a RECORDED fixture. Replay (and the golden tests / viewer that consume fixtures) reconstruct metrics by re-running the captured **transcript.jsonl** (and/or the **events.jsonl** lifecycle sidecar) back through the production tailer + parser (core/cmd/replay/main.go header: \"replays it through the production tailer + state classifier\"). The assertion is therefore only satisfiable if the rate-limit data lives in one of those two captured files.\n\nFor claudecode it lives in NEITHER:\n\n1. **Not in the transcript.** Claude Code's rate-limit data arrives entirely out-of-band over HTTP — the statusLine command POSTs the payload to `POST /api/v1/hooks/claudecode/statusline` (statusline_installer.go:41, statusline.go:65-101). It is never written to the claude session `.jsonl` transcript that the daemon tails. Re-parsing the transcript yields zero rate-limit data.\n\n2. **Not in the events.jsonl sidecar.** `NewStatuslineHandler` calls ONLY `target.IngestRateLimit(transcriptPath, snap)` (statusline.go:97), which routes through the metrics adapter (metrics/adapter.go:233-245) into `TranscriptTailer.IngestRateLimit` → `ingestRateLimit` (tailer/tailer_metrics.go:30-59), updating in-memory state `t.rateLimit` and the rolling `t.rateLimitHistory`. That state is surfaced live as `metrics.RateLimit` / `metrics.RateLimitHistory` (tailer_metrics.go:311-316) and served via the API — but it is NEVER handed to the recorder. The handler emits no lifecycle event (no `KindHookReceived`, nothing). Confirmed structurally: `lifecycle.Event` (core/domain/lifecycle/event.go) has NO rate-limit field and there is no `KindRateLimit` — the sidecar format physically cannot carry a rate-limit snapshot for ANY adapter. A repo-wide grep for `rate_limit` across every committed events.jsonl returns nothing.\n\nSo a recorded claudecode fixture contains NO trace of the rate-limit snapshot at all — not the progression, not even a single sample. Per the #476 rubric, \"the behavior leaves no trace in the Source\" is `incapable` (architecture: the recording format / Source can't represent it), not `bug` (the daemon does the right thing live) and not a driver gap.\n\n**Why codex is `full` and claudecode is `incapable` for the SAME signal:** codex carries the same `rate_limits` map natively inside its transcript on every `token_count` event (verified: replaydata/agents/codex/scenarios/*/transcript.jsonl lines with `payload.type=token_count` + `rate_limits`), so replaying the codex transcript re-derives the full per-turn history and `extractCodexRateLimits()` reconstructs each snapshot. claudecode's identical data exists only as ephemeral live metrics state from an out-of-band HTTP tick. (Note: even codex's quota-burndown is currently UN-recorded — its cell has only assessment.json + an aspirational expected.jsonl, no transcript/events/recordings — and that expected.jsonl's literal phrasing \"events.jsonl has a rate_limit event\" is not implementable as written, since no events.jsonl carries rate-limit data; it can only mean the replay-derived metrics snapshot.)\n\n## A faithful claudecode spec would assert on metrics STATE, not events\n\nBecause there is no per-tick event history and no transcript trace, a claudecode quota-burndown spec could NOT mirror codex's events-based assertion. The only claudecode-observable rate-limit fact is the LIVE metrics snapshot (`metrics.RateLimit.Windows[0].UsedPercent`, `SampledAt`) and the in-memory `RateLimitHistory`. A faithful spec would therefore have to assert against a live-daemon metrics probe (a `GET /api/v1/sessions` style read after each statusline tick), NOT against a replayed transcript/events fixture. The onboarding recording pipeline (transcript + events.jsonl golden) has no mechanism to capture, replay, or assert on that out-of-band metrics state — so the scenario is not faithfully recordable in the fixture format the matrix uses.\n\n## driver_capability: ready\n\nNo missing step primitive. If the signal were recordable, a 2-3 turn send / wait_turn recipe with a statusline settle would suffice — the claudecode interactive driver already has send/wait/sleep. The gap is NOT in the driver; it is that there is nothing in the captured Source to assert against. (Marked `ready` rather than `gap:*` precisely to avoid routing this to the wrong owner per the #471 mislabel lesson.)\n\n## requires\n\nThere is no `rate_limit` / `quota` capability key in any agent's capabilities.json (claudecode features: background_process, context_curation, cost_tracking, … — none for rate limits). The Primitive exercised maps to no existing key. Like provider-failover-midturn (claudecode: partial/incapable/ready, no requires), `requires: null` is the honest choice — the cell's blocker is observability-architecture, not a missing declared capability, and inventing a key would misrepresent the matrix.\n\n## Conclusion / route\n\nFROZEN. The agent has the feature (yes) and the driver is ready, but irrlicht's recording format fundamentally cannot capture the burndown progression (incapable): the statusline data is out-of-band, unpersisted to the transcript, and unrepresentable in the events.jsonl sidecar. This is a legitimate incapable verdict, NOT a recording failure. What would unblock it: either (a) the statusline handler emits a recordable lifecycle event carrying the snapshot AND `lifecycle.Event` gains rate-limit fields (a `KindRateLimit` event with UsedPercent/SampledAt/WindowMinutes), so a fixture can capture per-tick history; or (b) a live-metrics-probe spec format is added to the onboarding harness that asserts on `metrics.RateLimit` state rather than on replayed transcript/events. Single-snapshot UsedPercent is observable LIVE today; cross-turn progression in a fixture is not.",
+      "caveats": [
+        "Live vs recorded: the live daemon DOES observe a single non-nil RateLimitSnapshot (UsedPercent surfaced in the API/dashboard) — this incapable verdict is specifically about the cross-turn PROGRESSION being unrepresentable in the transcript+events.jsonl fixture format the matrix records and replays.",
+        "Even if the data were recordable, subscription windows (five_hour=300min, seven_day=10080min) move slowly; a short 2-3 turn session may not move UsedPercent at all (ingestRateLimit only appends to history on a material change — tailer_metrics.go:48-59), so a fixture could show a flat/zero-delta window and fail the strict P2 > P1 reading even where the spec tolerates P2 ≥ P1.",
+        "A faithful claudecode spec must assert on metrics STATE (metrics.RateLimit / RateLimitHistory via a live API probe), not on events.jsonl rate_limit lines — which differs from codex's transcript-replay-derived spec.",
+        "If a future irrlicht release records the statusline snapshot as a lifecycle event (adding rate-limit fields + a KindRateLimit to lifecycle.Event), re-assess: daemon_capability would move toward full and the cell becomes recordable."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/claudecode/statusline.go:65-101",
+          "note": "NewStatuslineHandler calls only target.IngestRateLimit(snap) and logs; it emits no lifecycle event to the recorder — the snapshot never reaches events.jsonl."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer_metrics.go:30-59,311-316",
+          "note": "IngestRateLimit/ingestRateLimit update in-memory t.rateLimit + rolling t.rateLimitHistory (capped, sample-on-change), surfaced as live metrics.RateLimit/RateLimitHistory state — not persisted to any tailed file. This is the latest-snapshot + in-memory-history that does NOT survive into a replayable fixture."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/lifecycle/event.go",
+          "note": "lifecycle.Event has no rate-limit field and there is no KindRateLimit; the events.jsonl sidecar physically cannot carry a rate-limit snapshot for any adapter. Confirmed: repo-wide grep for rate_limit across all committed events.jsonl returns nothing."
+        },
+        {
+          "kind": "file",
+          "ref": "core/cmd/replay/main.go:1-34",
+          "note": "Replay reconstructs metrics by re-running the captured transcript.jsonl (or events.jsonl sidecar) through the production tailer + classifier — so an assertable signal must live in one of those files. claudecode's rate-limit data lives in neither."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/codex/parser.go:340-396",
+          "note": "Contrast: codex's rate_limits map is carried natively in its transcript on every token_count event and re-parsed by extractCodexRateLimits on replay — the structural reason codex/quota-burndown is daemon_capability:full while claudecode is incapable for the same signal."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/codex/scenarios/quota-burndown/expected.jsonl",
+          "note": "Reference spec (un-recorded): asserts UsedPercent non-decreasing across turns with SampledAt advancing. Phrased as 'events.jsonl has a rate_limit event' — not literally implementable; can only mean the replay-derived metrics snapshot. claudecode cannot satisfy even that interpretation from a transcript+events fixture."
+        },
+        {
+          "kind": "binary",
+          "ref": "strings $(which claude) | grep -iE 'seven_day|rate_limit_tier|statusLine'",
+          "note": "Yields seven_day, seven_day_sonnet, seven_day_opus, rate_limit_tier, CLAUDE_CODE_RATE_LIMIT_TIER, executeStatusLineCommand — confirms claude ships subscription rate-limit windows + the statusline transport, grounding agent_supports:yes (Step 2.5)."
+        }
+      ]
+    }
+  },
+  "scenario_id": "quota-burndown"
+}

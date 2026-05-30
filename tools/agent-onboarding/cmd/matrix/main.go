@@ -144,7 +144,7 @@ func gateCompleteness(m *matrix.Matrix, agent string, stdout, stderr io.Writer) 
 		return exitUsage
 	}
 	if !m.HasAgent(agent) {
-		fmt.Fprintf(stderr, "completeness-gate: %q is not an onboarded adapter (not in replaydata/scenarios/_meta.json min_versions)\n", agent)
+		fmt.Fprintf(stderr, "completeness-gate: %q is not an onboarded adapter (not in replaydata/scenarios.json meta.min_versions)\n", agent)
 		return exitUsage
 	}
 	fmt.Fprintf(stdout, "== completeness gate: %s ==\n", agent)

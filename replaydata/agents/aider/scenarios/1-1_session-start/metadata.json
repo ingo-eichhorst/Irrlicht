@@ -1,0 +1,62 @@
+{
+  "recording_dir": "aider/scenarios/1-1_session-start",
+  "artifacts": {
+    "events": "aider/scenarios/1-1_session-start/events.jsonl",
+    "transcript_md": "aider/scenarios/1-1_session-start/transcript.md",
+    "manifest": "aider/scenarios/1-1_session-start/manifest.json"
+  },
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "pass_rate": "2/2 phases passed",
+    "agent_cli_version": "0.86.2",
+    "daemon_version": "0.4.7+070925e.dirty",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "session-start",
+      "agent": "aider",
+      "assessed_at": "2026-05-23T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nThe scenario's two Expected bullets are (1) the session appears in `ready` within 1s of agent launch and (2) the PID is bound within 1s. Both are directly observable for the aider adapter. Aider writes `.aider.chat.history.md` (a per-cwd markdown chat log) on launch; the daemon's FilesUnderCWD watcher emits `transcript_new` immediately and the classifier lands the session in `ready` inside the first scanner tick. The proc-<PID> pre-session row (~50 ms in the recording) covers any gap.\n\nPID binding happens at the same tick via `pid_discovered`. The recording shows process_exited within 250 ms of birth — aider's headless `--print` mode is extremely short-lived — but session_birth and pid_bind both fire within the spec's 1000 ms budget, well before exit.",
+      "caveats": [
+        "Aider's transcript is markdown, not JSONL; assertions about JSONL line counts (used elsewhere) don't apply. Aider also exits very quickly in --print mode (~200ms), so any post-recording assertions about an idle ready window need to anchor before process_exited.",
+        "Headless aider may briefly show the working state if the daemon catches the in-flight LLM call, but for the session-start spec only ready and pid_discovered matter."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/aider/agent.go",
+          "note": "Identity.Name=aider, Source variant FilesUnderCWD with filename .aider.chat.history.md, ExactName{Name: \"aider\"} process matcher."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "aider CLI on PATH and authenticated (ANTHROPIC_API_KEY or OPENAI_API_KEY)",
+        "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+      ],
+      "setup": [
+        "Create an empty cwd under <staging>/cwd/"
+      ],
+      "prompt": "Reply with exactly the word: ok",
+      "verify": [
+        "events.jsonl contains a transcript_new event for the .aider.chat.history.md within 1000 ms of agent launch",
+        "events.jsonl contains a state_transition to ready within 500 ms of birth",
+        "events.jsonl contains a pid_discovered event within 1000 ms",
+        "final session state is ready"
+      ],
+      "settings": {},
+      "timeout_seconds": 120
+    }
+  },
+  "scenario_id": "session-start"
+}

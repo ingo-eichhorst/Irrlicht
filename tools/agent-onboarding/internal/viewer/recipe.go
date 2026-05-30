@@ -39,15 +39,20 @@ type recipeAdapterEntry struct {
 }
 
 // loadRecipeMap reads the per-scenario shards and builds the recipe index.
-// Each shard is one row; each agent's recipeEntry comes from its
+// Each shard is one row; each agent's recipeEntry comes from its metadata.json
 // Details.Recipe (applicable + script); the folder comes from the agent's
-// RecordingDir basename. Missing/malformed shards → empty index; callers
+// RecordingDir basename. Missing/malformed cells → empty index; callers
 // tolerate "no recipe authored."
 func loadRecipeMap(repoRoot string) recipeIndex {
 	out := recipeIndex{
 		canonical:     map[string]recipeEntry{},
 		folderByAgent: map[string]map[string]string{},
 		byName:        map[string]recipeEntry{},
+	}
+	// Scan each adapter's cells once, keyed by scenario_id.
+	adapterCells := map[string]map[string]*shard.ShardAgent{}
+	for _, agent := range shard.Agents(repoRoot) {
+		adapterCells[agent] = shard.LoadAdapterCells(repoRoot, agent)
 	}
 	for _, sh := range shard.LoadAll(repoRoot) {
 		cid := sh.Name
@@ -60,7 +65,11 @@ func loadRecipeMap(repoRoot string) recipeIndex {
 			}{},
 		}
 		out.folderByAgent[cid] = map[string]string{}
-		for agent, cell := range sh.Agents {
+		for agent, cells := range adapterCells {
+			cell, ok := cells[cid]
+			if !ok {
+				continue
+			}
 			// Recipe block (applicable + script) for the pipeline strip.
 			if len(cell.Details.Recipe) > 0 {
 				var rec recipeAdapterEntry
@@ -119,23 +128,39 @@ func (s *Server) handleRecipes(w http.ResponseWriter, r *http.Request) {
 		ByAdapter     map[string]json.RawMessage `json:"by_adapter"`
 		FolderByAgent map[string]string          `json:"folder_by_agent,omitempty"`
 	}
+	// Scan each adapter's cells once, keyed by scenario_id.
+	adapterCells := map[string]map[string]*shard.ShardAgent{}
+	for _, a := range shard.Agents(s.RepoRoot) {
+		adapterCells[a] = shard.LoadAdapterCells(s.RepoRoot, a)
+	}
 	rows := make([]recipeRow, 0, len(shards))
 	for _, sh := range shards {
 		row := recipeRow{Name: sh.Name, CoverageID: sh.Name, ByAdapter: map[string]json.RawMessage{}, FolderByAgent: map[string]string{}}
+		// Cells for THIS scenario, per adapter.
+		cells := map[string]*shard.ShardAgent{}
+		for a, byCID := range adapterCells {
+			if c, ok := byCID[sh.Name]; ok {
+				cells[a] = c
+			}
+		}
 		// Sorted agent keys for deterministic output.
-		agentKeys := make([]string, 0, len(sh.Agents))
-		for a := range sh.Agents {
+		agentKeys := make([]string, 0, len(cells))
+		for a := range cells {
 			agentKeys = append(agentKeys, a)
 		}
 		sort.Strings(agentKeys)
 		for _, a := range agentKeys {
-			if rec := sh.Agents[a].Details.Recipe; len(rec) > 0 {
+			cell := cells[a]
+			if cell == nil {
+				continue
+			}
+			if rec := cell.Details.Recipe; len(rec) > 0 {
 				row.ByAdapter[a] = rec
 			}
 			// Resolve the recording folder for this agent (variant-folder aware);
 			// fall back to the coverage_id when the cell has no recording_dir.
 			folder := sh.Name
-			if rd := sh.Agents[a].RecordingDir; rd != "" {
+			if rd := cell.RecordingDir; rd != "" {
 				folder = filepath.Base(rd)
 			}
 			row.FolderByAgent[a] = folder

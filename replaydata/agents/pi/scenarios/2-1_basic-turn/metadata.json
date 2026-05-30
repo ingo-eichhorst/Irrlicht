@@ -1,0 +1,59 @@
+{
+  "recording_dir": "pi/scenarios/2-1_basic-turn",
+  "artifacts": {
+    "events": "pi/scenarios/2-1_basic-turn/events.jsonl",
+    "transcript": "pi/scenarios/2-1_basic-turn/transcript.jsonl",
+    "manifest": "pi/scenarios/2-1_basic-turn/manifest.json",
+    "golden": "pi/scenarios/2-1_basic-turn/transcript.jsonl.replay.json.golden"
+  },
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "pass_rate": "5/5 phases passed",
+    "agent_cli_version": "0.70.0",
+    "daemon_version": "0.4.7+7b5218c",
+    "confidence": 0.95,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "basic-turn",
+      "agent": "pi",
+      "assessed_at": "2026-05-25T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.95,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nThe scenario's User-observable signals are (1) the `ready → working → ready` state arc and (2) `TotalTokens > 0` after the turn. Pi supports the smallest possible round-trip natively: a single `pi --print -p <prompt>` invocation runs one assistant turn with no tool use and exits. Pi writes one JSONL session file per invocation under `~/.pi/agent/sessions/<cwd-slug>/<ts>_<UUID>.jsonl` immediately on launch (FilesUnderRoot, non-lazy), so the daemon observes a `proc-<PID>` pre-session born ready, then a `transcript_new` + `state_transition`→ready for the UUID-keyed rollout session, then the working→ready flip as the single turn runs and completes, then `process_exited` at headless exit.\n\nThe pi parser identifies the assistant message end as a complete turn boundary: `stopReason=stop` on the final assistant event maps to `turn_done`, settling working→ready. This is the same turn-end detection the sibling session-start cell already exercises for the launch arc; basic-turn adds the working→ready turn on the rollout session. `TotalTokens > 0` is covered by the parser's per-turn token snapshot (not expressible in the phase DSL today; covered by parser unit tests).",
+      "caveats": [
+        "Pi cannot accept a pre-assigned UUID — it generates one itself. The headless driver discovers the UUID from the session header on line 1 of the freshly-created transcript.",
+        "`pi --print` exits after the single turn, so the rollout session's terminal working→ready settle and the process_exited can land close together; the spec anchors turn_end to turn_start (not to session_birth) so the matcher picks the post-turn ready, not the earlier birth ready."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/pi/agent.go",
+          "note": "Identity.Name=pi, Source variant FilesUnderRoot under ~/.pi/agent/sessions/, ExactName{Name: \"pi\"} process matcher."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/pi/parser.go",
+          "note": "stopReason=stop on the final assistant event maps to turn_done (working→ready)."
+        },
+        {
+          "kind": "file",
+          "ref": ".claude/skills/ir:onboard-agent/scripts/drive-pi.sh",
+          "note": "Headless `pi --print -p <prompt>` single-shot driver; resolves the freshly-created transcript and extracts the UUID from line 1."
+        }
+      ]
+    },
+    "recipe": {
+      "prompt": "Reply with exactly the word: ok",
+      "settings": {},
+      "timeout_seconds": 90
+    }
+  },
+  "scenario_id": "basic-turn"
+}

@@ -1,0 +1,101 @@
+{
+  "recording_dir": "claudecode/scenarios/5-6_subscription-detection",
+  "artifacts": {
+    "events": "claudecode/scenarios/5-6_subscription-detection/events.jsonl",
+    "transcript": "claudecode/scenarios/5-6_subscription-detection/transcript.jsonl",
+    "manifest": "claudecode/scenarios/5-6_subscription-detection/manifest.json",
+    "golden": "claudecode/scenarios/5-6_subscription-detection/transcript.jsonl.replay.json.golden"
+  },
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "pass_rate": "3/3 phases passed",
+    "agent_cli_version": "2.1.156",
+    "daemon_version": "0.4.7+9167f2c",
+    "confidence": 0.9,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "subscription-detection",
+      "agent": "claudecode",
+      "assessed_at": "2026-05-23T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.9,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nClaude Code emits subscription quota data via the statusline hook (POST /api/v1/hooks/claudecode/statusline). The key billing-model signal is structural: **subscription users get a `rate_limits` block in the hook payload; API-key, Bedrock, and Vertex users do not**.\n\nThe statusline handler in `core/adapters/inbound/agents/claudecode/statusline.go` converts the hook payload to a `session.RateLimitSnapshot` via `statuslineToSnapshot()`. The function returns nil when `rate_limits` is absent (API-key path) or when both `five_hour` and `seven_day` windows are nil. This nil/non-nil distinction is the irrlicht-observable subscription signal for Claude Code — PlanType is not populated from the statusline (the hook payload carries no plan_type field).\n\nFor the subscription variant of this scenario, the recording needs a Pro/Max session. The developer's normal session qualifies. A single turn is sufficient to trigger the statusline hook and produce a non-nil snapshot.\n\nFor the API-key variant, the recording requires a session backed by an API key (not a Pro subscription), so `rate_limits` is absent from the statusline payload. This requires a dedicated test key distinct from the developer's Pro session and is deferred to a separate fixture: `subscription-detection-apikey`.\n\n## What irrlicht does NOT see (and why that's OK)\n\nClaude Code's statusline does not include a `plan_type` string (pro, max, team). The only plan-type signal available is the presence of the `rate_limits` block itself, which distinguishes subscription from API-key. Finer-grained plan type (pro vs max) is not surfaced via the statusline hook today. The scenario therefore validates presence/absence of RateLimitSnapshot, not the value of PlanType.",
+      "caveats": [
+        "Recording the subscription variant requires the developer's normal Claude Code Pro/Max session — no special key needed.",
+        "The API-key variant (RateLimitSnapshot nil) is deferred to a separate scenario ID (subscription-detection-apikey) because it requires a different Claude Code session backed by an API key.",
+        "The statusline hook fires asynchronously on a timer in the Claude Code CLI; the recording script must keep the session alive long enough for at least one statusline tick to arrive after the turn completes. Typically one turn of moderate length is sufficient."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/claudecode/statusline.go:114-136",
+          "note": "statuslineToSnapshot() returns nil when rate_limits is absent or both windows are nil — the nil/non-nil distinction is the subscription signal."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/claudecode/statusline.go:19",
+          "note": "Comment explicitly states: 'API-key users, Bedrock, and Vertex don't get the rate_limits block'."
+        },
+        {
+          "kind": "spec",
+          "ref": ".specs/agent-scenarios.md → Feature: Subscription detection",
+          "note": "Subscription variant: RateLimitSnapshot non-nil with at least one Window entry."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "claude CLI on PATH and authenticated as a Claude.ai Pro/Max subscription session (NOT an API key) — the subscription is what makes the statusline payload carry a rate_limits block",
+        "irrlichd is recording on :7837 with --record (this cell records in --attach mode against the developer's running daemon, because claudecode's statusLine hook POSTs to a hardcoded localhost:7837)",
+        "the developer's global ~/.claude/settings.json defines statusLine.command teeing the payload to http://localhost:7837/api/v1/hooks/claudecode/statusline (claude --settings merges with global settings, so the empty scenario settings blob does not disable this)",
+        "no other claudecode session uses the same UUID"
+      ],
+      "setup": [
+        "Generate a fresh lowercased session UUID (run-cell.sh does this via uuidgen | tr '[:upper:]' '[:lower:]')",
+        "Create an empty cwd under <staging>/cwd/ (claude prompts for trust on first encounter — the driver auto-accepts)"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "List the first five prime numbers, one per line, and nothing else."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 18
+        }
+      ],
+      "verify": [
+        "events.jsonl contains a transcript_new event for the UUID session and a state_transition to ready (session detected in ready)",
+        "events.jsonl shows a ready -> working -> ready arc for the first turn (user prompt starts a turn, turn completes back to ready)",
+        "final session state is ready",
+        "the daemon ingested at least one rate-limit snapshot for this session during the run (subscription signal): the statusline receiver logged 'ingested rate-limit snapshot', i.e. a non-nil RateLimitSnapshot with at least one Window (five_hour and/or seven_day) was attached to the session — this is the presence-of-rate_limits subscription evidence",
+        "no API-key path: the run did NOT log 'received statusline tick with no rate_limits block' as the only statusline outcome (that would indicate the session was not a subscription, which belongs to subscription-detection-apikey)"
+      ],
+      "settings": {},
+      "timeout_seconds": 180
+    }
+  },
+  "scenario_id": "subscription-detection"
+}

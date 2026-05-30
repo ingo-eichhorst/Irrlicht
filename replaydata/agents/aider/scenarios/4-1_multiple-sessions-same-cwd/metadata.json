@@ -1,0 +1,60 @@
+{
+  "artifacts": {},
+  "metadata": {
+    "agent_supports": "partial",
+    "daemon_capability": "incapable",
+    "driver_capability": "ready",
+    "confidence": 0.85,
+    "notes": "agent_supports: partial\ndaemon_capability: incapable\ndriver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "multiple-sessions-same-cwd",
+      "agent": "aider",
+      "assessed_at": "2026-05-25T00:00:00Z",
+      "agent_supports": "partial",
+      "daemon_capability": "incapable",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: partial\ndaemon_capability: incapable\ndriver_capability: ready\n\n## Scenario\n\n**Primitive exercised:** PID-based session isolation — the daemon must bind each session to its own PID even when multiple agents share the same transcript directory and filename pattern. **User-observable signal:** two distinct session rows with separate `session_id`s and PIDs, each transitioning state independently, with no flapping and no PID cross-contamination.\n\n## agent_supports: partial\n\nNothing in aider prevents launching two instances in the same cwd, and `headless_mode` (the scenario's only `requires:`) is supported (`capabilities.json` → `headless_mode: true`). But aider has no concept of session identity: `capabilities.json` records `session_id_assignment: false` and `session_resume: false`, and its history file name is the static `.aider.chat.history.md` with no per-instance/per-PID component. The default `--chat-history-file` is literally `.aider.chat.history.md` (aider docs), and the file lives per-project in the cwd (aider FAQ). Two instances in the same cwd therefore append to the **same** shared transcript with no demultiplexing key. So aider can host the situation but has no native primitive that keeps the two instances' data apart — hence `partial`, not `yes`.\n\n## daemon_capability: incapable\n\nThe aider adapter is the repo's only `FilesUnderCWD` source (`agent.go`): the scanner watches processes by command-line regex (`/aider`) and probes each PID's cwd for a fixed filename. Two same-cwd aiders are two distinct PIDs, and the scanner mints one synthetic session per PID — `sessionID := fmt.Sprintf(\"proc-%d\", pid)` (`scanner.go`). So at the session-creation layer the PID isolation primitive *does* hold: two distinct rows with distinct PIDs appear.\n\nThe break is in the transcript binding. For each tracked PID the scanner computes `path := filepath.Join(proc.cwd, s.transcriptFilename)` (`scanner.go` line 322), and `transcriptFilename` is the hardcoded `.aider.chat.history.md` (`agent.go`). Two PIDs sharing a cwd resolve to the **identical** `TranscriptPath`. Each session gets its own `Parser` instance (the `NewParser` factory in `agent.go` exists precisely so idle-flush state doesn't collide), but both parsers tail the *same* file. Every `####`/`> Tokens:`/idle-flush line is fed to both sessions, so:\n\n- State transitions move in lockstep (both go working→ready together when *either* aider writes) — the \"each transitions state independently\" signal fails.\n- Per-call tokens/cost are double-counted across the two rows.\n\nThis is `incapable`, not `bug`: there *is* a trace (the shared `.aider.chat.history.md`), but the `FilesUnderCWD` transport offers no key to attribute a transcript line to one PID over the other, and the 3-state model has nothing to disambiguate two arcs interleaved in one file. No `events.jsonl` could prove independent per-session arcs because the signal that would distinguish them never reaches the daemon distinctly. The owner is architecture (transport redesign — e.g. per-PID transcript binding), not a product bug in the existing parser. This ratifies the coverage matrix verdict (`incapable`).\n\n## driver_capability: ready\n\nThe interactive driver (`scripts/drive-aider-interactive.sh`) implements send / slash / wait_turn / interrupt / sleep. The aider scenario as conceived (two instances launched in the same cwd, each driven independently) can in principle be set up with `start_session` + per-step targeting in the generic recipe framework; the driver's own grammar does not block the *recording* of two processes. But `daemon_capability: incapable` dominates — even a perfectly-driven pair of sessions cannot be observed as two independent arcs, so the route is **frozen** regardless of driver readiness. There is no driver primitive whose absence is the blocking axis here, so `driver_capability` stays `ready` rather than masquerading the architecture limit as a `gap:session`.\n\n## Capability-key mapping\n\n**Primitive exercised** = \"PID-based session isolation.\" This has no dedicated key in `aider/capabilities.json`; the closest evidence keys are `session_id_assignment: false` and `session_resume: false`, both confirming aider provides no session-identity primitive of its own. There is no flag to flip — the limitation is the `FilesUnderCWD` single-shared-file transport, not a missing aider capability.\n\n## Route\n\n`partial` + `incapable` + `ready` ⇒ **frozen**: aider can be put in this situation but the daemon's `FilesUnderCWD` transport cannot observe two independent arcs from one shared transcript, so there is no recording to make. Unblocking would require a transport redesign (per-PID transcript binding or a per-instance `--chat-history-file` the adapter could discover).",
+      "caveats": [
+        "feature-invisible-but-spec-compliant: the scanner does PID-isolate at session creation (one proc-<pid> row per PID), so distinct rows/PIDs do appear; the gap is purely the shared TranscriptPath, which makes the two rows' state and metrics non-independent.",
+        "Setting AIDER_CHAT_HISTORY_FILE (or --chat-history-file) to a distinct path per instance would give each aider its own transcript, but the adapter probes a single hardcoded filename, so irrlicht would not pick up the second file even then."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/aider/agent.go",
+          "note": "FilesUnderCWD source with hardcoded transcriptFilename = .aider.chat.history.md; per-process NewParser factory"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/processlifecycle/scanner.go",
+          "note": "sessionID = proc-<pid> (PID-isolated rows, line 282); TranscriptPath = filepath.Join(proc.cwd, transcriptFilename) (line 322) — identical for two same-cwd PIDs, so the daemon is incapable of attributing lines per-PID"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/aider/pid.go",
+          "note": "DiscoverPIDByCWDAndCmdLine('/aider', cwd) — binds by cwd+cmdline; two same-cwd aiders disambiguate to one PID"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/aider/capabilities.json",
+          "note": "session_id_assignment: false, session_resume: false — aider has no session-identity primitive; headless_mode: true satisfies the scenario requires:"
+        },
+        {
+          "kind": "url",
+          "ref": "https://aider.chat/docs/config/options.html",
+          "note": "--chat-history-file default is the static .aider.chat.history.md (no per-instance uniqueness)"
+        },
+        {
+          "kind": "url",
+          "ref": "https://aider.chat/docs/faq.html",
+          "note": "aider writes .aider.chat.history.md per-project in the cwd; global override only via AIDER_CHAT_HISTORY_FILE"
+        }
+      ]
+    }
+  },
+  "scenario_id": "multiple-sessions-same-cwd"
+}

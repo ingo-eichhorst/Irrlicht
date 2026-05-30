@@ -6,38 +6,51 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
-// writeShardRepo writes a t.TempDir repo with _meta.json + the named shards so
-// the shard-backed recipe code (loadRecipeMap / handleRecipes) has data to read.
+// writeShardRepo writes a t.TempDir repo with a consolidated scenarios.json
+// (meta + the named scenarios). Agent cell data is written via writeAgentCell.
+// `shards` maps scenario name → its scenario-object JSON (global fields only).
 func writeShardRepo(t *testing.T, shards map[string]string) string {
 	t.Helper()
 	dir := t.TempDir()
-	scen := filepath.Join(dir, "replaydata", "scenarios")
-	if err := os.MkdirAll(scen, 0o755); err != nil {
+	rd := filepath.Join(dir, "replaydata")
+	if err := os.MkdirAll(rd, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	mustWrite(t, filepath.Join(scen, "_meta.json"), `{"min_versions":{"aider":"1.0.0","codex":"1.0.0"}}`)
-	for name, body := range shards {
-		mustWrite(t, filepath.Join(scen, name+".json"), body)
+	parts := make([]string, 0, len(shards))
+	for _, body := range shards {
+		parts = append(parts, body)
 	}
+	catalog := `{"meta":{"min_versions":{"aider":"1.0.0","codex":"1.0.0"}},"scenarios":[` +
+		strings.Join(parts, ",") + `]}`
+	mustWrite(t, filepath.Join(rd, "scenarios.json"), catalog)
 	return dir
 }
 
-// TestLoadRecipeMap covers the shard-backed recipe index (#510): each shard is
-// one coverage_id row; each agent's recipe block + recording folder come from
-// the shard's per-agent Details.Recipe / RecordingDir.
+// writeAgentCell writes a metadata.json for one (adapter, folder) cell.
+func writeAgentCell(t *testing.T, repoRoot, adapter, folder, body string) {
+	t.Helper()
+	d := filepath.Join(repoRoot, "replaydata", "agents", adapter, "scenarios", folder)
+	if err := os.MkdirAll(d, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, filepath.Join(d, "metadata.json"), body)
+}
+
+// TestLoadRecipeMap covers the recipe index: each scenario is one coverage_id
+// row; each agent's recipe block + recording folder come from its metadata.json
+// (keyed by scenario_id).
 func TestLoadRecipeMap(t *testing.T) {
 	root := writeShardRepo(t, map[string]string{
-		"x": `{
-  "id": "1.1", "name": "x", "section": "S", "feature": "X",
-  "agents": {
-    "aider": {"recording_dir": "aider/scenarios/x", "details": {"recipe": {"applicable": true, "script": [{"type":"send"}]}}},
-    "codex": {"details": {"recipe": {"applicable": false}}}
-  }
-}`,
+		"x": `{"id": "1.1", "name": "x", "section": "S", "feature": "X"}`,
 	})
+	writeAgentCell(t, root, "aider", "1-1_x",
+		`{"scenario_id": "x", "recording_dir": "aider/scenarios/1-1_x", "details": {"recipe": {"applicable": true, "script": [{"type":"send"}]}}}`)
+	writeAgentCell(t, root, "codex", "1-1_x",
+		`{"scenario_id": "x", "details": {"recipe": {"applicable": false}}}`)
 	idx := loadRecipeMap(root)
 
 	rec, ok := idx.canonical["x"]
@@ -52,9 +65,9 @@ func TestLoadRecipeMap(t *testing.T) {
 	if !ok || codex.Applicable == nil || *codex.Applicable {
 		t.Errorf("codex recipe should be applicable:false, got: %+v", codex)
 	}
-	// Folder resolves from the recording-dir basename.
-	if got := resolveScenarioFolderForAgent(idx, "aider", "x"); got != "x" {
-		t.Errorf("folder(aider,x) = %q; want x", got)
+	// Folder resolves from the recording-dir basename (id-prefixed).
+	if got := resolveScenarioFolderForAgent(idx, "aider", "x"); got != "1-1_x" {
+		t.Errorf("folder(aider,x) = %q; want 1-1_x", got)
 	}
 	// codex has no recording → no folder.
 	if got := resolveScenarioFolderForAgent(idx, "codex", "x"); got != "" {
@@ -65,14 +78,15 @@ func TestLoadRecipeMap(t *testing.T) {
 // TestHandleRecipes checks the shard-backed /api/recipes surface: one entry per
 // coverage_id, each carrying a by_adapter map of recipes.
 func TestHandleRecipes(t *testing.T) {
+	// aider records under the coverage_id folder; codex records under a
+	// VARIANT folder (basename != coverage_id) — exercises folder_by_agent.
 	root := writeShardRepo(t, map[string]string{
-		// aider records under the coverage_id folder; codex records under a
-		// VARIANT folder (basename != coverage_id) — exercises folder_by_agent.
-		"a": `{"id":"1.1","name":"a","section":"S","feature":"A","agents":{
-  "aider":{"recording_dir":"aider/scenarios/a","details":{"recipe":{"script":[]}}},
-  "codex":{"recording_dir":"codex/scenarios/a-variant","details":{"recipe":{"script":[]}}}
-}}`,
+		"a": `{"id":"1.1","name":"a","section":"S","feature":"A"}`,
 	})
+	writeAgentCell(t, root, "aider", "1-1_a",
+		`{"scenario_id":"a","recording_dir":"aider/scenarios/1-1_a","details":{"recipe":{"script":[]}}}`)
+	writeAgentCell(t, root, "codex", "1-1_a-variant",
+		`{"scenario_id":"a","recording_dir":"codex/scenarios/1-1_a-variant","details":{"recipe":{"script":[]}}}`)
 	srv := &Server{RepoRoot: root}
 	req := httptest.NewRequest(http.MethodGet, "/api/recipes", nil)
 	rec := httptest.NewRecorder()
@@ -104,11 +118,11 @@ func TestHandleRecipes(t *testing.T) {
 	// folder_by_agent resolves the variant folder per agent (the #511 fix the
 	// viewer.js recording link depends on): coverage_id for aider, the variant
 	// basename for codex.
-	if got := s.FolderByAgent["aider"]; got != "a" {
-		t.Errorf("folder_by_agent[aider] = %q; want a", got)
+	if got := s.FolderByAgent["aider"]; got != "1-1_a" {
+		t.Errorf("folder_by_agent[aider] = %q; want 1-1_a", got)
 	}
-	if got := s.FolderByAgent["codex"]; got != "a-variant" {
-		t.Errorf("folder_by_agent[codex] = %q; want a-variant", got)
+	if got := s.FolderByAgent["codex"]; got != "1-1_a-variant" {
+		t.Errorf("folder_by_agent[codex] = %q; want 1-1_a-variant", got)
 	}
 }
 

@@ -1,0 +1,50 @@
+{
+  "artifacts": {},
+  "metadata": {
+    "agent_supports": "no",
+    "daemon_capability": "n/a",
+    "driver_capability": "n/a",
+    "confidence": 0.85,
+    "notes": "agent_supports: no\ndaemon_capability: n/a; driver_capability: n/a"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "tool-gate-permission-prompt",
+      "agent": "pi",
+      "assessed_at": "2026-05-25T00:00:00Z",
+      "agent_supports": "no",
+      "daemon_capability": "n/a",
+      "driver_capability": "n/a",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: no\ndaemon_capability: n/a; driver_capability: n/a\n\n## Scenario\n\nThe canonical primitive here is `permission_hooks`: the agent's tool framework has an explicit permission prompt that BLOCKS execution until the user approves or denies, producing the observable arc `ready → working → waiting → working → ready` (with a late post-tool hook being a no-op). The cell `requires: [headless_mode, tool_calls, permission_hooks]`.\n\n## agent_supports: no\n\npi has no per-tool-call permission prompt. Its built-in tools (`read`, `bash`, `edit`, `write`) execute autonomously inside the turn with no blocking approval gate, so there is no `working → waiting` permission arc to record.\n\nThe ONLY tool-gating surface pi exposes is a **static launch-time allowlist**, confirmed in the bundled package help (`@mariozechner/pi-coding-agent` 0.70.0, the version installed locally):\n\n- `--tools, -t <tools>` — \"Comma-separated allowlist of tool names to enable\"\n- `--no-tools, -nt` — \"Disable all tools by default (built-in and extension)\"\n- `--no-builtin-tools, -nbt` — \"Disable built-in tools by default but keep extension/custom tools enabled\"\n\nThese decide, at process start, WHICH tools exist for the whole session. They never pause a running turn for an interactive per-call decision. The SDK describes this same axis as a \"tool suppression mode\" with an optional \"allowlist of tool names\" — a static configuration, not a runtime gate.\n\n### Step 2.5 binary/package scan (the `no` guard)\n\nThe `pi` binary on PATH is a Node wrapper (`#!/usr/bin/env node`) symlinked to `@mariozechner/pi-coding-agent/dist/cli.js`, so the authoritative scan is over the package's bundled `dist/` rather than `strings $(which pi)` (which would only see the loader stub). Grepping the whole `dist/` tree (incl. sourcemaps with full identifier names) for the feature's keywords came up empty for every per-call-gate signal:\n\n- `permissionDecision`, `preToolUse`, `postToolUse`, `permission_prompt`, `requireApproval`, `tool approval`, `permission gate` → **0 hits**.\n- `ask before`, `block until`, `await user/approval`, `require…confirm`, `tool…(approval|gate)` → **0 hits**.\n- The only `permission` hit is a clipboard-error comment in interactive-mode (unrelated).\n- Every `allowlist` hit (12) is the launch-time `--tools` tool-name allowlist above.\n- The `confirm*` hits are all session/file management UI (delete/rename a saved session), never tool-call approval.\n\nSo the verdict `no` is not merely \"`--help` lacks a flag\" — the shipped 0.70.0 code contains no per-tool permission-prompt mechanism at all.\n\n## daemon_capability: n/a; driver_capability: n/a\n\nBecause the agent never enters the gated state, there is nothing for the daemon to observe — hence `n/a` (agent-layer freeze), not `no` (transport gap). For completeness the transport would not help either: the pi adapter is `FilesUnderRoot` + `ExactName{pi}` with a JSONL parser whose `Parser.ParseLine` only maps `session` / `model_change` / `compaction` / `message{role: assistant|user|toolResult|bashExecution}`. There is no permission/approval/`ask` event kind and no path that sets a `PermissionPending` / waiting flag, so even if pi did gate, the current parser emits no event that rule-0 (`PermissionPending=true → waiting`) in `state_classifier.go` could key on. `capabilities.json` records `permission_hooks: false`, matching.\n\n## Applicability\n\nagent_supports=no ⇒ `applicable: no`. The cell is frozen at the agent layer. No recipe, no recording. It would unblock only if a future pi release (or a first-party extension shipped as stock) added an interactive per-tool approval prompt AND the pi parser learned to emit a waiting-producing event for it.",
+      "caveats": [
+        "pi can gate tools wholesale at launch via --tools/--no-tools/--no-builtin-tools, but that is a static allowlist chosen before the turn, not an interactive per-call permission prompt — it produces no working→waiting arc.",
+        "If a third-party pi extension adds an approval prompt it would not be stock pi, and the current pi parser still emits no waiting-producing event for it (no permission/ask event kind)."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/pi/capabilities.json",
+          "note": "\"permission_hooks\": false — no per-tool permission prompt declared for pi"
+        },
+        {
+          "kind": "binary-scan",
+          "ref": "@mariozechner/pi-coding-agent@0.70.0 dist/ (pi resolves to dist/cli.js, a Node wrapper)",
+          "note": "grep over bundled dist incl. sourcemaps: 0 hits for permissionDecision/preToolUse/postToolUse/requireApproval/ask-before/block-until; the only tool-gating surface is the launch-time --tools allowlist; confirm* hits are session/file UI only"
+        },
+        {
+          "kind": "file",
+          "ref": "dist/cli/args.d.ts.map (@mariozechner/pi-coding-agent 0.70.0)",
+          "note": "--tools/-t <tools> 'Comma-separated allowlist of tool names to enable'; --no-tools/-nt 'Disable all tools by default'; --no-builtin-tools/-nbt — launch-time gating, no interactive per-call prompt"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/pi/parser.go",
+          "note": "ParseLine maps only session/model_change/compaction/message{assistant|user|toolResult|bashExecution}; no permission/ask/waiting-producing event kind, so no transport for a permission gate even if pi had one"
+        }
+      ]
+    }
+  },
+  "scenario_id": "tool-gate-permission-prompt"
+}

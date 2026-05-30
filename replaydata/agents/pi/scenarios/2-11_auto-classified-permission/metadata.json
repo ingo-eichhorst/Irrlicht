@@ -1,0 +1,60 @@
+{
+  "artifacts": {},
+  "metadata": {
+    "agent_supports": "no",
+    "daemon_capability": "n/a",
+    "driver_capability": "n/a",
+    "confidence": 0.85,
+    "notes": "agent_supports: no\ndaemon_capability: n/a; driver_capability: n/a\napplicable: no"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "auto-classified-permission",
+      "agent": "pi",
+      "assessed_at": "2026-05-25T00:00:00Z",
+      "agent_supports": "no",
+      "daemon_capability": "n/a",
+      "driver_capability": "n/a",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: no\ndaemon_capability: n/a; driver_capability: n/a\napplicable: no\n\n## Scenario\n\n`auto-classified-permission` exercises the `permission_hooks` primitive: an in-product classifier that auto-approves *safe* tool calls (state stays `ready → working → ready`, never `waiting`) but selectively gates *risky* ones into `working → waiting → working → ready` on user approval. The safe-path branch is this cell; the risky-path branch is owned by `tool-gate-permission-prompt`. The whole arc requires the agent to have a permission classifier that distinguishes safe from risky tool calls at runtime.\n\n## Reasoning — agent layer (`no`)\n\npi has no permission classifier and no runtime tool-approval gate of any kind. Stock built-in tools (read, bash, edit, write) execute directly and autonomously within the turn. Three independent primary sources confirm this:\n\n1. **`capabilities.json` declares `permission_hooks: false`.** This is the canonical capability key mapped from the scenario's *Primitive exercised* field.\n\n2. **The pi package README explicitly lists \"Permission gates and path protection\" under the features pi does NOT ship** (it is extension territory), and states verbatim: **\"No permission popups. Run in a container, or build your own confirmation flow with extensions inline with your environment and security requirements.\"** Permission gating is delegated to the user's environment (containers) or to user-authored extensions — it is not a stock, in-product behavior.\n\n3. **Step 2.5 binary/source scan came up empty for a classifier.** pi ships as an unminified Node bundle under `@mariozechner/pi-coding-agent/dist/`. Grepping the whole dist tree for `permission|auto-approv|classif|allowlist|denylist|risky|sandbox` returned only three hits, none of which is a runtime safe-vs-risky gate:\n   - `cli/args.js` — the `--tools, -t <tools>` flag, a comma-separated **launch-time allowlist** of enabled tool names.\n   - `modes/interactive/interactive-mode.js` — two incidental comments (a tmux query \"sandbox\" fallback and a clipboard-\"permission\" error swallow), neither related to tool gating.\n   - `core/export-html/vendor/highlight.min.js` — a syntax-highlighter vendor lib (irrelevant).\n   A broader scan for `grantPermission|requestPermission|needsApproval|requiresApproval|canExecute|isAllowed|confirm.*tool` found only `core/agent-session.js`'s `isAllowedTool(name) = !allowedToolNames || allowedToolNames.has(name)` — a static **set-membership check against the launch-time allowlist**, not a runtime classifier and not an interactive approval prompt. There is no safe-vs-risky branching anywhere in the bundle.\n\nThe `--tools` allowlist gates tool *availability* at process start (a tool not in the list never exists for the turn); it never pauses an in-flight turn for approval and never distinguishes \"safe\" from \"risky\" among enabled tools. That is categorically different from the runtime auto-classifier this scenario exercises. No selective `waiting` transition can ever be produced.\n\n## Reasoning — observability layer (`n/a`)\n\nBecause the agent never produces the classified-permission event, there is nothing for irrlicht to observe. The pi adapter is `FilesUnderRoot` (`agent.go`) with a JSONL parser (`parser.go`) that maps only `session`, `model_change`, `compaction`, and `message` (roles `assistant` / `user` / `toolResult` / `bashExecution`) lines. The parser has no mapping that would emit a `waiting` state from a tool call — tool calls live inside an `assistant` (mid-turn, working) message and `toolResult` lines, all of which keep the session `working` until `stopReason==\"stop\"` flips it to `turn_done` (ready). Even if pi *did* classify permissions, the transcript carries no permission-classification line for the parser to key on. So `irrlicht_observes` is `n/a` — not a transport gap to be closed, but the absence of any agent-side event to observe.\n\n## Applicability\n\nWith `agent_supports: no`, `applicable` is `no` per the return-contract table: the pipeline is frozen at the agent layer. No recipe and no recording follow. The cell unblocks only if pi adds a built-in (non-extension) permission classifier in a future release — at which point re-assess.\n\n## Matrix drift\n\nNone. Coverage matrix already says `no / n/a` with an empty note; this assessment ratifies it and supplies the binary-scan evidence so the verdict is not re-litigated.",
+      "caveats": [
+        "pi CAN restrict tools via the launch-time `--tools`/`-t` allowlist (and run inside a container), but this is a static, process-start availability gate — not a runtime safe-vs-risky classifier and not an interactive per-call approval prompt, so it produces no `waiting` transition.",
+        "Permission gating is explicitly delegated to user-authored extensions (README: \"build your own confirmation flow with extensions\"); a custom extension could add a classifier, but that is not stock pi and would need its own assessment."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/pi/capabilities.json",
+          "note": "\"permission_hooks\": false — canonical capability key for this scenario's Primitive exercised"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/pi/agent.go",
+          "note": "Source: FilesUnderRoot + ExactName{pi}; no permission-event transport"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/pi/parser.go",
+          "note": "ParseLine maps session/model_change/compaction/message only; tool calls keep state working, no waiting mapping exists"
+        },
+        {
+          "kind": "file",
+          "ref": "node_modules/@mariozechner/pi-coding-agent/dist/core/agent-session.js:1787",
+          "note": "Step 2.5 source scan: only gate is isAllowedTool(name)=!allowedToolNames||allowedToolNames.has(name) — static launch-time allowlist membership, not a runtime classifier"
+        },
+        {
+          "kind": "file",
+          "ref": "node_modules/@mariozechner/pi-coding-agent/dist/cli/args.js:215",
+          "note": "Step 2.5 source scan: --tools/-t is a comma-separated launch-time allowlist, not an interactive per-call permission gate"
+        },
+        {
+          "kind": "docs",
+          "ref": "@mariozechner/pi-coding-agent README.md (lines 345, 454)",
+          "note": "\"Permission gates and path protection\" listed under features pi does NOT build in; \"No permission popups. Run in a container, or build your own confirmation flow with extensions.\""
+        }
+      ]
+    }
+  },
+  "scenario_id": "auto-classified-permission"
+}

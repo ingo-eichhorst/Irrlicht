@@ -1,0 +1,101 @@
+{
+  "recording_dir": "codex/scenarios/2-2_auto-executed-tool-call",
+  "artifacts": {
+    "events": "codex/scenarios/2-2_auto-executed-tool-call/events.jsonl",
+    "transcript": "codex/scenarios/2-2_auto-executed-tool-call/transcript.jsonl",
+    "manifest": "codex/scenarios/2-2_auto-executed-tool-call/manifest.json",
+    "golden": "codex/scenarios/2-2_auto-executed-tool-call/transcript.jsonl.replay.json.golden"
+  },
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "pass_rate": "6/6 phases passed",
+    "agent_cli_version": "0.130.0",
+    "daemon_version": "0.4.7+14e1e7a",
+    "confidence": 0.9,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "auto-executed-tool-call",
+      "agent": "codex",
+      "assessed_at": "2026-05-23T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.9,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\n`auto-executed-tool-call` (scenario-meanings.md): the agent uses one or more tools mid-turn, every call auto-resolves with NO user approval gate, and the turn completes — the user-observable arc is `ready → working → ready` and state NEVER enters `waiting`. Primitive `tool_calls`; requires `headless_mode` and `tool_calls`. This cell focuses on the AUTO-EXECUTED (ungated) nature of the round-trip; the sibling `full-lifecycle-toolcall` (coverage_id auto-executed-tool-call, codex recorded 6/6) already showed a function_call/function_call_output round-trip mid-turn.\n\n**agent_supports: yes.** Codex CLI 0.130.0 runs shell/exec tools autonomously inside its own sandbox with no permission hook — `replaydata/agents/codex/capabilities.json` records `tool_calls: true` and `permission_hooks: false`. A prompt that asks codex to run a quick read-only shell command (e.g. `pwd`) produces a real tool round-trip that auto-resolves without ever blocking on the user.\n\n**daemon_capability: full; driver_capability: ready.** The codex parser (parser.go) translates `function_call` / `function_call_output` transcript events into tool-use / tool-result records and `task_complete` event_msg into `turn_done`, so the daemon keeps the session `working` across the tool call and settles `working → ready` at turn end via the primary `IsAgentDone()` path. With no permission hook, no `waiting` transition is ever emitted — matching the scenario's negative invariant. Sibling interactive cells multi-turn-conversation (10/10) and full-lifecycle-toolcall (6/6) confirm the daemon observes codex's live-REPL working↔ready arcs cleanly.\n\n## Recipe-shape note (interactive, not headless)\n\nRecorded with the INTERACTIVE driver (`send` a tool-using prompt → `wait_turn` → trailing `sleep`), not headless `codex exec`. A single-shot `exec` turn is too short for the daemon to observe the `ready → working` flip (debounce coalesces it — basic-turn headless lands 3/5), and its turn-end surfaces as `process_exited` rather than a `working → ready` settle. The live REPL stays alive across the turn so the daemon observes the full working→ready arc on the rollout session, then `process_exited` only at REPL teardown.",
+      "caveats": [
+        "claudecode's auto-executed-tool-call recipe enables auto mode to keep a safe Bash call from tripping a permission gate; codex has no such gate (permission_hooks:false), so the codex recipe needs no auto-mode step — the shell tool auto-runs inside codex's sandbox and the spec asserts a no-waiting invariant.",
+        "Near-duplicate of the sibling full-lifecycle-toolcall codex recording (same ready→working→ready arc, same no-waiting invariant). Differentiated by intent: this cell uses a read-only `pwd` prompt to spotlight the ungated auto-execution, where the sibling's prose framing leans on the round-trip itself."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/codex/parser.go",
+          "note": "function_call / function_call_output → tool-use/tool-result; task_complete → turn_done so working→ready settles via primary path"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/codex/capabilities.json",
+          "note": "tool_calls: true, permission_hooks: false — tools auto-resolve in-sandbox, no waiting gate"
+        },
+        {
+          "kind": "file",
+          "ref": ".claude/skills/ir:onboard-agent/scenario-meanings.md",
+          "note": "auto-executed-tool-call canonical flow: ready→working→ready, never enters waiting"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/codex/scenarios/full-lifecycle-toolcall/expected.jsonl",
+          "note": "sibling codex cell, coverage_id auto-executed-tool-call, recorded 6/6 — interactive recording shape reused here"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/codex/scenarios/multi-turn-conversation/manifest.json",
+          "note": "interactive codex live-REPL turn arcs validated 10/10 — the recording shape used here"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "codex CLI on PATH and authenticated (~/.codex/config.toml or OPENAI_API_KEY)",
+        "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+      ],
+      "setup": [
+        "The interactive driver launches `codex --no-alt-screen` in a fresh per-run cwd under <staging>/cwd/, accepts the trust dialog, and waits for the TUI banner + MCP boot before sending the prompt",
+        "No auto-mode step is needed: codex has no permission gate (capabilities.json permission_hooks:false), so the shell tool runs autonomously inside codex's sandbox — unlike the claudecode recipe, which must enable auto mode to keep a Bash call from tripping a gate",
+        "Each send bumps the expected-turn counter; wait_turn blocks until a new event_msg/task_complete line appears in the rollout, so the trailing sleep never races a still-running turn"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Run the shell command 'pwd' using your shell tool, then tell me the directory it printed."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        }
+      ],
+      "verify": [
+        "events.jsonl contains a presession_created (proc-<PID>) event in ready within 1000 ms of agent launch",
+        "events.jsonl contains a transcript_new for the rollout session with a distinct session_id, born ready",
+        "events.jsonl contains a pid_discovered event bound to the rollout session_id",
+        "events.jsonl contains a state_transition→working on the rollout session_id when the tool-using prompt is sent, sustained across the auto-executed shell call",
+        "transcript.jsonl contains a function_call / function_call_output pair for the pwd command (the auto-executed, ungated tool call)",
+        "events.jsonl contains a state_transition→ready on the same rollout session_id once the tool resolves and the turn completes",
+        "events.jsonl contains NO state_transition to waiting for the rollout session at any point (codex has no permission gate; the call auto-executes)",
+        "events.jsonl contains a process_exited on the rollout session at REPL teardown"
+      ],
+      "settings": {},
+      "timeout_seconds": 240
+    }
+  },
+  "scenario_id": "auto-executed-tool-call"
+}

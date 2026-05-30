@@ -1,0 +1,94 @@
+{
+  "recording_dir": "pi/scenarios/2-13_turn-end-terminal-text",
+  "artifacts": {
+    "events": "pi/scenarios/2-13_turn-end-terminal-text/events.jsonl",
+    "transcript": "pi/scenarios/2-13_turn-end-terminal-text/transcript.jsonl",
+    "manifest": "pi/scenarios/2-13_turn-end-terminal-text/manifest.json",
+    "golden": "pi/scenarios/2-13_turn-end-terminal-text/transcript.jsonl.replay.json.golden"
+  },
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "pass_rate": "5/5 phases passed",
+    "agent_cli_version": "0.70.0",
+    "daemon_version": "0.4.7+327fbc2",
+    "confidence": 0.92,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "turn-end-terminal-text",
+      "agent": "pi",
+      "assessed_at": "2026-05-25T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.92,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nturn-end-terminal-text pins the terminal-text end signal: the assistant produces a final plain-text message that closes the turn with no tool use, and the classifier drives working→ready off the adapter-specific end token. The User-observable signal is the `ready → working → ready` arc reaching `ready` regardless of which adapter-specific signal closes the turn. Pi supports this natively — the pi parser maps `stopReason=stop` on the final assistant event to `turn_done`, settling working→ready (this is the real-transcript behavior confirmed in the pi parser tests and #119). A one-line plain-text prompt (no tool) produces exactly this terminal-text close.\n\nirrlicht observes the full arc: pi writes one JSONL rollout file per session under `~/.pi/agent/sessions/<cwd-slug>/<ts>_<UUID>.jsonl` on launch (FilesUnderRoot, non-lazy), so the daemon sees the rollout session born ready, the working flip on the first transcript activity, and the working→ready settle when the terminal-text turn completes, plus pid_discovered and one process_exited at REPL teardown.\n\nUNLIKE the headless `pi --print` shape (basic-turn / session-end), this cell is recorded with the INTERACTIVE driver (drive-pi-interactive.sh): a single `send` of a plain-text prompt + `wait_turn` keeps pi alive long enough for the daemon to observe the working→ready settle as a distinct arc before teardown. Headless `pi --print` exits too fast and the terminal working→ready settle races process_exited (concern C6), so script-mode is the right shape for an end-signal cell. The cell overlaps basic-turn intentionally but isolates the end-of-turn mechanism (terminal stop_reason allow-list), not the broader happy-path lifecycle.",
+      "caveats": [
+        "Pi cannot accept a pre-assigned UUID — it generates one itself. The interactive driver discovers the UUID from the session header on line 1 of the freshly-created rollout transcript.",
+        "The live REPL may briefly emit a proc-<PID> pre-session born ready before the UUID-keyed rollout transcript appears; the spec anchors the turn arc to recording start with NO session pin so the matcher binds the UUID rollout (the pre-session never enters working), then chains later phases via same_session_as.",
+        "Script-mode (send + wait_turn) is used instead of headless `pi --print` so the daemon observes the working→ready settle as a distinct arc; headless exits too fast and the terminal settle races process_exited (concern C6)."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/pi/agent.go",
+          "note": "Identity.Name=pi, Source variant FilesUnderRoot under ~/.pi/agent/sessions/, ExactName{Name: \"pi\"} process matcher."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/pi/parser.go",
+          "note": "stopReason=stop on the final assistant event maps to turn_done (working→ready) — the terminal-text end signal (#119)."
+        },
+        {
+          "kind": "file",
+          "ref": ".claude/skills/ir:onboard-agent/scripts/drive-pi-interactive.sh",
+          "note": "Interactive tmux REPL driver supporting send/slash/wait_turn/interrupt/sleep; keeps pi alive across the single plain-text turn so the working→ready settle is observed, then kills the tmux session once → single process_exited."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "pi CLI on PATH and authenticated (pi runs against its configured model out-of-band)",
+        "tmux available — the interactive driver runs pi in a tmux REPL so the single turn's working→ready settle is observed before teardown",
+        "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+      ],
+      "setup": [
+        "The interactive driver (drive-pi-interactive.sh) launches pi in a fresh per-run cwd inside a tmux session, waits for the REPL prompt, then sends the single prompt",
+        "pi writes one JSONL rollout file per session under ~/.pi/agent/sessions/<cwd-slug>/ on launch (FilesUnderRoot, non-lazy); the driver resolves that file and extracts the UUID from line 1",
+        "The send bumps the expected-turn counter; wait_turn blocks until the rollout shows a completed assistant turn, so the trailing sleep never races a still-running turn",
+        "After wait_turn + trailing sleep the driver kills the tmux session once — pi exits and the daemon emits a single process_exited for the rollout session"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly this sentence and nothing else: The capital of France is Paris."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        }
+      ],
+      "verify": [
+        "events.jsonl contains a transcript_new for the rollout session born ready within ~2s of REPL launch (a transient proc-<PID> pre-session may also appear; the turn arc and pid_discovered land on the UUID-keyed rollout session)",
+        "events.jsonl contains a pid_discovered event bound to the rollout session_id",
+        "events.jsonl contains a state_transition→working on the rollout session_id when the prompt is sent (the single tool-less assistant turn)",
+        "events.jsonl contains a state_transition→ready on the same rollout session_id once the terminal-text turn completes — pi emits stopReason=stop on the final plain-text assistant message, the parser maps it to turn_done, and the classifier settles working→ready (unlike headless `pi --print` which exits before the settle is cleanly observable, concern C6)",
+        "events.jsonl contains NO tool_use / tool-call events for the rollout session (deliberately tool-less prompt)",
+        "the rollout session's final live state is ready before the driver tears the REPL down",
+        "events.jsonl contains exactly one process_exited on the rollout session at REPL teardown (one long-lived session, not a per-turn exit)",
+        "no state_transition to waiting appears for the rollout session at any point (the declarative answer has no trailing question mark, so the classifier never reads a waiting cue)"
+      ],
+      "settings": {},
+      "timeout_seconds": 180
+    }
+  },
+  "scenario_id": "turn-end-terminal-text"
+}

@@ -66,32 +66,42 @@ There are two web trees, and they are NOT competing copies:
 
 When changing the live dashboard, edit `platforms/web/` only.
 
-## Onboarding fixture matrix (per-scenario shards)
+## Onboarding fixture matrix (one catalog + per-agent cells)
 
 The agent-onboarding coverage matrix — scenario × adapter, browsed by the
-viewer's catalog SPA — is stored as **one self-contained shard per scenario**
-at `replaydata/scenarios/<name>.json` (#510). A shard is the single home for a
-matrix row: its `id` (`<section>.<index>`), `section`/`feature`/`description`,
-and an `agents.<adapter>` map. Each cell splits into a `metadata` overview tier
-(the assessment axes + versions + a note excerpt, enough to color the cell),
-a `details` tier (`assessment`, `recipe`), and `artifacts` refs. Recordings
-themselves never move — `events.jsonl`, `transcript.{jsonl,md}`, `*.golden`,
-`recordings/`, and the spec-grounded `expected.jsonl` stay on disk under
-`replaydata/agents/<adapter>/{scenarios,regression}/<name>/`; the shard points
-at them.
+viewer's catalog SPA — is split across two file kinds:
 
-The Go reader is `tools/agent-onboarding/internal/shard` (`LoadAll`, `Load`,
-`LoadMeta`, `Agents`); `internal/matrix` and the viewer both read shards
-through it. `replaydata/scenarios/_meta.json` holds the onboarded-adapter set
-(`min_versions` keys) and per-adapter `transcript_extensions`.
+- **Catalog** — `replaydata/scenarios.json`, a single object
+  `{"meta": {...}, "scenarios": [...]}`. Each `scenarios[]` entry is the
+  scenario-global spec for one matrix row: `id` (`<section>.<index>`),
+  `name`, `section`/`feature`/`description`, `requires`, `verify`, `idle_only`,
+  and (for the one cross-adapter cell) `cross_adapter`. No per-agent data. The
+  `meta` block holds the onboarded-adapter set (`min_versions` keys), per-adapter
+  `transcript_extensions`, and the `capability_vocab`.
+- **Per-agent cell** — `replaydata/agents/<adapter>/scenarios/<id>_<name>/metadata.json`.
+  One (scenario, adapter) cell: a `metadata` overview tier (assessment axes +
+  versions + a note excerpt), a `details` tier (`assessment`, `recipe`),
+  `artifacts` refs, and a `scenario_id` tying the cell back to its catalog row.
+  **Recording folders are prefixed by the scenario's dashed id** —
+  e.g. scenario `architect-editor-pair` (id `5.4`) records under
+  `5-4_architect-editor-pair`. A few cells use a variant folder name (e.g. pi's
+  `2-17_agent-question-pending` for `user-blocking-question`); the `scenario_id`
+  field is the authoritative link, not the folder name. The metadata.json sits
+  in the same directory as the recording it describes.
 
-> **Migration status (in progress, #511):** the **Go** side reads shards
-> exclusively, but the **bash recording pipeline** (`run-cell.sh` et al.) still
-> reads the pre-#510 `scenarios.json` + per-adapter `capabilities.json` +
-> per-cell `assessment.json`, so those files are still present. Until #511
-> ports the pipeline and deletes them, edit a cell by editing **both** its
-> shard and the legacy file. `cmd/migrate-shards` regenerated the shards from
-> the legacy layout once; see its README.
+Recordings stay on disk alongside the cell — `events.jsonl`,
+`transcript.{jsonl,md}`, `*.golden`, `recordings/`, and the spec-grounded
+`expected.jsonl`. **`regression/` cells keep their plain (un-prefixed) folder
+names** — they're not catalog rows.
+
+The Go reader is `tools/agent-onboarding/internal/shard`: `LoadAll`/`Load`
+read the catalog; `LoadAdapterCells` (scan one adapter, keyed by `scenario_id`),
+`LoadAllCells`, and `LoadAgentCell` (direct by folder) read per-agent
+`metadata.json`; `LoadMeta`/`Agents` read the `meta` block; `FolderForScenario`
+computes the `<id>_<name>` folder. `internal/matrix` and the viewer both go
+through it. The bash rig reads cells through `scripts/lib/shard-lib.sh`
+(`shard_recipe`, `shard_cell`, `shard_folder`, `agent_cell_file`,
+`scenario_global`, …).
 
 ## Key Conventions
 

@@ -1,0 +1,111 @@
+{
+  "recording_dir": "claudecode/scenarios/1-4_session-resume",
+  "artifacts": {
+    "events": "claudecode/scenarios/1-4_session-resume/events.jsonl",
+    "transcript": "claudecode/scenarios/1-4_session-resume/transcript.jsonl",
+    "manifest": "claudecode/scenarios/1-4_session-resume/manifest.json",
+    "golden": "claudecode/scenarios/1-4_session-resume/transcript.jsonl.replay.json.golden"
+  },
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "pass_rate": "7/7 phases passed",
+    "agent_cli_version": "2.1.143",
+    "daemon_version": "0.4.5+53618ac",
+    "confidence": 0.9,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "session-resume",
+      "agent": "claudecode",
+      "assessed_at": "2026-05-17T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.9,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nClaude Code supports session resumption via `--resume <uuid>` (and `--continue` for the most-recent session). The resumed process appends to the existing `~/.claude/projects/<projHash>/<UUID>.jsonl` transcript file rather than minting a new one, so irrlicht sees the SAME `session_id` row come back after the first lifetime exits.\n\nThe spec asserts three things for the primary variant (clean exit + resume): (1) same session_id reappears (not a new row), (2) state is `ready` initially, (3) `ready → working` on the first new turn. All three are observable in events.jsonl: when the resumed process is detected by the scanner, a new `presession_created` (proc-<PID>) appears, and the existing UUID transcript's next `transcript_activity` event ties back to the original session_id — the same UUID that was alive before v1_exit. The state band shows a clean v1 arc, a grey gap (process gone between exit and resume), and a v2 arc on the same UUID.\n\nThe spec's second variant (multiple kill+resume across PID lifetimes) extends the same shape — each lifetime's turn arc is independent and correctly attributed because the daemon binds PID to the UUID via `DiscoverPID`'s metadata lookup (`~/.claude/sessions/<UUID>.json`) on each new pre-session→UUID handoff. The current recipe records the primary variant only; multi-resume can be a follow-up cell.",
+      "caveats": [
+        "Recipe records the clean-exit-then-resume case only. The spec's second variant (multiple kill+resume across PID lifetimes) shares the same observability surface but isn't exercised by this recording. A follow-up cell can chain N restart+resume cycles if regression coverage warrants.",
+        "Resume relies on the daemon's pre-session → UUID handoff: the new claudecode process starts as `proc-<PID>`, and the DiscoverPID metadata lookup matches it to the existing UUID. If that lookup misses (e.g. stale ~/.claude/sessions/<UUID>.json), the resumed process appears as a fresh UUID-less row until the transcript file's first append rebinds it."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/claudecode/agent.go",
+          "note": "FilesUnderRoot{transcriptsDir()} watches ~/.claude/projects/ — resumed claude appends to the same UUID-keyed transcript, so the same session_id reappears."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/claudecode/pid.go",
+          "note": "DiscoverPID prefers metadata under ~/.claude/sessions/<UUID>.json — this is the lookup that rebinds a newly-launched proc-<PID> to the existing UUID on resume."
+        },
+        {
+          "kind": "file",
+          "ref": ".claude/skills/ir:onboard-agent/scenarios.json",
+          "note": "by_adapter.claudecode.script for session-resume — 9 steps: launch → turn → exit_clean → resume (driver re-launches with --resume <uuid> + cwd) → second turn."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "claude CLI on PATH and authenticated (subscription or API key)",
+        "irrlichd is recording (--attach against a daemon with --record, or isolated mode)",
+        "no other claudecode session uses the recipe's UUID"
+      ],
+      "setup": [
+        "Driver generates a fresh lowercased session UUID; the resume step reuses it.",
+        "Driver creates one cwd under <staging>/cwd/ and reuses it across both launches — claude caches trust per directory, so the second launch skips the trust dialog naturally."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 2
+        },
+        {
+          "type": "exit_clean"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        },
+        {
+          "type": "resume"
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: again"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the FIRST launch's pre-session entering ready, then the UUID handing off to ready, then the working/ready cycle for turn 1",
+        "events.jsonl contains a process_exited event for the UUID after turn 1 (clean exit)",
+        "events.jsonl shows a SECOND pre-session entering ready (proc-<PID2>) after the first lifetime ends",
+        "the SAME UUID session_id re-appears in events.jsonl after the resume — NOT a new UUID. This proves the session row persisted across PID lifetimes (spec: 'Same session_id reappears')",
+        "second-lifetime working transition fires on the SAME UUID, then back to ready",
+        "final session state is ready",
+        "transcript.jsonl contains exactly 2 user lines and 2 assistant lines — appended across both lifetimes since claude re-opens the existing transcript file"
+      ],
+      "settings": {},
+      "timeout_seconds": 180
+    }
+  },
+  "scenario_id": "session-resume"
+}

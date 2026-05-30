@@ -18,13 +18,20 @@ command -v jq >/dev/null || { echo "recipe-lint_test: jq is required" >&2; exit 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-# #511: recipe-lint reads per-scenario shards (replaydata/scenarios/<name>.json
-# → .agents[$a].details.recipe) via shard-lib. Build shard fixtures and point
-# shard-lib at them with IR_SHARD_DIR.
-export IR_SHARD_DIR="$TMP/replaydata/scenarios"
-mkdir -p "$IR_SHARD_DIR"
-# shard <name> <recipe-json> — write a one-cell shard for agent "fake".
-shard() { printf '{"name":"%s","agents":{"fake":{"details":{"recipe":%s}}}}\n' "$1" "$2" > "$IR_SHARD_DIR/$1.json"; }
+# recipe-lint reads the per-agent cell (replaydata/agents/<adapter>/scenarios/
+# <folder>/metadata.json → .details.recipe) via shard-lib. Build fixtures and
+# point shard-lib at them with IR_SCENARIOS_FILE + IR_AGENTS_DIR.
+export IR_SCENARIOS_FILE="$TMP/replaydata/scenarios.json"
+export IR_AGENTS_DIR="$TMP/replaydata/agents"
+mkdir -p "$(dirname "$IR_SCENARIOS_FILE")"
+printf '{"meta":{},"scenarios":[]}\n' > "$IR_SCENARIOS_FILE"
+# shard <name> <recipe-json> — write the agent "fake"'s metadata.json (keyed by
+# scenario_id == <name>) carrying the recipe. recipe-lint reads it by scenario_id.
+shard() {
+  local cell="$IR_AGENTS_DIR/fake/scenarios/$1"
+  mkdir -p "$cell"
+  printf '{"scenario_id":"%s","details":{"recipe":%s}}\n' "$1" "$2" > "$cell/metadata.json"
+}
 
 # Fixture driver: a sparse interactive driver dispatching on $type, with one
 # grouped arm (send|slash) and a default. Mirrors the real drivers' shape,

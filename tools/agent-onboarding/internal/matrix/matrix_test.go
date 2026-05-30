@@ -92,34 +92,38 @@ type shardFix struct {
 	recorded   bool   // synthesize events + transcript artifacts
 }
 
-// writeShardFixture writes a t.TempDir repo with replaydata/scenarios shards +
-// _meta.json so matrix.LoadRepo reads the shard layout (P2). Each cell is a
-// (recipe, assessment, recorded) triple. Returns the repo root.
+// writeShardFixture writes a t.TempDir repo with a consolidated
+// replaydata/scenarios.json + per-cell metadata.json files (folders id-prefixed,
+// each carrying scenario_id). Returns the repo root.
 func writeShardFixture(t *testing.T, agent string, shards map[string]shardFix) string {
 	t.Helper()
 	root := t.TempDir()
-	scen := filepath.Join(root, "replaydata", "scenarios")
-	if err := os.MkdirAll(scen, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	mustWrite := func(name string, b []byte) {
-		if err := os.WriteFile(filepath.Join(scen, name), b, 0o644); err != nil {
+	mustWriteFile := func(path string, b []byte) {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, b, 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	meta, _ := json.Marshal(map[string]any{"min_versions": map[string]string{agent: "1.0.0"}})
-	mustWrite("_meta.json", meta)
-
+	scenarios := []map[string]any{}
 	i := 0
 	for name, fx := range shards {
 		i++
-		cell := map[string]any{}
+		id := "1." + itoa(i)
+		scenarios = append(scenarios, map[string]any{
+			"id": id, "name": name, "section": "Sec", "feature": name,
+		})
+		folder := "1-" + itoa(i) + "_" + name
+
+		// Agent cell metadata.json (written even when minimal so the matrix sees the cell).
+		cell := map[string]any{"scenario_id": name}
 		if fx.recorded {
-			cell["recording_dir"] = agent + "/scenarios/" + name
+			cell["recording_dir"] = agent + "/scenarios/" + folder
 			cell["artifacts"] = map[string]any{
-				"events":     agent + "/scenarios/" + name + "/events.jsonl",
-				"transcript": agent + "/scenarios/" + name + "/transcript.jsonl",
+				"events":     agent + "/scenarios/" + folder + "/events.jsonl",
+				"transcript": agent + "/scenarios/" + folder + "/transcript.jsonl",
 			}
 		}
 		details := map[string]any{}
@@ -132,16 +136,16 @@ func writeShardFixture(t *testing.T, agent string, shards map[string]shardFix) s
 		if len(details) > 0 {
 			cell["details"] = details
 		}
-		sh := map[string]any{
-			"id":      "1." + itoa(i),
-			"name":    name,
-			"section": "Sec",
-			"feature": name,
-			"agents":  map[string]any{agent: cell},
-		}
-		b, _ := json.MarshalIndent(sh, "", "  ")
-		mustWrite(name+".json", b)
+		cb, _ := json.MarshalIndent(cell, "", "  ")
+		mustWriteFile(filepath.Join(root, "replaydata", "agents", agent, "scenarios", folder, "metadata.json"), cb)
 	}
+
+	catalog := map[string]any{
+		"meta":      map[string]any{"min_versions": map[string]string{agent: "1.0.0"}},
+		"scenarios": scenarios,
+	}
+	cb, _ := json.MarshalIndent(catalog, "", "  ")
+	mustWriteFile(filepath.Join(root, "replaydata", "scenarios.json"), cb)
 	return root
 }
 

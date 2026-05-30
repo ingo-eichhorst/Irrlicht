@@ -75,10 +75,11 @@ type Config struct {
 
 // Matrix is the loaded, normalized model. Construct via Load / LoadRepo.
 type Matrix struct {
-	catalog []catalogEntry
-	agents  []string                        // sorted onboarded adapters (shard _meta.min_versions keys)
-	shards  map[string]shard.Shard          // coverage_id (shard.Name) → shard
-	cells   map[string]map[string]CellState // agent → coverage_id → cell (cells present in the shard only)
+	catalog    []catalogEntry
+	agents     []string                              // sorted onboarded adapters (shard _meta.min_versions keys)
+	shards     map[string]shard.Shard                // coverage_id (shard.Name) → shard (scenario-global spec only)
+	agentCells map[string]map[string]*shard.ShardAgent // agent → coverage_id → cell (from metadata.json)
+	cells      map[string]map[string]CellState       // agent → coverage_id → cell
 }
 
 type catalogEntry struct {
@@ -119,16 +120,23 @@ func Load(cfg Config) (*Matrix, error) {
 
 	shards := shard.LoadAll(repoRoot)
 	if len(shards) == 0 {
-		return nil, fmt.Errorf("no shards under %s", shard.Dir(repoRoot))
+		return nil, fmt.Errorf("no scenarios in %s", shard.File(repoRoot))
 	}
 
 	m := &Matrix{
-		agents: shard.Agents(repoRoot),
-		shards: make(map[string]shard.Shard, len(shards)),
-		cells:  map[string]map[string]CellState{},
+		agents:     shard.Agents(repoRoot),
+		shards:     make(map[string]shard.Shard, len(shards)),
+		agentCells: map[string]map[string]*shard.ShardAgent{},
+		cells:      map[string]map[string]CellState{},
 	}
 	for _, sh := range shards {
 		m.shards[sh.Name] = sh
+	}
+
+	// Load per-adapter cells (one directory scan per adapter), keyed by
+	// scenario_id, from replaydata/agents/<adapter>/scenarios/<folder>/metadata.json.
+	for _, adapter := range m.agents {
+		m.agentCells[adapter] = shard.LoadAdapterCells(repoRoot, adapter)
 	}
 
 	// catalog: one row per IN-CATALOG shard, in shard (section.index) order.
@@ -146,7 +154,7 @@ func Load(cfg Config) (*Matrix, error) {
 	for _, agent := range m.agents {
 		m.cells[agent] = map[string]CellState{}
 		for _, sh := range shards {
-			if _, ok := sh.Agents[agent]; !ok {
+			if m.agentCells[agent] == nil || m.agentCells[agent][sh.Name] == nil {
 				continue // no cell for this (agent, scenario)
 			}
 			m.cells[agent][sh.Name] = m.buildCell(agent, sh.Name)
@@ -184,7 +192,10 @@ func (m *Matrix) Agents() []string { return append([]string(nil), m.agents...) }
 // cellRecorded mirrors the old recordedAndAssessment's "recorded" leg
 // (events.jsonl + a transcript) using the shard cell's Artifacts refs instead
 // of scanning the on-disk candidate dirs.
-func cellRecorded(c shard.ShardAgent) bool {
+func cellRecorded(c *shard.ShardAgent) bool {
+	if c == nil {
+		return false
+	}
 	return c.Artifacts.Events != "" && (c.Artifacts.Transcript != "" || c.Artifacts.TranscriptMD != "")
 }
 
@@ -192,8 +203,8 @@ func cellRecorded(c shard.ShardAgent) bool {
 // true when the blob is present AND parseable into an AssessmentReport — the
 // shard-backed equivalent of finding a parseable assessment.json. rep is nil
 // when the blob is empty or malformed.
-func cellAssessment(c shard.ShardAgent) (hasAssessFile bool, rep *AssessmentReport) {
-	if len(c.Details.Assessment) == 0 {
+func cellAssessment(c *shard.ShardAgent) (hasAssessFile bool, rep *AssessmentReport) {
+	if c == nil || len(c.Details.Assessment) == 0 {
 		return false, nil
 	}
 	hasAssessFile = true
@@ -213,12 +224,11 @@ func cellAssessment(c shard.ShardAgent) (hasAssessFile bool, rep *AssessmentRepo
 //	recipe.applicable == false    → AppFalse
 //	recipe.applicable absent/true → AppTrue
 func (m *Matrix) applicableState(agent, cid string) ApplicableState {
-	sh, ok := m.shards[cid]
-	if !ok {
+	if m.agentCells[agent] == nil {
 		return AppAbsent
 	}
-	c, ok := sh.Agents[agent]
-	if !ok {
+	c := m.agentCells[agent][cid]
+	if c == nil {
 		return AppAbsent
 	}
 	if len(c.Details.Recipe) == 0 {
@@ -248,7 +258,7 @@ func repAxes(rep *AssessmentReport) (supports, daemon, driver string) {
 // the shard names. Axes come from the cell's assessment; recorded / applicable
 // are reconstructed from the cell's Artifacts / Recipe.
 func (m *Matrix) buildCell(agent, cid string) CellState {
-	c := m.shards[cid].Agents[agent]
+	c := m.agentCells[agent][cid]
 	recorded := cellRecorded(c)
 	hasAssessFile, rep := cellAssessment(c)
 	appl := m.applicableState(agent, cid)
@@ -280,7 +290,7 @@ func (m *Matrix) buildCell(agent, cid string) CellState {
 	// (the viewer's overview tier) so a cell with no parsed assessment still
 	// renders a non-empty verdict rather than collapsing to "unknown".
 	dsSupports, dsDaemon, dsDriver := supports, daemon, driver
-	if rep == nil {
+	if rep == nil && c != nil {
 		dsSupports = c.Metadata.AgentSupports
 		dsDaemon = c.Metadata.DaemonCapability
 		dsDriver = c.Metadata.DriverCapability

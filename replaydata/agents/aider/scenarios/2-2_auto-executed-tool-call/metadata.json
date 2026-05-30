@@ -1,0 +1,129 @@
+{
+  "recording_dir": "aider/scenarios/2-2_auto-executed-tool-call",
+  "artifacts": {
+    "events": "aider/scenarios/2-2_auto-executed-tool-call/events.jsonl",
+    "transcript_md": "aider/scenarios/2-2_auto-executed-tool-call/transcript.md",
+    "manifest": "aider/scenarios/2-2_auto-executed-tool-call/manifest.json"
+  },
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "pass_rate": "5/5 phases passed",
+    "agent_cli_version": "0.86.2",
+    "daemon_version": "0.4.7+fd1343c",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes\ndaemon_capability: full\ndriver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "auto-executed-tool-call",
+      "agent": "aider",
+      "assessed_at": "2026-05-25T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Scenario meaning\n\nThe `auto-executed-tool-call` cell exercises the Primitive `tool_calls`: the agent invokes one or more tools mid-turn, all auto-resolve without user approval, and the session traces `ready → working → ready` while **never** entering `waiting`. The User-observable signal is exactly that arc plus `contains_tool_call: true` and `has_waiting_state: false`. This is the gate-less happy path — deliberately distinct from `tool-gate-permission-prompt`, `user-blocking-question`, and `auto-classified-permission`, all of which involve a gate aider structurally cannot reproduce.\n\n## agent_supports: yes\n\nAider performs file edits and shell commands as ordinary autonomous turn actions. It generates a search/replace edit block and applies it to the working tree, or runs a shell command, with no per-tool approval. The interactive driver launches `aider --no-auto-commits --yes-always --no-gitignore` in a tmux REPL: `--yes-always` answers every confirmation `yes` so any file-add prompt auto-resolves and the tool executes without user input (aider.chat config/options + usage/modes docs). `capabilities.json` records `tool_calls: true` and `permission_hooks: false`, matching the Primitive exercised — the agent invokes tools and resumes without user approval, and there is no gate to enter.\n\n## daemon_capability: full\n\nThe daemon, as it exists today, emits every observable the canonical signal asserts. Aider's `Source` is `FilesUnderCWD{Filename: .aider.chat.history.md, RawLineParser}` (agent.go); the markdown transcript is parsed line-by-line in parser.go:\n\n- **`ready → working`.** A `#### <prompt>` line opens the turn (`turnOpen = true`) and emits `user_message`; the state classifier's default branch (Rule 4) moves the session to `working`.\n- **Tool call within the working span (`contains_tool_call`).** `appliedEditRE` (`> Applied edit to <file>`) → `toolCall(\"Edit\")` and `runningRE` (`> Running <cmd>`) → `toolCall(\"Bash\")`. Each emits a discrete `tool_result` event carrying `ToolUses[0]` (synthetic ID + Name) and a matching `ToolResultIDs` entry. So a tool call is provable from `events.jsonl`/`transcript.jsonl`. Covered by `TestParser_ToolCall_AppliedEdit` and `TestParser_ToolCall_RunningShell`.\n- **`working → ready`, never `waiting`.** `toolCall` emits the tool open and close in one `tool_result` (comment: \"Aider runs with --yes-always; tools execute immediately … The state classifier sees a completed tool call without a permission window\"), so `HasOpenToolCall` is false after the pass. The classifier's waiting paths cannot fire: Rule 0 (`PermissionPending`) never sets — aider has no permission hook; Rule 1 (`NeedsUserAttention` / `isUserBlockingTool`) returns true only for `AskUserQuestion`/`ExitPlanMode`/`question`, never for the `Edit`/`Bash` names aider emits; and `ShouldSynthesizeCollapsedWaiting` (session_detector_activity.go) is gated on those same user-blocking tools, so the collapsed-waiting synthesis is not triggered. The turn closes via `IdleFlush` (1500 ms quiet → synthetic `turn_done`), flipping the session back to `ready` (Rule 2b). Thus `has_waiting_state: false` holds by construction.\n\nA trace exists in the watched Source AND the parser/classifier handles it today, so `daemon_capability: full`.\n\n## driver_capability: ready\n\nThe recipe script uses only `send`, `wait_turn`, and `sleep` — all three implemented by `scripts/drive-aider-interactive.sh`. None of the driver's gap primitives (`restart`, `reset_session`, `resume`, `start_session`, `exit_clean`, `sigkill`, `keys`, `session`, `fork`) is needed to drive a single gate-less tool-call turn, so the driver is `ready`.\n\n## Why the matrix said unknown, and why full is the honest verdict\n\nThe coverage row records `daemon_capability: unknown` with the note \"tool calls reduced to '> Applied edit' / '> Running' markdown markers; coarse-grained.\" That granularity statement is accurate — aider's markdown transcript yields one marker line per tool with no arguments or result payload, unlike a structured JSONL agent — but the canonical signal for THIS cell is only \"a tool call is observed inside the working span, and the full ready→working→ready arc completes without waiting.\" Both are fully met. Per the authoring rule (caveats over downgrades), the honest daemon verdict is `full` with the coarse granularity captured as a caveat, not a defensive `bug`/`incapable`. This also ratifies the sibling `full-lifecycle-toolcall` coverage cell for the same primitive.\n\n## Route\n\nrecord — proceed to recipe/record against the gate-less `auto-executed-tool-call` verify (ready→working→ready, contains_tool_call, no waiting), exactly as the codex and pi recipes for this cell already do.",
+      "caveats": [
+        "Coarse-grained tool visibility: aider's markdown transcript yields one marker line per tool (`> Applied edit to <file>` → Edit, `> Running <cmd>` → Bash). The parser emits a single collapsed `tool_result` per marker with no tool arguments or result payload — sufficient to assert a tool call occurred, but not to inspect what the tool did. Pattern: feature-invisible-but-spec-compliant (the spec asserts a tool call happened, which IS observed).",
+        "Tool-name inference is heuristic: the parser maps `Applied edit` → \"Edit\" and `Running` → \"Bash\" by line prefix. These are synthetic labels, not aider's own tool taxonomy; they are stable for the standard edit/shell paths this scenario exercises.",
+        "Working→ready latency is idle-flush-bound: aider emits no end-of-turn marker, so `working→ready` is synthesized by IdleFlush after a 1500 ms quiet window, gated by the SessionDetector's ~5s staleWorkingRefreshInterval poll. The interactive driver keeps the REPL alive across one send + wait_turn (trailing ≥8s sleep) so the working→ready settle is observed before `process_exited` and the arc is not truncated."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/aider/parser.go",
+          "note": "appliedEditRE/runningRE → toolCall() emits a single tool_result with ToolUses+ToolResultIDs; toolCall comment states tools execute immediately under --yes-always with no permission window; #### opens turn (user_message → working); IdleFlush (1500ms) synthesizes turn_done → ready. Grounds daemon_capability: full."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/aider/parser_test.go",
+          "note": "TestParser_ToolCall_AppliedEdit asserts one Edit ToolUse with matching ToolResultID; TestParser_ToolCall_RunningShell asserts one Bash ToolUse — confirms the tool_result event shape the daemon emits for this cell."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/aider/agent.go",
+          "note": "Source variant FilesUnderCWD{Filename: .aider.chat.history.md, RawLineParser}; CommandPattern '/aider' matcher; per-process Parser instance for idle-flush state. Confirms transport trace exists for daemon_capability: full."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go",
+          "note": "ClassifyState: Rule 0 PermissionPending and Rule 1 NeedsUserAttention are the only waiting paths; neither fires for aider's non-blocking Edit/Bash tool_result, so the arc is ready→working (Rule 4)→ready (Rule 2b) with no waiting — daemon_capability: full for the no-waiting invariant."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/session.go",
+          "note": "isUserBlockingTool returns true only for AskUserQuestion/ExitPlanMode/question; aider's synthetic Edit/Bash names are not user-blocking, so NeedsUserAttention is false → no waiting."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/session_detector_activity.go",
+          "note": "ShouldSynthesizeCollapsedWaiting fires only for AskUserQuestion/ExitPlanMode + permissionPending overlays; aider's Edit/Bash tool_result does not trigger it, confirming has_waiting_state: false structurally."
+        },
+        {
+          "kind": "file",
+          "ref": ".claude/skills/ir:onboard-agent/scripts/drive-aider-interactive.sh",
+          "note": "Implements send / slash / wait_turn / interrupt / sleep. The recipe script (send + wait_turn + sleep) uses only implemented step types — no gapped primitive needed → driver_capability: ready."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/aider/capabilities.json",
+          "note": "tool_calls: true, permission_hooks: false — the Primitive exercised (tool_calls) is supported and there is no gate, so no waiting is possible."
+        },
+        {
+          "kind": "url",
+          "ref": "https://aider.chat/docs/config/options.html",
+          "note": "--yes-always = 'Always say yes to every confirmation'; --no-auto-commits / --no-gitignore are the flags the interactive driver launches with."
+        },
+        {
+          "kind": "url",
+          "ref": "https://aider.chat/docs/usage/modes.html",
+          "note": "Aider applies file edits automatically during a turn via search/replace edit blocks and runs shell commands; tool use is a standard autonomous turn action."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "aider CLI on PATH and authenticated against its configured provider/model (auth is set up out-of-band; the rig's precheck delegates auth to the user). Headless aider with no reachable provider hangs on the model-auth prompt; the live REPL needs a model that actually answers the prompt so the file-edit tool call really runs.",
+        "tmux available — the interactive driver runs aider in a tmux REPL so it stays alive across the turn (the working→ready settle is idle-flush-bound and must be observed before teardown)",
+        "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+      ],
+      "setup": [
+        "The interactive driver (drive-aider-interactive.sh) git-inits a fresh per-run cwd under <staging>/cwd/, launches `aider --no-auto-commits --yes-always --no-gitignore` (plus --model if IRRLICHT_AIDER_MODEL is set) inside a tmux session, and waits for the `> Repo-map:` banner line in .aider.chat.history.md before sending the prompt",
+        "aider stores its transcript as .aider.chat.history.md in the cwd (FilesUnderCWD, RawLineParser), so the daemon keys the WHOLE session by proc-<PID> — there is no separate transcript-UUID rollout session and no handoff/reconcile; the turn arc, pid_discovered and teardown all land on that one proc-<PID> row. The transcript is LAZY (materializes on first input), but the proc-<PID> pre-session is observable from launch (that is where the spec's session_birth ‘ready within 1s’ is grounded)",
+        "No auto-mode / permission step is needed and there is no gate to enable: aider runs under --yes-always and has NO permission hook (capabilities.json permission_hooks:false), so the file-add confirmation auto-answers and the edit applies straight through with no permission window — unlike the claudecode recipe for this cell, which must enable auto mode to keep a Bash call from tripping a gate. The session therefore never enters waiting (parser.go appliedEditRE collapses the edit into a single tool_result; ShouldSynthesizeCollapsedWaiting never fires for an Edit/Bash marker)",
+        "WHY interactive, not headless `aider --message` (drift fix, same shape as the pi/codex siblings for this coverage_id): aider emits no end-of-turn marker, so working→ready is synthesized by IdleFlush after a ~1.5s quiet window, clamped to the SessionDetector's ~5s working-refresh poll; a headless --message run can exit promptly after the reply, so the daemon misses the terminal working→ready settle before process_exited and truncates the arc. Keeping aider alive in the REPL across one send + wait_turn lets the daemon observe the full ready→working→ready settle cleanly, and the single tmux kill-session teardown then yields one clean process_exited",
+        "wait_turn blocks until a new `> Tokens:` line appears in the transcript (aider's per-round close marker), so the trailing sleep never races a still-running turn; the ≥8s trailing sleep is one full idle-flush cycle plus slack so the working→ready settle is observed before teardown",
+        "The send self-contains the fixture: aider is asked to create hello.txt then reply done, forcing exactly one auto-executed file-edit tool call inside the working span"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Create a new file named hello.txt with exactly the contents: hello\n\nThen on the next line reply with exactly: done"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        }
+      ],
+      "verify": [
+        "events.jsonl contains a transcript_new + presession_created for the proc-<PID> session born ready within ~1s of REPL launch",
+        "events.jsonl contains a pid_discovered event bound to the same proc-<PID> session_id",
+        "events.jsonl contains exactly one state_transition→working / →ready arc on the proc-<PID> session_id, sustained across the auto-executed file-edit tool call",
+        "transcript.jsonl contains a collapsed tool_result (an Edit ToolUse, parsed from the `> Applied edit to hello.txt` marker) inside the working span — the auto-executed, ungated tool call (coarse-grained: one marker, no args/result payload)",
+        "events.jsonl contains NO state_transition to waiting for the session at any point (the edit auto-executes under --yes-always; aider never gates)",
+        "the session's final live state is ready before the driver tears the REPL down",
+        "events.jsonl contains exactly one process_exited on the proc-<PID> session at REPL teardown"
+      ],
+      "settings": {},
+      "timeout_seconds": 300
+    }
+  },
+  "scenario_id": "auto-executed-tool-call"
+}

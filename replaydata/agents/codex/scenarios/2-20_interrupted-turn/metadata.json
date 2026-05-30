@@ -1,0 +1,96 @@
+{
+  "recording_dir": "codex/scenarios/2-20_interrupted-turn",
+  "artifacts": {
+    "events": "codex/scenarios/2-20_interrupted-turn/events.jsonl",
+    "transcript": "codex/scenarios/2-20_interrupted-turn/transcript.jsonl",
+    "manifest": "codex/scenarios/2-20_interrupted-turn/manifest.json",
+    "golden": "codex/scenarios/2-20_interrupted-turn/transcript.jsonl.replay.json.golden",
+    "recordings": [
+      "codex/scenarios/2-20_interrupted-turn/recordings/2026-05-14-23-36-59_irrlichd-dev",
+      "codex/scenarios/2-20_interrupted-turn/recordings/2026-05-16-18-49-32_irrlichd-dev",
+      "codex/scenarios/2-20_interrupted-turn/recordings/2026-05-16-22-53-47_irrlichd-0.3.13+4662be4"
+    ]
+  },
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "incapable",
+    "driver_capability": "ready",
+    "pass_rate": "2/5 phases passed",
+    "agent_cli_version": "0.130.0",
+    "daemon_version": "0.3.13+4662be4",
+    "confidence": 0.88,
+    "notes": "agent_supports: yes\ndaemon_capability: incapable; driver_capability: ready\n=> applicable: n/a (agent has the feature; irrlicht cannot observe the user-observable signal today)"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "user-esc-interrupt",
+      "agent": "codex",
+      "assessed_at": "2026-05-23T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "incapable",
+      "driver_capability": "ready",
+      "confidence": 0.88,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: incapable; driver_capability: ready\n=> applicable: n/a (agent has the feature; irrlicht cannot observe the user-observable signal today)\n\n## Scenario\n\nuser-esc-interrupt asserts the user-observable arc `ready -> working -> ready`: the user sends a prompt that takes >2s, state flips to `working`, the user presses ESC to cancel the in-flight turn before the agent emits a turn-done marker, and state must settle back to `ready` (not stick in `working`). The interrupted turn must NOT count as a completed turn, and a follow-up prompt should drive a fresh `ready -> working -> ready` arc proving the parser reset.\n\n## agent_supports: yes\n\ncodex 0.130.0 binds Escape to \"cancel the in-flight LLM turn\" (its TUI footer reads \"esc to interrupt\" while a turn runs). The cancelled turn lands in the rollout transcript as `event_msg/turn_aborted` (no `task_complete`). This is documented in the codex interactive driver's `step_interrupt` (`.claude/skills/ir:onboard-agent/scripts/drive-codex-interactive.sh`, which sends `tmux send-keys Escape` and decrements the expected-turn counter precisely because the aborted turn never produces a `task_complete`), and is corroborated by the committed `interrupted-turn` codex transcript, which contains three `turn_aborted` markers and ten `interrupted` markers. So the agent unambiguously supports user ESC cancellation.\n\n## daemon_capability: incapable; driver_capability: ready\n\nThe daemon cannot observe the `working -> ready` settle the spec requires, because the codex adapter does not parse the `turn_aborted` marker:\n\n1. `grep -rni turn_aborted core/` returns nothing — there is no handling of the abort marker anywhere in the daemon. The codex parser (`core/adapters/inbound/agents/codex/parser.go`, `case \"event_msg\"`) treats `task_complete` as the only turn-done signal and skips every other `event_msg` payload (including `turn_aborted`). With no turn-done emitted on abort, `IsAgentDone()` never fires, so no `working -> ready` transition is produced.\n2. There is no fallback idle-sweep that would settle a still-alive `working` session to `ready`. The PID-liveness sweep in `core/application/services/pid_manager.go` only TTL-cleans `StateReady` sessions or reaps PID-dead ones; a `working` session with a live REPL PID is never swept to `ready`.\n3. The empirical proof is the sibling `interrupted-turn` codex recording (committed, marked `known_failing`, `expected_pass_rate: 2/5 phases passed`). Its `events.jsonl` state-transition sequence is: presession `ready` -> rollout session `ready` -> `working`, then ~30s of silence, then `process_exited` — with no `working -> ready` transition at the abort and none even after the recovery prompt's single `task_complete` (the recording reaches `process_exited` first). The only observable settle signals codex produces are `task_complete` (turn_done) and `process_exited`; the abort is invisible.\n\nBecause the spec's load-bearing user-observable assertion (state returns to `ready` after the user ESC interrupt, not stuck in `working`) cannot be observed by the daemon as it exists today, recording this cell would capture a stuck-`working`-then-`process_exited` shape that proves the opposite of the scenario's intent. Per the pipeline rule, the cell is frozen at applicable: n/a — no recipe, no recording — until the codex parser gains `turn_aborted` handling.\n\n## What would unblock it\n\nAdd a `turn_aborted` -> `turn_done` mapping in the codex parser's `case \"event_msg\"` (sibling to the existing `task_complete` branch) so `IsAgentDone()` fires on the abort and the classifier emits `working -> ready`. That is the exact daemon change the `interrupted-turn` known_failing note also calls for; once it lands, re-assess both cells to `yes/yes` and proceed to recipe + record.",
+      "caveats": [
+        "Same root cause as the committed codex/interrupted-turn cell (known_failing, 2/5 phases): the daemon does not parse codex's turn_aborted marker, so the post-ESC working->ready settle is unobservable."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/codex/parser.go",
+          "note": "case \"event_msg\": only task_complete maps to turn_done; all other payloads (incl. turn_aborted) are skipped — no turn-done on abort."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/pid_manager.go",
+          "note": "PID-liveness sweep TTL-cleans only StateReady or PID-dead sessions; a live-PID working session is never settled to ready."
+        },
+        {
+          "kind": "file",
+          "ref": ".claude/skills/ir:onboard-agent/scripts/drive-codex-interactive.sh",
+          "note": "step_interrupt sends Escape; documents that the aborted turn lands as event_msg/turn_aborted with no task_complete and decrements the turn counter."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/codex/scenarios/interrupted-turn/expected.jsonl",
+          "note": "Sibling cell known_failing note: daemon does not detect turn_aborted; working->ready after ESC never fires."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/codex/scenarios/interrupted-turn/events.jsonl",
+          "note": "Recorded shape: rollout session ready->working then ~30s silence then process_exited; no working->ready settle (manifest expected_pass_rate 2/5)."
+        }
+      ]
+    },
+    "recipe": {
+      "script": [
+        {
+          "type": "send",
+          "text": "Write a long detailed essay about the history of computing, at least 500 words. Take your time."
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        },
+        {
+          "type": "interrupt"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly: ok"
+        },
+        {
+          "type": "wait_turn"
+        }
+      ],
+      "settings": {},
+      "timeout_seconds": 360
+    }
+  },
+  "scenario_id": "user-esc-interrupt"
+}

@@ -4,29 +4,28 @@ name: Replaydata deletion guard
 # enumerate artifact filenames (which let new types like subagents/*.jsonl slip
 # through), it protects WHOLE recording folders. A PR may FAIL only if its diff
 # deletes one of:
-#   - a per-scenario shard / _meta      replaydata/scenarios/*.json   (#511: the matrix catalog)
+#   - the consolidated catalog              replaydata/scenarios.json   (the matrix catalog)
 #   - ANY file under a regression recording   replaydata/agents/*/regression/*/**
-#     (regression cells aren't in the shard catalog, so even their assessment.json
+#     (regression cells aren't in the catalog, so even their assessment.json
 #     is load-bearing — the viewer reads it on disk)
 #   - ANY file (except assessment.json) under a scenarios/ recording whose folder
-#     IS STILL REFERENCED by a shard at HEAD (name or recording_dir basename) —
-#     i.e. a live catalog cell
+#     IS STILL A LIVE CELL at HEAD (it holds a metadata.json)
 #   - any orchestrator scenario fixture   replaydata/orchestrators/*/scenarios/*  (#268)
 #
-# What is ALLOWED (so the pipeline + #511 consolidation can proceed):
-#   - deleting any scenarios/ recording whose folder is referenced by NO shard
-#     (an orphan / properly-retired cell — the shard reference is the source of
-#     truth, mirrored by internal/shard TestNoOrphanRecordingFolders and the
+# What is ALLOWED:
+#   - deleting any scenarios/ recording whose folder holds NO metadata.json at
+#     HEAD (an orphan / properly-retired cell — the metadata.json is the source
+#     of truth, mirrored by internal/shard TestNoOrphanRecordingFolders and the
 #     bash cell-integrity gate);
-#   - deleting a scenarios/ cell's assessment.json (the assessment now lives in
-#     the shard's details.assessment; #511);
-#   - renames (git mv between subtrees) — never counted as deletions.
+#   - deleting a scenarios/ cell's assessment.json (the assessment lives in the
+#     cell's metadata.json details.assessment);
+#   - renames (git mv, incl. the id-prefix folder rename) — never counted as
+#     deletions.
 #
-# Background: #268 Phase 1 introduced a blanket scenarios/+regression guard; #511
-# made it folder-granular + shard-reference-aware so the migration can retire
-# orphan recordings and drop scenarios/ assessment.json, while still protecting
-# every other artifact (events/transcript/golden/manifest/expected/subagents/
-# recordings) of live cells and all of regression/.
+# Background: #268 Phase 1 introduced a blanket scenarios/+regression guard; it
+# was later made folder-granular + cell-aware so the pipeline can retire orphan
+# recordings and drop scenarios/ assessment.json, while still protecting every
+# other artifact of live cells and all of regression/.
 
 on:
   pull_request:
@@ -60,19 +59,13 @@ jobs:
           # git mv as a rename (not a delete), documented + stable.
           deletions=$(git diff --name-only --diff-filter=D --find-renames=50% "$base...$head" -- 'replaydata/**' || true)
 
-          # A scenarios/ recording folder is protected iff some shard at HEAD
-          # references it — by shard name (coverage_id) or an agent cell's
-          # recording_dir basename. (Shards on disk == HEAD; we checked it out.)
-          shard_references() {
-            local a="$1" fold="$2" s match
-            for s in replaydata/scenarios/*.json; do
-              [ "$(basename "$s")" = "_meta.json" ] && continue
-              [ -f "$s" ] || continue
-              match=$(jq -r --arg a "$a" --arg f "$fold" \
-                'select(.name==$f or ((.agents[$a].recording_dir // "") | split("/") | last)==$f) | .name' "$s" 2>/dev/null || true)
-              [ -n "$match" ] && return 0
-            done
-            return 1
+          # A scenarios/ recording folder is a LIVE cell iff it holds a
+          # metadata.json at HEAD (the working tree == HEAD; we checked it out).
+          # Deleting any artifact of a live cell is a violation; an orphan folder
+          # (no metadata.json) is freely deletable.
+          cell_is_live() {
+            local a="$1" fold="$2"
+            [ -f "replaydata/agents/$a/scenarios/$fold/metadata.json" ]
           }
 
           violations=""
@@ -81,47 +74,54 @@ jobs:
             # Protect WHOLE recording folders rather than enumerating artifact
             # filenames — so a new artifact type (e.g. subagents/*.jsonl) can't
             # silently slip through an outdated glob list. The ONLY allowed
-            # deletion inside a recording folder is assessment.json (which #511
-            # retires from scenarios/ cells; regression keeps its own). Patterns
-            # are bash `case` globs where `*` also matches `/`, so a single
+            # deletion inside a recording folder is assessment.json (which the
+            # scenarios/ cells retire; regression keeps its own). Patterns are
+            # bash `case` globs where `*` also matches `/`, so a single
             # `…/scenarios/*` covers nested subagents/ and recordings/ files.
             case "$f" in
-              replaydata/scenarios/*.json)
-                # _meta.json also matches here; it is load-bearing too, so the
-                # protection is correct (only the label is generic).
-                violations="$violations  - $f  (shard / _meta — matrix catalog)"$'\n' ;;
+              replaydata/scenarios.json)
+                violations="$violations  - $f  (matrix catalog)"$'\n' ;;
               replaydata/orchestrators/*/scenarios/*)
                 violations="$violations  - $f  (orchestrator scenario fixture)"$'\n' ;;
               replaydata/agents/*/regression/*)
                 # Everything under a regression recording is load-bearing,
-                # INCLUDING assessment.json (regression cells aren't in the shard
+                # INCLUDING assessment.json (regression cells aren't in the
                 # catalog, so the viewer reads their assessment.json on disk).
                 violations="$violations  - $f  (regression recording)"$'\n' ;;
               replaydata/agents/*/scenarios/*/assessment.json)
-                : ;;  # allowed (#511: the assessment lives in the shard now)
-              replaydata/agents/*/scenarios/*)
-                # Any other artifact under a scenarios cell is protected IFF the
-                # cell is still referenced by a shard at HEAD (orphan/retired
-                # folders are deletable — that is the #511 consolidation path).
+                : ;;  # allowed (the assessment lives in the cell's metadata.json)
+              replaydata/agents/*/scenarios/*/metadata.json)
+                # The cell descriptor itself: protected IFF the folder is still a
+                # live cell at HEAD (i.e. the metadata.json survives at HEAD; a
+                # deleted-and-gone folder is a retirement, allowed).
                 agent=$(printf '%s' "$f" | sed -E 's#replaydata/agents/([^/]+)/scenarios/([^/]+)/.*#\1#')
                 folder=$(printf '%s' "$f" | sed -E 's#replaydata/agents/([^/]+)/scenarios/([^/]+)/.*#\2#')
-                if shard_references "$agent" "$folder"; then
-                  violations="$violations  - $f  (recording of shard-referenced cell '$agent/$folder')"$'\n'
+                if cell_is_live "$agent" "$folder"; then
+                  violations="$violations  - $f  (metadata.json of live cell '$agent/$folder')"$'\n'
                 fi ;;
-              *) : ;;  # outside any recording folder (e.g. capabilities.json) → allowed
+              replaydata/agents/*/scenarios/*)
+                # Any other artifact under a scenarios cell is protected IFF the
+                # folder is still a live cell at HEAD (holds a metadata.json).
+                # Orphan/retired folders are deletable.
+                agent=$(printf '%s' "$f" | sed -E 's#replaydata/agents/([^/]+)/scenarios/([^/]+)/.*#\1#')
+                folder=$(printf '%s' "$f" | sed -E 's#replaydata/agents/([^/]+)/scenarios/([^/]+)/.*#\2#')
+                if cell_is_live "$agent" "$folder"; then
+                  violations="$violations  - $f  (recording of live cell '$agent/$folder')"$'\n'
+                fi ;;
+              *) : ;;  # outside any recording folder → allowed
             esac
           done <<< "$deletions"
 
           if [ -n "$violations" ]; then
-            echo "::error::PR deletes load-bearing replaydata (shards or referenced recordings)."
+            echo "::error::PR deletes load-bearing replaydata (catalog or referenced recordings)."
             echo
             echo "Disallowed deletions:"
             printf '%s' "$violations"
             echo
-            echo "Shards and the recordings of live (shard-referenced) catalog cells are"
-            echo "load-bearing regression fixtures. To retire a cell, first remove its shard"
-            echo "reference (so the folder becomes unreferenced), or git mv the recording to"
-            echo "regression/. For a genuine removal, open an issue and get maintainer sign-off."
+            echo "The catalog and the recordings of live cells (folders holding a metadata.json)"
+            echo "are load-bearing regression fixtures. To retire a cell, delete its whole folder"
+            echo "(metadata.json included, so it stops being a live cell), or git mv the recording"
+            echo "to regression/. For a genuine removal, open an issue and get maintainer sign-off."
             exit 1
           fi
 

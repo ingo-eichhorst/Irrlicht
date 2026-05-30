@@ -1,0 +1,122 @@
+{
+  "recording_dir": "pi/scenarios/2-12_context-compaction",
+  "artifacts": {
+    "events": "pi/scenarios/2-12_context-compaction/events.jsonl",
+    "transcript": "pi/scenarios/2-12_context-compaction/transcript.jsonl",
+    "manifest": "pi/scenarios/2-12_context-compaction/manifest.json",
+    "golden": "pi/scenarios/2-12_context-compaction/transcript.jsonl.replay.json.golden"
+  },
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "pass_rate": "9/9 phases passed",
+    "agent_cli_version": "0.70.0",
+    "daemon_version": "0.4.7+ac2dcc1",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "context-compaction",
+      "agent": "pi",
+      "assessed_at": "2026-05-25T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## agent_supports: yes\n\nPi 0.70.0 ships a manual `/compact` slash command (registered in dist/core/slash-commands.js as `name: \"compact\"`; the CHANGELOG references it directly — \"Fixed `/compact` to reuse the session thinking level for compaction summaries\"). It triggers a real LLM summarization round and, on completion, writes a single top-level `{\"type\":\"compaction\",\"summary\":...,\"firstKeptEntryId\":...,\"tokensBefore\":...}` entry to the session via SessionManager.appendCompaction() → _appendEntry() (dist/core/session-manager.js:617-621). Crucially the compact path calls _appendEntry on the CURRENT leaf — there is NO newSession()/createSessionId() in it, so compaction stays inside the SAME rollout file and the SAME session UUID. (Pi also supports automatic compaction on context-window pressure via CompactionSettings/CompactionEnabled, but that is NOT deterministically reproducible in a bounded recording; the manual `/compact` is the deterministic trigger this cell uses.)\n\nEmpirically confirmed by a standalone driver probe (2026-05-25, pi 0.70.0): send 'ok' → wait_turn → /compact → send 'still-here'. ONE session file (`...02-34-02-757Z_019e5cfb...jsonl`, single id throughout) with 8 lines: session header, model_change, thinking_level_change, user, assistant/stop (priming turn), `{type:\"compaction\",summary}` at 02:34:43 (~8.3s after the priming stop — a real model round), then user + assistant/stop (post-compaction turn). No second file, no waiting, no supersession.\n\n## daemon_capability: full; driver_capability: ready\n\nThe pi parser handles compaction explicitly (core/adapters/inbound/agents/pi/parser.go:55-60): `eventType == \"compaction\"` → `ev.EventType = \"assistant\"`, i.e. active model work that promotes ready→working (covered by TestParser_Compaction_IsActivityEvent and TestParser_Compaction_SetsLastEventToAssistant). Since the compaction line is separated from the priming ready by several seconds, the daemon emits it as its OWN working→ready arc on the same session — exactly the scenario's user-observable signal (state arc across the compaction, no intervening waiting, session continues). Pi Source = FilesUnderRoot watching ~/.pi/agent/sessions (agent.go), and the compaction entry lands in the existing rollout file, so there is no new session_id and no transcript-stitching dependency.\n\nWhy `partial`, not `yes`: irrlicht cannot LABEL the turn as a compaction. The parser collapses the compaction event into a generic assistant/working activity; the domain CompactionState field (session.go:16-18, 550) has no production writer and StringState's compaction branch is dead code, so the dashboard shows compaction as an ordinary working turn — indistinguishable from a normal long turn. The state ARC is fully observed (hence applicable: yes); the compaction-vs-normal-turn DISTINCTION is not (hence irrlicht_observes downgraded to partial). The spec asserts only the arc, which is the user-observable contract.",
+      "caveats": [
+        "irrlicht cannot distinguish a compaction turn from a normal working turn: parser.go maps the `compaction` event to a generic assistant/working activity, and the domain CompactionState field is dead code (no production writer; StringState's compaction branch never fires). The dashboard shows compaction as an ordinary working turn. This is fine for the spec contract (state arc only); surfacing compaction in the UI would be a separate ticket — the reason irrlicht_observes is `partial` not `yes`.",
+        "Pi also supports AUTOMATIC compaction on context-window pressure (CompactionSettings/CompactionEnabled), but auto-compaction is not deterministically reproducible in a short bounded recording. This cell uses the MANUAL `/compact` slash command, which is deterministic and produces the same `{type:\"compaction\"}` entry on the same session.",
+        "DRIVER-SYNC: pi's `/compact` writes a `compaction` entry, NOT an assistant `stopReason==stop` message, so drive-pi-interactive.sh's turn-counter does not increment for it. The recipe deliberately omits a counted `wait_turn` after `/compact` (which would inflate EXPECTED_TURNS and force a driver timeout) and instead sleeps over the compaction round, then issues the post-compaction prompt with a trailing sleep to flush its turn before teardown. No driver extension is needed — only `send`/`slash`/`wait_turn`/`sleep`, all of which the pi driver already implements."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "node_modules/@mariozechner/pi-coding-agent/dist/core/slash-commands.js",
+          "note": "`name: \"compact\"` is a registered slash command in pi 0.70.0 — primary evidence the manual /compact trigger ships."
+        },
+        {
+          "kind": "file",
+          "ref": "node_modules/@mariozechner/pi-coding-agent/dist/core/session-manager.js",
+          "note": "Lines 617-621 appendCompaction(): writes a {type:\"compaction\",summary,firstKeptEntryId,tokensBefore,...} entry via _appendEntry on the CURRENT leaf — no newSession()/createSessionId(), so compaction stays inside the same rollout file / same session UUID (no boundary file, no supersession)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/pi/parser.go",
+          "note": "Lines 55-60: eventType==\"compaction\" → EventType=\"assistant\" (active model work, ready→working). Confirmed by TestParser_Compaction_IsActivityEvent and TestParser_Compaction_SetsLastEventToAssistant. The compaction-vs-normal distinction is NOT surfaced — the event collapses into a generic assistant activity."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/session.go",
+          "note": "Lines 16-18, 550, 598-601: CompactionState constants + field + StringState branch exist but have NO production writer — dead code. The daemon cannot label a turn as compaction; hence irrlicht_observes is partial."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.pi/agent/sessions/.../2026-05-25T02-34-02-757Z_019e5cfb-7085-76df-8c30-767695534d3c.jsonl",
+          "note": "Live probe rollout (2026-05-25): one session id throughout; priming user+assistant/stop, then a {type:\"compaction\"} entry at 02:34:43 (~8.3s after priming stop), then post-compaction user+assistant/stop. No new file, no waiting."
+        },
+        {
+          "kind": "maintainer",
+          "ref": "Ingo (2026-05-25) — reassessment",
+          "note": "context-compaction set to applicable: yes at confidence 0.80; pi supports manual /compact, the parser maps the compaction event to assistant(working) (no new session, no waiting). Spec asserts the lifecycle arc; the compaction label is not phase-expressible (CompactionState dead code) so it is documented in spec notes."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "pi CLI on PATH and authenticated (PI_API_KEY or configured provider; verified against pi 0.70.0)",
+        "irrlichd is recording (--attach against a daemon with --record, or isolated mode)",
+        "pi version ships the manual /compact slash command (verified live against pi 0.70.0: registered in dist/core/slash-commands.js as name:\"compact\")"
+      ],
+      "setup": [
+        "Driver boots a fresh pi REPL in a per-run cwd under <staging>/cwd/; pi assigns its own session UUID per rollout (one rollout file for the whole scenario)"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "slash",
+          "text": "/compact"
+        },
+        {
+          "type": "sleep",
+          "seconds": 14
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: still-here"
+        },
+        {
+          "type": "sleep",
+          "seconds": 7
+        }
+      ],
+      "verify": [
+        "events.jsonl shows a proc-<PID> pre-session born ready at launch, then the UUID rollout session reconciling into ready",
+        "events.jsonl shows ready→working→ready for the priming turn on the rollout session",
+        "after /compact runs, events.jsonl shows ANOTHER ready→working→ready arc on the SAME rollout session_id (the compaction entry is parsed as assistant/working activity — pi appends it to the existing rollout, NO new session)",
+        "events.jsonl shows ready→working→ready for the post-compaction turn on the same session (the session keeps working after compaction)",
+        "no state_transition to waiting appears anywhere in the recording",
+        "exactly one process_exited on the rollout session at REPL teardown; final session state is ready",
+        "transcript.jsonl is a SINGLE rollout file (one session id) containing the priming turn (user + assistant/stop), a {type:\"compaction\",summary} entry, and the post-compaction turn (user + assistant/stop); the compaction-vs-normal-turn distinction is not surfaced by the daemon"
+      ],
+      "settings": {},
+      "timeout_seconds": 240,
+      "notes": "Pi difference vs claudecode: pi's /compact appends a single top-level {type:\"compaction\",summary,...} entry to the SAME rollout file (session-manager.js appendCompaction → _appendEntry on the current leaf — NO newSession()), so the whole scenario stays on ONE session UUID — there is no boundary transcript (unlike claudecode 2.1.x) and no supersession (unlike pi /new). The pi parser (parser.go:55-60) maps the compaction event to EventType:\"assistant\" (active model work, ready→working), so the daemon sees it as an ordinary working→ready arc on the same session. irrlicht cannot LABEL the turn as compaction (CompactionState is dead code; the parser collapses it into a generic assistant activity), so the recipe asserts only the visible state arc — priming working→ready, a compaction working→ready arc on the same session, post-compaction working→ready, no waiting. DRIVER-SYNC (load-bearing): /compact writes a `compaction` entry, NOT an assistant stopReason==stop message, so drive-pi-interactive.sh's turn-counter does NOT increment for it. A counted wait_turn after /compact would inflate EXPECTED_TURNS by 1 and force a driver timeout (proven by a standalone probe). So the recipe deliberately uses NO wait_turn after /compact: it sleeps 14s over the real ~8s compaction summarization round (separated from the priming ready by a 3s sleep so the compaction registers as its OWN working blip), then issues the post-compaction prompt and ends on a 7s trailing sleep (NO final wait_turn) to flush that turn's working→ready arc and the post-turn ready dwell before the tmux teardown. Only send/slash/wait_turn/sleep are used — all already implemented by the pi driver; no driver extension needed. WHY interactive (not headless pi --print): a slash command only exists inside the REPL; headless pi is single-shot. WHY manual /compact (not auto): automatic compaction fires only on context-window pressure and is not deterministically reproducible in a bounded recording; manual /compact produces the identical {type:\"compaction\"} entry deterministically. C7 / SESSION-IDENTITY: session_birth matches the transient proc-<PID> pre-session born at launch; prime_start anchors to recording start with NO session pin so the matcher binds the FIRST working (necessarily the rollout, since the pre-session never goes working); compaction_start anchors to prime_end so it binds the post-priming working arc; every later phase pins to prime_start via same_session_as. Between runs: assistant wording, the summary text, per-turn/compaction token counts, session UUID, PID and timestamps differ; pi may flush a turn as one OR two bursts — the structural baseline is a priming working→ready arc + a compaction working→ready arc + a post-compaction working→ready arc on one rollout session_id, no waiting, a single process_exited, final ready. If it broke, look at core/adapters/inbound/agents/pi/parser.go (eventType==\"compaction\" → assistant) and whether a pi update changed where /compact writes the compaction entry (e.g. into a new session file)."
+    }
+  },
+  "scenario_id": "context-compaction"
+}

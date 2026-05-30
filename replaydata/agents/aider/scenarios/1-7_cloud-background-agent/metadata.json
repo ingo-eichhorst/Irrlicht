@@ -1,0 +1,55 @@
+{
+  "artifacts": {},
+  "metadata": {
+    "agent_supports": "no",
+    "daemon_capability": "n/a",
+    "driver_capability": "ready",
+    "confidence": 0.9,
+    "notes": "agent_supports: no\ndaemon_capability: n/a\ndriver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "cloud-background-agent",
+      "agent": "aider",
+      "assessed_at": "2026-05-25T00:00:00Z",
+      "agent_supports": "no",
+      "daemon_capability": "n/a",
+      "driver_capability": "ready",
+      "confidence": 0.9,
+      "body": "## Verdict\n\nagent_supports: no\ndaemon_capability: n/a\ndriver_capability: ready\n\n## Reasoning\n\nAider is a purely local tool: \"AI pair programming in your terminal.\" Version 0.86.2 ships no cloud, remote, server, daemon, or background-agent execution mode where the agent runs on remote infrastructure with no local process. The scenario requires \"an adapter that does NOT rely on FilesUnderRoot or FilesUnderCWD\" and a session that appears with PID = 0 / absent — aider can satisfy neither because it has no remote-execution surface to begin with.\n\nEvidence the feature is absent:\n\n- `aider --help` (0.86.2) exposes no `--cloud`, `--remote`, `--server`, `--daemon`, or hosted-variant flag. Every `api`-related flag is LLM-provider configuration (`--openai-api-key`, `--anthropic-api-key`, `--api-key PROVIDER=KEY`, `--timeout`), not a remote-agent feed.\n- A keyword scan of the installed package (`.../site-packages/aider`) for `cloud_agent|remote_run|sidecar|webhook|headless` matched only `website/docs/usage/notifications.md`, and that hit is the \"Remote Notifications\" section (push notifications via Apprise) — not remote execution.\n- `aider/gui.py` is a local Streamlit app (`import streamlit as st`, runs on localhost); it is a local browser frontend over a local Coder process, not a cloud-hosted agent.\n- The official docs describe only local install paths (pip/uv/docker) and dev environments (GitHub Codespaces, Replit). Those environments host the *user's* machine — aider still runs there as a local process with a local CWD and PID — so they are not a first-party cloud-agent feed.\n\nBecause `agent_supports` is `no`, the daemon-observation question is moot: `daemon_capability: n/a`. For completeness on the transport: even if a cloud variant existed, the aider adapter could not observe it as specified. `core/adapters/inbound/agents/aider/agent.go` uses `Source: agent.FilesUnderCWD{Filename: \".aider.chat.history.md\"}` and matches the process by command line (`/aider`) + CWD via `DiscoverPID` (`pid.go`). Both axes require a local OS process with a local working directory; a PID-less, file-less cloud run has neither. `capabilities.json` correctly carries no `cloud_agent` key — the Primitive exercised (remote-process transport via API feed / sidecar / webhook) maps to a `cloud_agent` key that does not exist for aider.\n\n`driver_capability: ready` because the interactive driver (`scripts/drive-aider-interactive.sh`) is not the blocker — the agent simply lacks the feature. No driver step type is missing for a scenario that cannot exist; per #476 a frozen no-feature cell parks the driver axis at `ready`, not at a `gap`.\n\n## What would flip the verdict\n\nThe upstream aider project would need to ship a hosted / remote-execution product (a cloud run with a server-side session feed). Only then would `agent_supports` move off `no`. Observing it would additionally require a new non-file Source variant (RemoteAPI/sidecar) in the adapter model — the aider Source today is `FilesUnderCWD`, which can only watch a local transcript — so `daemon_capability` would then become `incapable` until such a transport landed (the same structural gap noted for claudecode × cloud-background-agent).\n\n## Matrix\n\nCurrent coverage row is agent_supports: no, daemon_capability: n/a, driver_capability: n/a. This assessment ratifies agent_supports + daemon_capability; it refines the driver axis from n/a to ready per the #476 frozen-no-feature convention (the driver is not the blocker).",
+      "caveats": [
+        "GitHub Codespaces and Replit run aider as a local process inside a remote dev container; that is the user's environment, not a first-party cloud-agent feed, and aider there still has a local PID + local transcript.",
+        "If aider ever shipped a hosted/remote variant, daemon_capability would become incapable (not n/a): the FilesUnderCWD Source watches only a local transcript, so a PID-less, file-less cloud run would leave no trace under the watch."
+      ],
+      "sources": [
+        {
+          "kind": "url",
+          "ref": "https://aider.chat/docs/usage.html",
+          "note": "Official docs: 'AI pair programming in your terminal'; no cloud/remote/server/daemon mode — confirmed via fetch 2026-05-25"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/aider/agent.go",
+          "note": "Adapter Source is FilesUnderCWD (.aider.chat.history.md) + CommandPattern /aider — local process only; no non-file Source for a remote feed"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/aider/pid.go",
+          "note": "DiscoverPID matches a local /aider process by CWD + command line; no remote transport"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/aider/capabilities.json",
+          "note": "No cloud_agent capability key — the Primitive-exercised key for this scenario is absent; aider is a local CLI/TUI"
+        },
+        {
+          "kind": "file",
+          "ref": ".local/share/uv/tools/aider-chat/lib/python3.12/site-packages/aider",
+          "note": "Package keyword scan for cloud/remote/sidecar/webhook matched only the docs 'Remote Notifications' (Apprise) section; gui.py is a local Streamlit app"
+        }
+      ]
+    }
+  },
+  "scenario_id": "cloud-background-agent"
+}

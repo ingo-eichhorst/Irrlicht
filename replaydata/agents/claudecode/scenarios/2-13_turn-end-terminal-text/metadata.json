@@ -1,0 +1,95 @@
+{
+  "recording_dir": "claudecode/scenarios/2-13_turn-end-terminal-text",
+  "artifacts": {
+    "events": "claudecode/scenarios/2-13_turn-end-terminal-text/events.jsonl",
+    "transcript": "claudecode/scenarios/2-13_turn-end-terminal-text/transcript.jsonl",
+    "manifest": "claudecode/scenarios/2-13_turn-end-terminal-text/manifest.json",
+    "golden": "claudecode/scenarios/2-13_turn-end-terminal-text/transcript.jsonl.replay.json.golden"
+  },
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "pass_rate": "3/3 phases passed",
+    "agent_cli_version": "2.1.143",
+    "daemon_version": "0.4.5+6258eed",
+    "confidence": 0.95,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "turn-end-terminal-text",
+      "agent": "claudecode",
+      "assessed_at": "2026-05-17T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.95,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nThis is the canonical happy-path turn: user prompts, assistant produces some text without invoking tools, turn ends. Claude Code emits a final `assistant` message with `stop_reason: end_turn` plus (in current versions) a trailing `system/turn_duration` event. Both paths land at `IsAgentDone()=true` and the classifier returns `working → ready` via rule 2b.\n\n**Adapter coverage of the end signal.** The parser's `resolveAssistantStreaming` (parser.go:288-303) uses an explicit allow-list of terminal stop_reasons — `end_turn`, `stop_sequence`, `refusal`, `tool_use` — anything else (max_tokens, pause_turn, unknown) gets downgraded to `assistant_streaming` (a non-terminal type). The terminal-text spec is exactly the `end_turn` branch. The independent `turn_done` mapping in `handleSystemEvent` (parser.go:157-163) catches the `system/turn_duration` and `stop_hook_summary` subtypes; if either arrives, `LastEventType=turn_done` and `IsAgentDone()` returns true via the primary path (session.go:451). The fallback path (`LastEventType in {assistant, assistant_output}` with no open tool calls — session.go:463-466) covers older Claude Code transcripts that lacked `turn_duration`. Three independent signals all converge on the same observable.\n\n**State arc.** Spec asks for `ready → working → ready`. The user message arrives, classifier rule 4 transitions ready→working. The terminal assistant message arrives, classifier rule 2b transitions working→ready. There are no tool calls in this scenario so the HasOpenToolCall guard in `IsAgentDone` never blocks the transition. No race conditions — both event flushes go through the same fswatcher pass.\n\n**Why this is the highest-confidence cell.** Every regression fixture in `replaydata/agents/claudecode/regression/` includes at least one terminal-text turn, the basic-turn scenario already covers it, and four issue-102 fixes hardened exactly this codepath (Bug D: terminal stop_reason allow-list). The cell is essentially a sanity check that the smallest happy path still works.",
+      "caveats": [
+        "Overlaps heavily with `basic-turn`. The two cells differ in intent: basic-turn asserts the overall happy-path lifecycle (session detection + ready→working→ready); turn-end-terminal-text specifically asserts that the terminal-text end signal closes the turn, regardless of which adapter-specific marker carries it. The recipe should be a deliberately tool-less prompt (e.g. 'say hello') to keep the cell focused.",
+        "Future Claude Code releases that introduce a new terminal stop_reason (e.g. `multi_turn_complete`) would land in the parser's else-branch and be downgraded to `assistant_streaming`, leaving the session stuck in working until the `turn_done` system event arrives. The fallback path catches this in practice; the parser allow-list comment (parser.go:283-287) is the relevant maintenance note."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/claudecode/parser.go",
+          "note": "Lines 282-303 (`resolveAssistantStreaming`) — terminal stop_reason allow-list `{end_turn, stop_sequence, refusal, tool_use}`; line 157-163 (`handleSystemEvent`) maps `system/turn_duration` and `system/stop_hook_summary` to `turn_done`."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/session.go",
+          "note": "Lines 440-468 (`IsAgentDone`): primary path via `LastEventType==turn_done`, fallback via `LastEventType in {assistant, assistant_output}` with no open tool calls — both fire for terminal-text turns."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go",
+          "note": "Rule 2b at line 58-61: when `IsAgentDone()` is true and not waiting for user input, working/waiting → ready with reason 'agent finished turn → ready'."
+        },
+        {
+          "kind": "memory",
+          "ref": "issue-102 Bug D fix",
+          "note": "Allow-list of terminal stop_reasons was the Bug-D fix; max_tokens/pause_turn/unknown now correctly stay in working until a real terminal signal arrives. The terminal-text scenario is the positive case for this fix."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "claude CLI on PATH and authenticated (subscription or API key)",
+        "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+        "no other claudecode session uses the same UUID"
+      ],
+      "setup": [
+        "Generate a fresh lowercased session UUID (run-cell.sh does this via uuidgen | tr '[:upper:]' '[:lower:]')",
+        "Create an empty cwd under <staging>/cwd/ (claude prompts for trust on first encounter — the driver auto-accepts)"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly: hello world"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        }
+      ],
+      "verify": [
+        "events.jsonl contains a presession_created for proc-<PID> within 1000 ms",
+        "events.jsonl contains a transcript_new for the UUID session within 500 ms of the first send",
+        "events.jsonl contains exactly one state_transition to working and exactly one state_transition to ready for the UUID",
+        "events.jsonl contains NO tool_use events for the UUID",
+        "transcript.jsonl's final assistant message has stop_reason=end_turn",
+        "final session state is ready",
+        "transcript.jsonl contains exactly 1 user line and 1 assistant line"
+      ],
+      "settings": {},
+      "timeout_seconds": 60
+    }
+  },
+  "scenario_id": "turn-end-terminal-text"
+}

@@ -1,0 +1,45 @@
+{
+  "artifacts": {},
+  "metadata": {
+    "agent_supports": "no",
+    "daemon_capability": "n/a",
+    "driver_capability": "ready",
+    "confidence": 0.9,
+    "notes": "agent_supports: no\ndaemon_capability: n/a\ndriver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "subscription-detection",
+      "agent": "aider",
+      "assessed_at": "2026-05-25T00:00:00Z",
+      "agent_supports": "no",
+      "daemon_capability": "n/a",
+      "driver_capability": "ready",
+      "confidence": 0.9,
+      "body": "## Verdict\n\nagent_supports: no\ndaemon_capability: n/a\ndriver_capability: ready\n\n## Reasoning\n\nSubscription detection asks whether the agent surfaces a billing-model signal — a subscription plan vs. an API-key/credits path. The two adapters that support it do so because the agent emits the data: Codex carries `plan_type` / `credits` in its `rate_limits` map (`extractCodexRateLimits` in core/adapters/inbound/agents/codex/parser.go), and Claude Code's statusline hook includes a `rate_limits` block for subscription users (statuslineToSnapshot in core/adapters/inbound/agents/claudecode/statusline.go).\n\nAider has no such concept. It is a local CLI that talks to a provider using the user's own API key (or a local model); there is no Aider-managed subscription tier, no plan-type field, and no credits ledger in its output. The aider adapter accordingly has zero rate-limit / plan-type / credits / subscription extraction — `grep -ri 'rate_limit|plan_type|quota|credits|subscription' core/adapters/inbound/agents/aider/` returns nothing.\n\nThe **Primitive exercised** (subscription / billing-model detection) maps to the `cost_tracking` key in replaydata/agents/aider/capabilities.json, which is `false` — Aider's BYO-key model has no billing/subscription state to surface. This is the sibling of `quota-burndown`.\n\n## Two-axis derivation (#476)\n\nBecause `agent_supports: no`, `daemon_capability` is `n/a` per the matrix convention: there is no signal in the transcript and no parser code path that could ever observe one, so there is no observation question to answer.\n\n`driver_capability` is `ready` (frozen): the cell is authored as an assessment only, so the absence of any required driver step is not a gap — the interactive driver is not exercised. The route is `frozen` because the agent lacks the feature, not because of any daemon or driver limitation.\n\n## What irrlicht does NOT see (and why that's OK)\n\nEverything billing-related. The feature does not exist in the agent under test — Aider's BYO-key model has no subscription state to report — so the absence of observation is correct, not a gap.",
+      "caveats": [
+        "agent_supports=no, so this cell is authored as an assessment only — no recording, expected.jsonl, or transcript.jsonl.",
+        "A future Aider release that introduced a hosted/subscription mode emitting plan data would change this verdict."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/aider/",
+          "note": "No rate-limit / plan-type / credits / subscription extraction exists in the aider adapter — nothing to parse a billing-model signal from."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/aider/capabilities.json",
+          "note": "cost_tracking=false — the Primitive exercised (billing-model detection) capability key is absent for aider; no subscription state exists to observe."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/codex/parser.go",
+          "note": "Contrast: Codex extracts plan_type/credits from rate_limits — the signal subscription-detection asserts, absent in Aider."
+        }
+      ]
+    }
+  },
+  "scenario_id": "subscription-detection"
+}

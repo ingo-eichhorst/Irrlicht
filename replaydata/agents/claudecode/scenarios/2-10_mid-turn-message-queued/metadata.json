@@ -1,0 +1,105 @@
+{
+  "recording_dir": "claudecode/scenarios/2-10_mid-turn-message-queued",
+  "artifacts": {
+    "events": "claudecode/scenarios/2-10_mid-turn-message-queued/events.jsonl",
+    "transcript": "claudecode/scenarios/2-10_mid-turn-message-queued/transcript.jsonl",
+    "manifest": "claudecode/scenarios/2-10_mid-turn-message-queued/manifest.json",
+    "golden": "claudecode/scenarios/2-10_mid-turn-message-queued/transcript.jsonl.replay.json.golden"
+  },
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "pass_rate": "4/4 phases passed",
+    "agent_cli_version": "2.1.143",
+    "daemon_version": "0.4.5+605ef47",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "mid-turn-message-queued",
+      "agent": "claudecode",
+      "assessed_at": "2026-05-18T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nClaude Code's TUI explicitly supports typing follow-up messages while the agent is mid-turn — the input is queued and consumed at the next safe point (post-tool-use boundary or turn end). This is a first-class CLI feature, cited in the spec as a canonical example alongside Codex. So `agent_supports: yes` is uncontroversial.\n\nThe spec asserts three observables for the daemon:\n1. State stays `working` through the queued-message arrival.\n2. No `→ ready` flicker when the queued input lands.\n3. The agent eventually consumes the queued message; the cycle still ends at `ready`.\n\nirrlicht's claudecode parser is shaped favourably for all three. State is driven off transcript-line shape, not off keystrokes — the queued text is buffered inside the `claude` process and is NOT written to the JSONL transcript until the agent actually consumes it. From the parser's perspective, the turn looks like one long contiguous `working` span with the queued user-line appearing only when claudecode chooses to consume it (typically as part of the next prompt cycle, sometimes folded into the current turn). Either way, the parser sees no premature `→ ready` because the transcript's last entry remains an in-progress assistant/tool entry throughout.\n\nThe third bullet is the normal turn-end mechanic that all baseline scenarios cover.\n\nThe PendingContributor refinement (in-progress turn cost) the adapter implements is orthogonal here — it tracks accumulating cost during the working span and is unaffected by queued input.\n\n## What irrlicht does NOT see (and why that's OK)\n\nThe queue itself is invisible to irrlicht — there is no event for 'user typed text that is now buffered'. The spec does not assert one; it only asserts state invariants on the working span. The recipe should anchor its phase contract on `state stays working for duration_at_least_ms` plus the invariant 'no state_transition to ready between v1_send_initial and v1_turn_done' — both of which the daemon can verify from its event stream.",
+      "caveats": [
+        "Driving this scenario via tmux is straightforward: `send-keys` the first prompt, wait for the working state to land, `send-keys` a second prompt while still working. The driver should NOT press Enter twice for the second prompt — claudecode's input field accepts the queued text on a single Enter at the next safe point.",
+        "If claudecode ever changes to surface queued text in the transcript as a synthetic user-line *before* consumption, the parser might briefly flip to ready (treating it as a turn-boundary marker). That regression is exactly what this scenario's invariants would catch — which is the test's purpose.",
+        "The 'fold queued text into current turn' vs 'consume at next turn boundary' choice is internal to claudecode and varies by tool-use shape. The spec accommodates both — the phase contract should not assume one or the other."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": ".specs/agent-scenarios.md",
+          "note": "Feature: Mid-turn user message queued at line 190 — cites Claude Code queue as a canonical example."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/claudecode/parser.go",
+          "note": "Transcript-driven state classification: queued text lives inside the claude process and is not written to the JSONL until consumed — parser sees a contiguous working span."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/claudecode/agent.go",
+          "note": "PendingContributor refinement tracks in-progress cost; orthogonal to queued-input handling but confirms the parser models the working span as a single open turn."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "claude CLI on PATH and authenticated (subscription or API key)",
+        "irrlichd is recording (--attach against a daemon with --record, or isolated mode)",
+        "Claude Code launched in auto mode so neither prompt trips a permission gate"
+      ],
+      "setup": [
+        "Driver generates a fresh lowercased session UUID and a fresh cwd under <staging>/cwd/",
+        "The first prompt must keep claude busy long enough (a few seconds) to type a follow-up into the TUI — a slow count-to-10 with explicit pauses is sufficient",
+        "The mid-turn follow-up is delivered via tmux send-keys ending in Enter; claudecode's TUI buffers the text and consumes it at the next safe point (post-tool boundary or turn end)"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Count from 1 to 10, one number per line, with a brief pause between each. Then on the last line reply with exactly the word: done"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "keys",
+          "keys": "f o l l o w u p Space q u e u e d Enter"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the UUID entering ready, then a ready→working transition for the first prompt",
+        "events.jsonl contains NO state_transition to ready between the first ready→working and the queued-message consumption (the working span must be contiguous through the queued arrival)",
+        "events.jsonl contains NO state_transition to waiting at any point during the working span",
+        "events.jsonl eventually shows a working→ready transition; final session state is ready",
+        "transcript.jsonl contains at least 1 user line for the initial prompt; the queued follow-up may appear as a second user line (consumed as a new turn) or be folded into the first turn — either shape is acceptable per spec"
+      ],
+      "settings": {},
+      "timeout_seconds": 240
+    }
+  },
+  "scenario_id": "mid-turn-message-queued"
+}

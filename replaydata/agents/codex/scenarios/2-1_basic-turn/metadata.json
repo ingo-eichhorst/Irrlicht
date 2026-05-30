@@ -1,0 +1,100 @@
+{
+  "recording_dir": "codex/scenarios/2-1_basic-turn",
+  "artifacts": {
+    "events": "codex/scenarios/2-1_basic-turn/events.jsonl",
+    "transcript": "codex/scenarios/2-1_basic-turn/transcript.jsonl",
+    "manifest": "codex/scenarios/2-1_basic-turn/manifest.json",
+    "golden": "codex/scenarios/2-1_basic-turn/transcript.jsonl.replay.json.golden",
+    "recordings": [
+      "codex/scenarios/2-1_basic-turn/recordings/2026-05-23-18-54-06_irrlichd-0.4.7+723609a"
+    ]
+  },
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "pass_rate": "6/6 phases passed",
+    "agent_cli_version": "0.130.0",
+    "daemon_version": "0.4.7+723609a",
+    "confidence": 0.9,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "basic-turn",
+      "agent": "codex",
+      "assessed_at": "2026-05-23T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.9,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\n`basic-turn` is the smallest possible round-trip: one user message, one assistant reply, no tool use, asserting the `ready -> working -> ready` arc with `TotalTokens > 0` after the turn. Its primitive is transcript turn-end detection and it requires `headless_mode`.\n\n**agent_supports: yes.** Codex CLI 0.130.0 runs a single prompt non-interactively via its `exec` headless mode, which is recorded in the codex adapter's `capabilities.json` as `headless_mode: true` and `structured_output_jsonl: true`. The committed codex regression fixture `regression/baseline-hello` is itself a captured headless single-turn round-trip, demonstrating the agent completes a basic turn and writes the JSONL transcript the daemon tails.\n\n**daemon_capability: full; driver_capability: ready.** The codex adapter watches session transcripts via `FilesUnderRoot{Dir: sessionsDir(), Parser: JSONLineParser{...}}` (agent.go) and the JSONL `Parser` (parser.go) translates the `task_complete` event_msg into an `EventType: \"turn_done\"`, so `IsAgentDone()` fires through the primary path and drives the `working -> ready` transition. The same parser extracts per-turn and cumulative token usage from `token_count` events (`last_token_usage` / `total_token_usage`), yielding the non-zero `TotalTokens` the spec asserts. Parser unit tests `TestParser_FullTranscript_EndDetection`, `TestParser_TurnCompleteEmitsTurnDone`, and `TestParser_MultiTurnTokenCount_UsesPerTurnSnapshot` cover exactly this turn-end + token-accounting behavior. The existing coverage matrix already records codex/basic-turn as yes/yes; this assessment ratifies it.\n\nNo carve-outs apply: codex assigns turn boundaries cleanly via `task_complete` (unlike aider, whose idle-flush turn-end carries ~5s latency and is recorded as a `partial` in the matrix).",
+      "caveats": [],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/codex/agent.go",
+          "note": "FilesUnderRoot + JSONLineParser transport; ExactName process match"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/codex/parser.go",
+          "note": "task_complete -> turn_done so IsAgentDone fires; token usage extraction from token_count events"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/codex/parser_test.go",
+          "note": "TestParser_FullTranscript_EndDetection, TestParser_TurnCompleteEmitsTurnDone, TestParser_MultiTurnTokenCount_UsesPerTurnSnapshot"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/codex/capabilities.json",
+          "note": "headless_mode: true, structured_output_jsonl: true, cost_tracking: true"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/codex/regression/baseline-hello",
+          "note": "committed captured headless single-turn round-trip fixture"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "codex CLI on PATH and authenticated (~/.codex/config.toml or OPENAI_API_KEY)",
+        "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+      ],
+      "setup": [
+        "The interactive driver launches `codex --no-alt-screen` in a fresh per-run cwd under <staging>/cwd/, accepts the trust dialog, and waits for the TUI banner + MCP boot before sending the prompt",
+        "Each send bumps the expected-turn counter; wait_turn blocks until a new event_msg/task_complete line appears in the rollout, so the trailing sleep never races a still-running turn"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        }
+      ],
+      "verify": [
+        "events.jsonl contains a presession_created (proc-<PID>) event in ready within 1000 ms of agent launch",
+        "events.jsonl contains a transcript_new for the rollout session with a distinct session_id, born ready",
+        "events.jsonl contains a pid_discovered event bound to the rollout session_id",
+        "events.jsonl contains a state_transition→working on the rollout session_id when the prompt is sent (the single assistant turn)",
+        "events.jsonl contains a state_transition→ready on the same rollout session_id once the turn completes (the interactive REPL returns to ready, unlike headless codex exec which exits)",
+        "the rollout session's final live state is ready before the driver tears the REPL down",
+        "events.jsonl contains a process_exited on the rollout session at REPL teardown",
+        "no state_transition to waiting appears for the rollout session at any point"
+      ],
+      "settings": {},
+      "timeout_seconds": 180
+    }
+  },
+  "scenario_id": "basic-turn"
+}

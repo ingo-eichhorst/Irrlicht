@@ -1,0 +1,105 @@
+{
+  "recording_dir": "pi/scenarios/2-16_oversized-transcript-line",
+  "artifacts": {
+    "events": "pi/scenarios/2-16_oversized-transcript-line/events.jsonl",
+    "transcript": "pi/scenarios/2-16_oversized-transcript-line/transcript.jsonl",
+    "manifest": "pi/scenarios/2-16_oversized-transcript-line/manifest.json",
+    "golden": "pi/scenarios/2-16_oversized-transcript-line/transcript.jsonl.replay.json.golden"
+  },
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "pass_rate": "5/5 phases passed",
+    "agent_cli_version": "0.70.0",
+    "daemon_version": "0.4.7+6ab9f88",
+    "confidence": 0.78,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "oversized-transcript-line",
+      "agent": "pi",
+      "assessed_at": "2026-05-25T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.78,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\n`oversized-transcript-line` (scenario-meanings.md): a single transcript event is unusually large; the tailer + line parser must handle it without stalling, and the session still resolves to `ready` normally. User-observable signal: `ready → working → ready`, with NO parser stall causing a stuck `working`. Primitive exercised: parser/tailer robustness — no special agent capability is required.\n\n**agent_supports: yes.** Concern C8: pi writes its rollout JSONL ONCE at turn completion as a single line per message (no partial flushes). So a LARGE single line is naturally producible — a single prompt that elicits a large assistant reply (e.g. \"print the numbers 1 to 400, each on its own line\") yields ONE assistant `message` JSONL line containing the whole reply. That single oversized line is exactly what the tailer + parser must ingest without choking.\n\n**daemon_capability: full; driver_capability: ready.** The tailer caps a single JSONL line at 64 MB via `readLineCapped` (tailer.go:19-22,622-648) and explicitly handles `bufio.ErrBufferFull` by growing past the default reader buffer (issue #270); a regression test (`core/pkg/tailer/large_line_test.go`) pins that a 3 MB line — and a synthetic >cap line — are consumed without wedging the tailer. The pi parser (parser.go) ingests the assistant `message` line and maps `stopReason == \"stop\"` to `turn_done` (working→ready) regardless of the line's size; nothing in the parser path is size-sensitive. So a large single assistant line is parsed, the turn boundary is preserved, and the session settles `ready → working → ready` with no stuck `working`.\n\n**Confidence 0.78** (not higher): a live `pi` reply is moderate in size (~a few hundred lines, well under both bufio.Scanner's old 2 MB cap and irrlicht's 64 MB ceiling), so the RECORDING is a sanity-check that the arc completes on a large-single-line turn, not a true >2 MB cap-stress. The genuine oversized (>64 MB) cap behavior is covered by the tailer unit test, not by a live recording — a live CLI cannot be coerced into emitting a multi-megabyte single line on demand. The 'line size' itself is not a phase-DSL form; the recording asserts the user-observable lifecycle arc (one clean ready→working→ready, no waiting, single process_exited) and the oversized-line robustness claim is documented as parser-unit-test territory in the spec notes.\n\n## Recipe-shape note (SCRIPT / interactive)\n\nRecorded with the INTERACTIVE pi driver (drive-pi-interactive.sh, a tmux REPL) rather than headless `pi --print`. WHY (concern C6): headless `pi --print` exits the instant it emits the final reply, so the daemon's scanner can miss the terminal working→ready settle before process_exited; script-mode keeps pi alive across one send + wait_turn so the daemon observes the settle cleanly, then a single tmux teardown yields one clean process_exited. The single prompt deliberately elicits a LARGE single assistant reply so the rollout flushes one oversized JSONL line the tailer/parser must handle. C7 / SESSION-IDENTITY: the live REPL emits a transient proc-<PID> pre-session born ready at launch (it bridges the gap until the UUID-keyed rollout transcript appears), so session_birth — which only asserts 'a session appears in ready within 2s of launch' — legitimately matches that pre-session with NO session pin. The oversized-line turn arc, pid_bind and teardown all pin to the rollout session via the first-working anchor (NO session pin on turn_start, so the matcher binds the FIRST working, necessarily the rollout session; the pre-session never goes working) + same_session_as.",
+      "caveats": [
+        "Concern C8: pi flushes the rollout JSONL once per message at turn completion (no partial flushes), so one large assistant reply IS one large single JSONL line — exactly the oversized-line input the tailer/parser must ingest.",
+        "The recording is a sanity-check (a live reply is moderate, well under the 64 MB tailer cap and the old 2 MB scanner limit), NOT a true cap-stress. Genuine >64 MB cap behavior is covered by core/pkg/tailer/large_line_test.go (issue #270), not by this live recording.",
+        "The 'oversized line' property is not a phase-DSL form: the absence of a parser stall is INFERRED from the lifecycle arc completing cleanly (one ready→working→ready, no stuck working). The spec asserts that arc; the size-robustness claim is documented in the spec notes as parser-unit-test territory.",
+        "Pi cannot accept a pre-assigned UUID — it generates one itself; the interactive driver discovers the UUID from the session header on line 1 of the freshly-created rollout transcript.",
+        "Because the live REPL bridges with a transient proc-<PID> pre-session, the turn phase anchors to recording start with NO session pin so the matcher binds the FIRST working (necessarily the rollout session; the pre-session never goes working); every later phase pins to it via same_session_as."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer.go",
+          "note": "tailer.go:19-22 maxTranscriptLineSize=64MB; readLineCapped (622-648) handles bufio.ErrBufferFull by growing past the default reader buffer so an oversized single line never wedges the tailer (issue #270)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/large_line_test.go",
+          "note": "Regression test: a 3 MB line and a synthetic >cap line are consumed without stalling the tailer — the genuine oversized-line robustness lives here, not in a live recording."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/pi/parser.go",
+          "note": "Parses the assistant `message` line and maps stopReason==stop → turn_done (working→ready) regardless of line size; nothing in the parser path is size-sensitive."
+        },
+        {
+          "kind": "file",
+          "ref": ".claude/skills/ir:onboard-agent/scenario-meanings.md",
+          "note": "oversized-transcript-line: single large transcript event handled without stalling; session resolves to ready normally; user-observable signal ready→working→ready, no parser stall causing stuck working."
+        },
+        {
+          "kind": "file",
+          "ref": ".claude/skills/ir:onboard-agent/scripts/drive-pi-interactive.sh",
+          "note": "Interactive tmux REPL driver; supports send / wait_turn / interrupt / sleep, keeps the rollout alive so the daemon observes the working→ready settle before teardown (concern C6)."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "pi CLI on PATH and authenticated (pi runs against its configured model out-of-band)",
+        "tmux available — the interactive driver runs pi in a tmux REPL so the rollout stays alive long enough for the daemon to observe the working→ready settle before teardown",
+        "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+      ],
+      "setup": [
+        "The interactive driver (drive-pi-interactive.sh) launches pi in a fresh per-run cwd inside a tmux session, waits for the REPL prompt, then sends the prompt",
+        "pi writes its rollout JSONL ONCE per message at turn completion (no partial flushes; concern C8), so a single prompt eliciting a large reply produces ONE oversized assistant JSONL line under ~/.pi/agent/sessions/<cwd-slug>/ — exactly the oversized-line input the shared tailer + pi parser must ingest without stalling",
+        "The driver resolves that rollout file and extracts the UUID from line 1; wait_turn blocks until the rollout shows the completed assistant turn (stopReason=stop), then a trailing sleep + a single tmux teardown lets pi exit and the daemon emit one process_exited for the rollout session"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Print the numbers from 1 to 400, each on its own line, with nothing else. Just the numbers."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        }
+      ],
+      "verify": [
+        "events.jsonl contains a transcript_new for the rollout session born ready within ~2s of REPL launch (a transient proc-<PID> pre-session may also appear at launch; the turn arc and pid_discovered land on the UUID-keyed rollout session)",
+        "events.jsonl contains exactly one ready→working transition for the rollout session_id as the large-reply turn begins",
+        "events.jsonl contains exactly one working→ready transition at turn end — completion of the arc is the parser-resilience proof: if the tailer had wedged on the oversized single line this transition would never fire (the genuine >64 MB cap behavior is pinned by core/pkg/tailer/large_line_test.go, issue #270; this live recording is a sanity-check on a large single line)",
+        "events.jsonl contains a pid_discovered event bound to the rollout session_id",
+        "the rollout session's final live state is ready before the driver tears the REPL down",
+        "events.jsonl contains exactly one process_exited on the rollout session at REPL teardown",
+        "no state_transition to waiting appears for the rollout session at any point",
+        "transcript.jsonl contains 1 user line and at least 1 assistant message line; the large assistant reply is flushed as a single JSONL row (pi flushes once per message at turn completion)"
+      ],
+      "settings": {},
+      "timeout_seconds": 300
+    }
+  },
+  "scenario_id": "oversized-transcript-line"
+}

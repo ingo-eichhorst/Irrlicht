@@ -1,0 +1,105 @@
+{
+  "recording_dir": "codex/scenarios/2-6_long-agentic-session-stress",
+  "artifacts": {
+    "events": "codex/scenarios/2-6_long-agentic-session-stress/events.jsonl",
+    "transcript": "codex/scenarios/2-6_long-agentic-session-stress/transcript.jsonl",
+    "manifest": "codex/scenarios/2-6_long-agentic-session-stress/manifest.json",
+    "golden": "codex/scenarios/2-6_long-agentic-session-stress/transcript.jsonl.replay.json.golden"
+  },
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "pass_rate": "7/7 phases passed",
+    "agent_cli_version": "0.130.0",
+    "daemon_version": "0.4.7+ccb564c",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready\napplicable: yes"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "long-agentic-session-stress",
+      "agent": "codex",
+      "assessed_at": "2026-05-25T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\napplicable: yes\n\n## Reasoning\n\n`long-agentic-session-stress` (scenario-meanings.md): the defining behavior is a long agentic turn carrying a large volume of interleaved assistant fragments and tool-call/result pairs, validating that state tracking stays coherent across the burst — within the turn state stays continuously `working` (no flicker to ready/waiting between tool calls), the turn settles cleanly to `ready`, and the session is never stuck. Primitive exercised: `tool_calls` + `headless_mode`, stress-testing the parser's ability to stay coherent across many sequential function_call/function_call_output pairs in ONE turn. Explicitly *Not to be confused with* `autonomous-loop` (no user prompts between iterations) or `self-correction-iteration` (a short retry cycle within one turn, not a high-volume burst).\n\n**agent_supports: yes.** Codex CLI 0.130.0 drives shell work through its exec/`function_call` tool and runs many sequential commands autonomously inside a single turn with NO permission gate (capabilities.json permission_hooks:false), so the agent never stops to ask the user mid-burst. A prompt that asks it to explore a directory — pwd, then ls -la, then wc -l on several files, then summarize — deterministically produces a chain of many function_call/function_call_output pairs in one turn before the final task_complete. This is exactly the high-volume single-turn burst the scenario targets, and unlike claudecode (which refuses auto-mode for paid models and stalls tool-call turns at a permission gate, forcing the claudecode recipe into a 4-plain-turn proxy), codex can exercise the real many-tool-call shape natively. capabilities.json records tool_calls:true, headless_mode:true, tui:true.\n\n**daemon_capability: full; driver_capability: ready.** The codex parser (parser.go) models each tool call as a paired `function_call` (open) / `function_call_output` (close) event, and a completed command always emits its function_call_output which CLOSES the open call (HasOpenToolCall clears), so the classifier never treats an intermediate tool result as a `waiting` gate or a `ready` settle — the whole burst stays a single contiguous `working` span. The turn settles to `ready` only at the canonical `task_complete` → `turn_done` signal (parser.go lines 155-170), whose explicit purpose is to suppress the assistant_message working→ready→working flicker that intermediate assistant fragments would otherwise cause at the start of every turn. Net observable: one ready→working at the prompt, ONE contiguous working span across the entire many-call burst, one working→ready at task_complete, final ready. The `partial` (matching the coverage matrix) reflects the documented dependence on the `task_complete` turn-done signal: if codex ever omits or delays task_complete (the fallback risk noted in the matrix re: #105 stale-tool timer flicker, since closed), the daemon would fall back to assistant_message heuristics and could mis-time the final settle — so the cell is observable but rests on one load-bearing signal rather than redundant evidence.\n\nThis cell is observationally DISTINCT from the neighbouring `codex × self-correction-iteration` (a short failing-then-corrected two-cycle retry asserting continuity across ONE errored result) and `codex × auto-executed-tool-call` (a single happy-path open/close): this cell asserts the parser's coherence across a HIGH VOLUME of sequential ungated tool calls in one turn — the stress dimension neither neighbour exercises.\n\n## Conclusion\n\nApplicable: yes. codex natively runs a long single-turn tool-call burst with no permission gate, and the daemon observes the full arc as one contiguous working span (each function_call_output closes its open call; task_complete is the only ready settle). Recipe: an interactive prompt that induces many sequential exec calls in one turn (pwd → ls -la → wc -l on the first few files → summarize), wait_turn (generous timeout for a longer turn), trailing sleep. Spec asserts user-observable state/topology only — session-birth ready, one ready→working, a contiguous working dwell across the burst with no flicker to ready/waiting mid-turn, one working→ready, final ready — never specific tool output text, command count, or token totals (all model/OS-dependent).",
+      "caveats": [
+        "Assert user-observable state/topology only — do NOT assert specific exec tool output text, the exact number of commands codex chooses to run, or token totals; all are model/OS-dependent and not stable across re-records.",
+        "irrlicht_observes is partial (matching the coverage matrix): coherence of the burst rests on the single task_complete→turn_done settle signal; the no-mid-turn-flip invariant is the load-bearing assertion and is exactly what the codex open-call + turn_done logic guarantees.",
+        "Distinct from the committed codex × self-correction-iteration (short two-cycle retry) and codex × auto-executed-tool-call (single happy-path call): this cell stresses coherence across a HIGH VOLUME of sequential tool calls in one turn."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": ".claude/skills/ir:onboard-agent/scenario-meanings.md",
+          "note": "long-agentic-session-stress: a realistic high-volume turn validates state tracking stays coherent — within a turn state stays working (no flicker), clean working→ready at turn boundaries, never stuck; primitive = tool_calls + headless_mode; distinct from autonomous-loop and self-correction-iteration"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/codex/capabilities.json",
+          "note": "tool_calls:true, headless_mode:true, tui:true, permission_hooks:false — codex runs many sequential ungated tool calls autonomously inside one turn"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/codex/parser.go",
+          "note": "function_call/function_call_output modeled as paired open/close; a completed command's function_call_output clears HasOpenToolCall (no waiting); task_complete→turn_done (lines 155-170) is the only ready settle, suppressing intermediate assistant_message flicker so the whole burst is one contiguous working span"
+        },
+        {
+          "kind": "file",
+          "ref": ".claude/skills/ir:onboard-agent/agent-scenarios-coverage.json",
+          "note": "coverage cell codex × long-agentic-session-stress = agent_supports:yes / irrlicht_observes:partial (#105 stale-tool timer flicker closed; task_complete dependence creates fallback risk)"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/codex/scenarios/self-correction-iteration/assessment.json",
+          "note": "neighbouring tool-call cell: short failing-then-corrected two-cycle retry asserting no-flicker across ONE errored result; this cell adds the high-volume stress dimension"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "codex CLI on PATH and authenticated (~/.codex/config.toml or OPENAI_API_KEY)",
+        "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+      ],
+      "setup": [
+        "The interactive driver launches `codex --no-alt-screen` in a fresh per-run cwd under <staging>/cwd/, accepts the trust dialog, and waits for the TUI banner + MCP boot before sending the prompt",
+        "No auto-mode step is needed: codex has no permission gate (capabilities.json permission_hooks:false), so the shell tool runs every command autonomously inside codex's sandbox — this is exactly why codex can capture the REAL many-tool-call single-turn burst, whereas the claudecode recipe for this scenario must fall back to 4 plain prompts (modern claudecode refuses auto-mode for paid models and stalls tool-call turns at a permission gate)",
+        "The prompt is fully self-contained — it tells codex to CREATE its own files and then run many commands on them, so the per-run cwd starting empty doesn't shrink the burst (an early attempt that only said 'ls then wc the existing files' produced just 2 calls because the fresh cwd had nothing to wc)",
+        "wait_turn blocks until a new event_msg/task_complete line appears in the rollout, so the trailing sleep never races a still-running turn; the timeout is generous because this is a deliberately LONG turn"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Do all of the following in THIS single turn, using your shell tool, running each as a SEPARATE command one at a time (do not combine them, do not write a script, do not ask me anything): 1) run `pwd`; 2) create three files with `printf 'line1\\nline2\\nline3\\n' > a.txt`, then `printf 'x\\ny\\n' > b.txt`, then `seq 1 20 > c.txt` (three separate commands); 3) run `ls -la`; 4) run `wc -l a.txt`, then `wc -l b.txt`, then `wc -l c.txt` (three separate commands); 5) run `cat a.txt`; 6) run `head -3 c.txt`; then finally summarize in one short paragraph how many lines each file had. Run every numbered command individually so I can see each one execute."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        }
+      ],
+      "verify": [
+        "events.jsonl contains a presession_created (proc-<PID>) event in ready within 1000 ms of agent launch",
+        "events.jsonl contains a transcript_new for the rollout session with a distinct session_id, born ready",
+        "events.jsonl contains a pid_discovered event bound to the rollout session_id",
+        "events.jsonl contains exactly one state_transition→working on the rollout session_id when the prompt is sent (start of the agentic burst)",
+        "transcript.jsonl contains MANY function_call / function_call_output pairs in the single turn (at least 5: pwd, ls -la, and ≥3 wc -l calls) — the high-volume burst",
+        "across the entire turn, NO state_transition to ready fires between successive function_call/function_call_output pairs (one contiguous working span, no flicker mid-burst)",
+        "across the entire turn, NO state_transition to waiting fires (codex has no permission gate; every command auto-executes)",
+        "events.jsonl contains exactly one state_transition→ready on the rollout session_id once the final tool call resolves and task_complete fires (turn end)",
+        "final session state is ready (not stuck working)",
+        "events.jsonl contains a process_exited on the rollout session at REPL teardown"
+      ],
+      "settings": {},
+      "timeout_seconds": 240
+    }
+  },
+  "scenario_id": "long-agentic-session-stress"
+}
