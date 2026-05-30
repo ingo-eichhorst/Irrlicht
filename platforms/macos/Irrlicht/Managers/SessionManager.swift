@@ -120,6 +120,13 @@ class SessionManager: ObservableObject {
     var relayDaemons: [String: String] = [:] {
         willSet { objectWillChange.send() }
     }
+    /// Daemons that disconnected but whose rows we keep on screen, faded, until
+    /// they reconnect (#540 "fade, don't delete"): daemon_id → label, so the
+    /// faded rows keep their hostname tooltip even though the daemon left
+    /// `relayDaemons`. A session is faded when its `daemonID` is a key here.
+    var offlineDaemons: [String: String] = [:] {
+        willSet { objectWillChange.send() }
+    }
     /// The relay URL currently connected, so a URL change forces a reconnect.
     private var activeRelayURL: String = ""
     /// Local groups before relay groups are appended. `apiGroups` (published)
@@ -511,12 +518,26 @@ class SessionManager: ObservableObject {
         case "snapshot":
             if let ctrl = try? JSONDecoder().decode(RelayControl.self, from: data) {
                 relayDaemons.removeAll()
-                for d in ctrl.daemons ?? [] { relayDaemons[d.daemonID] = d.daemonLabel ?? d.daemonID }
+                for d in ctrl.daemons ?? [] {
+                    relayDaemons[d.daemonID] = d.daemonLabel ?? d.daemonID
+                    // A daemon we were fading is back — drop its stale rows and
+                    // the offline mark; its fresh state arrives as pushes.
+                    if offlineDaemons[d.daemonID] != nil { restoreDaemon(d.daemonID) }
+                }
             }
         case "daemon_status":
             if let ctrl = try? JSONDecoder().decode(RelayControl.self, from: data), let id = ctrl.daemonID {
-                if ctrl.status == "disconnected" { relayDaemons.removeValue(forKey: id) }
-                else { relayDaemons[id] = ctrl.daemonLabel ?? id }
+                if ctrl.status == "disconnected" {
+                    // Fade, don't delete (#540): keep the daemon's rows on screen
+                    // (the relay no longer deletes them) and remember its label so
+                    // the faded rows keep their tooltip. The view dims them via
+                    // `isOffline`.
+                    let label = relayDaemons.removeValue(forKey: id) ?? offlineDaemons[id] ?? id
+                    offlineDaemons[id] = label
+                } else {
+                    relayDaemons[id] = ctrl.daemonLabel ?? id
+                    if offlineDaemons[id] != nil { restoreDaemon(id) }
+                }
             }
         case "hello_ack":
             break
@@ -562,6 +583,25 @@ class SessionManager: ObservableObject {
             }
         default:
             break
+        }
+    }
+
+    /// A relay session is faded when its daemon is currently offline (#540).
+    func isOffline(_ session: SessionState) -> Bool {
+        guard let id = session.daemonID else { return false }
+        return offlineDaemons[id] != nil
+    }
+
+    /// A faded daemon reconnected: drop its kept rows (any that ended while it
+    /// was offline are gone for good; live ones re-arrive as fresh pushes) and
+    /// clear the offline mark so its rows render solid again.
+    private func restoreDaemon(_ id: String) {
+        offlineDaemons.removeValue(forKey: id)
+        let before = relaySessionMap.count
+        relaySessionMap = relaySessionMap.filter { $0.value.daemonID != id }
+        if relaySessionMap.count != before {
+            rebuildSessionsFromMap()
+            recomposeApiGroups()
         }
     }
 

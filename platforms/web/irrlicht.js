@@ -1463,6 +1463,21 @@
       return sessionOrigin(a) === 'remote' && localIds.has(displaySessionId(a.session_id));
     }
 
+    // daemonSessionIds returns the session ids delivered by one relay daemon.
+    // Used to drop its rows when it disconnects (#540): the relay no longer
+    // deletes them per-session, so the web dashboard removes them itself to keep
+    // its existing behaviour (macOS fades instead). Pure; exported for tests.
+    function daemonSessionIds(groups, daemonId) {
+      const out = [];
+      if (!daemonId) return out;
+      for (const g of (groups || [])) {
+        for (const a of (g.agents || [])) {
+          if (sourceIdOf(a.session_id) === daemonId) out.push(a.session_id);
+        }
+      }
+      return out;
+    }
+
     // relayFrameKind classifies an incoming frame so the handler can branch.
     // Pure; exported for tests.
     function relayFrameKind(msg) {
@@ -1605,6 +1620,16 @@
       setTimeout(() => { if (!src.closing && sources.get(src.id) === src) connectSource(src); }, delay);
     }
 
+    // purgeDaemonSessions drops every row from one relay daemon — the web
+    // dashboard's response to a daemon disconnect (#540). The relay stopped
+    // fanning out per-session deletes on disconnect, so we reproduce the prior
+    // behaviour here (macOS fades the rows instead).
+    function purgeDaemonSessions(daemonId) {
+      const ids = daemonSessionIds(dashboardGroups, daemonId);
+      for (const sid of ids) applySessionDelete(sid);
+      if (ids.length) render();
+    }
+
     function handleSourceFrame(src, msg) {
       if (!msg) return;
       switch (relayFrameKind(msg)) {
@@ -1619,8 +1644,12 @@
           return;
         case 'daemon_status':
           if (msg.daemon_id) {
-            if (msg.status === 'disconnected') src.daemons.delete(msg.daemon_id);
-            else src.daemons.set(msg.daemon_id, { label: msg.daemon_label || msg.daemon_id, status: msg.status || 'connected' });
+            if (msg.status === 'disconnected') {
+              src.daemons.delete(msg.daemon_id);
+              purgeDaemonSessions(msg.daemon_id);   // #540: relay no longer deletes them for us
+            } else {
+              src.daemons.set(msg.daemon_id, { label: msg.daemon_label || msg.daemon_id, status: msg.status || 'connected' });
+            }
           }
           updateWsStatus();
           return;
@@ -2358,4 +2387,5 @@ export {
   relayFrameKind, aggregateConnState, relayWsUrl,
   compoundSessionId, displaySessionId,
   sessionOrigin, sourceIdOf, localBareIds, isShadowedRemote,
+  daemonSessionIds,
 };

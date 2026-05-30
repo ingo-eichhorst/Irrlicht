@@ -1089,11 +1089,14 @@ struct SessionRowView: View {
                 // (relayOnly), so any row with a daemonID is genuinely remote.
                 // Tooltip = the daemon's hostname (from the relay's label map).
                 if let daemonID = session.daemonID {
-                    Image(systemName: "cloud")
+                    let host = sessionManager.relayDaemons[daemonID]
+                        ?? sessionManager.offlineDaemons[daemonID] ?? daemonID
+                    let offline = sessionManager.isOffline(session)
+                    Image(systemName: offline ? "cloud.slash" : "cloud")
                         .font(.system(size: 9))
                         .foregroundColor(.secondary)
                         .frame(width: 14, alignment: .center)
-                        .tooltip(sessionManager.relayDaemons[daemonID] ?? daemonID)
+                        .tooltip(offline ? "\(host) — offline" : host)
                 }
 
                 // Active subagent count badge
@@ -1274,6 +1277,11 @@ struct SessionRowView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 4)
+        // Fade, don't delete (#540): a row whose relay daemon has gone offline
+        // dims in place and restores on reconnect, so a flapping link doesn't
+        // yank rows. Local sessions are never offline.
+        .opacity(sessionManager.isOffline(session) ? 0.4 : 1)
+        .animation(IrrMotion.easeOut(duration: IrrMotion.fast), value: sessionManager.isOffline(session))
         .background(isHovered ? IrrColors.surfaceHover : Color.clear)
         .contentShape(Rectangle())
         .onHover { hovering in

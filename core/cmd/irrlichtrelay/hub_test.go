@@ -201,7 +201,7 @@ func TestRelayReplaysCacheToLateClient(t *testing.T) {
 	}
 }
 
-func TestRelayDaemonDisconnectDeletesSessions(t *testing.T) {
+func TestRelayDaemonDisconnectKeepsRowsClientSide(t *testing.T) {
 	wsURL, baseURL := newTestServer(t)
 
 	client := dial(t, wsURL)
@@ -236,12 +236,13 @@ func TestRelayDaemonDisconnectDeletesSessions(t *testing.T) {
 		t.Fatalf("expected s1 cached before disconnect, got %s", body)
 	}
 
-	// Daemon drops → the relay must fan out a session_deleted for its cached
-	// session and a disconnected status, and evict the session from the cache.
+	// Daemon drops → the relay announces the disconnect but must NOT fan out a
+	// session_deleted (#540 "fade, don't delete"): clients keep the rows and
+	// decide how to present them. The cache is still evicted.
 	daemon.Close()
-	sawDelete, sawDisconnect := false, false
+	sawDisconnect := false
 	deadline := time.Now().Add(2 * time.Second)
-	for (!sawDelete || !sawDisconnect) && time.Now().Before(deadline) {
+	for !sawDisconnect && time.Now().Before(deadline) {
 		client.SetReadDeadline(time.Now().Add(2 * time.Second))
 		_, data, err := client.ReadMessage()
 		if err != nil {
@@ -252,7 +253,7 @@ func TestRelayDaemonDisconnectDeletesSessions(t *testing.T) {
 			var p relay.Push
 			mustJSON(t, data, &p)
 			if p.Msg.Type == outbound.PushTypeDeleted && p.Msg.Session != nil && p.Msg.Session.SessionID == "s1" {
-				sawDelete = true
+				t.Fatal("unexpected session_deleted on disconnect — rows must fade, not delete (#540)")
 			}
 		case relay.MsgDaemonStatus:
 			var ds relay.DaemonStatus
@@ -261,9 +262,6 @@ func TestRelayDaemonDisconnectDeletesSessions(t *testing.T) {
 				sawDisconnect = true
 			}
 		}
-	}
-	if !sawDelete {
-		t.Fatal("no session_deleted push for the disconnected daemon's session")
 	}
 	if !sawDisconnect {
 		t.Fatal("no daemon disconnect status")

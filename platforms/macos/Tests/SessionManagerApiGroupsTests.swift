@@ -392,6 +392,32 @@ final class SessionManagerApiGroupsTests: XCTestCase {
         XCTAssertNil(local.daemonID, "a local session has no daemonID — no glyph")
     }
 
+    // MARK: - Offline fade (#540)
+
+    /// A relay daemon going offline fades its rows (keeps them, marks offline)
+    /// instead of deleting them; reconnect restores them solid.
+    func testOffline_disconnectFadesRows_reconnectRestores() {
+        sut.handleRelayMessage(relaySnapshot(daemonID: "daemonA", label: "ingo-mini.local"))
+        sut.handleRelayMessage(relayPush(source: "daemonA", sessionId: "proc-1234", project: "alpha"))
+        let row = { self.sut.sessions.first { $0.id == "proc-1234" } }
+        XCTAssertNotNil(row(), "row present while the daemon is connected")
+        XCTAssertFalse(sut.isOffline(row()!), "not offline while connected")
+
+        // Daemon drops — the row stays, marked offline (faded), not deleted.
+        sut.handleRelayMessage(daemonStatus(daemonID: "daemonA", status: "disconnected"))
+        XCTAssertNotNil(row(), "row must remain after disconnect (fade, don't delete)")
+        XCTAssertTrue(sut.isOffline(row()!), "row is offline/faded after disconnect")
+        XCTAssertEqual(sut.offlineDaemons["daemonA"], "ingo-mini.local", "offline label kept for the tooltip")
+        XCTAssertNil(sut.relayDaemons["daemonA"], "an offline daemon is not in the connected set")
+
+        // Reconnect — offline mark clears; fresh state re-arrives as a push.
+        sut.handleRelayMessage(daemonStatus(daemonID: "daemonA", status: "connected", label: "ingo-mini.local"))
+        XCTAssertNil(sut.offlineDaemons["daemonA"], "reconnect clears the offline mark")
+        sut.handleRelayMessage(relayPush(source: "daemonA", sessionId: "proc-1234", project: "alpha"))
+        XCTAssertNotNil(row(), "row restored after reconnect")
+        XCTAssertFalse(sut.isOffline(row()!), "row is solid again after reconnect")
+    }
+
     // MARK: - Helpers
 
     /// Builds a relay `snapshot` control frame announcing a connected daemon
@@ -399,6 +425,13 @@ final class SessionManagerApiGroupsTests: XCTestCase {
     private func relaySnapshot(daemonID: String, label: String) -> String {
         """
         {"type":"snapshot","daemons":[{"daemon_id":"\(daemonID)","daemon_label":"\(label)","status":"connected"}]}
+        """
+    }
+
+    /// Builds a relay `daemon_status` control frame (connect/disconnect).
+    private func daemonStatus(daemonID: String, status: String, label: String = "") -> String {
+        """
+        {"type":"daemon_status","daemon_id":"\(daemonID)","daemon_label":"\(label)","status":"\(status)"}
         """
     }
 

@@ -17,6 +17,7 @@ import {
   sourceIdOf,
   localBareIds,
   isShadowedRemote,
+  daemonSessionIds,
 } from './irrlicht.js'
 
 describe('resolvedTheme', () => {
@@ -304,5 +305,33 @@ describe('local-wins shadowing (#538)', () => {
     expect(localIds.size).toBe(0)
     expect(isShadowedRemote(g[0].agents[0], localIds)).toBe(false)
     expect(isShadowedRemote(g[0].agents[1], localIds)).toBe(false)
+  })
+})
+
+describe('daemonSessionIds (#540 drop a disconnected daemon\'s rows)', () => {
+  const groups = [{
+    name: 'proj',
+    agents: [
+      { session_id: 'proc-1' },                                 // local — untouched
+      { session_id: compoundSessionId('daemon-A', 'proc-2') },  // daemon A
+      { session_id: compoundSessionId('daemon-A', 'proc-3') },  // daemon A
+      { session_id: compoundSessionId('daemon-B', 'proc-4') },  // daemon B
+    ],
+  }]
+
+  test('returns only the target daemon\'s session ids', () => {
+    expect(daemonSessionIds(groups, 'daemon-A')).toEqual([
+      compoundSessionId('daemon-A', 'proc-2'),
+      compoundSessionId('daemon-A', 'proc-3'),
+    ])
+    expect(daemonSessionIds(groups, 'daemon-B')).toEqual([
+      compoundSessionId('daemon-B', 'proc-4'),
+    ])
+  })
+
+  test('never matches local sessions, and is empty for an unknown/empty daemon', () => {
+    expect(daemonSessionIds(groups, 'daemon-Z')).toEqual([])
+    expect(daemonSessionIds(groups, '')).toEqual([])
+    expect(daemonSessionIds(groups, undefined)).toEqual([])
   })
 })
