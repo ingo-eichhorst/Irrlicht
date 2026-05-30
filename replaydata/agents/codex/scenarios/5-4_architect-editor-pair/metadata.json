@@ -1,0 +1,127 @@
+{
+  "scenario_id": "architect-editor-pair",
+  "artifacts": {},
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.135.0",
+    "daemon_version": "0.4.8+bd04eba.dirty",
+    "confidence": 0.78,
+    "notes": "agent_supports: yes (codex Plan Mode = /plan + \u003cproposed_plan\u003e; implement phase applies a real apply_patch edit)\ndaemon_capability: full; driver_capability: ready\nInstantiation (b) of architect-editor-pair: codex's plan-\u003eimplement MODE pair (one model) across the approval gate — the FULL arc ready-\u003eworking-\u003ewaiting-\u003eworking-\u003eready. The architect/plan phase is codex Plan Mode (/plan slash); the agent emits a \u003cproposed_plan\u003e block which the codex parser synthesizes into ExitPlanMode -\u003e waiting (the plan-review gate). On approval the user message clears the open tool and the editor/implement phase recovers waiting-\u003eworking, applies a real file edit (apply_patch creating calc.py), and the turn completes -\u003e ready, accumulating tokens across both phases. Direct continuation of the recorded codex 2-18 (user-blocking-plan-mode-approval, 9/9) — same parser path, extended past approval through a real edit. One model throughout (mode-pair, not the Aider two-model shape)."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "architect-editor-pair",
+      "agent": "codex",
+      "assessed_at": "2026-05-31T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.78,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\nThis is instantiation (b) of architect-editor-pair: a plan-\u003eimplement MODE pair (one model) captured across the approval gate, asserting the FULL arc ready-\u003eworking-\u003ewaiting-\u003eworking-\u003eready. It is the post-approval CONTINUATION of the recorded codex 2-18 cell (user-blocking-plan-mode-approval, 9/9 phases, daemon=full, driver=ready): 2-18 terminates at the waiting plan-review gate; this cell continues PAST approval through the editor/implement phase, additionally asserting a real file edit + cross-phase token accumulation. It is NOT the Aider two-models-in-one-turn shape; codex captures one ModelName.\n\n## How codex instantiates it (agent_supports: yes)\n\n- **Architect = plan phase.** codex 0.135.0 ships a Claude-Code-style **Plan Mode**, a collaboration mode entered interactively with the `/plan` slash command (TUI-only; no headless `codex exec` plan entry and no `-c collaboration_mode` config key). In Plan Mode the agent must not perform mutating actions and presents its plan wrapped in a `\u003cproposed_plan\u003e...\u003c/proposed_plan\u003e` block. The `\u003cproposed_plan\u003e` token and the `Plan Mode (Conversational)` developer-prompt title are present in the codex 0.135.0 native binary (strings scan, anchored below). This is the planning/architect contribution and gates the session into waiting.\n- **Editor = implement phase.** On the user's approval (a follow-up message asking codex to implement), codex exits the gate and applies the edits with its real file-edit primitive `apply_patch` (present 25x in the binary's tool-instruction strings), creating calc.py, then the turn completes. This is the editing/editor contribution.\n- One model is used throughout (codex emits one ModelName; recent local rollouts and the 2-18 recording both show `gpt-5.5`); this is the mode-pair instantiation, not the Aider two-model shape, which is exactly what the broadened meaning admits.\n\n## irrlicht observability (daemon_capability: full)\n\nSource variant = `FilesUnderRoot{~/.codex/sessions, JSONLineParser}` (agent.go). The full arc is produced by shipped code, the SAME machinery the recorded codex 2-18 cell validates for the entry, extended through the approval continuation:\n\n1. **working (architect/plan phase).** The plan-request prompt in Plan Mode drives ready-\u003eworking on the rollout session.\n2. **waiting (plan-review gate).** The codex parser (`parseCodexMessage`, parser.go lines 199-204) detects a complete `\u003cproposed_plan\u003e...\u003c/proposed_plan\u003e` span inside an ASSISTANT text/output_text block (role-gated via `assistantContentContainsBlock` + the developer-role guard) and synthesizes a tool_use `{ID: codex-proposed-plan, Name: ExitPlanMode}`. That open tool call survives the subsequent `task_complete` (mapped to turn_done), so the classifier routes working-\u003ewaiting rather than -\u003eready — the plan-review gate. This is verified by parser unit tests (TestParser_ProposedPlan_EndToEndWaitingState etc.) and the committed regression fixture proposed-plan-pending, and was RECORDED live in 2-18.\n3. **working (editor/implement phase).** On the user's approval message the synthetic ExitPlanMode is cleared (`ClearToolNames` on the user message, parser.go line 207) and the next assistant activity drives waiting-\u003eworking. The recovery turn does real multi-step work (apply_patch creating calc.py, plus a verifying `ls`) so the working span survives the daemon's 2s activity-debounce window and is emitted as a distinct episode (the same longer-interactive-turn fix 2-18's recipe documents).\n4. **ready.** The terminal `task_complete` lands working-\u003eready.\n5. **Token accumulation + ModelName.** The codex parser emits per-turn delta Contributions from `total_token_usage` into SessionMetrics across both phases (cursor-delta logic, parser.go lines 108-122), and ModelName stays a single consistent value (one model). The editor phase carries a real file-edit tool call.\n\n2-18 asserts ONLY items 1-2 (it terminates in waiting). This cell asserts the full 1-5, i.e. the post-approval editor phase + cross-phase token growth + the real edit. That is the user-observable distinction (not an internal flag), so the two cells do not collapse.\n\n## driver_capability: ready\n\nThe codex interactive driver implements slash / send / sleep / wait_turn / keys (and more). The recipe needs only: a `slash` `/plan` to enter Plan Mode, a `send` for the plan request, a `sleep` to reach the waiting gate, a `send` for the approval+implement turn, and trailing `sleep`s to let the working-\u003eready settle land. No absent step type -\u003e driver ready, not a gap. (This mirrors the proven 2-18 codex recipe exactly, plus an apply_patch instruction in the recovery turn.)\n\n## Provisional emission note\n\ndaemon=full for the arc THROUGH the waiting gate is settled (recorded in 2-18). The ADDITIONAL implement-phase assertions specific to THIS cell — a real apply_patch edit creating calc.py AND TotalTokens growing from plan_gate to turn_end — are derived from the parser + binary evidence but not yet recorded for this cell, so confidence is held at 0.78 and `record` promotes them from provisional to settled.\n\n## Distinctness (must hold)\n\nvs user-blocking-plan-mode-approval (2-18): same /plan -\u003e \u003cproposed_plan\u003e -\u003e waiting entry, but 2-18 has final_state waiting and captures ONLY the gate; this cell continues to final_state ready through the editor/implement phase with a real apply_patch edit. vs model-switch-midsession (5-3): that is a user-driven cross-turn model change (two ModelNames); this is one model across a plan/implement mode pair.",
+      "caveats": [
+        "MODE-PAIR instantiation (one model: plan phase = architect, implement phase = editor), per the broadened architect-editor-pair meaning. NOT the Aider two-models-in-one-turn shape; codex emits one ModelName.",
+        "Plan Mode is TUI-only in codex (0.135.0) — there is no headless `codex exec` plan entry and no `-c collaboration_mode` config key. The recipe drives the interactive REPL and enters via the `/plan` slash command, unlike claudecode's headless permissions.defaultMode=plan.",
+        "The waiting state is driven by a SYNTHETIC ExitPlanMode synthesized from the \u003cproposed_plan\u003e text span (codex has no structured ExitPlanMode tool_use); a malformed or unclosed tag would not gate.",
+        "Distinct from user-blocking-plan-mode-approval (2-18): 2-18 terminates at the waiting gate (final_state waiting); this cell continues past approval through the editor/implement phase to ready, asserting the post-approval waiting-\u003eworking-\u003eready continuation + a real apply_patch edit + cross-phase token accumulation.",
+        "The recovery turn must do real multi-step work (apply_patch creating calc.py + a verifying `ls`) so the working span survives the daemon's 2s activity-debounce window — a trivial text-only reply would coalesce into a direct waiting-\u003eready and lose the working episode (the same fix 2-18's recipe documents).",
+        "PROVISIONAL emission: the implement-phase real-edit + cross-phase token-growth assertions specific to this cell are doc/code/binary-derived, not yet recorded; `record` settles them. The arc THROUGH the waiting gate is already recorded (2-18)."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/codex/parser.go",
+          "note": "parseCodexMessage lines 199-204 synthesize ExitPlanMode from a complete \u003cproposed_plan\u003e...\u003c/proposed_plan\u003e assistant block (architect/plan phase -\u003e waiting); line 207 ClearToolNames on the user approval message recovers waiting-\u003eworking (editor/implement phase); lines 108-122 emit per-turn token delta Contributions accumulated across both phases."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/codex/parser_test.go",
+          "note": "TestParser_ProposedPlan_EndToEndWaitingState — HasOpenToolCall=true with ExitPlanMode after proposed_plan + task_complete (the gate); plus Synthesize/DeveloperMessage/PartialTag/ClosedByUserReply tests proving the recovery."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/codex/scenarios/2-18_user-blocking-plan-mode-approval/metadata.json",
+          "note": "Recorded sibling 2-18 cell (9/9 phases, daemon=full, driver=ready) — same /plan -\u003e \u003cproposed_plan\u003e -\u003e waiting entry; this cell is the post-approval continuation, so the entry arc is already proven by a live recording."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/codex/agent.go",
+          "note": "Source = FilesUnderRoot{~/.codex/sessions, JSONLineParser} — the transcript-tailer path the synthetic ExitPlanMode and the implement-phase tool calls flow through."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex",
+          "note": "codex 0.135.0 native binary strings scan: `\u003cproposed_plan\u003e` (3x) and `Plan Mode (Conversational)` (2x) confirm Plan Mode ships (architect/plan phase); `apply_patch` (25x) is codex's real file-edit primitive for the editor/implement phase."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.codex/sessions/2026/05/29/rollout-2026-05-29T23-41-35-019e75af-7be0-72d1-a2c4-32115a002718.jsonl",
+          "note": "Recent local codex 0.135.0 rollout — model `gpt-5.5` (the single ModelName for the mode-pair); matches the model recorded in the 2-18 cell."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "codex CLI on PATH and authenticated (~/.codex/config.toml or OPENAI_API_KEY)",
+        "codex 0.130.0+ — Plan Mode is the `/plan` collaboration mode (TUI only; no headless `codex exec` plan entry, no `-c collaboration_mode` config key). Verified live against 0.135.0.",
+        "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+        "no other codex session uses the same rollout"
+      ],
+      "setup": [
+        "The interactive driver launches `codex --no-alt-screen` in a fresh per-run cwd under \u003cstaging\u003e/cwd/, accepts the trust dialog, and waits for the TUI banner + MCP boot before the first step.",
+        "Step 1 is a `/plan` slash that switches the session into Plan Mode (architect/plan phase). `/plan` toggles a mode and does NOT start a turn (no task_complete), so it is followed by a fixed `sleep`, not `wait_turn` — wait_turn would over-count against the EXPECTED_TURNS bump every send/slash applies and time out.",
+        "Plan Mode's developer prompt encourages a PHASE-1 exploration pass; running in an empty cwd plus an explicit 'emit the plan now' instruction keeps the plan turn to a single short reply wrapping a \u003cproposed_plan\u003e block. The codex parser synthesizes a SYNTHETIC ExitPlanMode tool_use from that span; the open call survives task_complete so the session sits in waiting (the plan-review gate) until the user approves.",
+        "The approval turn (the editor/implement phase, the load-bearing CONTINUATION past 2-18) MUST apply a REAL file edit AND span several wall-clock seconds with intermediate tool calls. It tells codex to create calc.py (a real apply_patch edit) with add(a,b) and sub(a,b), then run `ls` to verify, before its final summary. WHY the multi-step work: the daemon coalesces transcript activity per session in a 2s debounce window, and a turn-end short-circuits it — a trivial text-only recovery reply lands user-message + agent-reply in one sub-2s burst, so the first activity event already sees a completed turn and the classifier jumps waiting-\u003eready, debounce-coalescing the brief working blip. Spreading the recovery across a real apply_patch + an `ls` means the first post-approval activity observes an in-progress turn -\u003e working, and the terminal task_complete arrives seconds later -\u003e ready, producing the OBSERVABLE waiting-\u003eworking-\u003eready arc plus a genuine editor contribution. codex runs in its default workspace-write sandbox with approval_policy=on-request, so creating calc.py inside the fresh cwd and running `ls` there are autonomous workspace operations that do not raise a command-approval prompt (which would be a different waiting gate); if a future codex default DID gate one, the recovery arc would show an extra waiting episode — re-check the sandbox/approval config in that case.",
+        "The interactive driver keeps the rollout session ALIVE across both turns; the REPL is torn down only at script end, so the daemon observes the full ready-\u003eworking-\u003ewaiting-\u003eworking-\u003eready arc + process_exited on ONE live session.",
+        "WHY a wait_turn covers the implement turn (not the plan turn): the plan turn ends in waiting (not a completed turn), so a wait_turn there would block forever; the plan-gate is reached via a fixed sleep instead, and wait_turn covers ONLY the post-approval implement turn which DOES complete. A trailing sleep after wait_turn lets the working-\u003eready settle land before the daemon stops observing."
+      ],
+      "script": [
+        {
+          "type": "slash",
+          "text": "/plan"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "send",
+          "text": "We are in Plan Mode. Do NOT explore the repo and do NOT ask any clarifying questions — there is nothing to explore here. Immediately produce your final plan for this trivial task: create a file calc.py containing exactly two functions, add(a, b) returning a + b and sub(a, b) returning a - b, and nothing else. Output ONLY a single \u003cproposed_plan\u003e block (opening tag on its own line, closing tag on its own line) with a short Summary, Key Changes, and Test Plan. No other text."
+        },
+        {
+          "type": "sleep",
+          "seconds": 75
+        },
+        {
+          "type": "send",
+          "text": "Approved — proceed with implementation now. Do NOT emit another \u003cproposed_plan\u003e block and do NOT ask any questions. Execute these steps in order: (1) create the file calc.py with exactly two functions, add(a, b) returning a + b and sub(a, b) returning a - b, and nothing else (apply this as a real file edit); (2) run `ls` in the working directory to confirm calc.py exists; then (3) reply with one short plain sentence stating that calc.py was created. Do the file creation and the `ls` as distinct steps so the work is visible."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 20
+        }
+      ],
+      "verify": [
+        "events.jsonl shows a presession (proc-\u003cPID\u003e) appear in ready within ~1s of agent launch.",
+        "events.jsonl shows the rollout session reconcile with a distinct session_id, born ready, with a pid_discovered bound to it.",
+        "events.jsonl shows a state_transition-\u003eworking on the rollout session when the plan-request prompt is sent in Plan Mode (architect/plan phase).",
+        "events.jsonl shows a state_transition-\u003ewaiting on the SAME session once the agent emits a \u003cproposed_plan\u003e block (synthetic ExitPlanMode keeps a tool call open across task_complete — the plan-review gate), with NO state_transition to ready before the user approves.",
+        "events.jsonl shows a state_transition-\u003eworking on the SAME session after the user approves and asks for implementation (waiting-\u003eworking recovery; the user message clears the open ExitPlanMode). The recovery turn does real work (apply_patch creating calc.py + `ls`) so the working span survives the debounce window.",
+        "events.jsonl shows a state_transition-\u003eready on the SAME session when the implement turn finishes (working-\u003eready).",
+        "transcript.jsonl contains an assistant message wrapping a \u003cproposed_plan\u003e block (architect/plan phase) AND, after approval, a real file-edit tool call (apply_patch) + its function_call_output creating calc.py (editor/implement phase) — a genuine editor contribution, not a stop-at-waiting.",
+        "the file calc.py is actually created in the cwd with add(a,b) and sub(a,b).",
+        "SessionMetrics.TotalTokens after turn_end \u003e at the plan gate (tokens accumulate across the plan and implement phases).",
+        "ModelName is a single consistent value across both phases (one model — this is the mode-pair instantiation, NOT the Aider two-model shape)."
+      ],
+      "settings": {},
+      "timeout_seconds": 300,
+      "notes": "Instantiation (b) of architect-editor-pair: codex's plan-\u003eimplement MODE pair (one model) captured across the approval gate — the FULL arc ready-\u003eworking-\u003ewaiting-\u003eworking-\u003eready. This is the post-approval CONTINUATION of codex 2-18 (user-blocking-plan-mode-approval): 2-18 records the SAME /plan -\u003e \u003cproposed_plan\u003e -\u003e waiting entry but TERMINATES at the waiting gate (final_state waiting); this cell continues PAST approval through the editor/implement phase to ready, asserting the waiting-\u003eworking-\u003eready recovery + a real apply_patch edit creating calc.py + cross-phase token accumulation. Stopping at waiting here would be a duplicate of 2-18 = FAILURE. ARCHITECT (plan phase): Plan Mode is engaged via the `/plan` slash (TUI-only; no headless entry); the prompt instructs the agent to emit a single \u003cproposed_plan\u003e block immediately in an empty fresh cwd. The codex parser synthesizes a SYNTHETIC ExitPlanMode from that span, gating the session into waiting. EDITOR (implement phase): the approval message clears the open tool (ClearToolNames) and directs codex to apply a REAL file edit (apply_patch) creating calc.py + run `ls` as distinct steps so the working span survives the daemon's 2s activity-debounce window (a trivial text-only reply would coalesce into a direct waiting-\u003eready and lose the working episode — the same fix 2-18's recipe documents). After the work the turn completes -\u003eready; a trailing 20s sleep lets the working-\u003eready settle land before teardown. WHY wait_turn covers the implement turn (not the plan turn): the plan turn ends in waiting (not a completed turn) so a wait_turn there blocks forever; the plan-gate is reached via a fixed 75s sleep instead. What differs between runs: token counts/cost, UUID/PID/timestamps, exact plan wording, model alias-\u003eversion. What must NOT differ: the full ready-\u003eworking-\u003ewaiting-\u003eworking-\u003eready arc on ONE session, a real apply_patch creating calc.py in the implement phase, no SECOND waiting episode in the implement phase, and TotalTokens growing from the plan gate to turn_end."
+    }
+  }
+}
