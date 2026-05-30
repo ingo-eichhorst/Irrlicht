@@ -1,0 +1,98 @@
+{
+  "scenario_id": "task-list",
+  "artifacts": {},
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "bug",
+    "driver_capability": "ready",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes (update_plan tool)\ndaemon_capability: bug — codex parser routes update_plan through the generic function_call path; the plan[] step/status array never reaches SessionMetrics.Tasks, so the session API tasks field stays empty"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "agent": "codex",
+      "assessed_at": "2026-05-30T00:00:00Z",
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: bug; driver_capability: ready\n\n## Reasoning\n\n### agent_supports: yes\n\nCodex's task-list equivalent is the **`update_plan`** tool. Claude Code uses `TaskCreate`/`TaskUpdate` and OpenCode uses `todowrite` (full-list replace); codex ships `update_plan`, a full-list-replace TODO/checklist tool. The codex binary itself is the authoritative source: its embedded tool catalog declares `update_plan` \u2014 \"Updates the task plan.\" \u2014 with a `plan` array of steps, each step carrying a `status` that is \"One of: pending, in_progress, completed\". The base instructions state codex's capabilities include \"making \u0026 updating plans\", and a dedicated `## update_plan` prompt section instructs the model: \"To create a new plan, call `update_plan` with a short list of 1-7-word steps with a `status` for each step (`pending`, `in_progress`, or `completed`) ... mark each finished step as `completed` and the next step you are working on as `in_progress`. There should always be exactly one `in_progress` step until everything is done.\" A real `update_plan` function_call in a committed codex transcript carries exactly the scenario's structure: `{\"plan\":[{\"step\":\"...\",\"status\":\"in_progress\"},{\"step\":\"...\",\"status\":\"pending\"}, ...]}`. The tool runs inside the agent's own session \u2014 it renders a checklist to the user, spawns no child session, and creates no ParentSessionID link, so SubagentCount stays 0. This is the same single-session task-list primitive the scenario asserts, distinct from foreground/background-subagent (which use a real spawn).\n\n### daemon_capability: bug\n\nA local trace EXISTS but the codex parser mis-handles it, so the load-bearing observable \u2014 the three items surfacing in the session API `tasks` field with subject + status \u2014 is NOT produced today.\n\n- The codex transcript records each `update_plan` call as a `function_call` event whose `arguments` JSON holds the full `plan[]` step/status array (verified in a committed recording). The signal reaches the Source the daemon tails \u2014 this is NOT a cloud-only / unobservable behavior.\n- The codex parser (`parser.go`) dispatches on event TYPE, not tool NAME: `update_plan` falls into the generic `function_call` / `response_item(type=function_call)` branch and becomes an opaque `ToolUse{ID:call_id, Name:\"update_plan\"}`. The parser emits NO `TaskDelta` and NO `TaskSnapshot` for it (it special-cases only `task_complete`/`turn_aborted`\u2192`turn_done` and `\u003cproposed_plan\u003e`\u2192`ExitPlanMode`).\n- The replay/daemon `tasks` summary (`core/application/replayengine/metrics.go` copies `m.Tasks`; the tailer fills `m.Tasks` only from parser-emitted `TaskDelta`/`TaskSnapshot`; `session.SessionMetrics.Tasks` is documented \"populated from TaskCreate / TaskUpdate ... Nil for ... non-Claude-Code adapters\"). With no codex task path, the codex session's `tasks` field stays empty.\n\nClassification: `bug`, not `incapable` \u2014 a trace is present and structurally complete; the daemon simply lacks a codex `update_plan`\u2192Task mapping (the analog of opencode's `todowrite` synthesis). It is the product/parser's job to add it; file an issue. The OTHER user-observable signals hold: `update_plan` auto-executes (no permission gate), so the arc is a clean ready \u2192 working \u2192 ready and SubagentCount stays 0 \u2014 those phases pass; only the tasks-content assertion is `known_failing`.\n\n### driver_capability: ready\n\nThe scenario is elicited with `send` / `wait_turn` / `sleep` steps, all present in codex's `driver-interactive.sh` (confirmed via recipe-lint: send, wait_turn, sleep, slash, plus session/fork/interrupt/restart/sigkill). No missing step type, so `ready`.\n\n## Provisional emission caveat\n\nThe `agent=yes` verdict is grounded in the binary's tool catalog + prompt AND a real committed `update_plan` call, so emission is confirmed, not merely inferred from the parser. The `daemon=bug` verdict is likewise grounded in a present trace, not a guess. Confidence 0.8: the gap mechanism is certain from code, but live recording will confirm that a 3-item walk to all-completed emits the expected function_call sequence and that the daemon indeed leaves tasks empty (promoting the bug from doc/code-derived to recording-proven).",
+      "caveats": [
+        "update_plan is full-list-replace (like opencode todowrite), not incremental TaskCreate/TaskUpdate deltas \u2014 a future codex Task path would need to reconcile each snapshot the way opencode's metrics.go does, not apply per-item deltas.",
+        "The codex binary notes 'update_plan is a TODO/checklist tool and is not allowed in Plan mode' \u2014 recording must drive codex in normal (non-Plan) mode so the tool is available; the recipe does not enter Plan mode.",
+        "The tasks-content assertion is not expressible in the phase DSL (mirroring claudecode/opencode task-list, whose tasks pin lives in the replay golden's summary.tasks). For this known_failing cell the phase spec asserts the lifecycle arc + SubagentCount=0 (which pass) and the meta flags known_failing for the tasks-content observable.",
+        "Codex emits an intermediate assistant message before tool calls; the parser's task_complete\u2192turn_done handling prevents working\u2192ready flicker, so the tool_loop_working invariant holds \u2014 but a live recording should confirm no spurious ready dip mid-plan."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/codex/parser.go",
+          "note": "Dispatches on event TYPE not tool NAME: update_plan \u2192 generic function_call \u2192 opaque ToolUse{Name:\"update_plan\"}. Emits no TaskDelta/TaskSnapshot (only task_complete/turn_aborted\u2192turn_done, \u003cproposed_plan\u003e\u2192ExitPlanMode)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/replayengine/metrics.go",
+          "note": "Lines 40-51: the session/golden tasks field is copied verbatim from m.Tasks (the tailer's accumulated task list); empty for codex because the parser emits no task deltas."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/session.go",
+          "note": "SessionMetrics.Tasks doc: 'populated from TaskCreate / TaskUpdate tool calls in the Claude Code transcript. Nil for sessions that have not used TaskCreate (including non-Claude-Code adapters).' Task struct = {ID, Subject, Status: pending|in_progress|completed}."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/parser.go",
+          "note": "TaskDelta / TaskSnapshotEntry are defined as Claude Code TaskCreate/TaskUpdate constructs; the tailer folds them into its tasks slice. opencode synthesises them from todowrite; codex emits neither."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/codex/regressions/01-example-session/recordings/2026-04-06-18-46-22_irrlichd-unknown/transcript.jsonl",
+          "note": "Committed codex transcript with 17 real update_plan function_calls; arguments = {\"plan\":[{\"step\":\"...\",\"status\":\"in_progress\"},{\"step\":\"...\",\"status\":\"pending\"},...]} \u2014 proves the local trace exists and carries subject(step)+status per item."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex",
+          "note": "Strings scan of the codex native binary (@openai/codex@0.135.0): update_plan tool 'Updates the task plan.' with steps status 'One of: pending, in_progress, completed'; base_instructions 'making \u0026 updating plans'; '## update_plan' prompt section detailing the pending\u2192in_progress\u2192completed walk; 'update_plan is a TODO/checklist tool and is not allowed in Plan mode'."
+        }
+      ],
+      "scenario_id": "task-list",
+      "agent_supports": "yes",
+      "daemon_capability": "bug",
+      "driver_capability": "ready",
+      "confidence": 0.8
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "codex CLI on PATH and authenticated (~/.codex/config.toml or OPENAI_API_KEY); min version 0.50.0",
+        "irrlichd is recording \u2014 either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+        "codex is NOT in Plan mode (update_plan is unavailable in Plan mode) \u2014 the interactive driver launches the normal REPL"
+      ],
+      "setup": [
+        "The interactive driver launches `codex --no-alt-screen` in a fresh per-run cwd under \u003cstaging\u003e/cwd/, accepts the trust dialog, and waits for the TUI banner + MCP boot before sending the prompt",
+        "No auto-mode step is needed: update_plan auto-executes with no permission gate (capabilities permission_hooks:false), so the session never enters waiting",
+        "Each send bumps the expected-turn counter; wait_turn blocks until a new event_msg/task_complete line appears in the rollout, so the trailing sleep never races a still-running turn"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Use your update_plan tool to track exactly three short steps, in this order: 'read README', 'summarize README', 'reply done'. Walk them one at a time: call update_plan to mark each step in_progress and then completed before moving to the next, keeping exactly one in_progress until all are done. Do NOT spawn any subagent \u2014 keep everything in this one session. When all three steps are completed, reply with exactly the word: done"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the rollout session born ready, then a single ready-\u003eworking transition when the prompt is sent",
+        "transcript.jsonl contains at least three function_call blocks with name=update_plan, the final one carrying all three steps at status=completed (the plan[] step/status array)",
+        "transcript.jsonl contains NO function_call with name resembling a subagent spawn; no parent_linked events and no child rollout sessions appear (SubagentCount stays 0)",
+        "events.jsonl contains NO state_transition to waiting (update_plan auto-executes, no permission gate)",
+        "events.jsonl shows a working-\u003eready transition at turn end; final session state is ready",
+        "KNOWN FAILING: the session API tasks field stays EMPTY (the codex parser emits no TaskDelta/TaskSnapshot for update_plan) \u2014 the correct behavior is three items with matching subjects and final status; this gap is the filed bug"
+      ],
+      "settings": {},
+      "timeout_seconds": 240
+    }
+  }
+}
