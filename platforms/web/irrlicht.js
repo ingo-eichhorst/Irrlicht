@@ -787,6 +787,7 @@
         '<span class="row-num"></span>' +
         '<span class="row-sub-badge" style="display:none"></span>' +
         '<span class="row-role-badge" style="display:none"></span>' +
+        '<span class="row-origin" style="display:none"></span>' +
         '<span class="row-branch"></span>' +
         '<span class="row-tool" style="display:none"></span>' +
         '<span class="row-ctx-bar"><span class="row-ctx-fill"></span><span class="row-ctx-label"></span></span>' +
@@ -890,6 +891,21 @@
       // SessionListView.swift:481-490. Toggling .has-sub on the row
       // shrinks the branch column so columns downstream still align with
       // rows that don't have a badge.
+      // Origin glyph (#538) — a cloud marks a session delivered by a relay
+      // (remote daemon); local-socket sessions show nothing, so a local-only
+      // dashboard is visually unchanged. Tooltip = the daemon's hostname.
+      const originEl = el.querySelector('.row-origin');
+      if (sessionOrigin(agent) === 'remote') {
+        if (!originEl.dataset.on) {
+          originEl.innerHTML = '<svg viewBox="0 0 24 24" width="11" height="11" fill="currentColor" aria-hidden="true"><path d="M19 18H6a4 4 0 0 1-.55-7.96 5 5 0 0 1 9.65-1.65A4 4 0 0 1 19 18z"/></svg>';
+          originEl.dataset.on = '1';
+        }
+        originEl.style.display = '';
+        originEl.title = daemonLabelFor(sourceIdOf(agent.session_id));
+      } else if (originEl.style.display !== 'none') {
+        originEl.style.display = 'none';
+      }
+
       const subBadge = el.querySelector('.row-sub-badge');
       const activeSubs = activeSubagentCount(agent);
       if (activeSubs > 0) {
@@ -1028,12 +1044,17 @@
         const showHeaders = dashboardGroups.length > 1;
         let agentNum = 0;
 
+        // Local-wins (#538): a relay session whose bare id is also delivered by
+        // a local source collapses to the local row — skip the relay duplicate.
+        const localIds = localBareIds(dashboardGroups);
+
         for (const g of dashboardGroups) {
           if (showHeaders) {
             items.push({type: 'group', key: 'g:' + g.name, group: g});
           }
           if (!collapsedGroups.has(g.name)) {
             for (const a of g.agents) {
+              if (isShadowedRemote(a, localIds)) continue;
               agentNum++;
               items.push({type: 'agent', key: 'a:' + a.session_id, agent: a, num: agentNum, isChild: false});
               // Pressure alert
@@ -1405,6 +1426,43 @@
       return i === -1 ? id : id.slice(i + 1);
     }
 
+    // sessionOrigin classifies a session by its id (#538): a relay session's id
+    // is compound (its bare form differs), a local-socket session's id is bare.
+    // Derives from displaySessionId so it never embeds the delimiter literal.
+    // Pure; exported for tests.
+    function sessionOrigin(a) {
+      const id = a && a.session_id;
+      return id && displaySessionId(id) !== id ? 'remote' : 'local';
+    }
+
+    // sourceIdOf recovers the relay daemon id (the compound prefix) from a
+    // session id, or '' for a bare/local id. Pure; exported for tests.
+    function sourceIdOf(id) {
+      if (!id) return '';
+      const bare = displaySessionId(id);
+      return bare === id ? '' : id.slice(0, id.length - bare.length - 1);
+    }
+
+    // localBareIds collects the bare session ids delivered by a local source,
+    // so a relay duplicate of the same session collapses to the local row
+    // (local wins, #538). Pure; exported for tests.
+    function localBareIds(groups) {
+      const out = new Set();
+      for (const g of (groups || [])) {
+        for (const a of (g.agents || [])) {
+          if (sessionOrigin(a) === 'local' && a.session_id) out.add(a.session_id);
+        }
+      }
+      return out;
+    }
+
+    // isShadowedRemote is true when a relay session is also present locally —
+    // the same daemon reached over both paths shows once, as the local row.
+    // Pure; exported for tests.
+    function isShadowedRemote(a, localIds) {
+      return sessionOrigin(a) === 'remote' && localIds.has(displaySessionId(a.session_id));
+    }
+
     // relayFrameKind classifies an incoming frame so the handler can branch.
     // Pure; exported for tests.
     function relayFrameKind(msg) {
@@ -1450,6 +1508,18 @@
     // Active sources, keyed by a stable id. Each: { id, label, kind, wsUrl,
     // state, ws, reconnectDelay, closing, daemons: Map<id,{label,status}> }.
     const sources = new Map();
+
+    // daemonLabelFor resolves a relay daemon id to its hostname label for the
+    // origin-glyph tooltip (#538), scanning the live per-source daemon maps
+    // (populated from snapshot/daemon_status). Falls back to the id itself.
+    function daemonLabelFor(daemonId) {
+      if (!daemonId) return '';
+      for (const src of sources.values()) {
+        const d = src.daemons && src.daemons.get(daemonId);
+        if (d && d.label) return d.label;
+      }
+      return daemonId;
+    }
 
     function desiredSources() {
       const out = [];
@@ -2287,4 +2357,5 @@ export {
   lastNotifiedPressure,
   relayFrameKind, aggregateConnState, relayWsUrl,
   compoundSessionId, displaySessionId,
+  sessionOrigin, sourceIdOf, localBareIds, isShadowedRemote,
 };

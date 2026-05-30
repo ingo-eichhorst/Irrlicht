@@ -1082,6 +1082,20 @@ struct SessionRowView: View {
                         .frame(width: 12, alignment: .trailing)
                 }
 
+                // Origin glyph (#538) — a cloud marks a session delivered by a
+                // remote relay daemon; local sessions show nothing, so a
+                // local-only dashboard is visually unchanged. A session that is
+                // also present locally is filtered to the local row upstream
+                // (relayOnly), so any row with a daemonID is genuinely remote.
+                // Tooltip = the daemon's hostname (from the relay's label map).
+                if let daemonID = session.daemonID {
+                    Image(systemName: "cloud")
+                        .font(.system(size: 9))
+                        .foregroundColor(.secondary)
+                        .frame(width: 14, alignment: .center)
+                        .tooltip(sessionManager.relayDaemons[daemonID] ?? daemonID)
+                }
+
                 // Active subagent count badge
                 if activeSubagentCount > 0 {
                     Text("\(activeSubagentCount)")

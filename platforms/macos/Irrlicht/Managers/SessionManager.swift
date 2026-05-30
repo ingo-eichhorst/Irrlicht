@@ -113,11 +113,11 @@ class SessionManager: ObservableObject {
     /// Relay-sourced sessions, keyed by session id.
     private var relaySessionMap: [String: SessionState] = [:]
     /// Daemons the relay reports connected: daemon_id → label, for the tooltip.
-    /// Drives `connectionTooltip` (a computed property read by the view) but
-    /// isn't @Published, so nudge SwiftUI on every change — otherwise a
-    /// daemon_status update with no accompanying session change leaves the
-    /// tooltip stale.
-    private var relayDaemons: [String: String] = [:] {
+    /// Drives `connectionTooltip` and the per-row origin glyph tooltip (#538) —
+    /// both read by the view. Not @Published, so nudge SwiftUI on every change —
+    /// otherwise a daemon_status update with no accompanying session change
+    /// leaves the tooltip stale.
+    var relayDaemons: [String: String] = [:] {
         willSet { objectWillChange.send() }
     }
     /// The relay URL currently connected, so a URL change forces a reconnect.

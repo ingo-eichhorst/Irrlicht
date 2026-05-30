@@ -375,7 +375,32 @@ final class SessionManagerApiGroupsTests: XCTestCase {
         XCTAssertNil(sut.sessions.first { $0.id == "proc-1234" }?.daemonID, "the surviving row is the local one")
     }
 
+    // MARK: - Origin glyph (#538)
+
+    /// A relay session carries a daemonID, and the relay's snapshot label map
+    /// resolves it to a hostname — the data the per-row origin glyph + tooltip
+    /// render from. A local session has no daemonID (no glyph).
+    func testOriginGlyph_remoteSessionResolvesHostnameTooltip() {
+        sut.handleRelayMessage(relaySnapshot(daemonID: "daemonA", label: "ingo-mini.local"))
+        sut.handleRelayMessage(relayPush(source: "daemonA", sessionId: "proc-1234", project: "alpha"))
+
+        let remote = sut.sessions.first { $0.id == "proc-1234" }
+        XCTAssertEqual(remote?.daemonID, "daemonA", "relay session carries the daemon id (glyph shows)")
+        XCTAssertEqual(sut.relayDaemons["daemonA"], "ingo-mini.local", "daemon id resolves to the hostname tooltip")
+
+        let local = makeSession(id: "local-1")
+        XCTAssertNil(local.daemonID, "a local session has no daemonID — no glyph")
+    }
+
     // MARK: - Helpers
+
+    /// Builds a relay `snapshot` control frame announcing a connected daemon
+    /// and its hostname label (populates `relayDaemons`).
+    private func relaySnapshot(daemonID: String, label: String) -> String {
+        """
+        {"type":"snapshot","daemons":[{"daemon_id":"\(daemonID)","daemon_label":"\(label)","status":"connected"}]}
+        """
+    }
 
     /// Builds a relay Push frame (envelope `source` + inner session_created)
     /// as the hub would forward it.

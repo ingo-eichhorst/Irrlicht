@@ -13,6 +13,10 @@ import {
   relayWsUrl,
   compoundSessionId,
   displaySessionId,
+  sessionOrigin,
+  sourceIdOf,
+  localBareIds,
+  isShadowedRemote,
 } from './irrlicht.js'
 
 describe('resolvedTheme', () => {
@@ -247,5 +251,58 @@ describe('compound keying keeps two daemons distinct in an index', () => {
     idx.set(k2, { daemon: 'B' })
     expect(idx.size).toBe(2)                  // would be 1 under bare session_id keying
     expect('a:' + k1).not.toBe('a:' + k2)     // distinct reconciliation render keys
+  })
+})
+
+describe('sessionOrigin / sourceIdOf (#538 origin glyph)', () => {
+  test('a compound (relay) id is remote; a bare (local) id is local', () => {
+    expect(sessionOrigin({ session_id: compoundSessionId('daemon-A', 'proc-1') })).toBe('remote')
+    expect(sessionOrigin({ session_id: 'proc-1' })).toBe('local')
+    expect(sessionOrigin({})).toBe('local')
+    expect(sessionOrigin(null)).toBe('local')
+  })
+
+  test('sourceIdOf recovers the daemon id from a compound id, else empty', () => {
+    expect(sourceIdOf(compoundSessionId('daemon-A', 'proc-1'))).toBe('daemon-A')
+    expect(sourceIdOf(compoundSessionId('my:weird/label', 'proc-9'))).toBe('my:weird/label')
+    expect(sourceIdOf('proc-1')).toBe('')
+    expect(sourceIdOf('')).toBe('')
+  })
+})
+
+describe('local-wins shadowing (#538)', () => {
+  const groups = [{
+    name: 'proj',
+    agents: [
+      { session_id: 'proc-1' },                                      // local
+      { session_id: compoundSessionId('daemon-A', 'proc-1') },       // relay dup of the local one
+      { session_id: compoundSessionId('daemon-B', 'proc-9') },       // relay-only
+    ],
+  }]
+
+  test('localBareIds collects only local-origin ids', () => {
+    expect(localBareIds(groups)).toEqual(new Set(['proc-1']))
+  })
+
+  test('a relay session whose bare id is local is shadowed (collapses to local)', () => {
+    const localIds = localBareIds(groups)
+    expect(isShadowedRemote({ session_id: compoundSessionId('daemon-A', 'proc-1') }, localIds)).toBe(true)
+  })
+
+  test('a relay-only session and a plain local session are not shadowed', () => {
+    const localIds = localBareIds(groups)
+    expect(isShadowedRemote({ session_id: compoundSessionId('daemon-B', 'proc-9') }, localIds)).toBe(false)
+    expect(isShadowedRemote({ session_id: 'proc-1' }, localIds)).toBe(false)
+  })
+
+  test('two different-daemon remotes sharing a session_id both survive (neither local)', () => {
+    const g = [{ name: 'p', agents: [
+      { session_id: compoundSessionId('daemon-A', 'proc-7') },
+      { session_id: compoundSessionId('daemon-B', 'proc-7') },
+    ]}]
+    const localIds = localBareIds(g)
+    expect(localIds.size).toBe(0)
+    expect(isShadowedRemote(g[0].agents[0], localIds)).toBe(false)
+    expect(isShadowedRemote(g[0].agents[1], localIds)).toBe(false)
   })
 })
