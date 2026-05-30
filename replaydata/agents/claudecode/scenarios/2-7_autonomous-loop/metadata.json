@@ -1,12 +1,13 @@
 {
   "recording_dir": "claudecode/scenarios/2-7_autonomous-loop",
   "artifacts": {
-    "events": "claudecode/scenarios/2-7_autonomous-loop/events.jsonl",
-    "transcript": "claudecode/scenarios/2-7_autonomous-loop/transcript.jsonl",
-    "manifest": "claudecode/scenarios/2-7_autonomous-loop/manifest.json",
-    "golden": "claudecode/scenarios/2-7_autonomous-loop/transcript.jsonl.replay.json.golden",
+    "events": "claudecode/scenarios/2-7_autonomous-loop/recordings/2026-05-18-22-52-38_irrlichd-0.4.5+8499138/events.jsonl",
+    "transcript": "claudecode/scenarios/2-7_autonomous-loop/recordings/2026-05-18-22-52-38_irrlichd-0.4.5+8499138/transcript.jsonl",
+    "manifest": "claudecode/scenarios/2-7_autonomous-loop/recordings/2026-05-18-22-52-38_irrlichd-0.4.5+8499138/manifest.json",
+    "golden": "claudecode/scenarios/2-7_autonomous-loop/recordings/2026-05-18-22-52-38_irrlichd-0.4.5+8499138/transcript.jsonl.replay.json.golden",
     "recordings": [
-      "claudecode/scenarios/2-7_autonomous-loop/recordings/2026-05-18-22-47-11_irrlichd-0.4.5+8499138"
+      "claudecode/scenarios/2-7_autonomous-loop/recordings/2026-05-18-22-47-11_irrlichd-0.4.5+8499138",
+      "claudecode/scenarios/2-7_autonomous-loop/recordings/2026-05-18-22-52-38_irrlichd-0.4.5+8499138"
     ]
   },
   "metadata": {

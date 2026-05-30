@@ -1,10 +1,13 @@
 {
   "recording_dir": "opencode/scenarios/2-12_context-compaction",
   "artifacts": {
-    "events": "opencode/scenarios/2-12_context-compaction/events.jsonl",
-    "transcript": "opencode/scenarios/2-12_context-compaction/transcript.jsonl",
-    "manifest": "opencode/scenarios/2-12_context-compaction/manifest.json",
-    "golden": "opencode/scenarios/2-12_context-compaction/transcript.jsonl.replay.json.golden"
+    "events": "opencode/scenarios/2-12_context-compaction/recordings/2026-05-27-01-18-43_irrlichd-0.4.7+2f1f7e5/events.jsonl",
+    "transcript": "opencode/scenarios/2-12_context-compaction/recordings/2026-05-27-01-18-43_irrlichd-0.4.7+2f1f7e5/transcript.jsonl",
+    "manifest": "opencode/scenarios/2-12_context-compaction/recordings/2026-05-27-01-18-43_irrlichd-0.4.7+2f1f7e5/manifest.json",
+    "golden": "opencode/scenarios/2-12_context-compaction/recordings/2026-05-27-01-18-43_irrlichd-0.4.7+2f1f7e5/transcript.jsonl.replay.json.golden",
+    "recordings": [
+      "opencode/scenarios/2-12_context-compaction/recordings/2026-05-27-01-18-43_irrlichd-0.4.7+2f1f7e5"
+    ]
   },
   "metadata": {
     "agent_supports": "yes",

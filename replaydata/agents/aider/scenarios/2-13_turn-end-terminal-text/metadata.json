@@ -1,9 +1,12 @@
 {
   "recording_dir": "aider/scenarios/2-13_turn-end-terminal-text",
   "artifacts": {
-    "events": "aider/scenarios/2-13_turn-end-terminal-text/events.jsonl",
-    "transcript_md": "aider/scenarios/2-13_turn-end-terminal-text/transcript.md",
-    "manifest": "aider/scenarios/2-13_turn-end-terminal-text/manifest.json"
+    "events": "aider/scenarios/2-13_turn-end-terminal-text/recordings/2026-05-25-19-03-37_irrlichd-0.4.7+1e9d01d/events.jsonl",
+    "transcript_md": "aider/scenarios/2-13_turn-end-terminal-text/recordings/2026-05-25-19-03-37_irrlichd-0.4.7+1e9d01d/transcript.md",
+    "manifest": "aider/scenarios/2-13_turn-end-terminal-text/recordings/2026-05-25-19-03-37_irrlichd-0.4.7+1e9d01d/manifest.json",
+    "recordings": [
+      "aider/scenarios/2-13_turn-end-terminal-text/recordings/2026-05-25-19-03-37_irrlichd-0.4.7+1e9d01d"
+    ]
   },
   "metadata": {
     "agent_supports": "yes",

@@ -1,10 +1,13 @@
 {
   "recording_dir": "pi/scenarios/2-12_context-compaction",
   "artifacts": {
-    "events": "pi/scenarios/2-12_context-compaction/events.jsonl",
-    "transcript": "pi/scenarios/2-12_context-compaction/transcript.jsonl",
-    "manifest": "pi/scenarios/2-12_context-compaction/manifest.json",
-    "golden": "pi/scenarios/2-12_context-compaction/transcript.jsonl.replay.json.golden"
+    "events": "pi/scenarios/2-12_context-compaction/recordings/2026-05-25-04-43-02_irrlichd-0.4.7+ac2dcc1/events.jsonl",
+    "transcript": "pi/scenarios/2-12_context-compaction/recordings/2026-05-25-04-43-02_irrlichd-0.4.7+ac2dcc1/transcript.jsonl",
+    "manifest": "pi/scenarios/2-12_context-compaction/recordings/2026-05-25-04-43-02_irrlichd-0.4.7+ac2dcc1/manifest.json",
+    "golden": "pi/scenarios/2-12_context-compaction/recordings/2026-05-25-04-43-02_irrlichd-0.4.7+ac2dcc1/transcript.jsonl.replay.json.golden",
+    "recordings": [
+      "pi/scenarios/2-12_context-compaction/recordings/2026-05-25-04-43-02_irrlichd-0.4.7+ac2dcc1"
+    ]
   },
   "metadata": {
     "agent_supports": "yes",

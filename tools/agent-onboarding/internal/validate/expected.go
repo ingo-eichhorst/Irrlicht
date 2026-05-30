@@ -148,34 +148,58 @@ type recordedEvent struct {
 	NewState  string    `json:"new_state,omitempty"`
 }
 
-// ValidateExpected loads expected.jsonl + events.jsonl from
-// scenarioDir and validates the recording against the spec-grounded
-// expectations. Returns nil + nil when there is nothing to validate:
-// either expected.jsonl is missing (no expectations declared yet) OR
-// neither events.jsonl NOR a transcript is present (recording not yet
-// captured — typical for applicable:false scenarios where the spec is
-// committed but the driver can't produce a recording today). It returns
-// an ERROR for a half-recorded cell — a transcript present but no
-// events.jsonl — so a partial recording can't masquerade as a pass
-// (#496 RC6).
+// NewestRecordingDir returns the path to the newest recording under
+// scenarioDir/recordings/ — the lexicographically-greatest entry name, which
+// (recording names are timestamp-prefixed) is the most recent. ok is false
+// when there is no recordings/ dir or it holds no subdirectories.
+func NewestRecordingDir(scenarioDir string) (string, bool) {
+	entries, err := os.ReadDir(filepath.Join(scenarioDir, "recordings"))
+	if err != nil {
+		return "", false
+	}
+	newest := ""
+	for _, e := range entries {
+		if e.IsDir() && e.Name() > newest {
+			newest = e.Name()
+		}
+	}
+	if newest == "" {
+		return "", false
+	}
+	return filepath.Join(scenarioDir, "recordings", newest), true
+}
+
+// ValidateExpected validates the cell's NEWEST recording against the
+// spec-grounded expectations in scenarioDir/expected.jsonl. Returns nil + nil
+// when there is nothing to validate: either expected.jsonl is missing (no
+// expectations declared yet) OR no recording is present (not yet captured —
+// typical for applicable:false cells). It returns an ERROR for a half-recorded
+// cell — a transcript present in the newest recording but no events.jsonl — so
+// a partial recording can't masquerade as a pass (#496 RC6).
+//
+// Every recording lives under recordings/<name>/; the spec (expected.jsonl)
+// stays at the cell root and is validated against the newest recording.
 func ValidateExpected(scenarioDir string) (*ExpectedReport, error) {
 	expectedPath := filepath.Join(scenarioDir, "expected.jsonl")
-	eventsPath := filepath.Join(scenarioDir, "events.jsonl")
+	recDir, ok := NewestRecordingDir(scenarioDir)
+	if !ok {
+		// No recording captured — nothing to validate (same shape as no spec).
+		return nil, nil
+	}
+	eventsPath := filepath.Join(recDir, "events.jsonl")
 	// HALF-recorded guard (#496 RC6) — scoped to the CELL path here, NOT to
-	// ValidateExpectedAgainst (the viewer's archive-drift evaluator, which must
-	// keep its silent skip so a missing-events archive isn't reported as a
-	// spurious "re-record" error). A committed cell with expected.jsonl + a
-	// transcript but no events.jsonl is a partial recording; returning (nil,nil)
-	// made replay-fixtures report a vacuous PASS (opencode/task-list).
+	// ValidateExpectedAgainst. A cell with expected.jsonl + a transcript but no
+	// events.jsonl in its newest recording is a partial recording; returning
+	// (nil,nil) made replay-fixtures report a vacuous PASS (opencode/task-list).
 	if _, err := os.Stat(expectedPath); err == nil {
 		if _, err := os.Stat(eventsPath); err != nil {
 			for _, t := range []string{"transcript.jsonl", "transcript.md"} {
-				if _, terr := os.Stat(filepath.Join(scenarioDir, t)); terr == nil {
+				if _, terr := os.Stat(filepath.Join(recDir, t)); terr == nil {
 					return nil, fmt.Errorf(
-						"incomplete recording: %s present but events.jsonl missing — "+
+						"incomplete recording: %s present but events.jsonl missing in %s — "+
 							"the cell has a spec and a transcript but no captured events; "+
 							"re-record it (run-cell.sh) so validation isn't silently skipped",
-						t)
+						t, filepath.Base(recDir))
 				}
 			}
 		}

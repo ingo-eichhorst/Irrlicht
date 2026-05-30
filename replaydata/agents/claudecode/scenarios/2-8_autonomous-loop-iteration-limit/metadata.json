@@ -1,10 +1,13 @@
 {
   "recording_dir": "claudecode/scenarios/2-8_autonomous-loop-iteration-limit",
   "artifacts": {
-    "events": "claudecode/scenarios/2-8_autonomous-loop-iteration-limit/events.jsonl",
-    "transcript": "claudecode/scenarios/2-8_autonomous-loop-iteration-limit/transcript.jsonl",
-    "manifest": "claudecode/scenarios/2-8_autonomous-loop-iteration-limit/manifest.json",
-    "golden": "claudecode/scenarios/2-8_autonomous-loop-iteration-limit/transcript.jsonl.replay.json.golden"
+    "events": "claudecode/scenarios/2-8_autonomous-loop-iteration-limit/recordings/2026-05-18-22-56-34_irrlichd-0.4.5+6898561/events.jsonl",
+    "transcript": "claudecode/scenarios/2-8_autonomous-loop-iteration-limit/recordings/2026-05-18-22-56-34_irrlichd-0.4.5+6898561/transcript.jsonl",
+    "manifest": "claudecode/scenarios/2-8_autonomous-loop-iteration-limit/recordings/2026-05-18-22-56-34_irrlichd-0.4.5+6898561/manifest.json",
+    "golden": "claudecode/scenarios/2-8_autonomous-loop-iteration-limit/recordings/2026-05-18-22-56-34_irrlichd-0.4.5+6898561/transcript.jsonl.replay.json.golden",
+    "recordings": [
+      "claudecode/scenarios/2-8_autonomous-loop-iteration-limit/recordings/2026-05-18-22-56-34_irrlichd-0.4.5+6898561"
+    ]
   },
   "metadata": {
     "agent_supports": "yes",

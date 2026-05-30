@@ -1,12 +1,13 @@
 {
   "recording_dir": "claudecode/scenarios/1-6_checkpoint-rewind",
   "artifacts": {
-    "events": "claudecode/scenarios/1-6_checkpoint-rewind/events.jsonl",
-    "transcript": "claudecode/scenarios/1-6_checkpoint-rewind/transcript.jsonl",
-    "manifest": "claudecode/scenarios/1-6_checkpoint-rewind/manifest.json",
-    "golden": "claudecode/scenarios/1-6_checkpoint-rewind/transcript.jsonl.replay.json.golden",
+    "events": "claudecode/scenarios/1-6_checkpoint-rewind/recordings/2026-05-17-00-45-25_irrlichd-0.4.5+3d59ddb/events.jsonl",
+    "transcript": "claudecode/scenarios/1-6_checkpoint-rewind/recordings/2026-05-17-00-45-25_irrlichd-0.4.5+3d59ddb/transcript.jsonl",
+    "manifest": "claudecode/scenarios/1-6_checkpoint-rewind/recordings/2026-05-17-00-45-25_irrlichd-0.4.5+3d59ddb/manifest.json",
+    "golden": "claudecode/scenarios/1-6_checkpoint-rewind/recordings/2026-05-17-00-45-25_irrlichd-0.4.5+3d59ddb/transcript.jsonl.replay.json.golden",
     "recordings": [
-      "claudecode/scenarios/1-6_checkpoint-rewind/recordings/2026-05-17-00-37-44_irrlichd-0.4.5+3d59ddb"
+      "claudecode/scenarios/1-6_checkpoint-rewind/recordings/2026-05-17-00-37-44_irrlichd-0.4.5+3d59ddb",
+      "claudecode/scenarios/1-6_checkpoint-rewind/recordings/2026-05-17-00-45-25_irrlichd-0.4.5+3d59ddb"
     ]
   },
   "metadata": {

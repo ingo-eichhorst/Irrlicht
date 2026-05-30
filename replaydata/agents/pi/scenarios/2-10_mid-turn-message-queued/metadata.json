@@ -1,12 +1,13 @@
 {
   "recording_dir": "pi/scenarios/2-10_mid-turn-message-queued",
   "artifacts": {
-    "events": "pi/scenarios/2-10_mid-turn-message-queued/events.jsonl",
-    "transcript": "pi/scenarios/2-10_mid-turn-message-queued/transcript.jsonl",
-    "manifest": "pi/scenarios/2-10_mid-turn-message-queued/manifest.json",
-    "golden": "pi/scenarios/2-10_mid-turn-message-queued/transcript.jsonl.replay.json.golden",
+    "events": "pi/scenarios/2-10_mid-turn-message-queued/recordings/2026-05-25-03-03-21_irrlichd-0.4.7+2f5b484-2/events.jsonl",
+    "transcript": "pi/scenarios/2-10_mid-turn-message-queued/recordings/2026-05-25-03-03-21_irrlichd-0.4.7+2f5b484-2/transcript.jsonl",
+    "manifest": "pi/scenarios/2-10_mid-turn-message-queued/recordings/2026-05-25-03-03-21_irrlichd-0.4.7+2f5b484-2/manifest.json",
+    "golden": "pi/scenarios/2-10_mid-turn-message-queued/recordings/2026-05-25-03-03-21_irrlichd-0.4.7+2f5b484-2/transcript.jsonl.replay.json.golden",
     "recordings": [
-      "pi/scenarios/2-10_mid-turn-message-queued/recordings/2026-05-25-03-03-21_irrlichd-0.4.7+2f5b484"
+      "pi/scenarios/2-10_mid-turn-message-queued/recordings/2026-05-25-03-03-21_irrlichd-0.4.7+2f5b484",
+      "pi/scenarios/2-10_mid-turn-message-queued/recordings/2026-05-25-03-03-21_irrlichd-0.4.7+2f5b484-2"
     ]
   },
   "metadata": {

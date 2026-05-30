@@ -189,14 +189,15 @@ func (m *Matrix) HasAgent(agent string) bool {
 // Agents returns the sorted list of onboarded agents.
 func (m *Matrix) Agents() []string { return append([]string(nil), m.agents...) }
 
-// cellRecorded mirrors the old recordedAndAssessment's "recorded" leg
-// (events.jsonl + a transcript) using the shard cell's Artifacts refs instead
-// of scanning the on-disk candidate dirs.
+// cellRecorded reports whether the cell has at least one captured recording.
+// Every recording lives under recordings/<name>/; a cell is recorded iff its
+// Artifacts.Recordings list is non-empty (read from metadata.json, no disk
+// scan). The per-file Events/Transcript pointers reference the newest recording.
 func cellRecorded(c *shard.ShardAgent) bool {
 	if c == nil {
 		return false
 	}
-	return c.Artifacts.Events != "" && (c.Artifacts.Transcript != "" || c.Artifacts.TranscriptMD != "")
+	return len(c.Artifacts.Recordings) > 0
 }
 
 // cellAssessment parses the shard cell's Details.Assessment. hasAssessFile is

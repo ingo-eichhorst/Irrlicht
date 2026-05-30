@@ -219,10 +219,15 @@ func annotateMeasurements(top map[string]any, repoRoot string) {
 }
 
 // measureScenario probes one (agent, scenario) cell: looks for a recording
-// + expected.jsonl, runs the validator, returns a compact status summary.
+// (the newest under recordings/) + expected.jsonl, runs the validator, returns
+// a compact status summary.
 func measureScenario(repoRoot, agent, folder string) map[string]any {
 	scenarioDir := filepath.Join(repoRoot, "replaydata", "agents", agent, "scenarios", folder)
-	if _, err := os.Stat(filepath.Join(scenarioDir, "events.jsonl")); err != nil {
+	recDir, ok := validate.NewestRecordingDir(scenarioDir)
+	if !ok {
+		return map[string]any{"status": "no_recording"}
+	}
+	if _, err := os.Stat(filepath.Join(recDir, "events.jsonl")); err != nil {
 		return map[string]any{"status": "no_recording"}
 	}
 	if _, err := os.Stat(filepath.Join(scenarioDir, "expected.jsonl")); err != nil {
@@ -320,12 +325,10 @@ func pipelineForCell(repoRoot, agent, coverageID, folder string, recipes recipeI
 	}
 	out["spec"] = map[string]any{"authored": specAuthored, "phase_count": phaseCount}
 
-	latest := false
-	if _, err := os.Stat(filepath.Join(scenarioDir, "events.jsonl")); err == nil {
-		latest = true
-	}
-	archiveCount := len(RecordingStore{RepoRoot: repoRoot}.listArchiveDirs(scenarioDir))
-	out["recordings"] = map[string]any{"latest": latest, "archive_count": archiveCount}
+	// Every recording lives under recordings/<name>/; "latest" means at least
+	// one recording exists, "archive_count" is the total recording count.
+	recCount := len(RecordingStore{RepoRoot: repoRoot}.listArchiveDirs(scenarioDir))
+	out["recordings"] = map[string]any{"latest": recCount > 0, "archive_count": recCount}
 
 	return out
 }

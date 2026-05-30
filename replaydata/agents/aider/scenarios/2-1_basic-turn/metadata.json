@@ -1,11 +1,12 @@
 {
   "recording_dir": "aider/scenarios/2-1_basic-turn",
   "artifacts": {
-    "events": "aider/scenarios/2-1_basic-turn/events.jsonl",
-    "transcript_md": "aider/scenarios/2-1_basic-turn/transcript.md",
-    "manifest": "aider/scenarios/2-1_basic-turn/manifest.json",
+    "events": "aider/scenarios/2-1_basic-turn/recordings/2026-05-25-17-16-28_irrlichd-0.4.7+7708dae/events.jsonl",
+    "transcript_md": "aider/scenarios/2-1_basic-turn/recordings/2026-05-25-17-16-28_irrlichd-0.4.7+7708dae/transcript.md",
+    "manifest": "aider/scenarios/2-1_basic-turn/recordings/2026-05-25-17-16-28_irrlichd-0.4.7+7708dae/manifest.json",
     "recordings": [
-      "aider/scenarios/2-1_basic-turn/recordings/2026-05-25-17-08-21_irrlichd-0.4.7+7708dae"
+      "aider/scenarios/2-1_basic-turn/recordings/2026-05-25-17-08-21_irrlichd-0.4.7+7708dae",
+      "aider/scenarios/2-1_basic-turn/recordings/2026-05-25-17-16-28_irrlichd-0.4.7+7708dae"
     ]
   },
   "metadata": {

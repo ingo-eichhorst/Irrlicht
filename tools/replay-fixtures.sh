@@ -59,15 +59,20 @@ while IFS= read -r fix; do
   [[ -z "$fix" ]] && continue
   [[ "$fix" == */subagents/* ]] && continue
   found_any=1
-  # Path shape: replaydata/agents/<adapter>/<scenarios|regression>/<id>/transcript.<ext>
-  scenario_dir="$(dirname "$fix")"
-  name="$(basename "$scenario_dir")"
-  kind="$(basename "$(dirname "$scenario_dir")")"          # scenarios | regression
-  adapter="$(basename "$(dirname "$(dirname "$scenario_dir")")")"
-  json="$REPORTS_DIR/${adapter}-${name}.json"
-  md="$REPORTS_DIR/${adapter}-${name}.md"
+  # Path shape (every recording lives under recordings/<recname>/):
+  #   replaydata/agents/<adapter>/<scenarios|regression>/<id>/recordings/<recname>/transcript.<ext>
+  rec_dir="$(dirname "$fix")"
+  recname="$(basename "$rec_dir")"
+  cell_dir="$(dirname "$(dirname "$rec_dir")")"            # strip recordings/<recname>
+  name="$(basename "$cell_dir")"
+  kind="$(basename "$(dirname "$cell_dir")")"              # scenarios | regression
+  adapter="$(basename "$(dirname "$(dirname "$cell_dir")")")"
+  # One report per recording — names include the recording so multiple
+  # recordings of the same cell don't collide.
+  json="$REPORTS_DIR/${adapter}-${name}__${recname}.json"
+  md="$REPORTS_DIR/${adapter}-${name}__${recname}.md"
 
-  echo ">> replaying ${adapter}/${kind}/${name}" >&2
+  echo ">> replaying ${adapter}/${kind}/${name}/${recname}" >&2
   "./$BIN" --out "$json" --debounce "$DEBOUNCE" "$fix"
 
   python3 - "$json" "$md" "$fix" "$kind" <<'PY'
@@ -198,41 +203,59 @@ fi
 # per-scenario report files for CI inspection.
 expected_failures=0
 while IFS= read -r expected_path; do
-  scenario_dir="$(dirname "$expected_path")"
-  agent="$(basename "$(dirname "$(dirname "$scenario_dir")")")"
-  scenario="$(basename "$scenario_dir")"
-  report_json="$REPORTS_DIR/${agent}-${scenario}.expected.json"
-  # Read meta.known_failing from the expected.jsonl meta line so a
-  # daemon-side gap doesn't block the test suite. The Go test does
-  # the same; this script mirrors the policy.
+  cell_dir="$(dirname "$expected_path")"            # expected.jsonl is at the cell root
+  agent="$(basename "$(dirname "$(dirname "$cell_dir")")")"
+  scenario="$(basename "$cell_dir")"
   known_failing="$(head -n1 "$expected_path" | jq -r '.known_failing // false' 2>/dev/null || echo false)"
-  # Capture the exit code: 0 = pass, 1 = validation failed, 2 = internal error
-  # (malformed expected.jsonl OR a half-recorded cell — #496 RC6). known_failing
-  # only excuses a validation FAILURE (exit 1, a daemon gap); it must NOT excuse
-  # an internal error (exit 2) — an incomplete/broken fixture always fails.
-  # `|| ev_rc=$?` is mandatory: the script runs under `set -e` (and CI's
-  # `bash -e`), so a bare non-zero `go run` (a known_failing cell's exit 1, or
-  # an exit-2 error) would abort the whole script before we could classify it.
-  ev_rc=0
-  go run ./tools/agent-onboarding/cmd/expected-validate "$scenario_dir" > "$report_json" 2>&1 || ev_rc=$?
-  if [[ "$ev_rc" -eq 0 ]]; then
-    if [[ "$known_failing" == "true" ]]; then
-      echo "expected: ${agent}/${scenario} PASS (was known_failing — drop the flag from expected.jsonl)" >&2
-      expected_failures=$((expected_failures + 1))
-    else
-      echo "expected: ${agent}/${scenario} PASS" >&2
-    fi
-  elif [[ "$ev_rc" -eq 2 ]]; then
-    echo "expected: ${agent}/${scenario} ERROR (incomplete/malformed fixture — see $report_json; known_failing does NOT excuse this)" >&2
-    expected_failures=$((expected_failures + 1))
-  else
-    if [[ "$known_failing" == "true" ]]; then
-      echo "expected: ${agent}/${scenario} known_failing (validation FAIL is expected; see meta.notes)" >&2
-    else
-      echo "expected: ${agent}/${scenario} FAIL — see $report_json" >&2
-      expected_failures=$((expected_failures + 1))
-    fi
+
+  # The newest recording is the canonical one: it carries the half-record guard
+  # and GATES the suite. Older recordings are validated too (every recording is
+  # reported), but a spec mismatch on an older one is informational drift — it
+  # does NOT fail the build (the byte-identity golden test pins all of them).
+  newest_rec=""
+  if newest_dir="$(ls -1d "$cell_dir"/recordings/*/ 2>/dev/null | sort | tail -n1)"; then
+    newest_rec="$(basename "${newest_dir%/}")"
   fi
+  [[ -n "$newest_rec" ]] || continue   # no recording captured → nothing to validate
+
+  for rec_dir in "$cell_dir"/recordings/*/; do
+    [[ -d "$rec_dir" ]] || continue
+    recname="$(basename "${rec_dir%/}")"
+    report_json="$REPORTS_DIR/${agent}-${scenario}__${recname}.expected.json"
+    ev_rc=0
+    if [[ "$recname" == "$newest_rec" ]]; then
+      # Newest: half-record guard active (no recording-name arg → ValidateExpected).
+      go run ./tools/agent-onboarding/cmd/expected-validate "$cell_dir" > "$report_json" 2>&1 || ev_rc=$?
+    else
+      # Older: validate this specific recording (drift signal, non-gating).
+      go run ./tools/agent-onboarding/cmd/expected-validate "$cell_dir" "$recname" > "$report_json" 2>&1 || ev_rc=$?
+      case "$ev_rc" in
+        0) echo "expected: ${agent}/${scenario}/${recname} PASS (older)" >&2 ;;
+        *) echo "expected: ${agent}/${scenario}/${recname} drift (older recording vs current spec — informational; see $report_json)" >&2 ;;
+      esac
+      continue
+    fi
+    # Gating classification for the NEWEST recording (known_failing excuses a
+    # validation FAILURE, exit 1, but never an internal error, exit 2).
+    if [[ "$ev_rc" -eq 0 ]]; then
+      if [[ "$known_failing" == "true" ]]; then
+        echo "expected: ${agent}/${scenario} PASS (was known_failing — drop the flag from expected.jsonl)" >&2
+        expected_failures=$((expected_failures + 1))
+      else
+        echo "expected: ${agent}/${scenario} PASS" >&2
+      fi
+    elif [[ "$ev_rc" -eq 2 ]]; then
+      echo "expected: ${agent}/${scenario} ERROR (incomplete/malformed fixture — see $report_json; known_failing does NOT excuse this)" >&2
+      expected_failures=$((expected_failures + 1))
+    else
+      if [[ "$known_failing" == "true" ]]; then
+        echo "expected: ${agent}/${scenario} known_failing (validation FAIL is expected; see meta.notes)" >&2
+      else
+        echo "expected: ${agent}/${scenario} FAIL — see $report_json" >&2
+        expected_failures=$((expected_failures + 1))
+      fi
+    fi
+  done
 done < <(find "$FIXTURES_ROOT" -name 'expected.jsonl' -not -path '*/_reports/*' | sort)
 
 # Artifact-completeness gate (#496 RC6): every RECORDED cell under scenarios/

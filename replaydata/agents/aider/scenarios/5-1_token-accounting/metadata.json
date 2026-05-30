@@ -1,9 +1,12 @@
 {
   "recording_dir": "aider/scenarios/5-1_token-accounting",
   "artifacts": {
-    "events": "aider/scenarios/5-1_token-accounting/events.jsonl",
-    "transcript_md": "aider/scenarios/5-1_token-accounting/transcript.md",
-    "manifest": "aider/scenarios/5-1_token-accounting/manifest.json"
+    "events": "aider/scenarios/5-1_token-accounting/recordings/2026-05-25-18-50-57_irrlichd-0.4.7+15fbf14/events.jsonl",
+    "transcript_md": "aider/scenarios/5-1_token-accounting/recordings/2026-05-25-18-50-57_irrlichd-0.4.7+15fbf14/transcript.md",
+    "manifest": "aider/scenarios/5-1_token-accounting/recordings/2026-05-25-18-50-57_irrlichd-0.4.7+15fbf14/manifest.json",
+    "recordings": [
+      "aider/scenarios/5-1_token-accounting/recordings/2026-05-25-18-50-57_irrlichd-0.4.7+15fbf14"
+    ]
   },
   "metadata": {
     "agent_supports": "yes",

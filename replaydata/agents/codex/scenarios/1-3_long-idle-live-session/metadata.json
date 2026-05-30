@@ -1,10 +1,13 @@
 {
   "recording_dir": "codex/scenarios/1-3_long-idle-live-session",
   "artifacts": {
-    "events": "codex/scenarios/1-3_long-idle-live-session/events.jsonl",
-    "transcript": "codex/scenarios/1-3_long-idle-live-session/transcript.jsonl",
-    "manifest": "codex/scenarios/1-3_long-idle-live-session/manifest.json",
-    "golden": "codex/scenarios/1-3_long-idle-live-session/transcript.jsonl.replay.json.golden"
+    "events": "codex/scenarios/1-3_long-idle-live-session/recordings/2026-05-23-11-05-03_irrlichd-0.4.7+451c4ea.dirty/events.jsonl",
+    "transcript": "codex/scenarios/1-3_long-idle-live-session/recordings/2026-05-23-11-05-03_irrlichd-0.4.7+451c4ea.dirty/transcript.jsonl",
+    "manifest": "codex/scenarios/1-3_long-idle-live-session/recordings/2026-05-23-11-05-03_irrlichd-0.4.7+451c4ea.dirty/manifest.json",
+    "golden": "codex/scenarios/1-3_long-idle-live-session/recordings/2026-05-23-11-05-03_irrlichd-0.4.7+451c4ea.dirty/transcript.jsonl.replay.json.golden",
+    "recordings": [
+      "codex/scenarios/1-3_long-idle-live-session/recordings/2026-05-23-11-05-03_irrlichd-0.4.7+451c4ea.dirty"
+    ]
   },
   "metadata": {
     "agent_supports": "yes",

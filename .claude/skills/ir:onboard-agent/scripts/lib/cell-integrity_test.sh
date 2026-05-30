@@ -30,32 +30,36 @@ mkdir -p "$(dirname "$IR_SCENARIOS_FILE")"
 printf '{"meta":{},"scenarios":[]}\n' > "$IR_SCENARIOS_FILE"
 
 S="$IR_AGENTS_DIR/fake/scenarios"
+REC="2026-01-01-00-00-00_irrlichd-t"   # the single recording folder per cell
 touchf() { mkdir -p "$(dirname "$1")"; printf '%s\n' "${2:-{}}" > "$1"; }
 cell_meta() { # cell_meta <folder> <scenario_id>
   touchf "$S/$1/metadata.json" "{\"scenario_id\":\"$2\",\"recording_dir\":\"fake/scenarios/$1\",\"details\":{\"assessment\":{\"agent_supports\":\"yes\"},\"recipe\":{\"script\":[{\"type\":\"send\"}]}}}"
 }
+# Every recording artifact lives under recordings/<REC>/; expected.jsonl +
+# metadata.json stay at the cell root.
+recf() { touchf "$S/$1/recordings/$REC/$2"; }
 
 # 5-1_cov — variant folder (folder != scenario name); complete jsonl recording.
 cell_meta 5-1_cov cov
 touchf "$S/5-1_cov/expected.jsonl"
-touchf "$S/5-1_cov/events.jsonl"
-touchf "$S/5-1_cov/transcript.jsonl"
-touchf "$S/5-1_cov/transcript.jsonl.replay.json.golden"
+recf 5-1_cov events.jsonl
+recf 5-1_cov transcript.jsonl
+recf 5-1_cov transcript.jsonl.replay.json.golden
 # 5-2_md — standard folder, markdown transcript, complete, NO golden expected.
 cell_meta 5-2_md md
 touchf "$S/5-2_md/expected.jsonl"
-touchf "$S/5-2_md/events.jsonl"
-touchf "$S/5-2_md/transcript.md"
+recf 5-2_md events.jsonl
+recf 5-2_md transcript.md
 # 5-3_half — recorded (transcript) but NO events.jsonl (the task-list defect).
 cell_meta 5-3_half half
 touchf "$S/5-3_half/expected.jsonl"
-touchf "$S/5-3_half/transcript.jsonl"
-touchf "$S/5-3_half/transcript.jsonl.replay.json.golden"
+recf 5-3_half transcript.jsonl
+recf 5-3_half transcript.jsonl.replay.json.golden
 # 5-4_orphan — complete recording but NO metadata.json (orphan).
 touchf "$S/5-4_orphan/expected.jsonl"
-touchf "$S/5-4_orphan/events.jsonl"
-touchf "$S/5-4_orphan/transcript.jsonl"
-touchf "$S/5-4_orphan/transcript.jsonl.replay.json.golden"
+recf 5-4_orphan events.jsonl
+recf 5-4_orphan transcript.jsonl
+recf 5-4_orphan transcript.jsonl.replay.json.golden
 
 fails=0
 pass() { echo "  PASS: $1"; }
@@ -84,7 +88,7 @@ ci_missing_artifacts fake 5-2_md "$S/5-2_md" "$S" >/dev/null
 assert_eq "complete md cell (no golden needed) → rc 0" 0 "$?"
 probs="$(ci_missing_artifacts fake 5-3_half "$S/5-3_half" "$S")"; rc=$?
 assert_eq "half cell → rc 1" 1 "$rc"
-assert_eq "half cell → flags events.jsonl" events.jsonl "$probs"
+assert_eq "half cell → flags the recording's events.jsonl" "recordings/$REC/events.jsonl" "$probs"
 probs="$(ci_missing_artifacts fake 5-4_orphan "$S/5-4_orphan" "$S")"; rc=$?
 assert_eq "orphan recording → rc 1" 1 "$rc"
 [[ "$probs" == recipe-row* ]] && pass "orphan → flags recipe-row" || fail "orphan → flags recipe-row" "recipe-row*" "$probs"

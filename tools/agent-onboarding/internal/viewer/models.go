@@ -29,9 +29,10 @@ type ScenarioDetail struct {
 	Degraded       bool                     `json:"degraded"`                  // true when there is no events.jsonl sidecar — the timeline is synthesized from the transcript via the shared classifier engine, not daemon-recorded
 	Expected       *validate.ExpectedReport `json:"expected,omitempty"`        // expected.jsonl validated against events.jsonl (if file present)
 	Transitions    []json.RawMessage        `json:"transitions"`               // state_transition rows from events.jsonl
-	Tools          []ToolCall               `json:"tools,omitempty"`           // tool_use blocks extracted from transcript.jsonl
-	LatestManifest *RecordingArchive        `json:"latest_manifest,omitempty"` // synthesized manifest for the live top-level recording, mirroring archive manifest fields so the viewer can render a uniform metadata panel
-	Assessment     *AssessmentReport        `json:"assessment,omitempty"`      // Stage 1 (Assessment) point-in-time record from assessment.json, if present
+	Tools           []ToolCall               `json:"tools,omitempty"`            // tool_use blocks extracted from the newest recording's transcript.jsonl
+	LatestManifest  *RecordingArchive        `json:"latest_manifest,omitempty"`  // manifest of the newest recording, mirroring archive manifest fields so the viewer renders a uniform metadata panel
+	LatestRecording string                   `json:"latest_recording,omitempty"` // name (under recordings/) of the newest recording these fields describe; "" when none captured
+	Assessment      *AssessmentReport        `json:"assessment,omitempty"`       // Stage 1 (Assessment) point-in-time record from assessment.json, if present
 }
 
 // AssessmentReport / AssessmentSource are the persisted artifact of one

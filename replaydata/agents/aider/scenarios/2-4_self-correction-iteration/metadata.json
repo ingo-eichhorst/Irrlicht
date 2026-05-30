@@ -1,9 +1,12 @@
 {
   "recording_dir": "aider/scenarios/2-4_self-correction-iteration",
   "artifacts": {
-    "events": "aider/scenarios/2-4_self-correction-iteration/events.jsonl",
-    "transcript_md": "aider/scenarios/2-4_self-correction-iteration/transcript.md",
-    "manifest": "aider/scenarios/2-4_self-correction-iteration/manifest.json"
+    "events": "aider/scenarios/2-4_self-correction-iteration/recordings/2026-05-25-18-26-46_irrlichd-0.4.7+d5c235c/events.jsonl",
+    "transcript_md": "aider/scenarios/2-4_self-correction-iteration/recordings/2026-05-25-18-26-46_irrlichd-0.4.7+d5c235c/transcript.md",
+    "manifest": "aider/scenarios/2-4_self-correction-iteration/recordings/2026-05-25-18-26-46_irrlichd-0.4.7+d5c235c/manifest.json",
+    "recordings": [
+      "aider/scenarios/2-4_self-correction-iteration/recordings/2026-05-25-18-26-46_irrlichd-0.4.7+d5c235c"
+    ]
   },
   "metadata": {
     "agent_supports": "yes",

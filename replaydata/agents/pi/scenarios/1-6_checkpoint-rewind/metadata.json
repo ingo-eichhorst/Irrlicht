@@ -1,10 +1,13 @@
 {
   "recording_dir": "pi/scenarios/1-6_checkpoint-rewind",
   "artifacts": {
-    "events": "pi/scenarios/1-6_checkpoint-rewind/events.jsonl",
-    "transcript": "pi/scenarios/1-6_checkpoint-rewind/transcript.jsonl",
-    "manifest": "pi/scenarios/1-6_checkpoint-rewind/manifest.json",
-    "golden": "pi/scenarios/1-6_checkpoint-rewind/transcript.jsonl.replay.json.golden"
+    "events": "pi/scenarios/1-6_checkpoint-rewind/recordings/2026-05-28-08-43-17_irrlichd-0.4.7+4ddeaf9/events.jsonl",
+    "transcript": "pi/scenarios/1-6_checkpoint-rewind/recordings/2026-05-28-08-43-17_irrlichd-0.4.7+4ddeaf9/transcript.jsonl",
+    "manifest": "pi/scenarios/1-6_checkpoint-rewind/recordings/2026-05-28-08-43-17_irrlichd-0.4.7+4ddeaf9/manifest.json",
+    "golden": "pi/scenarios/1-6_checkpoint-rewind/recordings/2026-05-28-08-43-17_irrlichd-0.4.7+4ddeaf9/transcript.jsonl.replay.json.golden",
+    "recordings": [
+      "pi/scenarios/1-6_checkpoint-rewind/recordings/2026-05-28-08-43-17_irrlichd-0.4.7+4ddeaf9"
+    ]
   },
   "metadata": {
     "agent_supports": "partial",

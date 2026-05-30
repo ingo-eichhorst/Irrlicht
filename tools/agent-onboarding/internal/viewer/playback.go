@@ -21,6 +21,7 @@ import (
 	"irrlicht/core/domain/session"
 	"irrlicht/core/ports/outbound"
 	"irrlicht/tools/agent-onboarding/internal/replay"
+	"irrlicht/tools/agent-onboarding/internal/validate"
 )
 
 // archiveNameRE constrains the optional `recording` field on /api/replay/start
@@ -265,8 +266,8 @@ func (m *PlaybackManager) Current() *Playback {
 }
 
 // Start a viewer-internal playback. Stops any existing playback first.
-// recording: "" → top-level events.jsonl; non-empty → archived recording
-// under <scenarioDir>/recordings/<recording>/.
+// Every recording lives under <scenarioDir>/recordings/<recording>/. recording:
+// "" → the newest recording; non-empty → that specific recording.
 func (m *PlaybackManager) StartViewerInternal(agent, subtree, scenario string, speed float64, recording string) (*Playback, error) {
 	if !slugRE.MatchString(agent) || !slugRE.MatchString(scenario) {
 		return nil, fmt.Errorf("invalid agent or scenario id")
@@ -275,15 +276,22 @@ func (m *PlaybackManager) StartViewerInternal(agent, subtree, scenario string, s
 		return nil, fmt.Errorf("subtree must be 'scenarios' or 'regression'")
 	}
 	scenarioDir := filepath.Join(m.repoRoot, "replaydata", "agents", agent, subtree, scenario)
-	eventsDir := scenarioDir
+	var eventsDir string
 	if recording != "" {
 		if !archiveNameRE.MatchString(recording) {
-			return nil, fmt.Errorf("invalid recording archive name")
+			return nil, fmt.Errorf("invalid recording name")
 		}
 		eventsDir = filepath.Join(scenarioDir, "recordings", recording)
 		if _, err := os.Stat(filepath.Join(eventsDir, "events.jsonl")); err != nil {
-			return nil, fmt.Errorf("archive %q has no events.jsonl", recording)
+			return nil, fmt.Errorf("recording %q has no events.jsonl", recording)
 		}
+	} else {
+		// Default to the newest recording.
+		newest, ok := validate.NewestRecordingDir(scenarioDir)
+		if !ok {
+			return nil, fmt.Errorf("scenario %s has no recordings", scenario)
+		}
+		eventsDir = newest
 	}
 	events, degraded, err := replay.LoadEventsOrSynthesize(eventsDir, agent)
 	if err != nil {

@@ -1,11 +1,12 @@
 {
   "recording_dir": "aider/scenarios/4-2_multiple-agents-same-workspace",
   "artifacts": {
-    "events": "aider/scenarios/4-2_multiple-agents-same-workspace/events.jsonl",
-    "transcript_md": "aider/scenarios/4-2_multiple-agents-same-workspace/transcript.md",
-    "manifest": "aider/scenarios/4-2_multiple-agents-same-workspace/manifest.json",
+    "events": "aider/scenarios/4-2_multiple-agents-same-workspace/recordings/2026-05-25-21-26-41_irrlichd-0.4.7+78e3ca5/events.jsonl",
+    "transcript_md": "aider/scenarios/4-2_multiple-agents-same-workspace/recordings/2026-05-25-21-26-41_irrlichd-0.4.7+78e3ca5/transcript.md",
+    "manifest": "aider/scenarios/4-2_multiple-agents-same-workspace/recordings/2026-05-25-21-26-41_irrlichd-0.4.7+78e3ca5/manifest.json",
     "recordings": [
-      "aider/scenarios/4-2_multiple-agents-same-workspace/recordings/2026-05-25-19-19-07_irrlichd-0.4.7+78e3ca5"
+      "aider/scenarios/4-2_multiple-agents-same-workspace/recordings/2026-05-25-19-19-07_irrlichd-0.4.7+78e3ca5",
+      "aider/scenarios/4-2_multiple-agents-same-workspace/recordings/2026-05-25-21-26-41_irrlichd-0.4.7+78e3ca5"
     ]
   },
   "metadata": {

@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -12,40 +13,58 @@ import (
 	"irrlicht/core/domain/session"
 )
 
-// fixturePath returns an absolute path to a fixture under the repo-root
-// replaydata/agents/<adapter>/<subtree>/<scenario>/ tree. The test binary
-// runs from the package directory (core/cmd/replay), so we walk up three
-// parents.
+// fixturePath returns an absolute path to a recording artifact under the
+// repo-root replaydata/agents/<adapter>/<subtree>/<scenario>/recordings/<name>/
+// tree. The test binary runs from the package directory (core/cmd/replay), so
+// we walk up three parents.
 //
 // Callers pass "<adapter>/<scenario>/<basename>" — e.g.
-// "claudecode/basic-turn/transcript.jsonl". The subtree segment
-// (scenarios/ or regression/) is auto-detected: scenarios/ is tried first
-// for the pipeline-managed catalog; regression/ is the fallback for
-// legacy ad-hoc captures (introduced by #268 Phase 1). If neither exists,
-// the scenarios/ path is returned so the caller surfaces a clear
+// "claudecode/basic-turn/transcript.jsonl". The subtree segment (scenarios/ or
+// regression/) is auto-detected: scenarios/ first, then regression/. Every
+// recording lives under recordings/<name>/, so the basename is resolved inside
+// the NEWEST recording (lexicographically-greatest name). If nothing matches,
+// the scenarios/ recordings path is returned so the caller surfaces a clear
 // "no such file" error pointing at the expected location.
 func fixturePath(t *testing.T, rel string) string {
 	t.Helper()
-	parts := strings.SplitN(rel, "/", 2)
-	var candidates []string
-	if len(parts) == 2 {
-		candidates = []string{
-			filepath.Join("..", "..", "..", "replaydata", "agents", parts[0], "scenarios", parts[1]),
-			filepath.Join("..", "..", "..", "replaydata", "agents", parts[0], "regression", parts[1]),
+	parts := strings.SplitN(rel, "/", 3)
+	if len(parts) != 3 {
+		// No scenario/basename split — treat rel as a literal agents-relative path.
+		abs, err := filepath.Abs(filepath.Join("..", "..", "..", "replaydata", "agents", rel))
+		if err != nil {
+			t.Fatalf("abs fixture path: %v", err)
 		}
-	} else {
-		candidates = []string{filepath.Join("..", "..", "..", "replaydata", "agents", rel)}
+		return abs
 	}
-	for _, c := range candidates {
-		if _, err := os.Stat(c); err == nil {
-			abs, err := filepath.Abs(c)
-			if err != nil {
-				t.Fatalf("abs fixture path: %v", err)
+	adapter, scenario, base := parts[0], parts[1], parts[2]
+	for _, subtree := range []string{"scenarios", "regression"} {
+		cellDir := filepath.Join("..", "..", "..", "replaydata", "agents", adapter, subtree, scenario)
+		recsDir := filepath.Join(cellDir, "recordings")
+		entries, err := os.ReadDir(recsDir)
+		if err != nil {
+			continue
+		}
+		// Newest-first by name (timestamp-prefixed → chronological).
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			if e.IsDir() {
+				names = append(names, e.Name())
 			}
-			return abs
+		}
+		sort.Sort(sort.Reverse(sort.StringSlice(names)))
+		for _, name := range names {
+			cand := filepath.Join(recsDir, name, base)
+			if _, err := os.Stat(cand); err == nil {
+				abs, err := filepath.Abs(cand)
+				if err != nil {
+					t.Fatalf("abs fixture path: %v", err)
+				}
+				return abs
+			}
 		}
 	}
-	abs, err := filepath.Abs(candidates[0])
+	// Nothing found — return a scenarios/ recordings path for a clear error.
+	abs, err := filepath.Abs(filepath.Join("..", "..", "..", "replaydata", "agents", adapter, "scenarios", scenario, "recordings", base))
 	if err != nil {
 		t.Fatalf("abs fixture path: %v", err)
 	}

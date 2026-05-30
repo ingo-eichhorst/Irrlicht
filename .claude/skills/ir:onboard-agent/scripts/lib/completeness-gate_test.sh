@@ -58,11 +58,11 @@ shard() {
   done
   rebuild_catalog
 }
-# A recorded cell carries non-empty artifact refs (cellRecorded checks the refs,
-# not the files on disk); an assessed-not-recorded cell has an assessment but
-# no refs; an unassessed cell has neither.
+# A recorded cell lists >=1 recording (cellRecorded checks artifacts.recordings,
+# not the files on disk); an assessed-not-recorded cell has an assessment but no
+# recordings; an unassessed cell has neither.
 ASSESS_OK='{"agent_supports":"yes","daemon_capability":"full","driver_capability":"ready"}'
-REC='{"events":"fake/scenarios/rec/events.jsonl","transcript":"fake/scenarios/rec/transcript.jsonl"}'
+REC='{"recordings":["fake/scenarios/rec/recordings/2026-01-01-00-00-00_irrlichd-t"],"events":"fake/scenarios/rec/recordings/2026-01-01-00-00-00_irrlichd-t/events.jsonl"}'
 
 shard rec            "{\"fake\":{\"artifacts\":$REC,\"details\":{\"assessment\":$ASSESS_OK,\"recipe\":{\"script\":[{\"type\":\"send\"}]}}}}"
 shard unrec-assessed "{\"fake\":{\"details\":{\"assessment\":$ASSESS_OK,\"recipe\":{\"script\":[{\"type\":\"send\"}]}}}}"
@@ -90,7 +90,7 @@ grep -q "unassessed.*unassessed → assess fake unassessed" <<<"$out" \
   || fail "assess hint" "assess fake unassessed line" "$out"
 
 # Make every non-terminal cell terminal; the gate should now pass.
-shard unrec-assessed "{\"fake\":{\"artifacts\":{\"events\":\"e\",\"transcript\":\"t\"},\"details\":{\"assessment\":$ASSESS_OK}}}"   # now recorded
+shard unrec-assessed "{\"fake\":{\"artifacts\":{\"recordings\":[\"r\"],\"events\":\"r/events.jsonl\"},\"details\":{\"assessment\":$ASSESS_OK}}}"   # now recorded
 shard unassessed     '{"fake":{"details":{"assessment":{"agent_supports":"no","daemon_capability":"n/a","driver_capability":"ready"}}}}'  # supports=no → applicable_false
 bash "$DIR/completeness-gate.sh" fake "$ROOT" >/dev/null 2>&1
 assert_eq "all terminal → exit 0" "0" "$?"

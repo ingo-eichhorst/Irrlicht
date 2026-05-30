@@ -15,17 +15,30 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"irrlicht/tools/agent-onboarding/internal/validate"
 )
 
 func main() {
-	if len(os.Args) != 2 {
-		fmt.Fprintln(os.Stderr, "usage: expected-validate <scenario-dir>")
+	if len(os.Args) != 2 && len(os.Args) != 3 {
+		fmt.Fprintln(os.Stderr, "usage: expected-validate <cell-dir> [recording-name]")
 		os.Exit(2)
 	}
 	scenarioDir := os.Args[1]
-	report, err := validate.ValidateExpected(scenarioDir)
+	var report *validate.ExpectedReport
+	var err error
+	if len(os.Args) == 3 {
+		// Validate ONE explicit recording against the cell's current spec.
+		recDir := filepath.Join(scenarioDir, "recordings", os.Args[2])
+		report, err = validate.ValidateExpectedAgainst(
+			filepath.Join(scenarioDir, "expected.jsonl"),
+			filepath.Join(recDir, "events.jsonl"),
+		)
+	} else {
+		// Validate the cell's NEWEST recording.
+		report, err = validate.ValidateExpected(scenarioDir)
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(2)

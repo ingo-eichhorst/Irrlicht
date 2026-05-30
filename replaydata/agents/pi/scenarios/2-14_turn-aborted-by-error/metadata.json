@@ -1,10 +1,13 @@
 {
   "recording_dir": "pi/scenarios/2-14_turn-aborted-by-error",
   "artifacts": {
-    "events": "pi/scenarios/2-14_turn-aborted-by-error/events.jsonl",
-    "transcript": "pi/scenarios/2-14_turn-aborted-by-error/transcript.jsonl",
-    "manifest": "pi/scenarios/2-14_turn-aborted-by-error/manifest.json",
-    "golden": "pi/scenarios/2-14_turn-aborted-by-error/transcript.jsonl.replay.json.golden"
+    "events": "pi/scenarios/2-14_turn-aborted-by-error/recordings/2026-05-25-05-20-53_irrlichd-0.4.7+9d9c471/events.jsonl",
+    "transcript": "pi/scenarios/2-14_turn-aborted-by-error/recordings/2026-05-25-05-20-53_irrlichd-0.4.7+9d9c471/transcript.jsonl",
+    "manifest": "pi/scenarios/2-14_turn-aborted-by-error/recordings/2026-05-25-05-20-53_irrlichd-0.4.7+9d9c471/manifest.json",
+    "golden": "pi/scenarios/2-14_turn-aborted-by-error/recordings/2026-05-25-05-20-53_irrlichd-0.4.7+9d9c471/transcript.jsonl.replay.json.golden",
+    "recordings": [
+      "pi/scenarios/2-14_turn-aborted-by-error/recordings/2026-05-25-05-20-53_irrlichd-0.4.7+9d9c471"
+    ]
   },
   "metadata": {
     "agent_supports": "yes",

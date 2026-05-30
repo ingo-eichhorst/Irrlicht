@@ -1,10 +1,13 @@
 {
   "recording_dir": "opencode/scenarios/2-10_mid-turn-message-queued",
   "artifacts": {
-    "events": "opencode/scenarios/2-10_mid-turn-message-queued/events.jsonl",
-    "transcript": "opencode/scenarios/2-10_mid-turn-message-queued/transcript.jsonl",
-    "manifest": "opencode/scenarios/2-10_mid-turn-message-queued/manifest.json",
-    "golden": "opencode/scenarios/2-10_mid-turn-message-queued/transcript.jsonl.replay.json.golden"
+    "events": "opencode/scenarios/2-10_mid-turn-message-queued/recordings/2026-05-27-06-29-43_irrlichd-0.4.7+94124e5/events.jsonl",
+    "transcript": "opencode/scenarios/2-10_mid-turn-message-queued/recordings/2026-05-27-06-29-43_irrlichd-0.4.7+94124e5/transcript.jsonl",
+    "manifest": "opencode/scenarios/2-10_mid-turn-message-queued/recordings/2026-05-27-06-29-43_irrlichd-0.4.7+94124e5/manifest.json",
+    "golden": "opencode/scenarios/2-10_mid-turn-message-queued/recordings/2026-05-27-06-29-43_irrlichd-0.4.7+94124e5/transcript.jsonl.replay.json.golden",
+    "recordings": [
+      "opencode/scenarios/2-10_mid-turn-message-queued/recordings/2026-05-27-06-29-43_irrlichd-0.4.7+94124e5"
+    ]
   },
   "metadata": {
     "agent_supports": "yes",

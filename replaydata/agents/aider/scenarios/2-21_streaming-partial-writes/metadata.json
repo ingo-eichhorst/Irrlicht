@@ -1,11 +1,12 @@
 {
   "recording_dir": "aider/scenarios/2-21_streaming-partial-writes",
   "artifacts": {
-    "events": "aider/scenarios/2-21_streaming-partial-writes/events.jsonl",
-    "transcript_md": "aider/scenarios/2-21_streaming-partial-writes/transcript.md",
-    "manifest": "aider/scenarios/2-21_streaming-partial-writes/manifest.json",
+    "events": "aider/scenarios/2-21_streaming-partial-writes/recordings/2026-05-25-19-33-33_irrlichd-0.4.7+9607a66/events.jsonl",
+    "transcript_md": "aider/scenarios/2-21_streaming-partial-writes/recordings/2026-05-25-19-33-33_irrlichd-0.4.7+9607a66/transcript.md",
+    "manifest": "aider/scenarios/2-21_streaming-partial-writes/recordings/2026-05-25-19-33-33_irrlichd-0.4.7+9607a66/manifest.json",
     "recordings": [
-      "aider/scenarios/2-21_streaming-partial-writes/recordings/2026-05-25-18-38-39_irrlichd-0.4.7+9607a66"
+      "aider/scenarios/2-21_streaming-partial-writes/recordings/2026-05-25-18-38-39_irrlichd-0.4.7+9607a66",
+      "aider/scenarios/2-21_streaming-partial-writes/recordings/2026-05-25-19-33-33_irrlichd-0.4.7+9607a66"
     ]
   },
   "metadata": {

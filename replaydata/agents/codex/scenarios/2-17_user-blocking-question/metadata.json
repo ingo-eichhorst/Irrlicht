@@ -1,10 +1,13 @@
 {
   "recording_dir": "codex/scenarios/2-17_user-blocking-question",
   "artifacts": {
-    "events": "codex/scenarios/2-17_user-blocking-question/events.jsonl",
-    "transcript": "codex/scenarios/2-17_user-blocking-question/transcript.jsonl",
-    "manifest": "codex/scenarios/2-17_user-blocking-question/manifest.json",
-    "golden": "codex/scenarios/2-17_user-blocking-question/transcript.jsonl.replay.json.golden"
+    "events": "codex/scenarios/2-17_user-blocking-question/recordings/2026-05-23-22-12-50_irrlichd-0.4.7+2209da4/events.jsonl",
+    "transcript": "codex/scenarios/2-17_user-blocking-question/recordings/2026-05-23-22-12-50_irrlichd-0.4.7+2209da4/transcript.jsonl",
+    "manifest": "codex/scenarios/2-17_user-blocking-question/recordings/2026-05-23-22-12-50_irrlichd-0.4.7+2209da4/manifest.json",
+    "golden": "codex/scenarios/2-17_user-blocking-question/recordings/2026-05-23-22-12-50_irrlichd-0.4.7+2209da4/transcript.jsonl.replay.json.golden",
+    "recordings": [
+      "codex/scenarios/2-17_user-blocking-question/recordings/2026-05-23-22-12-50_irrlichd-0.4.7+2209da4"
+    ]
   },
   "metadata": {
     "agent_supports": "yes",

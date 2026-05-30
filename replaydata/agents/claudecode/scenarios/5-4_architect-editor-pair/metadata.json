@@ -1,9 +1,12 @@
 {
   "artifacts": {
-    "events": "claudecode/scenarios/5-4_architect-editor-pair/events.jsonl",
-    "transcript": "claudecode/scenarios/5-4_architect-editor-pair/transcript.jsonl",
-    "manifest": "claudecode/scenarios/5-4_architect-editor-pair/manifest.json",
-    "golden": "claudecode/scenarios/5-4_architect-editor-pair/transcript.jsonl.replay.json.golden"
+    "events": "claudecode/scenarios/5-4_architect-editor-pair/recordings/2026-05-29-23-33-27_irrlichd-0.4.7+37990a5/events.jsonl",
+    "transcript": "claudecode/scenarios/5-4_architect-editor-pair/recordings/2026-05-29-23-33-27_irrlichd-0.4.7+37990a5/transcript.jsonl",
+    "manifest": "claudecode/scenarios/5-4_architect-editor-pair/recordings/2026-05-29-23-33-27_irrlichd-0.4.7+37990a5/manifest.json",
+    "golden": "claudecode/scenarios/5-4_architect-editor-pair/recordings/2026-05-29-23-33-27_irrlichd-0.4.7+37990a5/transcript.jsonl.replay.json.golden",
+    "recordings": [
+      "claudecode/scenarios/5-4_architect-editor-pair/recordings/2026-05-29-23-33-27_irrlichd-0.4.7+37990a5"
+    ]
   },
   "metadata": {
     "agent_supports": "yes",

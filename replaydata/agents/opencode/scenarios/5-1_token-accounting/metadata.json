@@ -1,12 +1,13 @@
 {
   "recording_dir": "opencode/scenarios/5-1_token-accounting",
   "artifacts": {
-    "events": "opencode/scenarios/5-1_token-accounting/events.jsonl",
-    "transcript": "opencode/scenarios/5-1_token-accounting/transcript.jsonl",
-    "manifest": "opencode/scenarios/5-1_token-accounting/manifest.json",
-    "golden": "opencode/scenarios/5-1_token-accounting/transcript.jsonl.replay.json.golden",
+    "events": "opencode/scenarios/5-1_token-accounting/recordings/2026-05-27-00-00-05_irrlichd-0.4.7+094218b/events.jsonl",
+    "transcript": "opencode/scenarios/5-1_token-accounting/recordings/2026-05-27-00-00-05_irrlichd-0.4.7+094218b/transcript.jsonl",
+    "manifest": "opencode/scenarios/5-1_token-accounting/recordings/2026-05-27-00-00-05_irrlichd-0.4.7+094218b/manifest.json",
+    "golden": "opencode/scenarios/5-1_token-accounting/recordings/2026-05-27-00-00-05_irrlichd-0.4.7+094218b/transcript.jsonl.replay.json.golden",
     "recordings": [
-      "opencode/scenarios/5-1_token-accounting/recordings/2026-05-25-23-39-45_irrlichd-0.4.7+094218b"
+      "opencode/scenarios/5-1_token-accounting/recordings/2026-05-25-23-39-45_irrlichd-0.4.7+094218b",
+      "opencode/scenarios/5-1_token-accounting/recordings/2026-05-27-00-00-05_irrlichd-0.4.7+094218b"
     ]
   },
   "metadata": {

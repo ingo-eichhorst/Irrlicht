@@ -62,28 +62,36 @@ func (s *Server) handleScenarioDetail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	d := ScenarioDetail{Agent: agent, Subtree: subtree, ID: id}
-	if b, ok := store.readFile(filepath.Join(scenarioDir, "recording-meta.json")); ok {
-		d.Meta = b
-	}
-	// No events.jsonl sidecar → the viewer will synthesize the timeline from
-	// the transcript via the shared classifier engine. Flag it so the UI
-	// badges a reconstructed arc rather than passing it off as recorded.
-	d.Degraded = !store.exists(filepath.Join(scenarioDir, "events.jsonl"))
-	d.Transitions = readTransitionsRaw(filepath.Join(scenarioDir, "events.jsonl"))
-	// Synthesize meta from events.jsonl when no recording-meta.json exists —
-	// every committed recording falls into this bucket today.
-	if d.Meta == nil {
-		if synth := synthesizeMetaFromEvents(filepath.Join(scenarioDir, "events.jsonl")); synth != nil {
-			d.Meta = synth
+	// Every recording lives under recordings/<name>/; the detail view's
+	// recording-derived fields come from the NEWEST one (the same recording
+	// the recordings list puts first). expected.jsonl + assessment stay at the
+	// cell root. recDir is "" when no recording is captured yet.
+	recDir, hasRec := validate.NewestRecordingDir(scenarioDir)
+	if hasRec {
+		d.LatestRecording = filepath.Base(recDir)
+		if b, ok := store.readFile(filepath.Join(recDir, "recording-meta.json")); ok {
+			d.Meta = b
 		}
+		// No events.jsonl sidecar → the viewer synthesizes the timeline from the
+		// transcript via the shared classifier engine. Flag it so the UI badges a
+		// reconstructed arc rather than passing it off as recorded.
+		d.Degraded = !store.exists(filepath.Join(recDir, "events.jsonl"))
+		d.Transitions = readTransitionsRaw(filepath.Join(recDir, "events.jsonl"))
+		if d.Meta == nil {
+			if synth := synthesizeMetaFromEvents(filepath.Join(recDir, "events.jsonl")); synth != nil {
+				d.Meta = synth
+			}
+		}
+		d.Tools = extractToolCalls(filepath.Join(recDir, "transcript.jsonl"))
+		d.LatestManifest = buildLatestManifest(recDir, agent, &d, s.RepoRoot)
+	} else {
+		d.Degraded = true
 	}
-	// Spec-grounded expected.jsonl validation. Errors are swallowed so a
-	// malformed expected.jsonl doesn't 500 the whole response.
+	// Spec-grounded expected.jsonl validation (against the newest recording).
+	// Errors are swallowed so a malformed expected.jsonl doesn't 500 the response.
 	if rep, err := validate.ValidateExpected(scenarioDir); err == nil && rep != nil {
 		d.Expected = rep
 	}
-	d.Tools = extractToolCalls(filepath.Join(scenarioDir, "transcript.jsonl"))
-	d.LatestManifest = buildLatestManifest(scenarioDir, agent, &d, s.RepoRoot)
 	d.Assessment = loadAssessment(scenarioDir)
 	writeJSON(w, d)
 }
@@ -152,19 +160,21 @@ func shardCellForFolder(repoRoot, agent, folder string) (shard.ShardAgent, bool)
 
 // buildLatestManifest produces a RecordingArchive-shaped manifest for the
 // live top-level recording so the viewer renders a uniform metadata panel
-// for both Latest and archives. Prefers a real manifest.json at the
-// scenario root; otherwise synthesizes from already-loaded data. Returns
-// nil when there isn't even a top-level events.jsonl to describe.
-func buildLatestManifest(scenarioDir, agent string, d *ScenarioDetail, repoRoot string) *RecordingArchive {
-	if _, err := os.Stat(filepath.Join(scenarioDir, "events.jsonl")); err != nil {
+// for the newest and older recordings alike. recDir is the recording dir
+// (recordings/<name>/); it prefers a real manifest.json there, otherwise
+// synthesizes from already-loaded data. Returns nil when recDir has no
+// events.jsonl to describe. The recipe-hash is keyed by the CELL folder
+// (filepath.Base of recDir's grandparent), not the recording name.
+func buildLatestManifest(recDir, agent string, d *ScenarioDetail, repoRoot string) *RecordingArchive {
+	if _, err := os.Stat(filepath.Join(recDir, "events.jsonl")); err != nil {
 		return nil
 	}
-	m := &RecordingArchive{Name: "latest", DaemonVersion: "dev"}
-	if b, err := os.ReadFile(filepath.Join(scenarioDir, "manifest.json")); err == nil {
+	m := &RecordingArchive{Name: filepath.Base(recDir), DaemonVersion: "dev"}
+	if b, err := os.ReadFile(filepath.Join(recDir, "manifest.json")); err == nil {
 		if err := json.Unmarshal(b, m); err != nil {
-			logViewerError("buildLatestManifest: malformed manifest.json in %s: %v", scenarioDir, err)
+			logViewerError("buildLatestManifest: malformed manifest.json in %s: %v", recDir, err)
 		}
-		m.Name = "latest" // `name` is internal-only — force regardless of file content
+		m.Name = filepath.Base(recDir)
 		return m
 	}
 	// Fall back to synthesis from in-memory data.
@@ -182,8 +192,9 @@ func buildLatestManifest(scenarioDir, agent string, d *ScenarioDetail, repoRoot 
 			m.RecordingStartedAt = meta.StartedAt
 		}
 	}
-	scenarioName := filepath.Base(scenarioDir)
-	m.RecipeHash = computeRecipeHash(repoRoot, agent, scenarioName)
+	// Cell folder = recDir/../.. (recordings/<name> → cell).
+	cellFolder := filepath.Base(filepath.Dir(filepath.Dir(recDir)))
+	m.RecipeHash = computeRecipeHash(repoRoot, agent, cellFolder)
 	return m
 }
 

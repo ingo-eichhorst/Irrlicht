@@ -1,12 +1,13 @@
 {
   "recording_dir": "claudecode/scenarios/2-1_basic-turn",
   "artifacts": {
-    "events": "claudecode/scenarios/2-1_basic-turn/events.jsonl",
-    "transcript": "claudecode/scenarios/2-1_basic-turn/transcript.jsonl",
-    "manifest": "claudecode/scenarios/2-1_basic-turn/manifest.json",
-    "golden": "claudecode/scenarios/2-1_basic-turn/transcript.jsonl.replay.json.golden",
+    "events": "claudecode/scenarios/2-1_basic-turn/recordings/2026-05-17-19-59-15_irrlichd-0.4.5+de926ab/events.jsonl",
+    "transcript": "claudecode/scenarios/2-1_basic-turn/recordings/2026-05-17-19-59-15_irrlichd-0.4.5+de926ab/transcript.jsonl",
+    "manifest": "claudecode/scenarios/2-1_basic-turn/recordings/2026-05-17-19-59-15_irrlichd-0.4.5+de926ab/manifest.json",
+    "golden": "claudecode/scenarios/2-1_basic-turn/recordings/2026-05-17-19-59-15_irrlichd-0.4.5+de926ab/transcript.jsonl.replay.json.golden",
     "recordings": [
-      "claudecode/scenarios/2-1_basic-turn/recordings/2026-04-24-20-45-41_irrlichd-0.4.5+de926ab"
+      "claudecode/scenarios/2-1_basic-turn/recordings/2026-04-24-20-45-41_irrlichd-0.4.5+de926ab",
+      "claudecode/scenarios/2-1_basic-turn/recordings/2026-05-17-19-59-15_irrlichd-0.4.5+de926ab"
     ]
   },
   "metadata": {

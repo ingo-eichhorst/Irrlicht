@@ -1,11 +1,12 @@
 {
   "recording_dir": "aider/scenarios/1-3_long-idle-live-session",
   "artifacts": {
-    "events": "aider/scenarios/1-3_long-idle-live-session/events.jsonl",
-    "transcript_md": "aider/scenarios/1-3_long-idle-live-session/transcript.md",
-    "manifest": "aider/scenarios/1-3_long-idle-live-session/manifest.json",
+    "events": "aider/scenarios/1-3_long-idle-live-session/recordings/2026-05-25-19-47-22_irrlichd-0.4.7+e934713/events.jsonl",
+    "transcript_md": "aider/scenarios/1-3_long-idle-live-session/recordings/2026-05-25-19-47-22_irrlichd-0.4.7+e934713/transcript.md",
+    "manifest": "aider/scenarios/1-3_long-idle-live-session/recordings/2026-05-25-19-47-22_irrlichd-0.4.7+e934713/manifest.json",
     "recordings": [
-      "aider/scenarios/1-3_long-idle-live-session/recordings/2026-05-25-17-54-35_irrlichd-0.4.7+e934713"
+      "aider/scenarios/1-3_long-idle-live-session/recordings/2026-05-25-17-54-35_irrlichd-0.4.7+e934713",
+      "aider/scenarios/1-3_long-idle-live-session/recordings/2026-05-25-19-47-22_irrlichd-0.4.7+e934713"
     ]
   },
   "metadata": {

@@ -1,12 +1,13 @@
 {
   "recording_dir": "opencode/scenarios/4-2_multiple-agents-same-workspace",
   "artifacts": {
-    "events": "opencode/scenarios/4-2_multiple-agents-same-workspace/events.jsonl",
-    "transcript": "opencode/scenarios/4-2_multiple-agents-same-workspace/transcript.jsonl",
-    "manifest": "opencode/scenarios/4-2_multiple-agents-same-workspace/manifest.json",
-    "golden": "opencode/scenarios/4-2_multiple-agents-same-workspace/transcript.jsonl.replay.json.golden",
+    "events": "opencode/scenarios/4-2_multiple-agents-same-workspace/recordings/2026-05-27-00-08-49_irrlichd-0.4.7+4b0addd/events.jsonl",
+    "transcript": "opencode/scenarios/4-2_multiple-agents-same-workspace/recordings/2026-05-27-00-08-49_irrlichd-0.4.7+4b0addd/transcript.jsonl",
+    "manifest": "opencode/scenarios/4-2_multiple-agents-same-workspace/recordings/2026-05-27-00-08-49_irrlichd-0.4.7+4b0addd/manifest.json",
+    "golden": "opencode/scenarios/4-2_multiple-agents-same-workspace/recordings/2026-05-27-00-08-49_irrlichd-0.4.7+4b0addd/transcript.jsonl.replay.json.golden",
     "recordings": [
-      "opencode/scenarios/4-2_multiple-agents-same-workspace/recordings/2026-05-26-00-58-18_irrlichd-0.4.7+4b0addd"
+      "opencode/scenarios/4-2_multiple-agents-same-workspace/recordings/2026-05-26-00-58-18_irrlichd-0.4.7+4b0addd",
+      "opencode/scenarios/4-2_multiple-agents-same-workspace/recordings/2026-05-27-00-08-49_irrlichd-0.4.7+4b0addd"
     ]
   },
   "metadata": {

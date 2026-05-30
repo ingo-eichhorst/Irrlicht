@@ -86,13 +86,26 @@ viewer's catalog SPA — is split across two file kinds:
   e.g. scenario `architect-editor-pair` (id `5.4`) records under
   `5-4_architect-editor-pair`. A few cells use a variant folder name (e.g. pi's
   `2-17_agent-question-pending` for `user-blocking-question`); the `scenario_id`
-  field is the authoritative link, not the folder name. The metadata.json sits
-  in the same directory as the recording it describes.
+  field is the authoritative link, not the folder name.
 
-Recordings stay on disk alongside the cell — `events.jsonl`,
-`transcript.{jsonl,md}`, `*.golden`, `recordings/`, and the spec-grounded
-`expected.jsonl`. **`regression/` cells keep their plain (un-prefixed) folder
-names** — they're not catalog rows.
+**Recordings layout.** A cell folder holds only `metadata.json` (the cell
+descriptor) and `expected.jsonl` (the spec) at its root. **Every recording —
+newest included — lives under `recordings/<name>/`**, holding all of its own
+data (`events.jsonl`, `transcript.{jsonl,md}`, `manifest.json`, and the
+`transcript.jsonl.replay.json.golden`). There is no "latest" at the cell root.
+Recording folder names are timestamp-prefixed
+(`<iso-ts-hyphens>_irrlichd-<ver>`), so they sort newest-first by name — the
+viewer lists them name-descending and autoselects the newest; the
+`metadata.json` `artifacts` point at the newest recording and list all of them.
+`expected.jsonl` is validated against each recording (the newest gates; older
+ones are a drift signal). **`regression/` cells keep their plain (un-prefixed)
+folder names** — they're not catalog rows — but follow the same
+`recordings/<name>/` layout.
+
+`validate.NewestRecordingDir(cellDir)` resolves the newest recording; the
+viewer, `cmd/expected-validate`, `replay-fixtures.sh`, `promote-recording.sh`,
+and `cell-integrity.sh` all go through it. `matrix.cellRecorded` reports a cell
+as recorded iff `artifacts.recordings` is non-empty.
 
 The Go reader is `tools/agent-onboarding/internal/shard`: `LoadAll`/`Load`
 read the catalog; `LoadAdapterCells` (scan one adapter, keyed by `scenario_id`),

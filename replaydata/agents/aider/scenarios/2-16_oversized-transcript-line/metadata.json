@@ -1,9 +1,12 @@
 {
   "recording_dir": "aider/scenarios/2-16_oversized-transcript-line",
   "artifacts": {
-    "events": "aider/scenarios/2-16_oversized-transcript-line/events.jsonl",
-    "transcript_md": "aider/scenarios/2-16_oversized-transcript-line/transcript.md",
-    "manifest": "aider/scenarios/2-16_oversized-transcript-line/manifest.json"
+    "events": "aider/scenarios/2-16_oversized-transcript-line/recordings/2026-05-25-18-17-41_irrlichd-0.4.7+261b8e7/events.jsonl",
+    "transcript_md": "aider/scenarios/2-16_oversized-transcript-line/recordings/2026-05-25-18-17-41_irrlichd-0.4.7+261b8e7/transcript.md",
+    "manifest": "aider/scenarios/2-16_oversized-transcript-line/recordings/2026-05-25-18-17-41_irrlichd-0.4.7+261b8e7/manifest.json",
+    "recordings": [
+      "aider/scenarios/2-16_oversized-transcript-line/recordings/2026-05-25-18-17-41_irrlichd-0.4.7+261b8e7"
+    ]
   },
   "metadata": {
     "agent_supports": "yes",

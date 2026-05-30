@@ -1,10 +1,13 @@
 {
   "recording_dir": "codex/scenarios/5-2_model-identification",
   "artifacts": {
-    "events": "codex/scenarios/5-2_model-identification/events.jsonl",
-    "transcript": "codex/scenarios/5-2_model-identification/transcript.jsonl",
-    "manifest": "codex/scenarios/5-2_model-identification/manifest.json",
-    "golden": "codex/scenarios/5-2_model-identification/transcript.jsonl.replay.json.golden"
+    "events": "codex/scenarios/5-2_model-identification/recordings/2026-05-23-23-30-16_irrlichd-0.4.7+db0201c/events.jsonl",
+    "transcript": "codex/scenarios/5-2_model-identification/recordings/2026-05-23-23-30-16_irrlichd-0.4.7+db0201c/transcript.jsonl",
+    "manifest": "codex/scenarios/5-2_model-identification/recordings/2026-05-23-23-30-16_irrlichd-0.4.7+db0201c/manifest.json",
+    "golden": "codex/scenarios/5-2_model-identification/recordings/2026-05-23-23-30-16_irrlichd-0.4.7+db0201c/transcript.jsonl.replay.json.golden",
+    "recordings": [
+      "codex/scenarios/5-2_model-identification/recordings/2026-05-23-23-30-16_irrlichd-0.4.7+db0201c"
+    ]
   },
   "metadata": {
     "agent_supports": "yes",

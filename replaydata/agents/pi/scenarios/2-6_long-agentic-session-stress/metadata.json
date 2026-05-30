@@ -1,10 +1,13 @@
 {
   "recording_dir": "pi/scenarios/2-6_long-agentic-session-stress",
   "artifacts": {
-    "events": "pi/scenarios/2-6_long-agentic-session-stress/events.jsonl",
-    "transcript": "pi/scenarios/2-6_long-agentic-session-stress/transcript.jsonl",
-    "manifest": "pi/scenarios/2-6_long-agentic-session-stress/manifest.json",
-    "golden": "pi/scenarios/2-6_long-agentic-session-stress/transcript.jsonl.replay.json.golden"
+    "events": "pi/scenarios/2-6_long-agentic-session-stress/recordings/2026-05-25-03-14-06_irrlichd-0.4.7+f45437e/events.jsonl",
+    "transcript": "pi/scenarios/2-6_long-agentic-session-stress/recordings/2026-05-25-03-14-06_irrlichd-0.4.7+f45437e/transcript.jsonl",
+    "manifest": "pi/scenarios/2-6_long-agentic-session-stress/recordings/2026-05-25-03-14-06_irrlichd-0.4.7+f45437e/manifest.json",
+    "golden": "pi/scenarios/2-6_long-agentic-session-stress/recordings/2026-05-25-03-14-06_irrlichd-0.4.7+f45437e/transcript.jsonl.replay.json.golden",
+    "recordings": [
+      "pi/scenarios/2-6_long-agentic-session-stress/recordings/2026-05-25-03-14-06_irrlichd-0.4.7+f45437e"
+    ]
   },
   "metadata": {
     "agent_supports": "yes",

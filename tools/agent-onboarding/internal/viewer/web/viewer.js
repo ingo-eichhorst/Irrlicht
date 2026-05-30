@@ -1716,24 +1716,24 @@ function truncate(s, n) {
   return s.slice(0, n - 1) + "…";
 }
 
-// renderRecordingHistory is now the TOP-LEVEL controller for the
-// scenario detail page (iteration 13). It owns:
-//   - a selector with options [(none), Latest, ...archives newest-first]
-//   - the Spec expectations panel (always visible; content swaps
-//     with the selected recording — for archives, the validator
-//     re-runs against the archive's events to surface drift)
-//   - a container of recording-derived panels (Playback, Meta,
-//     Ground truth, Transitions, Tool calls, Validate, Signals)
-//     rendered only when a recording is selected
+// renderRecordingHistory is the TOP-LEVEL controller for the scenario detail
+// page. It owns:
+//   - a selector with options [(none), ...recordings newest-first]. Every
+//     recording lives under recordings/<name>/; there is no separate "Latest".
+//   - the Spec expectations panel (always visible; content swaps with the
+//     selected recording — the validator re-runs the current spec against that
+//     recording's events to surface drift)
+//   - a container of recording-derived panels (Playback, Meta, Transitions,
+//     Tool calls) rendered only when a recording is selected
 //
 // State machine for the selector:
-//   "(none)"  → only Spec expectations renders, in spec-only mode (no
-//               pass/fail badges — there's nothing to validate against).
-//   ""        → "Latest": full feature set including live Playback.
-//   "<name>"  → archive: panels reflect that archive; Playback retargets
-//               to the archive's events via /api/replay/start's recording
-//               field. Validate + Signals panels stay hidden because
-//               promote-recording.sh doesn't archive those today.
+//   "(none)"       → only Spec expectations renders, in spec-only mode (no
+//                    pass/fail badges — nothing to validate against).
+//   newest name    → the newest recording; its data is already embedded in
+//                    ScenarioDetail (latestData), rendered without a refetch.
+//   other <name>   → an older recording: fetched via the recordings endpoint;
+//                    Playback retargets to its events via /api/replay/start's
+//                    recording field.
 function renderRecordingHistory(s, latestData, archives, initialArchive, recipeEntry, coverageEntry) {
   const wrap = document.createElement("div");
 
@@ -1742,11 +1742,11 @@ function renderRecordingHistory(s, latestData, archives, initialArchive, recipeE
   const selPanel = panel("Recording", "recordings");
   const intro = document.createElement("div");
   intro.style.cssText = "margin-bottom: 8px; font-size: 12px; color: #555;";
-  const archCount = (archives || []).length;
-  intro.innerHTML = `Select which recording to inspect. <b>expected.jsonl</b> is the constant benchmark across all of them — picking an archive re-evaluates the current spec against that archive's events (drift signal).` +
-    (archCount > 0
-      ? ` <b>${archCount}</b> archived recording${archCount === 1 ? "" : "s"} available.`
-      : ` No archived recordings yet — the next re-record promotes the current one into <code>recordings/</code>.`);
+  const recCount = (archives || []).length;
+  intro.innerHTML = `Select which recording to inspect — all live under <code>recordings/</code>, newest first. <b>expected.jsonl</b> is the constant benchmark across all of them; picking an older recording re-evaluates the current spec against its events (drift signal).` +
+    (recCount > 0
+      ? ` <b>${recCount}</b> recording${recCount === 1 ? "" : "s"} available.`
+      : ` No recordings yet.`);
   selPanel.appendChild(intro);
 
   const select = document.createElement("select");
@@ -1756,12 +1756,9 @@ function renderRecordingHistory(s, latestData, archives, initialArchive, recipeE
   noneOpt.textContent = "— No recording (spec only) —";
   select.appendChild(noneOpt);
 
-  // Label format shared by latest + archives: recording_started_at,
-  // daemon version, fresh pass rate. Using recording_started_at (not
-  // promoted_at) so the timestamps in the dropdown describe WHEN the
-  // recording was captured, which is what the operator actually wants
-  // to compare across runs. The latest's metadata comes from
-  // latestData.expected (no separate manifest at top-level).
+  // Label: recording_started_at, daemon version, fresh pass rate. Uses
+  // recording_started_at (not promoted_at) so the timestamps describe WHEN
+  // the recording was captured.
   function fmtLabel(startedAt, daemonVer, passRate) {
     const ts = startedAt || "(no timestamp)";
     const ver = daemonVer ? ` · daemon ${daemonVer}` : "";
@@ -1769,37 +1766,23 @@ function renderRecordingHistory(s, latestData, archives, initialArchive, recipeE
     return `${ts}${ver}${pass}`;
   }
 
-  // The top-level recording (events.jsonl at the scenario root) sits at
-  // the top of the dropdown — it IS the latest, no separate "Latest"
-  // entry needed. value stays "" so the server-side path is unchanged.
-  const latestOpt = document.createElement("option");
-  latestOpt.value = "";
-  // Prefer expected.recording_start when an expected.jsonl exists; fall
-  // back to meta.started_at (synthesized from events.jsonl[0].ts by
-  // synthesizeMetaFromEvents) for scenarios without a spec file yet.
-  // Without this fallback the option reads "(no timestamp)" right after
-  // a fresh recording before expected.jsonl is authored.
-  const latestStart = (latestData.expected && latestData.expected.recording_start)
-    || (latestData.meta && latestData.meta.started_at)
-    || null;
-  const latestPass = latestData.expected && latestData.expected.summary;
-  latestOpt.textContent = fmtLabel(latestStart, "dev", latestPass);
-  select.appendChild(latestOpt);
-
+  // Every recording lives under recordings/<name>/ — there is no separate
+  // "Latest" entry. The list is newest-first by name; the newest (the one the
+  // ScenarioDetail's recording-derived fields describe) is latestData.latest_recording.
+  const newestName = latestData.latest_recording || ((archives || [])[0] && archives[0].name) || "";
   for (const a of (archives || [])) {
     const opt = document.createElement("option");
     opt.value = a.name;
-    opt.textContent = fmtLabel(a.recording_started_at || a.name, a.daemon_version, a.expected_pass_rate);
+    let label = fmtLabel(a.recording_started_at || a.name, a.daemon_version, a.expected_pass_rate);
+    if (a.name === newestName) label = "● " + label + " (newest)";
+    opt.textContent = label;
     select.appendChild(opt);
   }
-  // Default = the newest recording (top-level events.jsonl). URL deep-
-  // links (#/recording/...) imply "show me this recording", which means
-  // the latest by default; users explicitly switch to (none) for spec-
-  // only view. When the URL specifies an archive segment
-  // (#/recording/.../.../<archive>) AND the archive exists for this
-  // cell, the dropdown opens pre-pointed at it.
+  // Default = the newest recording. A URL deep-link (#/recording/.../.../<name>)
+  // that exists opens pre-pointed at it; otherwise the newest is autoselected.
+  // With no recordings at all, fall back to the spec-only view.
   const archMatch = initialArchive && (archives || []).some(a => a.name === initialArchive);
-  select.value = archMatch ? initialArchive : "";
+  select.value = archMatch ? initialArchive : (newestName || "__none__");
   selPanel.appendChild(select);
 
   const manifestBox = document.createElement("div");
@@ -1836,15 +1819,14 @@ function renderRecordingHistory(s, latestData, archives, initialArchive, recipeE
       return;
     }
 
-    if (value === "") {
-      // Latest — full feature set. Render the same manifest panel as
-      // archives, populated server-side via ScenarioDetail.LatestManifest
-      // (synthesized when no scenarioDir/manifest.json exists yet).
+    if (value === newestName) {
+      // The newest recording — its data is already embedded in ScenarioDetail
+      // (latestData), so render directly without a second fetch.
       expHost.replaceChildren(renderExpected(latestData));
       const lm = latestData.latest_manifest;
       if (lm) {
         manifestBox.innerHTML = `
-          <b>promoted_at:</b> ${escapeHtml(lm.promoted_at || "(live — not yet archived)")}<br>
+          <b>promoted_at:</b> ${escapeHtml(lm.promoted_at || "")}<br>
           <b>daemon_version:</b> ${escapeHtml(lm.daemon_version || "")}<br>
           <b>agent_cli_version:</b> ${escapeHtml(lm.agent_cli_version || "")}<br>
           <b>recipe_hash:</b> <code>${escapeHtml((lm.recipe_hash || "").slice(0, 16))}${lm.recipe_hash ? "…" : ""}</code><br>
@@ -1852,13 +1834,13 @@ function renderRecordingHistory(s, latestData, archives, initialArchive, recipeE
           <b>recording_started_at:</b> ${escapeHtml(lm.recording_started_at || "")}
         `;
       } else {
-        manifestBox.innerHTML = `<i>Showing the current top-level recording (<code>events.jsonl</code>, <code>transcript.jsonl</code>).</i>`;
+        manifestBox.innerHTML = `<i>Showing the newest recording (<code>recordings/${escapeHtml(newestName)}/</code>).</i>`;
       }
-      renderRecordingPanels(latestData, /*archiveName=*/"");
+      renderRecordingPanels(latestData, /*recordingName=*/newestName);
       return;
     }
 
-    // Archive selected.
+    // An older recording selected.
     const arch = (archives || []).find(a => a.name === value);
     if (arch) {
       manifestBox.innerHTML = `

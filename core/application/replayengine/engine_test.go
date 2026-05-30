@@ -23,6 +23,28 @@ func repoRoot(t *testing.T) string {
 	return filepath.Join(filepath.Dir(thisFile), "..", "..", "..")
 }
 
+// newestTranscript returns the committed transcript.jsonl of the NEWEST
+// recording for a scenarios/ cell. Every recording lives under
+// recordings/<name>/; the newest is the lexicographically-greatest name.
+func newestTranscript(t *testing.T, cellFolder string) string {
+	t.Helper()
+	recsDir := filepath.Join(repoRoot(t), "replaydata", "agents", "claudecode", "scenarios", cellFolder, "recordings")
+	entries, err := os.ReadDir(recsDir)
+	if err != nil {
+		t.Fatalf("read recordings dir %s: %v", recsDir, err)
+	}
+	newest := ""
+	for _, e := range entries {
+		if e.IsDir() && e.Name() > newest {
+			newest = e.Name()
+		}
+	}
+	if newest == "" {
+		t.Fatalf("no recordings under %s", recsDir)
+	}
+	return filepath.Join(recsDir, newest, "transcript.jsonl")
+}
+
 // TestReplayTranscript_producesWaitingFromQuestion is the regression guard
 // for issue #461 finding #1: a transcript whose turn ends on a question must
 // route through `waiting`. This is exactly the semantics the agent-onboarding
@@ -30,8 +52,7 @@ func repoRoot(t *testing.T) string {
 // viewer drives this engine, the engine owning the behaviour keeps them in
 // lockstep.
 func TestReplayTranscript_producesWaitingFromQuestion(t *testing.T) {
-	src := filepath.Join(repoRoot(t),
-		"replaydata", "agents", "claudecode", "scenarios", "2-17_user-blocking-question", "transcript.jsonl")
+	src := newestTranscript(t, "2-17_user-blocking-question")
 
 	res, err := replayengine.ReplayTranscript(src, replayengine.Options{
 		Adapter:                    claudecode.AdapterName,
@@ -102,8 +123,7 @@ func TestReplayTranscript_emptyTranscript(t *testing.T) {
 // (pricing-independent); cost is asserted only as non-decreasing because the
 // LiteLLM pricing cache may be absent in a bare `go test`.
 func TestReplayTranscript_metricsTimelineClimbs(t *testing.T) {
-	src := filepath.Join(repoRoot(t),
-		"replaydata", "agents", "claudecode", "scenarios", "5-1_token-accounting", "transcript.jsonl")
+	src := newestTranscript(t, "5-1_token-accounting")
 
 	res, err := replayengine.ReplayTranscript(src, replayengine.Options{
 		Adapter:                    claudecode.AdapterName,

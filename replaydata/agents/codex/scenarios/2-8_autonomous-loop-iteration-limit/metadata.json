@@ -1,10 +1,13 @@
 {
   "recording_dir": "codex/scenarios/2-8_autonomous-loop-iteration-limit",
   "artifacts": {
-    "events": "codex/scenarios/2-8_autonomous-loop-iteration-limit/events.jsonl",
-    "transcript": "codex/scenarios/2-8_autonomous-loop-iteration-limit/transcript.jsonl",
-    "manifest": "codex/scenarios/2-8_autonomous-loop-iteration-limit/manifest.json",
-    "golden": "codex/scenarios/2-8_autonomous-loop-iteration-limit/transcript.jsonl.replay.json.golden"
+    "events": "codex/scenarios/2-8_autonomous-loop-iteration-limit/recordings/2026-05-23-23-20-25_irrlichd-0.4.7+6a1a098/events.jsonl",
+    "transcript": "codex/scenarios/2-8_autonomous-loop-iteration-limit/recordings/2026-05-23-23-20-25_irrlichd-0.4.7+6a1a098/transcript.jsonl",
+    "manifest": "codex/scenarios/2-8_autonomous-loop-iteration-limit/recordings/2026-05-23-23-20-25_irrlichd-0.4.7+6a1a098/manifest.json",
+    "golden": "codex/scenarios/2-8_autonomous-loop-iteration-limit/recordings/2026-05-23-23-20-25_irrlichd-0.4.7+6a1a098/transcript.jsonl.replay.json.golden",
+    "recordings": [
+      "codex/scenarios/2-8_autonomous-loop-iteration-limit/recordings/2026-05-23-23-20-25_irrlichd-0.4.7+6a1a098"
+    ]
   },
   "metadata": {
     "agent_supports": "partial",

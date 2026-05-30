@@ -135,14 +135,28 @@ func TestSynthesizeMetaFromEvents_seedScenario(t *testing.T) {
 	}
 }
 
+// mkRecording writes a cell fixture. Cell-level files (expected.jsonl,
+// assessment.json, metadata.json, recording-meta.json) land at the cell root;
+// every recording artifact (events.jsonl, transcript.*, manifest.json, golden)
+// lands under recordings/<one>/ — the on-disk layout where there is no "latest"
+// at the root.
 func mkRecording(t *testing.T, root, agent, subtree, id string, files map[string]string) {
 	t.Helper()
 	dir := filepath.Join(root, "replaydata", "agents", agent, subtree, id)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	recDir := filepath.Join(dir, "recordings", "2026-01-01-00-00-00_irrlichd-test")
+	if err := os.MkdirAll(recDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	cellLevel := map[string]bool{
+		"expected.jsonl": true, "assessment.json": true,
+		"metadata.json": true, "recording-meta.json": true,
+	}
 	for name, content := range files {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+		target := recDir
+		if cellLevel[name] {
+			target = dir
+		}
+		if err := os.WriteFile(filepath.Join(target, name), []byte(content), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
