@@ -13,8 +13,8 @@
 //   {"phase":"pid_bind","kind":"pid_discovered","relative_to":"session_birth","max_delay_ms":1000,"text":"..."}
 //   ...
 //
-// See .claude/skills/ir:onboard-agent/spec/SKILL.md for the
-// authoring workflow.
+// See .claude/skills/ir:onboarding-factory/assess/SKILL.md for the
+// spec-authoring workflow.
 //
 // # Relationship to tools/onboarding-factory/cmd/replay's extended check
 //

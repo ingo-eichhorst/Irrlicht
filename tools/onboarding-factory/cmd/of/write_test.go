@@ -110,6 +110,39 @@ func TestCellWriteFK(t *testing.T) {
 	}
 }
 
+func TestCellSpec(t *testing.T) {
+	root := validRepo(t)
+	specFile := filepath.Join(t.TempDir(), "expected.jsonl")
+	// meta line lacks scenario_id (FK forced on write) + one verbatim phase line.
+	_ = os.WriteFile(specFile, []byte(
+		`{"schema_version":1,"notes":"hi"}`+"\n"+
+			`{"phase":"birth","anchor":"start","key":"abc"}`+"\n"), 0o644)
+
+	// dangling scenario → fail
+	if code, _, _ := runOf("cell", "spec", "--agent", "claudecode", "--scenario", "ghost", "--file", specFile, "--repo-root", root); code != exitFail {
+		t.Fatal("cell spec with unknown scenario must fail")
+	}
+	// real scenario → ok, FK forced on meta, phase line verbatim
+	code, _, errs := runOf("cell", "spec", "--agent", "claudecode", "--scenario", "basic-turn", "--file", specFile, "--repo-root", root)
+	if code != exitOK {
+		t.Fatalf("cell spec failed: %d %s", code, errs)
+	}
+	b, _ := os.ReadFile(filepath.Join(root, "replaydata", "agents", "claudecode", "scenarios", "2-1_basic-turn", "expected.jsonl"))
+	if !strings.Contains(string(b), `"scenario_id":"basic-turn"`) {
+		t.Fatalf("scenario_id FK not forced on meta line: %s", b)
+	}
+	if !strings.Contains(string(b), `{"phase":"birth","anchor":"start","key":"abc"}`) {
+		t.Fatalf("phase line not preserved verbatim: %s", b)
+	}
+
+	// malformed JSONL → fail
+	bad := filepath.Join(t.TempDir(), "bad.jsonl")
+	_ = os.WriteFile(bad, []byte("not json\n"), 0o644)
+	if code, _, _ := runOf("cell", "spec", "--agent", "claudecode", "--scenario", "basic-turn", "--file", bad, "--repo-root", root); code != exitFail {
+		t.Fatal("cell spec with malformed JSONL must fail")
+	}
+}
+
 func TestVerifyCommand(t *testing.T) {
 	root := validRepo(t)
 	cell := filepath.Join(root, "replaydata", "agents", "claudecode", "scenarios", "1-1_session-start")

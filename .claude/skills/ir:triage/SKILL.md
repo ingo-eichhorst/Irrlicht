@@ -133,7 +133,7 @@ Each flag below is **only** applied when the criterion fits. The brief must incl
 - `good first issue` — apply when **all four** hold: scope is one file or one cohesive function, complexity is Low, no domain-specific knowledge of irrlicht's hexagonal architecture or replay system is required, no concurrency / unsafe / FFI / signing code involved. One-liner names which of the four conditions make it newcomer-safe.
 - `help wanted` — issue is well-scoped and acceptance is clear, but is **not** in the maintainer's near-term roadmap and external contribution is welcome. One-liner names why it's parked (e.g. "v0.6 milestone, not blocking 0.4").
 - `documentation` — the only artifact that changes is documentation (`AGENTS.md`, `CLAUDE.md`, `site/docs/`, `README*`). One-liner names the doc surface.
-- `adapter-request` — issue asks for support for a new coding agent or orchestrator. One-liner names the agent. When this lands at `ready-for-agent`, the brief must point at `ir:onboard-agent` and the canonical scenario matrix rather than enumerating onboarding steps.
+- `adapter-request` — issue asks for support for a new coding agent or orchestrator. One-liner names the agent. When this lands at `ready-for-agent`, the brief must point at `ir:onboarding-factory` and the canonical scenario matrix rather than enumerating onboarding steps.
 - `track:brand` — touches UI / marketing / overlay design that's part of the brand surface. One-liner names the surface.
 - `duplicate` — a prior open issue covers the same scope. One-liner names `#N`.
 - `invalid` — the report is wrong (works on current main, misunderstands the system). One-liner names the misunderstanding.

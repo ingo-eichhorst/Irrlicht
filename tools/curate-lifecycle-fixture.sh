@@ -16,7 +16,7 @@
 #     <recording.jsonl> <session-id> <transcript.jsonl> <adapter> <scenario>
 #
 # -d <agents-root> overrides the default ($REPO_ROOT/replaydata/agents).
-# Used by the ir:onboard-agent skill to stage fixtures under .build/refresh/
+# Used by the onboarding factory's record path to stage fixtures under .build/refresh/
 # before a human reviews and copies them into the real replaydata/ tree.
 #
 # Example:

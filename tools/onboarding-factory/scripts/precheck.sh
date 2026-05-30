@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# precheck.sh — fail-fast correctness bundle for the ir:onboard-agent skill.
+# precheck.sh — fail-fast correctness bundle for the onboarding factory's
+# record path (of record run → run-cell.sh).
 #
 # Every check prints a specific failing-check name on stderr and exits
 # nonzero so the skill can surface the exact reason. These checks are for

@@ -2,8 +2,8 @@
 # drive-tmux-agent.sh — drive an interactive REPL agent in a detached tmux
 # session: send a prompt, poll for completion, capture output, tear down.
 #
-# Generic over the agent CLI — used by the post-discovery live-recording
-# smoke (see .claude/skills/ir:onboard-agent/discovery-instructions.md).
+# Generic over the agent CLI — the live-recording smoke used when onboarding a
+# new agent column (see .claude/skills/ir:onboarding-factory/create-agent/SKILL.md).
 # Designed to be reused for any future REPL-style agent.
 #
 # Usage:

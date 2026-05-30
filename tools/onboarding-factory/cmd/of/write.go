@@ -33,14 +33,9 @@ type writeCatalog struct {
 	Scenarios []shard.Shard   `json:"scenarios"`
 }
 
-// writeJSONFileAtomic marshals v (2-space indent) and replaces path atomically
-// via a temp file + rename, so a crashed write never leaves a half file.
-func writeJSONFileAtomic(path string, v any) error {
-	b, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
-		return err
-	}
-	b = append(b, '\n')
+// writeBytesAtomic replaces path with b via a temp file + rename, so a crashed
+// write never leaves a half file. Parent dirs are created as needed.
+func writeBytesAtomic(path string, b []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
@@ -49,6 +44,24 @@ func writeJSONFileAtomic(path string, v any) error {
 		return err
 	}
 	return os.Rename(tmp, path)
+}
+
+// writeJSONFileAtomic marshals v (2-space indent) and replaces path atomically.
+func writeJSONFileAtomic(path string, v any) error {
+	b, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return err
+	}
+	return writeBytesAtomic(path, append(b, '\n'))
+}
+
+// resolveCellFolder returns the on-disk folder for (scenario, override): the
+// override when set, else the canonical <dashed-id>_<name>.
+func resolveCellFolder(sh shard.Shard, override string) string {
+	if override != "" {
+		return override
+	}
+	return strings.ReplaceAll(sh.ID, ".", "-") + "_" + sh.Name
 }
 
 func loadWriteCatalog(repoRoot string) (*writeCatalog, error) {
@@ -284,13 +297,28 @@ func registerAgentColumn(repoRoot, id, minVer string, stderr io.Writer) int {
 	return exitOK
 }
 
-// --- of cell write ---
+// --- of cell write|spec ---
+
+const cellUsage = `usage: of cell write --agent a --scenario s --file metadata.json [--folder f]
+       of cell spec  --agent a --scenario s --file expected.jsonl [--folder f]`
 
 func runCell(args []string, stdout, stderr io.Writer) int {
-	if len(args) == 0 || args[0] != "write" {
-		fmt.Fprintln(stderr, "usage: of cell write --agent a --scenario s --file metadata.json [--folder f]")
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, cellUsage)
 		return exitUsage
 	}
+	switch args[0] {
+	case "write":
+		return runCellWrite(args[1:], stdout, stderr)
+	case "spec":
+		return runCellSpec(args[1:], stdout, stderr)
+	default:
+		fmt.Fprintln(stderr, cellUsage)
+		return exitUsage
+	}
+}
+
+func runCellWrite(args []string, stdout, stderr io.Writer) int {
 	fs := newFlagSet("of cell write")
 	var (
 		agent    = fs.String("agent", "", "agent id")
@@ -299,7 +327,7 @@ func runCell(args []string, stdout, stderr io.Writer) int {
 		folder   = fs.String("folder", "", "override on-disk folder (default: <dashed-id>_<name>)")
 		repoRoot = fs.String("repo-root", ".", "repository root")
 	)
-	if err := fs.Parse(args[1:]); err != nil {
+	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
 	if *agent == "" || *scenario == "" || *file == "" {
@@ -323,10 +351,7 @@ func runCell(args []string, stdout, stderr io.Writer) int {
 	}
 	// Force the FK so the cell always links back to its catalog row.
 	cell.ScenarioID = *scenario
-	fold := *folder
-	if fold == "" {
-		fold = strings.ReplaceAll(sh.ID, ".", "-") + "_" + sh.Name
-	}
+	fold := resolveCellFolder(sh, *folder)
 	metaPath := filepath.Join(*repoRoot, "replaydata", "agents", *agent, "scenarios", fold, "metadata.json")
 	if err := writeJSONFileAtomic(metaPath, cell); err != nil {
 		fmt.Fprintf(stderr, "of cell write: write: %v\n", err)
@@ -334,4 +359,84 @@ func runCell(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintf(stdout, "of cell write: %s/%s ok\n", *agent, fold)
 	return exitOK
+}
+
+// runCellSpec writes a cell's expected.jsonl (the spec) through the factory so
+// the skill never edits replaydata directly. It validates well-formed JSONL and
+// forces the meta line's scenario_id to the FK; phase lines are kept verbatim.
+func runCellSpec(args []string, stdout, stderr io.Writer) int {
+	fs := newFlagSet("of cell spec")
+	var (
+		agent    = fs.String("agent", "", "agent id")
+		scenario = fs.String("scenario", "", "scenario name (the FK)")
+		file     = fs.String("file", "", "expected.jsonl content to write")
+		folder   = fs.String("folder", "", "override on-disk folder (default: <dashed-id>_<name>)")
+		repoRoot = fs.String("repo-root", ".", "repository root")
+	)
+	if err := fs.Parse(args); err != nil {
+		return exitUsage
+	}
+	if *agent == "" || *scenario == "" || *file == "" {
+		fmt.Fprintln(stderr, "of cell spec: --agent, --scenario, --file are required")
+		return exitUsage
+	}
+	sh, ok := shard.Load(*repoRoot, *scenario)
+	if !ok {
+		fmt.Fprintf(stderr, "of cell spec: scenario %q not in the catalog\n", *scenario)
+		return exitFail
+	}
+	b, err := os.ReadFile(*file)
+	if err != nil {
+		fmt.Fprintf(stderr, "of cell spec: %v\n", err)
+		return exitUsage
+	}
+	out, err := normalizeExpectedJSONL(b, *scenario)
+	if err != nil {
+		fmt.Fprintf(stderr, "of cell spec: %v\n", err)
+		return exitFail
+	}
+	fold := resolveCellFolder(sh, *folder)
+	specPath := filepath.Join(*repoRoot, "replaydata", "agents", *agent, "scenarios", fold, "expected.jsonl")
+	if err := writeBytesAtomic(specPath, out); err != nil {
+		fmt.Fprintf(stderr, "of cell spec: write: %v\n", err)
+		return exitUsage
+	}
+	fmt.Fprintf(stdout, "of cell spec: %s/%s ok\n", *agent, fold)
+	return exitOK
+}
+
+// normalizeExpectedJSONL validates that b is well-formed JSONL (one JSON object
+// per non-empty line) and forces the meta line (the first non-empty line) to
+// carry scenario_id=scenarioID + a schema_version (default 1). Phase lines are
+// emitted byte-for-byte so a re-written spec doesn't churn their key order.
+func normalizeExpectedJSONL(b []byte, scenarioID string) ([]byte, error) {
+	var out []string
+	metaDone := false
+	for i, ln := range strings.Split(strings.TrimRight(string(b), "\n"), "\n") {
+		if strings.TrimSpace(ln) == "" {
+			continue
+		}
+		var obj map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(ln), &obj); err != nil {
+			return nil, fmt.Errorf("line %d is not a JSON object: %w", i+1, err)
+		}
+		if !metaDone {
+			obj["scenario_id"], _ = json.Marshal(scenarioID)
+			if _, ok := obj["schema_version"]; !ok {
+				obj["schema_version"] = json.RawMessage("1")
+			}
+			nb, err := json.Marshal(obj)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, string(nb))
+			metaDone = true
+			continue
+		}
+		out = append(out, ln) // phase line — verbatim
+	}
+	if !metaDone {
+		return nil, fmt.Errorf("expected.jsonl has no meta line")
+	}
+	return []byte(strings.Join(out, "\n") + "\n"), nil
 }
