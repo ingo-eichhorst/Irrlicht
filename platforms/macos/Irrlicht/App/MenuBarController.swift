@@ -15,6 +15,14 @@ import SwiftUI
 ///   re-anchor the panel top under the status item.
 /// - Re-anchoring uses `setFrame(_:display:animate:)` with animate=false
 ///   so content change + size change + origin change land in one pass.
+// NSWindow.canBecomeKey returns false for .borderless windows by default, so
+// makeKey() is a no-op on the stock NSPanel. Override to allow Settings text
+// fields to receive keyboard input when we explicitly activate.
+private final class IrrlichtPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { false }
+}
+
 @MainActor
 final class MenuBarController: NSObject {
     private let daemonManager: DaemonManager
@@ -23,7 +31,7 @@ final class MenuBarController: NSObject {
     private let updateManager: UpdateManager
 
     private let statusItem: NSStatusItem
-    private let panel: NSPanel
+    private let panel: IrrlichtPanel
     private let hostingController: NSHostingController<AnyView>
 
     private var imageSubscription: AnyCancellable?
@@ -52,7 +60,7 @@ final class MenuBarController: NSObject {
             .environmentObject(updateManager)
         self.hostingController = NSHostingController(rootView: AnyView(root))
 
-        self.panel = NSPanel(
+        self.panel = IrrlichtPanel(
             contentRect: NSRect(x: 0, y: 0, width: SessionListView.panelWidth, height: 200),
             styleMask: [.borderless, .nonactivatingPanel, .fullSizeContentView],
             backing: .buffered,

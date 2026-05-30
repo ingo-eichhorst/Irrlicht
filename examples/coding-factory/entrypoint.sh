@@ -15,6 +15,14 @@ rm -f "$state_dir/relay-identity.json"
 mkdir -p "$HOME/.codex"
 printf 'model = "%s"\n' "${CODEX_MODEL:-gpt-4o-mini}" > "$HOME/.codex/config.toml"
 
+# Pre-authenticate codex so the first-run API key wizard doesn't appear in the
+# tmux session before the driver is ready to handle it. `--with-api-key` reads
+# from stdin and stores the key in ~/.codex/; OPENAI_API_KEY in the env suffices
+# for inference itself, but without this the interactive wizard fires first.
+if [ -n "${OPENAI_API_KEY:-}" ]; then
+  echo "$OPENAI_API_KEY" | codex login --with-api-key 2>/dev/null || true
+fi
+
 echo "[entrypoint] irrlichd → ${IRRLICHT_RELAY_URL:-<unset>} (token: ${IRRLICHT_RELAY_TOKEN:+set}, model: ${CODEX_MODEL:-gpt-4o-mini})"
 irrlichd &
 daemon=$!
