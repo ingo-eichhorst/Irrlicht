@@ -1,0 +1,73 @@
+{
+  "scenario_id": "subagent-orphan-cleanup",
+  "artifacts": {},
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "incapable",
+    "driver_capability": "n/a",
+    "agent_cli_version": "0.135.0",
+    "daemon_version": "0.4.8+5321b6d.dirty",
+    "confidence": 0.75,
+    "notes": "agent_supports: yes (multi_agent stable=true; SubagentStart/Stop hooks, thread_spawn_edges)\ndaemon_capability: incapable — no codex parent-child linking path; frozen"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "subagent-orphan-cleanup",
+      "agent": "codex",
+      "assessed_at": "2026-05-31T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "incapable",
+      "driver_capability": "n/a",
+      "confidence": 0.75,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: incapable (no codex parent-child linking path)\ndriver_capability: n/a (frozen — no recording)\n\n## Agent pillar (yes)\n\nCodex CLI 0.135.0 supports spawning subagents as separate child threads. Evidence from the native binary and live install:\n\n- `codex features list` reports `multi_agent  stable  true` — the multi-agent capability is on by default (not gated/experimental). `multi_agent_v2` is still `under development`, but the v1 capability is stable.\n- The binary's embedded hook schema defines `SubagentStart` / `SubagentStop` lifecycle hooks and a `\"Spawn a sub-agent for a well-scoped task\"` tool description.\n- The agent state DB (`~/.codex/state_5.sqlite`) has a `thread_spawn_edges(parent_thread_id, child_thread_id, status)` table plus `agent_jobs` / `agent_job_items`, and TS type files `SubAgentSource.ts` / `CollabAgentState.ts` — codex models subagents as distinct child *threads*, each with its own `rollout_path` (a separate `rollout-*.jsonl` under `~/.codex/sessions/`). This is structurally analogous to claudecode's parent/sidechain model, so the scenario's precondition (a child session linked to a parent) is producible by the agent.\n\nCaveat: no subagent thread has ever run on this machine (0 rows in `thread_spawn_edges`, 0 `agent_jobs`, no thread with a subagent `source`/`agent_role`), so the exact on-disk shape of a *child* rollout — and whether it carries any parent reference in its own header — is provisional, not directly observed.\n\n## Daemon pillar (incapable)\n\nThe scenario's acceptance criteria require \"≥ 1 child session(s) linked to a parent\" and \"≥ 1 subagent transcript(s)\". The irrlicht daemon establishes a parent→child link by exactly three mechanisms, none of which fire for codex:\n\n1. Transcript-path pattern `.../\u003cparent\u003e/subagents/\u003cchild\u003e.jsonl` (claudecode) — `deriveParentSessionID` in `core/application/services/helpers.go:64`. Codex rollouts live at a FLAT path `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` with no `subagents/` parent directory, so this never matches.\n2. Transcript header `{\"type\":\"session\",\"parentSession\":\"...\"}` (pi) — `deriveParentSessionFromTranscript` in `helpers.go:75`. A codex rollout's first line is `{\"type\":\"session_meta\", payload:{... \"source\":\"cli\",\"thread_source\":\"user\",\"originator\":\"codex-tui\" ...}}` — the type is `session_meta`, not `session`, and there is NO `parentSession` field, so this never matches either.\n3. A parser that sets `ev.ParentSessionID` (consumed at `session_detector_activity.go:88`). The codex parser (`core/adapters/inbound/agents/codex/parser.go`) never sets `ParentSessionID` — the codex package has zero references to parent/child/sidechain linking.\n\nThe parent→child relationship for codex lives solely in `state_5.sqlite`'s `thread_spawn_edges` table (and/or codex-internal thread metadata), which the codex adapter does not read — the adapter's `Source` is `FilesUnderRoot{~/.codex/sessions}` tailing JSONL, with no access to the SQLite spawn-edge store. Therefore the daemon cannot, today, observe a codex subagent as a *linked child session* — the core observable this scenario asserts. This is not a narrow `bug` (a spec-required observable mis-handled on a trace the daemon already reads); it is a missing capability: there is no codex parent-linking code path at all. Building one is new adapter work (read `thread_spawn_edges`, or parse a spawn/parent reference out of the child rollout if one is emitted).\n\n## Why frozen\n\nWith `agent=yes` and `daemon=incapable`, the route is `frozen` per the routing table. The scenario as written (parent + N children, restart sweep, no spurious working transition, child linked to parent) cannot be observed for codex until the adapter learns to link codex parent→child threads. Re-assess once codex parent-linking lands in the adapter; the agent side is already there.",
+      "caveats": [
+        "Provisional emission: no codex subagent has run locally (0 thread_spawn_edges), so the on-disk shape of a child rollout and whether its header carries any parent/spawn reference is inferred from the binary's schema (thread_spawn_edges, SubAgentSource.ts), not from an observed child rollout. A live spawn would settle whether the link could be recovered from the rollout header (cheap adapter fix) vs only from state_5.sqlite (heavier).",
+        "Unblock path: add codex parent-child linking to the adapter — either (a) read thread_spawn_edges from ~/.codex/state_5.sqlite to map child rollout -\u003e parent thread id, or (b) if a child rollout's session_meta payload carries a parent/spawn-source field, extend deriveParentSessionFromTranscript to recognize the codex header. Either flips daemon -\u003e full and unfreezes this cell.",
+        "The restart-sweep / no-working-transition invariant (issue #321) is daemon-internal and agent-agnostic; it is already covered by the claudecode cell. The codex-specific blocker is strictly the parent-child link, not the sweep behavior."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/codex/parser.go",
+          "note": "Codex parser never sets event.ParentSessionID; the entire codex adapter package has zero parent/child/sidechain linking references (grep-confirmed)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/codex/agent.go",
+          "note": "Source is FilesUnderRoot{~/.codex/sessions} tailing JSONL rollouts; the adapter has no access to ~/.codex/state_5.sqlite where thread_spawn_edges (the parent-\u003echild link) lives."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/helpers.go",
+          "note": "deriveParentSessionID (line 64) matches only .../subagents/\u003cchild\u003e.jsonl; deriveParentSessionFromTranscript (line 75) matches only a pi header {\"type\":\"session\",\"parentSession\":...}. A codex rollout's flat path + session_meta header (no parentSession field) match neither."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.codex/state_5.sqlite",
+          "note": "threads(id, rollout_path, source, thread_source, agent_role, ...) + thread_spawn_edges(parent_thread_id, child_thread_id, status) + agent_jobs/agent_job_items. Codex models subagents as separate child threads linked by spawn edges; 0 spawn edges / 0 agent_jobs recorded locally."
+        },
+        {
+          "kind": "file",
+          "ref": "@openai/codex-darwin-arm64 vendor/aarch64-apple-darwin/bin/codex (strings)",
+          "note": "SubagentStart/SubagentStop hook consts, 'Spawn a sub-agent for a well-scoped task', SubAgentSource.ts / CollabAgentState.ts type refs in binary 0.135.0."
+        },
+        {
+          "kind": "file",
+          "ref": "codex features list (0.135.0)",
+          "note": "multi_agent = stable, effective true (subagent capability on by default); multi_agent_v2 = under development, false."
+        },
+        {
+          "kind": "issue",
+          "ref": "ingo-eichhorst/Irrlicht#321",
+          "note": "Zombie-on-restart fix establishing the no-working-transition-during-cleanup invariant; agent-agnostic, already covered by the claudecode cell — not the codex blocker."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "note": "Frozen: agent=yes but daemon=incapable. No recipe is run because the daemon cannot observe a codex subagent as a linked child session (no codex parent-child linking path). Recipe would otherwise mirror claudecode's 3-4 cell (spawn a subagent that reads a file and waits; SIGKILL the process group; restart and observe the sweep). Re-author once codex parent-linking lands in the adapter.",
+      "script": []
+    }
+  }
+}
