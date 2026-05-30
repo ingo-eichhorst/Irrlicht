@@ -131,7 +131,7 @@ func runRecordRun(args []string, stdout, stderr io.Writer) int {
 	}
 	runCell, ok := resolveRunCell(*repoRoot)
 	if !ok {
-		fmt.Fprintf(stderr, "of record run: run-cell.sh not found (factory scripts or skill)\n")
+		fmt.Fprintf(stderr, "of record run: run-cell.sh not found at tools/onboarding-factory/scripts/run-cell.sh\n")
 		return exitFail
 	}
 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"strings"
 
 	"irrlicht/tools/onboarding-factory/internal/shard"
+	"irrlicht/tools/onboarding-factory/internal/validate"
 )
 
 // flagPassed reports whether name was explicitly set on the command line (so an
@@ -43,7 +45,11 @@ func writeBytesAtomic(path string, b []byte) error {
 	if err := os.WriteFile(tmp, b, 0o644); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp) // don't leave a stray .tmp for directory scans to trip on
+		return err
+	}
+	return nil
 }
 
 // writeJSONFileAtomic marshals v (2-space indent) and replaces path atomically.
@@ -55,13 +61,17 @@ func writeJSONFileAtomic(path string, v any) error {
 	return writeBytesAtomic(path, append(b, '\n'))
 }
 
-// resolveCellFolder returns the on-disk folder for (scenario, override): the
-// override when set, else the canonical <dashed-id>_<name>.
-func resolveCellFolder(sh shard.Shard, override string) string {
+// resolveCellFolder returns the on-disk folder for one (agent, scenario) cell:
+// the override when set, else the agent's existing folder for the scenario
+// (preferring a variant folder where its recordings already live), else the
+// canonical <dashed-id>_<name> for a brand-new cell. Routing write + spec
+// through the same resolver keeps a cell's metadata.json and expected.jsonl in
+// the SAME folder as its recordings.
+func resolveCellFolder(repoRoot, agent string, sh shard.Shard, override string) string {
 	if override != "" {
 		return override
 	}
-	return strings.ReplaceAll(sh.ID, ".", "-") + "_" + sh.Name
+	return shard.AgentFolderForScenario(repoRoot, agent, sh.Name)
 }
 
 func loadWriteCatalog(repoRoot string) (*writeCatalog, error) {
@@ -102,14 +112,52 @@ func readFileArg(path string) (string, error) {
 	return strings.TrimRight(string(b), "\n"), nil
 }
 
-// --- of scenario add|update ---
+// --- of scenario add|update|show ---
+
+// runScenarioShow prints one scenario's full spec (the five fields). It is the
+// read the skill's assess / create-* verbs use to fetch description + process +
+// acceptance_criteria — the coverage/status views carry only ids and state, and
+// the skill must NOT read replaydata/agents/scenarios.json directly.
+func runScenarioShow(args []string, stdout, stderr io.Writer) int {
+	fs := newFlagSet("of scenario show")
+	var (
+		name     = fs.String("name", "", "scenario name (kebab slug)")
+		asJSON   = fs.Bool("json", false, "emit JSON")
+		repoRoot = fs.String("repo-root", ".", "repository root")
+	)
+	if err := fs.Parse(args); err != nil {
+		return exitUsage
+	}
+	if *name == "" {
+		fmt.Fprintln(stderr, "of scenario show: --name is required")
+		return exitUsage
+	}
+	sh, ok := shard.Load(*repoRoot, *name)
+	if !ok {
+		fmt.Fprintf(stderr, "of scenario show: %q not in the catalog\n", *name)
+		return exitFail
+	}
+	if *asJSON {
+		if err := writeJSON(stdout, sh); err != nil {
+			fmt.Fprintf(stderr, "of scenario show: encode: %v\n", err)
+			return exitUsage
+		}
+		return exitOK
+	}
+	fmt.Fprintf(stdout, "id: %s\nname: %s\ndescription: %s\n\n## process\n%s\n\n## acceptance_criteria\n%s\n",
+		sh.ID, sh.Name, sh.Description, sh.Process, sh.AcceptanceCriteria)
+	return exitOK
+}
 
 func runScenario(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: of scenario add|update ...")
+		fmt.Fprintln(stderr, "usage: of scenario add|update|show ...")
 		return exitUsage
 	}
 	verb := args[0]
+	if verb == "show" {
+		return runScenarioShow(args[1:], stdout, stderr)
+	}
 	fs := newFlagSet("of scenario " + verb)
 	var (
 		id       = fs.String("id", "", "scenario id <section>.<index> (add only)")
@@ -195,7 +243,7 @@ func runScenario(args []string, stdout, stderr io.Writer) int {
 			s.AcceptanceCriteria = acceptance
 		}
 	default:
-		fmt.Fprintln(stderr, "of scenario: verb must be add or update")
+		fmt.Fprintln(stderr, "of scenario: verb must be add, update, or show")
 		return exitUsage
 	}
 
@@ -351,7 +399,7 @@ func runCellWrite(args []string, stdout, stderr io.Writer) int {
 	}
 	// Force the FK so the cell always links back to its catalog row.
 	cell.ScenarioID = *scenario
-	fold := resolveCellFolder(sh, *folder)
+	fold := resolveCellFolder(*repoRoot, *agent, sh, *folder)
 	metaPath := filepath.Join(*repoRoot, "replaydata", "agents", *agent, "scenarios", fold, "metadata.json")
 	if err := writeJSONFileAtomic(metaPath, cell); err != nil {
 		fmt.Fprintf(stderr, "of cell write: write: %v\n", err)
@@ -395,7 +443,7 @@ func runCellSpec(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "of cell spec: %v\n", err)
 		return exitFail
 	}
-	fold := resolveCellFolder(sh, *folder)
+	fold := resolveCellFolder(*repoRoot, *agent, sh, *folder)
 	specPath := filepath.Join(*repoRoot, "replaydata", "agents", *agent, "scenarios", fold, "expected.jsonl")
 	if err := writeBytesAtomic(specPath, out); err != nil {
 		fmt.Fprintf(stderr, "of cell spec: write: %v\n", err)
@@ -408,11 +456,16 @@ func runCellSpec(args []string, stdout, stderr io.Writer) int {
 // normalizeExpectedJSONL validates that b is well-formed JSONL (one JSON object
 // per non-empty line) and forces the meta line (the first non-empty line) to
 // carry scenario_id=scenarioID + a schema_version (default 1). Phase lines are
-// emitted byte-for-byte so a re-written spec doesn't churn their key order.
+// emitted byte-for-byte (modulo CRLF normalization) so a re-written spec doesn't
+// churn their key order. Phases are validated on the same terms as the reader
+// (validate.ParseShardSpec) so a structurally-broken phase is rejected here, not
+// silently written and only caught later at record/verify time.
 func normalizeExpectedJSONL(b []byte, scenarioID string) ([]byte, error) {
 	var out []string
-	metaDone := false
-	for i, ln := range strings.Split(strings.TrimRight(string(b), "\n"), "\n") {
+	var metaLine json.RawMessage
+	var phaseLines []json.RawMessage
+	for i, raw := range strings.Split(strings.TrimRight(string(b), "\n"), "\n") {
+		ln := strings.TrimRight(raw, "\r") // normalize CRLF → LF so endings stay uniform
 		if strings.TrimSpace(ln) == "" {
 			continue
 		}
@@ -420,23 +473,46 @@ func normalizeExpectedJSONL(b []byte, scenarioID string) ([]byte, error) {
 		if err := json.Unmarshal([]byte(ln), &obj); err != nil {
 			return nil, fmt.Errorf("line %d is not a JSON object: %w", i+1, err)
 		}
-		if !metaDone {
+		if obj == nil { // a bare `null` line unmarshals to a nil map with no error
+			return nil, fmt.Errorf("line %d is JSON null, not an object", i+1)
+		}
+		if metaLine == nil {
+			// Meta line: force the FK + a default schema_version, then re-emit
+			// WITHOUT HTML-escaping so it matches the file's literal style (the
+			// rest of replaydata is not >-escaped); otherwise a re-write
+			// would churn every < > & in source/notes into escapes.
 			obj["scenario_id"], _ = json.Marshal(scenarioID)
 			if _, ok := obj["schema_version"]; !ok {
 				obj["schema_version"] = json.RawMessage("1")
 			}
-			nb, err := json.Marshal(obj)
+			enc, err := marshalNoEscape(obj)
 			if err != nil {
 				return nil, err
 			}
-			out = append(out, string(nb))
-			metaDone = true
+			metaLine = enc
+			out = append(out, string(enc))
 			continue
 		}
 		out = append(out, ln) // phase line — verbatim
+		phaseLines = append(phaseLines, json.RawMessage(ln))
 	}
-	if !metaDone {
-		return nil, fmt.Errorf("expected.jsonl has no meta line")
+	if metaLine == nil {
+		return nil, fmt.Errorf("expected.jsonl has no meta line (empty or whitespace-only file)")
+	}
+	if _, _, _, err := validate.ParseShardSpec(metaLine, phaseLines); err != nil {
+		return nil, err
 	}
 	return []byte(strings.Join(out, "\n") + "\n"), nil
+}
+
+// marshalNoEscape encodes v as compact JSON without Go's default HTML escaping
+// of <, >, & — matching the literal (non-\u-escaped) style of replaydata files.
+func marshalNoEscape(v any) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	return bytes.TrimRight(buf.Bytes(), "\n"), nil // Encode appends a trailing newline
 }

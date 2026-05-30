@@ -218,14 +218,44 @@ func Load(repoRoot, name string) (Shard, bool) {
 // FolderForScenario returns the on-disk recording folder for a standard cell:
 // the scenario's dashed id, an underscore, then the scenario name
 // (e.g. "5-4_architect-editor-pair"). Empty when the scenario is unknown.
-// Variant-folder cells don't follow this rule — resolve those from a loaded
-// cell's RecordingDir instead.
+// Variant-folder cells don't follow this rule — resolve a specific adapter's
+// cell with AgentFolderForScenario instead.
 func FolderForScenario(repoRoot, name string) string {
 	s, ok := Load(repoRoot, name)
 	if !ok {
 		return ""
 	}
 	return strings.ReplaceAll(s.ID, ".", "-") + "_" + name
+}
+
+// AgentFolderForScenario resolves the on-disk folder for one (adapter, scenario)
+// cell. It prefers an EXISTING folder whose metadata.json carries the matching
+// scenario_id — so a variant-folder cell (e.g. codex's "2-20_interrupted-turn"
+// for scenario "user-esc-interrupt", or pi's "2-17_agent-question-pending" for
+// "user-blocking-question") resolves to where its recordings actually live —
+// and falls back to the canonical <dashed-id>_<name> when no cell exists yet
+// (a brand-new cell). Empty only when the scenario is unknown and no folder is
+// on disk. This is the bash rig's `shard_folder` (scan-by-scenario_id) in Go;
+// of cell write/spec and of verify all go through it so a cell's metadata.json,
+// expected.jsonl, and recordings never split across two folders.
+func AgentFolderForScenario(repoRoot, adapter, name string) string {
+	scenDir := filepath.Join(repoRoot, "replaydata", "agents", adapter, "scenarios")
+	if entries, err := os.ReadDir(scenDir); err == nil {
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			b, err := os.ReadFile(filepath.Join(scenDir, e.Name(), "metadata.json"))
+			if err != nil {
+				continue
+			}
+			var cell ShardAgent
+			if json.Unmarshal(b, &cell) == nil && cell.ScenarioID == name {
+				return e.Name()
+			}
+		}
+	}
+	return FolderForScenario(repoRoot, name) // canonical fallback (new cell)
 }
 
 // LoadMeta reads the `meta` block of replaydata/agents/scenarios.json. Returns an

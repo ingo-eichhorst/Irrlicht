@@ -61,7 +61,7 @@ concrete citation; finer granularity multiplies the chance of mislabeling.
 
 ```bash
 of status --scenario <scenario> --json   # the cell's current pillars + route
-of coverage --json                        # the scenario's description/process/acceptance
+of scenario show --name <scenario>        # the scenario's description + process + acceptance_criteria
 ```
 
 Capture the **user-observable signal** the scenario asserts (from its
