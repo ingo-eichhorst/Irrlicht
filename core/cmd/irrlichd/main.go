@@ -176,6 +176,9 @@ func main() {
 		if err != nil {
 			logger.LogError("startup", "", fmt.Sprintf("relay identity persistence failed (using ephemeral id): %v", err))
 		}
+		// Bearer token for an auth-enabled relay: IRRLICHT_RELAY_TOKEN or
+		// <dataDir>/relay-token.json (mode 0600). Empty against a no-auth relay.
+		relayToken := relay.LoadDaemonToken(dataDir(home))
 		snapshot := func() ([]*session.SessionState, []relay.AgentInfo) {
 			sessions, err := cachedRepo.ListAll()
 			if err != nil {
@@ -192,7 +195,7 @@ func main() {
 			}
 			return sessions, infos
 		}
-		fwd := relay.NewForwarder(relayURL, identity, push, snapshot, logger)
+		fwd := relay.NewForwarder(relayURL, identity, relayToken, push, snapshot, logger)
 		relayCtx, relayCancel := context.WithCancel(context.Background())
 		defer relayCancel()
 		go fwd.Run(relayCtx)

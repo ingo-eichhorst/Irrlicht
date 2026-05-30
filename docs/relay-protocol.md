@@ -38,7 +38,8 @@ Every frame is a JSON text message with a `type` tag.
 
 ```jsonc
 { "type": "hello", "protocol_version": 1, "role": "daemon" | "client",
-  "daemon_id": "uuid", "daemon_label": "laptop" }   // daemon_* set by daemons only
+  "daemon_id": "uuid", "daemon_label": "laptop",     // daemon_* set by daemons only
+  "token": "…" }                                      // both roles, when --auth is on
 ```
 
 A daemon mints `daemon_id` once and persists it at
@@ -46,6 +47,12 @@ A daemon mints `daemon_id` once and persists it at
 the id is stable across restarts; clients dedupe by it. `daemon_label` defaults
 to the hostname. The relay **refuses** a daemon `hello` with an empty
 `daemon_id`. A client `hello` omits the daemon fields.
+
+`token` carries the bearer token, sent by **both** roles. It is omitted against
+a `--auth off` relay (the trusted-LAN default) and required against an
+auth-enabled one (see [Auth, TLS, and origins](#auth-tls-and-origins)). The
+token rides in the `hello` rather than an HTTP header because a browser cannot
+set headers on a WebSocket — one channel serves daemon, macOS, and web alike.
 
 ### `hello_ack` (relay → peer)
 
@@ -112,6 +119,10 @@ socket and a relay collapses to one row automatically. **Caveat:** two
 *different* daemons that share a `session_id` (e.g. `proc-<pid>`) would merge —
 per-source keying and row-level source badges are deferred.
 
+Against an auth-enabled relay a client includes its `token` in that `hello`. A
+WS close with code **4401** means the token was missing, invalid, or revoked;
+clients treat it as "auth failed" and stop reconnecting rather than looping.
+
 ## HTTP
 
 The relay re-serves the daemon's read API from its cache so clients render
@@ -124,8 +135,49 @@ without an empty first paint, and serves the `platforms/web/` dashboard:
 | `GET /api/v1/version`  | the relay's own build version.                                 |
 | `GET /` (+ assets)     | the dashboard, served from disk (`IRRLICHT_UI_DIR` override, else dev/bundle lookup). |
 
-WebSocket `CheckOrigin` is permissive in v0 (localhost-only, no auth; the
-dashboard served from a different port is cross-origin). Tighten alongside auth.
+WebSocket `CheckOrigin` is permissive by default (the dashboard served from a
+different port is cross-origin). `serve --origin-allowlist host1,host2`
+restricts which browser `Origin`s may open the socket; non-browser peers send
+no `Origin` and are always admitted, with auth still gating them.
+
+## Auth, TLS, and origins
+
+The relay is safe to expose once these are in place.
+
+**TLS (`wss://`).** Two supported patterns:
+
+- *Reverse-proxy termination (recommended).* Front the relay with
+  Caddy/nginx/traefik terminating TLS and passing the WS upgrade through to the
+  relay on loopback. The relay itself binds `127.0.0.1`.
+- *Native TLS.* `irrlichtrelay serve --tls-cert cert.pem --tls-key key.pem`
+  serves `wss://` directly (`ListenAndServeTLS`); both flags are required
+  together. The daemon dialer already upgrades `https://`→`wss://`.
+
+**Bearer tokens (`--auth`).** `off` (default) accepts any `hello` — the
+trusted-LAN posture. `tokens-file[:PATH]` verifies the `hello`'s `token` for
+both roles against a store hashed at rest (SHA-256); default path
+`<data-dir>/tokens.json` (`$IRRLICHT_HOME` or `~/.local/share/irrlicht`).
+
+```
+irrlichtrelay token issue --label "ingo-laptop"   # prints the plaintext ONCE
+irrlichtrelay token list                          # id, created, label
+irrlichtrelay token revoke <id>                    # next frame closed with 4401
+```
+
+A serving relay re-reads the tokens file when it changes, so `revoke` takes
+effect without a restart: the revoked peer's next frame is closed with WS code
+**4401** (`relay.CloseRevoked`), the same code that rejects a missing/invalid
+token at handshake. The daemon presents its token via `IRRLICHT_RELAY_TOKEN` or
+a `<data-dir>/relay-token.json` `{"token":"…"}` file (mode 0600 — a different
+basename from the relay server's hashed `tokens.json` so the two never collide
+under a shared `$IRRLICHT_HOME`); macOS uses the Keychain (URL/enabled stay in
+UserDefaults); web keeps it in `localStorage`.
+
+When `--auth` is on the gate also covers the read endpoints `GET
+/api/v1/sessions` and `/api/v1/agents` — they carry the same session content as
+the WS stream, so a token is required via `Authorization: Bearer <t>` or a
+`?token=<t>` query param. `GET /api/v1/version` stays open as a health check.
+`/api/v1/tokens` REST management is deferred — CLI-only for now.
 
 ## Running it
 
@@ -135,12 +187,13 @@ IRRLICHT_RELAY_URL=ws://localhost:7839 irrlichd   # …also forwards to the rela
 irrlichtrelay serve                               # the relay on 127.0.0.1:7839
 ```
 
-> **Bind:** the relay listens on **`127.0.0.1:7839`** by default. v0 has no auth
-> and a permissive WS origin policy, so it stays loopback-only until bearer-token
-> auth lands. To watch sessions across machines, opt in explicitly with
-> `irrlichtrelay serve --addr 0.0.0.0:7839` (or a specific interface) — aware
-> that anyone who can reach that address can read every session and inject as a
-> daemon. This mirrors the daemon's own loopback-by-default posture.
+> **Bind:** the relay listens on **`127.0.0.1:7839`** by default. With no
+> `--auth` and no TLS it must stay loopback-only — anyone who can reach an
+> exposed address can read every session and inject as a daemon. To expose it,
+> bind a routable address *and* enable auth + TLS (or front it with a
+> TLS-terminating reverse proxy), e.g. `irrlichtrelay serve --addr 0.0.0.0:7839
+> --tls-cert cert.pem --tls-key key.pem --auth tokens-file`. This mirrors the
+> daemon's own loopback-by-default posture.
 
 > **Port choice:** irrlicht uses three contiguous ports — `7837` (production
 > daemon), `7838` (dev-daemon coexist via `IRRLICHT_DAEMON_PORT`/`BIND_ADDR`),
@@ -154,10 +207,10 @@ connection-status tooltip lists the connected daemon(s).
 
 ## Reserved (named, not built)
 
-- `auth` / bearer tokens, `token issue|list|revoke` CLI.
 - `seq` (per-source sequence numbers) and `resume` (reconnect cursor) for
   gap-free reconnection.
-- Multiple relays per daemon; multi-node relays; persistence; TLS.
+- `/api/v1/tokens` REST management (POST/DELETE); token management is CLI-only.
+- Multiple relays per daemon; multi-node relays; persistence.
 - Row-level source badges and "fade, don't delete" on daemon-offline (v0 deletes
   a disconnected daemon's rows).
 - History re-hydration of late-joining relay clients (bars fill from live ticks;

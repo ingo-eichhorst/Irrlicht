@@ -332,6 +332,18 @@ class SessionManager: ObservableObject {
         }
     }
 
+    /// Called when the relay bearer token changes in Settings. The token lives
+    /// in the Keychain, not UserDefaults, so it never fires the didChangeNotification
+    /// that drives sourcesSettingsChanged — and after a 4401 the relay is parked
+    /// in .disconnected with reconnect disabled. Force a fresh connect with the
+    /// new credential so correcting the token recovers without an app restart.
+    func relayTokenDidChange() {
+        guard useRelayServer, !relayServerURL.isEmpty else { return }
+        stopRelay()
+        activeRelayURL = relayServerURL
+        startRelay()
+    }
+
     // MARK: - Relay WebSocket
 
     func startRelay() {
@@ -379,7 +391,13 @@ class SessionManager: ObservableObject {
 
         // Announce as a client so the relay streams enveloped frames. Harmless
         // if the URL actually points at a daemon (it ignores the frame).
-        try? await task.send(.string(#"{"type":"hello","protocol_version":1,"role":"client"}"#))
+        var hello: [String: Any] = ["type": "hello", "protocol_version": 1, "role": "client"]
+        let relayToken = KeychainStore.get(account: "relayToken")
+        if !relayToken.isEmpty { hello["token"] = relayToken }
+        if let helloData = try? JSONSerialization.data(withJSONObject: hello),
+           let helloStr = String(data: helloData, encoding: .utf8) {
+            try? await task.send(.string(helloStr))
+        }
 
         do {
             var confirmed = false
@@ -406,19 +424,29 @@ class SessionManager: ObservableObject {
             print("🔌 Relay disconnected: \(error.localizedDescription)")
         }
 
-        guard relayConnectionState != .disconnected && !Task.isCancelled else { return }
-        // While the link is down we no longer know the remote state, so drop
-        // the relay's daemons and sessions — otherwise a remote session that
-        // ended during the outage lingers as a ghost row (the relay's replay
-        // can only re-add survivors, never signal the deletions we missed).
-        // The relay's replay rebuilds the live set on reconnect; sessions also
-        // present locally stay (they live in sessionMap, which local wins).
+        // The link is down, so we no longer know the remote state: drop the
+        // relay's daemons and sessions in BOTH the reconnect and the auth-failed
+        // path — otherwise a remote session that ended during the outage lingers
+        // as a ghost row (the relay's replay can only re-add survivors, never
+        // signal the deletions we missed). The relay's replay rebuilds the live
+        // set on reconnect; sessions also present locally stay (they live in
+        // sessionMap, which local wins).
         relayDaemons.removeAll()
         if !relaySessionMap.isEmpty {
             relaySessionMap.removeAll()
             rebuildSessionsFromMap()
             recomposeApiGroups()
         }
+
+        // A 4401 close means the relay rejected or revoked our bearer token.
+        // Retrying with the same credential just loops, so stop reconnecting and
+        // wait for the user to fix the token (relayTokenDidChange restarts us).
+        if task.closeCode.rawValue == 4401 {
+            relayConnectionState = .disconnected
+            print("🔌 Relay auth failed (4401) — check the relay token in Settings; not reconnecting")
+            return
+        }
+        guard relayConnectionState != .disconnected && !Task.isCancelled else { return }
         let jitter = Double.random(in: 0...(relayReconnectDelay * 0.2))
         let delay = relayReconnectDelay + jitter
         relayConnectionState = .reconnecting

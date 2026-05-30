@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -87,7 +89,7 @@ func TestForwarderHelloSnapshotAndPush(t *testing.T) {
 		return []*session.SessionState{{SessionID: "s1", State: "working"}},
 			[]AgentInfo{{Name: "claude-code", DisplayName: "Claude Code"}}
 	}
-	f := NewForwarder(tr.url, Identity{DaemonID: "d-123", DaemonLabel: "laptop"}, bc, snap, nil)
+	f := NewForwarder(tr.url, Identity{DaemonID: "d-123", DaemonLabel: "laptop"}, "", bc, snap, nil)
 	go f.Run(t.Context())
 
 	var hello Hello
@@ -116,7 +118,7 @@ func TestForwarderHelloSnapshotAndPush(t *testing.T) {
 func TestForwarderFiltersFocusRequested(t *testing.T) {
 	tr := newTestRelay(t)
 	bc := newFakeBroadcaster()
-	f := NewForwarder(tr.url, Identity{DaemonID: "d1"}, bc, nil, nil)
+	f := NewForwarder(tr.url, Identity{DaemonID: "d1"}, "", bc, nil, nil)
 	go f.Run(t.Context())
 
 	tr.next(t) // hello
@@ -137,7 +139,7 @@ func TestForwarderFiltersFocusRequested(t *testing.T) {
 func TestForwarderReconnects(t *testing.T) {
 	tr := newTestRelay(t)
 	bc := newFakeBroadcaster()
-	f := NewForwarder(tr.url, Identity{DaemonID: "d1"}, bc, nil, nil)
+	f := NewForwarder(tr.url, Identity{DaemonID: "d1"}, "", bc, nil, nil)
 	f.minBackoff = 10 * time.Millisecond
 	f.maxBackoff = 20 * time.Millisecond
 	go f.Run(t.Context())
@@ -213,5 +215,44 @@ func TestShouldForward(t *testing.T) {
 		if !shouldForward(outbound.PushMessage{Type: ty}) {
 			t.Fatalf("%s should be forwarded", ty)
 		}
+	}
+}
+
+// TestForwarderSendsToken verifies a configured bearer token is carried in the
+// daemon hello so an auth-enabled relay can authenticate it.
+func TestForwarderSendsToken(t *testing.T) {
+	tr := newTestRelay(t)
+	bc := newFakeBroadcaster()
+	snap := func() ([]*session.SessionState, []AgentInfo) { return nil, nil }
+	f := NewForwarder(tr.url, Identity{DaemonID: "d1"}, "s3cr3t-token", bc, snap, nil)
+	go f.Run(t.Context())
+
+	var hello Hello
+	mustUnmarshal(t, tr.next(t), &hello)
+	if hello.Type != MsgHello || hello.Role != RoleDaemon {
+		t.Fatalf("first frame is not a daemon hello: %+v", hello)
+	}
+	if hello.Token != "s3cr3t-token" {
+		t.Fatalf("hello.Token = %q, want the configured token", hello.Token)
+	}
+}
+
+// TestLoadDaemonToken covers env-var precedence and the tokens.json fallback.
+func TestLoadDaemonToken(t *testing.T) {
+	dir := t.TempDir()
+	if got := LoadDaemonToken(dir); got != "" {
+		t.Fatalf("no env, no file: got %q want empty", got)
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, "relay-token.json"), []byte(`{"token":"from-file"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := LoadDaemonToken(dir); got != "from-file" {
+		t.Fatalf("file fallback: got %q want from-file", got)
+	}
+
+	t.Setenv("IRRLICHT_RELAY_TOKEN", "from-env")
+	if got := LoadDaemonToken(dir); got != "from-env" {
+		t.Fatalf("env precedence: got %q want from-env", got)
 	}
 }

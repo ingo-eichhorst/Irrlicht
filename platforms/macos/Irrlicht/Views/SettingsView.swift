@@ -21,6 +21,9 @@ struct SettingsView: View {
     @AppStorage("relayServerURL") private var relayServerURL: String = ""
     @State private var relayURLDraft: String = ""
     @State private var relayURLDebounceTask: Task<Void, Never>? = nil
+    // Relay bearer token lives in the Keychain (not @AppStorage); this draft
+    // mirrors it for the field, loaded on appear and written on change.
+    @State private var relayTokenDraft: String = ""
     @State private var notificationsDenied = false
     @State private var customImportError: String?
 
@@ -124,9 +127,22 @@ struct SettingsView: View {
                                     .frame(width: 8, height: 8)
                                     .help(sessionManager.relayConnectionState.shortLabel)
                             }
+                            SecureField("Relay token (leave empty if the relay has no auth)", text: $relayTokenDraft)
+                                .textFieldStyle(.roundedBorder)
+                                .font(.system(.caption, design: .monospaced))
+                                .autocorrectionDisabled(true)
+                                .onChange(of: relayTokenDraft) { newValue in
+                                    KeychainStore.set(newValue.trimmingCharacters(in: .whitespacesAndNewlines), account: "relayToken")
+                                    // Keychain writes don't fire UserDefaults.didChangeNotification,
+                                    // so nudge the relay to reconnect with the new token.
+                                    sessionManager.relayTokenDidChange()
+                                }
                         }
                     }
-                    .onAppear { relayURLDraft = relayServerURL }
+                    .onAppear {
+                        relayURLDraft = relayServerURL
+                        relayTokenDraft = KeychainStore.get(account: "relayToken")
+                    }
                     .onChange(of: useRelayServer) { on in
                         if on && relayURLDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                             relayURLDraft = "ws://localhost:7839"
