@@ -81,8 +81,6 @@ func (s *Server) buildCatalogJSON() ([]byte, string, error) {
 		scenarios = append(scenarios, map[string]any{
 			"id":       sh.Name,
 			"code":     sh.ID, // shard ID already carries "<section>.<index>"
-			"section":  sh.Section,
-			"feature":  sh.Feature,
 			"coverage": coverage,
 		})
 	}
@@ -90,7 +88,7 @@ func (s *Server) buildCatalogJSON() ([]byte, string, error) {
 	out := map[string]any{
 		"version":        1,
 		"generated_at":   time.Now().UTC().Format("2006-01-02"),
-		"source_catalog": "replaydata/scenarios.json",
+		"source_catalog": "replaydata/agents/scenarios.json",
 		"agents":         agentEntries,
 		"scenarios":      scenarios,
 	}

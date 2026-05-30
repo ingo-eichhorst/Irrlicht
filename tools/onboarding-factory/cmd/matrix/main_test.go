@@ -17,7 +17,7 @@ import (
 func fixture(t *testing.T) (repoRoot string) {
 	t.Helper()
 	tmp := t.TempDir()
-	write(t, filepath.Join(tmp, "replaydata", "scenarios.json"), `{
+	write(t, filepath.Join(tmp, "replaydata", "agents", "scenarios.json"), `{
   "meta": {"min_versions": {"ag": "1.0.0"}},
   "scenarios": [
     {"id": "1.1", "name": "recd", "section": "S", "feature": "Recd"},

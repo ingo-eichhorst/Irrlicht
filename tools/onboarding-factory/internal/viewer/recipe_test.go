@@ -17,7 +17,7 @@ func writeShardRepo(t *testing.T, shards map[string]string) string {
 	t.Helper()
 	dir := t.TempDir()
 	rd := filepath.Join(dir, "replaydata")
-	if err := os.MkdirAll(rd, 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(rd, "agents"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	parts := make([]string, 0, len(shards))
@@ -26,7 +26,7 @@ func writeShardRepo(t *testing.T, shards map[string]string) string {
 	}
 	catalog := `{"meta":{"min_versions":{"aider":"1.0.0","codex":"1.0.0"}},"scenarios":[` +
 		strings.Join(parts, ",") + `]}`
-	mustWrite(t, filepath.Join(rd, "scenarios.json"), catalog)
+	mustWrite(t, filepath.Join(rd, "agents", "scenarios.json"), catalog)
 	return dir
 }
 

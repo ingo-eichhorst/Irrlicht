@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # shard-lib.sh — the single home for reading the onboarding catalog. The
-# scenario catalog is one file replaydata/scenarios.json =
+# scenario catalog is one file replaydata/agents/scenarios.json =
 # {"meta": {...}, "scenarios": [...]}; each (scenario, adapter) cell is a
 # metadata.json at replaydata/agents/<adapter>/scenarios/<id>_<name>/metadata.json
 # (folders are prefixed by the scenario's dashed id; every metadata.json carries
@@ -14,20 +14,20 @@
 #
 # Path resolution order:
 #   1. $IR_SCENARIOS_FILE / $IR_AGENTS_DIR  — explicit overrides (lib unit tests)
-#   2. $REPO_ROOT/replaydata/{scenarios.json,agents}
-#   3. <this file>/../../../../../replaydata/{scenarios.json,agents} — up 5
+#   2. $REPO_ROOT/replaydata/agents/{scenarios.json + cells}
+#   3. <this file>/../../../../../replaydata/agents/{scenarios.json + cells} — up 5
 
-# scenarios_file → path to the consolidated catalog (replaydata/scenarios.json).
+# scenarios_file → path to the consolidated catalog (replaydata/agents/scenarios.json).
 scenarios_file() {
   if [[ -n "${IR_SCENARIOS_FILE:-}" ]]; then echo "$IR_SCENARIOS_FILE"; return; fi
-  if [[ -n "${REPO_ROOT:-}" ]]; then echo "$REPO_ROOT/replaydata/scenarios.json"; return; fi
-  ( cd "$(dirname "${BASH_SOURCE[0]}")/../../../../.." && echo "$PWD/replaydata/scenarios.json" )
+  if [[ -n "${REPO_ROOT:-}" ]]; then echo "$REPO_ROOT/replaydata/agents/scenarios.json"; return; fi
+  ( cd "$(dirname "${BASH_SOURCE[0]}")/../../../../.." && echo "$PWD/replaydata/agents/scenarios.json" )
 }
 
-# agents_dir → the replaydata/agents root (sibling of scenarios.json).
+# agents_dir → the replaydata/agents root (the catalog now lives inside it).
 agents_dir() {
   if [[ -n "${IR_AGENTS_DIR:-}" ]]; then echo "$IR_AGENTS_DIR"; return; fi
-  echo "$(dirname "$(scenarios_file)")/agents"
+  echo "$(dirname "$(scenarios_file)")"
 }
 
 # scenario_global <coverage_id> → the scenario's global object from the catalog
@@ -80,15 +80,15 @@ shard_has_assessment() {
 }
 
 # shard_cell <coverage_id> <adapter>
-#   → the run-cell projection: scenario-level description/requires/verify (from
-#     the catalog) plus the recipe's per-adapter fields (from metadata.json),
+#   → the run-cell projection: scenario-level description/acceptance_criteria/process
+#     (from the catalog) plus the recipe's per-adapter fields (from metadata.json),
 #     flattened (the legacy CELL_JSON shape). Empty when the cell is absent.
 shard_cell() {
   local g cf; g="$(scenario_global "$1")"; cf="$(agent_cell_file "$1" "$2")"
   [[ -n "$g" && -n "$cf" && -f "$cf" ]] || return 0
   jq -cn --argjson scen "$g" --slurpfile c "$cf" '
     ($c[0].details.recipe // {}) as $r |
-    {description: $scen.description, requires: $scen.requires, verify: $scen.verify,
+    {description: $scen.description, acceptance_criteria: $scen.acceptance_criteria, process: $scen.process,
      applicable: $r.applicable, scope_note: $r.scope_note, notes: $r.notes,
      partner_adapter: $r.partner_adapter, prompt: $r.prompt, script: $r.script,
      settings: $r.settings, timeout_seconds: $r.timeout_seconds}

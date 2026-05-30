@@ -1,5 +1,5 @@
 // Package shard is the onboarding-matrix data model. The scenario catalog is a
-// single file replaydata/scenarios.json = {"meta": {...}, "scenarios": [...]};
+// single file replaydata/agents/scenarios.json = {"meta": {...}, "scenarios": [...]};
 // each (scenario, adapter) cell is a metadata.json at
 // replaydata/agents/<adapter>/scenarios/<id>_<name>/metadata.json (folders are
 // prefixed by the scenario's dashed id). It lives in its own package (rather
@@ -17,26 +17,22 @@ import (
 	"strings"
 )
 
-// Shard is one scenario's unified object: the scenario-global spec for one
-// matrix row. It lives at replaydata/scenarios/<name>.json. Agent-specific
-// cell data (assessment, recipe, artifacts, verdict) moved to
-// replaydata/agents/<adapter>/scenarios/<folder>/metadata.json (#split-shards).
+// Shard is one scenario's unified object: the agent-AGNOSTIC spec for one
+// matrix row. It lives in the catalog replaydata/agents/scenarios.json. A
+// scenario is just identity (id, name) + three markdown-ish fields: a one-line
+// description, the agent-neutral process to exercise it, and the acceptance
+// criteria. Nothing agent-specific lives here — per-(scenario,adapter) cell data
+// (assessment, recipe, artifacts, verdict) lives in
+// replaydata/agents/<adapter>/scenarios/<folder>/metadata.json.
 //
 // Recording artifacts stay on disk under
 // replaydata/agents/<adapter>/{scenarios,regressions}/<name>/.
 type Shard struct {
-	ID          string          `json:"id"`   // stable section.index, e.g. "2.19"
-	Name        string          `json:"name"` // row identity / filename / coverage_id
-	Section     string          `json:"section"`
-	Feature     string          `json:"feature"`
-	Description string          `json:"description,omitempty"`
-	Requires    []string        `json:"requires,omitempty"` // informational driver hint (no longer gates applicability)
-	Verify      json.RawMessage `json:"verify,omitempty"`
-	IdleOnly    *bool           `json:"idle_only,omitempty"` // observation-only scenario (frontend badge)
-	// CrossAdapter, when set, is the list of adapters a cross-adapter cell drives
-	// concurrently in one shared workspace (read by run-cell-multi.sh). Only the
-	// multiple-agents-same-workspace cell uses it.
-	CrossAdapter []string `json:"cross_adapter,omitempty"`
+	ID                 string `json:"id"`   // stable section.index, e.g. "2.19"
+	Name               string `json:"name"` // row identity / coverage_id (kebab slug)
+	Description        string `json:"description,omitempty"`
+	AcceptanceCriteria string `json:"acceptance_criteria,omitempty"` // markdown
+	Process            string `json:"process,omitempty"`             // markdown
 }
 
 // ShardAgent is one (scenario, adapter) cell. It lives at
@@ -173,16 +169,16 @@ func LoadAllCells(repoRoot, scenarioName string) map[string]*ShardAgent {
 
 // File is the path to the consolidated scenario catalog.
 func File(repoRoot string) string {
-	return filepath.Join(repoRoot, "replaydata", "scenarios.json")
+	return filepath.Join(repoRoot, "replaydata", "agents", "scenarios.json")
 }
 
-// catalog is the on-disk shape of replaydata/scenarios.json.
+// catalog is the on-disk shape of replaydata/agents/scenarios.json.
 type catalog struct {
 	Meta      Meta    `json:"meta"`
 	Scenarios []Shard `json:"scenarios"`
 }
 
-// loadCatalog reads + parses replaydata/scenarios.json. ok is false on any
+// loadCatalog reads + parses replaydata/agents/scenarios.json. ok is false on any
 // error (missing file, malformed JSON).
 func loadCatalog(repoRoot string) (catalog, bool) {
 	var c catalog
@@ -196,7 +192,7 @@ func loadCatalog(repoRoot string) (catalog, bool) {
 	return c, true
 }
 
-// LoadAll reads every scenario from replaydata/scenarios.json, sorted by stable
+// LoadAll reads every scenario from replaydata/agents/scenarios.json, sorted by stable
 // id (section, then index). Returns nil on any error.
 func LoadAll(repoRoot string) []Shard {
 	c, ok := loadCatalog(repoRoot)
@@ -235,7 +231,7 @@ func FolderForScenario(repoRoot, name string) string {
 	return strings.ReplaceAll(s.ID, ".", "-") + "_" + name
 }
 
-// LoadMeta reads the `meta` block of replaydata/scenarios.json. Returns an
+// LoadMeta reads the `meta` block of replaydata/agents/scenarios.json. Returns an
 // empty Meta on any error — callers tolerate an empty column set.
 func LoadMeta(repoRoot string) Meta {
 	c, ok := loadCatalog(repoRoot)

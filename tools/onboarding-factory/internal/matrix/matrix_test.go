@@ -93,7 +93,7 @@ type shardFix struct {
 }
 
 // writeShardFixture writes a t.TempDir repo with a consolidated
-// replaydata/scenarios.json + per-cell metadata.json files (folders id-prefixed,
+// replaydata/agents/scenarios.json + per-cell metadata.json files (folders id-prefixed,
 // each carrying scenario_id). Returns the repo root.
 func writeShardFixture(t *testing.T, agent string, shards map[string]shardFix) string {
 	t.Helper()
@@ -147,7 +147,7 @@ func writeShardFixture(t *testing.T, agent string, shards map[string]shardFix) s
 		"scenarios": scenarios,
 	}
 	cb, _ := json.MarshalIndent(catalog, "", "  ")
-	mustWriteFile(filepath.Join(root, "replaydata", "scenarios.json"), cb)
+	mustWriteFile(filepath.Join(root, "replaydata", "agents", "scenarios.json"), cb)
 	return root
 }
 

@@ -4,8 +4,8 @@ name: Replaydata deletion guard
 # enumerate artifact filenames (which let new types like subagents/*.jsonl slip
 # through), it protects WHOLE recording folders. A PR may FAIL only if its diff
 # deletes one of:
-#   - the consolidated catalog              replaydata/scenarios.json   (the matrix catalog)
-#   - ANY file under a regression recording   replaydata/agents/*/regression/*/**
+#   - the consolidated catalog              replaydata/agents/scenarios.json   (the matrix catalog)
+#   - ANY file under a regression recording   replaydata/agents/*/regressions/*/**
 #     (regression cells aren't in the catalog, so even their assessment.json
 #     is load-bearing — the viewer reads it on disk)
 #   - ANY file (except assessment.json) under a scenarios/ recording whose folder
@@ -79,11 +79,11 @@ jobs:
             # bash `case` globs where `*` also matches `/`, so a single
             # `…/scenarios/*` covers nested subagents/ and recordings/ files.
             case "$f" in
-              replaydata/scenarios.json)
+              replaydata/agents/scenarios.json)
                 violations="$violations  - $f  (matrix catalog)"$'\n' ;;
               replaydata/orchestrators/*/scenarios/*)
                 violations="$violations  - $f  (orchestrator scenario fixture)"$'\n' ;;
-              replaydata/agents/*/regression/*)
+              replaydata/agents/*/regressions/*)
                 # Everything under a regression recording is load-bearing,
                 # INCLUDING assessment.json (regression cells aren't in the
                 # catalog, so the viewer reads their assessment.json on disk).

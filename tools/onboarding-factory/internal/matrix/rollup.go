@@ -41,8 +41,6 @@ type RollupAgent struct {
 // RollupScenario is one catalog row with its per-agent coverage.
 type RollupScenario struct {
 	ID       string                        `json:"id"`
-	Section  string                        `json:"section"`
-	Feature  string                        `json:"feature"`
 	Coverage map[string]RollupCoverageCell `json:"coverage"`
 }
 
@@ -88,7 +86,7 @@ func (m *Matrix) BuildRollup(overlay RollupOverlay) RollupDoc {
 		Legend:        overlay.Legend,
 	}
 	if doc.SourceCatalog == "" {
-		doc.SourceCatalog = "replaydata/scenarios.json"
+		doc.SourceCatalog = "replaydata/agents/scenarios.json"
 	}
 
 	for _, a := range agents {
@@ -116,8 +114,6 @@ func (m *Matrix) BuildRollup(overlay RollupOverlay) RollupDoc {
 		}
 		doc.Scenarios = append(doc.Scenarios, RollupScenario{
 			ID:       cat.ID,
-			Section:  cat.Section,
-			Feature:  cat.Feature,
 			Coverage: cov,
 		})
 	}

@@ -83,9 +83,7 @@ type Matrix struct {
 }
 
 type catalogEntry struct {
-	ID      string `json:"id"`
-	Section string `json:"section"`
-	Feature string `json:"feature"`
+	ID string `json:"id"`
 }
 
 // shardRecipe is the slim view of a cell's Details.Recipe the matrix needs:
@@ -101,7 +99,7 @@ type shardRecipe struct {
 // populated for back-compat but no longer read.
 func LoadRepo(repoRoot string) (*Matrix, error) {
 	return Load(Config{
-		ScenariosPath: filepath.Join(repoRoot, ".claude", "skills", "ir:onboard-agent", "scenarios.json"),
+		ScenariosPath: filepath.Join(repoRoot, "replaydata", "agents", "scenarios.json"),
 		AgentsRoot:    filepath.Join(repoRoot, "replaydata", "agents"),
 		RepoRoot:      repoRoot,
 	})
@@ -148,7 +146,7 @@ func Load(cfg Config) (*Matrix, error) {
 		if !inCatalog(sh.ID) {
 			continue
 		}
-		m.catalog = append(m.catalog, catalogEntry{ID: sh.Name, Section: sh.Section, Feature: sh.Feature})
+		m.catalog = append(m.catalog, catalogEntry{ID: sh.Name})
 	}
 
 	for _, agent := range m.agents {

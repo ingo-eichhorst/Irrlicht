@@ -9,16 +9,12 @@ import (
 )
 
 func TestShardRoundTrip(t *testing.T) {
-	idle := true
 	want := Shard{
-		ID:          "2.1",
-		Name:        "basic-turn",
-		Section:     "Turn shape",
-		Feature:     "Basic turn",
-		Description: "Smallest possible round-trip.",
-		Requires:    []string{"headless_mode"},
-		Verify:      json.RawMessage(`["final_state","tool_calls_max"]`),
-		IdleOnly:    &idle,
+		ID:                 "2.1",
+		Name:               "basic-turn",
+		Description:        "Smallest possible round-trip.",
+		Process:            "1. Send a prompt.\n2. Agent replies.",
+		AcceptanceCriteria: "- Final state: `ready`\n- Tool calls: ≤ 0",
 	}
 
 	b, err := json.Marshal(want)
@@ -124,14 +120,14 @@ func TestSplitID(t *testing.T) {
 	}
 }
 
-// writeCatalog writes replaydata/scenarios.json = {"meta":..., "scenarios":[...]}.
+// writeCatalog writes replaydata/agents/scenarios.json = {"meta":..., "scenarios":[...]}.
 func writeCatalog(t *testing.T, dir, body string) {
 	t.Helper()
 	rd := filepath.Join(dir, "replaydata")
-	if err := os.MkdirAll(rd, 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(rd, "agents"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(rd, "scenarios.json"), []byte(body), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(rd, "agents", "scenarios.json"), []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
 }
