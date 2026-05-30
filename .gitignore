@@ -125,3 +125,5 @@ replaydata/agents/_reports/
 # OpenCode session metadata (auto-created by the daemon)
 opencode.json
 /expected-validate
+
+**/*.env
