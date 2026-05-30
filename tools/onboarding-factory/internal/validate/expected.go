@@ -70,6 +70,22 @@ type ExpectedMeta struct {
 	Source        string `json:"source"`
 	Notes         string `json:"notes,omitempty"`
 	KnownFailing  bool   `json:"known_failing,omitempty"`
+	// Observations carries the go-test-style assertions over the recording's
+	// metric vector (model / cost / tokens), beyond the lifecycle-state phases.
+	// Absent → no hard metric assertions (the soft-diff vs the prior recording
+	// still runs in ValidateObservations).
+	Observations *ObservationSpec `json:"observations,omitempty"`
+}
+
+// ObservationSpec is the optional metric-assertion block of an expected.jsonl
+// meta line. Categorical fields (model) assert exact equality; numeric fields
+// assert nonzero. The full vector is additionally soft-diffed against the prior
+// recording within TolerancePct — see ValidateObservations.
+type ObservationSpec struct {
+	Model         string  `json:"model,omitempty"`          // exact-match assertion (categorical)
+	CostNonzero   bool    `json:"cost_nonzero,omitempty"`   // estimated_cost_usd > 0
+	TokensNonzero bool    `json:"tokens_nonzero,omitempty"` // cum_input+output > 0
+	TolerancePct  float64 `json:"tolerance_pct,omitempty"`  // soft-diff band vs prior (default 50)
 }
 
 // ExpectedPhase is one line of expected.jsonl after the meta line.
