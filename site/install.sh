@@ -307,11 +307,17 @@ ok
 step "Installing to /Applications"
 # ditto preserves macOS metadata including code signatures
 ditto -xk "$TMPDIR/$ASSET" /Applications/ || fail "Extract failed"
+# Strip any quarantine attribute so Gatekeeper never prompts on first launch.
+xattr -dr com.apple.quarantine /Applications/Irrlicht.app 2>/dev/null || true
 ok
 
 step "Registering with LaunchServices"
 "/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister" \
     -f /Applications/Irrlicht.app 2>/dev/null || true
+# Warm Gatekeeper now: the first notarization check on a freshly downloaded
+# app can take 10–20s. Doing it here (instead of silently during `open`) means
+# the app — and the daemon it spawns — start promptly inside the wait window.
+spctl -a -t exec /Applications/Irrlicht.app 2>/dev/null || true
 ok
 
 step "Launching Irrlicht"
@@ -337,8 +343,10 @@ while [ $i -lt 15 ]; do
     i=$((i + 1))
 done
 
-printf '%stimeout%s\n' "$YELLOW" "$RESET"
+printf '%sstill starting%s\n' "$YELLOW" "$RESET"
 say ""
-warn "Installed, but the daemon didn't respond on port 7837 within 15s."
-warn "Try: open /Applications/Irrlicht.app"
-exit 1
+warn "Installed. The daemon hadn't responded on port 7837 within 15s —"
+warn "macOS may still be verifying the app on this first launch. It should"
+warn "come up on its own shortly; the menu bar indicator will appear."
+warn "If not, run: open /Applications/Irrlicht.app"
+exit 0
