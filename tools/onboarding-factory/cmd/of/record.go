@@ -53,17 +53,13 @@ func resolveDriver(repoRoot, agent string) (string, bool) {
 	return "", false
 }
 
-// resolveRunCell finds the orchestration script. It moves from the (to-be-
-// retired) skill into the factory; check both so `of record` keeps working
-// across that relocation. ok is false when neither is present.
+// resolveRunCell finds the orchestration script. It lives in the factory
+// (relocated out of the retired ir:onboard-agent skill in #528); ok is false
+// when it is absent.
 func resolveRunCell(repoRoot string) (string, bool) {
-	for _, p := range []string{
-		filepath.Join(repoRoot, "tools", "onboarding-factory", "scripts", "run-cell.sh"),
-		filepath.Join(repoRoot, ".claude", "skills", "ir:onboard-agent", "scripts", "run-cell.sh"),
-	} {
-		if fileExists(p) {
-			return p, true
-		}
+	p := filepath.Join(repoRoot, "tools", "onboarding-factory", "scripts", "run-cell.sh")
+	if fileExists(p) {
+		return p, true
 	}
 	return "", false
 }

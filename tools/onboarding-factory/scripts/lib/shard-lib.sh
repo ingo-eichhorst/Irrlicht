@@ -15,13 +15,17 @@
 # Path resolution order:
 #   1. $IR_SCENARIOS_FILE / $IR_AGENTS_DIR  — explicit overrides (lib unit tests)
 #   2. $REPO_ROOT/replaydata/agents/{scenarios.json + cells}
-#   3. <this file>/../../../../../replaydata/agents/{scenarios.json + cells} — up 5
+#   3. git toplevel of <this file>, else <this file>/../../../../replaydata/...
+#      — up 4 from tools/onboarding-factory/scripts/lib/ to the repo root.
 
 # scenarios_file → path to the consolidated catalog (replaydata/agents/scenarios.json).
 scenarios_file() {
   if [[ -n "${IR_SCENARIOS_FILE:-}" ]]; then echo "$IR_SCENARIOS_FILE"; return; fi
   if [[ -n "${REPO_ROOT:-}" ]]; then echo "$REPO_ROOT/replaydata/agents/scenarios.json"; return; fi
-  ( cd "$(dirname "${BASH_SOURCE[0]}")/../../../../.." && echo "$PWD/replaydata/agents/scenarios.json" )
+  local rr
+  rr="$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel 2>/dev/null)" \
+    || rr="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
+  echo "$rr/replaydata/agents/scenarios.json"
 }
 
 # agents_dir → the replaydata/agents root (the catalog now lives inside it).
