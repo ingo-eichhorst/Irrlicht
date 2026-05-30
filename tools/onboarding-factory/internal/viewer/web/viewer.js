@@ -133,12 +133,18 @@ function folderToCoverageId(folder, agent) {
         el.dataset.recKey = `${s.agent}/${s.subtree}/${s.id}`;
         // Label by the resolved coverage_id (+ catalog code) so variant-folder
         // recordings (e.g. agent-question-pending → user-blocking-question) read
-        // like their catalog row instead of the raw folder name. The folder is
-        // kept as a parenthetical when it differs, so the entry is still
-        // identifiable; the breadcrumb on the detail page shows it too.
+        // like their catalog row instead of the raw folder name.
         const cid = folderToCoverageId(s.id, s.agent);
         const code = codeById.get(cid);
-        const labelId = cid === s.id ? s.id : `${cid} (${s.id})`;
+        // The on-disk folder is kept as a parenthetical ONLY when it's a genuine
+        // variant. Folders are id-prefixed (<dashed-code>_<name>), so a standard
+        // cell's folder is just the code + name already shown — appending it
+        // would be redundant noise. Show it only when the folder isn't the
+        // canonical <dashed-code>_<name> (the 2 real variants:
+        // user-esc-interrupt→2-20_interrupted-turn, user-blocking-question→
+        // 2-17_agent-question-pending); the detail breadcrumb shows it regardless.
+        const canonicalFolder = code ? `${code.replace(/\./g, "-")}_${cid}` : cid;
+        const labelId = s.id === canonicalFolder ? cid : `${cid} (${s.id})`;
         el.textContent = code ? `${code} ${labelId}` : labelId;
         el.addEventListener("click", () => navigate(`#/recording/${s.agent}/${s.subtree}/${s.id}`));
         agentDet.appendChild(el);
@@ -481,7 +487,7 @@ function renderCoverageMatrix(detail) {
   `;
   panel.appendChild(sum);
 
-  // Explainer / legend — describes the 6-segment strip and the full
+  // Explainer / legend — describes the 7-segment strip and the full
   // state vocabulary for each segment. Each row lists one segment, what
   // it tests, and every glyph that can appear in it with its meaning.
   const legend = document.createElement("div");
@@ -497,31 +503,33 @@ function renderCoverageMatrix(detail) {
     `<div style="min-width:120px;color:#222;"><b>${idx}. ${name}</b><div style="color:#777;font-weight:400;">${blurb}</div></div>` +
     `<div style="flex:1;">${states}</div></div>`;
   legend.innerHTML = `
-    <div style="font-weight:600;margin-bottom:6px;color:#222;">How to read each cell — 6-segment pipeline</div>
-    ${row("1", "Supports", "agent CLI implements the feature — glyph ⚙, color = state",
+    <div style="font-weight:600;margin-bottom:6px;color:#222;">How to read each cell — 7-segment pipeline (3 assessment pillars + 4 workflow stages)</div>
+    ${row("1", "Supports", "agent CLI implements the feature (agent_supports) — glyph ⚙, color = state",
       stateChip("⚙", "#d6f0d4", "#1f5a1d", "yes — fully supported") +
       stateChip("⚙", "#fde7c1", "#8a4500", "partial — partially supported") +
       stateChip("⚙", "#f8c8c8", "#8a0000", "no — freezes the pipeline") +
       stateChip("⚙", "#e5e5e5", "#555",    "unknown — needs assessment") +
       stateChip("⚙", "#eeece4", "#999",    "n/a"))}
-    ${row("2", "Observability", "derived from daemon + driver capability — glyph ◉, color = display state",
-      stateChip("◉", "#d6f0d4", "#1f5a1d", "observed — daemon full, driver ready, recorded") +
-      stateChip("◉", "#e7eef7", "#33598a", "pending record — capable, not yet recorded") +
-      stateChip("◉", "#f8c8c8", "#8a0000", "blocked: daemon — observable but mis-handled (bug)") +
-      stateChip("◉", "#fde7c1", "#8a4500", "blocked: driver — needs a driver primitive (gap:*)") +
-      stateChip("◉", "#ffcda3", "#a8480a", "unobservable — leaves no trace the daemon can see") +
-      stateChip("◉", "#eeece4", "#999",    "n.a. — agent doesn't support feature") +
+    ${row("2", "Daemon", "daemon sensor capture (daemon_capability) — glyph ◉, color = state",
+      stateChip("◉", "#d6f0d4", "#1f5a1d", "full — trace exists and the daemon handles it") +
+      stateChip("◉", "#f8c8c8", "#8a0000", "bug — trace exists but mis-handled (record known_failing)") +
+      stateChip("◉", "#ffcda3", "#a8480a", "incapable — leaves no trace the daemon can see") +
+      stateChip("◉", "#eeece4", "#999",    "n/a — agent doesn't support the feature") +
       stateChip("◉", "#e5e5e5", "#555",    "unknown — needs assessment"))}
-    ${row("3", "Recipe", "driver script in scenarios.json",
+    ${row("3", "Driver", "recording harness can drive it (driver_capability) — glyph ▷, color = state",
+      stateChip("▷", "#d6f0d4", "#1f5a1d", "ready — driver has every step the recipe needs") +
+      stateChip("▷", "#fde7c1", "#8a4500", "gap:&lt;primitive&gt; — driver lacks a step type") +
+      stateChip("▷", "#e5e5e5", "#555",    "unknown — needs assessment"))}
+    ${row("4", "Recipe", "driver script in scenarios.json",
       stateChip("✎", "#d6f0d4", "#1f5a1d", "authored") +
       stateChip("·", "transparent", "#bbb",  "not yet authored"))}
-    ${row("4", "Spec", "expected.jsonl phase assertions",
+    ${row("5", "Spec", "expected.jsonl phase assertions",
       stateChip("§", "#d6f0d4", "#1f5a1d", "authored") +
       stateChip("·", "transparent", "#bbb",  "not yet authored"))}
-    ${row("5", "Recordings", "count of fixtures captured",
+    ${row("6", "Recordings", "count of fixtures captured",
       stateChip("N", "#d6f0d4", "#1f5a1d", "N total (latest + archived)") +
       stateChip("·", "transparent", "#bbb",  "none yet"))}
-    ${row("6", "Validation", "latest recording vs spec",
+    ${row("7", "Validation", "latest recording vs spec",
       stateChip("✓", "#d6f0d4", "#1f5a1d", "pass — all phases matched") +
       stateChip("✗", "#f8c8c8", "#8a0000", "fail — at least one phase failed") +
       stateChip("⚠", "#fff7d6", "#8a4500", "known_failing — documented gap") +
@@ -539,14 +547,13 @@ function renderCoverageMatrix(detail) {
   panel.appendChild(legend);
 }
 
-// loadCoverageDetail shows the per-agent testing plan for one
-// scenario from the coverage catalog. Combines:
-//   - Coverage data (.claude/skills/ir:onboard-agent/agent-scenarios-coverage.json) — verdicts
-//     and maintainer notes per agent.
-//   - Recording recipe (scenarios.json) — joined by coverage_id —
-//     showing the actual driver (interactive tmux vs headless print),
-//     step-script or prompt, settings, and which committed recordings
-//     exist for each agent.
+// loadCoverageDetail shows the per-agent testing plan for one scenario.
+// Combines:
+//   - the agent-agnostic scenario spec (description / process / acceptance),
+//     from /api/scenario-spec, in the spec panel.
+//   - per-agent plan panels (buildAgentPlanPanel) — the derived verdict +
+//     the cell's own recipe (metadata.json → details.recipe) and which
+//     committed recordings exist for each agent.
 async function loadCoverageDetail(scenarioId) {
   if (!catalog || !Array.isArray(catalog.scenarios)) {
     navigate("#/");
@@ -601,36 +608,14 @@ async function loadCoverageDetail(scenarioId) {
     }
   } catch (_) { /* spec unavailable — show recipe-only */ }
 
-  // Recipe lookup by coverage_id
+  // Recipe lookup by coverage_id — used by the per-agent plan panels below.
+  // The old scenario-level "Recording recipe" panel was removed: a scenario has
+  // no recipe of its own under the agent-agnostic model (recipes live per
+  // (scenario, agent) cell in metadata.json → details.recipe, surfaced in the
+  // per-agent panels + the recording detail page), and the fields it rendered
+  // (requires / verify) were dropped in the schema cutover. The scenario's
+  // description / process / acceptance are already shown in the spec panel.
   const recipe = recipesByCoverageId.get(sc.id);
-  if (recipe) {
-    const recipePanel = document.createElement("div");
-    recipePanel.className = "panel";
-    let recHTML = `<h3>Recording recipe — <code>${recipe.name}</code></h3>`;
-    if (recipe.description) {
-      recHTML += `<p style="font-size: 12px; color: #444; margin: 0 0 8px;">${recipe.description}</p>`;
-    }
-    if (Array.isArray(recipe.requires) && recipe.requires.length) {
-      recHTML += `<div style="font-size: 11px; color: #888;">requires: <code>${recipe.requires.join(", ")}</code></div>`;
-    }
-    if (recipe.verify && Object.keys(recipe.verify).length) {
-      recHTML += `<div style="font-size: 11px; color: #888;">verify: <code>${escapeHtml(JSON.stringify(recipe.verify))}</code></div>`;
-    }
-    recipePanel.innerHTML = recHTML;
-    detail.appendChild(recipePanel);
-  } else {
-    const stub = document.createElement("div");
-    stub.className = "panel";
-    stub.innerHTML = `
-      <h3>Recording recipe</h3>
-      <p style="font-size: 12px; color: #888; margin: 0;">
-        No recording recipe configured yet for this scenario's cells.
-        Recipes live per (scenario, agent) cell under
-        <code>replaydata/agents/&lt;agent&gt;/scenarios/${escapeHtml(sc.code ? sc.code.replace(/\./g, "-") + "_" : "")}${sc.id}/metadata.json</code>.
-      </p>
-    `;
-    detail.appendChild(stub);
-  }
 
   // Per-agent plan panels
   const agents = (catalog.agents || []).map(a => typeof a === "string" ? a : a.id);
@@ -878,20 +863,37 @@ function _axisBadge(value) {
   }
 }
 
-// _displayBadge returns chip data for segment 2 — the derived
-// observability display state (#476), rolled up from daemon_capability +
-// driver_capability + the measured recording status. glyph ◉; color from
-// the shared _displayMeta palette so it matches the detail header + legend.
-function _displayBadge(displayState) {
-  const m = _displayMeta(displayState);
-  return {label: "◉", bg: m.bg, fg: m.fg};
+// _daemonBadge returns chip data for segment 2 — the daemon sensor-capture
+// pillar (daemon_capability). glyph ◉; color carries the raw verdict (not the
+// rolled-up display state) so the overview shows the three pillars individually.
+function _daemonBadge(value) {
+  const label = "◉";
+  switch (value) {
+    case "full":      return {label, bg: "#d6f0d4", fg: "#1f5a1d"};
+    case "bug":       return {label, bg: "#f8c8c8", fg: "#8a0000"};
+    case "incapable": return {label, bg: "#ffcda3", fg: "#a8480a"};
+    case "n/a":       return {label, bg: "#eeece4", fg: "#999"};
+    default:          return {label, bg: "#e5e5e5", fg: "#555"}; // unknown / undefined
+  }
 }
 
-// renderPipelineStrip paints a compact 6-segment indicator that
+// _driverBadge returns chip data for segment 3 — the driver-capability pillar.
+// glyph ▷ ("the harness can drive it"); color carries ready vs a gap:* primitive.
+function _driverBadge(value) {
+  const label = "▷";
+  if (value === "ready") return {label, bg: "#d6f0d4", fg: "#1f5a1d"};
+  if (String(value).startsWith("gap:")) return {label, bg: "#fde7c1", fg: "#8a4500"};
+  return {label, bg: "#e5e5e5", fg: "#555"}; // unknown / undefined
+}
+
+// renderPipelineStrip paints a compact 7-segment indicator that
 // summarizes where a single (agent × scenario) cell sits in the
 // onboarding workflow:
 //
-//   [ Supports ][ Observes ][ Recipe ][ Spec ][ N recordings ][ Validation ]
+//   [ Supports ][ Daemon ][ Driver ][ Recipe ][ Spec ][ N recordings ][ Validation ]
+//
+// Segments 1-3 are the three assessment pillars (agent_supports /
+// daemon_capability / driver_capability), each shown individually.
 //
 // Each segment is its OWN clickable button that jumps to the
 // corresponding section on the cell's detail page (via the
@@ -915,8 +917,8 @@ function renderPipelineStrip(agent, scenarioID, cov, rec) {
   const meas = cov.measurement || {};
 
   // agent_supports=no freezes the whole pipeline — nothing downstream
-  // matters. The Supports segment shows the ✗; everything after Observes
-  // collapses to dim placeholders.
+  // matters. The Supports segment shows the state; the Daemon + Driver pillars
+  // still render, and everything after them collapses to dim placeholders.
   const blocked = (sup === "no");
 
   // Outer container is a plain <div>; each segment is its own button.
@@ -939,16 +941,18 @@ function renderPipelineStrip(agent, scenarioID, cov, rec) {
     }
   };
 
-  // Build 6 segments. Segments 1 + 2 are the two assessment axes,
-  // each its own button; both jump to the same Assessment panel
-  // (its chips render the two axes individually inside).
+  // Build 7 segments. Segments 1-3 are the three assessment pillars, each its
+  // own button; all jump to the Assessment panel (which renders the pillars in
+  // full inside).
   const supChip = _axisBadge(sup);
-  const obsChip = _displayBadge(display);
+  const daemonChip = _daemonBadge(daemon);
+  const driverChip = _driverBadge(driver);
   wrap.appendChild(_pipeBtn(supChip.label, supChip.bg, supChip.fg,
-    jump("supports"), false, "Supports — agent CLI implements this feature"));
-  wrap.appendChild(_pipeBtn(obsChip.label, obsChip.bg, obsChip.fg,
-    jump("observes"), false,
-    `Observability: ${_displayMeta(display).text} (daemon=${daemon}, driver=${driver})`));
+    jump("supports"), false, `agent_supports: ${sup} — agent CLI implements this feature`));
+  wrap.appendChild(_pipeBtn(daemonChip.label, daemonChip.bg, daemonChip.fg,
+    jump("observes"), false, `daemon: ${daemon} — can the daemon observe it`));
+  wrap.appendChild(_pipeBtn(driverChip.label, driverChip.bg, driverChip.fg,
+    jump("observes"), false, `driver: ${driver} — can the harness drive it`));
   if (blocked) {
     // Four disabled placeholders so the cell width stays consistent
     // across rows when supports=no freezes the pipeline.
@@ -1383,8 +1387,8 @@ function renderMeta(data) {
 //     read fine via the literal `##` prefix)
 //   - sources list with URL anchors where applicable
 function renderAssessment(a) {
-  // anchor "supports" — pipeline-strip segments ⚙ AND ◉ both land
-  // here (the panel's chips render the two axes individually).
+  // anchor "supports" — the pipeline-strip pillar segments (⚙ ◉ ▷) all land
+  // here (the panel's chips render the three pillars individually).
   const p = panel("Assessment", "supports");
   // Also tag with the observes alias so [data-anchor="observes"]
   // resolves to the same panel.
@@ -1408,12 +1412,12 @@ function renderAssessment(a) {
     row.appendChild(conf);
   }
   p.appendChild(row);
-  // Body — render as preformatted wrapping text. Markdown headings
-  // (e.g. "## Verdict") show with their leading hashes; readable as-is.
+  // Body — rendered Markdown (## / ### headings, - and 1. lists, **bold**,
+  // `code`). renderMarkdown escapes the prose first, so it cannot inject HTML.
   if (a.body) {
-    const body = document.createElement("pre");
-    body.style.cssText = "white-space: pre-wrap; font-family: -apple-system, BlinkMacSystemFont, sans-serif; font-size: 13px; line-height: 1.5; color: #222; margin: 0 0 10px 0; padding: 10px; background: #fafaf6; border: 1px solid #ece9dd; border-radius: 4px;";
-    body.textContent = a.body;
+    const body = document.createElement("div");
+    body.className = "md-body";
+    body.innerHTML = renderMarkdown(a.body);
     p.appendChild(body);
   }
   // Caveats — known limitations / metric drifts the verdict doesn't
@@ -2763,6 +2767,57 @@ function text(s) {
 function escapeHtml(s) {
   if (s == null) return "";
   return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+
+// renderMarkdown converts the small Markdown subset the assessment bodies use
+// (## / ### / #### headings, "- " and "1. " lists, **bold**, `code`, and
+// blank-line-separated paragraphs) into safe HTML, returned as a string for
+// innerHTML. The input is escaped FIRST so any literal HTML in the prose stays
+// inert — only the tags this function inserts are live. No external engine: the
+// subset is deliberately small (it's what the assess skill authors), so a few
+// regexes beat pulling a markdown library into a no-build SPA. Style lives in
+// the `.md-body` rules in index.html.
+export function renderMarkdown(md) {
+  const esc = escapeHtml(String(md || ""));
+  // Inline pass — one alternation, left-to-right: a `code` span is matched
+  // whole (so any ** inside it stays literal), otherwise **bold**. One pass,
+  // no placeholder sentinels in the source.
+  const inline = (s) =>
+    s.replace(/`([^`]+)`|\*\*([^*]+)\*\*/g,
+      (_, code, bold) => code !== undefined ? `<code>${code}</code>` : `<strong>${bold}</strong>`);
+  const out = [];
+  let list = null;   // {tag, items:[]}
+  let para = [];     // accumulated plain lines → one <p>
+  const flushPara = () => { if (para.length) { out.push(`<p>${inline(para.join(" "))}</p>`); para = []; } };
+  const flushList = () => {
+    if (list) { out.push(`<${list.tag}>${list.items.map(i => `<li>${inline(i)}</li>`).join("")}</${list.tag}>`); list = null; }
+  };
+  for (const raw of esc.split("\n")) {
+    const line = raw.replace(/\s+$/, "");
+    let m;
+    if (line === "") { flushPara(); flushList(); continue; }
+    if ((m = line.match(/^(#{2,4})\s+(.*)$/))) {
+      flushPara(); flushList();
+      out.push(`<h${m[1].length + 2}>${inline(m[2])}</h${m[1].length + 2}>`); // ## → h4, ### → h5, #### → h6
+      continue;
+    }
+    if ((m = line.match(/^\s*-\s+(.*)$/))) {
+      flushPara();
+      if (!list || list.tag !== "ul") { flushList(); list = {tag: "ul", items: []}; }
+      list.items.push(m[1]);
+      continue;
+    }
+    if ((m = line.match(/^\s*\d+\.\s+(.*)$/))) {
+      flushPara();
+      if (!list || list.tag !== "ol") { flushList(); list = {tag: "ol", items: []}; }
+      list.items.push(m[1]);
+      continue;
+    }
+    flushList();
+    para.push(line);
+  }
+  flushPara(); flushList();
+  return out.join("\n");
 }
 
 // findOffsetBefore returns the greatest offset < `cur`, or null if none.
