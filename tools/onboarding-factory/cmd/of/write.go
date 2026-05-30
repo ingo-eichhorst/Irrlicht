@@ -399,6 +399,11 @@ func runCellWrite(args []string, stdout, stderr io.Writer) int {
 	}
 	// Force the FK so the cell always links back to its catalog row.
 	cell.ScenarioID = *scenario
+	// details.assessment is the verdict's source of truth (the matrix reads it
+	// for routing). Mirror its three pillars + confidence into the metadata
+	// overview tier so the two tiers can't drift — the author only has to get
+	// details.assessment right.
+	mirrorAssessmentPillars(&cell)
 	fold := resolveCellFolder(*repoRoot, *agent, sh, *folder)
 	metaPath := filepath.Join(*repoRoot, "replaydata", "agents", *agent, "scenarios", fold, "metadata.json")
 	if err := writeJSONFileAtomic(metaPath, cell); err != nil {
@@ -407,6 +412,39 @@ func runCellWrite(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintf(stdout, "of cell write: %s/%s ok\n", *agent, fold)
 	return exitOK
+}
+
+// mirrorAssessmentPillars copies the three pillars + confidence from
+// details.assessment (the verdict of record, which the matrix reads for
+// disposition/route) into the metadata overview tier (which the viewer and the
+// matrix's DisplayState fallback read). Keeping one authored source prevents the
+// two tiers from telling different stories. No-op when details.assessment is
+// absent or carries no pillar keys.
+func mirrorAssessmentPillars(cell *shard.ShardAgent) {
+	if len(cell.Details.Assessment) == 0 {
+		return
+	}
+	var a struct {
+		AgentSupports    string  `json:"agent_supports"`
+		DaemonCapability string  `json:"daemon_capability"`
+		DriverCapability string  `json:"driver_capability"`
+		Confidence       float64 `json:"confidence"`
+	}
+	if json.Unmarshal(cell.Details.Assessment, &a) != nil {
+		return
+	}
+	if a.AgentSupports != "" {
+		cell.Metadata.AgentSupports = a.AgentSupports
+	}
+	if a.DaemonCapability != "" {
+		cell.Metadata.DaemonCapability = a.DaemonCapability
+	}
+	if a.DriverCapability != "" {
+		cell.Metadata.DriverCapability = a.DriverCapability
+	}
+	if a.Confidence != 0 {
+		cell.Metadata.Confidence = a.Confidence
+	}
 }
 
 // runCellSpec writes a cell's expected.jsonl (the spec) through the factory so
