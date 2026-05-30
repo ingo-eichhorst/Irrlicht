@@ -39,7 +39,8 @@ func validRepo(t *testing.T) string {
   "details": {"assessment": {"agent_supports": "yes", "daemon_capability": "full", "driver_capability": "ready"}}
 }`)
 	write(t, filepath.Join(cell, "expected.jsonl"), `{"schema_version":1}`+"\n")
-	write(t, filepath.Join(cell, "recordings", "r1", "events.jsonl"), "\n")
+	write(t, filepath.Join(cell, "recordings", "r1", "events.jsonl"),
+		`{"seq":1,"ts":"2026-05-01T00:00:00Z","kind":"pid_discovered","session_id":"s"}`+"\n")
 	return root
 }
 
