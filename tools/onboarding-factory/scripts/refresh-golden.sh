@@ -31,9 +31,16 @@ SCENARIO="${2:?usage: refresh-golden.sh <agent> <scenario>}"
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
 
-SCEN="replaydata/agents/${AGENT}/scenarios/${SCENARIO}"
+# Resolve the scenario to its on-disk cell folder (id-prefixed, variant-aware)
+# the same way run-cell.sh does, so a caller can pass the catalog name
+# ("session-start") and we still find the "1-1_session-start" folder. A folder
+# name passed directly resolves to itself.
+# shellcheck source=lib/shard-lib.sh
+source "$REPO_ROOT/tools/onboarding-factory/scripts/lib/shard-lib.sh"
+FOLDER="$(shard_folder "$SCENARIO" "$AGENT")"
+SCEN="replaydata/agents/${AGENT}/scenarios/${FOLDER}"
 if [[ ! -d "$SCEN" ]]; then
-  echo "refresh-golden: no scenario dir $SCEN" >&2
+  echo "refresh-golden: no cell dir for ${AGENT}/${SCENARIO} (resolved folder: ${FOLDER})" >&2
   exit 1
 fi
 
