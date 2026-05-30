@@ -42,14 +42,24 @@ const (
 	StatusDisconnected = "disconnected"
 )
 
+// CloseRevoked is the WebSocket close code the relay sends when a peer's bearer
+// token is missing/invalid at handshake, or revoked while connected. Chosen in
+// the application-private 4000–4999 range; clients treat it as "auth failed,
+// don't keep reconnecting" rather than a transient drop.
+const CloseRevoked = 4401
+
 // Hello is the first frame a peer sends after the socket opens. Daemons set
-// the Daemon* fields; clients leave them empty.
+// the Daemon* fields; clients leave them empty. Token carries the bearer token
+// when the relay runs with --auth; it is the only auth channel (works from a
+// browser, which can't set request headers on a WebSocket) and is omitted on a
+// no-auth (trusted-LAN) relay.
 type Hello struct {
 	Type            string `json:"type"`
 	ProtocolVersion int    `json:"protocol_version"`
 	Role            string `json:"role"`
 	DaemonID        string `json:"daemon_id,omitempty"`
 	DaemonLabel     string `json:"daemon_label,omitempty"`
+	Token           string `json:"token,omitempty"`
 }
 
 // HelloAck is the relay's reply to a hello, echoing the negotiated version.

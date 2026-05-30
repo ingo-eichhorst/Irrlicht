@@ -125,10 +125,11 @@
       enableLocalSource: true,
       enableRelaySource: false,
       relayUrl: '',
+      relayToken: '',
     };
     // Settings keys that change the live source connections (vs. display-only
     // toggles), so the change handler knows to reconnect.
-    const SOURCE_SETTING_KEYS = new Set(['enableLocalSource', 'enableRelaySource', 'relayUrl']);
+    const SOURCE_SETTING_KEYS = new Set(['enableLocalSource', 'enableRelaySource', 'relayUrl', 'relayToken']);
     function loadSettings() {
       try {
         const raw = localStorage.getItem(SETTINGS_KEY);
@@ -1436,7 +1437,7 @@
       }
       if (settings.enableRelaySource) {
         const wsUrl = relayWsUrl(settings.relayUrl);
-        if (wsUrl) out.push({ id: 'relay:' + wsUrl, label: settings.relayUrl || 'Relay', kind: 'relay', wsUrl });
+        if (wsUrl) out.push({ id: 'relay:' + wsUrl, label: settings.relayUrl || 'Relay', kind: 'relay', wsUrl, token: settings.relayToken || '' });
       }
       return out;
     }
@@ -1449,7 +1450,14 @@
       const desired = desiredSources();
       const desiredById = new Map(desired.map(s => [s.id, s]));
       for (const [id, src] of [...sources]) {
-        if (!desiredById.has(id)) {
+        const want = desiredById.get(id);
+        // Drop a source that's no longer desired, OR a relay source whose token
+        // changed / is parked in 'unauthorized'. The source id is keyed by URL
+        // only, so without this a corrected token would never reconnect (the id
+        // still matches) and an auth-failed relay would stay stuck. Tearing it
+        // down here lets the loop below recreate it with the new credential.
+        const stale = want && src.kind === 'relay' && (src.token !== want.token || src.state === 'unauthorized');
+        if (!want || stale) {
           src.closing = true;
           try { if (src.ws) src.ws.close(); } catch (e) {}
           sources.delete(id);
@@ -1474,7 +1482,11 @@
       ws.onopen = function() {
         src.state = 'connected';
         src.reconnectDelay = 1000;
-        try { ws.send(JSON.stringify({ type: 'hello', protocol_version: 1, role: 'client' })); } catch (e) {}
+        // A browser can't set request headers on a WebSocket, so an auth-enabled
+        // relay's bearer token rides in this first frame (relay sources only).
+        const hello = { type: 'hello', protocol_version: 1, role: 'client' };
+        if (src.kind === 'relay' && settings.relayToken) hello.token = settings.relayToken;
+        try { ws.send(JSON.stringify(hello)); } catch (e) {}
         updateWsStatus();
       };
       ws.onmessage = function(evt) {
@@ -1483,10 +1495,13 @@
         handleSourceFrame(src, msg);
       };
       ws.onerror = function() {};
-      ws.onclose = function() {
+      ws.onclose = function(ev) {
         if (src.closing) return;
-        src.state = 'disconnected';
         src.daemons.clear();
+        // 4401 = auth failed/revoked: retrying with the same token just loops, so
+        // stop reconnecting (until settings change) instead of a tight loop.
+        if (ev && ev.code === 4401) { src.state = 'unauthorized'; updateWsStatus(); return; }
+        src.state = 'disconnected';
         updateWsStatus();
         scheduleReconnect(src);
       };

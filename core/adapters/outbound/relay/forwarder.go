@@ -54,6 +54,7 @@ type SnapshotFunc func() ([]*session.SessionState, []AgentInfo)
 type Forwarder struct {
 	url      string
 	identity Identity
+	token    string
 	push     outbound.PushBroadcaster
 	snapshot SnapshotFunc
 	logger   outbound.Logger
@@ -64,11 +65,13 @@ type Forwarder struct {
 }
 
 // NewForwarder builds a Forwarder targeting relayURL. push and snapshot are
-// required; logger may be nil.
-func NewForwarder(relayURL string, id Identity, push outbound.PushBroadcaster, snapshot SnapshotFunc, logger outbound.Logger) *Forwarder {
+// required; logger may be nil. token is sent in the hello for an auth-enabled
+// relay and may be empty (a no-auth relay ignores it).
+func NewForwarder(relayURL string, id Identity, token string, push outbound.PushBroadcaster, snapshot SnapshotFunc, logger outbound.Logger) *Forwarder {
 	return &Forwarder{
 		url:        normalizeRelayURL(relayURL),
 		identity:   id,
+		token:      token,
 		push:       push,
 		snapshot:   snapshot,
 		logger:     logger,
@@ -125,6 +128,7 @@ func (f *Forwarder) runOnce(ctx context.Context) error {
 		Role:            RoleDaemon,
 		DaemonID:        f.identity.DaemonID,
 		DaemonLabel:     f.identity.DaemonLabel,
+		Token:           f.token,
 	}); err != nil {
 		return err
 	}
