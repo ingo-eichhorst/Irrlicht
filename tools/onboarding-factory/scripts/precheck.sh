@@ -129,8 +129,14 @@ BIN_DIR="$REPO_ROOT/.build/refresh/bin"
 mkdir -p "$BIN_DIR"
 VERSION_STR="$("$REPO_ROOT/tools/version.sh" 2>/dev/null || echo dev)"
 for bin in irrlichd replay; do
-  if ! (cd "$REPO_ROOT" && go build -ldflags "-X main.Version=$VERSION_STR" -o "$BIN_DIR/$bin" ./core/cmd/"$bin") >/dev/null 2>&1; then
-    fail "failed to build $bin from ./core/cmd/$bin"
+  # irrlichd lives in core; replay moved into the factory module (#523). go.work
+  # resolves both from the repo root.
+  case "$bin" in
+    irrlichd) src="./core/cmd/irrlichd" ;;
+    replay)   src="./tools/onboarding-factory/cmd/replay" ;;
+  esac
+  if ! (cd "$REPO_ROOT" && go build -ldflags "-X main.Version=$VERSION_STR" -o "$BIN_DIR/$bin" "$src") >/dev/null 2>&1; then
+    fail "failed to build $bin from $src"
   fi
 done
 

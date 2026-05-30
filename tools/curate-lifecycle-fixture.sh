@@ -92,10 +92,10 @@ fi
 OUT_EVENTS="$SCENARIO_DIR/events.jsonl"
 OUT_SUBAGENTS_DIR="$SCENARIO_DIR/subagents"
 
-# Adapter declares its native transcript extension in scenarios.json's meta
-# block. Default "jsonl"; preserve it so the parser can ingest the file verbatim
-# during replay.
-CATALOG_JSON="$REPO_ROOT/replaydata/scenarios.json"
+# Adapter declares its native transcript extension in the catalog's meta block
+# (replaydata/agents/scenarios.json since #524). Default "jsonl"; preserve it so
+# the parser can ingest the file verbatim during replay.
+CATALOG_JSON="$REPO_ROOT/replaydata/agents/scenarios.json"
 TRANSCRIPT_EXT="$(jq -r --arg a "$ADAPTER" '.meta.transcript_extensions[$a] // "jsonl"' "$CATALOG_JSON")"
 OUT_TRANSCRIPT="$SCENARIO_DIR/transcript.$TRANSCRIPT_EXT"
 
