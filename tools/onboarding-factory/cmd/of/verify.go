@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"io"
-	"path/filepath"
 
 	"irrlicht/tools/onboarding-factory/internal/shard"
 	"irrlicht/tools/onboarding-factory/internal/validate"
@@ -35,7 +34,10 @@ func runVerify(args []string, stdout, stderr io.Writer) int {
 	fold := *folder
 	if fold == "" {
 		if sh, ok := shard.Load(*repoRoot, *scenario); ok {
-			fold = filepath.Base(shard.FolderForScenario(*repoRoot, sh.Name))
+			// Prefer the agent's existing folder (variant cells live under a
+			// non-canonical name), so verify reads the same folder of record/
+			// write land in — never a phantom canonical folder.
+			fold = shard.AgentFolderForScenario(*repoRoot, *agent, sh.Name)
 		} else {
 			fmt.Fprintf(stderr, "of verify: scenario %q not in the catalog\n", *scenario)
 			return exitFail

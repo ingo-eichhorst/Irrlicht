@@ -40,9 +40,9 @@ const (
 )
 
 const usage = `usage:
-  matrix query --gate completeness --agent <a> [--repo-root .] [--scenarios p] [--agents-root r]
-  matrix query --cells --agent <a> [--repo-root .] [--scenarios p] [--agents-root r]
-  matrix rollup [--check] [--repo-root .] [--scenarios p] [--agents-root r] [--out p]`
+  matrix query --gate completeness --agent <a> [--repo-root .] [--agents-root r]
+  matrix query --cells --agent <a> [--repo-root .] [--agents-root r]
+  matrix rollup [--check] [--repo-root .] [--agents-root r] [--out p]`
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))

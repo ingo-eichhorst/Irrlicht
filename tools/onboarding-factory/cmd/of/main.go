@@ -39,6 +39,7 @@ const usage = `usage:
   of validate [--json] [--repo-root .]
   of coverage [--json] [--repo-root .]
   of scenario add|update --name n [--id i] [--description d] [--process-file f] [--acceptance-file f]
+  of scenario show --name n [--json]
   of agent add --id i --name n --provider p [--min-version v] [--prereq p]...
   of cell write --agent a --scenario s --file metadata.json [--folder f]
   of cell spec  --agent a --scenario s --file expected.jsonl [--folder f]

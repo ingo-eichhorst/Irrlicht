@@ -99,10 +99,10 @@ For each scenario, judge from its `process` which step types its recipe will
 need, and which the freshly-scaffolded driver lacks:
 
 ```bash
-of status --json | jq -r '.scenarios[] | "\(.id)\t\(.name)"'
-# read each scenario's process via of coverage --json / of status, infer the
-# step types it implies (multi-session ⇒ reset_session/restart; in-REPL picker
-# ⇒ keys; forced kill ⇒ sigkill; …)
+of status --json | jq -r '.scenarios[] | "\(.id)\t\(.name)"'   # the row list
+of scenario show --name <name>                                  # one scenario's process, per row
+# from each process, infer the step types it implies (multi-session ⇒
+# reset_session/restart; in-REPL picker ⇒ keys; forced kill ⇒ sigkill; …)
 ```
 
 This is a prediction, not a verdict — `assess` settles each cell's **driver**

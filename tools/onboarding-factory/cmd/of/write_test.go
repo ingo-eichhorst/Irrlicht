@@ -113,16 +113,17 @@ func TestCellWriteFK(t *testing.T) {
 func TestCellSpec(t *testing.T) {
 	root := validRepo(t)
 	specFile := filepath.Join(t.TempDir(), "expected.jsonl")
-	// meta line lacks scenario_id (FK forced on write) + one verbatim phase line.
+	// meta line lacks scenario_id (FK forced on write) + one verbatim phase line
+	// (well-formed per ParseShardSpec: phase name + exactly one of expected_state/kind).
+	const phase = `{"phase":"birth","expected_state":"ready","relative_to":"start"}`
 	_ = os.WriteFile(specFile, []byte(
-		`{"schema_version":1,"notes":"hi"}`+"\n"+
-			`{"phase":"birth","anchor":"start","key":"abc"}`+"\n"), 0o644)
+		`{"schema_version":1,"notes":"a > b & c"}`+"\n"+phase+"\n"), 0o644)
 
 	// dangling scenario → fail
 	if code, _, _ := runOf("cell", "spec", "--agent", "claudecode", "--scenario", "ghost", "--file", specFile, "--repo-root", root); code != exitFail {
 		t.Fatal("cell spec with unknown scenario must fail")
 	}
-	// real scenario → ok, FK forced on meta, phase line verbatim
+	// real scenario → ok, FK forced on meta, phase line verbatim, meta NOT HTML-escaped
 	code, _, errs := runOf("cell", "spec", "--agent", "claudecode", "--scenario", "basic-turn", "--file", specFile, "--repo-root", root)
 	if code != exitOK {
 		t.Fatalf("cell spec failed: %d %s", code, errs)
@@ -131,8 +132,14 @@ func TestCellSpec(t *testing.T) {
 	if !strings.Contains(string(b), `"scenario_id":"basic-turn"`) {
 		t.Fatalf("scenario_id FK not forced on meta line: %s", b)
 	}
-	if !strings.Contains(string(b), `{"phase":"birth","anchor":"start","key":"abc"}`) {
+	if !strings.Contains(string(b), phase) {
 		t.Fatalf("phase line not preserved verbatim: %s", b)
+	}
+	// Literal > and & survive: HTML-escaping would have written the > /
+	// & forms, so a matching literal substring proves the meta line was
+	// emitted unescaped (matching the rest of replaydata's style).
+	if !strings.Contains(string(b), `a > b & c`) {
+		t.Fatalf("meta notes HTML-escaped or not preserved: %s", b)
 	}
 
 	// malformed JSONL → fail
@@ -140,6 +147,18 @@ func TestCellSpec(t *testing.T) {
 	_ = os.WriteFile(bad, []byte("not json\n"), 0o644)
 	if code, _, _ := runOf("cell", "spec", "--agent", "claudecode", "--scenario", "basic-turn", "--file", bad, "--repo-root", root); code != exitFail {
 		t.Fatal("cell spec with malformed JSONL must fail")
+	}
+	// a `null` meta line must error cleanly, not panic the nil map
+	nullMeta := filepath.Join(t.TempDir(), "null.jsonl")
+	_ = os.WriteFile(nullMeta, []byte("null\n"), 0o644)
+	if code, _, _ := runOf("cell", "spec", "--agent", "claudecode", "--scenario", "basic-turn", "--file", nullMeta, "--repo-root", root); code != exitFail {
+		t.Fatal("cell spec with a null meta line must fail cleanly")
+	}
+	// a structurally-invalid phase (neither expected_state nor kind) is rejected at write time
+	badPhase := filepath.Join(t.TempDir(), "badphase.jsonl")
+	_ = os.WriteFile(badPhase, []byte(`{"schema_version":1}`+"\n"+`{"phase":"birth"}`+"\n"), 0o644)
+	if code, _, _ := runOf("cell", "spec", "--agent", "claudecode", "--scenario", "basic-turn", "--file", badPhase, "--repo-root", root); code != exitFail {
+		t.Fatal("cell spec with an invalid phase line must fail")
 	}
 }
 
