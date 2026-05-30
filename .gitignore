@@ -53,6 +53,7 @@ tools/onboarding-factory/matrix
 tools/onboarding-factory/viewer
 tools/onboarding-factory/expected-validate
 tools/onboarding-factory/replay
+tools/onboarding-factory/of
 
 # Gas Town runtime directories
 .beads/
