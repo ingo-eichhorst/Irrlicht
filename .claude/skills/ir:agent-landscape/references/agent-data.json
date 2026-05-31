@@ -1,5 +1,5 @@
 {
-  "last_updated": "2026-05-15",
+  "last_updated": "2026-05-31",
   "agents": [
     {
       "name": "Claw Code",
@@ -785,6 +785,25 @@
       ]
     },
     {
+      "name": "Antigravity",
+      "github_repo": null,
+      "category": "agent",
+      "website": "https://antigravity.google/product/antigravity-cli",
+      "description": "Google's Go-based agent-first development platform with a terminal CLI; replaced Gemini CLI on 2026-05-19 (Gemini CLI requests stop 2026-06-18). Distributed as a closed binary via install script.",
+      "stars": null,
+      "language": null,
+      "license": null,
+      "interface": "Desktop app (IDE) / CLI",
+      "pricing": "Freemium",
+      "irrlicht_support": "none",
+      "first_seen": "2026-05-31",
+      "alternative_metrics": {
+        "source": "Google I/O 2026; Google Developers Blog 'Transitioning Gemini CLI to Antigravity CLI'; no independent funding/user data",
+        "measured_date": "2026-05-31"
+      },
+      "stars_history": []
+    },
+    {
       "name": "Amazon Q Developer",
       "github_repo": null,
       "category": "agent",
@@ -1312,6 +1331,48 @@
       ]
     },
     {
+      "name": "Emdash",
+      "github_repo": "generalaction/emdash",
+      "category": "orchestrator",
+      "website": "https://github.com/generalaction/emdash",
+      "description": "Emdash is the Open-Source Agentic Development Environment (YC W26). Run multiple coding agents in parallel. Use any provider.",
+      "stars": 4710,
+      "language": "TypeScript",
+      "license": "Apache-2.0",
+      "interface": "Desktop app (Electron)",
+      "pricing": "Free (open source)",
+      "irrlicht_support": "none",
+      "first_seen": "2026-05-31",
+      "alternative_metrics": null,
+      "stars_history": [
+        {
+          "date": "2026-05-31",
+          "stars": 4710
+        }
+      ]
+    },
+    {
+      "name": "OpenAgentsControl",
+      "github_repo": "darrenhinde/OpenAgentsControl",
+      "category": "orchestrator",
+      "website": "https://github.com/darrenhinde/OpenAgentsControl",
+      "description": "AI agent framework for plan-first development workflows with approval-based execution. Multi-language support (TypeScript, Python, Go, Rust) with automatic testing, code review, and validation built for OpenCode.",
+      "stars": 4187,
+      "language": "TypeScript",
+      "license": "MIT",
+      "interface": "CLI / SDK",
+      "pricing": "Free (open source)",
+      "irrlicht_support": "none",
+      "first_seen": "2026-05-31",
+      "alternative_metrics": null,
+      "stars_history": [
+        {
+          "date": "2026-05-31",
+          "stars": 4187
+        }
+      ]
+    },
+    {
       "name": "Multiclaude",
       "github_repo": "dlorenc/multiclaude",
       "category": "orchestrator",
@@ -1337,6 +1398,27 @@
         {
           "date": "2026-04-12",
           "stars": 529
+        }
+      ]
+    },
+    {
+      "name": "Bernstein",
+      "github_repo": "sipyourdrink-ltd/bernstein",
+      "category": "orchestrator",
+      "website": "https://bernstein.run",
+      "description": "Audit-grade multi-agent orchestration for CLI coding agents (Claude Code, Codex, Gemini CLI, +40 more). HMAC-chained audit log, signed agent cards, per-artefact lineage, air-gap deploy.",
+      "stars": 530,
+      "language": "Python",
+      "license": "Apache-2.0",
+      "interface": "CLI",
+      "pricing": "Free (open source)",
+      "irrlicht_support": "none",
+      "first_seen": "2026-05-31",
+      "alternative_metrics": null,
+      "stars_history": [
+        {
+          "date": "2026-05-31",
+          "stars": 530
         }
       ]
     },
