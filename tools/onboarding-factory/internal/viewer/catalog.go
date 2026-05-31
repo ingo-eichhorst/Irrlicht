@@ -335,26 +335,31 @@ func pipelineForCell(repoRoot, agent, coverageID, folder string, recipes recipeI
 	}
 	out["recipe"] = map[string]any{"authored": recipeAuthored, "step_count": stepCount}
 
-	scenarioDir := filepath.Join(repoRoot, "replaydata", "agents", agent, "scenarios", folder)
 	specAuthored := false
 	phaseCount := 0
-	if specBytes, err := os.ReadFile(filepath.Join(scenarioDir, "expected.jsonl")); err == nil {
-		specAuthored = true
-		lines := 0
-		for _, b := range specBytes {
-			if b == '\n' {
-				lines++
+	recCount := 0
+	// folder == "" means the cell is absent on disk (no metadata.json for this
+	// agent/scenario): there is no spec or recording, and joining an empty folder
+	// would stat the scenarios/ parent. Skip the disk reads entirely.
+	if folder != "" {
+		scenarioDir := filepath.Join(repoRoot, "replaydata", "agents", agent, "scenarios", folder)
+		if specBytes, err := os.ReadFile(filepath.Join(scenarioDir, "expected.jsonl")); err == nil {
+			specAuthored = true
+			lines := 0
+			for _, b := range specBytes {
+				if b == '\n' {
+					lines++
+				}
+			}
+			if lines > 0 {
+				phaseCount = lines - 1 // first line is the meta object
 			}
 		}
-		if lines > 0 {
-			phaseCount = lines - 1 // first line is the meta object
-		}
+		// Every recording lives under recordings/<name>/; "latest" means at least
+		// one recording exists, "archive_count" is the total recording count.
+		recCount = len(RecordingStore{RepoRoot: repoRoot}.listArchiveDirs(scenarioDir))
 	}
 	out["spec"] = map[string]any{"authored": specAuthored, "phase_count": phaseCount}
-
-	// Every recording lives under recordings/<name>/; "latest" means at least
-	// one recording exists, "archive_count" is the total recording count.
-	recCount := len(RecordingStore{RepoRoot: repoRoot}.listArchiveDirs(scenarioDir))
 	out["recordings"] = map[string]any{"latest": recCount > 0, "archive_count": recCount}
 
 	return out

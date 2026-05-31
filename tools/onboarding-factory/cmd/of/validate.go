@@ -178,21 +178,22 @@ func validateCells(repoRoot string, names map[string]bool, add func(path, msg st
 			} else if !names[cell.ScenarioID] {
 				add(rel+"/metadata.json", fmt.Sprintf("scenario_id %q not in the catalog", cell.ScenarioID))
 			}
-			if hasRecordings {
-				cellDir := filepath.Join(scenDir, folder)
+			// A cell is "recorded" iff NewestRecordingDir resolves one — the SAME
+			// definition matrix.cellRecorded uses, so the two never disagree.
+			// (hasRecordings/dirHasChildren above is only for orphan detection:
+			// content present but no metadata.json.)
+			cellDir := filepath.Join(scenDir, folder)
+			if recDir, ok := validate.NewestRecordingDir(cellDir); ok {
 				if !fileExists(filepath.Join(cellDir, "expected.jsonl")) {
 					add(rel, "recorded cell is missing expected.jsonl")
 				}
-				// The newest recording is the authoritative one (it gates
-				// validation and the viewer autoselects it); it must be complete.
-				// Older recordings are kept as drift signals. The on-disk tree is
-				// the single source of truth, so an incomplete newest recording is
-				// a hard error.
-				if recDir, ok := validate.NewestRecordingDir(cellDir); ok {
-					recRel := filepath.Join(rel, "recordings", filepath.Base(recDir))
-					for _, finding := range validate.RecordingComplete(recDir) {
-						add(recRel, "incomplete recording: "+finding)
-					}
+				// The newest recording is authoritative (it gates validation and
+				// the viewer autoselects it); it must be complete. Older recordings
+				// are kept as drift signals. The on-disk tree is the single source
+				// of truth, so an incomplete newest recording is a hard error.
+				recRel := filepath.Join(rel, "recordings", filepath.Base(recDir))
+				for _, finding := range validate.RecordingComplete(recDir) {
+					add(recRel, "incomplete recording: "+finding)
 				}
 			}
 		}

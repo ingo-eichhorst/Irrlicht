@@ -322,3 +322,53 @@ func writeRec(t *testing.T, dir, file, content string) {
 	t.Helper()
 	mustWrite(t, filepath.Join(dir, "recordings", "rec", file), content)
 }
+
+// TestRecordingComplete pins the structural completeness rules for one recording
+// directory: events + manifest + exactly one transcript, and a replay golden iff
+// the transcript is jsonl (markdown adapters like aider have none).
+func TestRecordingComplete(t *testing.T) {
+	write := func(dir string, files ...string) string {
+		t.Helper()
+		d := filepath.Join(t.TempDir(), dir)
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for _, f := range files {
+			if err := os.WriteFile(filepath.Join(d, f), []byte("{}\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return d
+	}
+	const golden = "transcript.jsonl.replay.json.golden"
+	cases := []struct {
+		name  string
+		files []string
+		want  []string // substrings expected in the findings (nil = complete)
+	}{
+		{"complete jsonl", []string{"events.jsonl", "manifest.json", "transcript.jsonl", golden}, nil},
+		{"complete md (aider, no golden)", []string{"events.jsonl", "manifest.json", "transcript.md"}, nil},
+		{"jsonl missing golden", []string{"events.jsonl", "manifest.json", "transcript.jsonl"}, []string{"golden"}},
+		{"missing events", []string{"manifest.json", "transcript.jsonl", golden}, []string{"events.jsonl"}},
+		{"missing manifest", []string{"events.jsonl", "transcript.jsonl", golden}, []string{"manifest.json"}},
+		{"no transcript", []string{"events.jsonl", "manifest.json"}, []string{"missing transcript"}},
+		{"both transcripts ambiguous", []string{"events.jsonl", "manifest.json", "transcript.jsonl", "transcript.md", golden}, []string{"ambiguous"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := RecordingComplete(write(c.name, c.files...))
+			if len(c.want) == 0 {
+				if len(got) != 0 {
+					t.Fatalf("want complete, got findings: %v", got)
+				}
+				return
+			}
+			joined := strings.Join(got, " | ")
+			for _, w := range c.want {
+				if !strings.Contains(joined, w) {
+					t.Errorf("want a finding containing %q, got: %v", w, got)
+				}
+			}
+		})
+	}
+}
