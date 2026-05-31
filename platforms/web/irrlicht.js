@@ -1316,8 +1316,8 @@
     //   2. METRICS — when structure is unchanged, merge trailing-window `costs`
     //      and per-agent `metrics.rate_limit*` in place (no reorder), so the
     //      cost figures and quota chips don't go stale between WS deltas.
-    setInterval(() => {
-      fetch('/api/v1/sessions').then(r => r.json()).catch(() => null).then(resp => {
+    function rehydratePoll() {
+      return fetch('/api/v1/sessions').then(r => r.json()).catch(() => null).then(resp => {
         if (!resp) return;
         const fresh = Array.isArray(resp) ? resp : (resp.groups || []);
         // Structure / role metadata changed → adopt the daemon's tree.
@@ -1329,24 +1329,26 @@
           repaintHistory();
           return;
         }
-        // Index fresh groups + agents recursively so nested Gas Town rig
-        // groups (matched by name) and rig agents are reachable.
-        const byName = new Map();
+        // Index fresh groups (by path, so a rig can't shadow a same-named
+        // top-level project) + agents recursively for the in-place merge.
+        const byPath = new Map();
         const freshAgents = new Map();
-        (function walkFresh(gs) {
+        (function walkFresh(gs, parentKey) {
           for (const g of (gs || [])) {
-            if (g && g.name) byName.set(g.name, g);
+            const key = parentKey ? parentKey + '/' + g.name : (g.name || '');
+            byPath.set(key, g);
             for (const a of (g.agents || [])) {
               if (a && a.session_id) freshAgents.set(a.session_id, a);
               if (a && a.children) (function ix(arr){ for (const c of arr||[]){ if (c.session_id) freshAgents.set(c.session_id, c); if (c.children) ix(c.children);} })(a.children);
             }
-            if (g.groups) walkFresh(g.groups);
+            if (g.groups) walkFresh(g.groups, key);
           }
-        })(fresh);
+        })(fresh, '');
         let changed = false;
-        (function walkGroups(groups) {
+        (function walkGroups(groups, parentKey) {
           for (const g of groups) {
-            const f = byName.get(g.name);
+            const key = parentKey ? parentKey + '/' + g.name : (g.name || '');
+            const f = byPath.get(key);
             if (f && f.costs && JSON.stringify(g.costs) !== JSON.stringify(f.costs)) {
               g.costs = f.costs;
               changed = true;
@@ -1370,9 +1372,9 @@
                 if (a.children) mergeRateLimit(a.children);
               }
             })(g.agents);
-            if (g.groups) walkGroups(g.groups);
+            if (g.groups) walkGroups(g.groups, key);
           }
-        })(dashboardGroups);
+        })(dashboardGroups, '');
         // Refresh per-provider windowed spend the same way as group costs —
         // it rides this response, not the WebSocket deltas.
         const freshProviderCosts = (!Array.isArray(resp) && resp.provider_costs) || {};
@@ -1382,7 +1384,20 @@
         }
         if (changed) render();
       });
-    }, 2500);
+    }
+    // Adaptive cadence: an orchestrator's nesting/role metadata changes
+    // asynchronously (no WS event), so poll fast (2.5s) while one is present to
+    // reflect it promptly. With no orchestrator the structure is WS-driven and
+    // only `costs` go stale, so fall back to 30s. Recursive setTimeout (not
+    // setInterval) so each tick re-reads the cadence and never overlaps a fetch.
+    function scheduleRehydratePoll() {
+      const hasOrchestrator = dashboardGroups.some(g =>
+        g && (g.type === 'gastown' || (g.groups && g.groups.length)));
+      setTimeout(() => {
+        rehydratePoll().finally(scheduleRehydratePoll);
+      }, hasOrchestrator ? 2500 : 30000);
+    }
+    scheduleRehydratePoll();
 
     // --- Sources & connections (multi-source) ---
     // The dashboard connects to one or more sources at once: the local source
@@ -2386,5 +2401,5 @@ export {
   relayFrameKind, aggregateConnState, relayWsUrl,
   compoundSessionId, displaySessionId,
   sessionOrigin, sourceIdOf, localBareIds, isShadowedRemote,
-  daemonSessionIds,
+  daemonSessionIds, structureSignature,
 };

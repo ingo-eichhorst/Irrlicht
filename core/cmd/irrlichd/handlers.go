@@ -138,6 +138,12 @@ func attachGroupCosts(groups []*session.AgentGroup, byTf map[string]map[string]f
 // agent under g — direct agents, agents in nested sub-groups (rigs), and their
 // children. De-duped so a project shared by multiple orchestrator sessions is
 // counted once.
+//
+// Caveat: trailing-window cost is keyed per-project, not per-session, so if a
+// project has sessions both under the orchestrator and in a regular group, its
+// whole windowed cost is attributed to the gastown total AND to that regular
+// group — there's no per-session split to apportion. Acceptable for an
+// at-a-glance orchestrator rollup.
 func collectProjectNames(g *session.AgentGroup) map[string]struct{} {
 	out := map[string]struct{}{}
 	var walk func(agents []*session.Agent)

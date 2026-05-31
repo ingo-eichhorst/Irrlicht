@@ -18,6 +18,7 @@ import {
   localBareIds,
   isShadowedRemote,
   daemonSessionIds,
+  structureSignature,
 } from './irrlicht.js'
 
 describe('resolvedTheme', () => {
@@ -360,5 +361,46 @@ describe('group traversal recurses Gas Town rig sub-groups (#559)', () => {
     expect(daemonSessionIds(groups, 'daemon-A')).toEqual([
       compoundSessionId('daemon-A', 'witness-1'),
     ])
+  })
+})
+
+describe('structureSignature (#559 — detects nesting/role changes the WS deltas miss)', () => {
+  const base = () => [{
+    name: 'gt', type: 'gastown',
+    agents: [{ session_id: 'mayor-1', role: 'mayor', icon: '🎩' }],
+    groups: [{ name: 'rig-1', status: 'operational', agents: [
+      { session_id: 'pc-1', role: 'polecat', icon: '👷', worker_id: 'bead-1' },
+    ]}],
+  }]
+
+  test('identical trees produce identical signatures', () => {
+    expect(structureSignature(base())).toBe(structureSignature(base()))
+  })
+
+  test('metric-only changes do NOT change the signature (no needless rebuild)', () => {
+    const a = base()
+    const b = base()
+    b[0].agents[0].metrics = { estimated_cost_usd: 9.99, context_utilization_percentage: 80 }
+    b[0].costs = { day: 5 }
+    expect(structureSignature(b)).toBe(structureSignature(a))
+  })
+
+  test('a session gaining a role/icon changes the signature (emoji fix)', () => {
+    const before = [{ name: 'gt', type: 'gastown', agents: [{ session_id: 's1' }] }]
+    const after = [{ name: 'gt', type: 'gastown', agents: [{ session_id: 's1', role: 'witness', icon: '🦉' }] }]
+    expect(structureSignature(after)).not.toBe(structureSignature(before))
+  })
+
+  test('re-nesting a session under a rig changes the signature (nesting fix)', () => {
+    const flat = [
+      { name: 'gt', type: 'gastown', agents: [] },
+      { name: 'rig-1', agents: [{ session_id: 's1', role: 'refinery' }] },
+    ]
+    const nested = [
+      { name: 'gt', type: 'gastown', agents: [], groups: [
+        { name: 'rig-1', agents: [{ session_id: 's1', role: 'refinery' }] },
+      ]},
+    ]
+    expect(structureSignature(nested)).not.toBe(structureSignature(flat))
   })
 })
