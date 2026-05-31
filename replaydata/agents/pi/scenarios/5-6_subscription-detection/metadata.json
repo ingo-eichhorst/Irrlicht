@@ -1,0 +1,62 @@
+{
+  "scenario_id": "subscription-detection",
+  "metadata": {
+    "agent_supports": "no",
+    "daemon_capability": "n/a",
+    "driver_capability": "n/a",
+    "agent_cli_version": "0.70.0",
+    "daemon_version": "0.4.8+382ee7d.dirty",
+    "confidence": 0.85,
+    "notes": "agent_supports: no — pi emits no rate-limit/plan-tier signal in any observable artifact\ndaemon_capability: n/a; driver_capability: n/a"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "subscription-detection",
+      "agent": "pi",
+      "assessed_at": "2026-05-31T00:00:00Z",
+      "agent_supports": "no",
+      "daemon_capability": "n/a",
+      "driver_capability": "n/a",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: no\ndaemon_capability: n/a; driver_capability: n/a\n\n## Reasoning\n\nThe user-observable signal for this scenario is a billing-model reading the daemon can surface: a non-nil `RateLimitSnapshot` with at least one rate-limit `Window` (claudecode's statusline path), or a non-empty `PlanType` / populated `Credits` (codex's `token_count.rate_limits` path). The acceptance criterion is structural — a subscription session yields a rate-limit/quota/plan signal that an API-key session does not.\n\n**pi emits no such signal in any artifact irrlicht can observe.** Two facts settle this:\n\n1. **The transcript carries no rate-limit/plan field.** pi's `Source` is `FilesUnderRoot{~/.pi/agent/sessions}` — the daemon tails only pi's JSONL transcript. Across live transcripts the only top-level event `type`s pi ever writes are `session`, `message`, `model_change`, `thinking_level_change`, `custom`, and `compaction`. The assistant `message.usage` object is `{input, output, cacheRead, cacheWrite, totalTokens, cost}` — token counts and a per-turn cost breakdown, but NO `rate_limits` block, NO `plan_type`, NO quota window, NO reset timestamp, NO credits balance. A `grep` for `rate_?limits?|plan_?type` across pi v0.70.0's entire `dist/core` (the session-store + serializer) returns zero matches: pi never serializes a rate-limit/plan field, so there is no trace for any parser to read.\n\n2. **pi performs no out-of-band POST.** claudecode's signal arrives via a statusLine hook POST to `/api/v1/hooks/claudecode/statusline` — a claudecode-only receiver (`core/adapters/inbound/agents/claudecode/statusline.go`; no equivalent exists for pi anywhere in the daemon). pi ships no statusline/hook mechanism that tees a quota payload to irrlichd.\n\n**pi's only \"subscription\" concept is auth-type, and it never leaves the local process.** pi distinguishes OAuth (subscription) auth from API-key auth: `auth-selector-status.js` prints \"subscription configured\" vs \"api key configured\", and `footer.js` appends a `(sub)` suffix to the cost string when `modelRegistry.isUsingOAuth(model)` is true (footer.js:109-112). `interactive-mode.js` even warns that Anthropic subscription auth via a third-party harness bills per-token \"not your Claude plan limits\" (interactive-mode.js:74) — i.e. pi explicitly does NOT consume or surface the provider's plan quota. All of this is derived UI string formatting from a local `isUsingOAuth` boolean; none of it is a rate-limit/plan-tier reading and none of it is written to the transcript. There is no quota `Window`, no `UsedPercent`, no `ResetsAt`, no `PlanType` value for the daemon to project into a `RateLimitSnapshot`.\n\n## Why agent=no (not daemon=incapable)\n\nThe scenario's acceptance criterion is the presence of an observable subscription/rate-limit signal. pi does not produce that signal in any form — not in its transcript, not via a hook. This is one layer earlier than \"irrlicht can't observe it\": there is nothing to observe because the agent emits nothing. With `agent_supports: no`, the daemon and driver pillars are `n/a` (the routing table maps `agent=no → frozen`). Pi's `(sub)` flag is an auth-mode indicator, not the rate-limit/quota/plan-tier signal this cell asserts, so it does not qualify as agent support for subscription DETECTION in the irrlicht-observable sense.\n\n## Binary + bundle confirmation (Step 2 guard)\n\nBefore writing `no`, scanned the shipped artifact, not just `--help`:\n\n- `which pi` → `@mariozechner/pi-coding-agent/dist/cli.js` (v0.70.0, a Node bundle; `strings` on the wrapper is the JS itself).\n- `grep -riE \"rate[_-]?limits?|plan[_-]?type|usage[_-]?limit|x-ratelimit|anthropic-ratelimit\"` across `dist/` → zero matches (the only `subscription`/`plan` hits are the auth-selector / footer / model-registry UI strings above, never a quota payload).\n- Enumerated every top-level `type` across live pi transcripts → `session|message|model_change|thinking_level_change|custom|compaction`; no rate-limit event kind.\n- `message.usage` shape confirmed from a live transcript: only token counts + a `cost` breakdown, no `rate_limits`.\n\nThe empty scan is authoritative for \"no subscription/rate-limit signal shipped in pi 0.70.0,\" so the `no` is honest rather than a `--help`-only assumption.\n\n## What would flip this\n\n`agent_supports` would move to `yes` only if upstream pi began emitting a rate-limit/quota/plan-tier payload — either into its JSONL transcript (a new event kind or a `rate_limits` block on `message`) or via a statusline-style POST to the daemon. `daemon_capability` would then need a new pi parser branch (transcript path) or a new pi hook receiver (POST path). Neither exists in pi 0.70.0 / daemon 0.4.8.",
+      "caveats": [
+        "pi's `(sub)` footer indicator (footer.js:109-112) and \"subscription configured\" auth status (auth-selector-status.js:2) ARE an auth-mode signal, but they are local UI strings derived from `isUsingOAuth`, never written to the transcript and never a rate-limit/quota/plan-tier reading — do not mistake the auth flag for the subscription-DETECTION signal this scenario asserts.",
+        "Confidence is 0.85 rather than 0.9 because the verdict rests on the current absence of a rate-limit field in pi's transcript + bundle; pi is fast-moving (v0.70.0) and a future release could add a provider-quota passthrough. Re-assess on a major pi bump.",
+        "The 'API-key session yields a nil snapshot' half of the scenario's acceptance criterion is also moot for pi: with no rate-limit signal emitted at all, both the subscription and API-key auth paths produce identically empty rate-limit observability."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/pi/parser.go:107-176",
+          "note": "pi parser reads message.usage into Tokens + PerTurnContribution (input/output/cacheRead/cacheWrite/cost) only; it sets no ev.RateLimit and has no rate_limits/plan_type branch — the daemon cannot emit a rate-limit metric for pi."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/pi/agent.go:31-38",
+          "note": "pi Source is FilesUnderRoot{~/.pi/agent/sessions} — the daemon tails only pi's JSONL transcript; there is no pi hook/POST receiver (statusline is claudecode-only, core/adapters/inbound/agents/claudecode/statusline.go)."
+        },
+        {
+          "kind": "file",
+          "ref": "$(which pi) dist/core bundle scan (v0.70.0)",
+          "note": "grep -riE 'rate[_-]?limits?|plan[_-]?type|usage[_-]?limit|x-ratelimit' across dist/core returned zero matches — pi never serializes a rate-limit/plan field into its transcript (Step 2 empty-scan citation)."
+        },
+        {
+          "kind": "file",
+          "ref": "live ~/.pi/agent/sessions transcript: assistant message.usage object",
+          "note": "Real recorded usage shape = {input, output, cacheRead, cacheWrite, totalTokens, cost{...}} — token counts + per-turn cost only, NO rate_limits/plan_type/window/credits. Transcript event types observed: session|message|model_change|thinking_level_change|custom|compaction."
+        },
+        {
+          "kind": "file",
+          "ref": "@mariozechner/pi-coding-agent/dist/modes/interactive/components/footer.js:109-112",
+          "note": "pi's only subscription surface: footer appends '(sub)' to the cost string when modelRegistry.isUsingOAuth(model); auth-selector-status.js:2 prints 'subscription configured' vs 'api key configured'. An auth-mode UI string, not a rate-limit/plan-tier payload, and never written to the transcript."
+        },
+        {
+          "kind": "file",
+          "ref": "@mariozechner/pi-coding-agent/dist/modes/interactive/interactive-mode.js:74",
+          "note": "ANTHROPIC_SUBSCRIPTION_AUTH_WARNING: subscription auth via a third-party harness 'draws from extra usage and is billed per token, not your Claude plan limits' — pi explicitly does not consume/surface the provider's plan quota, so no quota signal exists to emit."
+        }
+      ]
+    }
+  }
+}
