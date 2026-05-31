@@ -1644,12 +1644,6 @@ struct GroupView: View {
             .padding(.vertical, isTopLevel ? 4 : 3)
 
             if isExpanded {
-                // Gas Town orchestrator panel: global agents + convoys (parity
-                // with the web overlay). Hidden when no live snapshot.
-                if isTopLevel && group.isGasTown {
-                    GasTownOrchestratorView()
-                }
-
                 ForEach(Array((group.agents ?? []).enumerated()), id: \.element.rowID) { index, session in
                     SessionRowView(
                         session: session,

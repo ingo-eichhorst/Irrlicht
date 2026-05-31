@@ -818,111 +818,6 @@
       color: var(--pressure-critical);
     }
 
-    /* Gas Town section */
-    .gt-section {
-      margin-bottom: 12px;
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      overflow: hidden;
-    }
-
-    .gt-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 8px 12px;
-      border-bottom: 1px solid var(--border-subtle);
-    }
-
-    .gt-title {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      font-family: var(--font-mono);
-      font-size: 11px;
-      font-weight: 700;
-      color: var(--text-bright);
-      letter-spacing: 0.04em;
-    }
-
-    .gt-title .gt-emoji { font-size: 12px; }
-
-    .gt-status-dot {
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      display: inline-block;
-    }
-
-    .gt-status-label {
-      font-family: var(--font-mono);
-      font-size: 10px;
-      color: var(--muted);
-      display: flex;
-      align-items: center;
-      gap: 5px;
-    }
-
-    .gt-body { padding: 0; }
-
-    .gt-convoy-header {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      padding: 6px 12px;
-      border-bottom: 1px solid var(--border-subtle);
-      font-family: var(--font-mono);
-      font-size: 10px;
-      font-weight: 600;
-      color: var(--muted);
-      letter-spacing: 0.06em;
-      text-transform: uppercase;
-    }
-
-    .gt-convoy-row {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      padding: 4px 12px 4px 24px;
-      border-bottom: 1px solid var(--border-subtle);
-      font-family: var(--font-mono);
-      font-size: 10px;
-    }
-
-    .gt-convoy-row:last-child { border-bottom: none; }
-
-    .gt-convoy-name {
-      color: var(--text);
-      flex: 1;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-
-    .gt-convoy-name.done { color: var(--muted); }
-
-    .gt-dotbar {
-      letter-spacing: 2px;
-      font-size: 10px;
-      flex-shrink: 0;
-    }
-
-    .gt-convoy-fraction {
-      font-size: 10px;
-      color: var(--muted);
-      flex-shrink: 0;
-      min-width: 36px;
-      text-align: right;
-      font-variant-numeric: tabular-nums;
-    }
-
-    .gt-convoy-check {
-      color: var(--ready);
-      font-size: 10px;
-      flex-shrink: 0;
-    }
-
     /* Role badge on session rows */
     .row-role-badge {
       font-size: 10px; padding: 0 5px; height: 14px; border-radius: 3px;
@@ -947,26 +842,6 @@
     .row-tool {
       display: none !important;
     }
-    /* Gas Town hierarchy */
-    .gt-agents-row {
-      display: flex; align-items: center; gap: 8px;
-      padding: 5px 12px; border-bottom: 1px solid var(--border-subtle); flex-wrap: wrap;
-    }
-    .gt-agent-chip {
-      display: flex; align-items: center; gap: 5px;
-      font-family: var(--font-mono); font-size: 10px; color: var(--text);
-      padding: 2px 7px; border-radius: 3px;
-      background: var(--surface-hover); border: 1px solid var(--border-subtle); cursor: default;
-    }
-    .gt-chip-dot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
-    .gt-chip-id { font-size: 9px; color: var(--muted); }
-    .gt-rig-block { padding: 5px 12px; border-bottom: 1px solid var(--border-subtle); }
-    .gt-rig-block:last-of-type { border-bottom: none; }
-    .gt-rig-name {
-      font-family: var(--font-mono); font-size: 9px; font-weight: 700;
-      color: var(--muted); letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 4px;
-    }
-    .gt-workers { display: flex; flex-wrap: wrap; gap: 4px; }
 
     /* Responsive — context bar is the load-bearing signal and never hides.
        Breakpoints sized to the actual minimum width of fixed columns plus

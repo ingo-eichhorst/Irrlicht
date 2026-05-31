@@ -103,10 +103,6 @@ func (m *OrchestratorMonitor) Run(ctx context.Context) error {
 			cp := state
 			m.states[state.Adapter] = &cp
 			m.mu.Unlock()
-			m.broadcaster.Broadcast(outbound.PushMessage{
-				Type:         outbound.PushTypeOrchestratorState,
-				Orchestrator: &cp,
-			})
 		}
 	}
 }

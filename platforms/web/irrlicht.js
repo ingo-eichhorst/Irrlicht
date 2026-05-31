@@ -3,8 +3,6 @@
     // Per-provider trailing-window spend (providerKey → timeframe → USD) from
     // the /api/v1/sessions `provider_costs` field. Feeds the usage chips.
     let dashboardProviderCosts = {};
-    let orchestrator = null;   // OrchestratorSummary from initial load
-    let orchFull = null;       // Full orchestrator.State (global_agents, codebases) from WS / secondary fetch
     // Adapter branding from /api/v1/agents — keyed by adapter `name`
     // (e.g. "claude-code"). Populated once on initial load; the daemon's
     // registry is essentially static (changes require a daemon restart).
@@ -547,7 +545,6 @@
       }
     }
 
-    // --- Orchestrator rendering (innerHTML is fine — updates rarely) ---
     // toolLabel maps raw tool names to short display strings for session rows.
     const toolLabel = {
       Bash: 'Bash', Read: 'Read', Write: 'Write', Edit: 'Edit',
@@ -561,92 +558,6 @@
       if (s === 'waiting') return 'var(--waiting)';
       if (s === 'ready') return 'var(--ready)';
       return 'var(--muted)';
-    }
-
-    function dotBar(total, done) {
-      const maxDots = 7;
-      // Coerce inputs to integers and bound the final dot counts by maxDots
-      // (a literal) so repeat() is provably bounded regardless of WS payload.
-      // Behaviour for legitimate inputs is unchanged at any scale: the
-      // done/total ratio still drives filled-vs-empty.
-      const t = Number(total) | 0;
-      const d = Number(done) | 0;
-      const totalDots = Math.max(0, Math.min(t, maxDots));
-      if (totalDots <= 0) return '';
-      const filled = t <= maxDots ? d : Math.round(d / t * maxDots);
-      const filledDots = Math.max(0, Math.min(filled, totalDots, maxDots));
-      const emptyDots = Math.max(0, Math.min(totalDots - filledDots, maxDots));
-      return '\u25CF'.repeat(filledDots) + '\u25CB'.repeat(emptyDots);
-    }
-
-    function renderOrchestrator() {
-      const container = document.getElementById('gt-container');
-      const hasOrch = orchestrator && orchestrator.running;
-      const hasFull = orchFull && orchFull.running;
-      if (!hasOrch && !hasFull) { container.style.display = 'none'; return; }
-      container.style.display = 'block';
-
-      let html = '<div class="gt-section">';
-      html += '<div class="gt-header">';
-      html += '<div class="gt-title"><span class="gt-emoji">\u26FD</span> Gas Town</div>';
-      html += '<div class="gt-status-label"><div class="gt-status-dot" style="background:var(--ready)"></div>running</div>';
-      html += '</div>';
-
-      // Global agents — icon/description come from the API, no hardcoding here.
-      if (hasFull && orchFull.global_agents && orchFull.global_agents.length) {
-        html += '<div class="gt-agents-row">';
-        for (const ga of orchFull.global_agents) {
-          const sid = ga.session_id ? shortID(ga.session_id) : 'idle';
-          html += '<div class="gt-agent-chip" title="' + esc(ga.description || ga.role) + '">';
-          html += '<span>' + (ga.icon ? esc(ga.icon) + ' ' : '') + esc(ga.role) + '</span>';
-          html += '<span class="gt-chip-dot" style="background:' + stateColor(ga.state) + '"></span>';
-          html += '<span class="gt-chip-id">' + esc(sid) + '</span>';
-          html += '</div>';
-        }
-        html += '</div>';
-      }
-
-      // Rig/codebase blocks — flatten worktrees for readability.
-      if (hasFull && orchFull.codebases && orchFull.codebases.length) {
-        for (const cb of orchFull.codebases) {
-          const workers = (cb.worktrees || []).flatMap(wt => wt.workers || []);
-          if (!workers.length) continue;
-          html += '<div class="gt-rig-block">';
-          html += '<div class="gt-rig-name">rig: ' + esc(cb.name) + '</div>';
-          html += '<div class="gt-workers">';
-          for (const w of workers) {
-            html += '<div class="gt-agent-chip" title="' + esc(w.description || w.role) + '">';
-            html += '<span>' + (w.icon ? esc(w.icon) + ' ' : '') + esc(w.role);
-            if (w.name) html += ' <span style="color:var(--text)">' + esc(w.name) + '</span>';
-            html += '</span>';
-            html += '<span class="gt-chip-dot" style="background:' + stateColor(w.state) + '"></span>';
-            if (w.id) html += '<span class="gt-chip-id">' + esc(w.id.slice(0, 8)) + '</span>';
-            html += '</div>';
-          }
-          html += '</div></div>';
-        }
-      }
-
-      // Convoys — use work_units from whichever source is available.
-      const workUnits = ((orchFull || orchestrator) || {}).work_units || [];
-      const convoys = workUnits.filter(w => w.type === 'convoy');
-      if (convoys.length > 0) {
-        html += '<div class="gt-body">';
-        html += '<div class="gt-convoy-header">\u{1F69A} Convoys</div>';
-        for (const c of convoys) {
-          const isDone = c.done >= c.total;
-          html += '<div class="gt-convoy-row">';
-          html += '<span class="gt-convoy-name' + (isDone ? ' done' : '') + '">' + esc(c.name) + '</span>';
-          html += '<span class="gt-dotbar" style="color:' + (isDone ? 'var(--ready)' : 'var(--working)') + '">' + dotBar(c.total, c.done) + '</span>';
-          html += '<span class="gt-convoy-fraction">' + (Number(c.done) | 0) + ' / ' + (Number(c.total) | 0) + '</span>';
-          if (isDone) html += '<span class="gt-convoy-check">\u2713</span>';
-          html += '</div>';
-        }
-        html += '</div>';
-      }
-
-      html += '</div>';
-      container.innerHTML = html;
     }
 
     // --- DOM Reconciliation ---
@@ -1053,8 +964,6 @@
 
     // --- Render ---
     function render() {
-      renderOrchestrator();
-
       const list = document.getElementById('session-list');
       const empty = document.getElementById('empty-state');
 
@@ -1373,6 +1282,29 @@
       render();
       repaintHistory();
     });
+    // Structure re-hydration. A WS session delta carries only the flat session
+    // — not its group nesting (Gas Town rig sub-groups) nor the computed
+    // role/icon metadata, which BuildDashboard produces daemon-side and ships
+    // only via /api/v1/sessions. So on session CREATE or DELETE (the structure
+    // changes), re-fetch and rebuild the group tree, debounced to coalesce
+    // bursts. Mirrors macOS SessionManager.scheduleRehydration. Metric-only
+    // session_updated ticks keep mutating in place (no reorder); collapse state
+    // survives because collapsedGroups is keyed by name/path, not identity.
+    let structureRehydrateTimer = null;
+    function scheduleStructureRehydrate() {
+      if (structureRehydrateTimer) return;
+      structureRehydrateTimer = setTimeout(() => {
+        structureRehydrateTimer = null;
+        fetch('/api/v1/sessions').then(r => r.ok ? r.json() : null).catch(() => null).then(resp => {
+          if (!resp) return;
+          dashboardGroups = Array.isArray(resp) ? resp : (resp.groups || []);
+          if (!Array.isArray(resp) && resp.provider_costs) dashboardProviderCosts = resp.provider_costs;
+          rebuildIndex();
+          render();
+          repaintHistory();
+        });
+      }, 600);
+    }
     // Periodic re-hydration so trailing-window costs (carried on each group
     // under `costs`) don't go stale between WebSocket deltas, which only
     // carry individual session updates. We only copy the `costs` field —
@@ -1755,13 +1687,6 @@
     // here, so the render/history/notification paths are unchanged.
     function dispatchRawFrame(msg) {
       if (!msg) return;
-      if (msg.type === 'orchestrator_state' && msg.orchestrator) {
-        const orch = msg.orchestrator;
-        orchestrator = orch.running ? orch : null;
-        orchFull = orch.running ? orch : null;
-        render();
-        return;
-      }
       if (msg.type === 'history_snapshot' && msg.session_id && msg.history) {
         applyHistorySnapshot(msg.session_id, msg.history, msg.generations);
         repaintHistory();
@@ -1781,8 +1706,13 @@
       var s = msg.session;
       if (msg.type === 'session_deleted') {
         applySessionDelete(s.session_id);
+        scheduleStructureRehydrate();
       } else {
         applySessionUpdate(s);
+        // A newly-seen session arrived via a delta with no group nesting or
+        // role/icon — re-read the structure so it lands under its rig with its
+        // emoji. session_updated (already-known id) skips this; it's a metric tick.
+        if (msg.type === 'session_created') scheduleStructureRehydrate();
       }
       render();
     }
