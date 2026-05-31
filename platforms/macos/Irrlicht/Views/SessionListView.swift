@@ -1082,6 +1082,28 @@ struct SessionRowView: View {
                         .frame(width: 12, alignment: .trailing)
                 }
 
+                // Worker name / bead-ID for Gas Town rows (parity with the web
+                // worker chips). Gated on `role` so non-orchestrator rows are
+                // pixel-identical; bounded width so the branch column downstream
+                // doesn't shift across orchestrator rows.
+                if session.role != nil {
+                    if let wn = session.workerName, !wn.isEmpty {
+                        Text(wn)
+                            .font(.system(size: 9, design: .monospaced))
+                            .foregroundColor(.primary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                            .frame(maxWidth: 60, alignment: .leading)
+                    }
+                    if let wid = session.workerID, !wid.isEmpty {
+                        Text(String(wid.prefix(8)))
+                            .font(.system(size: 9, design: .monospaced))
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                            .tooltip(wid)
+                    }
+                }
+
                 // Origin glyph (#538) — a cloud marks a session delivered by a
                 // remote relay daemon; local sessions show nothing, so a
                 // local-only dashboard is visually unchanged. A session that is
@@ -1591,6 +1613,14 @@ struct GroupView: View {
                     .tooltip("Click to cycle time frame (day → week → month → year)")
                 }
 
+                // Rig/codebase status (Codebase.Status) on nested rig headers.
+                if !isTopLevel, let status = group.status, !status.isEmpty {
+                    Text(status.uppercased())
+                        .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                        .foregroundColor(IrrColors.forState(status))
+                        .tooltip("Rig status: \(status)")
+                }
+
                 Spacer()
 
                 let count = isTopLevel ? agentCount : (group.agents?.count ?? 0)
@@ -1614,6 +1644,12 @@ struct GroupView: View {
             .padding(.vertical, isTopLevel ? 4 : 3)
 
             if isExpanded {
+                // Gas Town orchestrator panel: global agents + convoys (parity
+                // with the web overlay). Hidden when no live snapshot.
+                if isTopLevel && group.isGasTown {
+                    GasTownOrchestratorView()
+                }
+
                 ForEach(Array((group.agents ?? []).enumerated()), id: \.element.rowID) { index, session in
                     SessionRowView(
                         session: session,

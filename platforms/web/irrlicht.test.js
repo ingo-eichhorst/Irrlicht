@@ -335,3 +335,30 @@ describe('daemonSessionIds (#540 drop a disconnected daemon\'s rows)', () => {
     expect(daemonSessionIds(groups, undefined)).toEqual([])
   })
 })
+
+describe('group traversal recurses Gas Town rig sub-groups (#559)', () => {
+  // A gastown group with a global agent plus two nested rigs whose worker
+  // sessions live in `groups[].agents`, not the top-level `agents`.
+  const groups = [{
+    name: 'Gas Town',
+    type: 'gastown',
+    agents: [{ session_id: 'mayor-1' }],                          // local global agent
+    groups: [
+      { name: 'rig-1', agents: [
+        { session_id: 'polecat-1' },                              // local
+        { session_id: compoundSessionId('daemon-A', 'witness-1') }, // relay
+      ]},
+      { name: 'rig-2', agents: [{ session_id: 'crew-1' }] },      // local
+    ],
+  }]
+
+  test('localBareIds includes rig worker ids nested under sub-groups', () => {
+    expect(localBareIds(groups)).toEqual(new Set(['mayor-1', 'polecat-1', 'crew-1']))
+  })
+
+  test('daemonSessionIds finds a relay session nested in a rig', () => {
+    expect(daemonSessionIds(groups, 'daemon-A')).toEqual([
+      compoundSessionId('daemon-A', 'witness-1'),
+    ])
+  })
+})

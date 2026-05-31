@@ -480,6 +480,19 @@
       margin-left: auto;
     }
 
+    /* Rig/codebase status badge on nested Gas Town rig headers. */
+    .group-status {
+      font-family: var(--font-mono);
+      font-size: 9px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+
+    /* Nested sub-group (rig) header — indented under its orchestrator group. */
+    .group-hdr.nested { padding-left: 26px; }
+    .group-hdr.nested .group-name { font-size: 11px; }
+
     /* Session row — strict one-line layout. The branch column owns excess
        width and ellipsises long names; all other columns are fixed so the
        meta cluster (bar/tokens/cost/model/icon) never wraps onto a second
@@ -513,6 +526,8 @@
     }
 
     .session-row.child { padding-left: 30px; }
+    /* Rig worker rows nested under a Gas Town rig header. */
+    .session-row.nested { padding-left: 26px; }
 
     .row-state-icon {
       width: 12px;

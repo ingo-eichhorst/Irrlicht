@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"irrlicht/core/domain/lifecycle"
+	"irrlicht/core/domain/orchestrator"
 	"irrlicht/core/domain/session"
 )
 
@@ -33,6 +34,11 @@ type PushMessage struct {
 	// session_id for ticks (parallel to Buckets).
 	Generations       map[string]uint64 `json:"generations,omitempty"`
 	BucketGenerations map[string]uint64 `json:"bucket_generations,omitempty"`
+
+	// Orchestrator carries the full orchestrator snapshot for
+	// PushTypeOrchestratorState messages (global agents, codebases/rigs,
+	// convoys). Clients render the Gas Town panel from it.
+	Orchestrator *orchestrator.State `json:"orchestrator,omitempty"`
 }
 
 // Valid PushMessage type constants.
@@ -54,6 +60,11 @@ const (
 	// client merges the priority into the current bucket of all three
 	// rings using max-priority aggregation.
 	PushTypeHistoryUpgrade = "history_upgrade"
+
+	// PushTypeOrchestratorState delivers the full orchestrator snapshot
+	// (Gas Town global agents, codebases/rigs, convoys) in the Orchestrator
+	// field. Emitted by OrchestratorMonitor on every state update.
+	PushTypeOrchestratorState = "orchestrator_state"
 )
 
 // SessionRepository loads, saves, and deletes session state files.

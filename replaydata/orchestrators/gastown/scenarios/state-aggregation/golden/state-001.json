@@ -48,5 +48,10 @@
       ]
     }
   ],
+  "health": {
+    "daemon_running": false,
+    "last_heartbeat": "0001-01-01T00:00:00Z",
+    "boot_degraded": true
+  },
   "updated_at": "0001-01-01T00:00:00Z"
 }

@@ -49,6 +49,7 @@ class SessionManager: ObservableObject {
     @Published var lastError: String?
     @Published var apiGroups: [AgentGroup] = []  // recursive group structure from API
     @Published var providerCosts: [String: [String: Double]] = [:]  // providerKey → timeframe → USD (windowed)
+    @Published var orchestratorState: OrchestratorState?  // full Gas Town snapshot (global agents, convoys); nil unless running
     @Published var stateHistory: [String: [String]] = [:]  // session_id → oldest→newest state strings (active granularity)
     @Published var historyBucketCount: Int = 60          // matches HistoryBucketCount on the daemon
 
@@ -955,6 +956,10 @@ class SessionManager: ObservableObject {
         let generations: [String: UInt64]?
         let bucketGenerations: [String: UInt64]?
 
+        // Orchestrator snapshot (orchestrator_state frame). Optional so all
+        // other frame types still decode.
+        let orchestrator: OrchestratorState?
+
         enum CodingKeys: String, CodingKey {
             case type
             case session
@@ -965,6 +970,7 @@ class SessionManager: ObservableObject {
             case priority
             case generations
             case bucketGenerations = "bucket_generations"
+            case orchestrator
         }
     }
 
@@ -1026,6 +1032,10 @@ class SessionManager: ObservableObject {
                 if let sid = envelope.sessionID, let prio = envelope.priority {
                     applyHistoryUpgrade(sessionID: sid, priority: prio)
                 }
+            case "orchestrator_state":
+                // Mirror the web's running gate: only surface a live snapshot,
+                // otherwise hide the panel.
+                orchestratorState = envelope.orchestrator?.running == true ? envelope.orchestrator : nil
             default:
                 break
             }

@@ -429,12 +429,19 @@
     // --- Session index ---
     function rebuildIndex() {
       sessionIndex.clear();
-      for (const g of dashboardGroups) {
-        for (const a of g.agents) {
-          sessionIndex.set(a.session_id, {group: g, agent: a, parent: null});
-          indexChildren(g, a);
+      // Walk top-level groups and their nested sub-groups (Gas Town rigs).
+      // Nested groups are tagged `_nested` so applySessionUpdate won't migrate
+      // a rig session out into a flat project group on its next WS update.
+      (function walk(groups, nested) {
+        for (const g of groups) {
+          if (nested) g._nested = true;
+          for (const a of (g.agents || [])) {
+            sessionIndex.set(a.session_id, {group: g, agent: a, parent: null});
+            indexChildren(g, a);
+          }
+          if (g.groups && g.groups.length) walk(g.groups, true);
         }
-      }
+      })(dashboardGroups, false);
     }
     function indexChildren(group, parent) {
       if (!parent.children) return;
@@ -463,8 +470,11 @@
         // first WS push arrived before metadata enrichment landed (empty
         // project_name → "unknown" bucket) stay stranded there forever even
         // after later updates carry the correct name. Children inherit their
-        // parent's group, so only migrate top-level entries.
-        if (!entry.parent) {
+        // parent's group, so only migrate top-level entries. Rig sessions
+        // (nested under a Gas Town sub-group) are exempt — their group is
+        // structural, not project-derived, so a project_name mismatch must
+        // not tear them out of their rig.
+        if (!entry.parent && !entry.group._nested) {
           var desired = a.project_name || 'unknown';
           if (entry.group.name !== desired) {
             var oldGroup = entry.group;
@@ -692,20 +702,24 @@
     }
 
     // --- Create/Update functions for session rows ---
-    function createGroupHeader(group) {
+    function createGroupHeader(group, groupKey, depth) {
       const el = document.createElement('div');
       el.className = 'group-hdr';
       // Anatomy mirrors overlay GroupView at SessionListView.swift:871:
-      // chevron + name + per-day cost on the left, session count on the right.
+      // chevron + name + status + per-day cost on the left, count on the right.
       el.innerHTML = '<span class="group-chevron">\u25BE</span>' +
         '<span class="group-name"></span>' +
+        '<span class="group-status" style="display:none"></span>' +
         '<span class="group-cost" title="Click to cycle time frame"></span>' +
         '<span class="group-count"></span>';
+      // Collapse keys off the live path-qualified key (set in updateGroupHeader)
+      // so reused header elements toggle the right rig, not a stale closure.
       el.addEventListener('click', () => {
-        if (collapsedGroups.has(group.name)) {
-          collapsedGroups.delete(group.name);
+        const k = el._groupKey || group.name;
+        if (collapsedGroups.has(k)) {
+          collapsedGroups.delete(k);
         } else {
-          collapsedGroups.add(group.name);
+          collapsedGroups.add(k);
         }
         persistCollapsedGroups();
         render();
@@ -715,7 +729,7 @@
         e.stopPropagation();
         cycleCostTimeframe();
       });
-      updateGroupHeader(el, group);
+      updateGroupHeader(el, group, groupKey, depth);
       return el;
     }
 
@@ -742,13 +756,29 @@
       return typeof v === 'number' ? v : 0;
     }
 
-    function updateGroupHeader(el, group) {
+    function updateGroupHeader(el, group, groupKey, depth) {
+      const key = groupKey || group.name;
+      el._groupKey = key;
+      el.classList.toggle('nested', !!depth);
       // Gas Town groups get a ⛽ glyph prefix on the title — matches macOS
       // group-title rendering at SessionListView.swift:945.
       const isGastown = group.type === 'gastown';
       const desiredName = (isGastown ? '⛽ ' : '') + (group.name || '');
       const nameEl = el.querySelector('.group-name');
       if (nameEl.textContent !== desiredName) nameEl.textContent = desiredName;
+      // Rig/codebase status (Codebase.Status) — surfaced as a small badge on
+      // nested rig headers; degrade gracefully when absent.
+      const statusEl = el.querySelector('.group-status');
+      if (statusEl) {
+        if (group.status) {
+          statusEl.style.display = '';
+          if (statusEl.textContent !== group.status) statusEl.textContent = group.status;
+          statusEl.style.color = stateColor(group.status);
+          statusEl.title = group.status;
+        } else {
+          statusEl.style.display = 'none';
+        }
+      }
       const tf = COST_TIMEFRAMES.find(t => t.key === currentTimeframe) || COST_TIMEFRAMES[0];
       const windowed = group.costs ? group.costs[currentTimeframe] : undefined;
       // Hide the cost until the daemon has windowed data for this project —
@@ -759,12 +789,13 @@
         : '';
       const costEl = el.querySelector('.group-cost');
       if (costEl.textContent !== costText) costEl.textContent = costText;
-      const totalAgents = group.agents.length + group.agents.reduce((n, a) => n + (a.children ? a.children.length : 0), 0);
+      const agents = group.agents || [];
+      const totalAgents = agents.length + agents.reduce((n, a) => n + (a.children ? a.children.length : 0), 0);
       const countText = totalAgents + (totalAgents === 1 ? ' session' : ' sessions');
       const countEl = el.querySelector('.group-count');
       if (countEl.textContent !== countText) countEl.textContent = countText;
 
-      const isCollapsed = collapsedGroups.has(group.name);
+      const isCollapsed = collapsedGroups.has(key);
       const chevron = el.querySelector('.group-chevron');
       chevron.classList.toggle('collapsed', isCollapsed);
 
@@ -1041,66 +1072,76 @@
 
         // Build flat list of render items: [{type, key, data}]
         const items = [];
-        const showHeaders = dashboardGroups.length > 1;
+        // Show headers when there's more than one top-level group, or when any
+        // group nests sub-groups (Gas Town rigs) that need their own headers.
+        const showHeaders = dashboardGroups.length > 1 ||
+          dashboardGroups.some(g => g.groups && g.groups.length);
         let agentNum = 0;
 
         // Local-wins (#538): a relay session whose bare id is also delivered by
         // a local source collapses to the local row — skip the relay duplicate.
         const localIds = localBareIds(dashboardGroups);
 
-        for (const g of dashboardGroups) {
+        // Emit a group header followed by its agents, then recurse into nested
+        // sub-groups (Gas Town rigs) as further collapsible headers. Collapse
+        // state is keyed by a path-qualified key (parent/name) so same-named
+        // rigs under different orchestrators don't share a collapse toggle.
+        function emitGroup(g, parentKey, depth) {
+          const key = parentKey ? parentKey + '/' + g.name : g.name;
           if (showHeaders) {
-            items.push({type: 'group', key: 'g:' + g.name, group: g});
+            items.push({type: 'group', key: 'g:' + key, group: g, groupKey: key, depth: depth});
           }
-          if (!collapsedGroups.has(g.name)) {
-            for (const a of g.agents) {
-              if (isShadowedRemote(a, localIds)) continue;
-              agentNum++;
-              items.push({type: 'agent', key: 'a:' + a.session_id, agent: a, num: agentNum, isChild: false});
-              // Pressure alert
-              const isActive = a.state === 'working' || a.state === 'waiting';
-              const pressure = a.metrics ? a.metrics.pressure_level : '';
-              if (isActive && (pressure === 'high' || pressure === 'warning' || pressure === 'critical')) {
-                items.push({type: 'alert', key: 'al:' + a.session_id, pressure: pressure});
-              }
-              // Waiting question — separate row beneath the parent (matches
-              // SessionListView.swift:588-604). Renders only while the
-              // session is in 'waiting' AND has a last_assistant_text.
-              if (a.state === 'waiting' && a.metrics && a.metrics.last_assistant_text) {
-                items.push({type: 'question', key: 'q:' + a.session_id, agent: a, isChild: false});
-              }
-              // Task progress dots — separate row beneath the parent so they
-              // don't push the meta columns off the session row. Matches the
-              // overlay's TaskListView placement (SessionListView.swift:629-632).
-              const tasks = (a.metrics && a.metrics.tasks) || [];
-              const tasksOpen = tasks.length > 0 && !tasks.every(t => t.status === 'completed');
-              if (tasksOpen) {
-                items.push({type: 'tasks', key: 'tk:' + a.session_id, agent: a, isChild: false});
-              }
+          if (collapsedGroups.has(key)) return;
+          for (const a of (g.agents || [])) {
+            if (isShadowedRemote(a, localIds)) continue;
+            agentNum++;
+            items.push({type: 'agent', key: 'a:' + a.session_id, agent: a, num: agentNum, isChild: false, depth: depth});
+            // Pressure alert
+            const isActive = a.state === 'working' || a.state === 'waiting';
+            const pressure = a.metrics ? a.metrics.pressure_level : '';
+            if (isActive && (pressure === 'high' || pressure === 'warning' || pressure === 'critical')) {
+              items.push({type: 'alert', key: 'al:' + a.session_id, pressure: pressure});
+            }
+            // Waiting question — separate row beneath the parent (matches
+            // SessionListView.swift:588-604). Renders only while the
+            // session is in 'waiting' AND has a last_assistant_text.
+            if (a.state === 'waiting' && a.metrics && a.metrics.last_assistant_text) {
+              items.push({type: 'question', key: 'q:' + a.session_id, agent: a, isChild: false});
+            }
+            // Task progress dots — separate row beneath the parent so they
+            // don't push the meta columns off the session row. Matches the
+            // overlay's TaskListView placement (SessionListView.swift:629-632).
+            const tasks = (a.metrics && a.metrics.tasks) || [];
+            const tasksOpen = tasks.length > 0 && !tasks.every(t => t.status === 'completed');
+            if (tasksOpen) {
+              items.push({type: 'tasks', key: 'tk:' + a.session_id, agent: a, isChild: false});
             }
           }
+          for (const sub of (g.groups || [])) emitGroup(sub, key, depth + 1);
         }
+        for (const g of dashboardGroups) emitGroup(g, '', 0);
 
         // Reconcile
         reconcile(list, items,
           item => item.key,
           item => {
-            if (item.type === 'group') return createGroupHeader(item.group);
+            if (item.type === 'group') return createGroupHeader(item.group, item.groupKey, item.depth);
             if (item.type === 'alert') return createAlertRow(item.pressure);
             if (item.type === 'tasks') return createTaskListRow(item.agent, item.isChild);
             if (item.type === 'question') return createQuestionRow(item.agent, item.isChild);
             const el = createSessionRow(item.agent, item.isChild);
+            el.classList.toggle('nested', !!item.depth);
             paintRowNum(el, item.num);
             return el;
           },
           (el, item) => {
-            if (item.type === 'group') { updateGroupHeader(el, item.group); return; }
+            if (item.type === 'group') { updateGroupHeader(el, item.group, item.groupKey, item.depth); return; }
             if (item.type === 'alert') { updateAlertRow(el, item.pressure); return; }
             if (item.type === 'tasks') { updateTaskListRow(el, item.agent); return; }
             if (item.type === 'question') { updateQuestionRow(el, item.agent); return; }
             updateSessionRow(el, item.agent, item.isChild);
             paintRowNum(el, item.num);
-            el.className = 'session-row' + (item.isChild ? ' child' : '');
+            el.className = 'session-row' + (item.isChild ? ' child' : '') + (item.depth ? ' nested' : '');
           }
         );
       }
@@ -1116,10 +1157,15 @@
           if (a.children) collectAll(a.children);
         }
       }
-      for (const g of dashboardGroups) {
-        for (const a of g.agents) topLevel.push(a);
-        collectAll(g.agents);
-      }
+      // Walk top-level groups and nested rig sub-groups so the header summary
+      // and counts include Gas Town rig agents.
+      (function walk(groups) {
+        for (const g of groups) {
+          for (const a of (g.agents || [])) topLevel.push(a);
+          collectAll(g.agents || []);
+          if (g.groups && g.groups.length) walk(g.groups);
+        }
+      })(dashboardGroups);
       updateSummary(all, topLevel);
       renderHeaderTitle();
     }
@@ -1341,42 +1387,50 @@
       fetch('/api/v1/sessions').then(r => r.json()).catch(() => null).then(resp => {
         if (!resp) return;
         const fresh = Array.isArray(resp) ? resp : (resp.groups || []);
+        // Index fresh groups + agents recursively so nested Gas Town rig
+        // groups (matched by name) and rig agents are reachable.
         const byName = new Map();
-        for (const g of fresh) if (g && g.name) byName.set(g.name, g);
         const freshAgents = new Map();
-        (function indexAgents(arr) {
-          for (const a of arr || []) {
-            if (a && a.session_id) freshAgents.set(a.session_id, a);
-            if (a && a.children) indexAgents(a.children);
-          }
-        })(fresh.flatMap(g => g.agents || []));
-        let changed = false;
-        for (const g of dashboardGroups) {
-          const f = byName.get(g.name);
-          if (f && f.costs && JSON.stringify(g.costs) !== JSON.stringify(f.costs)) {
-            g.costs = f.costs;
-            changed = true;
-          }
-          (function mergeRateLimit(arr) {
-            for (const a of arr || []) {
-              const fa = freshAgents.get(a.session_id);
-              if (fa && fa.metrics) {
-                if (!a.metrics) a.metrics = {};
-                const newRL = fa.metrics.rate_limit || null;
-                const newETA = fa.metrics.rate_limit_forecast_eta || null;
-                if (JSON.stringify(a.metrics.rate_limit || null) !== JSON.stringify(newRL)) {
-                  a.metrics.rate_limit = newRL;
-                  changed = true;
-                }
-                if ((a.metrics.rate_limit_forecast_eta || null) !== newETA) {
-                  a.metrics.rate_limit_forecast_eta = newETA;
-                  changed = true;
-                }
-              }
-              if (a.children) mergeRateLimit(a.children);
+        (function walkFresh(gs) {
+          for (const g of (gs || [])) {
+            if (g && g.name) byName.set(g.name, g);
+            for (const a of (g.agents || [])) {
+              if (a && a.session_id) freshAgents.set(a.session_id, a);
+              if (a && a.children) (function ix(arr){ for (const c of arr||[]){ if (c.session_id) freshAgents.set(c.session_id, c); if (c.children) ix(c.children);} })(a.children);
             }
-          })(g.agents);
-        }
+            if (g.groups) walkFresh(g.groups);
+          }
+        })(fresh);
+        let changed = false;
+        (function walkGroups(groups) {
+          for (const g of groups) {
+            const f = byName.get(g.name);
+            if (f && f.costs && JSON.stringify(g.costs) !== JSON.stringify(f.costs)) {
+              g.costs = f.costs;
+              changed = true;
+            }
+            (function mergeRateLimit(arr) {
+              for (const a of arr || []) {
+                const fa = freshAgents.get(a.session_id);
+                if (fa && fa.metrics) {
+                  if (!a.metrics) a.metrics = {};
+                  const newRL = fa.metrics.rate_limit || null;
+                  const newETA = fa.metrics.rate_limit_forecast_eta || null;
+                  if (JSON.stringify(a.metrics.rate_limit || null) !== JSON.stringify(newRL)) {
+                    a.metrics.rate_limit = newRL;
+                    changed = true;
+                  }
+                  if ((a.metrics.rate_limit_forecast_eta || null) !== newETA) {
+                    a.metrics.rate_limit_forecast_eta = newETA;
+                    changed = true;
+                  }
+                }
+                if (a.children) mergeRateLimit(a.children);
+              }
+            })(g.agents);
+            if (g.groups) walkGroups(g.groups);
+          }
+        })(dashboardGroups);
         // Refresh per-provider windowed spend the same way as group costs —
         // it rides this response, not the WebSocket deltas.
         const freshProviderCosts = (!Array.isArray(resp) && resp.provider_costs) || {};
@@ -1448,11 +1502,14 @@
     // (local wins, #538). Pure; exported for tests.
     function localBareIds(groups) {
       const out = new Set();
-      for (const g of (groups || [])) {
-        for (const a of (g.agents || [])) {
-          if (sessionOrigin(a) === 'local' && a.session_id) out.add(a.session_id);
+      (function walk(gs) {
+        for (const g of (gs || [])) {
+          for (const a of (g.agents || [])) {
+            if (sessionOrigin(a) === 'local' && a.session_id) out.add(a.session_id);
+          }
+          if (g.groups) walk(g.groups);
         }
-      }
+      })(groups);
       return out;
     }
 
@@ -1470,11 +1527,14 @@
     function daemonSessionIds(groups, daemonId) {
       const out = [];
       if (!daemonId) return out;
-      for (const g of (groups || [])) {
-        for (const a of (g.agents || [])) {
-          if (sourceIdOf(a.session_id) === daemonId) out.push(a.session_id);
+      (function walk(gs) {
+        for (const g of (gs || [])) {
+          for (const a of (g.agents || [])) {
+            if (sourceIdOf(a.session_id) === daemonId) out.push(a.session_id);
+          }
+          if (g.groups) walk(g.groups);
         }
-      }
+      })(groups);
       return out;
     }
 

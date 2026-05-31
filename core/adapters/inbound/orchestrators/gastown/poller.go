@@ -72,7 +72,7 @@ func (p *poller) BuildOrchestratorState(ctx context.Context) *orchestrator.State
 	wg.Wait()
 
 	running := daemon != nil && daemon.Running
-	return p.mapToOrchestratorState(rigs, polecats, dogs, boot, running, now)
+	return p.mapToOrchestratorState(rigs, polecats, dogs, boot, daemon, running, now)
 }
 
 // mapToOrchestratorState maps raw Gas Town types to the standardised model.
@@ -81,6 +81,7 @@ func (p *poller) mapToOrchestratorState(
 	polecats []polecatState,
 	dogs []dogState,
 	boot *bootStatus,
+	daemon *daemonState,
 	running bool,
 	now time.Time,
 ) *orchestrator.State {
@@ -324,6 +325,23 @@ func (p *poller) mapToOrchestratorState(
 		return codebases[i].Name < codebases[j].Name
 	})
 	state.Codebases = codebases
+
+	// Daemon / watchdog health, when either signal is observed.
+	if daemon != nil || boot != nil {
+		h := &orchestrator.Health{}
+		if daemon != nil {
+			h.DaemonRunning = daemon.Running
+			h.PID = daemon.PID
+			h.LastHeartbeat = daemon.LastHeartbeat
+			h.HeartbeatCount = daemon.HeartbeatCount
+		}
+		if boot != nil {
+			h.BootRunning = boot.Running
+			h.BootDegraded = boot.Degraded
+			h.SessionAlive = boot.SessionAlive
+		}
+		state.Health = h
+	}
 
 	return state
 }

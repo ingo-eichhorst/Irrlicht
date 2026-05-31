@@ -19,11 +19,25 @@ type State struct {
 	Codebases []Codebase `json:"codebases,omitempty"`
 	// WorkUnits are trackable units of work (convoys, task lists, etc.).
 	WorkUnits []workUnit `json:"work_units,omitempty"`
+	// Health is the orchestrator's daemon/watchdog health, if reported.
+	Health *Health `json:"health,omitempty"`
 	// UpdatedAt is when this state snapshot was produced.
 	UpdatedAt time.Time `json:"updated_at"`
 	// RoleIcons maps role names to display emojis. Set by the adapter,
 	// used by the domain for CWD-based role derivation fallback.
 	RoleIcons map[string]string `json:"-"`
+}
+
+// Health reports the orchestrator daemon and watchdog liveness. All fields are
+// optional so adapters that can't observe a signal simply omit it.
+type Health struct {
+	DaemonRunning  bool      `json:"daemon_running"`
+	PID            int       `json:"pid,omitempty"`
+	LastHeartbeat  time.Time `json:"last_heartbeat"`
+	HeartbeatCount int       `json:"heartbeat_count,omitempty"`
+	BootRunning    bool      `json:"boot_running,omitempty"`
+	BootDegraded   bool      `json:"boot_degraded,omitempty"`
+	SessionAlive   bool      `json:"session_alive,omitempty"`
 }
 
 // GlobalAgent represents an orchestrator-level agent not scoped to a codebase.

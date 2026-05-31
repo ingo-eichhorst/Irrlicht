@@ -42,5 +42,11 @@
       ]
     }
   ],
+  "health": {
+    "daemon_running": true,
+    "pid": 12345,
+    "last_heartbeat": "2026-04-25T12:01:00Z",
+    "heartbeat_count": 60
+  },
   "updated_at": "0001-01-01T00:00:00Z"
 }

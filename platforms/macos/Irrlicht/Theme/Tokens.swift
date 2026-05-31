@@ -67,6 +67,18 @@ enum IrrColors {
     // hierarchy stays legible.
     static let surfaceHoverSubtle = Color.primary.opacity(0.04)
     static let trackFill          = Color.primary.opacity(0.08)
+
+    /// State/status string → color, mirroring the web `stateColor` palette
+    /// (working/waiting/ready, muted fallback). Used for Gas Town global-agent
+    /// dots, convoy progress, and rig status badges.
+    static func forState(_ s: String?) -> Color {
+        switch s {
+        case "working": return working
+        case "waiting": return waiting
+        case "ready":   return ready
+        default:        return Color.secondary
+        }
+    }
 }
 
 enum IrrSpacing {
