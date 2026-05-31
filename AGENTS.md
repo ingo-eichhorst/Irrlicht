@@ -113,3 +113,15 @@ For multi-step tasks, state a brief plan:
 ```
 
 Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
+
+## ETA Estimation
+
+End EVERY assistant message with an ETA tag as its final line — this includes messages that only narrate one line before firing tool calls, not just your final reply. A turn that ends in tool calls is still an output and still needs the tag.
+
+- The estimate covers ALL remaining agentic turns + tool calls until the task is done — not the current step.
+- Format: the tag on its own line, last thing in the message: [[ETA:30m]]
+- Only the final message to the user may be [[ETA:0m]].
+
+Examples:
+- Mid-task (before a tool call): Let me search the adapters for duplication: [[ETA:8m]]
+- Final reply: Done — all tests pass: [[ETA:0m]]
