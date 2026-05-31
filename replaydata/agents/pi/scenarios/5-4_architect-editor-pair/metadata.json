@@ -1,0 +1,62 @@
+{
+  "scenario_id": "architect-editor-pair",
+  "metadata": {
+    "agent_supports": "no",
+    "daemon_capability": "n/a",
+    "driver_capability": "n/a",
+    "agent_cli_version": "0.70.0",
+    "daemon_version": "0.4.8+7df3053.dirty",
+    "confidence": 0.9,
+    "notes": "agent_supports: no — pi has no plan mode (no ExitPlanMode/approval gate → no user-visible mid-turn waiting) and no two-models-in-one-turn orchestration; neither instantiation of architect-editor-pair is producible."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "architect-editor-pair",
+      "agent": "pi",
+      "assessed_at": "2026-05-31T00:00:00Z",
+      "agent_supports": "no",
+      "daemon_capability": "n/a",
+      "driver_capability": "n/a",
+      "confidence": 0.9,
+      "body": "## Verdict\n\nagent_supports: no\ndaemon_capability: n/a; driver_capability: n/a\n\nNeither instantiation of architect-editor-pair is producible by stock pi (`@mariozechner/pi-coding-agent` 0.70.0). Route: frozen at the agent layer.\n\n## What the scenario requires\n\nThe scenario (id 5.4) asserts the FULL lifecycle arc `ready → working → waiting → working → ready` with a USER-VISIBLE `waiting` episode and ≥1 tool call, captured across an approval gate. Its `description` pins it to the Claude-Code instantiation (b): the architect = PLAN phase (plan mode → ExitPlanMode → waiting), the editor = IMPLEMENT phase (user approves → waiting→working → real Edit/Write → ready). The agent-agnostic scenario-meanings essence also admits instantiation (a): two models in ONE turn (Aider `--architect`), accumulating both contributions inside one turn boundary.\n\n## Why pi cannot produce instantiation (b) — plan→implement mode pair (the mid-turn waiting gate)\n\n**Stock pi has no plan mode**, so there is no transcript-level `working→waiting` plan-approval gate. This is already established at high confidence in the sibling cell pi/2.18 (user-blocking-plan-mode-approval = `agent_supports: no`), and I re-ran the Step-2 strings guard against the installed binary to re-confirm it for this cell:\n\n- `pi` resolves to `…/@mariozechner/pi-coding-agent/dist/cli.js` (v0.70.0).\n- A keyword sweep across the whole `dist/` tree for `exitplanmode`, `proposed_plan`, `plan_approval`, `--architect`, `architect-model`, `editor-model`, `two-model`, `multi-model` returned **zero hits**.\n- The only `plan-mode` strings live in `dist/cli/args.*` as help text describing an OPTIONAL extension: `pi --help` states \"Extensions can register additional flags (e.g., --plan from plan-mode extension).\" `--plan` is therefore not a core flag, and the plan-mode example extension (per 2.18's analysis) is an in-TUI overlay tool-allowlist swap, NOT an `ExitPlanMode`-style tool_use written to the JSONL transcript — so even if installed it would emit no transcript-level approval gate.\n\nPi's built-in tools (`read`/`bash`/`edit`/`write`) also run autonomously with no per-tool permission prompt (sibling cell pi/2.19 = `agent_supports: no`), so there is no permission-hook path to a mid-turn `waiting` either. The ONLY way pi reaches a user-visible `waiting` is the trailing-`?` text-classifier path (pi/2.17), which is a turn that ENDS in waiting — not a mid-turn approval gate that a user resolves to continue the SAME turn into a working→ready implement phase. So the scenario's required `working → waiting → working → ready` mid-turn continuation is unreachable.\n\n## Why pi cannot produce instantiation (a) — two models in one turn\n\nPi uses ONE model per turn. `--model` selects a single model; `--models` is a comma-separated set for Ctrl+P CYCLING BETWEEN turns (the model-switch-midsession primitive), not a within-turn architect+editor split. There is no `--architect`/`--editor-model` dual-model-in-one-turn orchestration flag (0 hits in the binary scan; absent from `pi --help`). So pi cannot record two model contributions inside a single turn boundary.\n\n## irrlicht observability is n/a (not no)\n\nPer the routing table, `agent_supports: no` freezes the cell at the agent layer regardless of transport, so daemon and driver are `n/a`. Grounding it anyway: the pi adapter is `FilesUnderRoot` (core/adapters/inbound/agents/pi/agent.go) and its parser (parser.go) maps only `session`/`model_change`/`compaction`/`message{assistant,user,toolResult,bashExecution}`; it has no waiting-state mapping for a plan/permission gate, and no per-turn dual-model accumulation path — there is no event in `events.jsonl` that would prove either instantiation for pi.\n\n## What would unblock this cell\n\nA future stock pi that ships either (1) a transcript-level plan-approval gate (an `ExitPlanMode`-equivalent tool_use that pauses the turn and is written to the JSONL transcript), or (2) two-models-in-one-turn orchestration. Re-assess if pi's CHANGELOG announces native plan mode or architect/editor multi-model orchestration.",
+      "caveats": [
+        "Re-confirmed against pi 0.70.0; the `plan-mode` strings in dist/cli/args.* are help text for an OPTIONAL example extension (`--plan`), not a built-in, and even installed it is a TUI overlay (tool-allowlist swap), not a transcript-level ExitPlanMode tool_use — so it would not emit a working→waiting gate the daemon could observe.",
+        "`--models` (plural) is cross-turn model CYCLING via Ctrl+P, i.e. the model-switch-midsession primitive — not within-turn architect+editor dual-model orchestration; do not mistake it for instantiation (a).",
+        "Consistent with sibling pi cells: 2.18 user-blocking-plan-mode-approval = no (no plan mode), 2.19 tool-gate-permission-prompt = no (no per-tool permission gate). Pi's only user-visible waiting is the trailing-`?` turn-END path (2.17), which cannot supply a mid-turn approval gate that continues into a working→ready implement phase."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@mariozechner/pi-coding-agent/dist",
+          "note": "Step-2 strings guard: recursive scan of the installed pi 0.70.0 dist/ for exitplanmode/proposed_plan/plan_approval/--architect/architect-model/editor-model/two-model/multi-model returned ZERO hits. Only plan-mode strings are help text in cli/args.* for the optional --plan extension."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/pi/scenarios/2-18_user-blocking-plan-mode-approval/metadata.json",
+          "note": "Sibling cell, agent_supports: no, confidence 0.9 — stock pi has no plan mode / ExitPlanMode-style approval gate (the instantiation-(b) gate this cell needs)."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/pi/scenarios/2-19_tool-gate-permission-prompt/metadata.json",
+          "note": "Sibling cell, agent_supports: no — pi has no per-tool blocking permission prompt; its built-in tools run autonomously, so no permission-hook path to a mid-turn waiting either."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/pi/parser.go",
+          "note": "pi parser maps only session/model_change/compaction/message{assistant,user,toolResult,bashExecution}; no waiting-state mapping for a plan/permission gate and no within-turn dual-model accumulation — grounds daemon=n/a."
+        },
+        {
+          "kind": "file",
+          "ref": ".claude/skills/ir:onboard-agent/scenario-meanings.md",
+          "note": "architect-editor-pair essence: two models in ONE turn (instantiation a, Aider --architect). The 5.4 description adds instantiation (b): plan→implement mode pair across the approval gate. Pi satisfies neither."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "notes": "Frozen at the agent layer (agent_supports: no). No recipe: pi has neither a plan-mode approval gate (instantiation b) nor two-models-in-one-turn orchestration (instantiation a), so the required ready→working→waiting→working→ready arc with a user-visible mid-turn waiting episode cannot be elicited. No recording.",
+      "script": []
+    }
+  }
+}
