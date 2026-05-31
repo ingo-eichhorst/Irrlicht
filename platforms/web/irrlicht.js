@@ -3,8 +3,6 @@
     // Per-provider trailing-window spend (providerKey → timeframe → USD) from
     // the /api/v1/sessions `provider_costs` field. Feeds the usage chips.
     let dashboardProviderCosts = {};
-    let orchestrator = null;   // OrchestratorSummary from initial load
-    let orchFull = null;       // Full orchestrator.State (global_agents, codebases) from WS / secondary fetch
     // Adapter branding from /api/v1/agents — keyed by adapter `name`
     // (e.g. "claude-code"). Populated once on initial load; the daemon's
     // registry is essentially static (changes require a daemon restart).
@@ -429,12 +427,19 @@
     // --- Session index ---
     function rebuildIndex() {
       sessionIndex.clear();
-      for (const g of dashboardGroups) {
-        for (const a of g.agents) {
-          sessionIndex.set(a.session_id, {group: g, agent: a, parent: null});
-          indexChildren(g, a);
+      // Walk top-level groups and their nested sub-groups (Gas Town rigs).
+      // Nested groups are tagged `_nested` so applySessionUpdate won't migrate
+      // a rig session out into a flat project group on its next WS update.
+      (function walk(groups, nested) {
+        for (const g of groups) {
+          if (nested) g._nested = true;
+          for (const a of (g.agents || [])) {
+            sessionIndex.set(a.session_id, {group: g, agent: a, parent: null});
+            indexChildren(g, a);
+          }
+          if (g.groups && g.groups.length) walk(g.groups, true);
         }
-      }
+      })(dashboardGroups, false);
     }
     function indexChildren(group, parent) {
       if (!parent.children) return;
@@ -463,8 +468,11 @@
         // first WS push arrived before metadata enrichment landed (empty
         // project_name → "unknown" bucket) stay stranded there forever even
         // after later updates carry the correct name. Children inherit their
-        // parent's group, so only migrate top-level entries.
-        if (!entry.parent) {
+        // parent's group, so only migrate top-level entries. Rig sessions
+        // (nested under a Gas Town sub-group) are exempt — their group is
+        // structural, not project-derived, so a project_name mismatch must
+        // not tear them out of their rig.
+        if (!entry.parent && !entry.group._nested) {
           var desired = a.project_name || 'unknown';
           if (entry.group.name !== desired) {
             var oldGroup = entry.group;
@@ -537,7 +545,6 @@
       }
     }
 
-    // --- Orchestrator rendering (innerHTML is fine — updates rarely) ---
     // toolLabel maps raw tool names to short display strings for session rows.
     const toolLabel = {
       Bash: 'Bash', Read: 'Read', Write: 'Write', Edit: 'Edit',
@@ -551,92 +558,6 @@
       if (s === 'waiting') return 'var(--waiting)';
       if (s === 'ready') return 'var(--ready)';
       return 'var(--muted)';
-    }
-
-    function dotBar(total, done) {
-      const maxDots = 7;
-      // Coerce inputs to integers and bound the final dot counts by maxDots
-      // (a literal) so repeat() is provably bounded regardless of WS payload.
-      // Behaviour for legitimate inputs is unchanged at any scale: the
-      // done/total ratio still drives filled-vs-empty.
-      const t = Number(total) | 0;
-      const d = Number(done) | 0;
-      const totalDots = Math.max(0, Math.min(t, maxDots));
-      if (totalDots <= 0) return '';
-      const filled = t <= maxDots ? d : Math.round(d / t * maxDots);
-      const filledDots = Math.max(0, Math.min(filled, totalDots, maxDots));
-      const emptyDots = Math.max(0, Math.min(totalDots - filledDots, maxDots));
-      return '\u25CF'.repeat(filledDots) + '\u25CB'.repeat(emptyDots);
-    }
-
-    function renderOrchestrator() {
-      const container = document.getElementById('gt-container');
-      const hasOrch = orchestrator && orchestrator.running;
-      const hasFull = orchFull && orchFull.running;
-      if (!hasOrch && !hasFull) { container.style.display = 'none'; return; }
-      container.style.display = 'block';
-
-      let html = '<div class="gt-section">';
-      html += '<div class="gt-header">';
-      html += '<div class="gt-title"><span class="gt-emoji">\u26FD</span> Gas Town</div>';
-      html += '<div class="gt-status-label"><div class="gt-status-dot" style="background:var(--ready)"></div>running</div>';
-      html += '</div>';
-
-      // Global agents — icon/description come from the API, no hardcoding here.
-      if (hasFull && orchFull.global_agents && orchFull.global_agents.length) {
-        html += '<div class="gt-agents-row">';
-        for (const ga of orchFull.global_agents) {
-          const sid = ga.session_id ? shortID(ga.session_id) : 'idle';
-          html += '<div class="gt-agent-chip" title="' + esc(ga.description || ga.role) + '">';
-          html += '<span>' + (ga.icon ? esc(ga.icon) + ' ' : '') + esc(ga.role) + '</span>';
-          html += '<span class="gt-chip-dot" style="background:' + stateColor(ga.state) + '"></span>';
-          html += '<span class="gt-chip-id">' + esc(sid) + '</span>';
-          html += '</div>';
-        }
-        html += '</div>';
-      }
-
-      // Rig/codebase blocks — flatten worktrees for readability.
-      if (hasFull && orchFull.codebases && orchFull.codebases.length) {
-        for (const cb of orchFull.codebases) {
-          const workers = (cb.worktrees || []).flatMap(wt => wt.workers || []);
-          if (!workers.length) continue;
-          html += '<div class="gt-rig-block">';
-          html += '<div class="gt-rig-name">rig: ' + esc(cb.name) + '</div>';
-          html += '<div class="gt-workers">';
-          for (const w of workers) {
-            html += '<div class="gt-agent-chip" title="' + esc(w.description || w.role) + '">';
-            html += '<span>' + (w.icon ? esc(w.icon) + ' ' : '') + esc(w.role);
-            if (w.name) html += ' <span style="color:var(--text)">' + esc(w.name) + '</span>';
-            html += '</span>';
-            html += '<span class="gt-chip-dot" style="background:' + stateColor(w.state) + '"></span>';
-            if (w.id) html += '<span class="gt-chip-id">' + esc(w.id.slice(0, 8)) + '</span>';
-            html += '</div>';
-          }
-          html += '</div></div>';
-        }
-      }
-
-      // Convoys — use work_units from whichever source is available.
-      const workUnits = ((orchFull || orchestrator) || {}).work_units || [];
-      const convoys = workUnits.filter(w => w.type === 'convoy');
-      if (convoys.length > 0) {
-        html += '<div class="gt-body">';
-        html += '<div class="gt-convoy-header">\u{1F69A} Convoys</div>';
-        for (const c of convoys) {
-          const isDone = c.done >= c.total;
-          html += '<div class="gt-convoy-row">';
-          html += '<span class="gt-convoy-name' + (isDone ? ' done' : '') + '">' + esc(c.name) + '</span>';
-          html += '<span class="gt-dotbar" style="color:' + (isDone ? 'var(--ready)' : 'var(--working)') + '">' + dotBar(c.total, c.done) + '</span>';
-          html += '<span class="gt-convoy-fraction">' + (Number(c.done) | 0) + ' / ' + (Number(c.total) | 0) + '</span>';
-          if (isDone) html += '<span class="gt-convoy-check">\u2713</span>';
-          html += '</div>';
-        }
-        html += '</div>';
-      }
-
-      html += '</div>';
-      container.innerHTML = html;
     }
 
     // --- DOM Reconciliation ---
@@ -692,20 +613,24 @@
     }
 
     // --- Create/Update functions for session rows ---
-    function createGroupHeader(group) {
+    function createGroupHeader(group, groupKey, depth) {
       const el = document.createElement('div');
       el.className = 'group-hdr';
       // Anatomy mirrors overlay GroupView at SessionListView.swift:871:
-      // chevron + name + per-day cost on the left, session count on the right.
+      // chevron + name + status + per-day cost on the left, count on the right.
       el.innerHTML = '<span class="group-chevron">\u25BE</span>' +
         '<span class="group-name"></span>' +
+        '<span class="group-status" style="display:none"></span>' +
         '<span class="group-cost" title="Click to cycle time frame"></span>' +
         '<span class="group-count"></span>';
+      // Collapse keys off the live path-qualified key (set in updateGroupHeader)
+      // so reused header elements toggle the right rig, not a stale closure.
       el.addEventListener('click', () => {
-        if (collapsedGroups.has(group.name)) {
-          collapsedGroups.delete(group.name);
+        const k = el._groupKey || group.name;
+        if (collapsedGroups.has(k)) {
+          collapsedGroups.delete(k);
         } else {
-          collapsedGroups.add(group.name);
+          collapsedGroups.add(k);
         }
         persistCollapsedGroups();
         render();
@@ -715,7 +640,7 @@
         e.stopPropagation();
         cycleCostTimeframe();
       });
-      updateGroupHeader(el, group);
+      updateGroupHeader(el, group, groupKey, depth);
       return el;
     }
 
@@ -742,13 +667,29 @@
       return typeof v === 'number' ? v : 0;
     }
 
-    function updateGroupHeader(el, group) {
+    function updateGroupHeader(el, group, groupKey, depth) {
+      const key = groupKey || group.name;
+      el._groupKey = key;
+      el.classList.toggle('nested', !!depth);
       // Gas Town groups get a ⛽ glyph prefix on the title — matches macOS
       // group-title rendering at SessionListView.swift:945.
       const isGastown = group.type === 'gastown';
       const desiredName = (isGastown ? '⛽ ' : '') + (group.name || '');
       const nameEl = el.querySelector('.group-name');
       if (nameEl.textContent !== desiredName) nameEl.textContent = desiredName;
+      // Rig/codebase status (Codebase.Status) — surfaced as a small badge on
+      // nested rig headers; degrade gracefully when absent.
+      const statusEl = el.querySelector('.group-status');
+      if (statusEl) {
+        if (group.status) {
+          statusEl.style.display = '';
+          if (statusEl.textContent !== group.status) statusEl.textContent = group.status;
+          statusEl.style.color = stateColor(group.status);
+          statusEl.title = group.status;
+        } else {
+          statusEl.style.display = 'none';
+        }
+      }
       const tf = COST_TIMEFRAMES.find(t => t.key === currentTimeframe) || COST_TIMEFRAMES[0];
       const windowed = group.costs ? group.costs[currentTimeframe] : undefined;
       // Hide the cost until the daemon has windowed data for this project —
@@ -759,12 +700,13 @@
         : '';
       const costEl = el.querySelector('.group-cost');
       if (costEl.textContent !== costText) costEl.textContent = costText;
-      const totalAgents = group.agents.length + group.agents.reduce((n, a) => n + (a.children ? a.children.length : 0), 0);
+      const agents = group.agents || [];
+      const totalAgents = agents.length + agents.reduce((n, a) => n + (a.children ? a.children.length : 0), 0);
       const countText = totalAgents + (totalAgents === 1 ? ' session' : ' sessions');
       const countEl = el.querySelector('.group-count');
       if (countEl.textContent !== countText) countEl.textContent = countText;
 
-      const isCollapsed = collapsedGroups.has(group.name);
+      const isCollapsed = collapsedGroups.has(key);
       const chevron = el.querySelector('.group-chevron');
       chevron.classList.toggle('collapsed', isCollapsed);
 
@@ -1022,8 +964,6 @@
 
     // --- Render ---
     function render() {
-      renderOrchestrator();
-
       const list = document.getElementById('session-list');
       const empty = document.getElementById('empty-state');
 
@@ -1041,66 +981,76 @@
 
         // Build flat list of render items: [{type, key, data}]
         const items = [];
-        const showHeaders = dashboardGroups.length > 1;
+        // Show headers when there's more than one top-level group, or when any
+        // group nests sub-groups (Gas Town rigs) that need their own headers.
+        const showHeaders = dashboardGroups.length > 1 ||
+          dashboardGroups.some(g => g.groups && g.groups.length);
         let agentNum = 0;
 
         // Local-wins (#538): a relay session whose bare id is also delivered by
         // a local source collapses to the local row — skip the relay duplicate.
         const localIds = localBareIds(dashboardGroups);
 
-        for (const g of dashboardGroups) {
+        // Emit a group header followed by its agents, then recurse into nested
+        // sub-groups (Gas Town rigs) as further collapsible headers. Collapse
+        // state is keyed by a path-qualified key (parent/name) so same-named
+        // rigs under different orchestrators don't share a collapse toggle.
+        function emitGroup(g, parentKey, depth) {
+          const key = parentKey ? parentKey + '/' + g.name : g.name;
           if (showHeaders) {
-            items.push({type: 'group', key: 'g:' + g.name, group: g});
+            items.push({type: 'group', key: 'g:' + key, group: g, groupKey: key, depth: depth});
           }
-          if (!collapsedGroups.has(g.name)) {
-            for (const a of g.agents) {
-              if (isShadowedRemote(a, localIds)) continue;
-              agentNum++;
-              items.push({type: 'agent', key: 'a:' + a.session_id, agent: a, num: agentNum, isChild: false});
-              // Pressure alert
-              const isActive = a.state === 'working' || a.state === 'waiting';
-              const pressure = a.metrics ? a.metrics.pressure_level : '';
-              if (isActive && (pressure === 'high' || pressure === 'warning' || pressure === 'critical')) {
-                items.push({type: 'alert', key: 'al:' + a.session_id, pressure: pressure});
-              }
-              // Waiting question — separate row beneath the parent (matches
-              // SessionListView.swift:588-604). Renders only while the
-              // session is in 'waiting' AND has a last_assistant_text.
-              if (a.state === 'waiting' && a.metrics && a.metrics.last_assistant_text) {
-                items.push({type: 'question', key: 'q:' + a.session_id, agent: a, isChild: false});
-              }
-              // Task progress dots — separate row beneath the parent so they
-              // don't push the meta columns off the session row. Matches the
-              // overlay's TaskListView placement (SessionListView.swift:629-632).
-              const tasks = (a.metrics && a.metrics.tasks) || [];
-              const tasksOpen = tasks.length > 0 && !tasks.every(t => t.status === 'completed');
-              if (tasksOpen) {
-                items.push({type: 'tasks', key: 'tk:' + a.session_id, agent: a, isChild: false});
-              }
+          if (collapsedGroups.has(key)) return;
+          for (const a of (g.agents || [])) {
+            if (isShadowedRemote(a, localIds)) continue;
+            agentNum++;
+            items.push({type: 'agent', key: 'a:' + a.session_id, agent: a, num: agentNum, isChild: false, depth: depth});
+            // Pressure alert
+            const isActive = a.state === 'working' || a.state === 'waiting';
+            const pressure = a.metrics ? a.metrics.pressure_level : '';
+            if (isActive && (pressure === 'high' || pressure === 'warning' || pressure === 'critical')) {
+              items.push({type: 'alert', key: 'al:' + a.session_id, pressure: pressure});
+            }
+            // Waiting question — separate row beneath the parent (matches
+            // SessionListView.swift:588-604). Renders only while the
+            // session is in 'waiting' AND has a last_assistant_text.
+            if (a.state === 'waiting' && a.metrics && a.metrics.last_assistant_text) {
+              items.push({type: 'question', key: 'q:' + a.session_id, agent: a, isChild: false});
+            }
+            // Task progress dots — separate row beneath the parent so they
+            // don't push the meta columns off the session row. Matches the
+            // overlay's TaskListView placement (SessionListView.swift:629-632).
+            const tasks = (a.metrics && a.metrics.tasks) || [];
+            const tasksOpen = tasks.length > 0 && !tasks.every(t => t.status === 'completed');
+            if (tasksOpen) {
+              items.push({type: 'tasks', key: 'tk:' + a.session_id, agent: a, isChild: false});
             }
           }
+          for (const sub of (g.groups || [])) emitGroup(sub, key, depth + 1);
         }
+        for (const g of dashboardGroups) emitGroup(g, '', 0);
 
         // Reconcile
         reconcile(list, items,
           item => item.key,
           item => {
-            if (item.type === 'group') return createGroupHeader(item.group);
+            if (item.type === 'group') return createGroupHeader(item.group, item.groupKey, item.depth);
             if (item.type === 'alert') return createAlertRow(item.pressure);
             if (item.type === 'tasks') return createTaskListRow(item.agent, item.isChild);
             if (item.type === 'question') return createQuestionRow(item.agent, item.isChild);
             const el = createSessionRow(item.agent, item.isChild);
+            el.classList.toggle('nested', !!item.depth);
             paintRowNum(el, item.num);
             return el;
           },
           (el, item) => {
-            if (item.type === 'group') { updateGroupHeader(el, item.group); return; }
+            if (item.type === 'group') { updateGroupHeader(el, item.group, item.groupKey, item.depth); return; }
             if (item.type === 'alert') { updateAlertRow(el, item.pressure); return; }
             if (item.type === 'tasks') { updateTaskListRow(el, item.agent); return; }
             if (item.type === 'question') { updateQuestionRow(el, item.agent); return; }
             updateSessionRow(el, item.agent, item.isChild);
             paintRowNum(el, item.num);
-            el.className = 'session-row' + (item.isChild ? ' child' : '');
+            el.className = 'session-row' + (item.isChild ? ' child' : '') + (item.depth ? ' nested' : '');
           }
         );
       }
@@ -1116,10 +1066,15 @@
           if (a.children) collectAll(a.children);
         }
       }
-      for (const g of dashboardGroups) {
-        for (const a of g.agents) topLevel.push(a);
-        collectAll(g.agents);
-      }
+      // Walk top-level groups and nested rig sub-groups so the header summary
+      // and counts include Gas Town rig agents.
+      (function walk(groups) {
+        for (const g of groups) {
+          for (const a of (g.agents || [])) topLevel.push(a);
+          collectAll(g.agents || []);
+          if (g.groups && g.groups.length) walk(g.groups);
+        }
+      })(dashboardGroups);
       updateSummary(all, topLevel);
       renderHeaderTitle();
     }
@@ -1327,56 +1282,99 @@
       render();
       repaintHistory();
     });
-    // Periodic re-hydration so trailing-window costs (carried on each group
-    // under `costs`) don't go stale between WebSocket deltas, which only
-    // carry individual session updates. We only copy the `costs` field —
-    // replacing the whole array would shuffle WS-added sessions back into
-    // the daemon's UUID order, which is the position-jump the user flagged.
-    //
-    // We additionally merge per-agent `metrics.rate_limit` and
-    // `metrics.rate_limit_forecast_eta` for any agent already in our state.
-    // The quota chip strip would otherwise stay pinned to the last value
-    // a WS message left in place during a WS disconnect.
-    setInterval(() => {
-      fetch('/api/v1/sessions').then(r => r.json()).catch(() => null).then(resp => {
-        if (!resp) return;
-        const fresh = Array.isArray(resp) ? resp : (resp.groups || []);
-        const byName = new Map();
-        for (const g of fresh) if (g && g.name) byName.set(g.name, g);
-        const freshAgents = new Map();
-        (function indexAgents(arr) {
-          for (const a of arr || []) {
-            if (a && a.session_id) freshAgents.set(a.session_id, a);
-            if (a && a.children) indexAgents(a.children);
-          }
-        })(fresh.flatMap(g => g.agents || []));
-        let changed = false;
-        for (const g of dashboardGroups) {
-          const f = byName.get(g.name);
-          if (f && f.costs && JSON.stringify(g.costs) !== JSON.stringify(f.costs)) {
-            g.costs = f.costs;
-            changed = true;
-          }
-          (function mergeRateLimit(arr) {
-            for (const a of arr || []) {
-              const fa = freshAgents.get(a.session_id);
-              if (fa && fa.metrics) {
-                if (!a.metrics) a.metrics = {};
-                const newRL = fa.metrics.rate_limit || null;
-                const newETA = fa.metrics.rate_limit_forecast_eta || null;
-                if (JSON.stringify(a.metrics.rate_limit || null) !== JSON.stringify(newRL)) {
-                  a.metrics.rate_limit = newRL;
-                  changed = true;
-                }
-                if ((a.metrics.rate_limit_forecast_eta || null) !== newETA) {
-                  a.metrics.rate_limit_forecast_eta = newETA;
-                  changed = true;
-                }
-              }
-              if (a.children) mergeRateLimit(a.children);
+    // structureSignature captures the daemon-computed shape of the group tree:
+    // group nesting (Gas Town rig sub-groups) + each session's role/icon/worker
+    // id. WS session deltas carry NONE of this (just the flat session), and the
+    // daemon re-nests a session / fills in its role asynchronously as the
+    // orchestrator poller catches up — with no create/delete event. So the only
+    // reliable way to reflect nesting + role-emoji changes is to poll the REST
+    // structure and adopt it when this signature changes. Pure metric ticks
+    // (cost/context/tokens) don't alter the signature, so they keep flowing
+    // through the in-place merge below with no reorder.
+    function structureSignature(groups) {
+      const parts = [];
+      (function walk(gs, depth) {
+        for (const g of (gs || [])) {
+          parts.push(depth + '#' + (g.name || '') + '#' + (g.type || '') + '#' + (g.status || ''));
+          (function agents(arr) {
+            for (const a of (arr || [])) {
+              parts.push('a:' + a.session_id + ':' + (a.role || '') + ':' + (a.icon || '') + ':' + (a.worker_id || ''));
+              if (a.children) agents(a.children);
             }
           })(g.agents);
+          if (g.groups) walk(g.groups, depth + 1);
         }
+      })(groups);
+      return parts.join('|');
+    }
+    // Periodic re-hydration. Two jobs, one fetch:
+    //   1. STRUCTURE — if the daemon's group tree / role metadata changed
+    //      (rig nesting settled, a new agent gained its role emoji), adopt the
+    //      fresh tree wholesale. Collapse state survives (collapsedGroups is
+    //      keyed by name/path). This is the only path that reflects nesting +
+    //      role changes, since WS deltas can't.
+    //   2. METRICS — when structure is unchanged, merge trailing-window `costs`
+    //      and per-agent `metrics.rate_limit*` in place (no reorder), so the
+    //      cost figures and quota chips don't go stale between WS deltas.
+    function rehydratePoll() {
+      return fetch('/api/v1/sessions').then(r => r.json()).catch(() => null).then(resp => {
+        if (!resp) return;
+        const fresh = Array.isArray(resp) ? resp : (resp.groups || []);
+        // Structure / role metadata changed → adopt the daemon's tree.
+        if (structureSignature(fresh) !== structureSignature(dashboardGroups)) {
+          dashboardGroups = fresh;
+          if (!Array.isArray(resp) && resp.provider_costs) dashboardProviderCosts = resp.provider_costs;
+          rebuildIndex();
+          render();
+          repaintHistory();
+          return;
+        }
+        // Index fresh groups (by path, so a rig can't shadow a same-named
+        // top-level project) + agents recursively for the in-place merge.
+        const byPath = new Map();
+        const freshAgents = new Map();
+        (function walkFresh(gs, parentKey) {
+          for (const g of (gs || [])) {
+            const key = parentKey ? parentKey + '/' + g.name : (g.name || '');
+            byPath.set(key, g);
+            for (const a of (g.agents || [])) {
+              if (a && a.session_id) freshAgents.set(a.session_id, a);
+              if (a && a.children) (function ix(arr){ for (const c of arr||[]){ if (c.session_id) freshAgents.set(c.session_id, c); if (c.children) ix(c.children);} })(a.children);
+            }
+            if (g.groups) walkFresh(g.groups, key);
+          }
+        })(fresh, '');
+        let changed = false;
+        (function walkGroups(groups, parentKey) {
+          for (const g of groups) {
+            const key = parentKey ? parentKey + '/' + g.name : (g.name || '');
+            const f = byPath.get(key);
+            if (f && f.costs && JSON.stringify(g.costs) !== JSON.stringify(f.costs)) {
+              g.costs = f.costs;
+              changed = true;
+            }
+            (function mergeRateLimit(arr) {
+              for (const a of arr || []) {
+                const fa = freshAgents.get(a.session_id);
+                if (fa && fa.metrics) {
+                  if (!a.metrics) a.metrics = {};
+                  const newRL = fa.metrics.rate_limit || null;
+                  const newETA = fa.metrics.rate_limit_forecast_eta || null;
+                  if (JSON.stringify(a.metrics.rate_limit || null) !== JSON.stringify(newRL)) {
+                    a.metrics.rate_limit = newRL;
+                    changed = true;
+                  }
+                  if ((a.metrics.rate_limit_forecast_eta || null) !== newETA) {
+                    a.metrics.rate_limit_forecast_eta = newETA;
+                    changed = true;
+                  }
+                }
+                if (a.children) mergeRateLimit(a.children);
+              }
+            })(g.agents);
+            if (g.groups) walkGroups(g.groups, key);
+          }
+        })(dashboardGroups, '');
         // Refresh per-provider windowed spend the same way as group costs —
         // it rides this response, not the WebSocket deltas.
         const freshProviderCosts = (!Array.isArray(resp) && resp.provider_costs) || {};
@@ -1386,7 +1384,20 @@
         }
         if (changed) render();
       });
-    }, 30000);
+    }
+    // Adaptive cadence: an orchestrator's nesting/role metadata changes
+    // asynchronously (no WS event), so poll fast (2.5s) while one is present to
+    // reflect it promptly. With no orchestrator the structure is WS-driven and
+    // only `costs` go stale, so fall back to 30s. Recursive setTimeout (not
+    // setInterval) so each tick re-reads the cadence and never overlaps a fetch.
+    function scheduleRehydratePoll() {
+      const hasOrchestrator = dashboardGroups.some(g =>
+        g && (g.type === 'gastown' || (g.groups && g.groups.length)));
+      setTimeout(() => {
+        rehydratePoll().finally(scheduleRehydratePoll);
+      }, hasOrchestrator ? 2500 : 30000);
+    }
+    scheduleRehydratePoll();
 
     // --- Sources & connections (multi-source) ---
     // The dashboard connects to one or more sources at once: the local source
@@ -1448,11 +1459,14 @@
     // (local wins, #538). Pure; exported for tests.
     function localBareIds(groups) {
       const out = new Set();
-      for (const g of (groups || [])) {
-        for (const a of (g.agents || [])) {
-          if (sessionOrigin(a) === 'local' && a.session_id) out.add(a.session_id);
+      (function walk(gs) {
+        for (const g of (gs || [])) {
+          for (const a of (g.agents || [])) {
+            if (sessionOrigin(a) === 'local' && a.session_id) out.add(a.session_id);
+          }
+          if (g.groups) walk(g.groups);
         }
-      }
+      })(groups);
       return out;
     }
 
@@ -1470,11 +1484,14 @@
     function daemonSessionIds(groups, daemonId) {
       const out = [];
       if (!daemonId) return out;
-      for (const g of (groups || [])) {
-        for (const a of (g.agents || [])) {
-          if (sourceIdOf(a.session_id) === daemonId) out.push(a.session_id);
+      (function walk(gs) {
+        for (const g of (gs || [])) {
+          for (const a of (g.agents || [])) {
+            if (sourceIdOf(a.session_id) === daemonId) out.push(a.session_id);
+          }
+          if (g.groups) walk(g.groups);
         }
-      }
+      })(groups);
       return out;
     }
 
@@ -1695,13 +1712,6 @@
     // here, so the render/history/notification paths are unchanged.
     function dispatchRawFrame(msg) {
       if (!msg) return;
-      if (msg.type === 'orchestrator_state' && msg.orchestrator) {
-        const orch = msg.orchestrator;
-        orchestrator = orch.running ? orch : null;
-        orchFull = orch.running ? orch : null;
-        render();
-        return;
-      }
       if (msg.type === 'history_snapshot' && msg.session_id && msg.history) {
         applyHistorySnapshot(msg.session_id, msg.history, msg.generations);
         repaintHistory();
@@ -1722,6 +1732,10 @@
       if (msg.type === 'session_deleted') {
         applySessionDelete(s.session_id);
       } else {
+        // First sight of a session arrives flat with no role/icon and no rig
+        // nesting (the WS delta lacks them). It renders immediately for
+        // responsiveness; the structure poll above re-reads its nesting + role
+        // emoji once the daemon's orchestrator poller has associated it.
         applySessionUpdate(s);
       }
       render();
@@ -2387,5 +2401,5 @@ export {
   relayFrameKind, aggregateConnState, relayWsUrl,
   compoundSessionId, displaySessionId,
   sessionOrigin, sourceIdOf, localBareIds, isShadowedRemote,
-  daemonSessionIds,
+  daemonSessionIds, structureSignature,
 };

@@ -18,6 +18,7 @@ import {
   localBareIds,
   isShadowedRemote,
   daemonSessionIds,
+  structureSignature,
 } from './irrlicht.js'
 
 describe('resolvedTheme', () => {
@@ -333,5 +334,73 @@ describe('daemonSessionIds (#540 drop a disconnected daemon\'s rows)', () => {
     expect(daemonSessionIds(groups, 'daemon-Z')).toEqual([])
     expect(daemonSessionIds(groups, '')).toEqual([])
     expect(daemonSessionIds(groups, undefined)).toEqual([])
+  })
+})
+
+describe('group traversal recurses Gas Town rig sub-groups (#559)', () => {
+  // A gastown group with a global agent plus two nested rigs whose worker
+  // sessions live in `groups[].agents`, not the top-level `agents`.
+  const groups = [{
+    name: 'Gas Town',
+    type: 'gastown',
+    agents: [{ session_id: 'mayor-1' }],                          // local global agent
+    groups: [
+      { name: 'rig-1', agents: [
+        { session_id: 'polecat-1' },                              // local
+        { session_id: compoundSessionId('daemon-A', 'witness-1') }, // relay
+      ]},
+      { name: 'rig-2', agents: [{ session_id: 'crew-1' }] },      // local
+    ],
+  }]
+
+  test('localBareIds includes rig worker ids nested under sub-groups', () => {
+    expect(localBareIds(groups)).toEqual(new Set(['mayor-1', 'polecat-1', 'crew-1']))
+  })
+
+  test('daemonSessionIds finds a relay session nested in a rig', () => {
+    expect(daemonSessionIds(groups, 'daemon-A')).toEqual([
+      compoundSessionId('daemon-A', 'witness-1'),
+    ])
+  })
+})
+
+describe('structureSignature (#559 — detects nesting/role changes the WS deltas miss)', () => {
+  const base = () => [{
+    name: 'gt', type: 'gastown',
+    agents: [{ session_id: 'mayor-1', role: 'mayor', icon: '🎩' }],
+    groups: [{ name: 'rig-1', status: 'operational', agents: [
+      { session_id: 'pc-1', role: 'polecat', icon: '👷', worker_id: 'bead-1' },
+    ]}],
+  }]
+
+  test('identical trees produce identical signatures', () => {
+    expect(structureSignature(base())).toBe(structureSignature(base()))
+  })
+
+  test('metric-only changes do NOT change the signature (no needless rebuild)', () => {
+    const a = base()
+    const b = base()
+    b[0].agents[0].metrics = { estimated_cost_usd: 9.99, context_utilization_percentage: 80 }
+    b[0].costs = { day: 5 }
+    expect(structureSignature(b)).toBe(structureSignature(a))
+  })
+
+  test('a session gaining a role/icon changes the signature (emoji fix)', () => {
+    const before = [{ name: 'gt', type: 'gastown', agents: [{ session_id: 's1' }] }]
+    const after = [{ name: 'gt', type: 'gastown', agents: [{ session_id: 's1', role: 'witness', icon: '🦉' }] }]
+    expect(structureSignature(after)).not.toBe(structureSignature(before))
+  })
+
+  test('re-nesting a session under a rig changes the signature (nesting fix)', () => {
+    const flat = [
+      { name: 'gt', type: 'gastown', agents: [] },
+      { name: 'rig-1', agents: [{ session_id: 's1', role: 'refinery' }] },
+    ]
+    const nested = [
+      { name: 'gt', type: 'gastown', agents: [], groups: [
+        { name: 'rig-1', agents: [{ session_id: 's1', role: 'refinery' }] },
+      ]},
+    ]
+    expect(structureSignature(nested)).not.toBe(structureSignature(flat))
   })
 })
