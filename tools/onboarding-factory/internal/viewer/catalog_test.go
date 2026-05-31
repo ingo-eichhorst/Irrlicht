@@ -71,22 +71,24 @@ func TestCatalogHandler(t *testing.T) {
 func TestDeriveDisplayState(t *testing.T) {
 	cases := []struct {
 		supports, daemon, driver string
-		rec                      bool
+		rec, applic              bool
 		want                     string
 	}{
-		{"no", "full", "ready", true, "n.a."},
-		{"unknown", "full", "ready", true, "unknown"},
-		{"yes", "n/a", "ready", true, "n.a."},
-		{"yes", "incapable", "ready", true, "unobservable"},
-		{"yes", "bug", "ready", true, "blocked-daemon"},
-		{"yes", "full", "gap:keys", true, "blocked-driver"},
-		{"yes", "full", "ready", false, "pending-record"},
-		{"yes", "full", "ready", true, "observed"},
+		{"no", "full", "ready", true, true, "n.a."},
+		{"unknown", "full", "ready", true, true, "unknown"},
+		{"yes", "n/a", "ready", true, true, "n.a."},
+		{"yes", "incapable", "ready", true, true, "unobservable"},
+		{"yes", "bug", "ready", true, true, "blocked-daemon"},
+		{"yes", "full", "gap:keys", true, true, "blocked-driver"},
+		{"yes", "full", "ready", false, true, "pending-record"},
+		// applicable:false (record_blocked deferral), not recorded → n.a.
+		{"yes", "full", "ready", false, false, "n.a."},
+		{"yes", "full", "ready", true, true, "observed"},
 	}
 	for _, c := range cases {
-		got := deriveDisplayState(c.supports, c.daemon, c.driver, c.rec)
+		got := deriveDisplayState(c.supports, c.daemon, c.driver, c.rec, c.applic)
 		if got != c.want {
-			t.Errorf("deriveDisplayState(%q,%q,%q,%v) = %q; want %q", c.supports, c.daemon, c.driver, c.rec, got, c.want)
+			t.Errorf("deriveDisplayState(%q,%q,%q,rec=%v,applic=%v) = %q; want %q", c.supports, c.daemon, c.driver, c.rec, c.applic, got, c.want)
 		}
 	}
 }

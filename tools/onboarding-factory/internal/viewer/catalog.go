@@ -108,9 +108,16 @@ func buildCellVerdict(ag *shard.ShardAgent) map[string]any {
 		"daemon_capability": "unknown",
 		"driver_capability": "ready",
 		"notes":             "",
+		// applicable is false only when the recipe explicitly marks applicable:false
+		// (a deliberate record_blocked deferral); absent/true recipe → true. Feeds
+		// the display state so such cells read n.a., not pending-record.
+		"applicable": true,
 	}
 	if ag == nil {
 		return cell
+	}
+	if recipeApplicableFalse(ag.Details.Recipe) {
+		cell["applicable"] = false
 	}
 	md := ag.Metadata
 	if md.AgentSupports != "" {
@@ -131,15 +138,29 @@ func buildCellVerdict(ag *shard.ShardAgent) map[string]any {
 	return cell
 }
 
+// recipeApplicableFalse reports whether a cell's recipe explicitly marks
+// applicable:false (a deliberate record_blocked deferral). Absent or
+// applicable:true/nil recipe → false.
+func recipeApplicableFalse(recipe json.RawMessage) bool {
+	if len(recipe) == 0 {
+		return false
+	}
+	var r recipeAdapterEntry
+	if json.Unmarshal(recipe, &r) != nil {
+		return false
+	}
+	return r.Applicable != nil && !*r.Applicable
+}
+
 // deriveDisplayState rolls the three orthogonal facts — agent support, daemon
-// capability, driver capability — plus the MEASURED recording status up into
-// one display state for the matrix (#476). It delegates to the canonical
-// matrix model (#508) so the viewer and the gates can never disagree on what a
-// cell's verdict means; hasRecording is true when a recording has been captured
-// (measurement status is anything other than the no-recording / no-spec
-// sentinels).
-func deriveDisplayState(supports, daemon, driver string, hasRecording bool) string {
-	return matrix.DeriveDisplayState(supports, daemon, driver, hasRecording)
+// capability, driver capability — plus the MEASURED recording status and
+// applicability up into one display state for the matrix (#476). It delegates to
+// the canonical matrix model (#508) so the viewer and the gates can never
+// disagree on what a cell's verdict means; hasRecording is true when a recording
+// has been captured (measurement status is anything other than the no-recording
+// / no-spec sentinels).
+func deriveDisplayState(supports, daemon, driver string, hasRecording, applicable bool) string {
+	return matrix.DeriveDisplayState(supports, daemon, driver, hasRecording, applicable)
 }
 
 // annotateDisplayState decorates each coverage cell with a derived
@@ -173,7 +194,11 @@ func annotateDisplayState(top map[string]any) {
 					hasRecording = st != "" && st != "no_recording" && st != "no_expected"
 				}
 			}
-			cell["display_state"] = deriveDisplayState(supports, daemon, driver, hasRecording)
+			applicable := true
+			if v, ok := cell["applicable"].(bool); ok {
+				applicable = v
+			}
+			cell["display_state"] = deriveDisplayState(supports, daemon, driver, hasRecording, applicable)
 		}
 	}
 }

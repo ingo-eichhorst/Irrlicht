@@ -294,7 +294,9 @@ func (m *Matrix) buildCell(agent, cid string) CellState {
 		dsDaemon = c.Metadata.DaemonCapability
 		dsDriver = c.Metadata.DriverCapability
 	}
-	cs.DisplayState = DeriveDisplayState(dsSupports, dsDaemon, dsDriver, recorded)
+	// appl == AppFalse means the recipe defers this cell (applicable:false, a
+	// documented record_blocked) — never recorded here, so n.a. not pending-record.
+	cs.DisplayState = DeriveDisplayState(dsSupports, dsDaemon, dsDriver, recorded, appl != AppFalse)
 	return cs
 }
 
