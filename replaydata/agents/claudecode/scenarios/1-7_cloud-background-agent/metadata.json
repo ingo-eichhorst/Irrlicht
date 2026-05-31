@@ -1,5 +1,5 @@
 {
-  "artifacts": {},
+  "scenario_id": "cloud-background-agent",
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "incapable",
@@ -55,6 +55,5 @@
       "applicable": false,
       "notes": "agent_supports=no per coverage matrix — claudecode is local-only. Translator stops here; no recipe."
     }
-  },
-  "scenario_id": "cloud-background-agent"
+  }
 }

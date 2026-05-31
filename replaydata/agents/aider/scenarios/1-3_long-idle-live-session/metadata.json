@@ -1,14 +1,5 @@
 {
-  "recording_dir": "aider/scenarios/1-3_long-idle-live-session",
-  "artifacts": {
-    "events": "aider/scenarios/1-3_long-idle-live-session/recordings/2026-05-25-19-47-22_irrlichd-0.4.7+e934713/events.jsonl",
-    "transcript_md": "aider/scenarios/1-3_long-idle-live-session/recordings/2026-05-25-19-47-22_irrlichd-0.4.7+e934713/transcript.md",
-    "manifest": "aider/scenarios/1-3_long-idle-live-session/recordings/2026-05-25-19-47-22_irrlichd-0.4.7+e934713/manifest.json",
-    "recordings": [
-      "aider/scenarios/1-3_long-idle-live-session/recordings/2026-05-25-17-54-35_irrlichd-0.4.7+e934713",
-      "aider/scenarios/1-3_long-idle-live-session/recordings/2026-05-25-19-47-22_irrlichd-0.4.7+e934713"
-    ]
-  },
+  "scenario_id": "long-idle-live-session",
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
@@ -119,6 +110,5 @@
       "timeout_seconds": 180,
       "scope_note": "Proves aider's PID-liveness keeps a ready session alive PAST readyTTL: aider's PID is discoverable via the /aider command-line match, so the daemon's sweep skips deletion while kill(pid,0)==nil — exactly as for claudecode. Recording uses IRRLICHT_READY_SESSION_TTL=15s so the 'past TTL' assertion is testable in ~45 s. Aider's idle-flush window (~5 s) means the post-turn ready transition lags actual LLM completion; the recipe budgets a 25 s idle sleep (≥20 s, clearly past the 15 s TTL) and a 12 s trailing sleep (gpt-5-nano is fast + aider's ~5 s settle) so each per-turn working→ready settles cleanly and the dwell clearly exceeds the TTL. PROMPT DESIGN (resolved drift): both prompts are PURE-CONVERSATIONAL factual asks (capital of France / Japan) that explicitly forbid file creation/edits and SEARCH/REPLACE blocks — same forbid-edits shape as aider/turn-end-terminal-text. This avoids the earlier 4/7 drift where 'Reply with exactly the word: ok' was non-deterministically interpreted by gpt-5-nano as a file-edit request, producing a post-turn `Applied edit to notes/ok.txt` write that landed ~8 s into the idle dwell and flicked ready→working, failing idle_window. With no file edit, the transcript goes quiet during the dwell so the ≥15 s held-ready window holds."
     }
-  },
-  "scenario_id": "long-idle-live-session"
+  }
 }

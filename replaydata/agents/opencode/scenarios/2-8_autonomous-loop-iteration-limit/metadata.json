@@ -1,5 +1,5 @@
 {
-  "artifacts": {},
+  "scenario_id": "autonomous-loop-iteration-limit",
   "metadata": {
     "agent_supports": "unknown",
     "daemon_capability": "n/a",
@@ -60,6 +60,5 @@
       "applicable": false,
       "notes": "scope_note: opencode has no autonomous self-prompting loop, so no iteration-limit stop to observe; presupposes the autonomous-loop primitive opencode lacks. Stock opencode is turn-based (a turn ends at session.idle awaiting the next user message), with no /goal, /loop, --auto, or max-iterations cap; self-prompting is plugin-only (oh-my-opencode Ralph Loop / Ultrawork) and the upstream built-in /loop request (anomalyco/opencode#23578) is still open. With no native loop there is no iteration cap to hit. agent_supports=unknown (see assessment.json)."
     }
-  },
-  "scenario_id": "autonomous-loop-iteration-limit"
+  }
 }

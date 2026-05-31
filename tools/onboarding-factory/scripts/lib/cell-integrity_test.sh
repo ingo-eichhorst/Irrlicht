@@ -33,7 +33,7 @@ S="$IR_AGENTS_DIR/fake/scenarios"
 REC="2026-01-01-00-00-00_irrlichd-t"   # the single recording folder per cell
 touchf() { mkdir -p "$(dirname "$1")"; printf '%s\n' "${2:-{}}" > "$1"; }
 cell_meta() { # cell_meta <folder> <scenario_id>
-  touchf "$S/$1/metadata.json" "{\"scenario_id\":\"$2\",\"recording_dir\":\"fake/scenarios/$1\",\"details\":{\"assessment\":{\"agent_supports\":\"yes\"},\"recipe\":{\"script\":[{\"type\":\"send\"}]}}}"
+  touchf "$S/$1/metadata.json" "{\"scenario_id\":\"$2\",\"details\":{\"assessment\":{\"agent_supports\":\"yes\"},\"recipe\":{\"script\":[{\"type\":\"send\"}]}}}"
 }
 # Every recording artifact lives under recordings/<REC>/; expected.jsonl +
 # metadata.json stay at the cell root.

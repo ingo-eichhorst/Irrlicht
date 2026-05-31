@@ -1,5 +1,5 @@
 {
-  "artifacts": {},
+  "scenario_id": "auto-classified-permission",
   "metadata": {
     "agent_supports": "partial",
     "daemon_capability": "incapable",
@@ -54,6 +54,5 @@
       "applicable": false,
       "notes": "applicable: n/a (assessment 2026-05-23: agent_supports=partial, irrlicht_observes=no). This scenario's defining signal is a per-call safe-vs-risky classifier that selectively prompts (working→waiting) for risky calls only — primitive permission_hooks, which codex has set false. Codex has a coarse sandbox/approval_policy that auto-runs benign commands and escalates others, but the codex parser exposes no safe-vs-risky classification: its only waiting paths are <proposed_plan>→ExitPlanMode (plan-mode-approval) and a generic open function_call at task_complete (open-tool-call/gate). The daemon therefore cannot observe the selective-gating signal that distinguishes this cell from auto-executed-tool-call. The only codex-observable half (a benign command auto-running with no waiting, ready→working→ready) is already fully captured by the committed codex × auto-executed-tool-call cell; recording it here would be a redundant near-duplicate that proves the wrong thing. No recipe, no recording. See replaydata/agents/codex/scenarios/auto-classified-permission/assessment.json."
     }
-  },
-  "scenario_id": "auto-classified-permission"
+  }
 }

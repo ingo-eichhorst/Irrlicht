@@ -1,5 +1,5 @@
 {
-  "artifacts": {},
+  "scenario_id": "context-compaction",
   "metadata": {
     "agent_supports": "no",
     "daemon_capability": "n/a",
@@ -60,6 +60,5 @@
         }
       ]
     }
-  },
-  "scenario_id": "context-compaction"
+  }
 }

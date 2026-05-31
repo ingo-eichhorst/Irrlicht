@@ -1,14 +1,5 @@
 {
-  "recording_dir": "pi/scenarios/2-6_long-agentic-session-stress",
-  "artifacts": {
-    "events": "pi/scenarios/2-6_long-agentic-session-stress/recordings/2026-05-25-03-14-06_irrlichd-0.4.7+f45437e/events.jsonl",
-    "transcript": "pi/scenarios/2-6_long-agentic-session-stress/recordings/2026-05-25-03-14-06_irrlichd-0.4.7+f45437e/transcript.jsonl",
-    "manifest": "pi/scenarios/2-6_long-agentic-session-stress/recordings/2026-05-25-03-14-06_irrlichd-0.4.7+f45437e/manifest.json",
-    "golden": "pi/scenarios/2-6_long-agentic-session-stress/recordings/2026-05-25-03-14-06_irrlichd-0.4.7+f45437e/transcript.jsonl.replay.json.golden",
-    "recordings": [
-      "pi/scenarios/2-6_long-agentic-session-stress/recordings/2026-05-25-03-14-06_irrlichd-0.4.7+f45437e"
-    ]
-  },
+  "scenario_id": "long-agentic-session-stress",
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
@@ -133,6 +124,5 @@
       "settings": {},
       "timeout_seconds": 360
     }
-  },
-  "scenario_id": "long-agentic-session-stress"
+  }
 }

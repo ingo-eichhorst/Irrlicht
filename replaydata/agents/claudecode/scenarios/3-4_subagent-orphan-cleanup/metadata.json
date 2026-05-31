@@ -1,14 +1,5 @@
 {
-  "recording_dir": "claudecode/scenarios/3-4_subagent-orphan-cleanup",
-  "artifacts": {
-    "events": "claudecode/scenarios/3-4_subagent-orphan-cleanup/recordings/2026-05-18-00-29-55_irrlichd-0.4.5+7e88e6f/events.jsonl",
-    "transcript": "claudecode/scenarios/3-4_subagent-orphan-cleanup/recordings/2026-05-18-00-29-55_irrlichd-0.4.5+7e88e6f/transcript.jsonl",
-    "manifest": "claudecode/scenarios/3-4_subagent-orphan-cleanup/recordings/2026-05-18-00-29-55_irrlichd-0.4.5+7e88e6f/manifest.json",
-    "golden": "claudecode/scenarios/3-4_subagent-orphan-cleanup/recordings/2026-05-18-00-29-55_irrlichd-0.4.5+7e88e6f/transcript.jsonl.replay.json.golden",
-    "recordings": [
-      "claudecode/scenarios/3-4_subagent-orphan-cleanup/recordings/2026-05-18-00-29-55_irrlichd-0.4.5+7e88e6f"
-    ]
-  },
+  "scenario_id": "subagent-orphan-cleanup",
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
@@ -94,6 +85,5 @@
       "settings": {},
       "timeout_seconds": 180
     }
-  },
-  "scenario_id": "subagent-orphan-cleanup"
+  }
 }

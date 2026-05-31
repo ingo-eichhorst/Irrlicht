@@ -1,14 +1,5 @@
 {
-  "recording_dir": "pi/scenarios/2-20_user-esc-interrupt",
-  "artifacts": {
-    "events": "pi/scenarios/2-20_user-esc-interrupt/recordings/2026-05-25-02-57-00_irrlichd-0.4.7+2127898/events.jsonl",
-    "transcript": "pi/scenarios/2-20_user-esc-interrupt/recordings/2026-05-25-02-57-00_irrlichd-0.4.7+2127898/transcript.jsonl",
-    "manifest": "pi/scenarios/2-20_user-esc-interrupt/recordings/2026-05-25-02-57-00_irrlichd-0.4.7+2127898/manifest.json",
-    "golden": "pi/scenarios/2-20_user-esc-interrupt/recordings/2026-05-25-02-57-00_irrlichd-0.4.7+2127898/transcript.jsonl.replay.json.golden",
-    "recordings": [
-      "pi/scenarios/2-20_user-esc-interrupt/recordings/2026-05-25-02-57-00_irrlichd-0.4.7+2127898"
-    ]
-  },
+  "scenario_id": "user-esc-interrupt",
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
@@ -106,6 +97,5 @@
       "settings": {},
       "timeout_seconds": 360
     }
-  },
-  "scenario_id": "user-esc-interrupt"
+  }
 }

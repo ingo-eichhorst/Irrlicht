@@ -1,14 +1,5 @@
 {
-  "recording_dir": "pi/scenarios/1-3_long-idle-live-session",
-  "artifacts": {
-    "events": "pi/scenarios/1-3_long-idle-live-session/recordings/2026-05-23-11-12-58_irrlichd-0.4.7+d30518a.dirty/events.jsonl",
-    "transcript": "pi/scenarios/1-3_long-idle-live-session/recordings/2026-05-23-11-12-58_irrlichd-0.4.7+d30518a.dirty/transcript.jsonl",
-    "manifest": "pi/scenarios/1-3_long-idle-live-session/recordings/2026-05-23-11-12-58_irrlichd-0.4.7+d30518a.dirty/manifest.json",
-    "golden": "pi/scenarios/1-3_long-idle-live-session/recordings/2026-05-23-11-12-58_irrlichd-0.4.7+d30518a.dirty/transcript.jsonl.replay.json.golden",
-    "recordings": [
-      "pi/scenarios/1-3_long-idle-live-session/recordings/2026-05-23-11-12-58_irrlichd-0.4.7+d30518a.dirty"
-    ]
-  },
+  "scenario_id": "long-idle-live-session",
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
@@ -86,6 +77,5 @@
       "timeout_seconds": 180,
       "scope_note": "See codex scope_note for the production readyTTL caveat."
     }
-  },
-  "scenario_id": "long-idle-live-session"
+  }
 }

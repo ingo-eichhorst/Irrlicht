@@ -1,17 +1,5 @@
 {
-  "recording_dir": "codex/scenarios/2-20_interrupted-turn",
-  "artifacts": {
-    "events": "codex/scenarios/2-20_interrupted-turn/recordings/2026-05-16-22-56-57_irrlichd-0.3.13+4662be4/events.jsonl",
-    "transcript": "codex/scenarios/2-20_interrupted-turn/recordings/2026-05-16-22-56-57_irrlichd-0.3.13+4662be4/transcript.jsonl",
-    "manifest": "codex/scenarios/2-20_interrupted-turn/recordings/2026-05-16-22-56-57_irrlichd-0.3.13+4662be4/manifest.json",
-    "golden": "codex/scenarios/2-20_interrupted-turn/recordings/2026-05-16-22-56-57_irrlichd-0.3.13+4662be4/transcript.jsonl.replay.json.golden",
-    "recordings": [
-      "codex/scenarios/2-20_interrupted-turn/recordings/2026-05-14-23-36-59_irrlichd-dev",
-      "codex/scenarios/2-20_interrupted-turn/recordings/2026-05-16-18-49-32_irrlichd-dev",
-      "codex/scenarios/2-20_interrupted-turn/recordings/2026-05-16-22-53-47_irrlichd-0.3.13+4662be4",
-      "codex/scenarios/2-20_interrupted-turn/recordings/2026-05-16-22-56-57_irrlichd-0.3.13+4662be4"
-    ]
-  },
+  "scenario_id": "user-esc-interrupt",
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "incapable",
@@ -92,6 +80,5 @@
       "settings": {},
       "timeout_seconds": 360
     }
-  },
-  "scenario_id": "user-esc-interrupt"
+  }
 }

@@ -1,14 +1,5 @@
 {
-  "recording_dir": "pi/scenarios/5-2_model-identification",
-  "artifacts": {
-    "events": "pi/scenarios/5-2_model-identification/recordings/2026-05-25-02-20-47_irrlichd-0.4.7+d379043/events.jsonl",
-    "transcript": "pi/scenarios/5-2_model-identification/recordings/2026-05-25-02-20-47_irrlichd-0.4.7+d379043/transcript.jsonl",
-    "manifest": "pi/scenarios/5-2_model-identification/recordings/2026-05-25-02-20-47_irrlichd-0.4.7+d379043/manifest.json",
-    "golden": "pi/scenarios/5-2_model-identification/recordings/2026-05-25-02-20-47_irrlichd-0.4.7+d379043/transcript.jsonl.replay.json.golden",
-    "recordings": [
-      "pi/scenarios/5-2_model-identification/recordings/2026-05-25-02-20-47_irrlichd-0.4.7+d379043"
-    ]
-  },
+  "scenario_id": "model-identification",
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
@@ -100,6 +91,5 @@
       "settings": {},
       "timeout_seconds": 180
     }
-  },
-  "scenario_id": "model-identification"
+  }
 }

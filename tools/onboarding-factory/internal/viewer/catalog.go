@@ -207,7 +207,12 @@ func annotateMeasurements(top map[string]any, repoRoot string) {
 			if !ok {
 				continue
 			}
-			folder := resolveCellFolder(repoRoot, recipes, agentSlug, sid)
+			folder, ok := resolveScenarioFolderForAgent(recipes, agentSlug, sid)
+			if !ok {
+				// No cell on disk for this (agent, scenario) — genuinely absent.
+				cell["measurement"] = map[string]any{"status": "no_recording"}
+				continue
+			}
 			cell["measurement"] = measureScenario(repoRoot, agentSlug, folder)
 		}
 	}
@@ -273,7 +278,12 @@ func annotatePipelineState(top map[string]any, repoRoot string) {
 			if !ok {
 				continue
 			}
-			folder := resolveCellFolder(repoRoot, recipes, agentSlug, sid)
+			folder, ok := resolveScenarioFolderForAgent(recipes, agentSlug, sid)
+			if !ok {
+				// No cell on disk for this (agent, scenario) — genuinely absent.
+				cell["pipeline"] = pipelineForCell(repoRoot, agentSlug, sid, "", recipes)
+				continue
+			}
 			cell["pipeline"] = pipelineForCell(repoRoot, agentSlug, sid, folder, recipes)
 		}
 	}

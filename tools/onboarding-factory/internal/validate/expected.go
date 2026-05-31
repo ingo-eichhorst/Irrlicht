@@ -185,6 +185,40 @@ func NewestRecordingDir(scenarioDir string) (string, bool) {
 	return filepath.Join(scenarioDir, "recordings", newest), true
 }
 
+// RecordingComplete reports problems with a single recording directory as a
+// list of human-readable findings (nil when the recording is complete). The
+// on-disk recordings/<name>/ tree is the single source of truth for a cell, so
+// a complete recording must carry the daemon events, a manifest, exactly one
+// transcript, and — for a jsonl transcript — the replay byte-identity golden.
+// An incomplete recording is a hard validation error, never silently tolerated.
+func RecordingComplete(recDir string) []string {
+	exists := func(name string) bool {
+		_, err := os.Stat(filepath.Join(recDir, name))
+		return err == nil
+	}
+	var findings []string
+	if !exists("events.jsonl") {
+		findings = append(findings, "missing events.jsonl")
+	}
+	if !exists("manifest.json") {
+		findings = append(findings, "missing manifest.json")
+	}
+	hasJSONL := exists("transcript.jsonl")
+	hasMD := exists("transcript.md")
+	switch {
+	case hasJSONL && hasMD:
+		findings = append(findings, "ambiguous transcript: both transcript.jsonl and transcript.md present")
+	case !hasJSONL && !hasMD:
+		findings = append(findings, "missing transcript (need transcript.jsonl or transcript.md)")
+	}
+	// The replay byte-identity golden is required for jsonl transcripts (the
+	// replay test pins them); markdown-transcript adapters (aider) have none.
+	if hasJSONL && !exists("transcript.jsonl.replay.json.golden") {
+		findings = append(findings, "missing transcript.jsonl.replay.json.golden (required for a jsonl transcript)")
+	}
+	return findings
+}
+
 // ValidateExpected validates the cell's NEWEST recording against the
 // spec-grounded expectations in scenarioDir/expected.jsonl. Returns nil + nil
 // when there is nothing to validate: either expected.jsonl is missing (no

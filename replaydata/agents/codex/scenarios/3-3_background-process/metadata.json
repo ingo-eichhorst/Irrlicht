@@ -1,6 +1,5 @@
 {
   "scenario_id": "background-process",
-  "artifacts": {},
   "metadata": {
     "agent_supports": "no",
     "daemon_capability": "n/a",

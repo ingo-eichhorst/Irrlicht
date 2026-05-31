@@ -1,15 +1,5 @@
 {
-  "recording_dir": "pi/scenarios/1-2_session-end",
-  "artifacts": {
-    "events": "pi/scenarios/1-2_session-end/recordings/2026-05-25-05-48-26_irrlichd-0.4.7+597f655/events.jsonl",
-    "transcript": "pi/scenarios/1-2_session-end/recordings/2026-05-25-05-48-26_irrlichd-0.4.7+597f655/transcript.jsonl",
-    "manifest": "pi/scenarios/1-2_session-end/recordings/2026-05-25-05-48-26_irrlichd-0.4.7+597f655/manifest.json",
-    "golden": "pi/scenarios/1-2_session-end/recordings/2026-05-25-05-48-26_irrlichd-0.4.7+597f655/transcript.jsonl.replay.json.golden",
-    "recordings": [
-      "pi/scenarios/1-2_session-end/recordings/2026-05-25-01-48-39_irrlichd-0.4.7+597f655",
-      "pi/scenarios/1-2_session-end/recordings/2026-05-25-05-48-26_irrlichd-0.4.7+597f655"
-    ]
-  },
+  "scenario_id": "session-end",
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
@@ -92,6 +82,5 @@
       "timeout_seconds": 180,
       "scope_note": "Pi session-end is recorded in SCRIPT mode (interactive tmux REPL): one normal turn, then the driver kills the tmux session so pi exits naturally — that natural process exit after the final ready IS the modeled clean-exit teardown. Re-recorded from PROMPT mode because headless `pi --print` exits before the post-turn settle and a transient proc-<PID> pre-session row stole session_birth, breaking the same_session_as chain (the C7 anchor-to-start workaround that fixed multi-turn-conversation). SIGKILL-idle / SIGKILL-mid-turn variants stay out of scope — the pi interactive driver exposes send/slash/wait_turn/interrupt/sleep only (no sigkill/exit_clean), and natural teardown is the single correctly-modeled variant."
     }
-  },
-  "scenario_id": "session-end"
+  }
 }

@@ -1,16 +1,5 @@
 {
-  "recording_dir": "claudecode/scenarios/1-5_session-reset",
-  "artifacts": {
-    "events": "claudecode/scenarios/1-5_session-reset/recordings/2026-05-17-01-28-47_irrlichd-0.4.5+9d7e5ba/events.jsonl",
-    "transcript": "claudecode/scenarios/1-5_session-reset/recordings/2026-05-17-01-28-47_irrlichd-0.4.5+9d7e5ba/transcript.jsonl",
-    "manifest": "claudecode/scenarios/1-5_session-reset/recordings/2026-05-17-01-28-47_irrlichd-0.4.5+9d7e5ba/manifest.json",
-    "golden": "claudecode/scenarios/1-5_session-reset/recordings/2026-05-17-01-28-47_irrlichd-0.4.5+9d7e5ba/transcript.jsonl.replay.json.golden",
-    "recordings": [
-      "claudecode/scenarios/1-5_session-reset/recordings/2026-05-15-12-58-24_irrlichd-0.4.5+56c4667",
-      "claudecode/scenarios/1-5_session-reset/recordings/2026-05-17-01-19-23_irrlichd-0.4.5+9d7e5ba",
-      "claudecode/scenarios/1-5_session-reset/recordings/2026-05-17-01-28-47_irrlichd-0.4.5+9d7e5ba"
-    ]
-  },
+  "scenario_id": "session-reset",
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
@@ -107,6 +96,5 @@
       "settings": {},
       "timeout_seconds": 120
     }
-  },
-  "scenario_id": "session-reset"
+  }
 }

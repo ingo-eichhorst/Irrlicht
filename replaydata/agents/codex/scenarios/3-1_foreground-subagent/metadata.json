@@ -1,6 +1,5 @@
 {
   "scenario_id": "foreground-subagent",
-  "artifacts": {},
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "incapable",

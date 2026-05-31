@@ -1,15 +1,5 @@
 {
-  "recording_dir": "opencode/scenarios/4-1_multiple-sessions-same-cwd",
-  "artifacts": {
-    "events": "opencode/scenarios/4-1_multiple-sessions-same-cwd/recordings/2026-05-27-20-12-04_irrlichd-0.4.7+7dc5c70/events.jsonl",
-    "transcript": "opencode/scenarios/4-1_multiple-sessions-same-cwd/recordings/2026-05-27-20-12-04_irrlichd-0.4.7+7dc5c70/transcript.jsonl",
-    "manifest": "opencode/scenarios/4-1_multiple-sessions-same-cwd/recordings/2026-05-27-20-12-04_irrlichd-0.4.7+7dc5c70/manifest.json",
-    "golden": "opencode/scenarios/4-1_multiple-sessions-same-cwd/recordings/2026-05-27-20-12-04_irrlichd-0.4.7+7dc5c70/transcript.jsonl.replay.json.golden",
-    "recordings": [
-      "opencode/scenarios/4-1_multiple-sessions-same-cwd/recordings/2026-05-27-03-35-01_irrlichd-0.4.7+7dc5c70",
-      "opencode/scenarios/4-1_multiple-sessions-same-cwd/recordings/2026-05-27-20-12-04_irrlichd-0.4.7+7dc5c70"
-    ]
-  },
+  "scenario_id": "multiple-sessions-same-cwd",
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "bug",
@@ -139,6 +129,5 @@
       "settings": {},
       "timeout_seconds": 300
     }
-  },
-  "scenario_id": "multiple-sessions-same-cwd"
+  }
 }

@@ -1,5 +1,5 @@
 {
-  "artifacts": {},
+  "scenario_id": "subscription-detection",
   "metadata": {
     "agent_supports": "no",
     "daemon_capability": "n/a",
@@ -40,6 +40,5 @@
         }
       ]
     }
-  },
-  "scenario_id": "subscription-detection"
+  }
 }

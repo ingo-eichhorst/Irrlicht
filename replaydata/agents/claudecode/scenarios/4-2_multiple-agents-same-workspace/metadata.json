@@ -1,14 +1,5 @@
 {
-  "recording_dir": "claudecode/scenarios/4-2_multiple-agents-same-workspace",
-  "artifacts": {
-    "events": "claudecode/scenarios/4-2_multiple-agents-same-workspace/recordings/2026-05-24-22-02-34_irrlichd-0.4.7+7bdc06c.dirty/events.jsonl",
-    "transcript": "claudecode/scenarios/4-2_multiple-agents-same-workspace/recordings/2026-05-24-22-02-34_irrlichd-0.4.7+7bdc06c.dirty/transcript.jsonl",
-    "manifest": "claudecode/scenarios/4-2_multiple-agents-same-workspace/recordings/2026-05-24-22-02-34_irrlichd-0.4.7+7bdc06c.dirty/manifest.json",
-    "golden": "claudecode/scenarios/4-2_multiple-agents-same-workspace/recordings/2026-05-24-22-02-34_irrlichd-0.4.7+7bdc06c.dirty/transcript.jsonl.replay.json.golden",
-    "recordings": [
-      "claudecode/scenarios/4-2_multiple-agents-same-workspace/recordings/2026-05-24-22-02-34_irrlichd-0.4.7+7bdc06c.dirty"
-    ]
-  },
+  "scenario_id": "multiple-agents-same-workspace",
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
@@ -86,6 +77,5 @@
       "settings": {},
       "timeout_seconds": 240
     }
-  },
-  "scenario_id": "multiple-agents-same-workspace"
+  }
 }

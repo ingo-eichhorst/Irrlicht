@@ -1,14 +1,5 @@
 {
-  "recording_dir": "opencode/scenarios/5-2_model-identification",
-  "artifacts": {
-    "events": "opencode/scenarios/5-2_model-identification/recordings/2026-05-25-23-33-10_irrlichd-0.4.7+92e5631/events.jsonl",
-    "transcript": "opencode/scenarios/5-2_model-identification/recordings/2026-05-25-23-33-10_irrlichd-0.4.7+92e5631/transcript.jsonl",
-    "manifest": "opencode/scenarios/5-2_model-identification/recordings/2026-05-25-23-33-10_irrlichd-0.4.7+92e5631/manifest.json",
-    "golden": "opencode/scenarios/5-2_model-identification/recordings/2026-05-25-23-33-10_irrlichd-0.4.7+92e5631/transcript.jsonl.replay.json.golden",
-    "recordings": [
-      "opencode/scenarios/5-2_model-identification/recordings/2026-05-25-23-33-10_irrlichd-0.4.7+92e5631"
-    ]
-  },
+  "scenario_id": "model-identification",
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
@@ -96,6 +87,5 @@
       "settings": {},
       "timeout_seconds": 180
     }
-  },
-  "scenario_id": "model-identification"
+  }
 }

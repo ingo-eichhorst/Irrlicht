@@ -1,5 +1,5 @@
 {
-  "artifacts": {},
+  "scenario_id": "task-list",
   "metadata": {
     "agent_supports": "no",
     "daemon_capability": "n/a",
@@ -67,6 +67,5 @@
         }
       ]
     }
-  },
-  "scenario_id": "task-list"
+  }
 }

@@ -1,5 +1,5 @@
 {
-  "artifacts": {},
+  "scenario_id": "streaming-partial-writes",
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "incapable",
@@ -58,6 +58,5 @@
       "applicable": false,
       "notes": "DEGRADED to applicable:false after a live recording proved the streaming-stability property is not observable for pi at the transcript layer. SCOPE_NOTE: pi writes its rollout JSONL session file ONCE, on turn completion — the assistant turn lands as a SINGLE consolidated `message`/assistant line carrying `stopReason=stop` and the whole multi-line reply in one content block (confirmed: a '6-line poem, one line at a time' prompt produced exactly 1 user line + 1 assistant(stop=stop) line). There are ZERO intermediate partial-assistant flushes in the transcript the daemon tails; pi's incremental streaming is purely a terminal-UI rendering concern that never reaches the JSONL. The spec's streaming window — sustaining `working` across multiple non-terminal partial flushes with no premature `→ ready` — therefore has nothing to assert over: the completed turn lands all-at-once, so the daemon emits ready→working→ready essentially instantaneously (working→ready at +0 ms because stopReason=stop is already present on the first activity). The live recording also exhibited a SECOND spurious working→ready arc ~2 s later from the daemon re-touching the already-completed file — a file-touch artifact, NOT streamed-content flicker, and unrelated to the property this cell targets. Validator result on the captured recording: 1/5 phases (turn_start 'no state_transition to ready' invariant violated at +0 ms). This is an adapter-transport limitation, not a flaky recipe: no live-CLI prompt can make pi emit intermediate partial-assistant JSONL flushes. The torn/partial-line concern lives in the separate oversized-transcript-line cell. expected.jsonl is retained as the documented target should pi ever switch to incremental rollout writes. Reassessment was yes/yes (0.72) on the PARSER logic (parser.go:78-83 sustains working on every non-stop assistant message; parser.go:55-60 maps compaction to assistant so even a mid-stream compaction can't flicker) — the parser would hold working correctly IF partial flushes existed, but pi's transport never produces them, so the cell is unrecordable as specified."
     }
-  },
-  "scenario_id": "streaming-partial-writes"
+  }
 }

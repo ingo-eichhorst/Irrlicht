@@ -1,6 +1,5 @@
 {
   "scenario_id": "background-subagent",
-  "artifacts": {},
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "incapable",

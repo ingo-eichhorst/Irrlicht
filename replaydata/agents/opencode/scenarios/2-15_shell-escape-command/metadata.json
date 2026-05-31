@@ -1,5 +1,5 @@
 {
-  "artifacts": {},
+  "scenario_id": "shell-escape-command",
   "metadata": {
     "agent_supports": "unknown",
     "daemon_capability": "n/a",
@@ -55,6 +55,5 @@
       "applicable": false,
       "notes": "scope_note: opencode has no user-level shell-escape (`!cmd`) that runs outside a model turn; shell is the model-invoked bash tool, already covered by auto-executed-tool-call. agent_supports:unknown (per assessment.json) → applicable_false (#476): no recipe script, no recording. The headless `opencode run` driver also has no escape/`!` step, but that gap is downstream of the missing agent primitive (not a driver_gap)."
     }
-  },
-  "scenario_id": "shell-escape-command"
+  }
 }

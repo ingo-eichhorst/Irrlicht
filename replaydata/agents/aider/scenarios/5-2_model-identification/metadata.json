@@ -1,13 +1,5 @@
 {
-  "recording_dir": "aider/scenarios/5-2_model-identification",
-  "artifacts": {
-    "events": "aider/scenarios/5-2_model-identification/recordings/2026-05-25-18-11-25_irrlichd-0.4.7+6fcf3d4/events.jsonl",
-    "transcript_md": "aider/scenarios/5-2_model-identification/recordings/2026-05-25-18-11-25_irrlichd-0.4.7+6fcf3d4/transcript.md",
-    "manifest": "aider/scenarios/5-2_model-identification/recordings/2026-05-25-18-11-25_irrlichd-0.4.7+6fcf3d4/manifest.json",
-    "recordings": [
-      "aider/scenarios/5-2_model-identification/recordings/2026-05-25-18-11-25_irrlichd-0.4.7+6fcf3d4"
-    ]
-  },
+  "scenario_id": "model-identification",
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
@@ -115,6 +107,5 @@
       "settings": {},
       "timeout_seconds": 180
     }
-  },
-  "scenario_id": "model-identification"
+  }
 }

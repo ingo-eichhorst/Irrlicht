@@ -1,5 +1,5 @@
 {
-  "artifacts": {},
+  "scenario_id": "autonomous-loop-iteration-limit",
   "metadata": {
     "agent_supports": "no",
     "daemon_capability": "n/a",
@@ -55,6 +55,5 @@
         }
       ]
     }
-  },
-  "scenario_id": "autonomous-loop-iteration-limit"
+  }
 }

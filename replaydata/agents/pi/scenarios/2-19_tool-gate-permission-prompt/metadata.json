@@ -1,5 +1,5 @@
 {
-  "artifacts": {},
+  "scenario_id": "tool-gate-permission-prompt",
   "metadata": {
     "agent_supports": "no",
     "daemon_capability": "n/a",
@@ -45,6 +45,5 @@
         }
       ]
     }
-  },
-  "scenario_id": "tool-gate-permission-prompt"
+  }
 }

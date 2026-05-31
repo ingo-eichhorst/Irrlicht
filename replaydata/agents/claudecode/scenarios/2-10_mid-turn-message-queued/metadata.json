@@ -1,14 +1,5 @@
 {
-  "recording_dir": "claudecode/scenarios/2-10_mid-turn-message-queued",
-  "artifacts": {
-    "events": "claudecode/scenarios/2-10_mid-turn-message-queued/recordings/2026-05-18-00-19-34_irrlichd-0.4.5+605ef47/events.jsonl",
-    "transcript": "claudecode/scenarios/2-10_mid-turn-message-queued/recordings/2026-05-18-00-19-34_irrlichd-0.4.5+605ef47/transcript.jsonl",
-    "manifest": "claudecode/scenarios/2-10_mid-turn-message-queued/recordings/2026-05-18-00-19-34_irrlichd-0.4.5+605ef47/manifest.json",
-    "golden": "claudecode/scenarios/2-10_mid-turn-message-queued/recordings/2026-05-18-00-19-34_irrlichd-0.4.5+605ef47/transcript.jsonl.replay.json.golden",
-    "recordings": [
-      "claudecode/scenarios/2-10_mid-turn-message-queued/recordings/2026-05-18-00-19-34_irrlichd-0.4.5+605ef47"
-    ]
-  },
+  "scenario_id": "mid-turn-message-queued",
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
@@ -103,6 +94,5 @@
       "settings": {},
       "timeout_seconds": 240
     }
-  },
-  "scenario_id": "mid-turn-message-queued"
+  }
 }

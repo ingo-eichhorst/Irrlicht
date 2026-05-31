@@ -1,5 +1,5 @@
 {
-  "artifacts": {},
+  "scenario_id": "cloud-background-agent",
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "incapable",
@@ -55,6 +55,5 @@
         }
       ]
     }
-  },
-  "scenario_id": "cloud-background-agent"
+  }
 }

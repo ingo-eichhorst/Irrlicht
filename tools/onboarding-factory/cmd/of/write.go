@@ -53,12 +53,18 @@ func writeBytesAtomic(path string, b []byte) error {
 }
 
 // writeJSONFileAtomic marshals v (2-space indent) and replaces path atomically.
+// HTML escaping is disabled so `<`, `>`, `&` stay literal — these are data files
+// (assessment markdown bodies are full of them), never served as HTML, and
+// literal is both readable and the format the committed corpus already uses.
 func writeJSONFileAtomic(path string, v any) error {
-	b, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(v); err != nil { // Encode appends a trailing newline
 		return err
 	}
-	return writeBytesAtomic(path, append(b, '\n'))
+	return writeBytesAtomic(path, buf.Bytes())
 }
 
 // resolveCellFolder returns the on-disk folder for one (agent, scenario) cell:

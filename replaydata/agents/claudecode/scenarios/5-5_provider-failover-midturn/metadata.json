@@ -1,5 +1,5 @@
 {
-  "artifacts": {},
+  "scenario_id": "provider-failover-midturn",
   "metadata": {
     "agent_supports": "partial",
     "daemon_capability": "incapable",
@@ -42,6 +42,5 @@
         }
       ]
     }
-  },
-  "scenario_id": "provider-failover-midturn"
+  }
 }

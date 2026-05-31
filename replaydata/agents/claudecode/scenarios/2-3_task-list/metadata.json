@@ -1,14 +1,5 @@
 {
-  "recording_dir": "claudecode/scenarios/2-3_task-list",
-  "artifacts": {
-    "events": "claudecode/scenarios/2-3_task-list/recordings/2026-05-24-17-09-17_irrlichd-0.4.7+df8122a/events.jsonl",
-    "transcript": "claudecode/scenarios/2-3_task-list/recordings/2026-05-24-17-09-17_irrlichd-0.4.7+df8122a/transcript.jsonl",
-    "manifest": "claudecode/scenarios/2-3_task-list/recordings/2026-05-24-17-09-17_irrlichd-0.4.7+df8122a/manifest.json",
-    "golden": "claudecode/scenarios/2-3_task-list/recordings/2026-05-24-17-09-17_irrlichd-0.4.7+df8122a/transcript.jsonl.replay.json.golden",
-    "recordings": [
-      "claudecode/scenarios/2-3_task-list/recordings/2026-05-24-17-09-17_irrlichd-0.4.7+df8122a"
-    ]
-  },
+  "scenario_id": "task-list",
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
@@ -60,6 +51,5 @@
       "settings": {},
       "timeout_seconds": 180
     }
-  },
-  "scenario_id": "task-list"
+  }
 }

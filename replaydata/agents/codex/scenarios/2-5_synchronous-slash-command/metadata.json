@@ -1,14 +1,5 @@
 {
-  "recording_dir": "codex/scenarios/2-5_synchronous-slash-command",
-  "artifacts": {
-    "events": "codex/scenarios/2-5_synchronous-slash-command/recordings/2026-05-23-21-53-28_irrlichd-0.4.7+6934b22/events.jsonl",
-    "transcript": "codex/scenarios/2-5_synchronous-slash-command/recordings/2026-05-23-21-53-28_irrlichd-0.4.7+6934b22/transcript.jsonl",
-    "manifest": "codex/scenarios/2-5_synchronous-slash-command/recordings/2026-05-23-21-53-28_irrlichd-0.4.7+6934b22/manifest.json",
-    "golden": "codex/scenarios/2-5_synchronous-slash-command/recordings/2026-05-23-21-53-28_irrlichd-0.4.7+6934b22/transcript.jsonl.replay.json.golden",
-    "recordings": [
-      "codex/scenarios/2-5_synchronous-slash-command/recordings/2026-05-23-21-53-28_irrlichd-0.4.7+6934b22"
-    ]
-  },
+  "scenario_id": "synchronous-slash-command",
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
@@ -96,6 +87,5 @@
       "timeout_seconds": 120,
       "notes": "Codex difference vs claudecode: a synchronous slash command writes NOTHING to the rollout (verified live against codex-cli 0.130.0 — /status appended 0 lines, task_complete count unchanged), so there's no <local-command> wrapper for the parser to filter; the daemon simply sees no activity. The warm-up turn FIRST is mandatory: codex creates rollout-*.jsonl only after the first user message, so without it resolve_transcript hangs. Only /status is exercised (single slash) because it's the cleanest verified no-LLM render; /help and /mcp are equally synchronous but /status was the one probed. Between runs: warm-up assistant wording, token counts, session UUID, PID and timestamps differ; the state_transition set (ready, ready→working, working→ready) and its order are the structural baseline. If it broke, look at core/adapters/inbound/agents/codex/parser.go (task_complete→turn_done) and whether a codex update started logging slash invocations into the rollout."
     }
-  },
-  "scenario_id": "synchronous-slash-command"
+  }
 }

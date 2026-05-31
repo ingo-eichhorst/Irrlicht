@@ -1,13 +1,5 @@
 {
-  "recording_dir": "aider/scenarios/1-1_session-start",
-  "artifacts": {
-    "events": "aider/scenarios/1-1_session-start/recordings/2026-05-23-00-59-14_irrlichd-0.4.7+070925e.dirty/events.jsonl",
-    "transcript_md": "aider/scenarios/1-1_session-start/recordings/2026-05-23-00-59-14_irrlichd-0.4.7+070925e.dirty/transcript.md",
-    "manifest": "aider/scenarios/1-1_session-start/recordings/2026-05-23-00-59-14_irrlichd-0.4.7+070925e.dirty/manifest.json",
-    "recordings": [
-      "aider/scenarios/1-1_session-start/recordings/2026-05-23-00-59-14_irrlichd-0.4.7+070925e.dirty"
-    ]
-  },
+  "scenario_id": "session-start",
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
@@ -60,6 +52,5 @@
       "settings": {},
       "timeout_seconds": 120
     }
-  },
-  "scenario_id": "session-start"
+  }
 }

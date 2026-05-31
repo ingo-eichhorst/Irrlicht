@@ -1,13 +1,5 @@
 {
-  "recording_dir": "aider/scenarios/2-8_autonomous-loop-iteration-limit",
-  "artifacts": {
-    "events": "aider/scenarios/2-8_autonomous-loop-iteration-limit/recordings/2026-05-25-19-15-12_irrlichd-0.4.7+1f29b8f/events.jsonl",
-    "transcript_md": "aider/scenarios/2-8_autonomous-loop-iteration-limit/recordings/2026-05-25-19-15-12_irrlichd-0.4.7+1f29b8f/transcript.md",
-    "manifest": "aider/scenarios/2-8_autonomous-loop-iteration-limit/recordings/2026-05-25-19-15-12_irrlichd-0.4.7+1f29b8f/manifest.json",
-    "recordings": [
-      "aider/scenarios/2-8_autonomous-loop-iteration-limit/recordings/2026-05-25-19-15-12_irrlichd-0.4.7+1f29b8f"
-    ]
-  },
+  "scenario_id": "autonomous-loop-iteration-limit",
   "metadata": {
     "agent_supports": "partial",
     "daemon_capability": "full",
@@ -130,6 +122,5 @@
       },
       "timeout_seconds": 300
     }
-  },
-  "scenario_id": "autonomous-loop-iteration-limit"
+  }
 }

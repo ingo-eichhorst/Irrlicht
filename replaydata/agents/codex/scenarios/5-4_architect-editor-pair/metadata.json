@@ -1,13 +1,5 @@
 {
   "scenario_id": "architect-editor-pair",
-  "artifacts": {
-    "events": "codex/scenarios/5-4_architect-editor-pair/recordings/2026-05-31-01-10-46_irrlichd-0.4.8+38e12b4.dirty/events.jsonl",
-    "transcript": "codex/scenarios/5-4_architect-editor-pair/recordings/2026-05-31-01-10-46_irrlichd-0.4.8+38e12b4.dirty/transcript.jsonl",
-    "manifest": "codex/scenarios/5-4_architect-editor-pair/recordings/2026-05-31-01-10-46_irrlichd-0.4.8+38e12b4.dirty/manifest.json",
-    "recordings": [
-      "codex/scenarios/5-4_architect-editor-pair/recordings/2026-05-31-01-10-46_irrlichd-0.4.8+38e12b4.dirty"
-    ]
-  },
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",

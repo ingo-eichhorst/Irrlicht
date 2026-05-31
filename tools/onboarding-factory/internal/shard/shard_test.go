@@ -35,13 +35,7 @@ func TestShardRoundTrip(t *testing.T) {
 
 func TestAgentCellRoundTrip(t *testing.T) {
 	want := ShardAgent{
-		RecordingDir: "aider/scenarios/basic-turn",
-		Artifacts: ShardArtifacts{
-			Events:       "aider/scenarios/basic-turn/events.jsonl",
-			TranscriptMD: "aider/scenarios/basic-turn/transcript.md",
-			Manifest:     "aider/scenarios/basic-turn/manifest.json",
-			Recordings:   []string{"aider/scenarios/basic-turn/recordings/2026-05-25"},
-		},
+		ScenarioID: "basic-turn",
 		Metadata: ShardMetadata{
 			AgentSupports:   "yes",
 			Confidence:      0.85,
@@ -221,9 +215,9 @@ func TestLoadAgentCell(t *testing.T) {
 	}
 
 	cell := ShardAgent{
-		RecordingDir: "aider/scenarios/basic-turn",
-		Metadata:     ShardMetadata{AgentSupports: "yes"},
-		Details:      ShardDetails{Assessment: json.RawMessage(`{"agent_supports":"yes"}`)},
+		ScenarioID: "basic-turn",
+		Metadata:   ShardMetadata{AgentSupports: "yes"},
+		Details:    ShardDetails{Assessment: json.RawMessage(`{"agent_supports":"yes"}`)},
 	}
 	b, _ := json.MarshalIndent(cell, "", "  ")
 	if err := os.WriteFile(filepath.Join(cellDir, "metadata.json"), b, 0o644); err != nil {
@@ -236,6 +230,10 @@ func TestLoadAgentCell(t *testing.T) {
 	}
 	if got.Metadata.AgentSupports != "yes" {
 		t.Fatalf("AgentSupports = %q; want yes", got.Metadata.AgentSupports)
+	}
+	// The loader stamps the on-disk folder name onto the cell (json:"-").
+	if got.Folder != "basic-turn" {
+		t.Fatalf("Folder = %q; want basic-turn", got.Folder)
 	}
 
 	// Wrong agent → ok=false.

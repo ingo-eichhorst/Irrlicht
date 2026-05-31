@@ -1,13 +1,5 @@
 {
-  "recording_dir": "aider/scenarios/1-2_session-end",
-  "artifacts": {
-    "events": "aider/scenarios/1-2_session-end/recordings/2026-05-23-01-20-36_irrlichd-0.4.7+4886de8.dirty/events.jsonl",
-    "transcript_md": "aider/scenarios/1-2_session-end/recordings/2026-05-23-01-20-36_irrlichd-0.4.7+4886de8.dirty/transcript.md",
-    "manifest": "aider/scenarios/1-2_session-end/recordings/2026-05-23-01-20-36_irrlichd-0.4.7+4886de8.dirty/manifest.json",
-    "recordings": [
-      "aider/scenarios/1-2_session-end/recordings/2026-05-23-01-20-36_irrlichd-0.4.7+4886de8.dirty"
-    ]
-  },
+  "scenario_id": "session-end",
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
@@ -61,6 +53,5 @@
       "timeout_seconds": 120,
       "scope_note": "Aider's headless `--print` exits within ~250 ms, so only variant 1 (clean exit) is recorded. Variants 2 and 3 (SIGKILL while idle / mid-turn) require driver-level primitives the aider interactive driver does not currently expose, and aider's TUI is not designed to outlive a single --print invocation anyway."
     }
-  },
-  "scenario_id": "session-end"
+  }
 }

@@ -1,13 +1,5 @@
 {
-  "recording_dir": "aider/scenarios/2-6_long-agentic-session-stress",
-  "artifacts": {
-    "events": "aider/scenarios/2-6_long-agentic-session-stress/recordings/2026-05-25-18-03-38_irrlichd-0.4.7+78cd100/events.jsonl",
-    "transcript_md": "aider/scenarios/2-6_long-agentic-session-stress/recordings/2026-05-25-18-03-38_irrlichd-0.4.7+78cd100/transcript.md",
-    "manifest": "aider/scenarios/2-6_long-agentic-session-stress/recordings/2026-05-25-18-03-38_irrlichd-0.4.7+78cd100/manifest.json",
-    "recordings": [
-      "aider/scenarios/2-6_long-agentic-session-stress/recordings/2026-05-25-18-03-38_irrlichd-0.4.7+78cd100"
-    ]
-  },
+  "scenario_id": "long-agentic-session-stress",
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
@@ -153,6 +145,5 @@
       "settings": {},
       "timeout_seconds": 360
     }
-  },
-  "scenario_id": "long-agentic-session-stress"
+  }
 }

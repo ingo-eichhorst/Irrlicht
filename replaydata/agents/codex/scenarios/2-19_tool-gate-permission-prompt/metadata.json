@@ -1,6 +1,5 @@
 {
   "scenario_id": "tool-gate-permission-prompt",
-  "artifacts": {},
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "incapable",

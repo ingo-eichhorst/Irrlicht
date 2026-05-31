@@ -1,6 +1,5 @@
 {
   "scenario_id": "subagent-orphan-cleanup",
-  "artifacts": {},
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "incapable",

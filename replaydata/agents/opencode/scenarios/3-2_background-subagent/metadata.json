@@ -1,5 +1,5 @@
 {
-  "artifacts": {},
+  "scenario_id": "background-subagent",
   "metadata": {
     "agent_supports": "unknown",
     "daemon_capability": "n/a",
@@ -55,6 +55,5 @@
       "applicable": false,
       "notes": "scope_note: opencode subagents are FOREGROUND task-tool children the parent AWAITS — opencode ships the `task` tool (opencode/foreground-subagent is recorded yes/full/ready) but no documented fire-and-forget BACKGROUND / async subagent dispatch (no run_in_background-style task that returns immediately while a detached child runs, no SendMessage-to-background-child primitive). agent_supports=unknown → STOP at Stage 1 (applicable:false), no recipe, no recording; the foreground case is already covered by opencode/foreground-subagent. Secondary blocker: even granting a hypothetical background primitive, the headless driver (drive-opencode-interactive.sh, send|wait_turn|sleep over BLOCKING sequential `opencode run`) cannot drive or observe a concurrently-running background child mid-turn. See replaydata/agents/opencode/scenarios/background-subagent/assessment.json (unknown / n/a / n/a)."
     }
-  },
-  "scenario_id": "background-subagent"
+  }
 }

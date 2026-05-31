@@ -1,14 +1,5 @@
 {
-  "recording_dir": "pi/scenarios/2-1_basic-turn",
-  "artifacts": {
-    "events": "pi/scenarios/2-1_basic-turn/recordings/2026-05-25-01-39-59_irrlichd-0.4.7+7b5218c/events.jsonl",
-    "transcript": "pi/scenarios/2-1_basic-turn/recordings/2026-05-25-01-39-59_irrlichd-0.4.7+7b5218c/transcript.jsonl",
-    "manifest": "pi/scenarios/2-1_basic-turn/recordings/2026-05-25-01-39-59_irrlichd-0.4.7+7b5218c/manifest.json",
-    "golden": "pi/scenarios/2-1_basic-turn/recordings/2026-05-25-01-39-59_irrlichd-0.4.7+7b5218c/transcript.jsonl.replay.json.golden",
-    "recordings": [
-      "pi/scenarios/2-1_basic-turn/recordings/2026-05-25-01-39-59_irrlichd-0.4.7+7b5218c"
-    ]
-  },
+  "scenario_id": "basic-turn",
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
@@ -57,6 +48,5 @@
       "settings": {},
       "timeout_seconds": 90
     }
-  },
-  "scenario_id": "basic-turn"
+  }
 }

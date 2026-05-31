@@ -1,6 +1,5 @@
 {
   "scenario_id": "provider-failover-midturn",
-  "artifacts": {},
   "metadata": {
     "agent_supports": "partial",
     "daemon_capability": "incapable",

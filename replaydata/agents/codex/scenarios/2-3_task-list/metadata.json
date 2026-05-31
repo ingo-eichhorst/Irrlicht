@@ -1,6 +1,5 @@
 {
   "scenario_id": "task-list",
-  "artifacts": {},
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "bug",

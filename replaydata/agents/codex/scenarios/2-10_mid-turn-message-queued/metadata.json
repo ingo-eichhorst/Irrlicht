@@ -1,14 +1,5 @@
 {
-  "recording_dir": "codex/scenarios/2-10_mid-turn-message-queued",
-  "artifacts": {
-    "events": "codex/scenarios/2-10_mid-turn-message-queued/recordings/2026-05-23-22-06-09_irrlichd-0.4.7+1a685fa/events.jsonl",
-    "transcript": "codex/scenarios/2-10_mid-turn-message-queued/recordings/2026-05-23-22-06-09_irrlichd-0.4.7+1a685fa/transcript.jsonl",
-    "manifest": "codex/scenarios/2-10_mid-turn-message-queued/recordings/2026-05-23-22-06-09_irrlichd-0.4.7+1a685fa/manifest.json",
-    "golden": "codex/scenarios/2-10_mid-turn-message-queued/recordings/2026-05-23-22-06-09_irrlichd-0.4.7+1a685fa/transcript.jsonl.replay.json.golden",
-    "recordings": [
-      "codex/scenarios/2-10_mid-turn-message-queued/recordings/2026-05-23-22-06-09_irrlichd-0.4.7+1a685fa"
-    ]
-  },
+  "scenario_id": "mid-turn-message-queued",
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
@@ -111,6 +102,5 @@
       "settings": {},
       "timeout_seconds": 240
     }
-  },
-  "scenario_id": "mid-turn-message-queued"
+  }
 }

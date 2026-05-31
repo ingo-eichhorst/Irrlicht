@@ -1,14 +1,5 @@
 {
-  "recording_dir": "codex/scenarios/2-13_turn-end-terminal-text",
-  "artifacts": {
-    "events": "codex/scenarios/2-13_turn-end-terminal-text/recordings/2026-05-23-21-44-53_irrlichd-0.4.7+f83dc27/events.jsonl",
-    "transcript": "codex/scenarios/2-13_turn-end-terminal-text/recordings/2026-05-23-21-44-53_irrlichd-0.4.7+f83dc27/transcript.jsonl",
-    "manifest": "codex/scenarios/2-13_turn-end-terminal-text/recordings/2026-05-23-21-44-53_irrlichd-0.4.7+f83dc27/manifest.json",
-    "golden": "codex/scenarios/2-13_turn-end-terminal-text/recordings/2026-05-23-21-44-53_irrlichd-0.4.7+f83dc27/transcript.jsonl.replay.json.golden",
-    "recordings": [
-      "codex/scenarios/2-13_turn-end-terminal-text/recordings/2026-05-23-21-44-53_irrlichd-0.4.7+f83dc27"
-    ]
-  },
+  "scenario_id": "turn-end-terminal-text",
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
@@ -99,6 +90,5 @@
       "settings": {},
       "timeout_seconds": 180
     }
-  },
-  "scenario_id": "turn-end-terminal-text"
+  }
 }

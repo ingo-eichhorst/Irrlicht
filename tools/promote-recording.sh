@@ -138,31 +138,13 @@ jq -n \
   }' > "$REC_DIR/manifest.json"
 echo "wrote $REC_DIR/manifest.json ($NEW_PASS_RATE)" >&2
 
-# 5. Repoint metadata.json artifacts at the newest recording + list all
-#    recordings (scenarios/ cells only — regression cells carry no metadata.json).
-if [[ -f "$TARGET_DIR/metadata.json" ]]; then
-  rel="$AGENT/scenarios/$SCENARIO"
-  newest="$rel/recordings/$REC_NAME"
-  ev=""; tr=""; trmd=""; mf=""; gd=""
-  [[ -f "$REC_DIR/events.jsonl" ]] && ev="$newest/events.jsonl"
-  [[ -f "$REC_DIR/transcript.jsonl" ]] && tr="$newest/transcript.jsonl"
-  [[ -f "$REC_DIR/transcript.md" ]] && trmd="$newest/transcript.md"
-  [[ -f "$REC_DIR/manifest.json" ]] && mf="$newest/manifest.json"
-  [[ -f "$REC_DIR/transcript.jsonl.replay.json.golden" ]] && gd="$newest/transcript.jsonl.replay.json.golden"
-  recs="$(for r in "$RECORDINGS_DIR"/*/; do [[ -d "$r" ]] && echo "$rel/recordings/$(basename "$r")"; done | sort | jq -R . | jq -s .)"
-  tmp="$(mktemp)"
-  jq --arg ev "$ev" --arg tr "$tr" --arg trmd "$trmd" --arg mf "$mf" --arg gd "$gd" --argjson recs "$recs" '
-    .artifacts = ({}
-      | (if $ev   != "" then .events        = $ev   else . end)
-      | (if $tr   != "" then .transcript    = $tr   else . end)
-      | (if $trmd != "" then .transcript_md = $trmd else . end)
-      | (if $mf   != "" then .manifest      = $mf   else . end)
-      | (if $gd   != "" then .golden        = $gd   else . end)
-      | .recordings = $recs)
-  ' "$TARGET_DIR/metadata.json" > "$tmp"
-  mv "$tmp" "$TARGET_DIR/metadata.json"
-  echo "updated $TARGET_DIR/metadata.json artifacts" >&2
-fi
+# 5. metadata.json is NOT touched. The on-disk recordings/<name>/ tree is the
+#    single source of truth: whether a cell is recorded, which recording is
+#    newest, and where each file lives are all resolved from disk (the Go side
+#    via validate.NewestRecordingDir / RecordingComplete). There is no artifacts
+#    cache to repoint — that is what kept drifting from disk. The recording dir
+#    written above (events/transcript/manifest, + the golden added next by
+#    refresh-golden.sh) IS the record.
 
 # 6. The promote does not auto-pass: if the new recording violates the spec,
 #    exit non-zero so the maintainer reviews. The recording is already saved.

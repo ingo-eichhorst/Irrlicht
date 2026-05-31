@@ -1,13 +1,5 @@
 {
-  "recording_dir": "aider/scenarios/2-17_user-blocking-question",
-  "artifacts": {
-    "events": "aider/scenarios/2-17_user-blocking-question/recordings/2026-05-25-19-06-58_irrlichd-0.4.7+96f085b/events.jsonl",
-    "transcript_md": "aider/scenarios/2-17_user-blocking-question/recordings/2026-05-25-19-06-58_irrlichd-0.4.7+96f085b/transcript.md",
-    "manifest": "aider/scenarios/2-17_user-blocking-question/recordings/2026-05-25-19-06-58_irrlichd-0.4.7+96f085b/manifest.json",
-    "recordings": [
-      "aider/scenarios/2-17_user-blocking-question/recordings/2026-05-25-19-06-58_irrlichd-0.4.7+96f085b"
-    ]
-  },
+  "scenario_id": "user-blocking-question",
   "metadata": {
     "agent_supports": "partial",
     "daemon_capability": "incapable",
@@ -110,6 +102,5 @@
       "settings": {},
       "timeout_seconds": 120
     }
-  },
-  "scenario_id": "user-blocking-question"
+  }
 }

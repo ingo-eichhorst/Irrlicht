@@ -1,14 +1,5 @@
 {
-  "recording_dir": "pi/scenarios/4-2_multiple-agents-same-workspace",
-  "artifacts": {
-    "events": "pi/scenarios/4-2_multiple-agents-same-workspace/recordings/2026-05-25-04-27-50_irrlichd-0.4.7+f688966.dirty/events.jsonl",
-    "transcript": "pi/scenarios/4-2_multiple-agents-same-workspace/recordings/2026-05-25-04-27-50_irrlichd-0.4.7+f688966.dirty/transcript.jsonl",
-    "manifest": "pi/scenarios/4-2_multiple-agents-same-workspace/recordings/2026-05-25-04-27-50_irrlichd-0.4.7+f688966.dirty/manifest.json",
-    "golden": "pi/scenarios/4-2_multiple-agents-same-workspace/recordings/2026-05-25-04-27-50_irrlichd-0.4.7+f688966.dirty/transcript.jsonl.replay.json.golden",
-    "recordings": [
-      "pi/scenarios/4-2_multiple-agents-same-workspace/recordings/2026-05-25-04-27-50_irrlichd-0.4.7+f688966.dirty"
-    ]
-  },
+  "scenario_id": "multiple-agents-same-workspace",
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
@@ -109,6 +100,5 @@
       "settings": {},
       "timeout_seconds": 240
     }
-  },
-  "scenario_id": "multiple-agents-same-workspace"
+  }
 }

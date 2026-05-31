@@ -120,13 +120,10 @@ func writeShardFixture(t *testing.T, agent string, shards map[string]shardFix) s
 		// Agent cell metadata.json (written even when minimal so the matrix sees the cell).
 		cell := map[string]any{"scenario_id": name}
 		if fx.recorded {
-			rec := agent + "/scenarios/" + folder + "/recordings/2026-01-01-00-00-00_irrlichd-test"
-			cell["recording_dir"] = agent + "/scenarios/" + folder
-			cell["artifacts"] = map[string]any{
-				"events":     rec + "/events.jsonl",
-				"transcript": rec + "/transcript.jsonl",
-				"recordings": []string{rec},
-			}
+			// "Recorded" is a disk fact: a recordings/<name>/ dir under the cell.
+			recDir := filepath.Join(root, "replaydata", "agents", agent, "scenarios", folder,
+				"recordings", "2026-01-01-00-00-00_irrlichd-test")
+			mustWriteFile(filepath.Join(recDir, "events.jsonl"), []byte("{}\n"))
 		}
 		details := map[string]any{}
 		if fx.assessment != "" {
