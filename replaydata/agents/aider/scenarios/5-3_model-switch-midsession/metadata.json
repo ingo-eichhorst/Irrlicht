@@ -1,13 +1,5 @@
 {
-  "recording_dir": "aider/scenarios/5-3_model-switch-midsession",
-  "artifacts": {
-    "events": "aider/scenarios/5-3_model-switch-midsession/recordings/2026-05-25-17-46-10_irrlichd-0.4.7+67feba0/events.jsonl",
-    "transcript_md": "aider/scenarios/5-3_model-switch-midsession/recordings/2026-05-25-17-46-10_irrlichd-0.4.7+67feba0/transcript.md",
-    "manifest": "aider/scenarios/5-3_model-switch-midsession/recordings/2026-05-25-17-46-10_irrlichd-0.4.7+67feba0/manifest.json",
-    "recordings": [
-      "aider/scenarios/5-3_model-switch-midsession/recordings/2026-05-25-17-46-10_irrlichd-0.4.7+67feba0"
-    ]
-  },
+  "scenario_id": "model-switch-midsession",
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
@@ -139,6 +131,5 @@
       "settings": {},
       "timeout_seconds": 300
     }
-  },
-  "scenario_id": "model-switch-midsession"
+  }
 }

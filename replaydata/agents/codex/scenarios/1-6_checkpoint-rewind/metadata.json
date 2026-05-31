@@ -1,13 +1,5 @@
 {
-  "artifacts": {
-    "events": "codex/scenarios/1-6_checkpoint-rewind/recordings/2026-05-29-22-53-06_irrlichd-0.4.7+99de757/events.jsonl",
-    "transcript": "codex/scenarios/1-6_checkpoint-rewind/recordings/2026-05-29-22-53-06_irrlichd-0.4.7+99de757/transcript.jsonl",
-    "manifest": "codex/scenarios/1-6_checkpoint-rewind/recordings/2026-05-29-22-53-06_irrlichd-0.4.7+99de757/manifest.json",
-    "golden": "codex/scenarios/1-6_checkpoint-rewind/recordings/2026-05-29-22-53-06_irrlichd-0.4.7+99de757/transcript.jsonl.replay.json.golden",
-    "recordings": [
-      "codex/scenarios/1-6_checkpoint-rewind/recordings/2026-05-29-22-53-06_irrlichd-0.4.7+99de757"
-    ]
-  },
+  "scenario_id": "checkpoint-rewind",
   "metadata": {
     "agent_supports": "partial",
     "daemon_capability": "full",
@@ -137,7 +129,5 @@
       "settings": {},
       "timeout_seconds": 180
     }
-  },
-  "scenario_id": "checkpoint-rewind",
-  "recording_dir": "codex/scenarios/1-6_checkpoint-rewind"
+  }
 }

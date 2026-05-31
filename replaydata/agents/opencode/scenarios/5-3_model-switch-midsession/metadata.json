@@ -1,19 +1,11 @@
 {
-  "artifacts": {
-    "events": "opencode/scenarios/5-3_model-switch-midsession/recordings/2026-05-29-23-39-07_irrlichd-0.4.7+c56c426.dirty/events.jsonl",
-    "transcript": "opencode/scenarios/5-3_model-switch-midsession/recordings/2026-05-29-23-39-07_irrlichd-0.4.7+c56c426.dirty/transcript.jsonl",
-    "manifest": "opencode/scenarios/5-3_model-switch-midsession/recordings/2026-05-29-23-39-07_irrlichd-0.4.7+c56c426.dirty/manifest.json",
-    "golden": "opencode/scenarios/5-3_model-switch-midsession/recordings/2026-05-29-23-39-07_irrlichd-0.4.7+c56c426.dirty/transcript.jsonl.replay.json.golden",
-    "recordings": [
-      "opencode/scenarios/5-3_model-switch-midsession/recordings/2026-05-29-23-39-07_irrlichd-0.4.7+c56c426.dirty"
-    ]
-  },
+  "scenario_id": "model-switch-midsession",
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
     "driver_capability": "ready",
-    "confidence": 0.85,
     "pass_rate": "5/5 phases passed",
+    "confidence": 0.85,
     "notes": "agent_supports: yes\ndaemon_capability: full (recorded 2026-05-30; two documented caveats — turn2_done final settle is known_failing via the settle-after-exit race, and the A→B model name is not surfaced in the replay golden, only in the transcript _model)\ndriver_capability: ready (headless `send` model field threads `opencode run -m`; turn 1 gemma-4-e2b-it-uncensored → turn 2 qwen/qwen3-4b)"
   },
   "details": {
@@ -144,7 +136,5 @@
       "timeout_seconds": 900,
       "notes": "opencode mid-session model switch via the headless `send` step's per-turn `model` field (gap:model-select unblock, driver commit bbf82830). The observable is TWO ready→working→ready arcs on ONE ses_… session: turn 1 runs on the config-default model A (lmstudio/gemma-4-e2b-it-uncensored), then turn 2 carries model:lmstudio/functiongemma-270m-it-mlx so the driver threads `opencode run -m lmstudio/functiongemma-270m-it-mlx` and that turn runs on model B IN PLACE on the same `--session` chain — a genuine A→B mid-session switch. opencode is the lone ProcessOwnedStore adapter: the daemon reads per-turn model from the SQLite store (metrics.go: message.data.model.modelID, with a top-level message.data.modelID fallback for providers that write it there), setting ModelName = NormalizeModelName(modelID) latest-non-empty-wins, so by turn 2 ModelName follows to model B and TotalTokens accumulates across the switch. The events.jsonl phase DSL carries NO model field, so expected.jsonl asserts only the two-turn mid-session lifecycle SKELETON (ready→working→ready twice on one ses_…, no waiting, PID bound); the model A→B change is asserted GOLDEN-LEVEL at summary.model_name in the .replay.json.golden (diffed by replay-fixtures), NOT in expected.jsonl. WHY the headless path (no `slash`/`reset_session` step): the in-REPL /models picker is an arrow-key DialogSelectModel overlay the opencode driver cannot navigate (no `keys` step) and inline `/model <id>` is a no-op on headless `opencode run` (proven by a live store probe — see assessment.json); the `-m` flag is the deterministic, navigation-free switch and keeps the cell on the simpler headless route. WHY a complete `settings` blob (not the usual empty {} for opencode cells): turn 2 references lmstudio/functiongemma-270m-it-mlx, which the operator's global config may not declare — seeding a project-local opencode.json that declares the default model A AND the lmstudio provider with BOTH models makes the run self-contained and re-recordable without editing the global config. WHY functiongemma-270m as model B (not the 26B): every opencode turn must PREFILL opencode's full system prompt + history — turn 2's context measured 21807 tokens live (2026-05-29). On this local host the 26B (gemma-4-26b-a4b) prefilling ~22k tokens did NOT finish turn 2 within a 650s budget (timed out, no step-finish), and at 16384 ctx it errored n_keep>n_ctx outright. Per issue #440 model B need only be a DIFFERENT reachable model, so model B was switched to the tiny lmstudio/functiongemma-270m-it-mlx (~184MB, loaded at 32768 ctx): it prefills 22k tokens fast and completes turn 2 in seconds, keeping the two-turn recording tractable. Model A stays the config-default gemma-4-e2b-it-uncensored (turn 1 ~244s incl. its ~2min prefill stall). timeout_seconds 900 leaves ample headroom for turn 1 + a fast turn 2. A different env may substitute any other reachable second model. WHY model values are not hardcoded as a contract (issue #440): the recipe and golden assert a per-turn CHANGE A→B and a non-empty model B, not a specific pair — a different env may substitute another reachable second model (e.g. ionos/<model> with IONOS_API_TOKEN). What differs between runs: the ses_… UUID/PID, timestamps, the assistant wording of the two replies, per-turn token counts and latency. What must NOT differ: two ready→working→ready arcs on ONE ses_… session, no waiting, ending ready, and (golden-level) summary.model_name = the normalized model B. Where to look if it broke: core/adapters/inbound/agents/opencode/metrics.go (modelID extraction + latest-wins ModelName) and drive-opencode-interactive.sh run_send (the `-m` thread + --session chaining); if a future opencode build stopped writing modelID on the assistant message, or the daemon's nested/top-level fallback no longer matched the store shape, summary.model_name would not follow the switch."
     }
-  },
-  "scenario_id": "model-switch-midsession",
-  "recording_dir": "opencode/scenarios/5-3_model-switch-midsession"
+  }
 }

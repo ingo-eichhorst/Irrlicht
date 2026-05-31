@@ -1,14 +1,5 @@
 {
-  "recording_dir": "claudecode/scenarios/2-4_self-correction-iteration",
-  "artifacts": {
-    "events": "claudecode/scenarios/2-4_self-correction-iteration/recordings/2026-05-18-00-16-32_irrlichd-0.4.5+71d506b/events.jsonl",
-    "transcript": "claudecode/scenarios/2-4_self-correction-iteration/recordings/2026-05-18-00-16-32_irrlichd-0.4.5+71d506b/transcript.jsonl",
-    "manifest": "claudecode/scenarios/2-4_self-correction-iteration/recordings/2026-05-18-00-16-32_irrlichd-0.4.5+71d506b/manifest.json",
-    "golden": "claudecode/scenarios/2-4_self-correction-iteration/recordings/2026-05-18-00-16-32_irrlichd-0.4.5+71d506b/transcript.jsonl.replay.json.golden",
-    "recordings": [
-      "claudecode/scenarios/2-4_self-correction-iteration/recordings/2026-05-18-00-16-32_irrlichd-0.4.5+71d506b"
-    ]
-  },
+  "scenario_id": "self-correction-iteration",
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
@@ -87,6 +78,5 @@
       "settings": {},
       "timeout_seconds": 180
     }
-  },
-  "scenario_id": "self-correction-iteration"
+  }
 }

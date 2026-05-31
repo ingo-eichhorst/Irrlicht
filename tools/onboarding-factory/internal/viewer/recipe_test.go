@@ -48,7 +48,7 @@ func TestLoadRecipeMap(t *testing.T) {
 		"x": `{"id": "1.1", "name": "x", "section": "S", "feature": "X"}`,
 	})
 	writeAgentCell(t, root, "aider", "1-1_x",
-		`{"scenario_id": "x", "recording_dir": "aider/scenarios/1-1_x", "details": {"recipe": {"applicable": true, "script": [{"type":"send"}]}}}`)
+		`{"scenario_id": "x", "details": {"recipe": {"applicable": true, "script": [{"type":"send"}]}}}`)
 	writeAgentCell(t, root, "codex", "1-1_x",
 		`{"scenario_id": "x", "details": {"recipe": {"applicable": false}}}`)
 	idx := loadRecipeMap(root)
@@ -65,13 +65,17 @@ func TestLoadRecipeMap(t *testing.T) {
 	if !ok || codex.Applicable == nil || *codex.Applicable {
 		t.Errorf("codex recipe should be applicable:false, got: %+v", codex)
 	}
-	// Folder resolves from the recording-dir basename (id-prefixed).
-	if got := resolveScenarioFolderForAgent(idx, "aider", "x"); got != "1-1_x" {
-		t.Errorf("folder(aider,x) = %q; want 1-1_x", got)
+	// Folder resolves from the cell's on-disk folder name (the single source of
+	// truth) — present for any agent that has a cell.
+	if got, ok := resolveScenarioFolderForAgent(idx, "aider", "x"); !ok || got != "1-1_x" {
+		t.Errorf("folder(aider,x) = %q,%v; want 1-1_x,true", got, ok)
 	}
-	// codex has no recording → no folder.
-	if got := resolveScenarioFolderForAgent(idx, "codex", "x"); got != "" {
-		t.Errorf("folder(codex,x) = %q; want empty", got)
+	if got, ok := resolveScenarioFolderForAgent(idx, "codex", "x"); !ok || got != "1-1_x" {
+		t.Errorf("folder(codex,x) = %q,%v; want 1-1_x,true", got, ok)
+	}
+	// An agent with no cell for the scenario → ok=false (callers must skip).
+	if got, ok := resolveScenarioFolderForAgent(idx, "pi", "x"); ok || got != "" {
+		t.Errorf("folder(pi,x) = %q,%v; want \"\",false", got, ok)
 	}
 }
 
@@ -84,9 +88,9 @@ func TestHandleRecipes(t *testing.T) {
 		"a": `{"id":"1.1","name":"a","section":"S","feature":"A"}`,
 	})
 	writeAgentCell(t, root, "aider", "1-1_a",
-		`{"scenario_id":"a","recording_dir":"aider/scenarios/1-1_a","details":{"recipe":{"script":[]}}}`)
+		`{"scenario_id":"a","details":{"recipe":{"script":[]}}}`)
 	writeAgentCell(t, root, "codex", "1-1_a-variant",
-		`{"scenario_id":"a","recording_dir":"codex/scenarios/1-1_a-variant","details":{"recipe":{"script":[]}}}`)
+		`{"scenario_id":"a","details":{"recipe":{"script":[]}}}`)
 	srv := &Server{RepoRoot: root}
 	req := httptest.NewRequest(http.MethodGet, "/api/recipes", nil)
 	rec := httptest.NewRecorder()

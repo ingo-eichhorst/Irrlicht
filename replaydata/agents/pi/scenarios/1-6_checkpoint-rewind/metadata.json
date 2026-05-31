@@ -1,14 +1,5 @@
 {
-  "recording_dir": "pi/scenarios/1-6_checkpoint-rewind",
-  "artifacts": {
-    "events": "pi/scenarios/1-6_checkpoint-rewind/recordings/2026-05-28-08-43-17_irrlichd-0.4.7+4ddeaf9/events.jsonl",
-    "transcript": "pi/scenarios/1-6_checkpoint-rewind/recordings/2026-05-28-08-43-17_irrlichd-0.4.7+4ddeaf9/transcript.jsonl",
-    "manifest": "pi/scenarios/1-6_checkpoint-rewind/recordings/2026-05-28-08-43-17_irrlichd-0.4.7+4ddeaf9/manifest.json",
-    "golden": "pi/scenarios/1-6_checkpoint-rewind/recordings/2026-05-28-08-43-17_irrlichd-0.4.7+4ddeaf9/transcript.jsonl.replay.json.golden",
-    "recordings": [
-      "pi/scenarios/1-6_checkpoint-rewind/recordings/2026-05-28-08-43-17_irrlichd-0.4.7+4ddeaf9"
-    ]
-  },
+  "scenario_id": "checkpoint-rewind",
   "metadata": {
     "agent_supports": "partial",
     "daemon_capability": "full",
@@ -161,6 +152,5 @@
       "applicable": true,
       "notes": "pi 0.70.0 ships an in-REPL rewind via the /tree slash command: it opens an interactive tree-selector overlay whose handleInput consumes tui.select.up/down + tui.select.confirm; selecting an earlier entry calls session.navigateTree(entryId) → SessionManager.branch(branchFromId), which only moves the in-memory leafId pointer (\"existing entries are not modified or deleted\") and keeps the SAME append-only .jsonl session file under the SAME session_id — the next turn is appended as a child of the rewound entry. An in-place rewind, like claudecode (NOT a fork like codex). agent_supports=partial: pi restores conversation state but not the working-tree files (no shadow-git in stock pi). The rewind EVENT itself is invisible to file-watch — branch() writes nothing at selection time — so we assert it as a negative invariant over the dwell window between the /tree selection and turn 3. Recipe uses the `keys` step type (raw tmux send-keys) added in commit 88400160 to navigate the /tree picker: send /tree, sleep to let the overlay materialize, `Up Up` to walk back from the latest-highlighted entry to the turn-1 leaf, Enter to commit the rewind. If the live overlay layout differs (oldest-first instead of newest-first), adjust the `Up` count to whatever lands on turn-1. The picker shows newest-first highlighted at the latest entry; `Up Up` from (4/4) `assistant: two` lands on (2/4) `assistant: one` (the turn-1 leaf). The first Enter selects that leaf and pi pops up a `Summarize branch? → No summary / Summarize / Summarize with custom prompt` confirmation dialog; a SECOND Enter accepts the default `No summary` and surfaces `Navigated to selected point`. Only then is it safe to send turn 3 (otherwise the third send is consumed by the dialog)."
     }
-  },
-  "scenario_id": "checkpoint-rewind"
+  }
 }

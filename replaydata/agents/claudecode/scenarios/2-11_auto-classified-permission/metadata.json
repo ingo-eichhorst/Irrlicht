@@ -1,14 +1,5 @@
 {
-  "recording_dir": "claudecode/scenarios/2-11_auto-classified-permission",
-  "artifacts": {
-    "events": "claudecode/scenarios/2-11_auto-classified-permission/recordings/2026-05-18-00-20-19_irrlichd-0.4.5+7b88ad9/events.jsonl",
-    "transcript": "claudecode/scenarios/2-11_auto-classified-permission/recordings/2026-05-18-00-20-19_irrlichd-0.4.5+7b88ad9/transcript.jsonl",
-    "manifest": "claudecode/scenarios/2-11_auto-classified-permission/recordings/2026-05-18-00-20-19_irrlichd-0.4.5+7b88ad9/manifest.json",
-    "golden": "claudecode/scenarios/2-11_auto-classified-permission/recordings/2026-05-18-00-20-19_irrlichd-0.4.5+7b88ad9/transcript.jsonl.replay.json.golden",
-    "recordings": [
-      "claudecode/scenarios/2-11_auto-classified-permission/recordings/2026-05-18-00-20-19_irrlichd-0.4.5+7b88ad9"
-    ]
-  },
+  "scenario_id": "auto-classified-permission",
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
@@ -102,6 +93,5 @@
       "settings": {},
       "timeout_seconds": 180
     }
-  },
-  "scenario_id": "auto-classified-permission"
+  }
 }

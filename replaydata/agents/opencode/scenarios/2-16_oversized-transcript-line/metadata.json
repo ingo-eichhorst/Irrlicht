@@ -1,5 +1,5 @@
 {
-  "artifacts": {},
+  "scenario_id": "oversized-transcript-line",
   "metadata": {
     "agent_supports": "no",
     "daemon_capability": "n/a",
@@ -65,6 +65,5 @@
       "applicable": false,
       "notes": "applicable:false — observed opencode INCAPABILITY (not a model weakness): a live opencode session cannot deterministically produce a single oversized (>=256 KB) transcript part, because opencode's tools cap their output before persisting it to the SQLite store. Verified empirically at record time (2026-05-26) on opencode 1.14.50 + the local default model: (1) the recipe's tool-induction path DID run cleanly — bash created a 300000-byte single-line big.txt and the read tool read it back, arc ready->working->ready completed twice on one ses_… session (run-cell STAGED) — but the read-tool-result part was only ~4.6 KB: opencode's read tool truncates each line to 2000 chars (the recorded output literally says 'line truncated to 2000 chars'). (2) A direct probe forcing ~300 KB of bash stdout produced part.data of only ~82 KB with state.metadata.truncated=1 and 'Full output saved to: ~/.local/share/opencode/tool-output/tool_…' — opencode stores a ~30-50 KB preview in the part row and overflows the full bytes to a SEPARATE sidecar file that the daemon never reads as a transcript part. So no tool path yields a single >=256 KB part.data row / >=256 KB exported transcript.jsonl line. This is a shared-tailer/store robustness PROPERTY, not an opencode feature, and opencode is structurally stronger here anyway: it is the lone ProcessOwnedStore adapter (agent.go:41) — the live watcher reads part.data straight from SQLite via rows.Scan (watcher.go:456-499) and ComputeMetrics likewise (metrics.go:67-103) with NO bufio line-buffer cap, so even an oversized part would be read whole; the shared tailer's 64 MB readLineCapped guard (tailer.go, issue #270) never gates opencode store reads. The authoritative cap-stress coverage is the agent-agnostic unit test core/pkg/tailer/large_line_test.go (TestTailAndProcess_LargeToolResultLine + TestReadLineCapped_OversizedLineSkipped), which pins the 64 MB cap on the shared tailer. We do NOT fabricate a >256 KB part into a fixture. expected.jsonl is retained as the documented state-arc target (the assessment route was record; the live recording overrode it — see assessment.json and the implement observability_correction)."
     }
-  },
-  "scenario_id": "oversized-transcript-line"
+  }
 }

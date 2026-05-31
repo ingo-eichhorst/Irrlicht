@@ -1,14 +1,5 @@
 {
-  "recording_dir": "codex/scenarios/2-17_user-blocking-question",
-  "artifacts": {
-    "events": "codex/scenarios/2-17_user-blocking-question/recordings/2026-05-23-22-12-50_irrlichd-0.4.7+2209da4/events.jsonl",
-    "transcript": "codex/scenarios/2-17_user-blocking-question/recordings/2026-05-23-22-12-50_irrlichd-0.4.7+2209da4/transcript.jsonl",
-    "manifest": "codex/scenarios/2-17_user-blocking-question/recordings/2026-05-23-22-12-50_irrlichd-0.4.7+2209da4/manifest.json",
-    "golden": "codex/scenarios/2-17_user-blocking-question/recordings/2026-05-23-22-12-50_irrlichd-0.4.7+2209da4/transcript.jsonl.replay.json.golden",
-    "recordings": [
-      "codex/scenarios/2-17_user-blocking-question/recordings/2026-05-23-22-12-50_irrlichd-0.4.7+2209da4"
-    ]
-  },
+  "scenario_id": "user-blocking-question",
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
@@ -122,6 +113,5 @@
       "settings": {},
       "timeout_seconds": 240
     }
-  },
-  "scenario_id": "user-blocking-question"
+  }
 }

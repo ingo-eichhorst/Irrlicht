@@ -1,5 +1,5 @@
 {
-  "artifacts": {},
+  "scenario_id": "token-quota-exhausted",
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
@@ -68,6 +68,5 @@
       "applicable": false,
       "notes": "scope_note: NOT RECORDABLE YET — assessed yes/partial (agent_supports:yes, observes:partial), so the cell is conceptually applicable, but it cannot be recorded in this environment because it is blocked on BOTH (a) auth and (b) a quota mock — NOT on a missing driver step type, so this is NOT a driver_gap. WHAT aider does: it stops cleanly on a 429/quota or budget cap — coders/base_coder.py's send loop doubles retry_delay until it exceeds RETRY_TIMEOUT (60s, models.py), then surfaces the cap (litellm RateLimitError 'check your quotas' / BudgetExceededError, both retry=True; or the non-retryable APIError+402 'Insufficient credits') via io.tool_warning+io.tool_error and breaks, ending the turn. The error lands in .aider.chat.history.md as a `> …Error…` blockquote (io._tool_message → append_chat_history(blockquote=True)), which irrlicht's aider parser matches with errorRE and turns into a synthetic turn_done via flushErrorTurn (the #262 path) → working→ready. observes:partial because (1) the capped turn is indistinguishable from any other turn-aborting LLM error — there is no quota/budget-specific event kind — and (2) the capped model call emits no `> Tokens:` line, so flushErrorTurn carries nil Tokens/Contribution (no per-turn cost recorded; capabilities.cost_tracking is false). WHY NOT RECORDABLE: (a) no aider auth in this environment — no provider key, headless aider hangs ~5min on provider OAuth, and the rig precheck delegates auth to the user (proven infra_fail). (b) NO deterministic aider quota mock exists: the claudecode mock-anthropic-429 path does NOT transfer — that recorder (tools/agent-onboarding/recording/record-token-quota-exhausted.sh) launches `claude --bare` with ANTHROPIC_BASE_URL pointed at an Anthropic-only stub, but aider's drivers (drive-aider.sh headless, drive-aider-interactive.sh) wire NO base-URL override and have no `--bare` equivalent, and aider routes every provider through litellm — so even WITH auth there is no deterministic way to elicit a 429/BudgetExceededError on demand. A recording becomes possible only once BOTH auth AND an aider-side quota mock (or a driver fixture-injection primitive) exist — a developer task. expected.jsonl is committed as the DOCUMENTED TARGET (ready→working→[`> …Error…` blockquote aborts the turn]→ready within the daemon sweep, single proc-<PID> session, final ready, never waiting). See replaydata/agents/aider/scenarios/token-quota-exhausted/assessment.json."
     }
-  },
-  "scenario_id": "token-quota-exhausted"
+  }
 }

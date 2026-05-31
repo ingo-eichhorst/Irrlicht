@@ -1,14 +1,5 @@
 {
-  "recording_dir": "codex/scenarios/5-1_token-accounting",
-  "artifacts": {
-    "events": "codex/scenarios/5-1_token-accounting/recordings/2026-05-23-23-24-46_irrlichd-0.4.7+26ab78c/events.jsonl",
-    "transcript": "codex/scenarios/5-1_token-accounting/recordings/2026-05-23-23-24-46_irrlichd-0.4.7+26ab78c/transcript.jsonl",
-    "manifest": "codex/scenarios/5-1_token-accounting/recordings/2026-05-23-23-24-46_irrlichd-0.4.7+26ab78c/manifest.json",
-    "golden": "codex/scenarios/5-1_token-accounting/recordings/2026-05-23-23-24-46_irrlichd-0.4.7+26ab78c/transcript.jsonl.replay.json.golden",
-    "recordings": [
-      "codex/scenarios/5-1_token-accounting/recordings/2026-05-23-23-24-46_irrlichd-0.4.7+26ab78c"
-    ]
-  },
+  "scenario_id": "token-accounting",
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
@@ -126,6 +117,5 @@
       "settings": {},
       "timeout_seconds": 300
     }
-  },
-  "scenario_id": "token-accounting"
+  }
 }

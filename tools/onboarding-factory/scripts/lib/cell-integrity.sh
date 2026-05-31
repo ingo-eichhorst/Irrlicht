@@ -33,17 +33,17 @@
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/shard-lib.sh"
 
 # ci_recipe_dir_names <agent>
-#   → every dir name an <agent> recording may legitimately use: each shard's
-#     name (coverage_id) AND its recording_dir basename. A recorded dir NOT in
-#     this set is an orphan (no shard to --re-record from).
+#   → every legitimate on-disk folder name for the agent (each folder that holds
+#     a metadata.json). A recorded dir NOT in this set is an orphan (no cell to
+#     --re-record from).
 ci_recipe_dir_names() {
   shard_recipe_dir_names "$1"
 }
 
 # ci_coverage_id_for_dir <dir-name> <agent>
-#   → the coverage_id a recording dir belongs to: the shard whose name or
-#     recording_dir basename == <dir-name>, else <dir-name> itself (already a
-#     coverage_id). Used to find the sibling assessment.json dir.
+#   → the coverage_id a recording dir belongs to: the scenario_id of the
+#     metadata.json at scenarios/<dir-name>/, else <dir-name> itself (already a
+#     coverage_id). Used to resolve the cell's assessment.
 ci_coverage_id_for_dir() {
   shard_coverage_for_dir "$1" "$2"
 }

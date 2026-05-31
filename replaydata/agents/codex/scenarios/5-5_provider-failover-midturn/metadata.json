@@ -1,0 +1,58 @@
+{
+  "scenario_id": "provider-failover-midturn",
+  "metadata": {
+    "agent_supports": "partial",
+    "daemon_capability": "incapable",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.135.0",
+    "daemon_version": "0.4.8+bd04eba.dirty",
+    "confidence": 0.7,
+    "notes": "agent_supports: partial; daemon_capability: incapable; driver_capability: ready (provider is a startup model_providers selection, no mid-turn failover chain; even if it failed over, only the model NAME reaches the JSONL, not the provider — so a provider swap leaves no observable trace)"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "provider-failover-midturn",
+      "agent": "codex",
+      "assessed_at": "2026-05-31T00:00:00Z",
+      "agent_supports": "partial",
+      "daemon_capability": "incapable",
+      "driver_capability": "ready",
+      "confidence": 0.7,
+      "body": "## Verdict\n\nagent_supports: partial\ndaemon_capability: incapable; driver_capability: ready\n\n## Scenario signal\n\n`provider-failover-midturn` (5.5) asserts three user-observable bullets: (a) `ModelName` changes mid-turn with no user action, (b) state stays `working` through the failover with no flicker to `ready`, (c) after the turn completes, `→ ready` with the FALLBACK model's name visible. The defining primitive is an in-turn provider/model swap on a primary error (rate limit, 5xx, timeout) that continues the SAME turn under a secondary model. The canonical spec frames this around adapters with explicit auto-fallback chains (Aider auto-fallback, Crush, Goose).\n\n## agent_supports: partial\n\nCodex CLI 0.135.0 supports a `model_providers` config table — multiple named providers (OpenAI, `amazon-bedrock`, and custom OpenAI-compatible `base_url` endpoints), selected via `model_provider`. But the provider is a STARTUP/config selection, resolved once per request (the binary logs `model_provider requested=` / `model_provider_name` for the single chosen provider). A binary-strings scan surfaces NO provider-chain, cascade, secondary-model, or 'try next provider' failover primitive: the `fallback` hits are model-METADATA defaults (token-limit fallback when a model's metadata is unknown — `0 is used. This will use fallback model metadata`) and unrelated transport fallbacks (DNS, OSC 52), not a model/provider failover chain. On a 429/5xx Codex retries the SAME provider/model with backoff (aws-config retry plumbing is present) and otherwise surfaces a turn-level error the user retries — there is no documented mid-turn swap to a DIFFERENT provider that continues the same turn. Hence `partial` (a provider mechanism exists, but not the scenario's in-turn auto-failover), mirroring the claudecode verdict for this row.\n\n## daemon_capability: incapable; driver_capability: ready\n\nThis is the load-bearing verdict. Even if Codex DID fail over mid-turn, irrlicht could not observe the scenario's distinguishing signal. `extractCodexMetadata` (parser.go L268-324) reads `ModelName` from the `model` string on payload/message events ONLY — there is no `provider` / `route` / `base_url` field extracted, because none is surfaced in the Codex JSONL. The provider is a transport-layer detail invisible to the transcript. Two failure modes for the scenario's bullet (a):\n- If a failover kept the same model id under a different provider (e.g. an OpenAI model served via a fallback OpenAI-compatible endpoint), `message.model` would be IDENTICAL across the swap — irrlicht's `ModelName` would not change, so the mid-turn-ModelName-change assertion never fires.\n- If a failover switched to a genuinely different model id, irrlicht WOULD see `ModelName` change — but that is observationally indistinguishable from the already-covered `model-switch-midsession` (5.3) / `model-identification` (5.2) cells, and Codex emits no signal tying the change to a PROVIDER failover vs a user/config switch.\n\nState continuity (bullet b: stays `working`, no `ready` flicker) and the closing `→ ready` (bullet c) ARE observable — `task_complete`/`turn_aborted` drive `turn_done` and the working→ready arc — but those halves are already locked down by `basic-turn` (2.1) and `turn-aborted-by-error` (2.14). The provider-failover-qua-provider-failover signal has no transcript trace and no parser branch, so `daemon=incapable` (no trace exists / the model-name extraction cannot represent provider identity). This is an architecture limit, not a parser bug: there is nothing in `events.jsonl` to mis-handle.\n\n`driver_capability: ready` — the codex interactive driver (`driver-interactive.sh`) implements `send`/`wait_turn`/`sleep`/`keys`/`slash`/etc.; a recipe COULD be written, but the route is frozen so none is, and the driver is not the blocker.\n\n## Conclusion\n\nFrozen at applicable=false. Codex has a provider mechanism (so not `no` on the agent), but irrlicht observes no signal that distinguishes a provider failover from an ordinary model switch or a transient error — the provider is never written to the JSONL the daemon tails. The genuinely-observable subsets (state stays `working` through transient errors; post-turn ModelName remains valid; turn completes → ready) are already covered by `turn-aborted-by-error`, `model-identification`, and `basic-turn`. No recipe, no recording. This unblocks only if (1) Codex ships a documented mid-turn provider-failover chain AND (2) it announces the failover in the transcript (a `provider`/`route` field on assistant/token events) AND the codex parser learns to extract it.",
+      "caveats": [
+        "agent=partial pivots on EMISSION, not just parser reading: the binary-strings scan and config docs show no mid-turn provider-failover chain, but a future Codex could add one. confidence is held at 0.7 because 'does a real failover swap message.model' can only be settled by a live recording, which the frozen route does not run.",
+        "If a failover keeps the same model id across a provider swap, ModelName would NOT change at all — the scenario's bullet (a) would silently never fire even if the failover happened. If it switches to a different model id, the change is indistinguishable from model-switch-midsession; either way the provider identity is invisible.",
+        "This verdict upgrades to partial/partial (and becomes applicable) only if Codex adds (1) a documented in-turn provider-failover chain AND (2) a transcript field naming the active provider/route, AND the codex parser is extended to extract it. Watch for a `provider`/`route`/`base_url` field on Codex assistant or token_count events.",
+        "Mock/synthetic fixture REJECTED (same rationale as claudecode 5.5): this harness records REAL CLI sessions and has no synthetic-fixture mechanism; a Codex provider failover is transport-layer and leaves no trace in the JSONL, so a mock would fabricate events Codex never emits — worse than an honest documentation-only frozen cell."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/codex/parser.go L268-324",
+          "note": "extractCodexMetadata reads ModelName only from the `model` string on payload/message events; no provider/route/base_url field is extracted because none is present in the Codex JSONL — provider identity is never surfaced to the daemon."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/codex/agent.go L32-38",
+          "note": "Source = FilesUnderRoot over the Codex sessions JSONL; the daemon tails the transcript only — a transport-layer provider swap that leaves no JSONL trace is unobservable by construction."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/5-5_provider-failover-midturn/metadata.json",
+          "note": "claudecode reference cell for this row: agent=partial, daemon=incapable, driver=ready, frozen/applicable_false — provider is a startup choice, model name is identical across providers, failover leaves no transcript trace. Codex matches."
+        },
+        {
+          "kind": "binary",
+          "ref": "@openai/codex-darwin-arm64 vendor bin codex (codex-cli 0.135.0): strings | grep -iE 'fallback|failover|provider chain|cascade|secondary_model|model_provider'",
+          "note": "model_providers config table + single `model_provider requested=` selection per request; NO provider-chain/cascade/secondary-model failover primitive. `fallback model metadata` hits are model token-limit metadata defaults, not a provider/model failover chain. Authoritative for 'what shipped' in 0.135.0."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "notes": "applicable: false (frozen, 2026-05-31: agent_supports=partial, daemon_capability=incapable). The scenario's defining signal is an in-turn provider/model failover that swaps the active provider on a primary error and continues the same turn, with ModelName updating to the fallback. Codex selects a single model_provider at startup (model_providers config) and has no mid-turn provider-failover chain; even if it did, the codex parser extracts only the model NAME, never the provider/route — so a provider swap leaves no observable trace. State continuity and the working→ready close ARE observable but are already covered by turn-aborted-by-error and basic-turn; ModelName validity is covered by model-identification. No recipe, no recording. Unblocks only if Codex ships a documented mid-turn provider-failover chain AND announces the provider/route in the transcript AND the codex parser learns to extract it. See replaydata/agents/claudecode/scenarios/5-5_provider-failover-midturn/metadata.json.",
+      "script": []
+    }
+  }
+}

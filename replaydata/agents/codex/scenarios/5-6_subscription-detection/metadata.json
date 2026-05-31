@@ -1,13 +1,5 @@
 {
-  "artifacts": {
-    "events": "codex/scenarios/5-6_subscription-detection/recordings/2026-05-29-23-27-36_irrlichd-0.4.7+34e4ef0/events.jsonl",
-    "transcript": "codex/scenarios/5-6_subscription-detection/recordings/2026-05-29-23-27-36_irrlichd-0.4.7+34e4ef0/transcript.jsonl",
-    "manifest": "codex/scenarios/5-6_subscription-detection/recordings/2026-05-29-23-27-36_irrlichd-0.4.7+34e4ef0/manifest.json",
-    "golden": "codex/scenarios/5-6_subscription-detection/recordings/2026-05-29-23-27-36_irrlichd-0.4.7+34e4ef0/transcript.jsonl.replay.json.golden",
-    "recordings": [
-      "codex/scenarios/5-6_subscription-detection/recordings/2026-05-29-23-27-36_irrlichd-0.4.7+34e4ef0"
-    ]
-  },
+  "scenario_id": "subscription-detection",
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
@@ -106,7 +98,5 @@
       "settings": {},
       "timeout_seconds": 180
     }
-  },
-  "scenario_id": "subscription-detection",
-  "recording_dir": "codex/scenarios/5-6_subscription-detection"
+  }
 }

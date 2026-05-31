@@ -78,11 +78,22 @@ of record run --attach --agent <agent> --scenario <scenario>
 
 `of record run` resolves the driver + orchestration script, prints the
 prerequisites, and drives the agent under the recording daemon: it walks the
-recipe in tmux, captures the daemon's `events.jsonl` + the agent's transcript,
-and promotes the fresh capture under
-`replaydata/agents/<agent>/scenarios/<id>_<scenario>/recordings/<name>/`,
-re-running spec validation as it promotes. (`--dry-run` prints the resolved plan
+recipe in tmux and captures the daemon's `events.jsonl` + the agent's transcript
+into a STAGING dir (`.build/refresh/<agent>/<folder>-<ts>/`). It does NOT touch
+`replaydata/` — promotion is the next step. (`--dry-run` prints the resolved plan
 without driving — useful to confirm wiring.)
+
+Then promote the staged capture into the cell's `recordings/<name>/`:
+
+```bash
+tools/promote-recording.sh <staging-dir> <agent> <folder>
+```
+
+This copies `events.jsonl` + the transcript + a `manifest.json` into a new
+`replaydata/agents/<agent>/scenarios/<folder>/recordings/<name>/`. It does NOT
+write any artifacts cache into `metadata.json`: the on-disk `recordings/<name>/`
+tree IS the record (the single source of truth). The replay golden is added by
+Step 5; nothing else needs wiring.
 
 **Retry exactly once** on a `timeout` / `transcript_missing` outcome (often a
 lazy-transcript nudge or trailing-sleep timing issue). On a second failure, or
@@ -162,7 +173,10 @@ git rev-parse --short HEAD
 ```
 
 **Always commit before returning** — a dirty `replaydata/` tree makes the next
-cell's recording precheck refuse. `of validate` should pass after the commit.
+cell's recording precheck refuse. `of validate` should pass after the commit; it
+now also gates recording completeness — the newest recording must carry
+`events.jsonl`, `manifest.json`, a transcript, and (for a jsonl transcript) its
+`transcript.jsonl.replay.json.golden`.
 
 > End commit messages with the trailer
 > `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`.
@@ -183,9 +197,12 @@ notes: <one or two sentences — drift flag, retry count, issue #, or infra/prer
 
 ## Anti-patterns
 
-- **Don't write `replaydata/` by hand.** `of record run` captures + promotes;
-  `of cell write` does the backflow correction; the driver is a script under
-  `replaydata/agents/<agent>/`. No `jq -i`, no hand-edited recordings.
+- **Don't write `replaydata/` by hand.** `of record run` stages;
+  `promote-recording.sh` copies the staged capture into `recordings/<name>/`;
+  `refresh-golden.sh` writes the golden; `of cell write` does the backflow
+  correction; the driver is a script under `replaydata/agents/<agent>/`. No
+  `jq -i`, no hand-edited recordings or metadata. The on-disk recording is the
+  single source of truth — there is no artifacts cache to maintain.
 - **Don't retry more than once**, and **don't retry a driver gap** — a missing
   step won't appear on a re-run; port it (Step 1) or return.
 - **Don't rebase `expected.jsonl`** to make a failing verify pass — flag the

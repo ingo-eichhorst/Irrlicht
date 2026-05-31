@@ -1,14 +1,5 @@
 {
-  "recording_dir": "claudecode/scenarios/5-2_model-identification",
-  "artifacts": {
-    "events": "claudecode/scenarios/5-2_model-identification/recordings/2026-05-18-00-31-36_irrlichd-0.4.5+73f31ff/events.jsonl",
-    "transcript": "claudecode/scenarios/5-2_model-identification/recordings/2026-05-18-00-31-36_irrlichd-0.4.5+73f31ff/transcript.jsonl",
-    "manifest": "claudecode/scenarios/5-2_model-identification/recordings/2026-05-18-00-31-36_irrlichd-0.4.5+73f31ff/manifest.json",
-    "golden": "claudecode/scenarios/5-2_model-identification/recordings/2026-05-18-00-31-36_irrlichd-0.4.5+73f31ff/transcript.jsonl.replay.json.golden",
-    "recordings": [
-      "claudecode/scenarios/5-2_model-identification/recordings/2026-05-18-00-31-36_irrlichd-0.4.5+73f31ff"
-    ]
-  },
+  "scenario_id": "model-identification",
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
@@ -89,6 +80,5 @@
       "settings": {},
       "timeout_seconds": 120
     }
-  },
-  "scenario_id": "model-identification"
+  }
 }

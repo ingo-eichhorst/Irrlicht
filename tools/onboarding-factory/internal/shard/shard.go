@@ -39,27 +39,22 @@ type Shard struct {
 // replaydata/agents/<adapter>/scenarios/<folder>/metadata.json. ScenarioID
 // ties variant-folder cells (where folder ≠ scenario name) back to their
 // parent scenario shard.
+//
+// Recording artifacts are NOT stored here. The on-disk recordings/<name>/ tree
+// is the single source of truth: whether a cell is recorded, which recording is
+// newest, and where each file lives are all resolved from disk
+// (validate.NewestRecordingDir / RecordingComplete). metadata.json carries only
+// the assessment overview + detail tiers, which are not derivable from disk.
 type ShardAgent struct {
-	ScenarioID   string         `json:"scenario_id,omitempty"` // coverage_id; set when folder ≠ scenario name
-	RecordingDir string         `json:"recording_dir,omitempty"`
-	Artifacts    ShardArtifacts `json:"artifacts,omitempty"`
-	Metadata     ShardMetadata  `json:"metadata,omitempty"`
-	Details      ShardDetails   `json:"details,omitempty"`
-}
+	ScenarioID string        `json:"scenario_id,omitempty"` // coverage_id; set when folder ≠ scenario name
+	Metadata   ShardMetadata `json:"metadata,omitempty"`
+	Details    ShardDetails  `json:"details,omitempty"`
 
-// ShardArtifacts names the on-disk recording files, as paths relative to
-// replaydata/agents/. Every recording lives under recordings/<name>/ (there is
-// no "latest" at the cell root). Events/Transcript/TranscriptMD/Manifest/Golden
-// point at the NEWEST recording's files; Recordings lists every recording dir
-// (newest sorts last by name). Missing files are omitted. A cell is "recorded"
-// iff Recordings is non-empty (see matrix.cellRecorded).
-type ShardArtifacts struct {
-	Events       string   `json:"events,omitempty"`
-	Transcript   string   `json:"transcript,omitempty"`
-	TranscriptMD string   `json:"transcript_md,omitempty"`
-	Manifest     string   `json:"manifest,omitempty"`
-	Golden       string   `json:"golden,omitempty"`
-	Recordings   []string `json:"recordings,omitempty"`
+	// Folder is the cell's on-disk folder name (e.g. "5-4_architect-editor-pair").
+	// Populated by the loaders from the directory they read; never serialized
+	// (json:"-"), so it can't leak back into metadata.json. Lets callers resolve
+	// the cell dir for disk lookups without a second scenario_id scan.
+	Folder string `json:"-"`
 }
 
 // ShardMetadata is the overview tier — what the matrix needs to render a
@@ -117,6 +112,7 @@ func LoadAgentCell(repoRoot, adapter, folder string) (*ShardAgent, bool) {
 	if json.Unmarshal(b, &cell) != nil {
 		return nil, false
 	}
+	cell.Folder = folder
 	return &cell, true
 }
 
@@ -143,6 +139,7 @@ func LoadAdapterCells(repoRoot, adapter string) map[string]*ShardAgent {
 		if json.Unmarshal(b, &cell) != nil {
 			continue
 		}
+		cell.Folder = e.Name()
 		key := cell.ScenarioID
 		if key == "" {
 			key = e.Name() // defensive: a cell without scenario_id keys on its folder

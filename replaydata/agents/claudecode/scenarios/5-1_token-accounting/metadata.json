@@ -1,14 +1,5 @@
 {
-  "recording_dir": "claudecode/scenarios/5-1_token-accounting",
-  "artifacts": {
-    "events": "claudecode/scenarios/5-1_token-accounting/recordings/2026-05-18-00-30-55_irrlichd-0.4.5+f3523ad/events.jsonl",
-    "transcript": "claudecode/scenarios/5-1_token-accounting/recordings/2026-05-18-00-30-55_irrlichd-0.4.5+f3523ad/transcript.jsonl",
-    "manifest": "claudecode/scenarios/5-1_token-accounting/recordings/2026-05-18-00-30-55_irrlichd-0.4.5+f3523ad/manifest.json",
-    "golden": "claudecode/scenarios/5-1_token-accounting/recordings/2026-05-18-00-30-55_irrlichd-0.4.5+f3523ad/transcript.jsonl.replay.json.golden",
-    "recordings": [
-      "claudecode/scenarios/5-1_token-accounting/recordings/2026-05-18-00-30-55_irrlichd-0.4.5+f3523ad"
-    ]
-  },
+  "scenario_id": "token-accounting",
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
@@ -110,6 +101,5 @@
       "settings": {},
       "timeout_seconds": 180
     }
-  },
-  "scenario_id": "token-accounting"
+  }
 }

@@ -3,7 +3,6 @@ package viewer
 import (
 	"encoding/json"
 	"net/http"
-	"path/filepath"
 	"sort"
 
 	"irrlicht/tools/onboarding-factory/internal/shard"
@@ -40,8 +39,8 @@ type recipeAdapterEntry struct {
 
 // loadRecipeMap reads the per-scenario shards and builds the recipe index.
 // Each shard is one row; each agent's recipeEntry comes from its metadata.json
-// Details.Recipe (applicable + script); the folder comes from the agent's
-// RecordingDir basename. Missing/malformed cells → empty index; callers
+// Details.Recipe (applicable + script); the folder is the cell's on-disk folder
+// name (variant-folder aware). Missing/malformed cells → empty index; callers
 // tolerate "no recipe authored."
 func loadRecipeMap(repoRoot string) recipeIndex {
 	out := recipeIndex{
@@ -80,12 +79,9 @@ func loadRecipeMap(repoRoot string) recipeIndex {
 					}{Applicable: rec.Applicable, Script: rec.Script}
 				}
 			}
-			// Folder: the recording-dir basename (e.g. "aider/scenarios/foo" →
-			// "foo"), so measureScenario / the spec strip resolve the on-disk
-			// recording for this (agent, cell).
-			if cell.RecordingDir != "" {
-				out.folderByAgent[cid][agent] = filepath.Base(cell.RecordingDir)
-			}
+			// Folder: the cell's on-disk folder name (variant-folder aware), so
+			// measureScenario / the spec strip resolve the recording on disk.
+			out.folderByAgent[cid][agent] = cell.Folder
 		}
 		out.canonical[cid] = entry
 		out.byName[cid] = entry
@@ -93,17 +89,17 @@ func loadRecipeMap(repoRoot string) recipeIndex {
 	return out
 }
 
-// resolveScenarioFolderForAgent returns the replaydata folder name for one
-// (agent, coverage_id) pair from the shard's recording-dir. Returns "" when the
-// agent has no recording for this coverage_id — callers fall back to the
-// coverage_id itself.
-func resolveScenarioFolderForAgent(idx recipeIndex, agent, coverageID string) string {
+// resolveScenarioFolderForAgent returns the on-disk folder name for one
+// (agent, coverage_id) cell, sourced from the loaded cell's folder (the single
+// source of truth, variant-folder aware). ok is false when the agent has no
+// cell for this coverage_id — callers must skip rather than invent a path.
+func resolveScenarioFolderForAgent(idx recipeIndex, agent, coverageID string) (string, bool) {
 	if perAgent, ok := idx.folderByAgent[coverageID]; ok {
-		if folder, ok := perAgent[agent]; ok {
-			return folder
+		if folder, ok := perAgent[agent]; ok && folder != "" {
+			return folder, true
 		}
 	}
-	return ""
+	return "", false
 }
 
 // handleRecipes serves the run-cell.sh scenario recipe catalog. Built from the
@@ -157,13 +153,9 @@ func (s *Server) handleRecipes(w http.ResponseWriter, r *http.Request) {
 			if rec := cell.Details.Recipe; len(rec) > 0 {
 				row.ByAdapter[a] = rec
 			}
-			// Resolve the recording folder for this agent (variant-folder aware);
-			// fall back to the coverage_id when the cell has no recording_dir.
-			folder := sh.Name
-			if rd := cell.RecordingDir; rd != "" {
-				folder = filepath.Base(rd)
-			}
-			row.FolderByAgent[a] = folder
+			// The recording folder for this agent is the cell's on-disk folder
+			// (variant-folder aware), the single source of truth.
+			row.FolderByAgent[a] = cell.Folder
 		}
 		rows = append(rows, row)
 	}

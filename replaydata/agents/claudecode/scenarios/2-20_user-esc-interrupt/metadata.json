@@ -1,15 +1,5 @@
 {
-  "recording_dir": "claudecode/scenarios/2-20_user-esc-interrupt",
-  "artifacts": {
-    "events": "claudecode/scenarios/2-20_user-esc-interrupt/recordings/2026-05-19-00-11-42_irrlichd-0.4.5+898a14f/events.jsonl",
-    "transcript": "claudecode/scenarios/2-20_user-esc-interrupt/recordings/2026-05-19-00-11-42_irrlichd-0.4.5+898a14f/transcript.jsonl",
-    "manifest": "claudecode/scenarios/2-20_user-esc-interrupt/recordings/2026-05-19-00-11-42_irrlichd-0.4.5+898a14f/manifest.json",
-    "golden": "claudecode/scenarios/2-20_user-esc-interrupt/recordings/2026-05-19-00-11-42_irrlichd-0.4.5+898a14f/transcript.jsonl.replay.json.golden",
-    "recordings": [
-      "claudecode/scenarios/2-20_user-esc-interrupt/recordings/2026-05-18-00-27-50_irrlichd-0.4.5+898a14f",
-      "claudecode/scenarios/2-20_user-esc-interrupt/recordings/2026-05-19-00-11-42_irrlichd-0.4.5+898a14f"
-    ]
-  },
+  "scenario_id": "user-esc-interrupt",
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
@@ -99,6 +89,5 @@
       "settings": {},
       "timeout_seconds": 90
     }
-  },
-  "scenario_id": "user-esc-interrupt"
+  }
 }

@@ -1,14 +1,5 @@
 {
-  "recording_dir": "codex/scenarios/2-12_context-compaction",
-  "artifacts": {
-    "events": "codex/scenarios/2-12_context-compaction/recordings/2026-05-23-23-38-27_irrlichd-0.4.7+c56a24a/events.jsonl",
-    "transcript": "codex/scenarios/2-12_context-compaction/recordings/2026-05-23-23-38-27_irrlichd-0.4.7+c56a24a/transcript.jsonl",
-    "manifest": "codex/scenarios/2-12_context-compaction/recordings/2026-05-23-23-38-27_irrlichd-0.4.7+c56a24a/manifest.json",
-    "golden": "codex/scenarios/2-12_context-compaction/recordings/2026-05-23-23-38-27_irrlichd-0.4.7+c56a24a/transcript.jsonl.replay.json.golden",
-    "recordings": [
-      "codex/scenarios/2-12_context-compaction/recordings/2026-05-23-23-38-27_irrlichd-0.4.7+c56a24a"
-    ]
-  },
+  "scenario_id": "context-compaction",
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
@@ -97,6 +88,5 @@
       "settings": {},
       "timeout_seconds": 240
     }
-  },
-  "scenario_id": "context-compaction"
+  }
 }

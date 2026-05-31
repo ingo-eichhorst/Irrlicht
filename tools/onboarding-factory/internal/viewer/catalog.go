@@ -108,9 +108,16 @@ func buildCellVerdict(ag *shard.ShardAgent) map[string]any {
 		"daemon_capability": "unknown",
 		"driver_capability": "ready",
 		"notes":             "",
+		// applicable is false only when the recipe explicitly marks applicable:false
+		// (a deliberate record_blocked deferral); absent/true recipe → true. Feeds
+		// the display state so such cells read n.a., not pending-record.
+		"applicable": true,
 	}
 	if ag == nil {
 		return cell
+	}
+	if recipeApplicableFalse(ag.Details.Recipe) {
+		cell["applicable"] = false
 	}
 	md := ag.Metadata
 	if md.AgentSupports != "" {
@@ -131,15 +138,29 @@ func buildCellVerdict(ag *shard.ShardAgent) map[string]any {
 	return cell
 }
 
+// recipeApplicableFalse reports whether a cell's recipe explicitly marks
+// applicable:false (a deliberate record_blocked deferral). Absent or
+// applicable:true/nil recipe → false.
+func recipeApplicableFalse(recipe json.RawMessage) bool {
+	if len(recipe) == 0 {
+		return false
+	}
+	var r recipeAdapterEntry
+	if json.Unmarshal(recipe, &r) != nil {
+		return false
+	}
+	return r.Applicable != nil && !*r.Applicable
+}
+
 // deriveDisplayState rolls the three orthogonal facts — agent support, daemon
-// capability, driver capability — plus the MEASURED recording status up into
-// one display state for the matrix (#476). It delegates to the canonical
-// matrix model (#508) so the viewer and the gates can never disagree on what a
-// cell's verdict means; hasRecording is true when a recording has been captured
-// (measurement status is anything other than the no-recording / no-spec
-// sentinels).
-func deriveDisplayState(supports, daemon, driver string, hasRecording bool) string {
-	return matrix.DeriveDisplayState(supports, daemon, driver, hasRecording)
+// capability, driver capability — plus the MEASURED recording status and
+// applicability up into one display state for the matrix (#476). It delegates to
+// the canonical matrix model (#508) so the viewer and the gates can never
+// disagree on what a cell's verdict means; hasRecording is true when a recording
+// has been captured (measurement status is anything other than the no-recording
+// / no-spec sentinels).
+func deriveDisplayState(supports, daemon, driver string, hasRecording, applicable bool) string {
+	return matrix.DeriveDisplayState(supports, daemon, driver, hasRecording, applicable)
 }
 
 // annotateDisplayState decorates each coverage cell with a derived
@@ -173,7 +194,11 @@ func annotateDisplayState(top map[string]any) {
 					hasRecording = st != "" && st != "no_recording" && st != "no_expected"
 				}
 			}
-			cell["display_state"] = deriveDisplayState(supports, daemon, driver, hasRecording)
+			applicable := true
+			if v, ok := cell["applicable"].(bool); ok {
+				applicable = v
+			}
+			cell["display_state"] = deriveDisplayState(supports, daemon, driver, hasRecording, applicable)
 		}
 	}
 }
@@ -207,9 +232,11 @@ func annotateMeasurements(top map[string]any, repoRoot string) {
 			if !ok {
 				continue
 			}
-			folder := resolveScenarioFolderForAgent(recipes, agentSlug, sid)
-			if folder == "" {
-				folder = sid
+			folder, ok := resolveScenarioFolderForAgent(recipes, agentSlug, sid)
+			if !ok {
+				// No cell on disk for this (agent, scenario) — genuinely absent.
+				cell["measurement"] = map[string]any{"status": "no_recording"}
+				continue
 			}
 			cell["measurement"] = measureScenario(repoRoot, agentSlug, folder)
 		}
@@ -276,9 +303,11 @@ func annotatePipelineState(top map[string]any, repoRoot string) {
 			if !ok {
 				continue
 			}
-			folder := resolveScenarioFolderForAgent(recipes, agentSlug, sid)
-			if folder == "" {
-				folder = sid
+			folder, ok := resolveScenarioFolderForAgent(recipes, agentSlug, sid)
+			if !ok {
+				// No cell on disk for this (agent, scenario) — genuinely absent.
+				cell["pipeline"] = pipelineForCell(repoRoot, agentSlug, sid, "", recipes)
+				continue
 			}
 			cell["pipeline"] = pipelineForCell(repoRoot, agentSlug, sid, folder, recipes)
 		}
@@ -306,26 +335,31 @@ func pipelineForCell(repoRoot, agent, coverageID, folder string, recipes recipeI
 	}
 	out["recipe"] = map[string]any{"authored": recipeAuthored, "step_count": stepCount}
 
-	scenarioDir := filepath.Join(repoRoot, "replaydata", "agents", agent, "scenarios", folder)
 	specAuthored := false
 	phaseCount := 0
-	if specBytes, err := os.ReadFile(filepath.Join(scenarioDir, "expected.jsonl")); err == nil {
-		specAuthored = true
-		lines := 0
-		for _, b := range specBytes {
-			if b == '\n' {
-				lines++
+	recCount := 0
+	// folder == "" means the cell is absent on disk (no metadata.json for this
+	// agent/scenario): there is no spec or recording, and joining an empty folder
+	// would stat the scenarios/ parent. Skip the disk reads entirely.
+	if folder != "" {
+		scenarioDir := filepath.Join(repoRoot, "replaydata", "agents", agent, "scenarios", folder)
+		if specBytes, err := os.ReadFile(filepath.Join(scenarioDir, "expected.jsonl")); err == nil {
+			specAuthored = true
+			lines := 0
+			for _, b := range specBytes {
+				if b == '\n' {
+					lines++
+				}
+			}
+			if lines > 0 {
+				phaseCount = lines - 1 // first line is the meta object
 			}
 		}
-		if lines > 0 {
-			phaseCount = lines - 1 // first line is the meta object
-		}
+		// Every recording lives under recordings/<name>/; "latest" means at least
+		// one recording exists, "archive_count" is the total recording count.
+		recCount = len(RecordingStore{RepoRoot: repoRoot}.listArchiveDirs(scenarioDir))
 	}
 	out["spec"] = map[string]any{"authored": specAuthored, "phase_count": phaseCount}
-
-	// Every recording lives under recordings/<name>/; "latest" means at least
-	// one recording exists, "archive_count" is the total recording count.
-	recCount := len(RecordingStore{RepoRoot: repoRoot}.listArchiveDirs(scenarioDir))
 	out["recordings"] = map[string]any{"latest": recCount > 0, "archive_count": recCount}
 
 	return out

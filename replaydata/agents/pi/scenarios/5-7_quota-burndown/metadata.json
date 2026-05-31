@@ -1,0 +1,62 @@
+{
+  "scenario_id": "quota-burndown",
+  "metadata": {
+    "agent_supports": "no",
+    "daemon_capability": "n/a",
+    "driver_capability": "n/a",
+    "agent_cli_version": "0.70.0",
+    "daemon_version": "0.4.8+382ee7d.dirty",
+    "confidence": 0.85,
+    "notes": "pi emits no subscription rate-limit window (no used_percent/rate_limits) to its transcript; nothing to burn down or observe."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "quota-burndown",
+      "agent": "pi",
+      "assessed_at": "2026-05-31T00:00:00Z",
+      "agent_supports": "no",
+      "daemon_capability": "n/a",
+      "driver_capability": "n/a",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: no\ndaemon_capability: n/a; driver_capability: n/a\n\n## Reasoning\n\nThis scenario asserts a **subscription rate-limit burndown**: as a session consumes tokens across turns, `RateLimitSnapshot.Windows[].UsedPercent` rises monotonically (after turn N ≥ after turn N-1) without resetting, and `RateLimitSnapshot.SampledAt` advances each turn. The user-observable signal is a *used-percent window* the daemon surfaces turn-over-turn.\n\nThe canonical (codex) cell for this scenario hinges entirely on one fact: codex emits a `rate_limits` map (`primary.used_percent`, `window_minutes`, `resets_at`) inside the `payload` of every `token_count` event, which `extractCodexRateLimits()` reads into a `RateLimitSnapshot`. **pi emits no equivalent.** Three independent confirmations:\n\n1. **Real pi transcripts carry no quota window.** Parsing pi's own recorded transcripts (e.g. `5-1_token-accounting`), the only top-level event types are `message`, `model_change`, `session`, `thinking_level_change`, and the assistant `message.usage` object's complete shape is `{cacheRead, cacheWrite, cost, input, output, totalTokens}` — raw token counts plus a per-turn cost figure. There is no `used_percent`, no `rate_limits` map, no `window_minutes`, no `resets_at`, no SampledAt-bearing window anywhere in the transcript.\n\n2. **The pi binary/dist emits no rate-limit window.** pi 0.70.0 resolves to `@mariozechner/pi-coding-agent@0.70.0`; a recursive grep over its `dist/` JS for `used_percent|usedPercentage|rate_limits|resets_at|window_minutes|x-ratelimit|RateLimitWindow` returned **zero matches**. The bundled `@mariozechner/pi-ai@0.70.0` SDK (the layer that would expose provider rate-limit headers) is likewise empty for all of those. The only `rate limit` reference in the dist is a *retry classifier* in `agent-session.js` (lines 336, 1918-1929) that matches `rate limit / 429` as a RETRYABLE error and transparently retries it inside the request layer — it never surfaces a quota window to the transcript. (This is the same auto-retry behavior the sibling `token-quota-exhausted` cell cited.)\n\n3. **The pi adapter has no rate-limit path.** `core/adapters/inbound/agents/pi/parser.go` never sets `ev.RateLimit`; only the codex transcript parser (`extractCodexRateLimits`) and the claudecode statusline HTTP receiver produce a `RateLimitSnapshot`. pi feeds neither path: it is a `FilesUnderRoot` JSONL tailer (no statusline POST), and its parser emits only model/usage/cost/tool events.\n\nBecause pi never produces the used-percent window the scenario is *about*, there is no behavior to elicit and nothing for the daemon to observe. Per the routing table `agent=no → daemon=n/a, driver=n/a → frozen`.\n\n## daemon_capability: n/a (not incapable)\n\nMarked `n/a` rather than `incapable` because the missing signal is upstream of the daemon: the agent emits no quota window at all, so there is no trace the 3-state model or the tailer must (and fails to) represent. If pi ever started emitting a `used_percent` window, the daemon would need an `extractPiRateLimits`-style path — but that is a hypothetical future, not an architecture limit on today's input.\n\n## Relationship to sibling cells\n\nDistinct from `token-quota-exhausted` (pi `partial`/`incapable`: pi tracks per-turn cost/usage but enforces no budget cap and auto-retries provider 429s). That cell is about a *cap-hit* arc; this one is about a *rising used-percent window*. Both fail for the same root cause — pi surfaces token/cost counts but no subscription rate-limit window — but quota-burndown is cleaner-cut: the asserted observable (`UsedPercent`) simply does not exist in pi's data stream, so `agent=no` rather than `partial`.",
+      "caveats": [
+        "pi DOES surface running token/cost figures (message.usage: input/output/cacheRead/cacheWrite/cost/totalTokens), so a token-accounting scenario is observable for pi — but that is absolute usage, not a percent-of-quota window with a reset, which is what this scenario asserts.",
+        "If a future pi release (or its pi-ai SDK) begins writing a provider rate-limit window (e.g. an x-ratelimit-derived used_percent) into the transcript, re-assess: the verdict flips toward yes/full only once both the emission and a pi adapter rate-limit path exist.",
+        "The strings $(which pi) launcher scan is empty by construction (pi is a Node script); the authoritative scan is the recursive grep over the @mariozechner/pi-coding-agent dist JS plus the bundled pi-ai SDK, both of which returned zero rate-limit-window matches."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/pi/scenarios/5-1_token-accounting/recordings/2026-05-25-02-16-07_irrlichd-0.4.7+ec7acf6/transcript.jsonl",
+          "note": "Real pi transcript: top-level types are only message/model_change/session/thinking_level_change; assistant message.usage shape is {cacheRead, cacheWrite, cost, input, output, totalTokens} — no used_percent / rate_limits / window_minutes / resets_at / SampledAt window anywhere."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@mariozechner/pi-coding-agent/dist",
+          "note": "pi 0.70.0 dist JS: recursive grep for used_percent|usedPercentage|rate_limits|resets_at|window_minutes|x-ratelimit|RateLimitWindow returned ZERO matches. Only rate-limit reference is agent-session.js:336/1918-1929, a retry classifier that auto-retries 429s and never emits a quota window."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@mariozechner/pi-coding-agent/node_modules/@mariozechner/pi-ai",
+          "note": "Bundled pi-ai 0.70.0 SDK (the layer that would expose provider rate-limit headers): zero matches for used_percent/usedPercentage/rate_limits/resets_at/window_minutes/x-ratelimit/RateLimit — no rate-limit window emitted."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/pi/parser.go",
+          "note": "pi parser never sets ev.RateLimit; it emits only model/usage(input,output,cacheRead,cacheWrite,cost)/tool/turn-boundary events. No RateLimitSnapshot path for pi."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/codex/parser.go:355-418",
+          "note": "Contrast: the ONLY transcript-side RateLimitSnapshot producer is codex's extractCodexRateLimits/extractCodexRateLimitWindow, reading payload.rate_limits.primary.used_percent on token_count events. pi emits no such payload, so this path has no pi analogue."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/pi/scenarios/2-9_token-quota-exhausted/metadata.json",
+          "note": "Sibling cell establishing pi tracks per-turn cost/usage but enforces no budget and auto-retries provider 429s (no distinct quota observable) — same root cause: pi surfaces token/cost counts but no subscription rate-limit window."
+        }
+      ]
+    }
+  }
+}

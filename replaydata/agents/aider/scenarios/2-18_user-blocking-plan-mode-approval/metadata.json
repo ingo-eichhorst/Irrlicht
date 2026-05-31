@@ -1,5 +1,5 @@
 {
-  "artifacts": {},
+  "scenario_id": "user-blocking-plan-mode-approval",
   "metadata": {
     "agent_supports": "partial",
     "daemon_capability": "incapable",
@@ -66,6 +66,5 @@
         }
       ]
     }
-  },
-  "scenario_id": "user-blocking-plan-mode-approval"
+  }
 }

@@ -1,5 +1,5 @@
 {
-  "artifacts": {},
+  "scenario_id": "checkpoint-rewind",
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
@@ -123,6 +123,5 @@
       "timeout_seconds": 240,
       "notes": "DEGRADED applicable:false again (2026-05-27, opencode v1.14.50, run-cell.sh COEXIST mode on :7838, local gemma-4-e2b model) after TWO consecutive recording attempts reproduced the SAME composer-coalescing defect — even with both prior driver fixes (f2cabf08 terminal step-finish counting + f5b15758 composer-flush confirmation) IN PLACE and live on HEAD. The first two turns serialize cleanly (terminal step-finish 0→1, 1→2; no premature completion), but the `slash` /undo step that follows turn 2 is SWALLOWED ENTIRELY and the turn-2 + turn-3 prompts COALESCE into one user message — both runs' staged transcripts show the identical merged literal 'Reply with exactly the word: twoReply with exactly the word: three' with NO /undo text and only 2 terminal step-finishes, so wait_turn for turn 3 times out (total stuck at 2). PRECISE REMAINING BLOCKER: under this slow local model (turn 1 ~100s to first token), f5b15758's per-send oc_flush capture-pane check is necessary but NOT sufficient across the send→slash→send sequence — the turn-2 send's composer is reported flushed (its turn fires) yet residual composer state lets the subsequent `slash` /undo + turn-3 send merge into the tail of turn 2, dropping /undo. The earlier 'live-verified' probe ended AT the /undo (send→wait_turn→send→wait_turn→slash) with no following turn-3 send, so it never exercised the slash→send hand-off that races here. This is a driver TUI-composer race (oc_send/slash do not reliably isolate the slash step + the turn after it from the prior send under slow-model latency), NOT a missing step type (recipe-lint passes; not a SKILL driver_gap) and NOT a daemon bug (the daemon faithfully recorded the 2 arcs that actually fired). Fix path: harden oc_flush so the `slash` arm and the send immediately AFTER a slash each confirm a SETTLED, empty composer (and that the prior turn's spinner cleared) before typing — e.g. wait for the spinner to vanish AND the composer prefix to clear, with a poll keyed to model latency, so /undo lands on its own and turn 3 is its own submission; then re-record. expected.jsonl stays as the documented in-place-rewind target (state/session_id/arc only — same ses_, revert set, no fork, clean post-rewind turn; never message/part counts)."
     }
-  },
-  "scenario_id": "checkpoint-rewind"
+  }
 }

@@ -1,14 +1,5 @@
 {
-  "recording_dir": "codex/scenarios/1-3_long-idle-live-session",
-  "artifacts": {
-    "events": "codex/scenarios/1-3_long-idle-live-session/recordings/2026-05-23-11-05-03_irrlichd-0.4.7+451c4ea.dirty/events.jsonl",
-    "transcript": "codex/scenarios/1-3_long-idle-live-session/recordings/2026-05-23-11-05-03_irrlichd-0.4.7+451c4ea.dirty/transcript.jsonl",
-    "manifest": "codex/scenarios/1-3_long-idle-live-session/recordings/2026-05-23-11-05-03_irrlichd-0.4.7+451c4ea.dirty/manifest.json",
-    "golden": "codex/scenarios/1-3_long-idle-live-session/recordings/2026-05-23-11-05-03_irrlichd-0.4.7+451c4ea.dirty/transcript.jsonl.replay.json.golden",
-    "recordings": [
-      "codex/scenarios/1-3_long-idle-live-session/recordings/2026-05-23-11-05-03_irrlichd-0.4.7+451c4ea.dirty"
-    ]
-  },
+  "scenario_id": "long-idle-live-session",
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
@@ -86,6 +77,5 @@
       "timeout_seconds": 180,
       "scope_note": "Tests that codex's rollout-keyed session survives a 20 s idle window between turns. The daemon's production readyTTL is 30 min, so this recording validates 'session stays observed during idle' rather than 'past TTL' — that stricter assertion would require IRRLICHT_READY_SESSION_TTL=15s on the daemon."
     }
-  },
-  "scenario_id": "long-idle-live-session"
+  }
 }

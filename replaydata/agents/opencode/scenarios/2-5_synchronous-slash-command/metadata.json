@@ -1,14 +1,5 @@
 {
-  "recording_dir": "opencode/scenarios/2-5_synchronous-slash-command",
-  "artifacts": {
-    "events": "opencode/scenarios/2-5_synchronous-slash-command/recordings/2026-05-26-23-46-51_irrlichd-0.4.7+a5fe454/events.jsonl",
-    "transcript": "opencode/scenarios/2-5_synchronous-slash-command/recordings/2026-05-26-23-46-51_irrlichd-0.4.7+a5fe454/transcript.jsonl",
-    "manifest": "opencode/scenarios/2-5_synchronous-slash-command/recordings/2026-05-26-23-46-51_irrlichd-0.4.7+a5fe454/manifest.json",
-    "golden": "opencode/scenarios/2-5_synchronous-slash-command/recordings/2026-05-26-23-46-51_irrlichd-0.4.7+a5fe454/transcript.jsonl.replay.json.golden",
-    "recordings": [
-      "opencode/scenarios/2-5_synchronous-slash-command/recordings/2026-05-26-23-46-51_irrlichd-0.4.7+a5fe454"
-    ]
-  },
+  "scenario_id": "synchronous-slash-command",
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
@@ -113,6 +104,5 @@
       "timeout_seconds": 180,
       "notes": "Synchronous no-LLM slash command on opencode (/help). The whole observable is the ABSENCE of a SECOND working transition: the warm-up 'ok' turn drives ready→working→ready to materialize the SQLite store row, then /help is delivered to the held-open TUI and the session STAYS ready — opencode's part-driven watcher (scanParts, watcher.go) emits EventActivity only when a NEW part row lands, and /help writes zero new parts (confirmed live 2026-05-26: parts/messages/step-finish all unchanged after /help). WHY a `slash` step and NOT a `send`: headless `opencode run -- \"/help\"` stores /help as a literal user prompt and runs a full model turn (ready→working→ready), inverting the scenario; the driver routes any `slash` step to run_live() (PR #495) which delivers it to the live TUI via tmux send-keys -l. WHY NO wait_turn after /help: a local /help makes no model call, so the step-finish count never increments — oc_wait_turn would hang/time out on an unchanged turn count (the race that bit checkpoint-rewind). The 6s trailing sleep is the dwell that lets the daemon observe the session HOLD ready across the slash window; expected.jsonl's slash_window phase asserts ready for duration_at_least_ms:4000 with invariants forbidding working/waiting. SINGLE session, no multi-session chain (unlike sibling session-reset, which uses /new to mint a fresh ses_…). What differs between runs: PID/timestamps/token counts and the warm-up turn's wall-clock latency (~30-45s on the local model). What must NOT differ: one working→ready arc on one ses_… session, then a held-ready slash window with no further state transition, ending ready."
     }
-  },
-  "scenario_id": "synchronous-slash-command"
+  }
 }

@@ -1,14 +1,5 @@
 {
-  "recording_dir": "codex/scenarios/2-7_autonomous-loop",
-  "artifacts": {
-    "events": "codex/scenarios/2-7_autonomous-loop/recordings/2026-05-23-23-15-25_irrlichd-0.4.7+774c575/events.jsonl",
-    "transcript": "codex/scenarios/2-7_autonomous-loop/recordings/2026-05-23-23-15-25_irrlichd-0.4.7+774c575/transcript.jsonl",
-    "manifest": "codex/scenarios/2-7_autonomous-loop/recordings/2026-05-23-23-15-25_irrlichd-0.4.7+774c575/manifest.json",
-    "golden": "codex/scenarios/2-7_autonomous-loop/recordings/2026-05-23-23-15-25_irrlichd-0.4.7+774c575/transcript.jsonl.replay.json.golden",
-    "recordings": [
-      "codex/scenarios/2-7_autonomous-loop/recordings/2026-05-23-23-15-25_irrlichd-0.4.7+774c575"
-    ]
-  },
+  "scenario_id": "autonomous-loop",
   "metadata": {
     "agent_supports": "partial",
     "daemon_capability": "full",
@@ -113,6 +104,5 @@
       "settings": {},
       "timeout_seconds": 240
     }
-  },
-  "scenario_id": "autonomous-loop"
+  }
 }

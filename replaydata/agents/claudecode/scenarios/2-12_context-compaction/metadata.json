@@ -1,14 +1,5 @@
 {
-  "recording_dir": "claudecode/scenarios/2-12_context-compaction",
-  "artifacts": {
-    "events": "claudecode/scenarios/2-12_context-compaction/recordings/2026-05-18-00-35-15_irrlichd-0.4.5+b3d5c9e/events.jsonl",
-    "transcript": "claudecode/scenarios/2-12_context-compaction/recordings/2026-05-18-00-35-15_irrlichd-0.4.5+b3d5c9e/transcript.jsonl",
-    "manifest": "claudecode/scenarios/2-12_context-compaction/recordings/2026-05-18-00-35-15_irrlichd-0.4.5+b3d5c9e/manifest.json",
-    "golden": "claudecode/scenarios/2-12_context-compaction/recordings/2026-05-18-00-35-15_irrlichd-0.4.5+b3d5c9e/transcript.jsonl.replay.json.golden",
-    "recordings": [
-      "claudecode/scenarios/2-12_context-compaction/recordings/2026-05-18-00-35-15_irrlichd-0.4.5+b3d5c9e"
-    ]
-  },
+  "scenario_id": "context-compaction",
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
@@ -111,6 +102,5 @@
       "settings": {},
       "timeout_seconds": 240
     }
-  },
-  "scenario_id": "context-compaction"
+  }
 }

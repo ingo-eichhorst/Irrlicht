@@ -1,5 +1,5 @@
 {
-  "artifacts": {},
+  "scenario_id": "session-reset",
   "metadata": {
     "agent_supports": "no",
     "daemon_capability": "n/a",
@@ -58,6 +58,5 @@
       "applicable": false,
       "scope_note": "Coverage matrix declares aider supports=no for session-reset: aider has /clear (clears chat history) but it does NOT mint a new session id — there is no aider session-id concept. Closing aider creates a fresh `.aider.chat.history.md` on next launch but that's session-end + session-start, not session-reset."
     }
-  },
-  "scenario_id": "session-reset"
+  }
 }

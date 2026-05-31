@@ -35,12 +35,17 @@ func validRepo(t *testing.T) string {
 	cell := filepath.Join(root, "replaydata", "agents", "claudecode", "scenarios", "1-1_session-start")
 	write(t, filepath.Join(cell, "metadata.json"), `{
   "scenario_id": "session-start",
-  "artifacts": {"recordings": ["claudecode/scenarios/1-1_session-start/recordings/r1"]},
   "details": {"assessment": {"agent_supports": "yes", "daemon_capability": "full", "driver_capability": "ready"}}
 }`)
 	write(t, filepath.Join(cell, "expected.jsonl"), `{"schema_version":1}`+"\n")
-	write(t, filepath.Join(cell, "recordings", "r1", "events.jsonl"),
+	// "Recorded" is a disk fact, and a recording must be complete: events +
+	// manifest + a transcript + (for a jsonl transcript) its replay golden.
+	rec := filepath.Join(cell, "recordings", "r1")
+	write(t, filepath.Join(rec, "events.jsonl"),
 		`{"seq":1,"ts":"2026-05-01T00:00:00Z","kind":"pid_discovered","session_id":"s"}`+"\n")
+	write(t, filepath.Join(rec, "manifest.json"), `{}`+"\n")
+	write(t, filepath.Join(rec, "transcript.jsonl"), `{}`+"\n")
+	write(t, filepath.Join(rec, "transcript.jsonl.replay.json.golden"), `{}`+"\n")
 	return root
 }
 
@@ -158,11 +163,11 @@ func TestValidateCatchesViolations(t *testing.T) {
 		}, "unexpected field"},
 		{"missing scenario_id", func(r string) {
 			write(t, filepath.Join(r, "replaydata", "agents", "claudecode", "scenarios", "1-1_session-start", "metadata.json"),
-				`{"artifacts":{"recordings":["x/r1"]}}`)
+				`{}`)
 		}, "missing scenario_id"},
 		{"dangling scenario_id", func(r string) {
 			write(t, filepath.Join(r, "replaydata", "agents", "claudecode", "scenarios", "1-1_session-start", "metadata.json"),
-				`{"scenario_id":"ghost","artifacts":{"recordings":["x/r1"]}}`)
+				`{"scenario_id":"ghost"}`)
 		}, "not in the catalog"},
 		{"recorded without expected", func(r string) {
 			_ = os.Remove(filepath.Join(r, "replaydata", "agents", "claudecode", "scenarios", "1-1_session-start", "expected.jsonl"))
@@ -170,6 +175,12 @@ func TestValidateCatchesViolations(t *testing.T) {
 		{"orphan recording folder", func(r string) {
 			write(t, filepath.Join(r, "replaydata", "agents", "claudecode", "scenarios", "9-9_orphan", "recordings", "r1", "events.jsonl"), "\n")
 		}, "orphan recording folder"},
+		{"incomplete newest recording (jsonl, no golden)", func(r string) {
+			// Remove the newest recording's golden — a jsonl transcript without
+			// its replay golden is an incomplete recording.
+			_ = os.Remove(filepath.Join(r, "replaydata", "agents", "claudecode",
+				"scenarios", "1-1_session-start", "recordings", "r1", "transcript.jsonl.replay.json.golden"))
+		}, "incomplete recording: missing transcript.jsonl.replay.json.golden"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

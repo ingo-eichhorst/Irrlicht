@@ -1,0 +1,68 @@
+{
+  "scenario_id": "provider-failover-midturn",
+  "metadata": {
+    "agent_supports": "partial",
+    "daemon_capability": "incapable",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.70.0",
+    "daemon_version": "0.4.8+382ee7d.dirty",
+    "confidence": 0.7,
+    "notes": "agent_supports: partial; daemon_capability: incapable; driver_capability: ready (pi has a model_providers registry + an in-turn auto-retry on overloaded/rate-limit/5xx/timeout, but the retry re-issues the SAME model via agent.continue() — no failover-to-a-secondary-provider chain; even pi's model_change carries a provider field the irrlicht parser never extracts, and the retry writes no model_change at all, so a provider swap leaves no observable trace)"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "provider-failover-midturn",
+      "agent": "pi",
+      "assessed_at": "2026-05-31T00:00:00Z",
+      "agent_supports": "partial",
+      "daemon_capability": "incapable",
+      "driver_capability": "ready",
+      "confidence": 0.7,
+      "body": "## Verdict\n\nagent_supports: partial\ndaemon_capability: incapable; driver_capability: ready\n\n## Scenario signal\n\n`provider-failover-midturn` (5.5) asserts three user-observable bullets: (a) `ModelName` changes mid-turn with no user action, (b) state stays `working` through the failover with no flicker to `ready`, (c) after the turn completes, `→ ready` with the FALLBACK model's name visible. The defining primitive is an in-turn provider/model swap on a primary error (rate limit, 5xx, timeout) that continues the SAME turn under a SECONDARY model. The canonical spec frames this around adapters with explicit auto-fallback chains (Aider auto-fallback, Crush, Goose).\n\n## agent_supports: partial\n\npi-coding-agent 0.70.0 has the two ingredients but not the scenario's primitive:\n- A `model_providers` / model-registry layer (multiple named providers, OpenRouter routing prefs including an `allow_fallbacks` flag) — but provider selection is a startup/config choice plus explicit user switches (`/model`, cycle), not an automatic in-turn cascade. The 'fallback' code paths are model-RESTORE fallback (`modelFallbackMessage`: \"Could not restore model X. Using Y\" when a saved session model is unavailable at startup), thinking-level fallback, and model-pattern matching — none is a mid-turn provider-failover chain.\n- An in-turn AUTO-RETRY on a retryable error. `_isRetryableError` matches exactly the scenario's triggers (overloaded / provider returned error / rate limit / 429 / 500-504 / service unavailable / network / timeout). On such an error pi runs `_handleRetryableError` → exponential backoff → `this.agent.continue()`, removing the errored assistant message and continuing the SAME turn. But `continue()` re-issues against the SAME model/provider — it is a same-model retry, NOT a swap to a different/secondary provider. There is no 'try provider A, then fall back to provider B and finish the turn under B' chain.\n\nHence `partial` (a provider mechanism + an in-turn error-recovery path both exist, but not the scenario's failover-to-a-secondary-provider-midturn), mirroring the claudecode and codex verdicts for this row.\n\n## daemon_capability: incapable; driver_capability: ready\n\nThis is the load-bearing verdict, and it holds for pi for two compounding reasons:\n\n1. The auto-retry writes NO `model_change`. `appendModelChange(provider, modelId)` (session-manager.js L604) — the only writer of the `model_change` transcript event the pi parser reads — is called solely from explicit model operations (`setModel`, `cycleModel`, scoped/available cycling). The retry path (`agent.continue()`) calls none of them, so even if pi DID fail over, the same-model retry leaves the transcript's model identity unchanged. The scenario's bullet (a) (`ModelName` changes mid-turn) never fires.\n\n2. The provider is never extracted, even where pi records it. Unlike codex/claudecode, pi's `model_change` entry DOES carry a `provider` field (session-manager.js L151-155, L604-611: `{type:\"model_change\", provider, modelId}`). But the irrlicht pi parser (parser.go L40-46) extracts only `modelId` from `model_change`, and only `model` from per-message blocks (L104) — it never reads `provider`. So provider identity is invisible to the daemon by construction. A provider failover that kept the same model id would change nothing the daemon tails; one that switched model id would be observationally indistinguishable from the already-covered model-switch-midsession (5.3) and carry no signal tying it to a PROVIDER failover.\n\nState continuity (bullet b: stays `working`, no `ready` flicker) and the closing `→ ready` (bullet c) ARE observable — pi's `stopReason==\"stop\"` drives `turn_done`/the working→ready arc — but those halves are already locked down by `basic-turn` (2.1) and `turn-aborted-by-error` (2.14). The provider-failover-qua-provider-failover signal has no transcript trace the daemon can mis-handle, so `daemon=incapable` (architecture limit, not a parser bug — there is nothing in `events.jsonl` to fix).\n\n`driver_capability: ready` — pi's interactive driver (`driver-interactive.sh`) implements send / wait_turn / interrupt / slash / keys / reset_session / resume / session / start_session / sleep / exit_clean. A recipe COULD be written, but the route is frozen so none is, and the driver is not the blocker.\n\n## Conclusion\n\nFrozen at applicable=false. pi has a provider registry AND an in-turn auto-retry (so not `no` on the agent), but the retry re-issues the same model and irrlicht observes no signal distinguishing a provider failover from an ordinary model switch or a transient error — the provider is never extracted from the JSONL the daemon tails, and the retry writes no model_change. The genuinely-observable subsets (state stays `working` through transient errors; post-turn ModelName remains valid; turn completes → ready) are already covered by `turn-aborted-by-error`, `model-identification`/`model-switch-midsession`, and `basic-turn`. No recipe, no recording. This unblocks only if (1) pi ships a documented mid-turn provider-failover chain that swaps to a SECONDARY provider and continues the turn AND (2) it announces the failover in the transcript (and writes a model_change on the swap) AND (3) the pi parser learns to extract the `provider` field it already receives.",
+      "caveats": [
+        "agent=partial pivots on EMISSION, not just parser reading: the dist-source scan shows an in-turn auto-retry but NO provider-failover chain — the retry uses agent.continue() against the same model. A future pi could add a cascade. confidence is held at 0.7 because 'does any pi path swap provider mid-turn' can only be fully settled by a live recording, which the frozen route does not run.",
+        "pi DOES carry a `provider` field on its model_change transcript entry (unlike codex/claudecode), but the irrlicht pi parser extracts only `modelId` — so provider identity is invisible regardless. If pi ever added a real failover that wrote a model_change on the swap, the parser would still need a one-line change to read `provider` before the scenario's bullet (a) could fire as a PROVIDER signal rather than a plain model switch.",
+        "If a failover kept the same model id across a provider swap, ModelName would NOT change at all — bullet (a) would silently never fire even if a failover happened. If it switched model id, the change is indistinguishable from model-switch-midsession (5.3, already recorded full for pi).",
+        "Mock/synthetic fixture REJECTED (same rationale as claudecode/codex 5.5): this harness records REAL CLI sessions and has no synthetic-fixture mechanism; a pi provider failover leaves no distinguishing trace in the JSONL (the retry writes no model_change; provider is unextracted), so a mock would fabricate events pi never emits — worse than an honest documentation-only frozen cell."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/pi/parser.go L40-46, L104",
+          "note": "model_change handling extracts modelId only; per-message model from `model`. The `provider` field present on pi's model_change entry is never read — provider identity is not surfaced to the daemon."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/pi/agent.go L34-40",
+          "note": "Source = FilesUnderRoot over pi's sessions JSONL; the daemon tails the transcript only — a same-model retry or transport-layer provider swap that writes no model_change is unobservable by construction."
+        },
+        {
+          "kind": "file",
+          "ref": "@mariozechner/pi-coding-agent 0.70.0 dist/core/agent-session.js L1921-2010 (_isRetryableError, _handleRetryableError)",
+          "note": "On overloaded/rate-limit/429/5xx/timeout pi auto-retries with exponential backoff via this.agent.continue() — re-issuing the SAME model, removing the errored assistant message and continuing the same turn. No swap to a secondary provider; no model_change written on retry."
+        },
+        {
+          "kind": "file",
+          "ref": "@mariozechner/pi-coding-agent 0.70.0 dist/core/session-manager.js L604-611 + dist/core/agent-session.js L1062-1135 (setModel/cycleModel)",
+          "note": "appendModelChange (the only writer of the model_change transcript event, and it DOES include a provider field) is called solely from explicit user/config model operations — never from the auto-retry path. A provider failover would therefore leave no model_change trace."
+        },
+        {
+          "kind": "file",
+          "ref": "@mariozechner/pi-coding-agent 0.70.0 dist/core/model-registry.js L12-30 (OpenRouterRoutingSchema.allow_fallbacks) + dist/core/sdk.js L96-122 + dist/core/model-resolver.js L113 (modelFallbackMessage/buildFallbackModel)",
+          "note": "dist scan for failover|fallback|provider-chain|cascade|secondary-model: all hits are OpenRouter routing prefs, startup model-RESTORE fallback (\"Could not restore model X. Using Y\"), thinking-level fallback, and model-pattern fallback — none is a mid-turn provider-failover chain. Authoritative for what shipped in 0.70.0."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/codex/scenarios/5-5_provider-failover-midturn/metadata.json + replaydata/agents/claudecode/scenarios/5-5_provider-failover-midturn/metadata.json",
+          "note": "Reference cells for this row: both agent=partial, daemon=incapable, driver=ready, frozen/applicable_false — provider is a startup choice, failover leaves no transcript trace. pi matches (provider field present but unextracted; retry is same-model)."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "notes": "applicable: false (frozen, 2026-05-31: agent_supports=partial, daemon_capability=incapable). The scenario's defining signal is an in-turn provider/model failover that swaps the active provider to a SECONDARY model on a primary error and continues the same turn, with ModelName updating to the fallback. pi has a model_providers registry and an in-turn auto-retry on overloaded/rate-limit/5xx/timeout, but the retry re-issues the SAME model via agent.continue() — no failover-to-a-different-provider chain; and the retry writes no model_change, while the pi parser extracts only modelId/model (never the provider field pi does record) — so a provider swap leaves no observable trace. State continuity and the working→ready close ARE observable but are already covered by turn-aborted-by-error and basic-turn; ModelName validity by model-identification/model-switch-midsession. No recipe, no recording. Unblocks only if pi ships a documented mid-turn provider-failover chain that swaps to a secondary provider AND announces it in the transcript (writing a model_change on the swap) AND the pi parser learns to extract the provider field. See replaydata/agents/codex/scenarios/5-5_provider-failover-midturn/metadata.json.",
+      "script": []
+    }
+  }
+}

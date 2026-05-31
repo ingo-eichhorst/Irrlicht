@@ -63,22 +63,24 @@ func TestCellVerdict(t *testing.T) {
 func TestDeriveDisplayState(t *testing.T) {
 	cases := []struct {
 		supports, daemon, driver string
-		rec                      bool
+		rec, applic              bool
 		want                     string
 	}{
-		{"no", "full", "ready", true, "n.a."},
-		{"unknown", "full", "ready", true, "unknown"},
-		{"yes", "n/a", "ready", true, "n.a."},
-		{"yes", "incapable", "ready", true, "unobservable"},
-		{"yes", "bug", "ready", true, "blocked-daemon"},
-		{"yes", "full", "gap:keys", true, "blocked-driver"},
-		{"yes", "unknown", "ready", false, "unknown"},
-		{"yes", "full", "ready", false, "pending-record"},
-		{"yes", "full", "ready", true, "observed"},
+		{"no", "full", "ready", true, true, "n.a."},
+		{"unknown", "full", "ready", true, true, "unknown"},
+		{"yes", "n/a", "ready", true, true, "n.a."},
+		{"yes", "incapable", "ready", true, true, "unobservable"},
+		{"yes", "bug", "ready", true, true, "blocked-daemon"},
+		{"yes", "full", "gap:keys", true, true, "blocked-driver"},
+		{"yes", "unknown", "ready", false, true, "unknown"},
+		{"yes", "full", "ready", false, true, "pending-record"},
+		// applicable:false (record_blocked deferral), not recorded → n.a., NOT pending-record.
+		{"yes", "full", "ready", false, false, "n.a."},
+		{"yes", "full", "ready", true, true, "observed"},
 	}
 	for _, c := range cases {
-		if got := DeriveDisplayState(c.supports, c.daemon, c.driver, c.rec); got != c.want {
-			t.Errorf("DeriveDisplayState(%q,%q,%q,%v) = %q; want %q", c.supports, c.daemon, c.driver, c.rec, got, c.want)
+		if got := DeriveDisplayState(c.supports, c.daemon, c.driver, c.rec, c.applic); got != c.want {
+			t.Errorf("DeriveDisplayState(%q,%q,%q,rec=%v,applic=%v) = %q; want %q", c.supports, c.daemon, c.driver, c.rec, c.applic, got, c.want)
 		}
 	}
 }
@@ -120,13 +122,10 @@ func writeShardFixture(t *testing.T, agent string, shards map[string]shardFix) s
 		// Agent cell metadata.json (written even when minimal so the matrix sees the cell).
 		cell := map[string]any{"scenario_id": name}
 		if fx.recorded {
-			rec := agent + "/scenarios/" + folder + "/recordings/2026-01-01-00-00-00_irrlichd-test"
-			cell["recording_dir"] = agent + "/scenarios/" + folder
-			cell["artifacts"] = map[string]any{
-				"events":     rec + "/events.jsonl",
-				"transcript": rec + "/transcript.jsonl",
-				"recordings": []string{rec},
-			}
+			// "Recorded" is a disk fact: a recordings/<name>/ dir under the cell.
+			recDir := filepath.Join(root, "replaydata", "agents", agent, "scenarios", folder,
+				"recordings", "2026-01-01-00-00-00_irrlichd-test")
+			mustWriteFile(filepath.Join(recDir, "events.jsonl"), []byte("{}\n"))
 		}
 		details := map[string]any{}
 		if fx.assessment != "" {

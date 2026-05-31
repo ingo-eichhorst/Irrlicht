@@ -1,14 +1,5 @@
 {
-  "recording_dir": "opencode/scenarios/3-4_subagent-orphan-cleanup",
-  "artifacts": {
-    "events": "opencode/scenarios/3-4_subagent-orphan-cleanup/recordings/2026-05-27-05-32-05_irrlichd-0.4.7+76ca42f/events.jsonl",
-    "transcript": "opencode/scenarios/3-4_subagent-orphan-cleanup/recordings/2026-05-27-05-32-05_irrlichd-0.4.7+76ca42f/transcript.jsonl",
-    "manifest": "opencode/scenarios/3-4_subagent-orphan-cleanup/recordings/2026-05-27-05-32-05_irrlichd-0.4.7+76ca42f/manifest.json",
-    "golden": "opencode/scenarios/3-4_subagent-orphan-cleanup/recordings/2026-05-27-05-32-05_irrlichd-0.4.7+76ca42f/transcript.jsonl.replay.json.golden",
-    "recordings": [
-      "opencode/scenarios/3-4_subagent-orphan-cleanup/recordings/2026-05-27-05-32-05_irrlichd-0.4.7+76ca42f"
-    ]
-  },
+  "scenario_id": "subagent-orphan-cleanup",
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
@@ -120,6 +111,5 @@
       "settings": {},
       "timeout_seconds": 300
     }
-  },
-  "scenario_id": "subagent-orphan-cleanup"
+  }
 }

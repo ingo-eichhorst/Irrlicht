@@ -1,14 +1,5 @@
 {
-  "recording_dir": "opencode/scenarios/2-12_context-compaction",
-  "artifacts": {
-    "events": "opencode/scenarios/2-12_context-compaction/recordings/2026-05-27-01-18-43_irrlichd-0.4.7+2f1f7e5/events.jsonl",
-    "transcript": "opencode/scenarios/2-12_context-compaction/recordings/2026-05-27-01-18-43_irrlichd-0.4.7+2f1f7e5/transcript.jsonl",
-    "manifest": "opencode/scenarios/2-12_context-compaction/recordings/2026-05-27-01-18-43_irrlichd-0.4.7+2f1f7e5/manifest.json",
-    "golden": "opencode/scenarios/2-12_context-compaction/recordings/2026-05-27-01-18-43_irrlichd-0.4.7+2f1f7e5/transcript.jsonl.replay.json.golden",
-    "recordings": [
-      "opencode/scenarios/2-12_context-compaction/recordings/2026-05-27-01-18-43_irrlichd-0.4.7+2f1f7e5"
-    ]
-  },
+  "scenario_id": "context-compaction",
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
@@ -123,6 +114,5 @@
       "timeout_seconds": 360,
       "notes": "opencode in-place compaction via the /summarize slash command. The whole observable is THREE working→ready arcs on ONE ses_…: two priming turns ('one','two') populate context, then /summarize runs an in-place LLM summarization round that surfaces as a third working→ready arc. opencode is the lone ProcessOwnedStore adapter — the daemon reads per-turn state from the SQLite store (watcher.go scanParts), and parser.go's parseStepFinish maps the summarization step-finish (reason=stop) to turn_done, so the daemon sees an ordinary working→ready arc on the SAME session. irrlicht's CompactionState field is dead code, so the compaction-vs-normal-turn LABEL is not surfaced — the recipe asserts only the visible state arc. WHY a `slash` step and NOT a `send`: headless `opencode run -- \"/summarize\"` stores /summarize as literal user prompt text (no command effect); the driver routes any `slash` step to run_live() which delivers it to the live TUI via tmux send-keys -l + Enter (oc_flush composer-clear confirmation). WHY NO wait_turn AFTER /summarize: the driver's `slash` arm does NOT re-snapshot TURN_BASELINE (only `send` does), so a wait_turn after a slash would compare the terminal step-finish total against the SECOND priming turn's baseline — already exceeded — and return immediately (a no-op), never actually waiting for the summarization round. Worse, embedding a send-after-slash re-introduces the slash→send composer-coalescing race that degraded checkpoint-rewind to applicable:false. So /summarize is the LAST input and is followed by a generous 75s trailing sleep — long enough for the slow local model's summarization round to complete (~30-60s) and for the daemon to observe the full working→ready arc plus the post-compaction ready dwell before tmux teardown. WHY manual /summarize (not auto-compaction): auto-compaction fires only on context-window overflow (isOverflow) and is not deterministically reproducible in a bounded recording; manual /summarize runs the identical summarization round deterministically. SINGLE session, no multi-session chain (unlike session-reset's /new): in-place compaction leaves exactly one ses_… for the cwd. What differs between runs: PID/timestamps/token counts, the assistant wording of the priming replies, the summary text, and the per-turn wall-clock latency (~30-60s on the local model). What must NOT differ: three working→ready arcs on one ses_… session (two priming + one compaction), no waiting, ending ready. Where to look if it broke: core/adapters/inbound/agents/opencode/parser.go (parseStepFinish reason=stop → turn_done) and watcher.go (scanParts step-finish detection); if /summarize stopped producing a terminal step-finish (e.g. an opencode update routed it through CompactionPart without a stop reason), the compaction arc would not register and the cell would need re-assessment."
     }
-  },
-  "scenario_id": "context-compaction"
+  }
 }

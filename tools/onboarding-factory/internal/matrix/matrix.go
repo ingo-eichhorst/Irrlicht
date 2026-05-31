@@ -7,6 +7,7 @@ import (
 	"sort"
 
 	"irrlicht/tools/onboarding-factory/internal/shard"
+	"irrlicht/tools/onboarding-factory/internal/validate"
 )
 
 // AssessmentReport is the persisted artifact of one Stage-1 assessment, one
@@ -73,6 +74,7 @@ type Config struct {
 
 // Matrix is the loaded, normalized model. Construct via Load / LoadRepo.
 type Matrix struct {
+	repoRoot   string
 	catalog    []catalogEntry
 	agents     []string                              // sorted onboarded adapters (shard _meta.min_versions keys)
 	shards     map[string]shard.Shard                // coverage_id (shard.Name) → shard (scenario-global spec only)
@@ -118,6 +120,7 @@ func Load(cfg Config) (*Matrix, error) {
 	}
 
 	m := &Matrix{
+		repoRoot:   repoRoot,
 		agents:     shard.Agents(repoRoot),
 		shards:     make(map[string]shard.Shard, len(shards)),
 		agentCells: map[string]map[string]*shard.ShardAgent{},
@@ -184,14 +187,15 @@ func (m *Matrix) HasAgent(agent string) bool {
 func (m *Matrix) Agents() []string { return append([]string(nil), m.agents...) }
 
 // cellRecorded reports whether the cell has at least one captured recording.
-// Every recording lives under recordings/<name>/; a cell is recorded iff its
-// Artifacts.Recordings list is non-empty (read from metadata.json, no disk
-// scan). The per-file Events/Transcript pointers reference the newest recording.
-func cellRecorded(c *shard.ShardAgent) bool {
-	if c == nil {
+// The on-disk recordings/<name>/ tree is the single source of truth: a cell is
+// recorded iff validate.NewestRecordingDir finds a recording under its folder.
+// (c.Folder is populated by the shard loaders from the directory they scanned.)
+func (m *Matrix) cellRecorded(agent string, c *shard.ShardAgent) bool {
+	if c == nil || c.Folder == "" {
 		return false
 	}
-	return len(c.Artifacts.Recordings) > 0
+	_, ok := validate.NewestRecordingDir(shard.AgentCellDir(m.repoRoot, agent, c.Folder))
+	return ok
 }
 
 // cellAssessment parses the shard cell's Details.Assessment. hasAssessFile is
@@ -250,11 +254,11 @@ func repAxes(rep *AssessmentReport) (supports, daemon, driver string) {
 }
 
 // buildCell assembles the full CellState for one (agent, coverage_id) cell that
-// the shard names. Axes come from the cell's assessment; recorded / applicable
-// are reconstructed from the cell's Artifacts / Recipe.
+// the shard names. Axes come from the cell's assessment; recorded is a disk
+// check (recordings/ on disk); applicable is reconstructed from the cell's Recipe.
 func (m *Matrix) buildCell(agent, cid string) CellState {
 	c := m.agentCells[agent][cid]
-	recorded := cellRecorded(c)
+	recorded := m.cellRecorded(agent, c)
 	hasAssessFile, rep := cellAssessment(c)
 	appl := m.applicableState(agent, cid)
 
@@ -290,7 +294,9 @@ func (m *Matrix) buildCell(agent, cid string) CellState {
 		dsDaemon = c.Metadata.DaemonCapability
 		dsDriver = c.Metadata.DriverCapability
 	}
-	cs.DisplayState = DeriveDisplayState(dsSupports, dsDaemon, dsDriver, recorded)
+	// appl == AppFalse means the recipe defers this cell (applicable:false, a
+	// documented record_blocked) — never recorded here, so n.a. not pending-record.
+	cs.DisplayState = DeriveDisplayState(dsSupports, dsDaemon, dsDriver, recorded, appl != AppFalse)
 	return cs
 }
 

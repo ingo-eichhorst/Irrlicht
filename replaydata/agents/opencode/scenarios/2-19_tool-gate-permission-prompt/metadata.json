@@ -1,5 +1,5 @@
 {
-  "artifacts": {},
+  "scenario_id": "tool-gate-permission-prompt",
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "incapable",
@@ -75,6 +75,5 @@
       "applicable": false,
       "notes": "driver_gap (gap:permission-approval). agent_supports:yes — opencode declares permission_hooks:true and its interactive TUI gates tool execution behind an approve/deny permission overlay. NOT recordable: opencode's permission gate is TUI-only, and the rig drives opencode via headless `opencode run`, which AUTO-EXECUTES tools with NO permission prompt — PROVEN this sweep by the sibling opencode/auto-executed-tool-call recording, where gemma's `write` tool ran automatically inside the working span with zero waiting/approval state (ready→working→ready, no waiting). So the `waiting` episode this cell asserts cannot arise on the headless driver. Even if it did, drive-opencode-interactive.sh drives BLOCKING `opencode run` subprocesses and implements ONLY send / wait_turn (no-op) / sleep in its `case \"$TYPE\"` dispatch — there is NO approve/deny (or keys) step to RESOLVE a prompt, so the waiting → working/ready resolution half is unreachable too. Eliciting AND resolving a permission gate needs a live-REPL opencode driver (permission-approval primitive); recording deferred — a developer task, out of scope for implement. NOT a recipe-lint step-TYPE gap (the recipe is left applicable:false with no script, so there is no step type to reject) — same shape as the opencode user-esc-interrupt (gap:interrupt) / model-switch-midsession (gap:model-select) cells. daemon side is now PROVEN incapable (C0 live probe, 2026-05-29, #492): a real bash gate was driven end-to-end under tmux and opencode.db inspected while the approve/deny overlay was held — the gated part sits at state.status=\"running\" with state.time.start set (indistinguishable from a normal in-flight tool, NOT pending), and the `permission` table is empty both while held and after approve. opencode holds the gate entirely in-memory/TUI; nothing in the watched Source (session/message/part) distinguishes 'blocked on a gate' from 'executing slowly'. A dwell heuristic is unsafe (opencode's bash legitimately runs long). So this is NOT an observability_correction — daemon_capability:incapable is confirmed, and per maintainer decision (2026-05-29) NO daemon feature is being built for it. expected.jsonl documents the full target arc (ready→working→waiting→working→ready, resolved by approval); assessment.json carries the yes / full / gap:permission-approval verdict. permission_hooks=yes (TUI). UNBLOCK: replace/augment drive-opencode-interactive.sh with a live-REPL driver (tmux-based, like claudecode/pi/aider) that launches the opencode TUI, sends a tool-inducing prompt to open the permission overlay, then fires an approve/deny step."
     }
-  },
-  "scenario_id": "tool-gate-permission-prompt"
+  }
 }

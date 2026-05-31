@@ -1,5 +1,5 @@
 {
-  "artifacts": {},
+  "scenario_id": "quota-burndown",
   "metadata": {
     "agent_supports": "no",
     "daemon_capability": "n/a",
@@ -41,6 +41,5 @@
         }
       ]
     }
-  },
-  "scenario_id": "quota-burndown"
+  }
 }

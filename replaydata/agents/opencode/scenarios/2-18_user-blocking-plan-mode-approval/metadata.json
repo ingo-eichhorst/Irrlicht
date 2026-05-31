@@ -1,5 +1,5 @@
 {
-  "artifacts": {},
+  "scenario_id": "user-blocking-plan-mode-approval",
   "metadata": {
     "agent_supports": "partial",
     "daemon_capability": "incapable",
@@ -56,6 +56,5 @@
       "applicable": false,
       "notes": "scope_note: opencode plan mode is a TOOL-RESTRICTION (read-only) mode, not a blocking plan-approval gate — the plan turn runs to completion (ready→working→ready) with no pause for user approval, so there is no daemon-observable waiting→approval transition. agent_supports:partial (a plan mode exists, but the wrong KIND — tool-restriction, not approval-gate), daemon_capability:incapable. Even if opencode paused for approval, the opencode adapter (lone ProcessOwnedStore) has NO waiting/user-blocking/ExitPlanMode branch in parser.go/watcher.go to classify it as waiting (grep returns nothing relevant). NOT a driver_gap (no agent primitive to elicit, no adapter branch to surface). Mirrors the sibling opencode/user-blocking-question cell (no daemon-observable structured-blocking waiting state from the SQLite store). No recipe, no recording; frozen at assessment. See replaydata/agents/opencode/scenarios/user-blocking-plan-mode-approval/assessment.json."
     }
-  },
-  "scenario_id": "user-blocking-plan-mode-approval"
+  }
 }

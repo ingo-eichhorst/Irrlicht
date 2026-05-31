@@ -1,14 +1,5 @@
 {
-  "recording_dir": "codex/scenarios/1-4_session-resume",
-  "artifacts": {
-    "events": "codex/scenarios/1-4_session-resume/recordings/2026-05-23-20-30-54_irrlichd-0.4.7+c461eef/events.jsonl",
-    "transcript": "codex/scenarios/1-4_session-resume/recordings/2026-05-23-20-30-54_irrlichd-0.4.7+c461eef/transcript.jsonl",
-    "manifest": "codex/scenarios/1-4_session-resume/recordings/2026-05-23-20-30-54_irrlichd-0.4.7+c461eef/manifest.json",
-    "golden": "codex/scenarios/1-4_session-resume/recordings/2026-05-23-20-30-54_irrlichd-0.4.7+c461eef/transcript.jsonl.replay.json.golden",
-    "recordings": [
-      "codex/scenarios/1-4_session-resume/recordings/2026-05-23-20-30-54_irrlichd-0.4.7+c461eef"
-    ]
-  },
+  "scenario_id": "session-resume",
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
@@ -113,6 +104,5 @@
       "timeout_seconds": 180,
       "scope_note": "Re-assessed 2026-05-23: the prior applicable:false (driver lacked resume) is STALE. The codex interactive driver now exposes exit_clean + resume (commit 8296cd0), and codex 0.130.0's `codex resume <uuid>` reopens the SAME rollout file (verified empirically) — one session id across two process lifetimes. Same single-session-two-lifetimes shape as claudecode/session-resume, but codex resume is explicit (`codex resume <uuid>`) where claudecode re-passes `--session-id`. How it differs between runs: UUID/PID/timestamps/token counts vary; the structural arc (birth → turn1 working/ready → process_exited → same-id re-bind → turn2 working/ready → final ready) is fixed. If it breaks, check drive-codex-interactive.sh step_resume (UUID resolution + `codex resume <uuid>` relaunch) and confirm codex flushed the rollout on Ctrl-D before relaunch."
     }
-  },
-  "scenario_id": "session-resume"
+  }
 }

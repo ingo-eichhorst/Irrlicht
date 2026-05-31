@@ -1,14 +1,5 @@
 {
-  "recording_dir": "opencode/scenarios/1-4_session-resume",
-  "artifacts": {
-    "events": "opencode/scenarios/1-4_session-resume/recordings/2026-05-23-13-11-09_irrlichd-0.4.7+e0e773f.dirty/events.jsonl",
-    "transcript": "opencode/scenarios/1-4_session-resume/recordings/2026-05-23-13-11-09_irrlichd-0.4.7+e0e773f.dirty/transcript.jsonl",
-    "manifest": "opencode/scenarios/1-4_session-resume/recordings/2026-05-23-13-11-09_irrlichd-0.4.7+e0e773f.dirty/manifest.json",
-    "golden": "opencode/scenarios/1-4_session-resume/recordings/2026-05-23-13-11-09_irrlichd-0.4.7+e0e773f.dirty/transcript.jsonl.replay.json.golden",
-    "recordings": [
-      "opencode/scenarios/1-4_session-resume/recordings/2026-05-23-13-11-09_irrlichd-0.4.7+e0e773f.dirty"
-    ]
-  },
+  "scenario_id": "session-resume",
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
@@ -87,6 +78,5 @@
       "timeout_seconds": 180,
       "scope_note": "OpenCode's per-turn process model means every `opencode run --session` after the first IS session resume. The recording validates that the SQLite-backed session row survives across PID lifetimes — same shape as claudecode's session-resume, just without an in-process REPL."
     }
-  },
-  "scenario_id": "session-resume"
+  }
 }

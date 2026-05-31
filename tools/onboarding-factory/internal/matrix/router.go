@@ -122,12 +122,18 @@ func CellVerdict(route Route, appl ApplicableState, recorded bool, blocked strin
 }
 
 // DeriveDisplayState rolls the three orthogonal facts — agent support, daemon
-// capability, driver capability — plus the MEASURED recording status up into
-// one matrix display state (#476). Ported from viewer's deriveDisplayState so
-// the viewer and the matrix model never diverge. Precedence is fixed and
-// daemon-before-driver: a product (daemon) problem outranks a tooling (driver)
-// gap because it's the more fundamental blocker.
-func DeriveDisplayState(supports, daemon, driver string, hasRecording bool) string {
+// capability, driver capability — plus the MEASURED recording status and whether
+// the cell is applicable for a live recording, up into one matrix display state
+// (#476). Ported from viewer's deriveDisplayState so the viewer and the matrix
+// model never diverge. Precedence is fixed and daemon-before-driver: a product
+// (daemon) problem outranks a tooling (driver) gap because it's the more
+// fundamental blocker.
+//
+// applicable is false when the cell's recipe is marked applicable:false — a
+// deliberate deferral (e.g. a record_blocked behavior covered by a unit test).
+// Such a cell will never be recorded here, so it is terminal (n.a.), not the
+// actionable pending-record an un-recorded recordable cell gets.
+func DeriveDisplayState(supports, daemon, driver string, hasRecording, applicable bool) string {
 	switch supports {
 	case "no":
 		return "n.a."
@@ -147,6 +153,9 @@ func DeriveDisplayState(supports, daemon, driver string, hasRecording bool) stri
 		return "unknown"
 	}
 	if !hasRecording {
+		if !applicable {
+			return "n.a."
+		}
 		return "pending-record"
 	}
 	return "observed"

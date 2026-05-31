@@ -1,13 +1,5 @@
 {
-  "recording_dir": "aider/scenarios/2-14_turn-aborted-by-error",
-  "artifacts": {
-    "events": "aider/scenarios/2-14_turn-aborted-by-error/recordings/2026-05-25-18-55-18_irrlichd-0.4.7+689e190/events.jsonl",
-    "transcript_md": "aider/scenarios/2-14_turn-aborted-by-error/recordings/2026-05-25-18-55-18_irrlichd-0.4.7+689e190/transcript.md",
-    "manifest": "aider/scenarios/2-14_turn-aborted-by-error/recordings/2026-05-25-18-55-18_irrlichd-0.4.7+689e190/manifest.json",
-    "recordings": [
-      "aider/scenarios/2-14_turn-aborted-by-error/recordings/2026-05-25-18-55-18_irrlichd-0.4.7+689e190"
-    ]
-  },
+  "scenario_id": "turn-aborted-by-error",
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
@@ -113,6 +105,5 @@
       },
       "timeout_seconds": 120
     }
-  },
-  "scenario_id": "turn-aborted-by-error"
+  }
 }

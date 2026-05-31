@@ -1,14 +1,5 @@
 {
-  "recording_dir": "opencode/scenarios/2-14_turn-aborted-by-error",
-  "artifacts": {
-    "events": "opencode/scenarios/2-14_turn-aborted-by-error/recordings/2026-05-28-00-32-48_irrlichd-0.4.7+ab9f697/events.jsonl",
-    "transcript": "opencode/scenarios/2-14_turn-aborted-by-error/recordings/2026-05-28-00-32-48_irrlichd-0.4.7+ab9f697/transcript.jsonl",
-    "manifest": "opencode/scenarios/2-14_turn-aborted-by-error/recordings/2026-05-28-00-32-48_irrlichd-0.4.7+ab9f697/manifest.json",
-    "golden": "opencode/scenarios/2-14_turn-aborted-by-error/recordings/2026-05-28-00-32-48_irrlichd-0.4.7+ab9f697/transcript.jsonl.replay.json.golden",
-    "recordings": [
-      "opencode/scenarios/2-14_turn-aborted-by-error/recordings/2026-05-28-00-32-48_irrlichd-0.4.7+ab9f697"
-    ]
-  },
+  "scenario_id": "turn-aborted-by-error",
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
@@ -104,6 +95,5 @@
       "settings": {},
       "timeout_seconds": 300
     }
-  },
-  "scenario_id": "turn-aborted-by-error"
+  }
 }

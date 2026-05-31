@@ -1,14 +1,5 @@
 {
-  "recording_dir": "pi/scenarios/2-15_shell-escape-command",
-  "artifacts": {
-    "events": "pi/scenarios/2-15_shell-escape-command/recordings/2026-05-25-02-51-25_irrlichd-0.4.7+021b5b0/events.jsonl",
-    "transcript": "pi/scenarios/2-15_shell-escape-command/recordings/2026-05-25-02-51-25_irrlichd-0.4.7+021b5b0/transcript.jsonl",
-    "manifest": "pi/scenarios/2-15_shell-escape-command/recordings/2026-05-25-02-51-25_irrlichd-0.4.7+021b5b0/manifest.json",
-    "golden": "pi/scenarios/2-15_shell-escape-command/recordings/2026-05-25-02-51-25_irrlichd-0.4.7+021b5b0/transcript.jsonl.replay.json.golden",
-    "recordings": [
-      "pi/scenarios/2-15_shell-escape-command/recordings/2026-05-25-02-51-25_irrlichd-0.4.7+021b5b0"
-    ]
-  },
+  "scenario_id": "shell-escape-command",
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
@@ -105,6 +96,5 @@
       "timeout_seconds": 120,
       "notes": "Pi difference vs claudecode/codex: pi runs `!`-prefixed REPL input as a LOCAL shell command with no LLM round-trip (verified live against pi 0.70.0 — interactive-mode.js text.startsWith(\"!\") → handleBashCommand → executeBash + recordBashResult; the `!!` variant additionally excludes output from context). Pi records the escape as ONE {\"type\":\"message\",\"message\":{\"role\":\"bashExecution\",...}} rollout line. The pi parser (core/adapters/inbound/agents/pi/parser.go:128-131) deliberately SKIPS the bashExecution role (ev.Skip = true), so — UNLIKE codex, which synthesizes a working→ready arc for its !-escape, and LIKE claudecode, which skips its <bash-input> wrappers — the daemon sees no transcript_activity and the session stays ready across the escape. The whole observable is the ABSENCE of a second working transition plus the proof (warm-up arc) that a NORMAL prompt still drives state. RECIPE SHAPE: the warm-up turn comes FIRST (the escape SECOND) — opposite to the claudecode recipe — because pi creates ~/.pi/agent/sessions/.../<ts>_<uuid>.jsonl only after the first user message, so without a leading real turn the driver's resolve_transcript never binds a UUID. The escape uses `send` (not the claudecode `keys` step): the pi interactive driver supports send/slash/wait_turn/interrupt/sleep but NOT keys, and step_send types the literal text (-l) then Enter, so `!echo hi` is delivered verbatim. NO wait_turn after the escape: it produces no assistant stopReason=stop, so wait_turn would time out; the trailing 6s sleep instead holds the recording open past the classifier debounce so the post-escape ready dwell is observed cleanly and the daemon-kill doesn't race the final-state emission. C7 / SESSION-IDENTITY: the live REPL emits a transient proc-<PID> pre-session born ready at launch (bridges the gap until the UUID rollout transcript appears); session_birth legitimately matches that pre-session, while the warm-up arc and post-escape dwell pin to the rollout via same_session_as (turn_start anchors to recording start with NO pin so the matcher binds the FIRST working — necessarily the rollout, since the pre-session never goes working). Between runs: warm-up assistant wording, token counts, session UUID, PID and timestamps differ, and pi may flush the warm-up turn as one or two working→ready bursts; the load-bearing assertion is the silent ready dwell across the escape window. If it broke, look at core/adapters/inbound/agents/pi/parser.go (case \"bashExecution\" → ev.Skip) and whether a pi update changed how `!` escapes are recorded in the rollout."
     }
-  },
-  "scenario_id": "shell-escape-command"
+  }
 }

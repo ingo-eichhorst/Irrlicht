@@ -1,0 +1,66 @@
+{
+  "scenario_id": "background-process",
+  "metadata": {
+    "agent_supports": "no",
+    "daemon_capability": "n/a",
+    "driver_capability": "n/a",
+    "agent_cli_version": "0.135.0",
+    "daemon_version": "0.4.8+a9ab9ea.dirty",
+    "confidence": 0.85,
+    "notes": "agent_supports: no — Codex CLI has no run_in_background primitive; shell tool is synchronous"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "background-process",
+      "agent": "codex",
+      "assessed_at": "2026-05-31T00:00:00Z",
+      "agent_supports": "no",
+      "daemon_capability": "n/a",
+      "driver_capability": "n/a",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: no\ndaemon_capability: n/a; driver_capability: n/a\n\n## What the scenario requires\n\nbackground-process (id 3.3) asserts the user-observable arc PR #450 / issue #445 added for Claude Code: the agent spawns a Bash command with `run_in_background:true`, the tool returns immediately carrying a structured `toolUseResult.backgroundTaskId`, the detached process outlives the turn's `end_turn`, the session STAYS `working` while the process is alive (`BackgroundProcessCount \u003e 0`), and a single `working → ready` fires once the process exits. The fixed structural arc is: one `ready → working`, an extended `working` dwell with no settle while the background process is alive, then exactly one `working → ready` after it exits.\n\n## Why agent_supports: no\n\nThe scenario's core primitive — a tool call that launches a process which the agent leaves running in the background and polls to completion in a later step — does not exist in Codex CLI 0.135.0. Codex's tool surface, read from the bundled rust binary's tool schema strings, is:\n\n- **`shell`** — \"Runs a shell command and returns its output.\" Parameters: `command`, `workdir`, `timeout_ms`, `with_escalated_permissions`/`justification`, `login`. There is NO `run_in_background` parameter. The tool is synchronous: it runs the command and returns its output (or times out at `timeout_ms`). A user could append `\u0026` inside the `command` string, but that backgrounds a child within the single synchronous invocation — the `shell` tool still returns when the foreground command returns, the detached child is not tracked, there is no id to poll, and nothing in the transcript marks a process as outliving the turn.\n- **`unified_exec` / `write_stdin`** — \"Writes characters to an existing unified exec session and returns recent output.\" Parameters: `session_id`, `chars`, `yield_time_ms`, `max_output_tokens`, `max_runtime_seconds`. This is an interactive PTY-style exec session you write stdin to and poll for output — a synchronous, foreground, agent-driven session, not a detached background process that holds the agent `working` past its own turn. The agent only `working` while it is actively reading/writing the session within the turn.\n\nCrucially, Codex emits NONE of the structured signals the scenario's observability is built on: zero hits in the binary for `run_in_background`, `backgroundTaskId`, `BashOutput`, or `KillShell`. The whole #445/#450 mechanism is keyed on Claude Code's `toolUseResult.backgroundTaskId` field plus the `BashOutput`/`KillShell` poll/kill tools; Codex has no analogue. The agent simply has no way to express \"launch this and let it keep running in the background past my turn\" as a first-class, trackable action.\n\nBecause the agent cannot perform the behavior, the daemon and driver pillars are `n/a`: there is no behavior to observe and no recipe to drive. (This is distinct from `cloud-background-agent`, where Codex DOES have the feature — Codex Cloud — but irrlicht has no transport, giving `daemon=incapable`. Here the gap is in the agent itself, so the route is frozen on `agent=no`, not on a transport limit.)\n\n## What would flip agent_supports to yes\n\nA future Codex release adding a true detached/background exec primitive — a `shell` `run_in_background` flag or a dedicated background-task tool that returns a task id, keeps the process alive past the turn, and exposes a poll/terminate surface the agent (and a tailer) can observe. None of that exists in 0.135.0.",
+      "caveats": [
+        "agent_supports: no is anchored to the codex-cli 0.135.0 vendor binary tool-schema strings: shell is synchronous ('Runs a shell command and returns its output') with params command/workdir/timeout_ms/with_escalated_permissions/justification/login and NO run_in_background; unified_exec is an interactive PTY session, not a detached background process.",
+        "A user-supplied `\u0026` inside a `shell` command backgrounds a child within the single synchronous invocation, but it is untracked, has no id to poll, and is not surfaced in the transcript as outliving the turn — it does not satisfy the scenario's tracked-background-process arc.",
+        "daemon/driver are n/a (not incapable): the agent lacks the primitive, so there is no signal to observe and no recipe to drive. Contrast cloud-background-agent, where the feature exists (Codex Cloud) but irrlicht has no transport (daemon=incapable)."
+      ],
+      "sources": [
+        {
+          "kind": "command",
+          "ref": "strings codex (codex-darwin-arm64 vendor binary, codex-cli 0.135.0) | grep -coiE 'run_in_background|backgroundTaskId|BashOutput|KillShell'",
+          "note": "0 hits for every Claude Code background-process primitive. The #445/#450 mechanism is keyed on toolUseResult.backgroundTaskId + BashOutput/KillShell; Codex emits none of these."
+        },
+        {
+          "kind": "command",
+          "ref": "strings codex (codex-cli 0.135.0) | grep 'Runs a shell command and returns its output'",
+          "note": "The shell tool is synchronous and returns output; its parameter schema is command/workdir/timeout_ms/with_escalated_permissions/justification/login — no run_in_background flag."
+        },
+        {
+          "kind": "command",
+          "ref": "strings codex (codex-cli 0.135.0) | grep 'Writes characters to an existing unified exec session'",
+          "note": "unified_exec/write_stdin is an interactive PTY session (session_id/chars/yield_time_ms/max_output_tokens/max_runtime_seconds), polled synchronously within the turn — not a detached background process that holds the session working past end_turn."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/codex/parser.go",
+          "note": "The codex parser produces no BackgroundSpawns / TerminatedBackgroundTaskIDs / BashOutputPolls — zero background-process handling. The daemon's BackgroundProcessCount path (core/pkg/tailer/tailer.go) is fed only by those parser fields, which only claudecode emits."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/3-3_background-process/metadata.json",
+          "note": "Canonical anchor (claudecode yes/full/ready): the scenario's observability is built entirely on Claude Code's run_in_background + backgroundTaskId + BashOutput/KillShell, none of which Codex has."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "preconditions": [],
+      "setup": [],
+      "script": [],
+      "verify": [],
+      "settings": {},
+      "timeout_seconds": 0
+    }
+  }
+}

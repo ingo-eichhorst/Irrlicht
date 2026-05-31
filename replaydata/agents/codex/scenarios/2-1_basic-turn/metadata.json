@@ -1,15 +1,5 @@
 {
-  "recording_dir": "codex/scenarios/2-1_basic-turn",
-  "artifacts": {
-    "events": "codex/scenarios/2-1_basic-turn/recordings/2026-05-23-20-36-20_irrlichd-0.4.7+723609a/events.jsonl",
-    "transcript": "codex/scenarios/2-1_basic-turn/recordings/2026-05-23-20-36-20_irrlichd-0.4.7+723609a/transcript.jsonl",
-    "manifest": "codex/scenarios/2-1_basic-turn/recordings/2026-05-23-20-36-20_irrlichd-0.4.7+723609a/manifest.json",
-    "golden": "codex/scenarios/2-1_basic-turn/recordings/2026-05-23-20-36-20_irrlichd-0.4.7+723609a/transcript.jsonl.replay.json.golden",
-    "recordings": [
-      "codex/scenarios/2-1_basic-turn/recordings/2026-05-23-18-54-06_irrlichd-0.4.7+723609a",
-      "codex/scenarios/2-1_basic-turn/recordings/2026-05-23-20-36-20_irrlichd-0.4.7+723609a"
-    ]
-  },
+  "scenario_id": "basic-turn",
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
@@ -96,6 +86,5 @@
       "settings": {},
       "timeout_seconds": 180
     }
-  },
-  "scenario_id": "basic-turn"
+  }
 }

@@ -1,0 +1,87 @@
+{
+  "scenario_id": "tool-gate-permission-prompt",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "incapable",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.135.0",
+    "daemon_version": "0.4.8+aa1c70d.dirty",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes (codex --ask-for-approval untrusted/on-request gates non-trusted commands); daemon_capability: incapable (the held approval gate is a live protocol/TUI state, never written to the watched rollout JSONL); driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "tool-gate-permission-prompt",
+      "agent": "codex",
+      "assessed_at": "2026-05-31T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "incapable",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes (codex CLI 0.135.0 has `-a/--ask-for-approval \u003cAPPROVAL_POLICY\u003e`; under `untrusted` every non-trusted command escalates and blocks on a human approval prompt)\ndaemon_capability: incapable (the held approval gate is a LIVE protocol/TUI state, never written to the watched rollout JSONL the daemon tails)\ndriver_capability: ready (codex's interactive driver has both `send` to elicit the gate and `keys` to resolve the picker)\n\n## Scenario signal\n\n`tool-gate-permission-prompt` asserts the user-observable arc `ready → working → waiting` when a tool invocation opens a permission prompt, and (the resolve half / late-hook variant) `waiting → working → ready` after the user answers, with a delayed post-tool signal NOT bouncing the session. The load-bearing observable is the `working → waiting` episode while the gate is held.\n\n## Agent supports it (agent_supports: yes)\n\ncodex CLI 0.135.0 ships `-a, --ask-for-approval \u003cAPPROVAL_POLICY\u003e` with `untrusted` / `on-request` / `on-failure` / `never` (codex --help). Under `untrusted`, only trusted commands (ls, cat, sed) auto-run; any other model-proposed command escalates to the user for approval and blocks the turn until answered. The codex rust binary's protocol schema carries `exec_approval_request` and `apply_patch_approval_request` EventMsg variants plus the runtime thread states `waitingOnApproval` / `waitingOnUserInput` (strings in the aarch64 codex binary). So codex unambiguously HAS the blocking permission gate this scenario asserts — stronger than the sibling `auto-classified-permission` cell's `partial`, because that scenario needs a per-call safe-vs-risky classifier (`permission_hooks`) codex lacks, whereas THIS scenario only needs the generic approval prompt, which `--ask-for-approval untrusted` provides.\n\n## Daemon cannot observe it (daemon_capability: incapable)\n\nThe codex adapter is `FilesUnderRoot` over `$HOME/.codex/sessions/rollout-*.jsonl` with a JSONL parser (agent.go) — there is NO HTTP hook channel of the Claude-Code kind. The held approval gate produces no trace the daemon can turn into `waiting`:\n\n1. **No hook → rule 0 dead.** `state_classifier.go` rule 0 (`PermissionPending` → waiting) is fed solely by Claude Code's HTTP `HandlePermissionHook` (PermissionRequest/PreToolUse). codex's FilesUnderRoot transport never calls it, so `PermissionPending` is always false for codex.\n2. **The approval request is never persisted to the rollout.** `exec_approval_request` / `apply_patch_approval_request` are live protocol notifications between the codex core and its TUI/client, correlated with ExecCommandBegin/PatchApplyBegin — they are NOT `RolloutItem`s. Surveyed across every recorded codex rollout in `replaydata/agents/codex/`, the persisted `event_msg` payload types are only `token_count`, `agent_message`, `task_started`, `user_message`, `task_complete`, `exec_command_end`, `patch_apply_end`, `turn_aborted`, `item_completed`, `context_compacted`; NO `*_approval_request` line appears in any rollout (the only `approval` substrings are the agent's own system-prompt escalation prose). So the gate's held state lives entirely in the live protocol / TUI (`waitingOnApproval`), outside the watched Source.\n3. **The most the rollout shows is an ordinary open tool call, which classifies as `working`.** A held command appears (if at all) as a `response_item` `function_call name=exec_command`/`shell` with no `function_call_output` yet → `HasOpenToolCall=true`. But the codex parser copies the raw codex tool name (`exec_command`, `shell`, `apply_patch`), and none of the three transcript waiting rules match it: rule 1 `NeedsUserAttention` matches only `AskUserQuestion`/`ExitPlanMode`/`question` (codex maps `\u003cproposed_plan\u003e` → `ExitPlanMode`, but that is the plan-mode scenario, not an exec/shell gate); rule 1b `OpenToolStalled` matches only `Edit`/`Write`/`MultiEdit`/`NotebookEdit`. The classifier test `state_classifier_test.go` (\"working stays working (Bash open, no permission pending)\") is verbatim authority: a generic open tool call with no permission-pending hook STAYS working, never waiting.\n\nNet: a held codex approval gate yields, in the watched rollout, at most a normal open tool call the daemon classifies as `working` — never `waiting`. The waiting episode the cell asserts leaves no trace the 3-state model can represent. That is `incapable` (no trace in the Source / architecture-transport limit on the FilesUnderRoot adapter) — NOT a `bug` (no spec-required observable is mis-handled; the gate simply isn't in the read path). This mirrors the committed `opencode × tool-gate-permission-prompt` verdict (held gate outside the watched Source → incapable) and the sibling `codex × auto-classified-permission` verdict (incapable, same parser limitation).\n\n## Driver is ready (driver_capability: ready)\n\nUnlike opencode (whose interactive driver lacked a raw-keystroke step to answer its overlay → gap:permission-approval), codex's `driver-interactive.sh` already implements both halves: `send` types a tool-inducing prompt (under `--ask-for-approval untrusted` this elicits the gate) and `keys` sends raw tmux key sequences (Up/Down/Enter/Escape) to navigate and answer the approval picker. recipe-lint `driver_step_types_from_file` reports the full set incl. `keys`. So there is NO driver gap — but the route is governed by the incapable daemon pillar, so driver readiness is moot here.\n\n## Route\n\nincapable daemon → **frozen**: irrlicht fundamentally cannot observe the held codex approval gate today, so no recipe and no recording are authored. This would unblock only if codex began persisting an approval-request / `waitingOnApproval` marker into the rollout AND the codex parser learned to translate the held gate into a `working → waiting` transition (e.g. a new parser branch + a dwell/approval-pending signal the classifier could read).",
+      "caveats": [
+        "agent_supports is yes, NOT the sibling auto-classified-permission cell's partial: tool-gate-permission-prompt only needs the generic blocking approval prompt, which codex's --ask-for-approval untrusted provides for every non-trusted command. auto-classified-permission additionally needs a per-call safe-vs-risky classifier (permission_hooks) codex lacks — different scenario, different agent verdict.",
+        "daemon=incapable, not bug: the approval request (exec_approval_request / apply_patch_approval_request) is a live protocol/TUI event (waitingOnApproval), never a RolloutItem, so it is absent from the watched rollout JSONL entirely — confirmed by surveying every recorded codex rollout (no *_approval_request line ever persists). A held gate shows at most as a normal open exec_command/shell function_call, which the classifier keeps in working (verbatim test: 'working stays working (Bash open, no permission pending)'). No spec-required observable is mis-handled; the gate is simply not in the read path.",
+        "This is a doc+code+binary-strings + recorded-rollout-survey verdict, NOT live-confirmed: no live codex run was driven through a held --ask-for-approval untrusted gate while inspecting the rollout in real time. The emission claim (the approval request never lands in the rollout) is grounded in the protocol schema (RolloutItem vs EventMsg) and the absence across all recorded rollouts, but a future live probe under untrusted could promote it from provisional to settled. Confidence 0.85 reflects this.",
+        "driver_capability is ready (codex driver has send + keys), unlike opencode's gap:permission-approval — but the route is frozen on the incapable daemon pillar regardless."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/codex/agent.go",
+          "note": "codex Source is FilesUnderRoot over $HOME/.codex/sessions with a JSONL parser — no HTTP hook channel, so the daemon's hook-fed PermissionPending (rule 0) path can never fire for codex."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/codex/parser.go",
+          "note": "Parser copies raw codex tool names (exec_command/shell/apply_patch) on function_call; maps only \u003cproposed_plan\u003e → ExitPlanMode. No approval/permission/waiting branch; persisted event_msg payloads are token_count/task_complete/turn_aborted (no approval_request)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go",
+          "note": "The three waiting paths: rule 0 PermissionPending (hook-only, dead for codex), rule 1 NeedsUserAttention (AskUserQuestion/ExitPlanMode/question only), rule 1b OpenToolStalled (Edit/Write/MultiEdit/NotebookEdit only). A generic open exec_command matches none → working."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier_test.go",
+          "note": "Verbatim authority: test case 'working stays working (Bash open, no permission pending)' — an open generic tool call with no permission-pending hook stays working, never waiting."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/session.go",
+          "note": "isUserBlockingTool = {AskUserQuestion, ExitPlanMode, question}; isPermissionGatedEditTool = {Edit, Write, MultiEdit, NotebookEdit}. codex's exec_command/shell/apply_patch are in neither set."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/codex/driver-interactive.sh",
+          "note": "Interactive driver implements both `send` (elicit a tool-inducing prompt) and `keys` (raw tmux key sequence to answer the approval picker) → driver=ready; recipe-lint driver_step_types_from_file lists keys."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex",
+          "note": "codex 0.135.0 aarch64 binary strings: protocol carries exec_approval_request / apply_patch_approval_request EventMsg variants and runtime thread states waitingOnApproval / waitingOnUserInput — live protocol/TUI state, correlated with ExecCommandBegin, NOT a RolloutItem persisted to the rollout JSONL."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/codex/scenarios/2-2_auto-executed-tool-call/recordings/2026-05-23-22-48-46_irrlichd-0.4.7+14e1e7a/transcript.jsonl",
+          "note": "Recorded codex rollout: an un-gated exec_command is response_item function_call → function_call_output with no approval line. Survey of all codex rollouts shows persisted event_msg payloads never include any *_approval_request; the only 'approval' substrings are the agent's system-prompt escalation prose."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/codex/scenarios/2-11_auto-classified-permission/metadata.json",
+          "note": "Sibling codex cell, same parser limitation: daemon=incapable because codex emits no structured permission/waiting signal the parser can map to a selective working→waiting; precedent for this verdict."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/opencode/scenarios/2-19_tool-gate-permission-prompt/metadata.json",
+          "note": "Same scenario, other non-hook agent: daemon=incapable because the held gate is outside the watched Source. Codex differs only in driver pillar (ready vs opencode's gap:permission-approval); the daemon verdict is the same."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "note": "Route is frozen on daemon=incapable — no recipe authored. If a future codex version persists an approval-request / waitingOnApproval marker into the rollout AND the codex parser maps a held gate to a working→waiting transition, re-assess and author the interactive recipe (send a non-trusted command under --ask-for-approval untrusted, then `keys` to elicit/answer the picker)."
+    }
+  }
+}

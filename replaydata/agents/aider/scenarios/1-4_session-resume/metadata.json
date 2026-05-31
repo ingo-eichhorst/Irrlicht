@@ -1,5 +1,5 @@
 {
-  "artifacts": {},
+  "scenario_id": "session-resume",
   "metadata": {
     "agent_supports": "partial",
     "daemon_capability": "incapable",
@@ -60,6 +60,5 @@
       "applicable": false,
       "scope_note": "Aider has no formal session-id concept — relaunching in the same cwd auto-loads `.aider.chat.history.md`, which is closer to 'append to existing log' than true session resume. The coverage matrix marks aider supports=partial, observes=unknown for this scenario; the recipe is intentionally not authored until the semantics are nailed down."
     }
-  },
-  "scenario_id": "session-resume"
+  }
 }

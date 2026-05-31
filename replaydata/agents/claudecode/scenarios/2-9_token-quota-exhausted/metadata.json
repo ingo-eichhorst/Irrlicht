@@ -1,15 +1,5 @@
 {
-  "recording_dir": "claudecode/scenarios/2-9_token-quota-exhausted",
-  "artifacts": {
-    "events": "claudecode/scenarios/2-9_token-quota-exhausted/recordings/2026-05-18-23-09-21_irrlichd-0.4.5+6898561/events.jsonl",
-    "transcript": "claudecode/scenarios/2-9_token-quota-exhausted/recordings/2026-05-18-23-09-21_irrlichd-0.4.5+6898561/transcript.jsonl",
-    "manifest": "claudecode/scenarios/2-9_token-quota-exhausted/recordings/2026-05-18-23-09-21_irrlichd-0.4.5+6898561/manifest.json",
-    "golden": "claudecode/scenarios/2-9_token-quota-exhausted/recordings/2026-05-18-23-09-21_irrlichd-0.4.5+6898561/transcript.jsonl.replay.json.golden",
-    "recordings": [
-      "claudecode/scenarios/2-9_token-quota-exhausted/recordings/2026-05-18-23-08-01_irrlichd-0.4.5+6898561",
-      "claudecode/scenarios/2-9_token-quota-exhausted/recordings/2026-05-18-23-09-21_irrlichd-0.4.5+6898561"
-    ]
-  },
+  "scenario_id": "token-quota-exhausted",
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
@@ -80,6 +70,5 @@
       "settings": {},
       "timeout_seconds": 120
     }
-  },
-  "scenario_id": "token-quota-exhausted"
+  }
 }

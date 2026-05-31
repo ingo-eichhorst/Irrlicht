@@ -1,14 +1,5 @@
 {
-  "recording_dir": "claudecode/scenarios/2-14_turn-aborted-by-error",
-  "artifacts": {
-    "events": "claudecode/scenarios/2-14_turn-aborted-by-error/recordings/2026-05-22-15-49-22_irrlichd-unknown/events.jsonl",
-    "transcript": "claudecode/scenarios/2-14_turn-aborted-by-error/recordings/2026-05-22-15-49-22_irrlichd-unknown/transcript.jsonl",
-    "manifest": "claudecode/scenarios/2-14_turn-aborted-by-error/recordings/2026-05-22-15-49-22_irrlichd-unknown/manifest.json",
-    "golden": "claudecode/scenarios/2-14_turn-aborted-by-error/recordings/2026-05-22-15-49-22_irrlichd-unknown/transcript.jsonl.replay.json.golden",
-    "recordings": [
-      "claudecode/scenarios/2-14_turn-aborted-by-error/recordings/2026-05-22-15-49-22_irrlichd-unknown"
-    ]
-  },
+  "scenario_id": "turn-aborted-by-error",
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
@@ -93,6 +84,5 @@
       "settings": {},
       "timeout_seconds": 120
     }
-  },
-  "scenario_id": "turn-aborted-by-error"
+  }
 }

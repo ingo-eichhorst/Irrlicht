@@ -1,5 +1,5 @@
 {
-  "artifacts": {},
+  "scenario_id": "cloud-background-agent",
   "metadata": {
     "agent_supports": "no",
     "daemon_capability": "n/a",
@@ -54,6 +54,5 @@
       "applicable": false,
       "notes": "agent_supports=no per fresh reassessment — opencode has no cloud/hosted background-agent concept; sessions are a LOCAL ProcessOwnedStore (SQLite at ~/.local/share/opencode/opencode.db) keyed to a local opencode process + cwd, so there is nothing PID-less/remote for irrlicht to observe. No recipe; pipeline frozen at Stage 1."
     }
-  },
-  "scenario_id": "cloud-background-agent"
+  }
 }

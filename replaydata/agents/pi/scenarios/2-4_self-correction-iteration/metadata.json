@@ -1,14 +1,5 @@
 {
-  "recording_dir": "pi/scenarios/2-4_self-correction-iteration",
-  "artifacts": {
-    "events": "pi/scenarios/2-4_self-correction-iteration/recordings/2026-05-25-02-25-53_irrlichd-0.4.7+9aa9a2e/events.jsonl",
-    "transcript": "pi/scenarios/2-4_self-correction-iteration/recordings/2026-05-25-02-25-53_irrlichd-0.4.7+9aa9a2e/transcript.jsonl",
-    "manifest": "pi/scenarios/2-4_self-correction-iteration/recordings/2026-05-25-02-25-53_irrlichd-0.4.7+9aa9a2e/manifest.json",
-    "golden": "pi/scenarios/2-4_self-correction-iteration/recordings/2026-05-25-02-25-53_irrlichd-0.4.7+9aa9a2e/transcript.jsonl.replay.json.golden",
-    "recordings": [
-      "pi/scenarios/2-4_self-correction-iteration/recordings/2026-05-25-02-25-53_irrlichd-0.4.7+9aa9a2e"
-    ]
-  },
+  "scenario_id": "self-correction-iteration",
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
@@ -107,6 +98,5 @@
       "settings": {},
       "timeout_seconds": 300
     }
-  },
-  "scenario_id": "self-correction-iteration"
+  }
 }

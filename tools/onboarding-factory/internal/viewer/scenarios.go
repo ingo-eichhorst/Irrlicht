@@ -146,10 +146,10 @@ func repoRootFromScenarioDir(scenarioDir string) string {
 }
 
 // shardCellForFolder finds the (agent) cell whose recording folder is `folder`.
-// The detail endpoint is keyed by the on-disk recording folder, which equals
-// the coverage_id for standard cells and the recording_dir basename for
-// variant-folder cells. metadata.json lives in the same directory as the
-// recordings, so a direct load by folder name is always correct.
+// The detail endpoint is keyed by the on-disk recording folder (the id-prefixed
+// scenario name for standard cells, or a variant name otherwise). metadata.json
+// lives in the same directory as the recordings, so a direct load by folder
+// name is always correct.
 func shardCellForFolder(repoRoot, agent, folder string) (shard.ShardAgent, bool) {
 	cell, ok := shard.LoadAgentCell(repoRoot, agent, folder)
 	if !ok {

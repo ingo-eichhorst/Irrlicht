@@ -1,5 +1,5 @@
 {
-  "artifacts": {},
+  "scenario_id": "token-quota-exhausted",
   "metadata": {
     "agent_supports": "partial",
     "daemon_capability": "incapable",
@@ -55,6 +55,5 @@
       "notes": "scope_note: NOT RECORDABLE — daemon observability gap (live-corrected from the doc verdict daemon_capability=full, \"step-finish reason=error covers\"). This is the SAME transport gap as the opencode/turn-aborted-by-error sibling: a quota/token-budget exhaustion is one error class of an error-aborted turn, and opencode 1.14.50 records ALL turn aborts on the message row (message.data.error), never as a step-finish part. Live store audit of ~/.local/share/opencode/opencode.db: step-finish reasons = stop(102)/tool-calls(165)/error(0) — ZERO error parts ever persisted; the closest live token-budget analog (context overflow, UnknownError \"n_keep: 27429 >= n_ctx: 4096\") plus quota/auth APIErrors all land on message.data.error. The watcher's scanParts JOINs message only for role context and discards it (watcher.go:498 `_ = msgData`); the terminal-turn decision (watcher.go:495) reads only isTerminalPart(partData), so no step-finish reason=error part means no turn_done — the session sticks in `working` until process_exited and never settles to `ready`. So the scenario's user-observable signal (final_state ready after the quota failure, no waiting) is unobservable from the store. NOT a driver_gap: the send-only driver is `ready` and a context-overflow prompt elicits the error live, but no observable part is written. Unblocks when opencode emits a step-finish reason=error part on quota aborts OR the watcher consumes message.data.error as a terminal signal (mirroring aider's flushErrorTurn, #262). No recipe, no recording, no expected.jsonl. See replaydata/agents/opencode/scenarios/token-quota-exhausted/assessment.json.",
       "scope_note": "UNELICITABLE IN THIS RIG — token/quota exhaustion is a remote-provider billing condition; the local LM Studio model (gemma-4-e2b) has no quota/billing, so no quota-exhaustion error can be triggered here. Groundwork is in place for when a billed remote model with a hittable quota is configured in ~/.config/opencode/opencode.json: the error-export driver fix (ee477644) carries message.data.error into the fixture, and watcher.go isErrorMessage (#493) settles working->ready on it — but only when the errored message has >=1 part (the documented zero-part blind spot, watcher.go:524-526). Verdict: agent_supports=yes / daemon_capability=full (>=1-part errors) / driver_capability=ready (error-export ported). Shares the error-export primitive with turn-aborted-by-error."
     }
-  },
-  "scenario_id": "token-quota-exhausted"
+  }
 }

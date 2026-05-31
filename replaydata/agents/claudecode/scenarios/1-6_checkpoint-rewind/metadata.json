@@ -1,15 +1,5 @@
 {
-  "recording_dir": "claudecode/scenarios/1-6_checkpoint-rewind",
-  "artifacts": {
-    "events": "claudecode/scenarios/1-6_checkpoint-rewind/recordings/2026-05-17-00-45-25_irrlichd-0.4.5+3d59ddb/events.jsonl",
-    "transcript": "claudecode/scenarios/1-6_checkpoint-rewind/recordings/2026-05-17-00-45-25_irrlichd-0.4.5+3d59ddb/transcript.jsonl",
-    "manifest": "claudecode/scenarios/1-6_checkpoint-rewind/recordings/2026-05-17-00-45-25_irrlichd-0.4.5+3d59ddb/manifest.json",
-    "golden": "claudecode/scenarios/1-6_checkpoint-rewind/recordings/2026-05-17-00-45-25_irrlichd-0.4.5+3d59ddb/transcript.jsonl.replay.json.golden",
-    "recordings": [
-      "claudecode/scenarios/1-6_checkpoint-rewind/recordings/2026-05-17-00-37-44_irrlichd-0.4.5+3d59ddb",
-      "claudecode/scenarios/1-6_checkpoint-rewind/recordings/2026-05-17-00-45-25_irrlichd-0.4.5+3d59ddb"
-    ]
-  },
+  "scenario_id": "checkpoint-rewind",
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
@@ -132,6 +122,5 @@
         "transcript.jsonl shows turns 1/2 then a structural break (truncation or marker) then turn 3"
       ]
     }
-  },
-  "scenario_id": "checkpoint-rewind"
+  }
 }

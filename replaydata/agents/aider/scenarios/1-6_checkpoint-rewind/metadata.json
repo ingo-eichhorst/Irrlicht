@@ -1,5 +1,5 @@
 {
-  "artifacts": {},
+  "scenario_id": "checkpoint-rewind",
   "metadata": {
     "agent_supports": "partial",
     "daemon_capability": "incapable",
@@ -65,6 +65,5 @@
       "applicable": false,
       "scope_note": "Coverage matrix marks aider supports=partial, observes=no. /undo reverts the last aider git commit and surfaces as a normal chat turn in the transcript; there is no multi-point checkpoint picker. Capturing it requires aider to first make a file edit and commit, then /undo — a recipe shape that needs file-tool granularity the current driver doesn't deterministically produce. Recording deferred."
     }
-  },
-  "scenario_id": "checkpoint-rewind"
+  }
 }

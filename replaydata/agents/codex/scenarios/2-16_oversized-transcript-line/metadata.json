@@ -1,5 +1,5 @@
 {
-  "artifacts": {},
+  "scenario_id": "oversized-transcript-line",
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
@@ -51,6 +51,5 @@
       "applicable": false,
       "notes": "applicable:false — a live codex session cannot be deterministically driven to emit a >64 MB (or even >2 MB) single JSONL line; this is a shared-tailer robustness property, not a codex behavior. No special agent capability is exercised. The authoritative coverage is the agent-agnostic unit test core/pkg/tailer/large_line_test.go (TestTailAndProcess_LargeToolResultLine + TestReadLineCapped_OversizedLineSkipped), which pins the 64 MB cap (issue #270) on the shared tailer that codex (FilesUnderRoot{JSONLineParser}) runs on. A 5000-word live recipe would only be a ~30 KB sanity-check, not true cap-stress, and we do NOT fabricate a 64 MB line into a fixture. expected.jsonl is retained as the documented state-arc target."
     }
-  },
-  "scenario_id": "oversized-transcript-line"
+  }
 }

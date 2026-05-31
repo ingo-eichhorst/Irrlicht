@@ -1,15 +1,5 @@
 {
-  "recording_dir": "pi/scenarios/1-5_session-reset",
-  "artifacts": {
-    "events": "pi/scenarios/1-5_session-reset/recordings/2026-05-27-23-52-56_irrlichd-0.4.7+b4e2076-2/events.jsonl",
-    "transcript": "pi/scenarios/1-5_session-reset/recordings/2026-05-27-23-52-56_irrlichd-0.4.7+b4e2076-2/transcript.jsonl",
-    "manifest": "pi/scenarios/1-5_session-reset/recordings/2026-05-27-23-52-56_irrlichd-0.4.7+b4e2076-2/manifest.json",
-    "golden": "pi/scenarios/1-5_session-reset/recordings/2026-05-27-23-52-56_irrlichd-0.4.7+b4e2076-2/transcript.jsonl.replay.json.golden",
-    "recordings": [
-      "pi/scenarios/1-5_session-reset/recordings/2026-05-27-23-52-56_irrlichd-0.4.7+b4e2076",
-      "pi/scenarios/1-5_session-reset/recordings/2026-05-27-23-52-56_irrlichd-0.4.7+b4e2076-2"
-    ]
-  },
+  "scenario_id": "session-reset",
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
@@ -126,6 +116,5 @@
       "settings": {},
       "timeout_seconds": 180
     }
-  },
-  "scenario_id": "session-reset"
+  }
 }

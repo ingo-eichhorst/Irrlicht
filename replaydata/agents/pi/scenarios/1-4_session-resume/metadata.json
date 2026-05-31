@@ -1,14 +1,5 @@
 {
-  "recording_dir": "pi/scenarios/1-4_session-resume",
-  "artifacts": {
-    "events": "pi/scenarios/1-4_session-resume/recordings/2026-05-27-23-44-40_irrlichd-0.4.7+ea59cea/events.jsonl",
-    "transcript": "pi/scenarios/1-4_session-resume/recordings/2026-05-27-23-44-40_irrlichd-0.4.7+ea59cea/transcript.jsonl",
-    "manifest": "pi/scenarios/1-4_session-resume/recordings/2026-05-27-23-44-40_irrlichd-0.4.7+ea59cea/manifest.json",
-    "golden": "pi/scenarios/1-4_session-resume/recordings/2026-05-27-23-44-40_irrlichd-0.4.7+ea59cea/transcript.jsonl.replay.json.golden",
-    "recordings": [
-      "pi/scenarios/1-4_session-resume/recordings/2026-05-27-23-44-40_irrlichd-0.4.7+ea59cea"
-    ]
-  },
+  "scenario_id": "session-resume",
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
@@ -111,6 +102,5 @@
       "timeout_seconds": 240,
       "scope_note": "Re-assessed 2026-05-25 -> agent_supports:yes / daemon_capability:full / driver_capability:ready (0.78): the prior applicable:false (driver lacked exit_clean + resume) is STALE. The pi interactive driver now exposes exit_clean + resume (commit e88e35b1), and `pi --session <transcript>` reopens and APPENDS to the SAME <ts>_<uuid>.jsonl across two process lifetimes — one session_id, two lifetimes. Same single-session-two-lifetimes shape as claudecode/codex session-resume. How it differs between runs: UUID/PID/timestamps/token counts vary; the structural arc (v1 birth -> turn1 working/ready -> process_exited -> same-id re-bind in ready -> turn2 working/ready -> final ready) is fixed. Pi turns can be slow, hence generous wait_turn/sleep budgets. If it breaks, check drive-pi-interactive.sh step_resume (transcript resolution + `pi --session` relaunch in the same cwd so DiscoverPID re-binds the new PID) and confirm pi flushed the transcript on Ctrl-D before relaunch."
     }
-  },
-  "scenario_id": "session-resume"
+  }
 }
