@@ -1282,43 +1282,53 @@
       render();
       repaintHistory();
     });
-    // Structure re-hydration. A WS session delta carries only the flat session
-    // — not its group nesting (Gas Town rig sub-groups) nor the computed
-    // role/icon metadata, which BuildDashboard produces daemon-side and ships
-    // only via /api/v1/sessions. So on session CREATE or DELETE (the structure
-    // changes), re-fetch and rebuild the group tree, debounced to coalesce
-    // bursts. Mirrors macOS SessionManager.scheduleRehydration. Metric-only
-    // session_updated ticks keep mutating in place (no reorder); collapse state
-    // survives because collapsedGroups is keyed by name/path, not identity.
-    let structureRehydrateTimer = null;
-    function scheduleStructureRehydrate() {
-      if (structureRehydrateTimer) return;
-      structureRehydrateTimer = setTimeout(() => {
-        structureRehydrateTimer = null;
-        fetch('/api/v1/sessions').then(r => r.ok ? r.json() : null).catch(() => null).then(resp => {
-          if (!resp) return;
-          dashboardGroups = Array.isArray(resp) ? resp : (resp.groups || []);
-          if (!Array.isArray(resp) && resp.provider_costs) dashboardProviderCosts = resp.provider_costs;
-          rebuildIndex();
-          render();
-          repaintHistory();
-        });
-      }, 600);
+    // structureSignature captures the daemon-computed shape of the group tree:
+    // group nesting (Gas Town rig sub-groups) + each session's role/icon/worker
+    // id. WS session deltas carry NONE of this (just the flat session), and the
+    // daemon re-nests a session / fills in its role asynchronously as the
+    // orchestrator poller catches up — with no create/delete event. So the only
+    // reliable way to reflect nesting + role-emoji changes is to poll the REST
+    // structure and adopt it when this signature changes. Pure metric ticks
+    // (cost/context/tokens) don't alter the signature, so they keep flowing
+    // through the in-place merge below with no reorder.
+    function structureSignature(groups) {
+      const parts = [];
+      (function walk(gs, depth) {
+        for (const g of (gs || [])) {
+          parts.push(depth + '#' + (g.name || '') + '#' + (g.type || '') + '#' + (g.status || ''));
+          (function agents(arr) {
+            for (const a of (arr || [])) {
+              parts.push('a:' + a.session_id + ':' + (a.role || '') + ':' + (a.icon || '') + ':' + (a.worker_id || ''));
+              if (a.children) agents(a.children);
+            }
+          })(g.agents);
+          if (g.groups) walk(g.groups, depth + 1);
+        }
+      })(groups);
+      return parts.join('|');
     }
-    // Periodic re-hydration so trailing-window costs (carried on each group
-    // under `costs`) don't go stale between WebSocket deltas, which only
-    // carry individual session updates. We only copy the `costs` field —
-    // replacing the whole array would shuffle WS-added sessions back into
-    // the daemon's UUID order, which is the position-jump the user flagged.
-    //
-    // We additionally merge per-agent `metrics.rate_limit` and
-    // `metrics.rate_limit_forecast_eta` for any agent already in our state.
-    // The quota chip strip would otherwise stay pinned to the last value
-    // a WS message left in place during a WS disconnect.
+    // Periodic re-hydration. Two jobs, one fetch:
+    //   1. STRUCTURE — if the daemon's group tree / role metadata changed
+    //      (rig nesting settled, a new agent gained its role emoji), adopt the
+    //      fresh tree wholesale. Collapse state survives (collapsedGroups is
+    //      keyed by name/path). This is the only path that reflects nesting +
+    //      role changes, since WS deltas can't.
+    //   2. METRICS — when structure is unchanged, merge trailing-window `costs`
+    //      and per-agent `metrics.rate_limit*` in place (no reorder), so the
+    //      cost figures and quota chips don't go stale between WS deltas.
     setInterval(() => {
       fetch('/api/v1/sessions').then(r => r.json()).catch(() => null).then(resp => {
         if (!resp) return;
         const fresh = Array.isArray(resp) ? resp : (resp.groups || []);
+        // Structure / role metadata changed → adopt the daemon's tree.
+        if (structureSignature(fresh) !== structureSignature(dashboardGroups)) {
+          dashboardGroups = fresh;
+          if (!Array.isArray(resp) && resp.provider_costs) dashboardProviderCosts = resp.provider_costs;
+          rebuildIndex();
+          render();
+          repaintHistory();
+          return;
+        }
         // Index fresh groups + agents recursively so nested Gas Town rig
         // groups (matched by name) and rig agents are reachable.
         const byName = new Map();
@@ -1372,7 +1382,7 @@
         }
         if (changed) render();
       });
-    }, 30000);
+    }, 2500);
 
     // --- Sources & connections (multi-source) ---
     // The dashboard connects to one or more sources at once: the local source
@@ -1706,13 +1716,12 @@
       var s = msg.session;
       if (msg.type === 'session_deleted') {
         applySessionDelete(s.session_id);
-        scheduleStructureRehydrate();
       } else {
+        // First sight of a session arrives flat with no role/icon and no rig
+        // nesting (the WS delta lacks them). It renders immediately for
+        // responsiveness; the structure poll above re-reads its nesting + role
+        // emoji once the daemon's orchestrator poller has associated it.
         applySessionUpdate(s);
-        // A newly-seen session arrived via a delta with no group nesting or
-        // role/icon — re-read the structure so it lands under its rig with its
-        // emoji. session_updated (already-known id) skips this; it's a metric tick.
-        if (msg.type === 'session_created') scheduleStructureRehydrate();
       }
       render();
     }
