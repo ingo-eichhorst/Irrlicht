@@ -1,3 +1,4 @@
+import ServiceManagement
 import SwiftUI
 import UniformTypeIdentifiers
 import UserNotifications
@@ -25,6 +26,7 @@ struct SettingsView: View {
     // mirrors it for the field, loaded on appear and written on change.
     @State private var relayTokenDraft: String = ""
     @State private var notificationsDenied = false
+    @State private var loginItemStatus: SMAppService.Status = .notRegistered
     @State private var customImportError: String?
 
     var body: some View {
@@ -82,12 +84,38 @@ struct SettingsView: View {
                         }
                     }
 
-                    LeadingToggle(
-                        isOn: $launchAtLogin,
-                        label: "Open at Login",
-                        info: "Start Irrlicht automatically when you log in to your Mac."
-                    )
-                    .onChange(of: launchAtLogin) { newValue in LoginItemManager.setEnabled(newValue) }
+                    VStack(alignment: .leading, spacing: 8) {
+                        LeadingToggle(
+                            isOn: $launchAtLogin,
+                            label: "Open at Login",
+                            info: "Start Irrlicht automatically when you log in to your Mac."
+                        )
+                        .onChange(of: launchAtLogin) { newValue in
+                            LoginItemManager.setEnabled(newValue)
+                            // setEnabled runs detached; give launchd a beat,
+                            // then re-read the system's real status.
+                            refreshLoginItemStatus(after: 0.4)
+                        }
+
+                        if loginItemStatus == .requiresApproval {
+                            HStack(spacing: 4) {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .foregroundColor(.orange)
+                                    .font(.caption)
+                                    .tooltip("Login item needs approval in System Settings")
+                                Text("Approve Irrlicht in Login Items.")
+                                    .font(.caption)
+                                    .foregroundColor(.orange)
+                                Button("Open Login Items") {
+                                    LoginItemManager.openLoginItemsSettings()
+                                }
+                                .font(.caption)
+                                .buttonStyle(.link)
+                                .tooltip("Open System Settings → General → Login Items")
+                            }
+                        }
+                    }
+                    .onAppear { refreshLoginItemStatus() }
 
                     Divider()
 
@@ -312,6 +340,15 @@ struct SettingsView: View {
 
     private func commitRelayURL() {
         relayServerURL = relayURLDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Reflect the login item's real system status (not just the stored
+    /// preference) so the `.requiresApproval` hint can appear. An optional
+    /// delay lets a detached register/unregister land first.
+    private func refreshLoginItemStatus(after delay: TimeInterval = 0) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            loginItemStatus = LoginItemManager.status
+        }
     }
 
     private func checkNotificationAuth() {
