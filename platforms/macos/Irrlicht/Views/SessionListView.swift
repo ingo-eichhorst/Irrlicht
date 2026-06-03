@@ -1359,9 +1359,19 @@ struct SessionRowView: View {
               est.completedRounds > 0 else { return nil }
         let remaining = max(0, eta.timeIntervalSince(now))
         let frac = est.totalRounds > 0 ? Double(est.completedRounds) / Double(est.totalRounds) : 0
-        let text = frac < 0.5
-            ? "~\(etaDurationString(remaining))–\(etaDurationString(remaining * 1.5)) left"
-            : "~\(etaDurationString(remaining)) left"
+        // The eta is anchored at the marker (daemon-side): the LOW bound
+        // counts down between marker updates while the HIGH bound — 1.5×
+        // the remaining time as projected AT the marker — stays pinned
+        // until the agent reports fresh progress.
+        var highSecs: TimeInterval? = nil
+        if frac < 0.5 {
+            if let updated = est.updatedAt {
+                highSecs = max(remaining, eta.timeIntervalSince(updated) * 1.5)
+            } else {
+                highSecs = remaining * 1.5
+            }
+        }
+        let text = etaText(remaining: remaining, highSecs: highSecs)
         var stale = false
         var title = "Task ETA — agent-reported \(est.completedRounds)/\(est.totalRounds) rounds"
         if let updated = est.updatedAt {
@@ -1370,6 +1380,25 @@ struct SessionRowView: View {
             title += ", updated \(Int(age))s ago"
         }
         return TaskEtaPresentation(text: text, stale: stale, title: title)
+    }
+
+    /// Renders the remaining-time text with exactly ONE sign — "~"
+    /// (approximate) or "<" (upper bound), never both, never a degenerate
+    /// "2m–2m" range (mirrors the web's fmtEtaText). highSecs nil → point.
+    ///   point, ≥1m → "~12m left" · point, <1m → "<1m left"
+    ///   range, low <1m → "<2m left" (collapses to its upper bound)
+    ///   range, low==high → point rules · range → "~8m–12m left"
+    private func etaText(remaining: TimeInterval, highSecs: TimeInterval?) -> String {
+        let low = etaDurationString(remaining)
+        if let highSecs {
+            let high = etaDurationString(highSecs)
+            if low != high {
+                if remaining < 60 { return "<\(high) left" }
+                return "~\(low)–\(high) left"
+            }
+        }
+        if remaining < 60 { return "<1m left" }
+        return "~\(low) left"
     }
 
     /// Minute-resolution duration for the ETA chip — second-level detail

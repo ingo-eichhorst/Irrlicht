@@ -26,22 +26,36 @@ type TaskEstimate struct {
 
 // ForecastTaskCompletion projects the wall-clock completion time from the
 // agent's self-reported progress, calibrated by the real elapsed time the
-// daemon already tracks:
+// daemon already tracks. The projection is ANCHORED AT THE MARKER, not at
+// the computing pass:
 //
-//	perRound  = elapsedSeconds / CompletedRounds   (measured rate)
-//	eta       = now + (TotalRounds − CompletedRounds) × perRound
+//	perRound  = elapsedAtMarker / CompletedRounds   (measured rate, frozen
+//	            at the marker — elapsed since the marker is subtracted)
+//	eta       = UpdatedAt + (TotalRounds − CompletedRounds) × perRound
 //
-// elapsedSeconds is since session start — a session that ran a while before
-// its first marker skews early ETAs long. That is a documented v1 decision
-// (acceptable for a rough chip); this function is the single seam to swap
-// when the estimation approach evolves. Returns nil when no projection is
-// possible: no estimate, no reported progress yet, or no elapsed time.
+// Anchoring makes eta stable between markers, so UIs can count the
+// remaining time down in real time instead of watching the ETA slide
+// forward on every markerless pass; eta drifting into the past is fine
+// (clients clamp and present an upper bound). elapsedSeconds is since
+// session start — a session that ran a while before its first marker skews
+// early ETAs long; documented v1 decision. This function is the single
+// seam to swap when the estimation approach evolves. Returns nil when no
+// projection is possible: no estimate, no reported progress yet, or no
+// elapsed time.
 func ForecastTaskCompletion(est *TaskEstimate, elapsedSeconds int64, now time.Time) *time.Time {
 	if est == nil || est.CompletedRounds <= 0 || elapsedSeconds <= 0 {
 		return nil
 	}
-	perRound := float64(elapsedSeconds) / float64(est.CompletedRounds)
+	anchor := now
+	elapsedAtMarker := elapsedSeconds
+	if est.UpdatedAt > 0 {
+		anchor = time.Unix(est.UpdatedAt, 0)
+		if gap := now.Unix() - est.UpdatedAt; gap > 0 && gap < elapsedSeconds {
+			elapsedAtMarker = elapsedSeconds - gap
+		}
+	}
+	perRound := float64(elapsedAtMarker) / float64(est.CompletedRounds)
 	remaining := max(est.TotalRounds-est.CompletedRounds, 0)
-	eta := now.Add(time.Duration(float64(remaining) * perRound * float64(time.Second)))
+	eta := anchor.Add(time.Duration(float64(remaining) * perRound * float64(time.Second)))
 	return &eta
 }

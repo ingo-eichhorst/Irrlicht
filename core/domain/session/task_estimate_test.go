@@ -6,7 +6,8 @@ import (
 )
 
 func TestForecastTaskCompletion_MeasuredRate(t *testing.T) {
-	// 2 of 10 rounds in 240s → perRound = 120s, remaining 8 → eta = now + 960s.
+	// No marker timestamp → anchored at now: 2 of 10 rounds in 240s →
+	// perRound = 120s, remaining 8 → eta = now + 960s.
 	now := time.Date(2026, 6, 3, 12, 0, 0, 0, time.UTC)
 	est := &TaskEstimate{TotalRounds: 10, CompletedRounds: 2}
 	eta := ForecastTaskCompletion(est, 240, now)
@@ -16,6 +17,28 @@ func TestForecastTaskCompletion_MeasuredRate(t *testing.T) {
 	want := now.Add(960 * time.Second)
 	if !eta.Equal(want) {
 		t.Errorf("eta = %v, want %v", eta, want)
+	}
+}
+
+func TestForecastTaskCompletion_AnchoredAtMarker(t *testing.T) {
+	// The projection anchors at the marker and freezes the rate there, so
+	// markerless passes don't slide the eta forward — UIs count down against
+	// a stable target (issue #558).
+	marker := time.Date(2026, 6, 3, 12, 0, 0, 0, time.UTC)
+	est := &TaskEstimate{TotalRounds: 10, CompletedRounds: 2, UpdatedAt: marker.Unix()}
+
+	// At the marker: elapsed 240s → perRound 120 → eta = marker + 960s.
+	want := marker.Add(960 * time.Second)
+	etaAtMarker := ForecastTaskCompletion(est, 240, marker)
+	if etaAtMarker == nil || !etaAtMarker.Equal(want) {
+		t.Fatalf("eta at marker = %v, want %v", etaAtMarker, want)
+	}
+
+	// 60s later with no fresh marker (elapsed grew to 300): the gap is
+	// subtracted, the anchor stays the marker → identical eta.
+	etaLater := ForecastTaskCompletion(est, 300, marker.Add(60*time.Second))
+	if etaLater == nil || !etaLater.Equal(want) {
+		t.Errorf("eta 60s later = %v, want unchanged %v", etaLater, want)
 	}
 }
 

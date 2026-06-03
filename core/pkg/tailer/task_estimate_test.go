@@ -19,6 +19,14 @@ func (p *taskEstimateTestParser) ParseLine(raw map[string]interface{}) *ParsedEv
 		ev.ClearToolNames = true
 		return ev
 	}
+	if _, ok := raw["tool_result"]; ok {
+		// Claude Code shape: tool results arrive as user-role lines that
+		// raise ClearToolNames but also carry ToolResultIDs.
+		ev.EventType = "user_message"
+		ev.ClearToolNames = true
+		ev.ToolResultIDs = []string{"tr-1"}
+		return ev
+	}
 	if v, ok := raw["est"].(map[string]interface{}); ok {
 		total, _ := v["total"].(float64)
 		done, _ := v["done"].(float64)
@@ -101,6 +109,27 @@ func TestTailer_TaskEstimate_ResetOnUserMessage(t *testing.T) {
 	}
 	if m.TaskEstimate == nil || m.TaskEstimate.TotalRounds != 4 {
 		t.Fatalf("TaskEstimate = %+v, want fresh 1/4", m.TaskEstimate)
+	}
+}
+
+func TestTailer_TaskEstimate_SurvivesToolResults(t *testing.T) {
+	// Tool results are user-role lines in Claude Code transcripts and raise
+	// ClearToolNames — they must NOT reset the estimate or the chip vanishes
+	// on every tool call mid-task (issue #558).
+	path := writeTranscriptLines(t, []map[string]interface{}{
+		{"timestamp": ts(0), "est": map[string]interface{}{"total": float64(10), "done": float64(4)}},
+	})
+	tl := newTaskEstimateTestTailer(path)
+	if _, err := tl.TailAndProcess(); err != nil {
+		t.Fatal(err)
+	}
+	appendTranscriptLine(t, path, map[string]interface{}{"timestamp": ts(1), "tool_result": true})
+	m, err := tl.TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.TaskEstimate == nil || m.TaskEstimate.CompletedRounds != 4 {
+		t.Fatalf("TaskEstimate = %+v, want 4/10 to survive a tool-result line", m.TaskEstimate)
 	}
 }
 

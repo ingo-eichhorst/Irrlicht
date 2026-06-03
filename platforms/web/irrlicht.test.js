@@ -353,9 +353,22 @@ describe('taskEtaPresentation', () => {
     expect(info.title).toContain('6/10 rounds')
   })
 
-  test('range when completed fraction is below half', () => {
+  test('range when completed fraction is below half — high pinned at the marker', () => {
+    // high = 1.5 × (eta − updated_at) = 1.5 × 750s = 1125s → 19m
     const info = taskEtaPresentation(metricsFor({ est: { completed_rounds: 2 } }), 'working', now)
-    expect(info.text).toBe('~12m–18m left')
+    expect(info.text).toBe('~12m–19m left')
+  })
+
+  test('low bound counts down between markers; high stays pinned', () => {
+    const m = metricsFor({ est: { completed_rounds: 2 } })
+    expect(taskEtaPresentation(m, 'working', now).text).toBe('~12m–19m left')
+    expect(taskEtaPresentation(m, 'working', now + 120).text).toBe('~10m–19m left')
+  })
+
+  test('range with sub-minute low collapses to its upper bound — one sign', () => {
+    const m = metricsFor({ est: { completed_rounds: 2 }, metrics: { task_completion_eta: now + 30 } })
+    // high = 1.5 × (30 + 30) = 90s → 2m; low <1m → "<2m left", never "~<1m–2m"
+    expect(taskEtaPresentation(m, 'working', now).text).toBe('<2m left')
   })
 
   test('stale when the last marker is older than 3 minutes', () => {
@@ -374,9 +387,9 @@ describe('taskEtaPresentation', () => {
     expect(taskEtaPresentation(metricsFor({ est: { completed_rounds: 0 } }), 'working', now)).toBeNull()
   })
 
-  test('eta in the past clamps to <1m, never negative', () => {
+  test('eta in the past clamps to <1m, never negative — one sign only', () => {
     const info = taskEtaPresentation(metricsFor({ metrics: { task_completion_eta: now - 5 } }), 'working', now)
-    expect(info.text).toBe('~<1m left')
+    expect(info.text).toBe('<1m left')
   })
 
   test('hour-scale remaining uses h+m resolution', () => {

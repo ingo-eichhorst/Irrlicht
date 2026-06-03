@@ -386,6 +386,27 @@
       return m + 'm';
     }
 
+    // fmtEtaText renders the remaining-time text with exactly ONE sign —
+    // "~" (approximate) or "<" (upper bound), never both, never a degenerate
+    // "2m–2m" range. highSecs null → point estimate.
+    //   point, ≥1m   → "~12m left"
+    //   point, <1m   → "<1m left"
+    //   range, low <1m → "<2m left"   (the range collapses to its upper bound)
+    //   range, low==high → point rules
+    //   range        → "~8m–12m left"
+    function fmtEtaText(remaining, highSecs) {
+      const low = fmtEtaDuration(remaining);
+      if (highSecs !== null) {
+        const high = fmtEtaDuration(highSecs);
+        if (low !== high) {
+          if (remaining < 60) return '<' + high + ' left';
+          return '~' + low + '–' + high + ' left';
+        }
+      }
+      if (remaining < 60) return '<1m left';
+      return '~' + low + ' left';
+    }
+
     // taskEtaPresentation decides the task-completion ETA chip for a session
     // (issue #558, agent-authored estimate). Returns null when the chip must
     // be hidden: session not `working`, no estimate, no reported progress, or
@@ -393,18 +414,25 @@
     // ("~12m left") once half the rounds are done, a range ("~8m–12m left")
     // below that, and stale=true when the last marker is older than 3min so
     // the chip degrades instead of letting the ETA drift.
+    //
+    // The eta is anchored at the marker (daemon-side), so the LOW bound
+    // counts down in real time between marker updates while the HIGH bound
+    // — 1.5× the remaining time as projected AT the marker — stays pinned
+    // until the agent reports fresh progress: "~3m–5m left" becomes
+    // "~2m–5m left" a minute later, never the other way around.
     function taskEtaPresentation(metrics, state, nowSec) {
       const est = metrics && metrics.task_estimate;
       const eta = metrics && metrics.task_completion_eta;
       if (state !== 'working' || !est || !eta || !(est.completed_rounds > 0)) return null;
       const remaining = Math.max(0, Math.floor(eta - nowSec));
       const frac = est.total_rounds > 0 ? est.completed_rounds / est.total_rounds : 0;
-      let text;
+      let highSecs = null;
       if (frac < 0.5) {
-        text = '~' + fmtEtaDuration(remaining) + '–' + fmtEtaDuration(Math.floor(remaining * 1.5)) + ' left';
-      } else {
-        text = '~' + fmtEtaDuration(remaining) + ' left';
+        highSecs = est.updated_at > 0
+          ? Math.max(remaining, Math.floor((eta - est.updated_at) * 1.5))
+          : Math.floor(remaining * 1.5);
       }
+      const text = fmtEtaText(remaining, highSecs);
       const ageSec = est.updated_at > 0 ? Math.max(0, Math.floor(nowSec - est.updated_at)) : 0;
       const stale = est.updated_at > 0 && ageSec > 180;
       let title = 'Task ETA — agent-reported ' + est.completed_rounds + '/' + est.total_rounds + ' rounds';

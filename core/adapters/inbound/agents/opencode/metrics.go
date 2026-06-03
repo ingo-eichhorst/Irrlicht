@@ -231,12 +231,13 @@ func querySessionMetrics(db *sql.DB, sessionID, dbPath string) (*session.Session
 
 		// Track the latest task-estimate marker (issue #558) — mirrors the
 		// tailer's lastTaskEstimate persistence, which this path bypasses.
-		// A user part resets it (new task/redirect — same rule as the
-		// tailer): only markers after the last user message count.
+		// A real user part resets it (new task/redirect — same rule as the
+		// tailer, including the tool-result guard): only markers after the
+		// last user message count.
 		if ev.TaskEstimate != nil {
 			lastTaskEstimate = ev.TaskEstimate
 		}
-		if ev.ClearToolNames {
+		if ev.ClearToolNames && len(ev.ToolResultIDs) == 0 {
 			lastTaskEstimate = nil
 		}
 	}

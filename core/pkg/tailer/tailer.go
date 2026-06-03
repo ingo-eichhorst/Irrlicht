@@ -903,11 +903,14 @@ func (t *TranscriptTailer) processParsedEvent(parsed *ParsedEvent, sawUserBlocki
 	if parsed.TaskEstimate != nil {
 		t.lastTaskEstimate = parsed.TaskEstimate
 	}
-	if parsed.ClearToolNames {
-		// A user message starts a new task (or redirects the current one) —
-		// the previous estimate no longer describes what the agent is doing,
-		// so reset it like lastAssistantText above. The chip stays hidden
-		// until the agent emits a fresh marker for the new work (#558).
+	if parsed.ClearToolNames && len(parsed.ToolResultIDs) == 0 {
+		// A REAL user message (new prompt, ESC, answer) starts a new task or
+		// redirects the current one — the previous estimate no longer
+		// describes what the agent is doing, so reset it like
+		// lastAssistantText above. The ToolResultIDs guard matters: Claude
+		// Code delivers tool results as user-role lines that also raise
+		// ClearToolNames, and resetting on those wiped the estimate on every
+		// tool call — the chip vanished mid-task until the next marker (#558).
 		t.lastTaskEstimate = nil
 	}
 
