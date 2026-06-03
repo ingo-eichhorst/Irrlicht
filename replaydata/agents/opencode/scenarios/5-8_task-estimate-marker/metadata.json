@@ -2,12 +2,12 @@
   "scenario_id": "task-estimate-marker",
   "metadata": {
     "agent_supports": "partial",
-    "daemon_capability": "bug",
+    "daemon_capability": "full",
     "driver_capability": "gap:seed_instruction",
     "agent_cli_version": "1.14.50",
-    "daemon_version": "0.4.8+8233c32",
-    "confidence": 0.7,
-    "notes": "opencode loads AGENTS.md + emits in-band text (agent=partial, model-dependent on the recorded local Gemma); marker scan is claudecode-only so the daemon can't surface task_estimate (daemon=bug); recipe needs an instruction-file seed step the driver lacks (gap:seed_instruction)."
+    "daemon_version": "0.4.8+1ae457d",
+    "confidence": 0.8,
+    "notes": "opencode loads AGENTS.md + emits in-band text (agent=partial, model-dependent on the recorded local Gemma); the marker scan is now ported to the opencode adapter so the daemon surfaces task_estimate + task_completion_eta from its custom SQLite path (daemon=full, no longer a bug); recipe still needs an instruction-file seed step the driver lacks (gap:seed_instruction) -> route driver-gap."
   },
   "details": {
     "assessment": {
@@ -15,51 +15,56 @@
       "scenario_id": "task-estimate-marker",
       "agent": "opencode",
       "agent_supports": "partial",
-      "daemon_capability": "bug",
+      "daemon_capability": "full",
       "driver_capability": "gap:seed_instruction",
-      "confidence": 0.7,
-      "body": "## Verdict\n\n- **agent = partial.** The scenario is agent-agnostic: any agent that (a) loads a persistent instruction file and (b) emits the marker in transcript-visible assistant text can satisfy it. opencode does both. The binary references `AGENTS.md`/`CLAUDE.md` and ships an `\"instructions\": [\"AGENTS.md\", …]` config key — opencode loads a global `~/.config/opencode/AGENTS.md` and a project-level `AGENTS.md` as its persistent rule file (the AGENTS.md-equivalent of CLAUDE.md). opencode's assistant `text` parts are plain transcript-visible prose, so a model that follows the rule would emit the hidden HTML-comment marker there. The downgrade from `yes` is the RECORDED local setup, not the architecture: the committed `~/.config/opencode/opencode.json` defaults to `lmstudio/gemma-4-e2b-it-uncensored` (a ~2–4B local model used in every prior opencode recording). Reliably FOLLOWING an \"emit a JSON-in-HTML-comment progress marker and increment it every turn\" rule is doubtful for a model that small — the 2026-05-31 marker experiment found 0% exact-format compliance even from Claude (the daemon parser is deliberately tolerant of key/format drift for exactly this reason). So the capability is structurally present but emission is model-dependent and unconfirmed → `partial`; only a live recording can promote it. (A capable cloud model is now also configured under the `ionos` provider — e.g. Qwen3-Coder-Next 80B — which could be selected per-turn via the driver's `-m` model field if the local model proves incapable; that's a recording knob, not an agent-capability change.)\n\n- **daemon = bug.** The task-estimate plumbing below the adapter is shared and ready: `tailer.ParsedEvent.TaskEstimate` → `tailer.go` `lastTaskEstimate` → `tailer_metrics.go` `metrics.TaskEstimate`, and `metrics/adapter.go` projects `task_completion_eta` via `session.ForecastTaskCompletion`, with the `task_estimate`/`task_completion_eta` fields suppressed once the session leaves `working`. But the per-adapter CONTENT SCAN that populates `ParsedEvent.TaskEstimate` exists ONLY in claudecode: `core/adapters/inbound/agents/claudecode/taskestimate.go` (`scanTaskEstimate`), wired at `claudecode/parser.go:388-390` over the FULL assistant text block. opencode has NO equivalent. Worse, opencode does not even flow through the tailer for metrics: it uses `ProcessOwnedStore` + `opencode/metrics.go ComputeMetrics`, which reads the SQLite `part.data` rows and never sets `metrics.TaskEstimate`; and `opencode/parser.go parseTextPart` tail-truncates assistant text to the last 200 runes (so even a naive scan added there would miss early markers — the scan must run over the full `part.data` text, available at metrics.go:227 before truncation). Crucially the marker TRACE exists and is fully readable — it is plain text in opencode's SQLite `part.data` column — the daemon just has no code to extract it. A spec-required observable (`task_estimate`/`task_completion_eta`) the daemon fails to surface from an existing trace is a `bug` (file an issue; record `known_failing`), NOT `incapable` (which is reserved for no-trace / 3-state-model-can't-represent cases).\n\n- **driver = gap:seed_instruction.** Scenario `process` step 1 requires seeding the marker rule into the workspace's `AGENTS.md` (the CLAUDE.md-equivalent persistent instruction file) BEFORE the first send. No driver in the repo has any instruction-file-seeding primitive: the opencode driver's `settings` blob is written ONLY to `RUN_CWD/opencode.json` (driver-interactive.sh:133-139), never to `AGENTS.md`, and there is no `seed_instruction`/`file`/`write` step type in any `driver-*.sh`. The rule TEXT (the fenced marker example) must live in an actual file opencode loads, not in `opencode.json` and not as a prompt (it must be a *persistent* rule, per the scenario). So the recipe needs a `seed_instruction` step the driver lacks → `gap:seed_instruction`. This is tooling work, not an observability limit: `record` ports the step (write the rule to `$RUN_CWD/AGENTS.md`, or add `\"AGENTS.md\"` to the seeded `opencode.json` `instructions` and write the file) before driving.\n\n## Route\n\n`partial | bug | gap:*` → **driver-gap**. `record` (1) ports the `seed_instruction` step, (2) drives the multi-step task, and (3) — because daemon=bug — files the adapter-scan issue and records the spec as `known_failing` (the spec asserts the CORRECT behavior; it is expected to FAIL until the opencode marker scan ships).",
+      "confidence": 0.8,
+      "body": "## Verdict\n\n- **agent = partial** (UNCHANGED). The scenario is agent-agnostic: any agent that (a) loads a persistent instruction file and (b) emits the marker in transcript-visible assistant text can satisfy it. opencode does both. The binary references `AGENTS.md`/`CLAUDE.md` and ships an `\"instructions\": [\"AGENTS.md\", …]` config key — opencode loads a global `~/.config/opencode/AGENTS.md` and a project-level `AGENTS.md` as its persistent rule file (the AGENTS.md-equivalent of CLAUDE.md). opencode's assistant `text` parts are plain transcript-visible prose, so a model that follows the rule would emit the hidden HTML-comment marker there. The downgrade from `yes` is the RECORDED local setup, not the architecture: the committed `~/.config/opencode/opencode.json` defaults to `lmstudio/gemma-4-e2b-it-uncensored` (a ~2–4B local model used in every prior opencode recording). Reliably FOLLOWING an \"emit a JSON-in-HTML-comment progress marker and increment it every turn\" rule is doubtful for a model that small — the 2026-05-31 marker experiment found 0% exact-format compliance even from Claude (the daemon parser is deliberately tolerant of key/format drift for exactly this reason). So the capability is structurally present but emission is model-dependent and unconfirmed → `partial`; only a live recording can promote it. (A capable cloud model is now also configured under the `ionos` provider — e.g. Qwen3-Coder-Next 80B — which could be selected per-turn via the driver's `-m` model field if the local model proves incapable; that's a recording knob, not an agent-capability change.)\n\n- **daemon = full** (was `bug`; FLIPPED by commit 1ae457d9). The per-adapter content scan that was missing is now present in the opencode adapter. `scanTaskEstimate` was promoted to the shared `tailer.ScanTaskEstimate` (`core/pkg/tailer/taskestimate_scan.go`) — adapter-agnostic, like `ExtractAssistantText` — because the marker contract is plain text. Two opencode wires consume it: (1) `opencode/parser.go parseTextPart` now scans the FULL part text via `tailer.ScanTaskEstimate(text, ev.Timestamp)` and sets `ev.TaskEstimate` BEFORE the 200-rune display truncation, so early markers in long messages survive (parser.go:206-210); (2) crucially, opencode does NOT flow metrics through the tailer — it uses `ProcessOwnedStore` + `ComputeMetrics` — so `querySessionMetrics` (the tailer-bypassing SQLite path) now accumulates the latest estimate (`lastTaskEstimate`, latest-wins) over the full `part.data` text and mirrors the shared `metrics/adapter.go` domain conversion: it sets `metrics.TaskEstimate = &session.TaskEstimate{…}` and projects `metrics.TaskCompletionEta` via `session.ForecastTaskCompletion` (metrics.go:232-276). The shared suppression-once-the-session-leaves-`working` projection is unchanged. So the two spec-required observables (`task_estimate {total_rounds, completed_rounds, updated_at}` + `task_completion_eta` burning down) now surface for opencode from its custom path. Verified in the tree by an end-to-end `TestComputeMetrics_TaskEstimate` over the SQLite harness (latest marker 3/6 wins, `UpdatedAt` from the latest part, projected ETA non-nil) plus parser truncation-trap tests — all green (`go test ./core/adapters/inbound/agents/opencode/... -race -count=1` → ok). Trace exists + daemon handles it correctly → `daemon=full`.\n\n- **driver = gap:seed_instruction** (UNCHANGED). Scenario `process` step 1 requires seeding the marker rule into the workspace's `AGENTS.md` (the CLAUDE.md-equivalent persistent instruction file) BEFORE the first send. No driver in the repo has any instruction-file-seeding primitive: the opencode driver's `settings` blob is written ONLY to `RUN_CWD/opencode.json` (driver-interactive.sh:133-139), never to `AGENTS.md`, and there is no `seed_instruction`/`file`/`write` step type in any `driver-*.sh`. The rule TEXT (the fenced marker example) must live in an actual file opencode loads, not in `opencode.json` and not as a prompt (it must be a *persistent* rule, per the scenario). So the recipe needs a `seed_instruction` step the driver lacks → `gap:seed_instruction`. This is tooling work, not an observability limit: `record` ports the step (write the rule to `$RUN_CWD/AGENTS.md`, or add `\"AGENTS.md\"` to the seeded `opencode.json` `instructions` and write the file) before driving.\n\n## Route\n\n`partial | full | gap:*` → **driver-gap** (the daemon no longer routes this cell; the seed_instruction driver gap is now the sole blocker). `record` (1) ports the `seed_instruction` step, then (2) drives the multi-step task and verifies the (now-CORRECT) spec. The spec is NO LONGER `known_failing` on account of the daemon — the marker scan ships — though emission remains model-dependent (agent=partial); a recording promotes that to settled.",
       "caveats": [
         "agent=partial is provisional and model-dependent: the recorded default model (lmstudio/gemma-4-e2b-it-uncensored, ~2-4B local) may be incapable of reliably emitting/incrementing the marker; only a live recording confirms emission. A capable cloud model (ionos/Qwen3-Coder-Next 80B) is configured and selectable per-turn via the driver -m field if needed.",
-        "daemon=bug, not incapable: the marker is plain text in opencode's SQLite part.data and is fully readable; the only gap is the missing per-adapter content scan (claudecode has taskestimate.go; opencode does not). The spec is authored as known_failing and asserts the correct behavior unweakened.",
-        "Even if a scan is added, opencode/parser.go parseTextPart truncates assistant text to the last 200 runes — the opencode scan must run over the full part.data text (metrics.go:227), not over ParsedEvent.AssistantText, mirroring claudecode/parser.go:388.",
+        "daemon=full as of 1ae457d9: the opencode adapter now scans the full part.data text via the shared tailer.ScanTaskEstimate and the SQLite ComputeMetrics path sets metrics.TaskEstimate + projects task_completion_eta (mirroring the shared metrics adapter). Confirmed by TestComputeMetrics_TaskEstimate + parser truncation-trap tests; this is a doc/code-based daemon=full, but the marker EMISSION (an agent property) is still unconfirmed — see agent caveat.",
+        "The scan runs over the full part.data text (parseTextPart sets ev.TaskEstimate before the 200-rune AssistantText truncation; the metrics path reads the latest estimate). The earlier truncation trap is closed by design.",
         "driver gap is seed_instruction (write a persistent AGENTS.md rule into the workspace); record ports it before driving. The settings->opencode.json seam does NOT write AGENTS.md."
       ],
       "sources": [
         {
           "kind": "file",
-          "ref": "core/adapters/inbound/agents/claudecode/taskestimate.go",
-          "note": "scanTaskEstimate — the marker content scan; v1 lives only in the claudecode adapter package"
+          "ref": "core/pkg/tailer/taskestimate_scan.go",
+          "note": "ScanTaskEstimate — the marker content scan promoted to the shared tailer package (adapter-agnostic), consumed by every adapter including opencode"
         },
         {
           "kind": "file",
-          "ref": "core/adapters/inbound/agents/claudecode/parser.go:380-393",
-          "note": "wires scanTaskEstimate over the FULL assistant text block (note: AssistantText is tail-truncated to 200 runes)"
+          "ref": "core/adapters/inbound/agents/opencode/parser.go:206-210",
+          "note": "parseTextPart now scans the FULL part text via tailer.ScanTaskEstimate and sets ev.TaskEstimate BEFORE the 200-rune display truncation"
         },
         {
           "kind": "file",
-          "ref": "core/adapters/inbound/agents/opencode/",
-          "note": "no taskestimate.go and no scanTaskEstimate caller — opencode has NO marker scan"
+          "ref": "core/adapters/inbound/agents/opencode/metrics.go:232-276",
+          "note": "querySessionMetrics (the tailer-bypassing SQLite path) accumulates the latest estimate (latest-wins) and sets metrics.TaskEstimate + projects metrics.TaskCompletionEta via session.ForecastTaskCompletion — mirrors the shared metrics adapter"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/opencode/metrics_test.go:324-413",
+          "note": "TestComputeMetrics_TaskEstimate — end-to-end over the SQLite harness: latest marker (3/6) wins, UpdatedAt from latest part, projected TaskCompletionEta non-nil; green in tree"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/opencode/parser_test.go",
+          "note": "parser truncation-trap tests — marker in a >200-rune block is still scanned"
+        },
+        {
+          "kind": "url",
+          "ref": "https://github.com/ingo-eichhorst/Irrlicht/commit/1ae457d9",
+          "note": "feat(adapters): port task-estimate marker scan to codex, pi, aider, opencode (#558) — flips this cell's daemon pillar bug->full"
         },
         {
           "kind": "file",
           "ref": "core/adapters/inbound/agents/opencode/agent.go:23-51",
-          "note": "opencode is ProcessOwnedStore (SQLite), routes metrics through ComputeMetrics — bypasses the tailer path that carries TaskEstimate"
-        },
-        {
-          "kind": "file",
-          "ref": "core/adapters/inbound/agents/opencode/metrics.go:27-258",
-          "note": "ComputeMetrics never sets metrics.TaskEstimate; full assistant text is available at line 227 before the parser truncates it"
-        },
-        {
-          "kind": "file",
-          "ref": "core/adapters/inbound/agents/opencode/parser.go:195-215",
-          "note": "parseTextPart tail-truncates AssistantText to last 200 runes — a marker scan must use the full part.data text instead"
+          "note": "opencode is ProcessOwnedStore (SQLite), routes metrics through ComputeMetrics — bypasses the tailer path, which is why the scan had to be wired into the custom metrics path too"
         },
         {
           "kind": "file",
           "ref": "core/adapters/outbound/metrics/adapter.go:176-178",
-          "note": "shared projection: TaskEstimate -> ForecastTaskCompletion -> task_completion_eta (agent-agnostic, ready)"
+          "note": "shared projection: TaskEstimate -> ForecastTaskCompletion -> task_completion_eta; opencode's ComputeMetrics now mirrors this"
         },
         {
           "kind": "file",
@@ -69,7 +74,7 @@
         {
           "kind": "file",
           "ref": "replaydata/agents/opencode/driver-interactive.sh:125-139",
-          "note": "settings blob is seeded ONLY as RUN_CWD/opencode.json; no AGENTS.md / instruction-file seed step exists"
+          "note": "settings blob is seeded ONLY as RUN_CWD/opencode.json; no AGENTS.md / instruction-file seed step exists (the remaining gap)"
         },
         {
           "kind": "file",
@@ -80,11 +85,6 @@
           "kind": "file",
           "ref": "~/.config/opencode/opencode.json",
           "note": "recorded default model lmstudio/gemma-4-e2b-it-uncensored (~2-4B local); ionos cloud provider with Qwen3-Coder-Next 80B also configured"
-        },
-        {
-          "kind": "file",
-          "ref": "opencode binary strings (/Users/ingo/.opencode/bin/opencode)",
-          "note": "references AGENTS.md, CLAUDE.md, and an \"instructions\":[\"AGENTS.md\"] config key — opencode loads a persistent AGENTS.md rule file"
         },
         {
           "kind": "url",
