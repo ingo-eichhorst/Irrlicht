@@ -10,6 +10,7 @@ struct SettingsView: View {
     @AppStorage("showCostDisplay") private var showCostDisplay: Bool = false
     @AppStorage("showQuotaForecast") private var showQuotaForecast: Bool = true
     @AppStorage("launchAtLogin") private var launchAtLogin: Bool = true
+    @AppStorage("taskEtaActivation") private var taskEtaActivation: Bool = false
     @AppStorage("providerMode_anthropic") private var providerModeAnthropic: String = ProviderModePreference.auto.rawValue
     @AppStorage("providerMode_openai") private var providerModeOpenAI: String = ProviderModePreference.auto.rawValue
     @AppStorage(NotificationEvent.ready.enabledKey) private var notifyOnReady: Bool = true
@@ -88,6 +89,28 @@ struct SettingsView: View {
                         info: "Start Irrlicht automatically when you log in to your Mac."
                     )
                     .onChange(of: launchAtLogin) { newValue in LoginItemManager.setEnabled(newValue) }
+
+                    // Task-eta global activation (issue #558). The daemon is
+                    // the source of truth: the toggle posts the flip and then
+                    // mirrors the daemon's answer, so a failed install never
+                    // shows as "on".
+                    LeadingToggle(
+                        isOn: $taskEtaActivation,
+                        label: "Task-Estimate Markers",
+                        info: "Add a managed emission rule to ~/.claude/CLAUDE.md so agents report task progress and sessions show a completion ETA. Only the Irrlicht-managed block is written; the rest of the file is untouched. Turning this off removes the block."
+                    )
+                    .onChange(of: taskEtaActivation) { newValue in
+                        Task {
+                            let actual = await ActivationClient.set(enabled: newValue)
+                            if actual != newValue { taskEtaActivation = actual }
+                        }
+                    }
+                    .onAppear {
+                        Task {
+                            let actual = await ActivationClient.status()
+                            if actual != taskEtaActivation { taskEtaActivation = actual }
+                        }
+                    }
 
                     Divider()
 

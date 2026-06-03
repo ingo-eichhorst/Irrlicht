@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	activationhandler "irrlicht/core/adapters/inbound/activation"
 	"irrlicht/core/adapters/inbound/agents"
 	"irrlicht/core/adapters/inbound/agents/agentwiring"
 	"irrlicht/core/adapters/inbound/agents/claudecode"
@@ -88,6 +89,19 @@ func main() {
 			fmt.Println("Removed irrlicht hooks from ~/.claude/settings.json")
 		} else {
 			fmt.Println("No irrlicht hooks found in ~/.claude/settings.json")
+		}
+		os.Exit(0)
+	}
+
+	if hasFlag("--uninstall-task-eta") {
+		modified, err := claudecode.UninstallTaskEtaBlock()
+		if err != nil {
+			log.Fatalf("failed to uninstall task-eta block: %v", err)
+		}
+		if modified {
+			fmt.Println("Removed irrlicht task-eta block from ~/.claude/CLAUDE.md")
+		} else {
+			fmt.Println("No irrlicht task-eta block found in ~/.claude/CLAUDE.md")
 		}
 		os.Exit(0)
 	}
@@ -392,6 +406,23 @@ func main() {
 
 	focusService := services.NewFocusService(cachedRepo, push, logger)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/focus", sessionshandler.NewFocusHandler(focusService, logger))
+
+	// Task-eta global activation (issue #558): consent-gated managed block in
+	// ~/.claude/CLAUDE.md. Never written silently — the user opts in via the
+	// API (macOS Settings toggle); once consented, startup re-asserts the
+	// block idempotently. localhostOnly: this endpoint rewrites a sensitive
+	// user file and must not be reachable from the LAN.
+	activationHome, _ := os.UserHomeDir()
+	activationSvc := services.NewActivationService(
+		dataDir(activationHome),
+		services.ActivationInstaller{
+			Install:   claudecode.EnsureTaskEtaBlockInstalled,
+			Uninstall: claudecode.UninstallTaskEtaBlock,
+		},
+		logger,
+	)
+	activationSvc.ReassertOnStartup()
+	mux.HandleFunc("/api/v1/activation/task-eta", localhostOnly(activationhandler.NewHandler(activationSvc, logger)))
 
 	// Suppress ghost proc pre-sessions for live processes whose real session
 	// is already persisted. The PID discriminator in HasRealSessionForPID
