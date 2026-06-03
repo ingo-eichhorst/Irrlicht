@@ -1000,7 +1000,10 @@
           if (showHeaders) {
             items.push({type: 'group', key: 'g:' + key, group: g, groupKey: key, depth: depth});
           }
-          if (collapsedGroups.has(key)) return;
+          // Collapse only applies while its header is rendered (#564): with a
+          // single flat group no header exists, so a stale persisted collapse
+          // would otherwise blank the dashboard with no way to recover.
+          if (showHeaders && collapsedGroups.has(key)) return;
           for (const a of (g.agents || [])) {
             if (isShadowedRemote(a, localIds)) continue;
             agentNum++;
@@ -1276,6 +1279,13 @@
       }
       if (resp) {
         dashboardGroups = Array.isArray(resp) ? resp : (resp.groups || []);
+        // A group with no direct agents (e.g. a gastown orchestrator group
+        // whose agents all live in rig sub-groups) omits `agents` entirely
+        // (json omitempty). Normalize once at ingest so every consumer —
+        // rebuildIndex, render, group headers — can iterate unconditionally.
+        for (const g of dashboardGroups) {
+          if (g && !g.agents) g.agents = [];
+        }
         dashboardProviderCosts = (resp && !Array.isArray(resp) && resp.provider_costs) || {};
         rebuildIndex();
       }

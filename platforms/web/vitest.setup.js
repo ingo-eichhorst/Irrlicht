@@ -19,6 +19,14 @@ document.body.innerHTML = `
   <div id="settings-perm-note"></div>
 `;
 
+// jsdom has no canvas — give paintRowHistory the minimal 2D context it uses
+// so tests that render session rows don't trip an unhandled rejection.
+HTMLCanvasElement.prototype.getContext = () => ({
+  setTransform: () => {},
+  clearRect: () => {},
+  fillRect: () => {},
+});
+
 // jsdom has no matchMedia — provide a stub
 if (!window.matchMedia) {
   window.matchMedia = (query) => ({
