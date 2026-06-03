@@ -39,7 +39,7 @@ final class SoundPlayerTests: XCTestCase {
 
     func testVoiceForEachSpokenVoiceIsNonNil() {
         // Every variant must resolve to a usable voice: when the canonical
-        // name (Ava / Tom) is installed we get the best-quality variant of
+        // name (Zoe / Jamie) is installed we get the best-quality variant of
         // it; when it isn't, we fall back to AVSpeechSynthesisVoice(
         // language: "en-US") which is always present.
         for v in SpokenVoice.allCases {
