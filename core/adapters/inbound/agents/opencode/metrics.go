@@ -87,6 +87,7 @@ func querySessionMetrics(db *sql.DB, sessionID, dbPath string) (*session.Session
 	var lastEventType string
 	openTools := make(map[string]string) // callID → toolName
 	var lastAssistantText string
+	var lastTaskEstimate *tailer.TaskEstimate
 	var cumCost float64
 	var cumInput, cumOutput, cumCacheRead int64
 	hasData := false
@@ -227,6 +228,12 @@ func querySessionMetrics(db *sql.DB, sessionID, dbPath string) (*session.Session
 		if ev.AssistantText != "" {
 			lastAssistantText = ev.AssistantText
 		}
+
+		// Track the latest task-estimate marker (issue #558) — mirrors the
+		// tailer's lastTaskEstimate persistence, which this path bypasses.
+		if ev.TaskEstimate != nil {
+			lastTaskEstimate = ev.TaskEstimate
+		}
 	}
 
 	if !hasData {
@@ -250,6 +257,23 @@ func querySessionMetrics(db *sql.DB, sessionID, dbPath string) (*session.Session
 	metrics.CumCacheReadTokens = cumCacheRead
 	metrics.ElapsedSeconds = int64(lastTS.Sub(firstTS).Seconds())
 	metrics.Tasks = tasks
+
+	// Surface the agent-authored task estimate + projected completion ETA
+	// (issue #558) — mirrors the conversion the shared metrics adapter does
+	// for tailer-path agents (metrics/adapter.go), which this path bypasses.
+	if lastTaskEstimate != nil {
+		metrics.TaskEstimate = &session.TaskEstimate{
+			TotalRounds:     lastTaskEstimate.TotalRounds,
+			CompletedRounds: lastTaskEstimate.CompletedRounds,
+			Risk:            lastTaskEstimate.Risk,
+			Confidence:      lastTaskEstimate.Confidence,
+			UpdatedAt:       lastTaskEstimate.ObservedAt,
+		}
+		if eta := session.ForecastTaskCompletion(metrics.TaskEstimate, metrics.ElapsedSeconds, time.Now()); eta != nil {
+			etaUnix := eta.Unix()
+			metrics.TaskCompletionEta = &etaUnix
+		}
+	}
 
 	cm := capacity.DefaultCapacityManager()
 	metrics.ContextWindow, metrics.ContextUtilization, metrics.PressureLevel, metrics.ContextWindowUnknown =

@@ -1,6 +1,6 @@
-// taskestimate.go parses the agent-emitted task-progress marker from assistant
-// text (issue #558). The agent authors its own estimate and emits it in-band as
-// a hidden HTML comment, e.g.
+// taskestimate_scan.go parses the agent-emitted task-progress marker from
+// assistant text (issue #558). The agent authors its own estimate and emits
+// it in-band as a hidden HTML comment, e.g.
 //
 //	<!-- {"marker":"irrlicht-eta","total_rounds":10,"completed_rounds":2} -->
 //
@@ -8,14 +8,16 @@
 // 2026-05-31 experiment showed 0% exact-format compliance (the model rewrites
 // the marker), so we accept key drift and ignore anything malformed rather
 // than erroring. Latest valid marker wins.
-package claudecode
+//
+// The scan lives in the tailer package (like ExtractAssistantText) because
+// the marker contract is plain text and adapter-agnostic; each adapter walks
+// its own transcript shape and feeds the full text blocks here.
+package tailer
 
 import (
 	"encoding/json"
 	"regexp"
 	"time"
-
-	"irrlicht/core/pkg/tailer"
 )
 
 // taskEstimateCommentRe matches candidate HTML comments carrying a JSON
@@ -31,13 +33,13 @@ var taskEstimateMarkerKeyRe = regexp.MustCompile(`^irrlicht[-_]e(stimate|ta)$`)
 // larger is not a progress marker.
 const maxTaskEstimateCommentLen = 2048
 
-// scanTaskEstimate scans the full text of an assistant text block for
+// ScanTaskEstimate scans the full text of an assistant text block for
 // task-estimate markers and returns the last valid one, stamped with the
 // event timestamp. Returns nil when no valid marker is present. It must be
 // fed the complete block text — ParsedEvent.AssistantText is tail-truncated
 // to 200 runes and would lose markers in long messages.
-func scanTaskEstimate(text string, observedAt time.Time) *tailer.TaskEstimate {
-	var latest *tailer.TaskEstimate
+func ScanTaskEstimate(text string, observedAt time.Time) *TaskEstimate {
+	var latest *TaskEstimate
 	for _, m := range taskEstimateCommentRe.FindAllStringSubmatch(text, -1) {
 		payload := m[1]
 		if len(payload) > maxTaskEstimateCommentLen {
@@ -56,7 +58,7 @@ func scanTaskEstimate(text string, observedAt time.Time) *tailer.TaskEstimate {
 // matching irrlicht[-_]e(stimate|ta) or carries total_rounds. Values are
 // validated — absurd markers are rejected wholesale rather than clamped, so a
 // later well-formed emission isn't shadowed by junk. Never errors.
-func parseTaskEstimatePayload(payload string) *tailer.TaskEstimate {
+func parseTaskEstimatePayload(payload string) *TaskEstimate {
 	var obj map[string]interface{}
 	if err := json.Unmarshal([]byte(payload), &obj); err != nil {
 		return nil
@@ -85,7 +87,7 @@ func parseTaskEstimatePayload(payload string) *tailer.TaskEstimate {
 		return nil
 	}
 
-	est := &tailer.TaskEstimate{TotalRounds: total, CompletedRounds: completed}
+	est := &TaskEstimate{TotalRounds: total, CompletedRounds: completed}
 	if risk, ok := obj["risk"].(string); ok {
 		est.Risk = risk
 	}

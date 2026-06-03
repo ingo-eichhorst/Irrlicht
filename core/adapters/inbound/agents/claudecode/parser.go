@@ -386,7 +386,7 @@ func scanMessageContent(raw map[string]interface{}, ev *tailer.ParsedEvent) stri
 				continue
 			}
 			if text, ok := block["text"].(string); ok {
-				if est := scanTaskEstimate(text, ev.Timestamp); est != nil {
+				if est := tailer.ScanTaskEstimate(text, ev.Timestamp); est != nil {
 					ev.TaskEstimate = est
 				}
 			}

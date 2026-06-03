@@ -82,15 +82,24 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 			ev.EventType = "assistant" // mid-turn (toolUse, etc.)
 		}
 
-		// Extract tool calls from message.content[].
+		// Extract tool calls from message.content[]; text blocks are scanned
+		// in full for the task-estimate marker (issue #558) — the display
+		// text below is tail-truncated and would lose early markers.
 		if contentArr, ok := piMsg["content"].([]interface{}); ok {
 			for _, item := range contentArr {
 				if block, ok := item.(map[string]interface{}); ok {
-					if block["type"] == "toolCall" {
+					switch block["type"] {
+					case "toolCall":
 						id, _ := block["id"].(string)
 						name, _ := block["name"].(string)
 						if name != "" {
 							ev.ToolUses = append(ev.ToolUses, tailer.ToolUse{ID: id, Name: name})
+						}
+					case "text":
+						if text, ok := block["text"].(string); ok {
+							if est := tailer.ScanTaskEstimate(text, ev.Timestamp); est != nil {
+								ev.TaskEstimate = est
+							}
 						}
 					}
 				}

@@ -320,3 +320,96 @@ func TestComputeMetrics_TodowriteSnapshotPrune(t *testing.T) {
 		t.Errorf("Tasks[1] = %+v, want {ID:2 Subject:Task B Status:pending}", got)
 	}
 }
+
+// TestComputeMetrics_TaskEstimate drives a session whose assistant text parts
+// carry task-estimate markers (issue #558) and asserts the custom metrics
+// path — which bypasses the tailer — surfaces the latest estimate and a
+// projected completion ETA.
+func TestComputeMetrics_TaskEstimate(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "opencode.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	schema := []string{
+		`CREATE TABLE session (
+			id text PRIMARY KEY, project_id text NOT NULL, parent_id text,
+			slug text NOT NULL, directory text NOT NULL, title text NOT NULL,
+			version text NOT NULL, time_created integer NOT NULL, time_updated integer NOT NULL
+		);`,
+		`CREATE TABLE message (
+			id text PRIMARY KEY, session_id text NOT NULL,
+			time_created integer NOT NULL, time_updated integer NOT NULL, data text NOT NULL
+		);`,
+		`CREATE TABLE part (
+			id text PRIMARY KEY, message_id text NOT NULL, session_id text NOT NULL,
+			time_created integer NOT NULL, time_updated integer NOT NULL, data text NOT NULL
+		);`,
+	}
+	for _, stmt := range schema {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("schema: %v", err)
+		}
+	}
+
+	const sid = "ses_test_taskestimate"
+	if _, err := db.Exec(
+		`INSERT INTO session(id, project_id, slug, directory, title, version, time_created, time_updated) VALUES (?, '', '', ?, '', '', 0, 0)`,
+		sid, "/tmp/opencode-eta-test",
+	); err != nil {
+		t.Fatalf("insert session: %v", err)
+	}
+	msgData := `{"role":"assistant","time":{"created":1000},"model":{"providerID":"test","modelID":"test-model"}}`
+	if _, err := db.Exec(
+		`INSERT INTO message(id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)`,
+		"msg_1", sid, 1000, 1000, msgData,
+	); err != nil {
+		t.Fatalf("insert message: %v", err)
+	}
+
+	textPart := func(text string) string {
+		b, err := json.Marshal(map[string]any{"type": "text", "text": text})
+		if err != nil {
+			t.Fatalf("marshal part: %v", err)
+		}
+		return string(b)
+	}
+	parts := []struct {
+		id      string
+		created int64
+		data    string
+	}{
+		{"part_1", 1100, textPart(`Step 1 done. <!-- {"marker":"irrlicht-eta","total_rounds":6,"completed_rounds":1} -->`)},
+		{"part_2", 240000, textPart(`Step 3 done. <!-- {"marker":"irrlicht-eta","total_rounds":6,"completed_rounds":3} -->`)},
+	}
+	for _, p := range parts {
+		if _, err := db.Exec(
+			`INSERT INTO part(id, message_id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?)`,
+			p.id, "msg_1", sid, p.created, p.created, p.data,
+		); err != nil {
+			t.Fatalf("insert part %s: %v", p.id, err)
+		}
+	}
+
+	metrics, err := ComputeMetrics(dbPath, sid)
+	if err != nil {
+		t.Fatalf("ComputeMetrics: %v", err)
+	}
+	if metrics == nil || metrics.TaskEstimate == nil {
+		t.Fatal("expected TaskEstimate on metrics")
+	}
+	// Latest marker wins.
+	if metrics.TaskEstimate.TotalRounds != 6 || metrics.TaskEstimate.CompletedRounds != 3 {
+		t.Errorf("rounds = %d/%d, want 3/6 (latest marker)",
+			metrics.TaskEstimate.CompletedRounds, metrics.TaskEstimate.TotalRounds)
+	}
+	if metrics.TaskEstimate.UpdatedAt != 240 { // part_2 time_updated 240000ms → unix 240s
+		t.Errorf("UpdatedAt = %d, want 240", metrics.TaskEstimate.UpdatedAt)
+	}
+	// ElapsedSeconds ≈ 239s for 3 completed rounds → remaining 3 → eta set.
+	if metrics.TaskCompletionEta == nil {
+		t.Fatal("expected TaskCompletionEta to be projected")
+	}
+}
