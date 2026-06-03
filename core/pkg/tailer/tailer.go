@@ -175,6 +175,11 @@ type SessionMetrics struct {
 	// (issue #558). Sporadic like RateLimit — the last one seen persists
 	// across passes. Nil when the session never emitted a marker.
 	TaskEstimate *TaskEstimate `json:"task_estimate,omitempty"`
+
+	// TaskEstimateBase is the first marker of the current task — the rate
+	// baseline for the completion forecast. Computation-only (the API
+	// surfaces the derived eta, not the baseline).
+	TaskEstimateBase *TaskEstimate `json:"-"`
 }
 
 // TranscriptTailer monitors transcript files and computes metrics.
@@ -271,6 +276,14 @@ type TranscriptTailer struct {
 	// the last one seen persists across passes that carry no fresh marker.
 	// See issue #558.
 	lastTaskEstimate *TaskEstimate
+
+	// firstTaskEstimate is the first marker of the CURRENT task — the rate
+	// baseline. Measuring perRound from marker deltas (latest − first)
+	// instead of session elapsed keeps multi-task sessions honest: after a
+	// reset, session elapsed includes all previous tasks and idle gaps and
+	// inflated projections ~2×. Re-anchored when completed_rounds goes
+	// backwards (agent started a new count without a user prompt).
+	firstTaskEstimate *TaskEstimate
 
 	// tasks accumulates the session's task list from TaskCreate / TaskUpdate
 	// tool_use events parsed by the Claude Code adapter.
@@ -901,6 +914,10 @@ func (t *TranscriptTailer) processParsedEvent(parsed *ParsedEvent, sawUserBlocki
 		t.lastAssistantText = ""
 	}
 	if parsed.TaskEstimate != nil {
+		if t.firstTaskEstimate == nil ||
+			(t.lastTaskEstimate != nil && parsed.TaskEstimate.CompletedRounds < t.lastTaskEstimate.CompletedRounds) {
+			t.firstTaskEstimate = parsed.TaskEstimate
+		}
 		t.lastTaskEstimate = parsed.TaskEstimate
 	}
 	if parsed.ClearToolNames && len(parsed.ToolResultIDs) == 0 {
@@ -912,6 +929,7 @@ func (t *TranscriptTailer) processParsedEvent(parsed *ParsedEvent, sawUserBlocki
 		// ClearToolNames, and resetting on those wiped the estimate on every
 		// tool call — the chip vanished mid-task until the next marker (#558).
 		t.lastTaskEstimate = nil
+		t.firstTaskEstimate = nil
 	}
 
 	t.contentChars += parsed.ContentChars

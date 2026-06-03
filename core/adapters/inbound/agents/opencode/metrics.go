@@ -87,7 +87,7 @@ func querySessionMetrics(db *sql.DB, sessionID, dbPath string) (*session.Session
 	var lastEventType string
 	openTools := make(map[string]string) // callID → toolName
 	var lastAssistantText string
-	var lastTaskEstimate *tailer.TaskEstimate
+	var lastTaskEstimate, firstTaskEstimate *tailer.TaskEstimate
 	var cumCost float64
 	var cumInput, cumOutput, cumCacheRead int64
 	hasData := false
@@ -235,10 +235,15 @@ func querySessionMetrics(db *sql.DB, sessionID, dbPath string) (*session.Session
 		// tailer, including the tool-result guard): only markers after the
 		// last user message count.
 		if ev.TaskEstimate != nil {
+			if firstTaskEstimate == nil ||
+				(lastTaskEstimate != nil && ev.TaskEstimate.CompletedRounds < lastTaskEstimate.CompletedRounds) {
+				firstTaskEstimate = ev.TaskEstimate
+			}
 			lastTaskEstimate = ev.TaskEstimate
 		}
 		if ev.ClearToolNames && len(ev.ToolResultIDs) == 0 {
 			lastTaskEstimate = nil
+			firstTaskEstimate = nil
 		}
 	}
 
@@ -268,14 +273,20 @@ func querySessionMetrics(db *sql.DB, sessionID, dbPath string) (*session.Session
 	// (issue #558) — mirrors the conversion the shared metrics adapter does
 	// for tailer-path agents (metrics/adapter.go), which this path bypasses.
 	if lastTaskEstimate != nil {
-		metrics.TaskEstimate = &session.TaskEstimate{
-			TotalRounds:     lastTaskEstimate.TotalRounds,
-			CompletedRounds: lastTaskEstimate.CompletedRounds,
-			Risk:            lastTaskEstimate.Risk,
-			Confidence:      lastTaskEstimate.Confidence,
-			UpdatedAt:       lastTaskEstimate.ObservedAt,
+		toDomain := func(src *tailer.TaskEstimate) *session.TaskEstimate {
+			if src == nil {
+				return nil
+			}
+			return &session.TaskEstimate{
+				TotalRounds:     src.TotalRounds,
+				CompletedRounds: src.CompletedRounds,
+				Risk:            src.Risk,
+				Confidence:      src.Confidence,
+				UpdatedAt:       src.ObservedAt,
+			}
 		}
-		if eta := session.ForecastTaskCompletion(metrics.TaskEstimate, metrics.ElapsedSeconds, time.Now()); eta != nil {
+		metrics.TaskEstimate = toDomain(lastTaskEstimate)
+		if eta := session.ForecastTaskCompletion(metrics.TaskEstimate, toDomain(firstTaskEstimate), metrics.ElapsedSeconds, time.Now()); eta != nil {
 			etaUnix := eta.Unix()
 			metrics.TaskCompletionEta = &etaUnix
 		}

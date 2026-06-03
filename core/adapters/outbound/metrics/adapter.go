@@ -175,7 +175,8 @@ func (a *Adapter) ComputeMetrics(transcriptPath, adapter string) (*session.Sessi
 	}
 	if m.TaskEstimate != nil {
 		result.TaskEstimate = tailerTaskEstimateToDomain(m.TaskEstimate)
-		if eta := session.ForecastTaskCompletion(result.TaskEstimate, m.ElapsedSeconds, time.Now()); eta != nil {
+		base := tailerTaskEstimateToDomain(m.TaskEstimateBase)
+		if eta := session.ForecastTaskCompletion(result.TaskEstimate, base, m.ElapsedSeconds, time.Now()); eta != nil {
 			etaUnix := eta.Unix()
 			result.TaskCompletionEta = &etaUnix
 		}

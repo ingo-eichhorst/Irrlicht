@@ -112,6 +112,45 @@ func TestTailer_TaskEstimate_ResetOnUserMessage(t *testing.T) {
 	}
 }
 
+func TestTailer_TaskEstimate_BaseTracking(t *testing.T) {
+	// The first marker of the current task is the rate baseline; a marker
+	// whose completed count goes BACKWARDS re-anchors it (the agent started
+	// a new count without a user prompt), and a real user message clears
+	// both (issue #558 multi-task sessions).
+	path := writeTranscriptLines(t, []map[string]interface{}{
+		{"timestamp": ts(0), "est": map[string]interface{}{"total": float64(6), "done": float64(0)}},
+		{"timestamp": ts(30), "est": map[string]interface{}{"total": float64(6), "done": float64(3)}},
+	})
+	tl := newTaskEstimateTestTailer(path)
+	m, err := tl.TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.TaskEstimateBase == nil || m.TaskEstimateBase.CompletedRounds != 0 {
+		t.Fatalf("base = %+v, want the 0/6 first marker", m.TaskEstimateBase)
+	}
+
+	// completed goes backwards → new task, base re-anchors.
+	appendTranscriptLine(t, path, map[string]interface{}{"timestamp": ts(60), "est": map[string]interface{}{"total": float64(9), "done": float64(1)}})
+	m, err = tl.TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.TaskEstimateBase == nil || m.TaskEstimateBase.TotalRounds != 9 || m.TaskEstimateBase.CompletedRounds != 1 {
+		t.Fatalf("base = %+v, want re-anchored 1/9", m.TaskEstimateBase)
+	}
+
+	// Real user message clears base and estimate together.
+	appendTranscriptLine(t, path, map[string]interface{}{"timestamp": ts(90), "user": true})
+	m, err = tl.TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.TaskEstimate != nil || m.TaskEstimateBase != nil {
+		t.Fatalf("estimate=%+v base=%+v, want both nil after user message", m.TaskEstimate, m.TaskEstimateBase)
+	}
+}
+
 func TestTailer_TaskEstimate_SurvivesToolResults(t *testing.T) {
 	// Tool results are user-role lines in Claude Code transcripts and raise
 	// ClearToolNames — they must NOT reset the estimate or the chip vanishes
