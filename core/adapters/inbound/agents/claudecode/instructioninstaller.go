@@ -28,16 +28,24 @@ const (
 // managedTaskEtaBlock is the full block (sentinels inclusive) written
 // verbatim. The lightest "emit periodically" phrasing won the 2026-05-31
 // emission experiment; the marker example stays minimal per the v1 contract.
-// Per-agent equivalents (~/.codex/AGENTS.md, ~/.config/opencode/AGENTS.md,
-// ~/.gemini/GEMINI.md) are documented in the issue but not written in v1.
+// The example MUST sit inside a fenced code block: Claude Code strips bare
+// HTML comments from CLAUDE.md at context-injection time (verified live on
+// v2.1.161 — the model quoted the rule with the example line missing), so an
+// unfenced example never reaches the model. The fence protects it; the
+// BEGIN/END sentinels don't need protection (they exist for this installer's
+// file patching, not for the model). Per-agent equivalents
+// (~/.codex/AGENTS.md, ~/.config/opencode/AGENTS.md, ~/.gemini/GEMINI.md)
+// are documented in the issue but not written in v1.
 const managedTaskEtaBlock = taskEtaBeginSentinel + `
 ## Task progress markers (managed by Irrlicht)
 
 As you work on a multi-step task, periodically emit a hidden progress marker
-so tools can show a task-completion estimate. Emit it as an HTML comment, and
-update it as you make progress:
+so tools can show a task-completion estimate. Emit it as an HTML comment in
+your response text, and update it as you make progress:
 
+` + "```" + `
 <!-- {"marker":"irrlicht-eta","total_rounds":N,"completed_rounds":M} -->
+` + "```" + `
 
 ` + "`total_rounds`" + ` is your estimate of the task's phases; ` + "`completed_rounds`" + `
 is how many you've finished. Update every few steps.
