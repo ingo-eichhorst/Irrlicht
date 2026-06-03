@@ -1247,30 +1247,33 @@ struct SessionRowView: View {
                 .tooltip(isCritical ? "Context window critically full" : "Context window nearing limit")
             }
 
-            // Task-completion ETA (issue #558) — agent-authored estimate on
-            // its own line: inline next to the cost it truncated to "…" at
-            // menu-bar width (the model label's layoutPriority wins the
-            // squeeze). Sits directly above the task-progress dots — they
-            // describe the same thing.
-            if let eta = taskEtaPresentation(), let est = session.metrics?.taskEstimate {
-                HStack(spacing: 4) {
-                    Image(systemName: "timer")
-                        .font(.system(size: 9))
-                        .foregroundColor(.secondary)
-                    Text("\(eta.text) · \(est.completedRounds)/\(est.totalRounds)")
-                        .font(.system(size: 9, design: .monospaced))
-                        .foregroundColor(.secondary)
-                        .lineLimit(1)
-                    Spacer()
+            // Task progress + completion ETA share one line: dots left, ETA
+            // right (issue #558). A sub-row, not the main HStack — inline
+            // next to the cost the ETA truncated to "…" at menu-bar width
+            // (the model label's layoutPriority wins the squeeze). The ETA
+            // label is fixed-size so the wrapping dots can't compress it.
+            if activeTasks != nil || taskEtaPresentation() != nil {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    if let tasks = activeTasks {
+                        TaskListView(tasks: tasks)
+                    }
+                    Spacer(minLength: 8)
+                    if let eta = taskEtaPresentation(), let est = session.metrics?.taskEstimate {
+                        HStack(spacing: 4) {
+                            Image(systemName: "timer")
+                                .font(.system(size: 9))
+                                .foregroundColor(.secondary)
+                            Text("\(eta.text) · \(est.completedRounds)/\(est.totalRounds)")
+                                .font(.system(size: 9, design: .monospaced))
+                                .foregroundColor(.secondary)
+                                .lineLimit(1)
+                        }
+                        .fixedSize()
+                        .opacity(eta.stale ? 0.5 : 1.0)
+                        .tooltip(eta.title)
+                    }
                 }
-                .opacity(eta.stale ? 0.5 : 1.0)
                 .padding(.top, 2)
-                .tooltip(eta.title)
-            }
-
-            // Task list (Claude Code TaskCreate / TaskUpdate)
-            if let tasks = session.metrics?.tasks, !tasks.isEmpty, !tasks.allSatisfy(\.isCompleted) {
-                TaskListView(tasks: tasks)
             }
 
             // Debug info
@@ -1328,6 +1331,13 @@ struct SessionRowView: View {
             return String(format: "%d:%02d:%02d", h, m, s)
         }
         return String(format: "%d:%02d", m, s)
+    }
+
+    /// The session's task list when it should render — non-empty and not
+    /// fully completed (same gate the standalone dots row used).
+    private var activeTasks: [SessionTask]? {
+        guard let tasks = session.metrics?.tasks, !tasks.isEmpty, !tasks.allSatisfy(\.isCompleted) else { return nil }
+        return tasks
     }
 
     private struct TaskEtaPresentation {
