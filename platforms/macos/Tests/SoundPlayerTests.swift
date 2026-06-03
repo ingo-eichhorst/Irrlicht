@@ -52,6 +52,25 @@ final class SoundPlayerTests: XCTestCase {
             ".default has no canonical name and must always report installed")
     }
 
+    func testMatchesAcceptsBareAndQualitySuffixedNames() {
+        // macOS 26.x reports premium/enhanced voices with the quality in
+        // the name ("Zoe (Premium)"); older releases report bare "Zoe".
+        XCTAssertTrue(SpokenVoice.female.matches(installedName: "Zoe"))
+        XCTAssertTrue(SpokenVoice.female.matches(installedName: "Zoe (Premium)"))
+        XCTAssertTrue(SpokenVoice.female.matches(installedName: "Zoe (Enhanced)"))
+        XCTAssertTrue(SpokenVoice.male.matches(installedName: "Jamie"))
+        XCTAssertTrue(SpokenVoice.male.matches(installedName: "Jamie (Premium)"))
+    }
+
+    func testMatchesRejectsOtherNames() {
+        XCTAssertFalse(SpokenVoice.female.matches(installedName: "Zoey"),
+            "near-miss names must not match")
+        XCTAssertFalse(SpokenVoice.female.matches(installedName: "Jamie (Premium)"))
+        XCTAssertFalse(SpokenVoice.male.matches(installedName: "Zoe (Premium)"))
+        XCTAssertFalse(SpokenVoice.default.matches(installedName: "Zoe"),
+            ".default has no canonical name and matches nothing")
+    }
+
     func testResolveMissingCustomFallsBackToPing() {
         let defaults = UserDefaults.standard
         let event = NotificationEvent.contextPressure
