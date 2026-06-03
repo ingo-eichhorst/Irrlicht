@@ -1325,6 +1325,13 @@
       }
       if (resp) {
         dashboardGroups = Array.isArray(resp) ? resp : (resp.groups || []);
+        // A group with no direct agents (e.g. a gastown orchestrator group
+        // whose agents all live in rig sub-groups) omits `agents` entirely
+        // (json omitempty). Normalize once at ingest so every consumer —
+        // rebuildIndex, render, group headers — can iterate unconditionally.
+        for (const g of dashboardGroups) {
+          if (g && !g.agents) g.agents = [];
+        }
         dashboardProviderCosts = (resp && !Array.isArray(resp) && resp.provider_costs) || {};
         rebuildIndex();
       }
