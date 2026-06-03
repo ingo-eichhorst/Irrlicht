@@ -141,7 +141,7 @@
         },
         {
           "type": "sleep",
-          "seconds": 12
+          "seconds": 30
         }
       ],
       "verify": [
@@ -155,7 +155,7 @@
       "settings": {
         "model": "sonnet"
       },
-      "timeout_seconds": 420
+      "timeout_seconds": 480
     }
   }
 }
