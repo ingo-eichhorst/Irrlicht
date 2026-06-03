@@ -152,7 +152,9 @@
         "While working the session metrics carry task_estimate + task_completion_eta; the client (web/macOS) shows the ETA chip only while working and hides it at ready (suppressed-by-state)",
         "State topology ready → working → ready across the turns; final state ready (the ≥10s trailing sleep captures the post-turn settle)"
       ],
-      "settings": {},
+      "settings": {
+        "model": "sonnet"
+      },
       "timeout_seconds": 300
     }
   }
