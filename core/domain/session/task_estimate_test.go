@@ -42,34 +42,35 @@ func TestForecastTaskCompletion_AllRoundsDone(t *testing.T) {
 	}
 }
 
-func TestMergeMetrics_TaskEstimateCarryOver(t *testing.T) {
-	// Markers are sporadic — a pass with no fresh marker must not drop the
-	// last-seen estimate or the chip flickers (issue #558).
+func TestMergeMetrics_TaskEstimateResetPropagates(t *testing.T) {
+	// No nil carry-over for the estimate: the tailer persists the last-seen
+	// marker itself, so a nil in fresh metrics is a real reset (a new user
+	// message started a new task) and must NOT be resurrected (issue #558).
 	etaUnix := int64(1769000000)
 	oldM := &SessionMetrics{
-		TaskEstimate:      &TaskEstimate{TotalRounds: 10, CompletedRounds: 3, UpdatedAt: 1768999000},
+		TaskEstimate:      &TaskEstimate{TotalRounds: 10, CompletedRounds: 10, UpdatedAt: 1768999000},
 		TaskCompletionEta: &etaUnix,
 	}
 	newM := &SessionMetrics{ModelName: "claude-sonnet-4-6"}
 	got := MergeMetrics(newM, oldM)
-	if got.TaskEstimate == nil || got.TaskEstimate.CompletedRounds != 3 {
-		t.Errorf("TaskEstimate = %+v, want carried-over 3/10", got.TaskEstimate)
+	if got.TaskEstimate != nil {
+		t.Errorf("TaskEstimate = %+v, want nil (reset must propagate)", got.TaskEstimate)
 	}
-	if got.TaskCompletionEta == nil || *got.TaskCompletionEta != etaUnix {
-		t.Errorf("TaskCompletionEta = %v, want carried-over %d", got.TaskCompletionEta, etaUnix)
+	if got.TaskCompletionEta != nil {
+		t.Errorf("TaskCompletionEta = %v, want nil (reset must propagate)", got.TaskCompletionEta)
 	}
 
-	// A fresh marker wins over the carried-over one.
+	// A fresh estimate copies through verbatim.
 	freshEta := int64(1769000500)
 	newM2 := &SessionMetrics{
 		TaskEstimate:      &TaskEstimate{TotalRounds: 10, CompletedRounds: 7, UpdatedAt: 1769000400},
 		TaskCompletionEta: &freshEta,
 	}
 	got2 := MergeMetrics(newM2, oldM)
-	if got2.TaskEstimate.CompletedRounds != 7 {
+	if got2.TaskEstimate == nil || got2.TaskEstimate.CompletedRounds != 7 {
 		t.Errorf("fresh TaskEstimate should win, got %+v", got2.TaskEstimate)
 	}
-	if *got2.TaskCompletionEta != freshEta {
-		t.Errorf("fresh TaskCompletionEta should win, got %d", *got2.TaskCompletionEta)
+	if got2.TaskCompletionEta == nil || *got2.TaskCompletionEta != freshEta {
+		t.Errorf("fresh TaskCompletionEta should win, got %v", got2.TaskCompletionEta)
 	}
 }

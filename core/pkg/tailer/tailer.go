@@ -903,6 +903,13 @@ func (t *TranscriptTailer) processParsedEvent(parsed *ParsedEvent, sawUserBlocki
 	if parsed.TaskEstimate != nil {
 		t.lastTaskEstimate = parsed.TaskEstimate
 	}
+	if parsed.ClearToolNames {
+		// A user message starts a new task (or redirects the current one) —
+		// the previous estimate no longer describes what the agent is doing,
+		// so reset it like lastAssistantText above. The chip stays hidden
+		// until the agent emits a fresh marker for the new work (#558).
+		t.lastTaskEstimate = nil
+	}
 
 	t.contentChars += parsed.ContentChars
 

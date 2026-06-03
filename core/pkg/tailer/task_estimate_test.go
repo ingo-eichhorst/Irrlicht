@@ -14,6 +14,11 @@ type taskEstimateTestParser struct{}
 
 func (p *taskEstimateTestParser) ParseLine(raw map[string]interface{}) *ParsedEvent {
 	ev := &ParsedEvent{Timestamp: ParseTimestamp(raw), EventType: "assistant_message"}
+	if _, ok := raw["user"]; ok {
+		ev.EventType = "user_message"
+		ev.ClearToolNames = true
+		return ev
+	}
 	if v, ok := raw["est"].(map[string]interface{}); ok {
 		total, _ := v["total"].(float64)
 		done, _ := v["done"].(float64)
@@ -66,6 +71,36 @@ func TestTailer_TaskEstimate_PersistsAcrossMarkerlessPasses(t *testing.T) {
 	}
 	if m.TaskEstimate == nil || m.TaskEstimate.CompletedRounds != 3 {
 		t.Fatalf("TaskEstimate = %+v, want persisted CompletedRounds=3", m.TaskEstimate)
+	}
+}
+
+func TestTailer_TaskEstimate_ResetOnUserMessage(t *testing.T) {
+	// A new user message starts a new task — the previous estimate must not
+	// survive into the next working episode (issue #558).
+	path := writeTranscriptLines(t, []map[string]interface{}{
+		{"timestamp": ts(0), "est": map[string]interface{}{"total": float64(10), "done": float64(9)}},
+	})
+	tl := newTaskEstimateTestTailer(path)
+	if _, err := tl.TailAndProcess(); err != nil {
+		t.Fatal(err)
+	}
+	appendTranscriptLine(t, path, map[string]interface{}{"timestamp": ts(1), "user": true})
+	m, err := tl.TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.TaskEstimate != nil {
+		t.Fatalf("TaskEstimate = %+v, want nil after user message", m.TaskEstimate)
+	}
+
+	// A fresh marker after the reset starts a new estimate.
+	appendTranscriptLine(t, path, map[string]interface{}{"timestamp": ts(2), "est": map[string]interface{}{"total": float64(4), "done": float64(1)}})
+	m, err = tl.TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.TaskEstimate == nil || m.TaskEstimate.TotalRounds != 4 {
+		t.Fatalf("TaskEstimate = %+v, want fresh 1/4", m.TaskEstimate)
 	}
 }
 

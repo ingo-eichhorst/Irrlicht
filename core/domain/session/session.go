@@ -753,14 +753,10 @@ func MergeMetrics(newM, oldM *SessionMetrics) *SessionMetrics {
 	if merged.RateLimitForecastEta == nil && oldM.RateLimitForecastEta != nil {
 		merged.RateLimitForecastEta = oldM.RateLimitForecastEta
 	}
-	// Task-estimate markers are sporadic too (model-discretion, every few
-	// turns) — without the carry-over the ETA chip would flicker off on
-	// every pass that saw no fresh marker (issue #558).
-	if merged.TaskEstimate == nil && oldM.TaskEstimate != nil {
-		merged.TaskEstimate = oldM.TaskEstimate
-	}
-	if merged.TaskCompletionEta == nil && oldM.TaskCompletionEta != nil {
-		merged.TaskCompletionEta = oldM.TaskCompletionEta
-	}
+	// TaskEstimate/TaskCompletionEta deliberately get NO nil carry-over:
+	// the tailer itself persists the last-seen marker across markerless
+	// passes (lastTaskEstimate), so a nil here is a real signal — the
+	// estimate was reset by a new user message and must not be
+	// resurrected from the previous task (issue #558).
 	return merged
 }
