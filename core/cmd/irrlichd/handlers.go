@@ -95,27 +95,76 @@ func costMaps(tracker outbound.CostTracker, cache *costAttachCache) (byProject, 
 }
 
 // attachGroupCosts populates each top-level group's Costs map with the
-// trailing-window cost for day/week/month/year. Orchestrator groups are
-// skipped — their agents span projects, so group-level aggregation is
-// ambiguous.
+// trailing-window cost for day/week/month/year. A regular project group gets
+// its single project's cost; an orchestrator (gastown) group gets the sum of
+// the distinct project costs across every session beneath it (rigs span
+// projects), counting a shared project once.
 func attachGroupCosts(groups []*session.AgentGroup, byTf map[string]map[string]float64) {
 	if byTf == nil {
 		return
 	}
 	for _, g := range groups {
-		if g == nil || g.Type == "gastown" {
+		if g == nil {
 			continue
 		}
 		costs := make(map[string]float64, len(costTimeframeSeconds))
-		for tf := range costTimeframeSeconds {
-			if v, ok := byTf[tf][g.Name]; ok {
-				costs[tf] = v
+		if g.Type == "gastown" {
+			projects := collectProjectNames(g)
+			for tf := range costTimeframeSeconds {
+				var sum float64
+				for p := range projects {
+					if v, ok := byTf[tf][p]; ok {
+						sum += v
+					}
+				}
+				if sum > 0 {
+					costs[tf] = sum
+				}
+			}
+		} else {
+			for tf := range costTimeframeSeconds {
+				if v, ok := byTf[tf][g.Name]; ok {
+					costs[tf] = v
+				}
 			}
 		}
 		if len(costs) > 0 {
 			g.Costs = costs
 		}
 	}
+}
+
+// collectProjectNames returns the distinct, non-empty ProjectNames of every
+// agent under g — direct agents, agents in nested sub-groups (rigs), and their
+// children. De-duped so a project shared by multiple orchestrator sessions is
+// counted once.
+//
+// Caveat: trailing-window cost is keyed per-project, not per-session, so if a
+// project has sessions both under the orchestrator and in a regular group, its
+// whole windowed cost is attributed to the gastown total AND to that regular
+// group — there's no per-session split to apportion. Acceptable for an
+// at-a-glance orchestrator rollup.
+func collectProjectNames(g *session.AgentGroup) map[string]struct{} {
+	out := map[string]struct{}{}
+	var walk func(agents []*session.Agent)
+	walk = func(agents []*session.Agent) {
+		for _, a := range agents {
+			if a == nil || a.SessionState == nil {
+				continue
+			}
+			if a.ProjectName != "" {
+				out[a.ProjectName] = struct{}{}
+			}
+			walk(a.Children)
+		}
+	}
+	walk(g.Agents)
+	for _, sub := range g.Groups {
+		for p := range collectProjectNames(sub) {
+			out[p] = struct{}{}
+		}
+	}
+	return out
 }
 
 // providerCostsByProvider inverts the tracker's timeframe→provider→USD map

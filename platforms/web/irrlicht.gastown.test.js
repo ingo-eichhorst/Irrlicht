@@ -59,14 +59,15 @@ describe('agent-less group in the sessions payload', () => {
     await import('./irrlicht.js')
     await new Promise((r) => setTimeout(r, 0))
 
-    // The normal project group's row must render despite the agent-less
-    // gastown group earlier in the payload.
+    // Rows render despite the agent-less gastown group earlier in the
+    // payload: the rig agent (nested sub-group, #559) and the normal
+    // project group's agent.
     const rows = document.querySelectorAll('#session-list .session-row')
-    expect(rows.length).toBe(1)
-    expect(rows[0].dataset.sessionId).toBe('proc-app')
-    // Two groups → both headers render (the gastown one with zero direct
-    // agents; its rig sub-groups are a known display gap, not a crash).
-    expect(document.querySelectorAll('#session-list .group-hdr').length).toBe(2)
+    expect(rows.length).toBe(2)
+    expect(rows[0].dataset.sessionId).toBe('proc-rig')
+    expect(rows[1].dataset.sessionId).toBe('proc-app')
+    // Headers: gastown group + its rig sub-group + the project group.
+    expect(document.querySelectorAll('#session-list .group-hdr').length).toBe(3)
     expect(document.getElementById('empty-state').style.display).toBe('none')
   })
 })
