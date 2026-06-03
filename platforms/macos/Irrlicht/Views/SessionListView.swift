@@ -1259,11 +1259,15 @@ struct SessionRowView: View {
                     }
                     Spacer(minLength: 8)
                     if let eta = taskEtaPresentation(), let est = session.metrics?.taskEstimate {
+                        // Progress as a percentage — the raw rounds (5/10)
+                        // read like a second task counter next to the dots;
+                        // the tooltip still carries the exact rounds.
+                        let percent = Int((Double(est.completedRounds) / Double(max(est.totalRounds, 1)) * 100).rounded())
                         HStack(spacing: 4) {
                             Image(systemName: "timer")
                                 .font(.system(size: 9))
                                 .foregroundColor(.secondary)
-                            Text("\(eta.text) · \(est.completedRounds)/\(est.totalRounds)")
+                            Text("\(eta.text) · \(percent)%")
                                 .font(.system(size: 9, design: .monospaced))
                                 .foregroundColor(.secondary)
                                 .lineLimit(1)
