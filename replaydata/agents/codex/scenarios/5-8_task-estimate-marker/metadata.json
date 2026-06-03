@@ -1,0 +1,136 @@
+{
+  "scenario_id": "task-estimate-marker",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "bug",
+    "driver_capability": "gap:seed_instruction",
+    "agent_cli_version": "0.135.0",
+    "daemon_version": "0.4.8+8233c32",
+    "confidence": 0.7,
+    "notes": "Codex loads a project/CWD-tree AGENTS.md verbatim (<INSTRUCTIONS> wrapper, no HTML stripping) so the rule CAN reach the model (agent=yes); the codex adapter has NO TaskEstimate scan (claudecode-only in v1) so the marker is never parsed (daemon=bug); the marker rule must live in the per-run scratch-CWD AGENTS.md (created fresh each run), and no rig script runs a recipe setup nor does any driver have an instruction-file-seeding step — there is no global ~/.codex/AGENTS.md injection to lean on either, so driver=gap:seed_instruction (matches sibling opencode/pi). Route: record ports a seed_instruction step + records known_failing until the codex marker-scan port lands."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "task-estimate-marker",
+      "agent": "codex",
+      "agent_supports": "yes",
+      "daemon_capability": "bug",
+      "driver_capability": "gap:seed_instruction",
+      "confidence": 0.7,
+      "body": "## Verdict\n\n**agent = yes (provisional on emission, confidence 0.7).** Codex 0.135.0 loads a project AGENTS.md into context and tells the model to obey it: the binary carries an explicit `## AGENTS.md spec` block in its base instructions (\"Repos often contain AGENTS.md files … a way for humans to give you instructions … the scope of an AGENTS.md file is the entire directory tree rooted at the folder that contains it\"), plus the config keys `project_doc`, `project_doc_max_bytes`, `project_doc_fallback_filenames` that drive the loader. Crucially the **HTML-comment-survival** question (flagged unknown by the scenario) resolves in our favour: the binary contains the literal injection wrapper template `<INSTRUCTIONS>\\n# AGENTS.md instructions for <path>\\n…\\n</INSTRUCTIONS>` — the file's bytes are passed through verbatim between those tags with NO markdown render and NO HTML-comment stripping, so a fenced `<!-- {…} -->` marker example reaches the model intact. What is NOT verified is **emission**: the 2026-05-31 marker experiment was claudecode/sonnet only; whether codex/GPT-5 reliably re-emits the marker turn-over-turn (advancing `completed_rounds`) is a model-behaviour question only a live recording can settle. Hence yes-but-provisional with confidence 0.7.\n\n**daemon = bug (confidence 0.85).** The tailer→metrics→domain plumbing is fully shared and ready: `tailer.TaskEstimate` carry-over (tailer.go:903), `metrics/adapter.go:176-181` calls `session.ForecastTaskCompletion`, and `session.TaskEstimate`/`TaskCompletionEta` already serialize on the metrics. The ONLY per-adapter piece is the content scan, and it exists for claudecode alone: `claudecode/parser.go:388-391` calls `scanTaskEstimate(text, …)` and sets `ev.TaskEstimate`. The codex adapter (`core/adapters/inbound/agents/codex/`) has **no `taskestimate.go` and no `scanTaskEstimate` call** — `parseCodexMessage` (parser.go:194-196) sets `ev.AssistantText` but never sets `ev.TaskEstimate`. So even when codex emits a perfectly-formed marker, irrlichd parses nothing and `task_estimate` never appears on the session. A trace exists (the marker is in the codex rollout's assistant `text` block, which `assistantContentContainsBlock` at parser.go:16-44 already reads in full, un-truncated) but the daemon mis-handles it by not scanning — the textbook `bug` shape, not `incapable`. The fix is a near-mechanical port of claudecode's ~110-line `taskestimate.go` (the `scanTaskEstimate`/`parseTaskEstimatePayload` helpers could even be lifted to a shared package) wired into `parseCodexMessage`. Record `known_failing`; file an issue.\n\n**driver = gap:seed_instruction (confidence 0.9).** The recipe needs the marker rule to reach the model via a persistent instruction file, and the only instruction file codex auto-injects is a project/CWD-tree `AGENTS.md`: the binary loads `AGENTS.md` for the repo root and every directory from CWD up to it (per the base-instructions `AGENTS.md spec` block and `## The contents of the AGENTS.md file … from the CWD up to the root are included with the developer message`), driven by the `project_doc_max_bytes`/`project_doc_fallback_filenames` config keys. There is NO global `$CODEX_HOME/AGENTS.md` injection — `$CODEX_HOME` holds `skills/`, `themes/`, and config only, never an auto-loaded instruction doc — so a human-seeded `~/.codex/AGENTS.md` would never be in scope for a session whose CWD is the staging dir. The rule must therefore live in an `AGENTS.md` inside the per-run scratch CWD, which the rig creates FRESH every run (`RUN_CWD=$STAGING/cwd`, `mkdir -p`, under timestamped `$REPO_ROOT/.build/refresh/codex/<folder>-<TS>`, drive-codex-interactive.sh:106-107). VERIFIED: no rig script executes a recipe `setup` array (`grep -n setup` over `run-cell.sh`, `drive-tmux-agent.sh`, and the lib returns nothing), and no driver has any instruction-file-seeding step type (the codex step set is exit_clean/fork/interrupt/keys/reset_session/restart/resume/send/session/sigkill/slash/sleep/start_session/wait_turn — no `seed_instruction`/`file`/`write`). HOME is NOT isolated (drive-codex-interactive.sh:99 watches the real `$HOME/.codex/sessions`), but that does not help: codex does not read a HOME-level AGENTS.md into the prompt, so nothing persistent can carry the rule into the fresh per-run CWD. The recipe thus needs a `seed_instruction` step the driver lacks → `gap:seed_instruction` (same as the sibling opencode and pi cells). This is tooling work, not an observability limit: `record` ports the step (write the fenced marker rule to `$RUN_CWD/AGENTS.md` before the first send), then drives.",
+      "caveats": [
+        "agent=yes is PROVISIONAL on emission: codex/GPT-5 marker emission is unverified (the 2026-05-31 experiment was claudecode/sonnet only). A recording must confirm codex re-emits the marker across turns with climbing completed_rounds before this is settled.",
+        "daemon=bug is the gating verdict: in v1 only the claudecode adapter scans for the marker (claudecode/taskestimate.go); the codex adapter has no equivalent, so no task_estimate is ever produced regardless of what codex emits. This cell records known_failing until the codex content-scan port lands.",
+        "driver=gap:seed_instruction: the marker rule must be seeded into the per-run scratch-CWD AGENTS.md before the first send (the only instruction file codex auto-injects is a project/CWD-tree AGENTS.md; there is no global $CODEX_HOME/AGENTS.md injection, and HOME is not isolated but that does not help). No rig script executes a recipe setup array and no driver has a seed_instruction/file/write step, so record must port that primitive before driving."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/codex/",
+          "note": "No taskestimate.go present; ls of the package shows adapter.go, agent.go, parser.go, pid.go only — no marker scan."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/codex/parser.go:191-212",
+          "note": "parseCodexMessage sets ev.AssistantText (line 196) but never sets ev.TaskEstimate — the codex adapter performs no marker scan."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/claudecode/parser.go:388-391",
+          "note": "The only call site of scanTaskEstimate, in the claudecode adapter — this is the per-adapter piece codex lacks."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/claudecode/taskestimate.go",
+          "note": "The ~110-line marker parser (scanTaskEstimate/parseTaskEstimatePayload). Tolerant by design; a codex port would be near-mechanical."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/outbound/metrics/adapter.go:176-181",
+          "note": "Shared projection: when m.TaskEstimate is non-nil, ForecastTaskCompletion derives TaskCompletionEta. Adapter-agnostic — fires for any agent that populates ev.TaskEstimate."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/task_estimate.go:39-47",
+          "note": "ForecastTaskCompletion: eta = now + (total-completed) * (elapsed/completed). Shared burndown math; not adapter-specific."
+        },
+        {
+          "kind": "binary",
+          "ref": "@openai/codex-darwin-arm64 vendor bin/codex (codex-cli 0.135.0), strings",
+          "note": "Contains '## AGENTS.md spec' base-instructions block, config keys project_doc/project_doc_max_bytes/project_doc_fallback_filenames, and the literal injection template '<INSTRUCTIONS>\\n# AGENTS.md instructions for …</INSTRUCTIONS>' — confirms AGENTS.md is loaded and injected VERBATIM (no HTML-comment stripping), resolving the scenario's flagged unknown."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/codex/parser.go:16-44",
+          "note": "assistantContentContainsBlock already iterates raw content[] blocks and reads full block['text'] un-truncated — the full assistant text a codex marker scan would need is already accessible, reinforcing daemon=bug (small port) over incapable."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "codex CLI on PATH and authenticated (codex login complete)",
+        "irrlichd is recording in isolated mode (dev irrlichd --record; the prod daemon runs without --record)",
+        "tmux + lsof installed (codex interactive driver pane/net sensors)"
+      ],
+      "script": [
+        {
+          "type": "seed_instruction",
+          "path": "AGENTS.md",
+          "text": "## Task progress marker (irrlicht)\\n\\nWhile working a multi-phase task, emit a hidden progress marker in your own reply text on EVERY turn, exactly in this form (keep it as an HTML comment so it stays out of the rendered answer):\\n\\n```\\n<!-- {\\\"marker\\\":\\\"irrlicht-eta\\\",\\\"total_rounds\\\":N,\\\"completed_rounds\\\":M} -->\\n```\\n\\nSet total_rounds to the number of phases you plan. Emit it with completed_rounds=0 on your first reply, then INCREASE completed_rounds by 1 each turn as you finish a phase, until completed_rounds == total_rounds on the final turn."
+        },
+        {
+          "type": "send",
+          "text": "Plan a 4-phase refactor of a small Python module: (1) read and summarize the file, (2) propose the change, (3) apply it, (4) verify. Treat each phase as one round. As instructed in AGENTS.md, emit the irrlicht-eta progress marker in your reply on every turn, starting now with completed_rounds=0 and total_rounds=4. Begin phase 1 and stop; I will say 'next' to advance."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "send",
+          "text": "next"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "send",
+          "text": "next"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "send",
+          "text": "next"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "send",
+          "text": "next — this is the final phase; report the task done and emit the marker with completed_rounds=4."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 12
+        }
+      ],
+      "verify": [
+        "While the session is working, session metrics carry task_estimate {total_rounds:4, completed_rounds:M} matching the values codex reported in its marker (completed_rounds <= total_rounds).",
+        "task_estimate.updated_at advances each time a fresher marker is observed.",
+        "task_estimate.completed_rounds is non-decreasing across turns and reaches 4 on the final working turn.",
+        "task_completion_eta is present once completed_rounds >= 1 and a later projection is <= an earlier one (burns down).",
+        "task_estimate / task_completion_eta are present only while working; absent at ready.",
+        "State topology ready -> working -> ready; final state ready.",
+        "KNOWN-FAILING in v1: the codex adapter has no marker scan, so task_estimate never appears — these assertions fail until the codex taskestimate port lands. The spec asserts the CORRECT behavior."
+      ],
+      "settings": {},
+      "timeout_seconds": 300
+    }
+  }
+}

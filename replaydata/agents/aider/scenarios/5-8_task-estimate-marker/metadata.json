@@ -1,0 +1,119 @@
+{
+  "scenario_id": "task-estimate-marker",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "bug",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.86.2",
+    "daemon_version": "0.4.8+8233c32",
+    "confidence": 0.75,
+    "notes": "daemon=bug: aider transcript carries the marker line, but the aider adapter has NO TaskEstimate scan (v1 is claudecode-only) and emits only a 200-rune-truncated AssistantText — record known_failing + file an issue. driver=ready (with a human prereq): the rig executes no recipe `setup` array (grep setup over scripts/ is empty — no instruction-file-seeding primitive), but aider uniquely loads a PERSISTENT user-level rule via ~/.aider.conf.yml `read: <persistent CONVENTIONS.md>`, and run-cell.sh isolates only IRRLICHT_HOME — never the agent's $HOME — so a once-seeded conventions file survives into the recording run. This is why aider stays ready while the opencode/pi siblings (which have only a per-run scratch path) are gap:seed_instruction."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "task-estimate-marker",
+      "agent": "aider",
+      "assessed_at": "2026-06-03T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "bug",
+      "driver_capability": "ready",
+      "confidence": 0.75,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: bug\ndriver_capability: ready\n\n## Scenario meaning\n\nWhile working a multi-phase task the agent emits its OWN progress estimate in-band, as a hidden HTML comment in its transcript-visible assistant text — `<!-- {\"marker\":\"irrlicht-eta\",\"total_rounds\":N,\"completed_rounds\":M} -->` — driven by a persistent instruction-file rule (NO hook). irrlicht parses it read-only and projects `task_estimate` {total_rounds, completed_rounds, updated_at} + a `task_completion_eta` onto the session metrics WHILE the session is `working`, burning the ETA down as `completed_rounds` climbs, then dropping the fields once the session leaves `working`. A \"round\" is the agent's own unit; there is no daemon-side round counting. The user-observable signal: progress surfaces on the metrics while working (matching the reported values, non-decreasing, updated_at advancing), the ETA is monotone non-increasing, and the fields are suppressed at `ready`. State arc ready → working → ready.\n\n## agent_supports: yes\n\nAider HAS a persistent-instruction mechanism: a conventions file loaded via `aider --read CONVENTIONS.md`, or the `.aider.conf.yml` `read:` entry, which loads on every run (aider.chat/docs/usage/conventions.html — the `--read` flag marks the file read-only; `read: CONVENTIONS.md` / `read: [..]` in the config loads it persistently). The marker is agent-agnostic plain text, so nothing about aider's surface blocks it from being emitted in assistant prose. The recipe can also fold the rule straight into the first prompt; the daemon parser does not care HOW the marker arrives, only that it lands in the transcript. Verdict `yes` because the mechanism exists and the marker is ordinary text the model can write — NOT a doc-stated guarantee that this model emits it (see caveat).\n\n## daemon_capability: bug\n\nThis is the load-bearing finding and it is a PARSER bug, not an architectural incapability — the marker trace DOES exist and DOES reach the Source the daemon tails. Two cited blockers in the aider adapter:\n\n1. **No marker scan.** `scanTaskEstimate` / `ev.TaskEstimate` is wired ONLY in the claudecode parser (core/adapters/inbound/agents/claudecode/parser.go:389-390, taskestimate.go). The aider parser (core/adapters/inbound/agents/aider/parser.go) never calls it and never sets `ParsedEvent.TaskEstimate`, so a working aider session emits NO `task_estimate` — every spec assertion (estimate present, monotone climb, ETA burndown, suppress-at-ready) fails.\n\n2. **Assistant text is truncated before any scan could run.** Even if a scan were retrofitted at the obvious site, `Parser.closeModelCall` (parser.go:171-187) emits `AssistantText: truncate(text)` — `truncate` keeps only the last 200 runes (parser.go:266-273). claudecode deliberately scans the FULL block text precisely because `AssistantText` is tail-truncated and would lose early markers (taskestimate.go:34-38; parser.go:381-392). An aider scan would have to read the buffered full prose in `closeModelCall` before truncation, which today is discarded.\n\nThe marker physically survives in `.aider.chat.history.md`: an HTML comment in assistant prose is neither a `####` user line nor a `>` blockquote, so `ParseLineRaw` buffers it as ordinary prose (parser.go:135-143) — confirmed against the recorded markdown format (regressions/multi-turn-conversation transcript). Because the trace exists and the daemon mis-handles it, the rubric routes this to `bug` (file an issue, record `known_failing`), NOT `incapable`. The spec asserts the CORRECT behavior; record files the issue and records known_failing.\n\n## driver_capability: ready (with an explicit human prereq)\n\nVERIFIED FACT: no script under tools/onboarding-factory/scripts/ executes a recipe `setup` array (`grep -n setup run-cell.sh drive-tmux-agent.sh recipe-lint.sh` returns nothing) — the rig has NO instruction-file-seeding primitive, so the recipe cannot create a conventions file fresh each run. The opencode/pi siblings hit gap:seed_instruction for exactly this reason. Aider is the exception that stays `ready`, on a persistent user-level mechanism a human seeds once out-of-band:\n\n- run-cell.sh isolates ONLY the daemon's IRRLICHT_HOME (run-cell.sh:182-236); it never sets `HOME=` and never `env -i`, and its own comment states agents \\\"watch the real $HOME … regardless of IRRLICHT_HOME\\\" (run-cell.sh:178-179). The aider drivers launch `aider` plainly (drive-aider-interactive.sh:130 tmux new-session; drive-aider.sh:68 timeout aider) inheriting the ambient env, so aider reads the REAL ~/.aider.conf.yml during the recording run — the same config that already supplies the gpt-5-nano model this cell records against.\n- Aider loads a PERSISTENT read-only instruction file via `~/.aider.conf.yml` `read: <CONVENTIONS.md>` (or `aider --read CONVENTIONS.md`), which applies on every invocation (aider.chat/docs/usage/conventions.html). A human seeds ~/.aider.conf.yml + a persistent CONVENTIONS.md ONCE; because $HOME is not isolated, the `read:` entry survives into the rig's run and the marker rule is in context for every turn — no per-run rig seeding needed.\n\nThe recipe steps themselves need only `send` / `wait_turn` / `sleep`, all implemented by the interactive driver (drive-aider-interactive.sh DRIVE_ELICITS=\\\"send slash wait_turn interrupt sleep\\\"), so no new step type is required; the prompts still cue each round so completed_rounds advances. Interactive (tmux REPL) over headless `--message` for the same reason as the sibling aider cells: aider's working→ready settle is IdleFlush-synthesized (~1.5s quiet, clamped to the ~5s SessionDetector poll), so the process must outlive the observation window for the suppress-at-ready phase to be observed.\n\nPREREQ (human, one-time): seed ~/.aider.conf.yml with a `read:` entry pointing at a persistent CONVENTIONS.md that states the irrlicht-eta marker rule. This is an out-of-band human step (like aider auth), NOT a rig step — record assumes it is done.\n\n## Why this is not incapable / not a downgrade\n\nThe 3-state model has no trouble here — the estimate rides on metrics during `working` and the arc is the ordinary ready→working→ready. The only thing missing is parser code. Mislabeling this `incapable` would route the fix to the wrong owner (architecture) instead of the adapter.",
+      "caveats": [
+        "PROVISIONAL emission risk (keeps confidence at 0.75): the recorded aider setup uses gpt-5-nano via ~/.aider.conf.yml; aider's terse, diff-focused output style plus a small model make periodic, format-stable marker emission uncertain. The 2026-05-31 claudecode experiment already measured 0% EXACT-format compliance (the model rewrites the marker), which is why the parser is tolerant — but a model that omits the marker entirely emits nothing to parse. record promotes this from provisional to settled.",
+        "Even after the parser bug is fixed, an aider scan must read the FULL buffered prose in closeModelCall before truncation; reusing the truncated AssistantText would silently lose markers in long turns.",
+        "driver=ready RESTS on the human prereq: the rig has no setup/seed primitive (verified — no script runs a recipe `setup` array), so the marker rule must arrive via the persistent ~/.aider.conf.yml `read: CONVENTIONS.md` path that survives into the run because run-cell.sh does not isolate the agent's $HOME. The prompts still cue each round, but the FORMAT rule lives in the seeded conventions file. If a maintainer prefers a rig-owned seed instead of the out-of-band file, that is a driver enhancement (a seed step, or aider_extra_args [\"--read\",\"CONVENTIONS.md\"] plus a workspace file-write) — and absent BOTH the human prereq and that enhancement the cell would degrade to gap:seed_instruction like its opencode/pi siblings."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/claudecode/parser.go:381-392",
+          "note": "scanTaskEstimate/ev.TaskEstimate wired ONLY in the claudecode parser — the v1 marker scan"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/claudecode/taskestimate.go:34-52",
+          "note": "scan reads FULL block text because AssistantText is tail-truncated to 200 runes"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/aider/parser.go:171-187,266-273",
+          "note": "aider closeModelCall emits truncate(text) (last 200 runes) and never calls any task-estimate scan — no ev.TaskEstimate"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/aider/parser.go:135-143",
+          "note": "an HTML-comment marker in assistant prose is buffered as ordinary prose (not #### / not >), so it DOES land in .aider.chat.history.md"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/aider/regressions/multi-turn-conversation/recordings/2026-04-25-21-54-18_irrlichd-unknown/transcript.md",
+          "note": "recorded aider markdown confirms assistant prose lands as plain lines between #### and > Tokens:"
+        },
+        {
+          "kind": "url",
+          "ref": "https://aider.chat/docs/usage/conventions.html",
+          "note": "aider persistent-instruction mechanism: aider --read CONVENTIONS.md and .aider.conf.yml read: entry"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/aider/driver-interactive.sh:57",
+          "note": "driver DRIVE_ELICITS=send slash wait_turn interrupt sleep — recipe steps all present, driver=ready"
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/internal/validate/observations.go:142-158",
+          "note": "observations verify supports only model/cost_nonzero/tokens_nonzero — task_estimate asserted via phases/notes"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "aider CLI on PATH and authenticated against a model that actually answers (auth set up out-of-band). The recorded setup uses gpt-5-nano via ~/.aider.conf.yml.",
+        "tmux available — the interactive driver runs aider in a tmux REPL so it stays alive across turns (the working→ready settle is idle-flush-bound and must be observed before teardown).",
+        "irrlichd is recording — run-cell.sh in isolated mode, or --attach against a daemon started with --record."
+      ],
+      "setup": [
+        "The interactive driver git-inits a fresh per-run cwd under <staging>/cwd/ and launches `aider --no-auto-commits --yes-always --no-gitignore` (plus --model if IRRLICHT_AIDER_MODEL is set) in a tmux session, waiting for the `> Repo-map:` banner before sending the first prompt.",
+        "No driver seeds a persistent instruction file today, so the marker rule is folded into the FIRST send prompt: instruct aider to plan a 3-round task and, on each turn, include in its prose a hidden marker EXACTLY of the form (fenced so the model sees the literal HTML comment): `<!-- {\"marker\":\"irrlicht-eta\",\"total_rounds\":3,\"completed_rounds\":M} -->`, advancing completed_rounds 0→1→2→3 as each round completes.",
+        "KNOWN FAILING (daemon=bug): the aider adapter has no TaskEstimate scan and truncates AssistantText to 200 runes, so even though the marker lands in .aider.chat.history.md the daemon emits no task_estimate. This recipe records the live behavior; the spec asserts the CORRECT (claudecode-equivalent) behavior and record files the parser-bug issue."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "You will do a 3-round planning task. On EVERY reply, include this exact hidden marker in your prose, updating completed_rounds as you go: <!-- {\"marker\":\"irrlicht-eta\",\"total_rounds\":3,\"completed_rounds\":0} -->. Round 1: list three subtasks for adding a CHANGELOG.md to this repo. Emit the marker with completed_rounds:0 now, then reply."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "send",
+          "text": "Round 1 done. Now do Round 2: draft the CHANGELOG.md header section as text (do not write a file). Update the marker to completed_rounds:1 in this reply."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "send",
+          "text": "Round 2 done. Now Round 3: draft an example entry under the header. Update the marker to completed_rounds:2 in this reply."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "send",
+          "text": "Round 3 done — the task is complete. Confirm completion and emit the marker with completed_rounds:3."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 10
+        }
+      ]
+    }
+  }
+}

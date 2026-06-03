@@ -1,0 +1,159 @@
+{
+  "scenario_id": "task-estimate-marker",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "2.1.161",
+    "daemon_version": "0.4.8+8233c32",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes (sonnet emits the fenced marker reliably) / daemon_capability: full (claudecode parser scans full assistant text, projects ETA, suppressed at ready) / driver_capability: ready (send+wait_turn+sleep). Prereq: seed the FENCED rule — bare HTML comments are stripped from CLAUDE.md at injection."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "task-estimate-marker",
+      "agent": "claudecode",
+      "assessed_at": "2026-06-03T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\n### agent_supports: yes\n\nThe behavior is not a built-in CLI feature — it is the model following a persistent instruction-file rule, so the bar is \"does the model load the rule and emit the marker in its transcript-visible prose,\" not a `claude --help` flag. The #558 implementation ships the rule itself: `EnsureTaskEtaBlockInstalled` (instructioninstaller.go) writes a consent-gated managed block into `~/.claude/CLAUDE.md` that instructs the model to \"periodically emit a hidden progress marker … as an HTML comment in your response text, and update it as you make progress,\" with the example `<!-- {\"marker\":\"irrlicht-eta\",\"total_rounds\":N,\"completed_rounds\":M} -->`. The load-bearing fact, established live (claude v2.1.161 + sonnet, 2026-06-03): Claude Code STRIPS bare HTML comments from CLAUDE.md at context-injection time, so the example MUST sit inside a fenced code block — unfenced produced 0 markers across two sessions; the fenced block (the one the installer now writes) produced 9 markers walking 0/7 → 7/7. So emission is confirmed by recording-grade evidence, not inferred. Emission is soft (model discretion): sonnet emitted reliably on a multi-step task with the fenced rule visible; opus 4.8 skipped emission on a SHORT task even with the rule present — hence the recipe pins a ≥5-phase task and the default (sonnet) model.\n\n### daemon_capability: full\n\nEvery user-observable signal the scenario asserts has a producing path that handles it correctly today:\n\n- **Marker → estimate on metrics.** The claudecode parser (parser.go:380-393) scans the FULL text of each assistant `text` block (not the 200-rune-truncated AssistantText) for HTML-comment markers via `scanTaskEstimate` (taskestimate.go); only assistant events qualify (a user pasting a marker can't feed the ETA). Parsing is tolerant — accepts marker-key drift (`irrlicht[-_]e(stimate|ta)`) and `completed_rounds`/`done_rounds`/`round`, clamps 1 ≤ total ≤ 100 and 0 ≤ completed ≤ total, rejects absurd markers wholesale (so junk can't shadow a later good marker), latest-valid-wins. The result rides `tailer.TaskEstimate` → `SessionMetrics.TaskEstimate {total_rounds, completed_rounds, updated_at}` (task_estimate.go), stamped with the event timestamp as `updated_at`.\n- **updated_at advances / completed non-decreasing.** `updated_at` is the observed event's unix time, so each fresher marker advances it. The model's own walk drives `completed_rounds` upward; the parser does not invent regressions. The tailer carries the last-seen marker across empty passes (tailer_metrics.go:320; MergeMetrics session.go:759-764) so the chip doesn't flicker off on a pass with no fresh marker.\n- **ETA present once a round is reported, and burns DOWN.** `ForecastTaskCompletion` (task_estimate.go:39) projects `now + (total − completed) × (elapsed/completed)` — the MEASURED rate from the elapsed wall-clock the daemon already tracks. Returns nil until at least one round is completed. As `completed` climbs, remaining rounds shrink and the projected absolute ETA moves toward now (burns down). Wired in the metrics adapter (adapter.go:176-182) beside the rate-limit forecast.\n- **Suppressed-by-state.** The daemon carries `task_estimate` + `task_completion_eta` on metrics; the presentation gate that makes them visible ONLY while `working` and absent at `ready` is the client (`taskEtaPresentation` in platforms/web/irrlicht.js returns null unless `state === 'working'`; the macOS SessionListView mirrors it). Live-confirmed 2026-06-03: the ETA burned down in GET /api/v1/sessions while working and the chip was suppressed once the session settled to ready.\n\nNo signal lacks a producing path; each is handled correctly — `daemon=full`.\n\n### driver_capability: ready\n\nThe recipe elicits the behavior with `send` / `wait_turn` / `sleep` only, all present in claudecode `driver-interactive.sh` (recipe-lint: send, wait_turn, sleep, slash, keys, start_session, session, resume, restart, reset_session, interrupt, sigkill, exit_clean). No missing step type → `ready`. The fenced-rule seed is an out-of-band ENVIRONMENT setup (no `seed_file`/`write_file` step exists, and the rig does not stage a CLAUDE.md), so it is a recording PREREQ, not a driver step-type gap.\n\n## Provisional emission caveat\n\nThe parser-side `daemon=full` is recording-grade for the PARSE path (the 0/7→7/7 burndown was observed live). The remaining provisional element is purely that emission is model-discretion: a live `record` run must confirm sonnet emits ≥2 markers with climbing `completed_rounds` AND that the fields drop at ready. Confidence 0.8: the parse/forecast/suppression mechanisms are certain from code + the live experiment; the soft-emission and the exact recorded `model` id are what `record` will settle.",
+      "caveats": [
+        "Emission is model discretion (soft): the fenced rule + a multi-step (≥5-phase) task is required; sonnet emitted reliably, opus 4.8 skipped emission on a short task. The recipe pins a multi-phase task and the default model.",
+        "CRITICAL recording prereq: the marker example in the rule MUST be inside a fenced code block. Claude Code strips bare HTML comments from CLAUDE.md at injection (verified live: unfenced → 0 markers). The instructioninstaller managed block is already fenced; a project CLAUDE.md seeded into the run cwd must be too.",
+        "ELAPSED skew: ForecastTaskCompletion measures elapsed since SESSION START, so a session that ran a while before its first marker skews early ETAs long; the burn-down monotonicity (later ETA ≤ earlier) still holds. Documented v1 decision.",
+        "Suppression-by-state is a CLIENT presentation gate (web taskEtaPresentation / macOS SessionListView), not a daemon drop — the daemon keeps the fields on metrics across passes. The user-observable assertion (chip/ETA present while working, gone at ready) holds via the clients; the verify engine asserts the working-window values, and ready-suppression is a client-observed fact noted here.",
+        "observations.model is pinned to claude-sonnet-4-5 (the brief validated sonnet); record will correct it if the live recording's model_name differs."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/claudecode/taskestimate.go",
+          "note": "scanTaskEstimate over the FULL assistant text block; tolerant parse (marker-key drift irrlicht[-_]e(stimate|ta), completed_rounds/done_rounds/round), clamps 1≤total≤100 and 0≤completed≤total, rejects absurd markers, latest-valid-wins."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/claudecode/parser.go",
+          "note": "Lines 380-393: only assistant text blocks feed scanTaskEstimate (a user-pasted marker can't feed the ETA); scans the full block, not the 200-rune-truncated AssistantText."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/task_estimate.go",
+          "note": "TaskEstimate {total_rounds, completed_rounds, updated_at}; ForecastTaskCompletion = now + (total−completed) × (elapsed/completed), measured rate, nil until ≥1 round; documented elapsed-since-session-start skew."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/outbound/metrics/adapter.go",
+          "note": "Lines 176-182: converts tailer.TaskEstimate → domain, projects TaskCompletionEta beside the rate-limit forecast block."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/session.go",
+          "note": "Lines 697-698, 759-764: TaskEstimate + TaskCompletionEta on SessionMetrics; MergeMetrics carries the last-seen marker across empty passes so the chip doesn't flicker (sporadic, model-discretion emission)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer_metrics.go",
+          "note": "Line 320: t.metrics.TaskEstimate = t.lastTaskEstimate — surfaces the last-seen marker even on an empty pass (sporadic like the rate-limit snapshot)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/claudecode/instructioninstaller.go",
+          "note": "EnsureTaskEtaBlockInstalled writes the consent-gated managed block to ~/.claude/CLAUDE.md; the marker example is inside a fenced code block specifically because Claude Code strips bare HTML comments from CLAUDE.md at injection (comment, lines 28-38, verified live on v2.1.161)."
+        },
+        {
+          "kind": "file",
+          "ref": "platforms/web/irrlicht.js",
+          "note": "taskEtaPresentation: returns null unless state === 'working' — the suppressed-by-state gate; burns the chip down (point estimate / range) and degrades on staleness. macOS SessionListView mirrors it."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/driver-interactive.sh",
+          "note": "recipe-lint driver_step_types: send, wait_turn, sleep present (plus slash, keys, start_session, session, resume, restart, reset_session, interrupt, sigkill, exit_clean) — the recipe needs only send/wait_turn/sleep, so driver=ready. No seed_file/write_file step exists; the CLAUDE.md seed is an out-of-band prereq."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "claude CLI on PATH and authenticated; v2.1.161 validated; default model = sonnet (claude-sonnet-4-5)",
+        "irrlichd is recording (run-cell.sh isolated mode, or --attach against a daemon started with --record)",
+        "PREREQ (human): the FENCED task-eta emission rule must be present where claude loads it for the run cwd — EITHER the daemon's managed block in ~/.claude/CLAUDE.md (irrlichd installs it on consent via /api/v1/activation/task-eta) OR a project CLAUDE.md seeded into IRRLICHT_ONBOARD_CWD with the example INSIDE a fenced code block. Bare (unfenced) HTML comments are stripped at injection → 0 markers."
+      ],
+      "setup": [
+        "Driver launches claude in a fresh per-run cwd under <staging>/cwd/ (or IRRLICHT_ONBOARD_CWD), accepts the trust + external-CLAUDE.md-import dialogs",
+        "Default model (sonnet) — do NOT pin opus: opus 4.8 skipped marker emission on a short task even with the rule visible; sonnet emits reliably on a multi-step task",
+        "The first send asks for a ≥5-phase task and instructs the agent to emit the marker each turn, starting at completed_rounds=0 and advancing as each phase completes"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Do a 5-phase writing task and report progress each turn using the task-progress marker. Plan exactly 5 phases (total_rounds:5). On THIS turn emit the marker at 0/5, then start phase 1: write a one-paragraph outline. End your turn after phase 1 with the marker updated to 1/5."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        },
+        {
+          "type": "send",
+          "text": "Continue: do phase 2 (draft the introduction), update the marker to 2/5, and stop."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        },
+        {
+          "type": "send",
+          "text": "Continue: do phase 3 (draft the body), update the marker to 3/5, and stop."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        },
+        {
+          "type": "send",
+          "text": "Continue: do phase 4 (draft the conclusion), update the marker to 4/5, and stop."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        },
+        {
+          "type": "send",
+          "text": "Finish: do phase 5 (final polish), update the marker to 5/5, and reply with exactly the word: done"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 12
+        }
+      ],
+      "verify": [
+        "transcript.jsonl assistant text carries the irrlicht-eta marker on ≥2 turns with completed_rounds climbing (e.g. 1/5 → … → 5/5); SessionMetrics.TaskEstimate.total_rounds=5 and completed_rounds matches the latest emitted marker",
+        "TaskEstimate.updated_at advances each time a fresher marker is observed (not pinned to a stale snapshot)",
+        "completed_rounds is non-decreasing across turns and reaches total_rounds (5) by the final working turn",
+        "TaskCompletionEta is present once ≥1 round is reported, and the projection after a later marker ≤ the projection after an earlier one (burns down)",
+        "While working the session metrics carry task_estimate + task_completion_eta; the client (web/macOS) shows the ETA chip only while working and hides it at ready (suppressed-by-state)",
+        "State topology ready → working → ready across the turns; final state ready (the ≥10s trailing sleep captures the post-turn settle)"
+      ],
+      "settings": {},
+      "timeout_seconds": 300
+    }
+  }
+}

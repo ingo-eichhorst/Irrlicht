@@ -1,0 +1,146 @@
+{
+  "scenario_id": "task-estimate-marker",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "bug",
+    "driver_capability": "gap:seed_instruction",
+    "agent_cli_version": "0.70.0",
+    "daemon_version": "0.4.8+8233c32.dirty",
+    "confidence": 0.75,
+    "notes": "agent loads AGENTS.md into context + records assistant text verbatim, but the pi adapter has no task-estimate scan and no driver has an instruction-file-seeding primitive"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "task-estimate-marker",
+      "agent": "pi",
+      "assessed_at": "2026-06-03T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "bug",
+      "driver_capability": "gap:seed_instruction",
+      "confidence": 0.75,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: bug (no per-adapter marker scan in the pi parser)\ndriver_capability: gap:seed_instruction\n\nroute: driver-gap\n\n## Reasoning\n\nThe scenario is agent-agnostic: any agent that (a) loads a persistent instruction file into context and (b) records its assistant prose verbatim in a local transcript can satisfy it. Pi clears both bars, so the only blockers are tooling — a missing per-adapter content scan (daemon) and a missing workspace-seed step (driver).\n\n### agent = yes\n\nPi loads a persistent instruction file into the model's context. `pi`'s `loadProjectContextFiles` (src/core/resource-loader.ts, shipped in dist source maps) reads `[\"AGENTS.md\", \"CLAUDE.md\"]` from the agent dir (`~/.pi/agent`) AND walks the cwd ancestor chain, loading each match. The loaded files flow through `getAgentsFiles()` into `_baseSystemPromptOptions.contextFiles` (src/core/agent-session.ts ~L912), so the marker rule reaches the model the same way the scenario assumes. Interactive mode even lists them under a \"Context\" section. Pi records assistant text verbatim: a committed pi recording stores assistant prose as the literal `message.content[].text` string (e.g. \"ok\", \"alive\") — an HTML comment in pi's prose would survive on disk byte-for-byte. So the agent *can* emit the marker and the transcript *would* retain it.\n\nThe verdict is `yes`, not higher-confidence, because emission-compliance is unverified live: the 2026-05-31 marker experiment measured 0% exact-format compliance even on claudecode (the model rewrites the marker), and no live pi recording exists to prove pi actually emits a parseable marker when instructed. AGENTS.md preference order (AGENTS.md wins over CLAUDE.md, and the global `~/.pi/agent/AGENTS.md` is loaded first) is the seam to seed against. Whether pi strips bare HTML comments from the instruction file at injection (the documented Claude Code hazard that forced the fenced-code-block workaround) is also unverified for pi — the scenario process already mandates fencing the example, which neutralizes this regardless.\n\n### daemon = bug\n\nThe task-estimate plumbing is fully shared and agent-agnostic EXCEPT the per-adapter content scan. The tailer (`core/pkg/tailer/tailer.go` lastTaskEstimate; tailer_metrics.go:320 surfaces it on every pass like the rate-limit snapshot), the domain projection (`core/domain/session/task_estimate.go` ForecastTaskCompletion: eta = now + (total-completed)*(elapsed/completed)), and the metrics adapter (`core/adapters/outbound/metrics/adapter.go:176-181` populates TaskEstimate + TaskCompletionEta) are all ready and adapter-independent. The ONLY thing that sets `ev.TaskEstimate` is a per-adapter scan of full assistant text. In v1 that scan lives ONLY in claudecode (`core/adapters/inbound/agents/claudecode/taskestimate.go` scanTaskEstimate, wired at parser.go:389-390). The pi adapter has NO equivalent: `core/adapters/inbound/agents/pi/` contains no taskestimate.go and pi/parser.go never sets `ev.TaskEstimate` (grep returns zero matches). Worse, pi/parser.go:179-197 `extractPiAssistantText` keeps only the LAST text block and tail-truncates it to 200 runes for waiting-state display — so even the in-memory text pi exposes today would lose early markers. The trace exists on disk (verbatim assistant text), but the daemon mis-handles the spec-required observable (it emits no task_estimate for pi). That is `daemon=bug`, not `incapable`: the 3-state model and the store fully support it; the fix is the same one-file port as claudecode's taskestimate.go, scanning the FULL block text. File an issue; record `known_failing`.\n\n### driver = gap:seed_instruction\n\nThe recipe's first step (scenario process step 1) must install the marker rule into a persistent instruction file before pi launches — either the scratch workspace's `<cwd>/AGENTS.md` or the global `~/.pi/agent/AGENTS.md`. The pi interactive driver cannot do this. Its step grammar (DRIVE_ELICITS, driver-interactive.sh:161) is `send slash wait_turn interrupt keys sleep exit_clean resume reset_session start_session session` — there is no `seed_instruction`/`write_file` step, and `step_start_session` just `mkdir -p $RUN_CWD` + launches pi with no file seeding. No driver in the repo has an instruction-file-seeding primitive (verified: codex/aider/opencode drivers don't seed AGENTS.md, and run-cell.sh does NOT execute the recipe's `setup` array — it is documentation-only, so a `setup`-described seed never actually runs). This matches the opencode cell's verdict (`gap:seed_instruction`) for the same scenario; the codex/aider cells assessed `driver=ready` on the assumption that `setup` seeds the file, which the tooling does not honor. (In production the rule is installed out-of-band by the daemon's managed-block installer — claudecode patches `~/.claude/CLAUDE.md`; the pi parallel is `~/.pi/agent/AGENTS.md`. But a self-contained recording must seed it as a recipe step, which the driver lacks.) This is tooling work, not an observability limit: `record` ports a `seed_instruction` step (write the fenced marker rule into `$RUN_CWD/AGENTS.md` before launch) into the pi driver, then drives.\n\n## What a clean recording asserts (once both gaps close)\n\nThe spec asserts the user-observable arc + the task_estimate metric vector while working: task_estimate.{total_rounds,completed_rounds} present and matching the agent's report, completed_rounds non-decreasing reaching total_rounds, updated_at advancing, and task_completion_eta burning down (later eta <= earlier eta). Suppression-at-ready (\"fields absent at ready\") is enforced at the PRESENTATION layer — `taskEtaPresentation` returns null when state != working (platforms/web/irrlicht.test.js:366-369) — not by clearing the raw websocket metric, so that criterion is a UI assertion, not a websocket-vector assertion. The spec asserts the lifecycle arc + the metric presence/burndown while working; suppression-at-ready is left to the chip layer.",
+      "caveats": [
+        "Live emission unverified: no pi recording exists, and the 2026-05-31 experiment showed 0% exact-format marker compliance even on claudecode (the model rewrites the marker). agent=yes is doc/code-grounded (pi loads AGENTS.md, records verbatim text) but record must promote it from provisional to settled.",
+        "Whether pi strips bare HTML comments from AGENTS.md at context-injection (the claudecode hazard) is unverified for pi; the scenario process already mandates fencing the marker example, which neutralizes it.",
+        "daemon=bug, not incapable: the fix is a one-file per-adapter scan (port claudecode/taskestimate.go to pi, scanning FULL assistant-text blocks). pi/parser.go's extractPiAssistantText currently keeps only the last text block, 200-rune-truncated — the port must NOT reuse that truncated text.",
+        "Suppression-at-ready is a UI-layer concern (taskEtaPresentation), so the spec asserts the working-state metric arc + burndown, not the absence of the raw field on the ready-state websocket frame."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/pi/parser.go",
+          "note": "pi parser never sets ev.TaskEstimate; extractPiAssistantText (L179-197) keeps only the last text block and tail-truncates to 200 runes. Grep for scanTaskEstimate/TaskEstimate in pi/ returns zero matches; the dir has no taskestimate.go."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/claudecode/taskestimate.go",
+          "note": "The v1 per-adapter scan (scanTaskEstimate), wired at claudecode/parser.go:389-390 on FULL block text. This is the one-file port pi needs."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer_metrics.go",
+          "note": "L320 surfaces lastTaskEstimate on every metrics pass (agent-agnostic, like rate-limit). Shared plumbing is ready; only the adapter scan is missing."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/task_estimate.go",
+          "note": "ForecastTaskCompletion: perRound=elapsed/completed, eta=now+(total-completed)*perRound — agent-independent projection."
+        },
+        {
+          "kind": "file",
+          "ref": "node_modules/@mariozechner/pi-coding-agent/dist/core/resource-loader.js.map (src/core/resource-loader.ts)",
+          "note": "loadProjectContextFiles reads [AGENTS.md, CLAUDE.md] from the agent dir + walks the cwd ancestor chain; feeds getAgentsFiles() → contextFiles. Authoritative evidence pi loads a persistent instruction file. pi 0.70.0 (@mariozechner/pi-coding-agent)."
+        },
+        {
+          "kind": "file",
+          "ref": "node_modules/@mariozechner/pi-coding-agent/dist/core/agent-session.js.map (src/core/agent-session.ts ~L912)",
+          "note": "loadedContextFiles = resourceLoader.getAgentsFiles().agentsFiles passed as contextFiles into _baseSystemPromptOptions — the AGENTS.md content reaches the model's system prompt."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/pi/scenarios/1-3_long-idle-live-session/recordings/2026-05-23-11-12-58_irrlichd-0.4.7+d30518a.dirty/transcript.jsonl",
+          "note": "pi records assistant prose verbatim as literal message.content[].text (\"ok\", \"alive\") — an HTML comment marker would survive on disk."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/pi/driver-interactive.sh",
+          "note": "DRIVE_ELICITS (L161): send slash wait_turn interrupt keys sleep exit_clean resume reset_session start_session session — no seed_instruction/write_file step. step_start_session (L384) just mkdir+launch, no AGENTS.md seeding."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/opencode/scenarios/5-8_task-estimate-marker/metadata.json",
+          "note": "Sibling cell with the SAME driver gap (gap:seed_instruction) for this scenario: 'No driver in the repo has any instruction-file-seeding primitive.' run-cell.sh does not execute the recipe `setup` array, so the codex/aider driver=ready (which relied on `setup` seeding) is the optimistic call; pi follows opencode's honest gap verdict."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/claudecode/instructioninstaller.go",
+          "note": "In production the rule is installed out-of-band into ~/.claude/CLAUDE.md (managed block, fenced example). L37 names the per-agent parallels incl. AGENTS.md dirs; pi's parallel is ~/.pi/agent/AGENTS.md. A self-contained recording must seed it via a recipe step instead."
+        },
+        {
+          "kind": "file",
+          "ref": "platforms/web/irrlicht.test.js:366-369",
+          "note": "taskEtaPresentation returns null when state != working — suppression-at-ready is a UI-layer concern, not a raw-websocket-vector assertion."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "pi CLI on PATH and authenticated (pi --version → 0.70.0)",
+        "irrlichd is recording (dev daemon with --record; prod daemon has no --record)",
+        "tmux + lsof for pane/net sensors"
+      ],
+      "setup": [
+        "BLOCKED on driver gap: the pi interactive driver needs a seed_instruction step that writes the fenced marker rule into <cwd>/AGENTS.md (or ~/.pi/agent/AGENTS.md) BEFORE launching pi. record ports this step (no reference driver has it — same gap as the opencode cell), then drives.",
+        "The seeded AGENTS.md MUST wrap the marker example in a fenced code block (some agents strip bare HTML comments at injection)."
+      ],
+      "script": [
+        {
+          "type": "seed_instruction",
+          "path": "AGENTS.md",
+          "text": "## Task progress markers\n\nAs you work a multi-step task, emit a hidden progress marker on each turn so tools can show a completion estimate. Emit it as an HTML comment in your reply:\n\n```\n<!-- {\"marker\":\"irrlicht-eta\",\"total_rounds\":N,\"completed_rounds\":M} -->\n```\n\n`total_rounds` is your estimate of the task's phases; `completed_rounds` is how many you have finished. Update `completed_rounds` as you progress."
+        },
+        {
+          "type": "send",
+          "text": "Plan a 4-phase task: create dirs a/, b/, c/, then write README.md summarizing them. Before doing anything, reply with the progress marker at 0/4. Then do ONE phase per turn, emitting an updated marker each turn, until 4/4."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "send",
+          "text": "Do the next phase and update the marker."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "send",
+          "text": "Do the next phase and update the marker."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "send",
+          "text": "Do the final phase, write README.md, and emit the marker at 4/4."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 12
+        }
+      ],
+      "verify": [
+        "While working: task_estimate.{total_rounds=4, completed_rounds matching the agent's report} present on session metrics.",
+        "completed_rounds non-decreasing across turns, reaching 4 by the final working turn; updated_at advances per fresher marker.",
+        "task_completion_eta present once >=1 round reported, burning down (later eta <= earlier eta).",
+        "State arc ready -> working -> ready; final state ready."
+      ],
+      "timeout_seconds": 240
+    }
+  }
+}

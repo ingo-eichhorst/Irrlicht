@@ -1,0 +1,134 @@
+{
+  "scenario_id": "task-estimate-marker",
+  "metadata": {
+    "agent_supports": "partial",
+    "daemon_capability": "bug",
+    "driver_capability": "gap:seed_instruction",
+    "agent_cli_version": "1.14.50",
+    "daemon_version": "0.4.8+8233c32",
+    "confidence": 0.7,
+    "notes": "opencode loads AGENTS.md + emits in-band text (agent=partial, model-dependent on the recorded local Gemma); marker scan is claudecode-only so the daemon can't surface task_estimate (daemon=bug); recipe needs an instruction-file seed step the driver lacks (gap:seed_instruction)."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "task-estimate-marker",
+      "agent": "opencode",
+      "agent_supports": "partial",
+      "daemon_capability": "bug",
+      "driver_capability": "gap:seed_instruction",
+      "confidence": 0.7,
+      "body": "## Verdict\n\n- **agent = partial.** The scenario is agent-agnostic: any agent that (a) loads a persistent instruction file and (b) emits the marker in transcript-visible assistant text can satisfy it. opencode does both. The binary references `AGENTS.md`/`CLAUDE.md` and ships an `\"instructions\": [\"AGENTS.md\", …]` config key — opencode loads a global `~/.config/opencode/AGENTS.md` and a project-level `AGENTS.md` as its persistent rule file (the AGENTS.md-equivalent of CLAUDE.md). opencode's assistant `text` parts are plain transcript-visible prose, so a model that follows the rule would emit the hidden HTML-comment marker there. The downgrade from `yes` is the RECORDED local setup, not the architecture: the committed `~/.config/opencode/opencode.json` defaults to `lmstudio/gemma-4-e2b-it-uncensored` (a ~2–4B local model used in every prior opencode recording). Reliably FOLLOWING an \"emit a JSON-in-HTML-comment progress marker and increment it every turn\" rule is doubtful for a model that small — the 2026-05-31 marker experiment found 0% exact-format compliance even from Claude (the daemon parser is deliberately tolerant of key/format drift for exactly this reason). So the capability is structurally present but emission is model-dependent and unconfirmed → `partial`; only a live recording can promote it. (A capable cloud model is now also configured under the `ionos` provider — e.g. Qwen3-Coder-Next 80B — which could be selected per-turn via the driver's `-m` model field if the local model proves incapable; that's a recording knob, not an agent-capability change.)\n\n- **daemon = bug.** The task-estimate plumbing below the adapter is shared and ready: `tailer.ParsedEvent.TaskEstimate` → `tailer.go` `lastTaskEstimate` → `tailer_metrics.go` `metrics.TaskEstimate`, and `metrics/adapter.go` projects `task_completion_eta` via `session.ForecastTaskCompletion`, with the `task_estimate`/`task_completion_eta` fields suppressed once the session leaves `working`. But the per-adapter CONTENT SCAN that populates `ParsedEvent.TaskEstimate` exists ONLY in claudecode: `core/adapters/inbound/agents/claudecode/taskestimate.go` (`scanTaskEstimate`), wired at `claudecode/parser.go:388-390` over the FULL assistant text block. opencode has NO equivalent. Worse, opencode does not even flow through the tailer for metrics: it uses `ProcessOwnedStore` + `opencode/metrics.go ComputeMetrics`, which reads the SQLite `part.data` rows and never sets `metrics.TaskEstimate`; and `opencode/parser.go parseTextPart` tail-truncates assistant text to the last 200 runes (so even a naive scan added there would miss early markers — the scan must run over the full `part.data` text, available at metrics.go:227 before truncation). Crucially the marker TRACE exists and is fully readable — it is plain text in opencode's SQLite `part.data` column — the daemon just has no code to extract it. A spec-required observable (`task_estimate`/`task_completion_eta`) the daemon fails to surface from an existing trace is a `bug` (file an issue; record `known_failing`), NOT `incapable` (which is reserved for no-trace / 3-state-model-can't-represent cases).\n\n- **driver = gap:seed_instruction.** Scenario `process` step 1 requires seeding the marker rule into the workspace's `AGENTS.md` (the CLAUDE.md-equivalent persistent instruction file) BEFORE the first send. No driver in the repo has any instruction-file-seeding primitive: the opencode driver's `settings` blob is written ONLY to `RUN_CWD/opencode.json` (driver-interactive.sh:133-139), never to `AGENTS.md`, and there is no `seed_instruction`/`file`/`write` step type in any `driver-*.sh`. The rule TEXT (the fenced marker example) must live in an actual file opencode loads, not in `opencode.json` and not as a prompt (it must be a *persistent* rule, per the scenario). So the recipe needs a `seed_instruction` step the driver lacks → `gap:seed_instruction`. This is tooling work, not an observability limit: `record` ports the step (write the rule to `$RUN_CWD/AGENTS.md`, or add `\"AGENTS.md\"` to the seeded `opencode.json` `instructions` and write the file) before driving.\n\n## Route\n\n`partial | bug | gap:*` → **driver-gap**. `record` (1) ports the `seed_instruction` step, (2) drives the multi-step task, and (3) — because daemon=bug — files the adapter-scan issue and records the spec as `known_failing` (the spec asserts the CORRECT behavior; it is expected to FAIL until the opencode marker scan ships).",
+      "caveats": [
+        "agent=partial is provisional and model-dependent: the recorded default model (lmstudio/gemma-4-e2b-it-uncensored, ~2-4B local) may be incapable of reliably emitting/incrementing the marker; only a live recording confirms emission. A capable cloud model (ionos/Qwen3-Coder-Next 80B) is configured and selectable per-turn via the driver -m field if needed.",
+        "daemon=bug, not incapable: the marker is plain text in opencode's SQLite part.data and is fully readable; the only gap is the missing per-adapter content scan (claudecode has taskestimate.go; opencode does not). The spec is authored as known_failing and asserts the correct behavior unweakened.",
+        "Even if a scan is added, opencode/parser.go parseTextPart truncates assistant text to the last 200 runes — the opencode scan must run over the full part.data text (metrics.go:227), not over ParsedEvent.AssistantText, mirroring claudecode/parser.go:388.",
+        "driver gap is seed_instruction (write a persistent AGENTS.md rule into the workspace); record ports it before driving. The settings->opencode.json seam does NOT write AGENTS.md."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/claudecode/taskestimate.go",
+          "note": "scanTaskEstimate — the marker content scan; v1 lives only in the claudecode adapter package"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/claudecode/parser.go:380-393",
+          "note": "wires scanTaskEstimate over the FULL assistant text block (note: AssistantText is tail-truncated to 200 runes)"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/opencode/",
+          "note": "no taskestimate.go and no scanTaskEstimate caller — opencode has NO marker scan"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/opencode/agent.go:23-51",
+          "note": "opencode is ProcessOwnedStore (SQLite), routes metrics through ComputeMetrics — bypasses the tailer path that carries TaskEstimate"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/opencode/metrics.go:27-258",
+          "note": "ComputeMetrics never sets metrics.TaskEstimate; full assistant text is available at line 227 before the parser truncates it"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/opencode/parser.go:195-215",
+          "note": "parseTextPart tail-truncates AssistantText to last 200 runes — a marker scan must use the full part.data text instead"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/outbound/metrics/adapter.go:176-178",
+          "note": "shared projection: TaskEstimate -> ForecastTaskCompletion -> task_completion_eta (agent-agnostic, ready)"
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/task_estimate.go:39",
+          "note": "ForecastTaskCompletion — shared ETA projection from estimate + elapsed"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/opencode/driver-interactive.sh:125-139",
+          "note": "settings blob is seeded ONLY as RUN_CWD/opencode.json; no AGENTS.md / instruction-file seed step exists"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/opencode/driver-interactive.sh:97",
+          "note": "DRIVE_ELICITS step grammar — no seed_instruction/file/write primitive"
+        },
+        {
+          "kind": "file",
+          "ref": "~/.config/opencode/opencode.json",
+          "note": "recorded default model lmstudio/gemma-4-e2b-it-uncensored (~2-4B local); ionos cloud provider with Qwen3-Coder-Next 80B also configured"
+        },
+        {
+          "kind": "file",
+          "ref": "opencode binary strings (/Users/ingo/.opencode/bin/opencode)",
+          "note": "references AGENTS.md, CLAUDE.md, and an \"instructions\":[\"AGENTS.md\"] config key — opencode loads a persistent AGENTS.md rule file"
+        },
+        {
+          "kind": "url",
+          "ref": "https://opencode.ai/docs/rules/",
+          "note": "opencode loads AGENTS.md (global ~/.config/opencode/AGENTS.md + project-level) as its persistent instruction/rules file; configurable via the instructions key"
+        }
+      ]
+    },
+    "recipe": {
+      "script": [
+        {
+          "type": "seed_instruction",
+          "path": "AGENTS.md",
+          "text": "## Task progress marker (irrlicht)\n\nWhile working a multi-phase task, emit a hidden progress marker in your own reply text on EVERY turn, exactly in this form (keep it as an HTML comment so it stays out of the rendered answer):\n\n```\n<!-- {\"marker\":\"irrlicht-eta\",\"total_rounds\":N,\"completed_rounds\":M} -->\n```\n\nSet total_rounds to the number of phases you plan. Emit it with completed_rounds=0 on your first reply, then INCREASE completed_rounds by 1 each turn as you finish a phase, until completed_rounds == total_rounds on the final turn."
+        },
+        {
+          "type": "live"
+        },
+        {
+          "type": "send",
+          "text": "Plan a 3-phase refactor of a small calculator module: (1) add input validation, (2) extract the arithmetic into a helper, (3) add unit tests. Do ONE phase per reply. On your VERY FIRST reply, before doing phase 1, emit the progress marker with total_rounds=3 and completed_rounds=0, then do phase 1 and update completed_rounds to 1. Remember to emit the marker on every reply."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "send",
+          "text": "Good. Now do phase 2 (extract the arithmetic helper) and update the progress marker to completed_rounds=2."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "send",
+          "text": "Now do phase 3 (add the unit tests). This is the final phase, so set the progress marker to completed_rounds=3 (== total_rounds) and confirm the task is done."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 12
+        }
+      ]
+    }
+  }
+}
