@@ -1052,7 +1052,11 @@
           if (showHeaders) {
             items.push({type: 'group', key: 'g:' + g.name, group: g});
           }
-          if (!collapsedGroups.has(g.name)) {
+          // Collapse only applies while a header exists to un-collapse it
+          // (#564): with a single group no header renders, so a stale
+          // persisted collapse would otherwise blank the dashboard with no
+          // way to recover.
+          if (!showHeaders || !collapsedGroups.has(g.name)) {
             for (const a of g.agents) {
               if (isShadowedRemote(a, localIds)) continue;
               agentNum++;
