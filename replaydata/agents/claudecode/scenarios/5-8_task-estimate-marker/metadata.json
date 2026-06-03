@@ -101,7 +101,7 @@
         },
         {
           "type": "send",
-          "text": "Continue: do phase 2 (draft the introduction), update the marker to 2/5, and stop."
+          "text": "Continue: do phase 2 (draft the introduction), update the marker to 2/5, and stop. Do not ask a question or offer to continue — end your turn immediately after the marker."
         },
         {
           "type": "wait_turn"
@@ -112,7 +112,7 @@
         },
         {
           "type": "send",
-          "text": "Continue: do phase 3 (draft the body), update the marker to 3/5, and stop."
+          "text": "Continue: do phase 3 (draft the body), update the marker to 3/5, and stop. Do not ask a question or offer to continue — end your turn immediately after the marker."
         },
         {
           "type": "wait_turn"
@@ -123,7 +123,7 @@
         },
         {
           "type": "send",
-          "text": "Continue: do phase 4 (draft the conclusion), update the marker to 4/5, and stop."
+          "text": "Continue: do phase 4 (draft the conclusion), update the marker to 4/5, and stop. Do not ask a question or offer to continue — end your turn immediately after the marker."
         },
         {
           "type": "wait_turn"
