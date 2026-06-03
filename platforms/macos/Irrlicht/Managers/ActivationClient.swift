@@ -14,23 +14,24 @@ enum ActivationClient {
         enum CodingKeys: String, CodingKey { case taskEtaEnabled = "task_eta_enabled" }
     }
 
-    /// Current consent state; false when the daemon is unreachable.
-    static func status() async -> Bool {
-        guard let url = endpoint else { return false }
+    /// Current consent state, or nil when the daemon is unreachable. The
+    /// caller MUST distinguish nil (unknown) from false (daemon says off) —
+    /// treating unreachable as "off" silently uninstalls the managed block
+    /// whenever Settings opens before the daemon is up (issue #558).
+    static func status() async -> Bool? {
+        guard let url = endpoint else { return nil }
         var req = URLRequest(url: url, timeoutInterval: 2)
         req.httpMethod = "GET"
-        return await send(req) ?? false
+        return await send(req)
     }
 
     /// Flip consent (POST = enable + install, DELETE = revoke + uninstall).
-    /// Returns the daemon's resulting state — on failure it re-reads status
-    /// so the caller can keep the toggle honest.
-    static func set(enabled: Bool) async -> Bool {
-        guard let url = endpoint else { return false }
+    /// Returns the daemon's resulting state, or nil when unreachable.
+    static func set(enabled: Bool) async -> Bool? {
+        guard let url = endpoint else { return nil }
         var req = URLRequest(url: url, timeoutInterval: 2)
         req.httpMethod = enabled ? "POST" : "DELETE"
-        if let state = await send(req) { return state }
-        return await status()
+        return await send(req)
     }
 
     private static func send(_ req: URLRequest) async -> Bool? {

@@ -1248,37 +1248,8 @@ struct SessionRowView: View {
             }
 
             // Task progress + completion ETA share one line: dots left, ETA
-            // right (issue #558). A sub-row, not the main HStack — inline
-            // next to the cost the ETA truncated to "…" at menu-bar width
-            // (the model label's layoutPriority wins the squeeze). The ETA
-            // label is fixed-size so the wrapping dots can't compress it.
-            if activeTasks != nil || taskEtaPresentation() != nil {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    if let tasks = activeTasks {
-                        TaskListView(tasks: tasks)
-                    }
-                    Spacer(minLength: 8)
-                    if let eta = taskEtaPresentation(), let est = session.metrics?.taskEstimate {
-                        // Progress as a percentage — the raw rounds (5/10)
-                        // read like a second task counter next to the dots;
-                        // the tooltip still carries the exact rounds.
-                        let percent = Int((Double(est.completedRounds) / Double(max(est.totalRounds, 1)) * 100).rounded())
-                        HStack(spacing: 4) {
-                            Image(systemName: "timer")
-                                .font(.system(size: 9))
-                                .foregroundColor(.secondary)
-                            Text("\(eta.text) · \(percent)%")
-                                .font(.system(size: 9, design: .monospaced))
-                                .foregroundColor(.secondary)
-                                .lineLimit(1)
-                        }
-                        .fixedSize()
-                        .opacity(eta.stale ? 0.5 : 1.0)
-                        .tooltip(eta.title)
-                    }
-                }
-                .padding(.top, 2)
-            }
+            // right (issue #558).
+            taskProgressRow
 
             // Debug info
             if debugMode {
@@ -1348,6 +1319,44 @@ struct SessionRowView: View {
         let text: String
         let stale: Bool
         let title: String
+    }
+
+    /// One sub-row: task dots left, completion ETA right (issue #558). It's a
+    /// sub-row rather than part of the main HStack because the ETA, placed
+    /// inline next to the cost, truncated to "…" at menu-bar width (the model
+    /// label's layoutPriority wins the squeeze); the ETA label is fixed-size
+    /// so the wrapping dots can't compress it. taskEtaPresentation() is
+    /// computed exactly once here.
+    @ViewBuilder
+    private var taskProgressRow: some View {
+        let eta = taskEtaPresentation()
+        if activeTasks != nil || eta != nil {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                if let tasks = activeTasks {
+                    TaskListView(tasks: tasks)
+                }
+                Spacer(minLength: 8)
+                if let eta, let est = session.metrics?.taskEstimate {
+                    // Progress as a percentage — the raw rounds (5/10) read
+                    // like a second task counter next to the dots; the tooltip
+                    // still carries the exact rounds.
+                    let percent = Int((Double(est.completedRounds) / Double(max(est.totalRounds, 1)) * 100).rounded())
+                    HStack(spacing: 4) {
+                        Image(systemName: "timer")
+                            .font(.system(size: 9))
+                            .foregroundColor(.secondary)
+                        Text("\(eta.text) · \(percent)%")
+                            .font(.system(size: 9, design: .monospaced))
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                    }
+                    .fixedSize()
+                    .opacity(eta.stale ? 0.5 : 1.0)
+                    .tooltip(eta.title)
+                }
+            }
+            .padding(.top, 2)
+        }
     }
 
     /// Decides the task-completion ETA chip (issue #558) — mirrors the web's

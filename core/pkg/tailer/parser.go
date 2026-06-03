@@ -354,6 +354,15 @@ type LedgerState struct {
 	// tool_result can still attribute the termination and clear the process.
 	// See issue #445.
 	PendingBashPolls map[string]string `json:"pending_bash_polls,omitempty"`
+	// LastTaskEstimate / FirstTaskEstimate persist the agent's task-progress
+	// marker and the current task's rate baseline (issue #558). MergeMetrics
+	// no longer carries the estimate across markerless passes (so a
+	// user-message reset propagates), which means a daemon restart would
+	// otherwise blank the ETA chip and lose the baseline until the next
+	// marker — persisting them here keeps both across restarts. A reset
+	// stores nil, so the reset survives a restart too.
+	LastTaskEstimate  *TaskEstimate `json:"last_task_estimate,omitempty"`
+	FirstTaskEstimate *TaskEstimate `json:"first_task_estimate,omitempty"`
 	// ModelName is the last observed model for the session. Persisted so that
 	// applyContribution's fallback (used when a contribution event carries no
 	// model — codex token_count) still routes to the right pricing bucket

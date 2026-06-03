@@ -166,15 +166,23 @@ func removeManagedBlock(existing string) (string, bool) {
 	}
 }
 
-// writeMemoryFile writes content atomically (temp + rename), creating
-// ~/.claude if needed. Mirrors writeClaudeSettings.
-func writeMemoryFile(path, content string) error {
+// atomicWriteFile writes data to path via a temp file + rename, creating the
+// parent dir. Shared by the settings.json (writeClaudeSettings) and CLAUDE.md
+// (writeMemoryFile) writers so a hardening change applies to both — CLAUDE.md
+// is the more sensitive, user-authored file and must not silently keep a
+// weaker write.
+func atomicWriteFile(path string, data []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		return err
 	}
 	return os.Rename(tmp, path)
+}
+
+// writeMemoryFile writes content atomically, creating ~/.claude if needed.
+func writeMemoryFile(path, content string) error {
+	return atomicWriteFile(path, []byte(content))
 }

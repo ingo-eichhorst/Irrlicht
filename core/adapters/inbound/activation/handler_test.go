@@ -103,3 +103,30 @@ func TestHandler_EnableErrorIs500(t *testing.T) {
 		t.Errorf("code = %d, want 500", rec.Code)
 	}
 }
+
+func TestHandler_RejectsCrossSiteMutations(t *testing.T) {
+	h := NewHandler(&fakeTarget{}, nopLogger{})
+	for _, m := range []string{http.MethodPost, http.MethodDelete} {
+		for _, site := range []string{"cross-site", "same-site"} {
+			req := httptest.NewRequest(m, "/api/v1/activation/task-eta", nil)
+			req.Header.Set("Sec-Fetch-Site", site)
+			rec := httptest.NewRecorder()
+			h(rec, req)
+			if rec.Code != http.StatusForbidden {
+				t.Errorf("%s with Sec-Fetch-Site=%s: code = %d, want 403", m, site, rec.Code)
+			}
+		}
+	}
+	// same-origin (the dashboard) and a missing header (native client) pass.
+	for _, site := range []string{"same-origin", "none", ""} {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/activation/task-eta", nil)
+		if site != "" {
+			req.Header.Set("Sec-Fetch-Site", site)
+		}
+		rec := httptest.NewRecorder()
+		h(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("POST with Sec-Fetch-Site=%q: code = %d, want 200", site, rec.Code)
+		}
+	}
+}

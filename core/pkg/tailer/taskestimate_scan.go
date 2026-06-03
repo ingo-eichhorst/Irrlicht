@@ -17,6 +17,7 @@ package tailer
 import (
 	"encoding/json"
 	"regexp"
+	"strings"
 	"time"
 )
 
@@ -39,6 +40,12 @@ const maxTaskEstimateCommentLen = 2048
 // fed the complete block text — ParsedEvent.AssistantText is tail-truncated
 // to 200 runes and would lose markers in long messages.
 func ScanTaskEstimate(text string, observedAt time.Time) *TaskEstimate {
+	// Fast-reject the overwhelmingly common no-marker case before running the
+	// regex engine over the (potentially large) full text block — this runs
+	// per assistant text block on the tail hot path.
+	if !strings.Contains(text, "<!--") {
+		return nil
+	}
 	var latest *TaskEstimate
 	for _, m := range taskEstimateCommentRe.FindAllStringSubmatch(text, -1) {
 		payload := m[1]
@@ -91,10 +98,10 @@ func parseTaskEstimatePayload(payload string) *TaskEstimate {
 	if risk, ok := obj["risk"].(string); ok {
 		est.Risk = risk
 	}
-	if c, ok := numField(obj, "confidence"); ok {
-		if c < 0 || c > 1 {
-			return nil
-		}
+	// confidence is an optional passthrough — an out-of-range value is
+	// ignored (dropped), NOT a reason to reject the whole marker and lose
+	// the valid total/completed progress it carries.
+	if c, ok := numField(obj, "confidence"); ok && c >= 0 && c <= 1 {
 		est.Confidence = &c
 	}
 	return est

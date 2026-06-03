@@ -189,3 +189,40 @@ func TestTailer_TaskEstimate_LatestMarkerWins(t *testing.T) {
 		t.Fatalf("TaskEstimate = %+v, want latest (7/12)", m.TaskEstimate)
 	}
 }
+
+func TestTailer_TaskEstimate_SurvivesLedgerRoundTrip(t *testing.T) {
+	// The estimate + baseline must survive a daemon restart (ledger
+	// rehydrate), since MergeMetrics no longer carries them across
+	// markerless passes (issue #558).
+	path := writeTranscriptLines(t, []map[string]interface{}{
+		{"timestamp": ts(0), "est": map[string]interface{}{"total": float64(10), "done": float64(2)}},
+		{"timestamp": ts(30), "est": map[string]interface{}{"total": float64(10), "done": float64(5)}},
+	})
+	tl := newTaskEstimateTestTailer(path)
+	if _, err := tl.TailAndProcess(); err != nil {
+		t.Fatal(err)
+	}
+	saved := tl.GetLedgerState()
+	if saved.LastTaskEstimate == nil || saved.LastTaskEstimate.CompletedRounds != 5 {
+		t.Fatalf("ledger LastTaskEstimate = %+v, want 5/10", saved.LastTaskEstimate)
+	}
+	if saved.FirstTaskEstimate == nil || saved.FirstTaskEstimate.CompletedRounds != 2 {
+		t.Fatalf("ledger FirstTaskEstimate = %+v, want the 2/10 baseline", saved.FirstTaskEstimate)
+	}
+
+	// Simulate a restart: a fresh tailer rehydrated from the ledger, then a
+	// markerless pass — the estimate must still surface.
+	appendTranscriptLine(t, path, map[string]interface{}{"timestamp": ts(60)})
+	restarted := newTaskEstimateTestTailer(path)
+	restarted.SetLedgerState(saved)
+	m, err := restarted.TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.TaskEstimate == nil || m.TaskEstimate.CompletedRounds != 5 {
+		t.Fatalf("after restart TaskEstimate = %+v, want preserved 5/10", m.TaskEstimate)
+	}
+	if m.TaskEstimateBase == nil || m.TaskEstimateBase.CompletedRounds != 2 {
+		t.Fatalf("after restart TaskEstimateBase = %+v, want preserved 2/10", m.TaskEstimateBase)
+	}
+}

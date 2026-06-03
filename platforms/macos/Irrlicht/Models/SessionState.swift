@@ -366,7 +366,11 @@ struct SessionMetrics: Codable {
         } else {
             rateLimitForecastEta = nil
         }
-        taskEstimate = try c.decodeIfPresent(TaskEstimateInfo.self, forKey: .taskEstimate)
+        // Lenient: a malformed task_estimate (e.g. an unexpected field type)
+        // must degrade to "no estimate", never throw and nuke the whole
+        // SessionMetrics decode (which would blank the row's elapsed/tokens/
+        // cost/tasks too). issue #558.
+        taskEstimate = (try? c.decodeIfPresent(TaskEstimateInfo.self, forKey: .taskEstimate)) ?? nil
         if let epoch = try c.decodeIfPresent(Double.self, forKey: .taskCompletionEta) {
             taskCompletionEta = Date(timeIntervalSince1970: epoch)
         } else {

@@ -385,6 +385,11 @@ func (t *TranscriptTailer) GetLedgerState() LedgerState {
 		maps.Copy(pp, t.pendingBashPolls)
 		s.PendingBashPolls = pp
 	}
+	// Estimate pointers are only ever reassigned (fresh allocations from
+	// ScanTaskEstimate), never mutated in place, so direct assignment is
+	// safe under the same marshal-while-locked guarantee as CumByModel.
+	s.LastTaskEstimate = t.lastTaskEstimate
+	s.FirstTaskEstimate = t.firstTaskEstimate
 	return s
 }
 
@@ -427,6 +432,8 @@ func (t *TranscriptTailer) SetLedgerState(s LedgerState) {
 		t.pendingBashPolls = make(map[string]string, len(s.PendingBashPolls))
 		maps.Copy(t.pendingBashPolls, s.PendingBashPolls)
 	}
+	t.lastTaskEstimate = s.LastTaskEstimate
+	t.firstTaskEstimate = s.FirstTaskEstimate
 }
 
 // TailAndProcess reads new transcript content from the last offset (or from the

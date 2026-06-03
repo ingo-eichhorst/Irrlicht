@@ -22,6 +22,9 @@ struct SettingsView: View {
     @AppStorage("relayServerURL") private var relayServerURL: String = ""
     @State private var relayURLDraft: String = ""
     @State private var relayURLDebounceTask: Task<Void, Never>? = nil
+    // Set just before a programmatic reconcile of taskEtaActivation so the
+    // .onChange it triggers is swallowed instead of re-POSTing to the daemon.
+    @State private var taskEtaReconciling = false
     // Relay bearer token lives in the Keychain (not @AppStorage); this draft
     // mirrors it for the field, loaded on appear and written on change.
     @State private var relayTokenDraft: String = ""
@@ -100,15 +103,28 @@ struct SettingsView: View {
                         info: "Add a managed emission rule to ~/.claude/CLAUDE.md so agents report task progress and sessions show a completion ETA. Only the Irrlicht-managed block is written; the rest of the file is untouched. Turning this off removes the block."
                     )
                     .onChange(of: taskEtaActivation) { newValue in
+                        // Swallow the change we made ourselves while reconciling
+                        // from the daemon — only a real user toggle should write.
+                        if taskEtaReconciling { taskEtaReconciling = false; return }
                         Task {
-                            let actual = await ActivationClient.set(enabled: newValue)
-                            if actual != newValue { taskEtaActivation = actual }
+                            // nil = daemon unreachable: leave the toggle where the
+                            // user put it; the next open reconciles. Only correct
+                            // the toggle on a definite, differing answer.
+                            if let actual = await ActivationClient.set(enabled: newValue), actual != newValue {
+                                taskEtaReconciling = true
+                                taskEtaActivation = actual
+                            }
                         }
                     }
                     .onAppear {
                         Task {
-                            let actual = await ActivationClient.status()
-                            if actual != taskEtaActivation { taskEtaActivation = actual }
+                            // Only reconcile on a definite answer — an unreachable
+                            // daemon (nil) must NOT flip the toggle off and trigger
+                            // a spurious uninstall of the managed CLAUDE.md block.
+                            if let actual = await ActivationClient.status(), actual != taskEtaActivation {
+                                taskEtaReconciling = true
+                                taskEtaActivation = actual
+                            }
                         }
                     }
 

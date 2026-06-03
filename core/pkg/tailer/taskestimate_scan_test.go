@@ -85,11 +85,28 @@ func TestScanTaskEstimate_ClampRejection(t *testing.T) {
 		"total too large":    `<!-- {"total_rounds":101,"completed_rounds":1} -->`,
 		"completed negative": `<!-- {"total_rounds":5,"completed_rounds":-1} -->`,
 		"completed > total":  `<!-- {"total_rounds":5,"completed_rounds":6} -->`,
-		"confidence > 1":     `<!-- {"total_rounds":5,"completed_rounds":1,"confidence":1.5} -->`,
-		"confidence < 0":     `<!-- {"total_rounds":5,"completed_rounds":1,"confidence":-0.1} -->`,
 	} {
 		if est := ScanTaskEstimate(text, estObservedAt); est != nil {
 			t.Errorf("%s: expected rejection, got %+v", name, est)
+		}
+	}
+}
+
+func TestScanTaskEstimate_OutOfRangeConfidenceIgnoredNotRejected(t *testing.T) {
+	// confidence is optional — an out-of-range value (e.g. the model emits
+	// 85 meaning 85%) is dropped, but the valid total/completed progress is
+	// kept, not thrown away.
+	for _, text := range []string{
+		`<!-- {"total_rounds":5,"completed_rounds":1,"confidence":1.5} -->`,
+		`<!-- {"total_rounds":5,"completed_rounds":1,"confidence":85} -->`,
+		`<!-- {"total_rounds":5,"completed_rounds":1,"confidence":-0.1} -->`,
+	} {
+		est := ScanTaskEstimate(text, estObservedAt)
+		if est == nil || est.CompletedRounds != 1 || est.TotalRounds != 5 {
+			t.Fatalf("est = %+v, want 1/5 kept", est)
+		}
+		if est.Confidence != nil {
+			t.Errorf("out-of-range confidence should be dropped, got %v", *est.Confidence)
 		}
 	}
 }

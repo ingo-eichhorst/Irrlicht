@@ -36,10 +36,22 @@ func NewHandler(target activationTarget, log outbound.Logger) http.HandlerFunc {
 		switch r.Method {
 		case http.MethodGet:
 			state = target.Status()
-		case http.MethodPost:
-			state, err = target.Enable()
-		case http.MethodDelete:
-			state, err = target.Disable()
+		case http.MethodPost, http.MethodDelete:
+			// localhostOnly is not enough for the mutating verbs: a
+			// safelisted cross-origin POST from any webpage the user visits
+			// reaches loopback without a CORS preflight and would rewrite
+			// ~/.claude/CLAUDE.md. Browsers stamp Sec-Fetch-Site; reject the
+			// cross-origin values. Non-browser clients (the macOS URLSession
+			// client, curl) omit the header → allowed.
+			if site := r.Header.Get("Sec-Fetch-Site"); site == "cross-site" || site == "same-site" {
+				http.Error(w, "forbidden", http.StatusForbidden)
+				return
+			}
+			if r.Method == http.MethodPost {
+				state, err = target.Enable()
+			} else {
+				state, err = target.Disable()
+			}
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
