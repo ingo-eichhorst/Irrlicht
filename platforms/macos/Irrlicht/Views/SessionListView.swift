@@ -1179,17 +1179,6 @@ struct SessionRowView: View {
                         .tooltip(displayMode.tooltip)
                 }
 
-                // Task-completion ETA chip (issue #558) — agent-authored
-                // estimate, shown only while working with reported progress.
-                if let eta = taskEtaPresentation() {
-                    Text(eta.text)
-                        .font(.system(size: 9, design: .monospaced))
-                        .foregroundColor(.secondary)
-                        .opacity(eta.stale ? 0.5 : 1.0)
-                        .lineLimit(1)
-                        .tooltip(eta.title)
-                }
-
                 Spacer()
 
                 if debugMode {
@@ -1256,6 +1245,27 @@ struct SessionRowView: View {
                 .cornerRadius(IrrRadius.sm)
                 .padding(.top, 2)
                 .tooltip(isCritical ? "Context window critically full" : "Context window nearing limit")
+            }
+
+            // Task-completion ETA (issue #558) — agent-authored estimate on
+            // its own line: inline next to the cost it truncated to "…" at
+            // menu-bar width (the model label's layoutPriority wins the
+            // squeeze). Sits directly above the task-progress dots — they
+            // describe the same thing.
+            if let eta = taskEtaPresentation(), let est = session.metrics?.taskEstimate {
+                HStack(spacing: 4) {
+                    Image(systemName: "timer")
+                        .font(.system(size: 9))
+                        .foregroundColor(.secondary)
+                    Text("\(eta.text) · \(est.completedRounds)/\(est.totalRounds)")
+                        .font(.system(size: 9, design: .monospaced))
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                    Spacer()
+                }
+                .opacity(eta.stale ? 0.5 : 1.0)
+                .padding(.top, 2)
+                .tooltip(eta.title)
             }
 
             // Task list (Claude Code TaskCreate / TaskUpdate)
