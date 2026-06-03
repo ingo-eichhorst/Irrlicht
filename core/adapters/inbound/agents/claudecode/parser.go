@@ -377,6 +377,19 @@ func scanMessageContent(raw map[string]interface{}, ev *tailer.ParsedEvent) stri
 			}
 		case "tool_result":
 			collectToolResult(block, ev, bgTaskID)
+		case "text":
+			// Task-estimate markers live in the agent's own prose, so only
+			// assistant events qualify (a user pasting a marker must not feed
+			// the ETA). Scan the full block text — ev.AssistantText is
+			// tail-truncated to 200 runes and would lose early markers.
+			if !isAssistantEventType(ev.EventType) {
+				continue
+			}
+			if text, ok := block["text"].(string); ok {
+				if est := scanTaskEstimate(text, ev.Timestamp); est != nil {
+					ev.TaskEstimate = est
+				}
+			}
 		}
 	}
 	return askUserQuestion
@@ -542,6 +555,16 @@ func toolResultText(block map[string]interface{}) string {
 func backgroundStatusTerminated(text string) bool {
 	status := strings.ToLower(strings.TrimSpace(extractXMLField(text, "status")))
 	return status != "" && status != "running"
+}
+
+// isAssistantEventType reports whether eventType is one of the assistant
+// message flavours (matching applyAssistantText's assistant case).
+func isAssistantEventType(eventType string) bool {
+	switch eventType {
+	case "assistant", eventTypeAssistantStreaming, "assistant_message", "assistant_output":
+		return true
+	}
+	return false
 }
 
 // applyAssistantText fills AssistantText for assistant/streaming events,

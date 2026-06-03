@@ -170,6 +170,11 @@ type SessionMetrics struct {
 	// slope calculation isn't diluted by zero-delta statusline ticks
 	// (issue #309). Capped at rateLimitHistoryCap entries.
 	RateLimitHistory []RateLimitSnapshot `json:"-"`
+
+	// TaskEstimate is the most recent agent-emitted task-progress marker
+	// (issue #558). Sporadic like RateLimit — the last one seen persists
+	// across passes. Nil when the session never emitted a marker.
+	TaskEstimate *TaskEstimate `json:"task_estimate,omitempty"`
 }
 
 // TranscriptTailer monitors transcript files and computes metrics.
@@ -260,6 +265,12 @@ type TranscriptTailer struct {
 	// lastAssistantText holds the text content of the most recent assistant
 	// message, truncated to ~200 characters.
 	lastAssistantText string
+
+	// lastTaskEstimate holds the most recent agent-emitted task-progress
+	// marker. Markers are sporadic (model-discretion, every few turns), so
+	// the last one seen persists across passes that carry no fresh marker.
+	// See issue #558.
+	lastTaskEstimate *TaskEstimate
 
 	// tasks accumulates the session's task list from TaskCreate / TaskUpdate
 	// tool_use events parsed by the Claude Code adapter.
@@ -888,6 +899,9 @@ func (t *TranscriptTailer) processParsedEvent(parsed *ParsedEvent, sawUserBlocki
 	}
 	if parsed.ClearToolNames {
 		t.lastAssistantText = ""
+	}
+	if parsed.TaskEstimate != nil {
+		t.lastTaskEstimate = parsed.TaskEstimate
 	}
 
 	t.contentChars += parsed.ContentChars

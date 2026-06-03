@@ -189,6 +189,12 @@ type ParsedEvent struct {
 	// them in via the statusline hook (different path — parser only fills this
 	// for in-band transcript signals).
 	RateLimit *RateLimitSnapshot
+
+	// TaskEstimate, when non-nil, is the agent's self-reported task progress,
+	// parsed from an in-band HTML-comment marker in this event's assistant
+	// text (issue #558). Latest valid marker wins; the tailer keeps the most
+	// recent one across passes.
+	TaskEstimate *TaskEstimate
 }
 
 // RateLimitSnapshot mirrors session.RateLimitSnapshot inside the tailer
@@ -215,6 +221,25 @@ type CreditsSnapshot struct {
 	HasCredits bool
 	Unlimited  bool
 	Balance    float64
+}
+
+// TaskEstimate mirrors session.TaskEstimate inside the tailer package so
+// parsers can emit estimates without importing the domain (same boundary as
+// RateLimitSnapshot above). It carries the agent's self-reported progress
+// from an in-band marker like
+//
+//	<!-- {"marker":"irrlicht-eta","total_rounds":10,"completed_rounds":2} -->
+//
+// A "round" is the agent's own unit (≈ a task phase) — never counted
+// daemon-side. See issue #558.
+type TaskEstimate struct {
+	TotalRounds     int
+	CompletedRounds int
+	Risk            string
+	Confidence      *float64
+	// ObservedAt is the unix-seconds timestamp of the transcript event the
+	// marker appeared in (replay-deterministic, unlike daemon wall-clock).
+	ObservedAt int64
 }
 
 // TokenSnapshot holds a token breakdown from a single event.
