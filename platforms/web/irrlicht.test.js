@@ -6,6 +6,7 @@ import {
   formatCost,
   formatUsageCost,
   pressureClass,
+  taskEtaPresentation,
   historyPriorityForState,
   lastNotifiedPressure,
   relayFrameKind,
@@ -333,5 +334,53 @@ describe('daemonSessionIds (#540 drop a disconnected daemon\'s rows)', () => {
     expect(daemonSessionIds(groups, 'daemon-Z')).toEqual([])
     expect(daemonSessionIds(groups, '')).toEqual([])
     expect(daemonSessionIds(groups, undefined)).toEqual([])
+  })
+})
+
+describe('taskEtaPresentation', () => {
+  const now = 1769000000
+  const metricsFor = (over) => ({
+    task_estimate: { total_rounds: 10, completed_rounds: 6, updated_at: now - 30, ...((over && over.est) || {}) },
+    task_completion_eta: now + 720,
+    ...((over && over.metrics) || {}),
+  })
+
+  test('point estimate once half the rounds are done', () => {
+    const info = taskEtaPresentation(metricsFor(), 'working', now)
+    expect(info).not.toBeNull()
+    expect(info.text).toBe('~12m left')
+    expect(info.stale).toBe(false)
+    expect(info.title).toContain('6/10 rounds')
+  })
+
+  test('range when completed fraction is below half', () => {
+    const info = taskEtaPresentation(metricsFor({ est: { completed_rounds: 2 } }), 'working', now)
+    expect(info.text).toBe('~12m–18m left')
+  })
+
+  test('stale when the last marker is older than 3 minutes', () => {
+    const info = taskEtaPresentation(metricsFor({ est: { updated_at: now - 200 } }), 'working', now)
+    expect(info.stale).toBe(true)
+  })
+
+  test('suppressed when not working', () => {
+    expect(taskEtaPresentation(metricsFor(), 'waiting', now)).toBeNull()
+    expect(taskEtaPresentation(metricsFor(), 'ready', now)).toBeNull()
+  })
+
+  test('suppressed without estimate, eta, or reported progress', () => {
+    expect(taskEtaPresentation({}, 'working', now)).toBeNull()
+    expect(taskEtaPresentation(metricsFor({ metrics: { task_completion_eta: undefined } }), 'working', now)).toBeNull()
+    expect(taskEtaPresentation(metricsFor({ est: { completed_rounds: 0 } }), 'working', now)).toBeNull()
+  })
+
+  test('eta in the past clamps to <1m, never negative', () => {
+    const info = taskEtaPresentation(metricsFor({ metrics: { task_completion_eta: now - 5 } }), 'working', now)
+    expect(info.text).toBe('~<1m left')
+  })
+
+  test('hour-scale remaining uses h+m resolution', () => {
+    const info = taskEtaPresentation(metricsFor({ metrics: { task_completion_eta: now + 5400 } }), 'working', now)
+    expect(info.text).toBe('~1h30m left')
   })
 })

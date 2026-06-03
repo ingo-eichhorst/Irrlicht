@@ -691,6 +691,16 @@
       text-align: right;
     }
 
+    /* Task-completion ETA chip (issue #558) — agent-authored estimate. */
+    .row-eta {
+      font-size: 9px;
+      color: var(--muted);
+      flex-shrink: 0;
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+    .row-eta.stale { opacity: 0.5; }
+
     .row-id {
       font-size: 9px;
       color: var(--muted);

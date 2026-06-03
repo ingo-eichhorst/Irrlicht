@@ -374,6 +374,44 @@
       return '';
     }
 
+    // Minute-resolution duration for the task-ETA chip — fmtDuration's
+    // second-level detail would make the chip flicker every tick for a
+    // number that is inherently rough.
+    function fmtEtaDuration(secs) {
+      if (secs < 60) return '<1m';
+      const mins = Math.round(secs / 60);
+      const h = Math.floor(mins / 60);
+      const m = mins % 60;
+      if (h > 0) return h + 'h' + (m > 0 ? m + 'm' : '');
+      return m + 'm';
+    }
+
+    // taskEtaPresentation decides the task-completion ETA chip for a session
+    // (issue #558, agent-authored estimate). Returns null when the chip must
+    // be hidden: session not `working`, no estimate, no reported progress, or
+    // no projected eta. Otherwise { text, stale, title }: a point estimate
+    // ("~12m left") once half the rounds are done, a range ("~8m–12m left")
+    // below that, and stale=true when the last marker is older than 3min so
+    // the chip degrades instead of letting the ETA drift.
+    function taskEtaPresentation(metrics, state, nowSec) {
+      const est = metrics && metrics.task_estimate;
+      const eta = metrics && metrics.task_completion_eta;
+      if (state !== 'working' || !est || !eta || !(est.completed_rounds > 0)) return null;
+      const remaining = Math.max(0, Math.floor(eta - nowSec));
+      const frac = est.total_rounds > 0 ? est.completed_rounds / est.total_rounds : 0;
+      let text;
+      if (frac < 0.5) {
+        text = '~' + fmtEtaDuration(remaining) + '–' + fmtEtaDuration(Math.floor(remaining * 1.5)) + ' left';
+      } else {
+        text = '~' + fmtEtaDuration(remaining) + ' left';
+      }
+      const ageSec = est.updated_at > 0 ? Math.max(0, Math.floor(nowSec - est.updated_at)) : 0;
+      const stale = est.updated_at > 0 && ageSec > 180;
+      let title = 'Task ETA — agent-reported ' + est.completed_rounds + '/' + est.total_rounds + ' rounds';
+      if (est.updated_at > 0) title += ', updated ' + fmtDuration(ageSec) + ' ago';
+      return { text: text, stale: stale, title: title };
+    }
+
     function shortID(id) { return id ? displaySessionId(id).slice(0, 6) : ''; }
 
     function pressureClass(level) {
@@ -794,6 +832,7 @@
         '<span class="row-ctx-pct"></span>' +
         '<span class="row-cost"></span>' +
         '<canvas class="row-history"></canvas>' +
+        '<span class="row-eta" style="display:none"></span>' +
         '<span class="row-spacer"></span>' +
         '<span class="row-model"></span>' +
         '<span class="row-adapter-icon" style="display:none"></span>' +
@@ -952,6 +991,25 @@
       elapsedEl.dataset.firstSeen = isActive ? (agent.first_seen || '') : '';
       elapsedEl.dataset.elapsedStored = metrics.elapsed_seconds || '';
       elapsedEl.dataset.active = isActive ? '1' : '0';
+
+      // Task-completion ETA chip (issue #558) — agent-authored estimate,
+      // shown only while working. The 1s tickElapsed loop re-derives the
+      // countdown from the dataset between polls.
+      const etaEl = el.querySelector('.row-eta');
+      const etaInfo = taskEtaPresentation(metrics, state, Date.now() / 1000);
+      if (etaInfo) {
+        etaEl.style.display = '';
+        etaEl.textContent = etaInfo.text;
+        etaEl.title = etaInfo.title;
+        etaEl.classList.toggle('stale', etaInfo.stale);
+        etaEl.dataset.eta = metrics.task_completion_eta;
+        etaEl.dataset.total = metrics.task_estimate.total_rounds;
+        etaEl.dataset.completed = metrics.task_estimate.completed_rounds;
+        etaEl.dataset.updatedAt = metrics.task_estimate.updated_at || '';
+      } else {
+        etaEl.style.display = 'none';
+        etaEl.dataset.eta = '';
+      }
 
       // Created chip — only stamp the first_seen on the element; the 1s
       // tickElapsed loop owns the textContent. first_seen is immutable per
@@ -1236,6 +1294,27 @@
         if (el.dataset.active === '1') {
           const fs = parseFloat(el.dataset.firstSeen);
           if (fs) el.textContent = fmtDuration(Math.max(0, Math.floor(now - fs)));
+        }
+      }
+      // Task-ETA chips burn down between polls. Only rows whose chip is
+      // visible carry dataset.eta (updateSessionRow clears it otherwise),
+      // and visibility/suppression decisions stay with updateSessionRow —
+      // the tick only refreshes the countdown and staleness.
+      for (const el of document.querySelectorAll('.row-eta')) {
+        const eta = parseFloat(el.dataset.eta);
+        if (!eta) continue;
+        const info = taskEtaPresentation({
+          task_completion_eta: eta,
+          task_estimate: {
+            total_rounds: parseInt(el.dataset.total, 10) || 0,
+            completed_rounds: parseInt(el.dataset.completed, 10) || 0,
+            updated_at: parseFloat(el.dataset.updatedAt) || 0,
+          },
+        }, 'working', now);
+        if (info) {
+          el.textContent = info.text;
+          el.title = info.title;
+          el.classList.toggle('stale', info.stale);
         }
       }
       // Debug-mode "created" chip — only iterate when the toggle is on so
@@ -2383,6 +2462,7 @@
 export {
   resolvedTheme, rowLabel, maybeNotifyOnUpdate,
   formatCost, formatUsageCost, pressureClass, historyPriorityForState,
+  taskEtaPresentation,
   lastNotifiedPressure,
   relayFrameKind, aggregateConnState, relayWsUrl,
   compoundSessionId, displaySessionId,
