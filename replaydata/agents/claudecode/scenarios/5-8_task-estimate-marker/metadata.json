@@ -97,7 +97,7 @@
         },
         {
           "type": "sleep",
-          "seconds": 4
+          "seconds": 12
         },
         {
           "type": "send",
@@ -108,7 +108,7 @@
         },
         {
           "type": "sleep",
-          "seconds": 4
+          "seconds": 12
         },
         {
           "type": "send",
@@ -119,7 +119,7 @@
         },
         {
           "type": "sleep",
-          "seconds": 4
+          "seconds": 12
         },
         {
           "type": "send",
@@ -130,7 +130,7 @@
         },
         {
           "type": "sleep",
-          "seconds": 4
+          "seconds": 12
         },
         {
           "type": "send",
@@ -155,7 +155,7 @@
       "settings": {
         "model": "sonnet"
       },
-      "timeout_seconds": 300
+      "timeout_seconds": 420
     }
   }
 }
