@@ -1179,6 +1179,17 @@ struct SessionRowView: View {
                         .tooltip(displayMode.tooltip)
                 }
 
+                // Task-completion ETA chip (issue #558) — agent-authored
+                // estimate, shown only while working with reported progress.
+                if let eta = taskEtaPresentation() {
+                    Text(eta.text)
+                        .font(.system(size: 9, design: .monospaced))
+                        .foregroundColor(.secondary)
+                        .opacity(eta.stale ? 0.5 : 1.0)
+                        .lineLimit(1)
+                        .tooltip(eta.title)
+                }
+
                 Spacer()
 
                 if debugMode {
@@ -1307,6 +1318,49 @@ struct SessionRowView: View {
             return String(format: "%d:%02d:%02d", h, m, s)
         }
         return String(format: "%d:%02d", m, s)
+    }
+
+    private struct TaskEtaPresentation {
+        let text: String
+        let stale: Bool
+        let title: String
+    }
+
+    /// Decides the task-completion ETA chip (issue #558) — mirrors the web's
+    /// taskEtaPresentation. Nil hides the chip: session not working, no
+    /// estimate, or no reported progress. A point estimate once half the
+    /// rounds are done, a range below that, and stale dimming when the last
+    /// marker is older than 3 minutes.
+    private func taskEtaPresentation(now: Date = Date()) -> TaskEtaPresentation? {
+        guard session.state == .working,
+              let metrics = session.metrics,
+              let est = metrics.taskEstimate,
+              let eta = metrics.taskCompletionEta,
+              est.completedRounds > 0 else { return nil }
+        let remaining = max(0, eta.timeIntervalSince(now))
+        let frac = est.totalRounds > 0 ? Double(est.completedRounds) / Double(est.totalRounds) : 0
+        let text = frac < 0.5
+            ? "~\(etaDurationString(remaining))–\(etaDurationString(remaining * 1.5)) left"
+            : "~\(etaDurationString(remaining)) left"
+        var stale = false
+        var title = "Task ETA — agent-reported \(est.completedRounds)/\(est.totalRounds) rounds"
+        if let updated = est.updatedAt {
+            let age = max(0, now.timeIntervalSince(updated))
+            stale = age > 180
+            title += ", updated \(Int(age))s ago"
+        }
+        return TaskEtaPresentation(text: text, stale: stale, title: title)
+    }
+
+    /// Minute-resolution duration for the ETA chip — second-level detail
+    /// would flicker for a number that is inherently rough.
+    private func etaDurationString(_ seconds: TimeInterval) -> String {
+        if seconds < 60 { return "<1m" }
+        let mins = Int((seconds / 60).rounded())
+        let h = mins / 60
+        let m = mins % 60
+        if h > 0 { return m > 0 ? "\(h)h\(m)m" : "\(h)h" }
+        return "\(m)m"
     }
 }
 

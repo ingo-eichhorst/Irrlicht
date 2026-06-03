@@ -108,6 +108,55 @@ struct CreditsInfo: Codable, Hashable {
 /// session.RateLimitSnapshot in the Go daemon (issue #309). Carried under
 /// SessionMetrics.rateLimit; nil for sessions that don't surface a quota
 /// (API-key Claude Code, Bedrock, Vertex).
+// Agent-authored task-progress estimate (issue #558), parsed read-only from
+// an in-band marker in the agent's transcript. A "round" is the agent's own
+// unit (≈ a task phase).
+struct TaskEstimateInfo: Codable, Hashable {
+    let totalRounds: Int
+    let completedRounds: Int
+    let risk: String?
+    let confidence: Double?
+    let updatedAt: Date?    // when the marker was last observed (staleness degrade)
+
+    enum CodingKeys: String, CodingKey {
+        case totalRounds = "total_rounds"
+        case completedRounds = "completed_rounds"
+        case risk
+        case confidence
+        case updatedAt = "updated_at"
+    }
+
+    init(totalRounds: Int, completedRounds: Int, risk: String? = nil, confidence: Double? = nil, updatedAt: Date? = nil) {
+        self.totalRounds = totalRounds
+        self.completedRounds = completedRounds
+        self.risk = risk
+        self.confidence = confidence
+        self.updatedAt = updatedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        totalRounds = try c.decodeIfPresent(Int.self, forKey: .totalRounds) ?? 0
+        completedRounds = try c.decodeIfPresent(Int.self, forKey: .completedRounds) ?? 0
+        risk = try c.decodeIfPresent(String.self, forKey: .risk)
+        confidence = try c.decodeIfPresent(Double.self, forKey: .confidence)
+        if let epoch = try c.decodeIfPresent(Double.self, forKey: .updatedAt), epoch > 0 {
+            updatedAt = Date(timeIntervalSince1970: epoch)
+        } else {
+            updatedAt = nil
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(totalRounds, forKey: .totalRounds)
+        try c.encode(completedRounds, forKey: .completedRounds)
+        try c.encodeIfPresent(risk, forKey: .risk)
+        try c.encodeIfPresent(confidence, forKey: .confidence)
+        try c.encodeIfPresent(updatedAt.map { $0.timeIntervalSince1970 }, forKey: .updatedAt)
+    }
+}
+
 struct RateLimitInfo: Codable, Hashable {
     let windows: [RateLimitWindowInfo]
     let planType: String?
@@ -279,6 +328,8 @@ struct SessionMetrics: Codable {
     let tasks: [SessionTask]?              // Claude Code task list (nil when TaskCreate never called)
     let rateLimit: RateLimitInfo?          // subscription-quota snapshot (nil for API-key / Bedrock / Vertex)
     let rateLimitForecastEta: Date?        // projected wall-clock time when the imminent window hits 100% (nil when unforecastable)
+    let taskEstimate: TaskEstimateInfo?    // agent-authored task progress from the in-band marker (issue #558)
+    let taskCompletionEta: Date?           // projected task completion (nil when no marker / no progress yet)
 
     enum CodingKeys: String, CodingKey {
         case elapsedSeconds = "elapsed_seconds"
@@ -293,6 +344,8 @@ struct SessionMetrics: Codable {
         case tasks
         case rateLimit = "rate_limit"
         case rateLimitForecastEta = "rate_limit_forecast_eta"
+        case taskEstimate = "task_estimate"
+        case taskCompletionEta = "task_completion_eta"
     }
 
     init(from decoder: Decoder) throws {
@@ -313,6 +366,12 @@ struct SessionMetrics: Codable {
         } else {
             rateLimitForecastEta = nil
         }
+        taskEstimate = try c.decodeIfPresent(TaskEstimateInfo.self, forKey: .taskEstimate)
+        if let epoch = try c.decodeIfPresent(Double.self, forKey: .taskCompletionEta) {
+            taskCompletionEta = Date(timeIntervalSince1970: epoch)
+        } else {
+            taskCompletionEta = nil
+        }
     }
 
     /// Explicit memberwise initializer for SwiftUI previews and tests that
@@ -330,7 +389,9 @@ struct SessionMetrics: Codable {
         lastAssistantText: String?,
         tasks: [SessionTask]?,
         rateLimit: RateLimitInfo? = nil,
-        rateLimitForecastEta: Date? = nil
+        rateLimitForecastEta: Date? = nil,
+        taskEstimate: TaskEstimateInfo? = nil,
+        taskCompletionEta: Date? = nil
     ) {
         self.elapsedSeconds = elapsedSeconds
         self.totalTokens = totalTokens
@@ -344,6 +405,8 @@ struct SessionMetrics: Codable {
         self.tasks = tasks
         self.rateLimit = rateLimit
         self.rateLimitForecastEta = rateLimitForecastEta
+        self.taskEstimate = taskEstimate
+        self.taskCompletionEta = taskCompletionEta
     }
 
     func encode(to encoder: Encoder) throws {
@@ -360,6 +423,8 @@ struct SessionMetrics: Codable {
         try c.encodeIfPresent(tasks, forKey: .tasks)
         try c.encodeIfPresent(rateLimit, forKey: .rateLimit)
         try c.encodeIfPresent(rateLimitForecastEta.map { $0.timeIntervalSince1970 }, forKey: .rateLimitForecastEta)
+        try c.encodeIfPresent(taskEstimate, forKey: .taskEstimate)
+        try c.encodeIfPresent(taskCompletionEta.map { $0.timeIntervalSince1970 }, forKey: .taskCompletionEta)
     }
     
     // Computed properties for UI display
