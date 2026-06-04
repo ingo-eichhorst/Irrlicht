@@ -1,0 +1,88 @@
+{
+  "scenario_id": "basic-turn",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "2.5.1",
+    "daemon_version": "0.4.8+f22f3be",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "basic-turn",
+      "agent": "kiro-cli",
+      "assessed_at": "2026-06-05T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nbasic-turn is the smallest round-trip: the user sends one prompt, the agent emits one assistant reply with no tool use, and the session arcs `ready → working → ready`. The scenario's user-observable signal is exactly that state topology plus a non-zero token count after the turn.\n\n**agent: yes.** kiro-cli performs a plain prompt → text reply turn. The live 2.5.1 smoke confirms the turn shape: `Prompt → AssistantMessage(text-only)`, where the FINAL text-only AssistantMessage of a turn is the turn-end marker (FINDINGS.md §5). A no-tool turn is the simplest case of that sequence.\n\n**daemon: full (state arc).** The kiro-cli adapter observes the complete arc. The `Prompt` event maps to `user_message` (parser.go), and because the transcript live-appends turn-by-turn (FINDINGS.md §2), the session flips to `working` the moment the prompt lands. The closing text-only `AssistantMessage` has no `toolUse` block, so the parser emits `turn_done` (parser.go lines 76-79), settling the session back to `ready`. PID binds via `DiscoverPIDByCWD(\"kiro-cli\", cwd)` — the `kiro-cli chat` parent keeps the session cwd as its OS cwd (pid.go; FINDINGS.md §1). Tool calls ≤ 0 is satisfied trivially (no toolUse blocks). The canonical state observable the scenario asserts is fully captured.\n\n**The TotalTokens > 0 criterion.** The scenario's acceptance criteria list `TotalTokens > 0` after the turn, but the kiro-cli JSONL carries NO model/token/cost fields — those live in the `<uuid>.json` sidecar, which the parser deliberately does not read (parser.go header; FINDINGS.md §4, where `input/output_token_count` are 0 even in the sidecar). This is NOT a daemon bug: the sibling claudecode and codex basic-turn specs both note that `TotalTokens > 0` is not expressible in the phase DSL and is covered by parser unit tests, not the matrix verify. For kiro-cli the daemon genuinely emits no tokens, so the observations vector asserts `tokens_nonzero: false`, `cost_nonzero: false`, model unknown — matching the sibling 1-1_session-start cell. Per the caveats-over-downgrades rule, the canonical state arc is met → daemon stays `full`, and the token gap is recorded as a caveat (sidecar MetricsReader is a documented future enhancement, FINDINGS.md adapter decisions).\n\n**driver: ready.** The recipe needs only `send`, `wait_turn`, `sleep`. driver-interactive.sh's semantic `DRIVE_ELICITS=\"send slash wait_turn sleep\"` lists all three as genuinely ported (line 86), so recipe-lint passes with no gap. An INTERACTIVE recipe is required: kiro-cli's headless `--no-interactive` mode writes NO session file and is invisible to the daemon (FINDINGS.md §7), and the TUI process must outlive the daemon's observation window so the working→ready settle is observed (a short sleep after wait_turn holds the REPL alive).\n\nConfidence 0.85 (not higher): the working→ready settle and the lazy-transcript timing are a provisional parser+adapter read for kiro-cli specifically — the live recording in `record` promotes it from provisional to settled.",
+      "caveats": [
+        "The scenario's TotalTokens > 0 criterion is NOT observable for kiro-cli: the JSONL has no token/cost/model fields (the <uuid>.json sidecar holds per-turn credits + model_id, but input/output_token_count are 0 there too, and the parser does not read the sidecar). The observations vector therefore asserts tokens_nonzero=false, cost_nonzero=false, model unknown — same as the sibling session-start cell. Sidecar MetricsReader is a documented future enhancement; this does not weaken the state-arc verdict, which the scenario's phase DSL covers in full.",
+        "kiro-cli writes its <uuid>.jsonl lazily — only after the first prompt lands (FINDINGS.md §2, §7). The on-time ready birth is satisfied by the pre-session (proc-<PID>) row; the UUID-keyed session reconciles in once the transcript appears on first input. The working→ready arc then plays out on the UUID session.",
+        "The working→ready settle is anchored to a text-only AssistantMessage being the turn-end marker (parser.go); the live recording confirms kiro-cli actually emits a text-only final AssistantMessage for a no-tool turn (provisional → settled in record)."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/parser.go",
+          "note": "Prompt→user_message (working); AssistantMessage with no toolUse → turn_done (lines 76-79, settles to ready); ToolResults→tool_result. Header comment: JSONL carries no model/token/cost fields — those live in the <uuid>.json sidecar, which this parser does not read."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/pid.go",
+          "note": "DiscoverPID calls processlifecycle.DiscoverPIDByCWD(ProcessName, cwd, …) with a sidecar-cwd fallback — the kiro-cli chat parent's OS cwd == session cwd, so PID binds for the basic turn."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/kiro-cli/driver-interactive.sh",
+          "note": "DRIVE_ELICITS=\"send slash wait_turn sleep\" (line 86) — the recipe's send/wait_turn/sleep steps are all genuinely elicited → driver ready. TUI-only (kiro-cli chat --trust-all-tools); headless --no-interactive writes no session file (NO HEADLESS PATH block)."
+        },
+        {
+          "kind": "file",
+          "ref": ".build/refresh/kiro-cli-smoke/FINDINGS.md",
+          "note": "Live 2.5.1 smoke: §1 DiscoverPIDByCWD works; §2 transcript live-appends turn-by-turn (working flips on prompt); §4 JSONL has no model/usage/cost, sidecar input/output_token_count are 0; §5 turn-end = final text-only AssistantMessage; §7 headless writes NO session file so the TUI launch is mandatory."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "kiro-cli on PATH and authenticated (subscription auth; trust-all consent already persisted on this machine)",
+        "irrlichd is recording — run-cell.sh in isolated mode, or --attach against a daemon started with --record",
+        "no other kiro-cli session shares the same cwd"
+      ],
+      "setup": [
+        "Create an empty cwd under <staging>/cwd/ (the driver launches kiro-cli chat --trust-all-tools there)"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        }
+      ],
+      "verify": [
+        "events.jsonl contains a presession_created event for proc-<PID> in ready within 1000 ms of the tmux new-session timestamp",
+        "events.jsonl contains a pid_discovered event for proc-<PID> within 1000 ms",
+        "events.jsonl contains a transcript_new event for the UUID session after the first send (kiro writes the .jsonl lazily on first prompt)",
+        "events.jsonl contains a state_transition to working for the UUID session when the Prompt lands",
+        "events.jsonl contains a state_transition to ready for the UUID session after the text-only AssistantMessage (turn_done)",
+        "no state_transition to waiting occurs",
+        "final session state is ready",
+        "transcript.jsonl contains exactly 1 Prompt line and a final text-only AssistantMessage line, with no toolUse blocks"
+      ],
+      "settings": {},
+      "timeout_seconds": 90
+    }
+  }
+}

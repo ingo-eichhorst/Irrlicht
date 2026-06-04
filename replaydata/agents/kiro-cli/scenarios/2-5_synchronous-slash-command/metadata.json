@@ -1,0 +1,129 @@
+{
+  "scenario_id": "synchronous-slash-command",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "2.5.1",
+    "daemon_version": "0.4.8+f22f3be.dirty",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes; daemon_capability: full; driver_capability: ready — a synchronous no-LLM slash (/help, /session-id) writes NO transcript event, so no spurious transition fires and the session stays ready."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "synchronous-slash-command",
+      "agent": "kiro-cli",
+      "assessed_at": "2026-06-05T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\nRoute: record. The whole observable is the ABSENCE of a working transition for the slash command: a ready session invokes a synchronous, no-LLM slash command that responds locally in the TUI, and the session stays ready throughout. The trailing tiny prompt proves the session is still alive (ready -> working -> ready).\n\n## Agent supports it (agent_supports: yes)\n\nkiro-cli 2.5.1 ships a rich in-TUI slash surface that responds locally without a model round-trip: /help, /stats, /context show, /session-id, /model, /tools, /agent, /transcript, plus chat save/load/new (FINDINGS.md §8, live smoke of kiro-cli 2.5.1). /session-id prints the session UUID; /stats and /context show render usage panels in the TUI. These are local-only — distinct from /compact (a real model call → context-compaction) and /clear|rewind (session lifecycle → session-reset / checkpoint-rewind). The scenario premise (a no-LLM local slash) is satisfied by /help and /session-id.\n\n## daemon observes it (daemon_capability: full)\n\nkiro-cli's Source is FilesUnderRoot{Dir: \".kiro/sessions/cli\", JSONLineParser} (core/adapters/inbound/agents/kirocli/agent.go); the daemon derives session state by tailing the <uuid>.jsonl transcript. The parser (core/adapters/inbound/agents/kirocli/parser.go) emits state only for four event kinds: Prompt → user_message (drives working), AssistantMessage with toolUse → assistant (stays working), text-only AssistantMessage → turn_done (back to ready), ToolResults → tool_result; Clear → Skip. EVERYTHING else is Skip (default arm).\n\nThe load-bearing fact: a synchronous slash command writes NO event to the .jsonl at all. The live smoke session's transcript (.build/refresh/kiro-cli-smoke/c423461a-…​.jsonl) contains ONLY Prompt/AssistantMessage/ToolResults/Clear — and zero occurrences of /help, /session-id, or any slash literal (verified: grep -c -E '/help|/session-id' → 0). kiro renders the slash response in the TUI and persists nothing. So the daemon's tailer sees no new line, fires no event, and the session holds ready across the slash window — exactly the scenario's user-observable signal (state stays ready; no → working transition recorded for the slash command itself). This is the SAME no-op shape as claudecode (its parser's isLocalCommandContent filters the <local-command> wrapper) and opencode (its part-driven watcher emits no activity when /help writes zero new parts). The daemon is fully capable of the assertion this scenario makes.\n\n## Why full and NOT incapable\n\nThe scenario asserts an INVARIANT — state stays ready, no spurious transition — plus a liveness arc (ready → working → ready) driven by the trailing normal prompt. The daemon observes both correctly: the warm-up + trailing turns produce real Prompt/AssistantMessage events (working↔ready), and the slash window produces no events at all (ready held). 'No transcript trace' here is not an observability LOSS — it is precisely WHY the invariant holds and is observable. incapable is reserved for behavior the 3-state model cannot represent or a signal that should reach the Source but doesn't; here the spec-required observable (stays ready) is fully surfaced. The slash command's TEXTUAL response (the /help body, the /session-id value) is genuinely invisible to the daemon — but the scenario never asserts the command's content is visible, only that no state machinery fires, so that invisibility is a caveat, not a downgrade.\n\n## driver can record it (driver_capability: ready)\n\nreplaydata/agents/kiro-cli/driver-interactive.sh is TUI-only (headless --no-interactive writes no session file → invisible to the daemon, FINDINGS.md §7). Its DRIVE_ELICITS constant is `send slash wait_turn sleep` and DRIVE_SLASH_REQUIRES_STEP_TYPE=false: the send|slash arm types text + Enter straight into the live kiro-cli TUI (tmux send-keys -l -- \"/help\" then Enter), and because kiro is TUI-first a bare slash reaches the live REPL (not stored as literal text — unlike opencode's headless run). The recipe needs only send (warm-up + trailing liveness turn), wait_turn (transcript-based: blocks until a text-only AssistantMessage lands), slash (/help, /session-id), and sleep (dwell) — every one elicited. No wait_turn follows a slash: a no-LLM slash produces no text-only AssistantMessage, so turn_count never increments and wait_turn would time out (the same turn-detection race the opencode recipe documents). driver_capability: ready.\n\n## Confidence\n\n0.85: agent_supports:yes and daemon_capability:full are grounded in the live 2.5.1 smoke (FINDINGS.md §4/§8) + the committed parser's four-kind vocabulary + the direct grep proving zero slash events in the smoke transcript; driver_capability:ready is grounded in the committed driver's DRIVE_ELICITS. Held below 0.9 because this exact cell has not yet been end-to-end recorded+validated — the no-transcript-write property of a slash is a property of what the agent EMITS, which only a live recording can promote from provisional to settled (the daemon-pillar emission caveat).",
+      "caveats": [
+        "The slash command's textual response (the /help body, the /session-id value, the /stats panel) is rendered in the kiro-cli TUI but written to NO transcript event, so it is genuinely invisible to the daemon. The scenario does not assert the command's content is visible — only that no state transition fires — so this is a caveat, not a daemon downgrade.",
+        "Restrict the recipe to genuinely local slash commands: /compact triggers a real model call (→ context-compaction), and /clear appends a Clear event / rewind forks a new session (→ session-reset / checkpoint-rewind). Use /help and /session-id, which write nothing to the .jsonl.",
+        "The kiro-cli JSONL carries no model/token/cost (those live only in the <uuid>.json sidecar, which the v1 parser does not read), so observations assert model:'unknown', cost_nonzero:false, tokens_nonzero:false.",
+        "No wait_turn may follow a slash step: a no-LLM slash writes no text-only AssistantMessage, so the driver's transcript-based turn_count never increments and wait_turn would time out. The trailing dwell sleep is the window in which the daemon observes the session HOLD ready.",
+        "Provisional on emission: this verdict is doc+code+smoke based; the 'a slash writes zero transcript events' property is about what the agent EMITS and is settled only by a live recording. record promotes it from provisional."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": ".build/refresh/kiro-cli-smoke/FINDINGS.md",
+          "note": "Live smoke of kiro-cli 2.5.1. §4: event vocabulary is Prompt/AssistantMessage/ToolResults/Clear; no model/usage/cost in the JSONL (only the <uuid>.json sidecar). §8: rich slash surface (agent, chat save/load/new, clear, compact, context, effort, model, plan, rewind, session-id, spawn, stats, tools, transcript, quit/exit); /session-id prints the UUID. §7: headless writes no session file → TUI driving mandatory."
+        },
+        {
+          "kind": "file",
+          "ref": ".build/refresh/kiro-cli-smoke/c423461a-e49e-4d30-8101-6ee082d28483.jsonl",
+          "note": "The smoke session transcript. Distinct kinds: 4 Prompt, 7 AssistantMessage, 3 ToolResults, 1 Clear — and ZERO occurrences of /help, /session-id, or any slash literal (grep -c -E '/help|/session-id' → 0). Proves a synchronous slash command leaves no transcript trace, so the daemon fires no event and the session stays ready."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/parser.go",
+          "note": "The parser emits state only for Prompt (user_message), AssistantMessage (assistant if toolUse, else turn_done), ToolResults (tool_result); Clear and every other kind hit Skip (default arm). No slash event kind exists, so a synchronous slash drives no state — daemon_capability: full for the 'stays ready' invariant."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/agent.go",
+          "note": "Source is FilesUnderRoot{Dir: \".kiro/sessions/cli\", JSONLineParser}: the daemon tails the <uuid>.jsonl. A slash that appends nothing to that file produces no tailer event, leaving session state untouched."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/kiro-cli/driver-interactive.sh",
+          "note": "TUI-only driver. DRIVE_ELICITS=\"send slash wait_turn sleep\" with DRIVE_SLASH_REQUIRES_STEP_TYPE=false: the send|slash arm delivers /help and /session-id straight to the live kiro-cli TUI via tmux send-keys (a bare slash reaches the REPL, not stored as literal text). The recipe needs only send/slash/wait_turn/sleep — driver_capability: ready."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/opencode/scenarios/2-5_synchronous-slash-command/expected.jsonl",
+          "note": "Calibration sibling. Same observable arc: a warm-up working→ready turn materializes the store, then the session HOLDS ready across the slash window with invariants forbidding state_transition to working/waiting. opencode's no-new-part no-op is the structural analogue of kiro's no-transcript-event no-op."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "kiro-cli on PATH and authenticated (subscription auth works; KIRO_API_KEY not required for this column — FINDINGS.md §7). Verified kiro-cli 2.5.1.",
+        "tmux on PATH (TUI-only driver: headless --no-interactive writes no session file, so it is invisible to the daemon and must NOT be used — FINDINGS.md §7).",
+        "irrlichd is recording — run-cell.sh isolated mode, or --attach against a daemon started with --record.",
+        "The slash commands chosen (/help, /session-id) must remain local-only no-LLM commands in the running kiro-cli version — if a future TUI change logs slash invocations as real Prompt events the scenario premise breaks (that regression is exactly what this cell locks down)."
+      ],
+      "setup": [
+        "Driver launches `kiro-cli chat --trust-all-tools` in a fresh per-run cwd under <staging>/cwd/; kiro mints its own session UUID and writes ~/.kiro/sessions/cli/<uuid>.jsonl lazily (only after the first prompt).",
+        "The single warm-up prompt materializes the <uuid>.jsonl so resolve_transcript can bind; that UUID stays the only session for the whole recipe (a no-LLM /help or /session-id mints no new session — distinct from rewind's fork or a /clear Clear event).",
+        "Avoid /compact (real model call → context-compaction), /clear (appends a Clear event → session-reset), and rewind (forks a new session → checkpoint-rewind). Use /help and /session-id, which append nothing to the .jsonl."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: warm"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        },
+        {
+          "type": "slash",
+          "text": "/help"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        },
+        {
+          "type": "slash",
+          "text": "/session-id"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: alive"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the <uuid> session entering ready at session birth, then ONE working→ready cycle for the warm-up 'warm' turn (the real LLM turn that materializes the transcript)",
+        "after /help and /session-id are delivered to the live TUI, NO state_transition to working and NO state_transition to waiting appears for the <uuid> session across the slash window — both slashes are no-LLM LOCAL commands that append ZERO lines to the .jsonl, so the tailer fires no event and the session stays ready",
+        "the trailing 'alive' send drives a SECOND working→ready cycle, proving the session is still alive (state topology ready→working→ready, repeated for warm + alive, with the slash window held ready in between)",
+        "exactly ONE distinct session_id (UUID) appears across the whole run (a local slash mints no new session — distinct from session-reset's /clear and checkpoint-rewind's fork)",
+        "transcript.jsonl contains exactly 2 Prompt lines (warm + alive) and NO line for /help or /session-id",
+        "final session state is ready"
+      ],
+      "settings": {},
+      "timeout_seconds": 180,
+      "notes": "Synchronous no-LLM slash command on kiro-cli (/help, /session-id). The whole observable is the ABSENCE of a working transition for the slash commands: the warm-up 'warm' turn drives ready→working→ready to materialize the <uuid>.jsonl, then /help and /session-id are delivered to the held-open TUI and the session STAYS ready — both render in the TUI and append nothing to the transcript (FINDINGS.md §4/§8; the smoke .jsonl has zero slash literals), so the tailer fires no event. WHY a `slash` step and NOT a `send`: kiro is TUI-first and the driver's send|slash arm delivers the slash straight to the live REPL (a bare slash is NOT stored as literal text — DRIVE_SLASH_REQUIRES_STEP_TYPE=false). WHY NO wait_turn after a slash: a no-LLM slash writes no text-only AssistantMessage, so the driver's transcript-based turn_count never increments and wait_turn would time out — the trailing sleeps are the dwell that lets the daemon observe the session HOLD ready across the slash window. The trailing 'alive' send is a SECOND real turn proving liveness (the scenario's ready→working→ready topology). SINGLE session, no multi-session chain. What differs between runs: the minted UUID, PIDs, timestamps, and warm/alive turn latency. What must NOT differ: two working→ready arcs on one UUID (warm + alive) with a held-ready slash window between them, ending ready; no model/token/cost (kiro JSONL carries none)."
+    }
+  }
+}

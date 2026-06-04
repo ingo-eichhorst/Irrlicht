@@ -1,0 +1,89 @@
+{
+  "scenario_id": "self-correction-iteration",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "2.5.1",
+    "daemon_version": "0.4.8+17650ec",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "self-correction-iteration",
+      "agent": "kiro-cli",
+      "assessed_at": "2026-06-05T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nThe scenario's load-bearing invariant is a SINGLE contiguous `working` span across a failed tool call and its recovery within ONE user turn — no flicker to `ready` or `waiting` between the failing attempt and the retry — then a single `working → ready` settle at turn end. The user-observable signal is: `ready → working` on the prompt, an unbroken `working` span across at least one failing tool_result + the corrective tool call, then `working → ready`. State topology `ready → working → ready`, final `ready`, at least one tool call.\n\n**agent_supports: yes.** kiro-cli 2.5.1 drives shell work through its tool layer and iterates autonomously within a single turn. Live smoke confirmed the exact retry-within-one-turn shape (FINDINGS.md §5): `Prompt → AssistantMessage(text+toolUse) → ToolResults → AssistantMessage(text+toolUse) → ToolResults → AssistantMessage(text-only)`. A failing tool result (`status` != `success`) does NOT end the turn — the model reads it and issues a corrective tool call in the same turn, then closes with a text-only AssistantMessage. A prompt of the form \"run `false`; if it fails, retry with `echo recovered`, then reply done\" deterministically produces the failing-then-corrected sequence in one turn.\n\n**daemon_capability: full.** The kiro-cli parser (core/adapters/inbound/agents/kirocli/parser.go) models the arc cleanly. `Prompt` → `user_message` (drives `ready → working`). A mid-turn `AssistantMessage` that carries `toolUse` blocks → `EventType: assistant` with `ToolUses` set (parser.go:71-79) — explicitly KEEPS the session `working` (\"the model is invoking tools and will produce more events\"). `ToolResults` → `tool_result`; crucially, a result whose `status` is non-`success` sets `ev.IsError = true` (parser.go:99-101) but emits NO state transition — `IsError` is a flag on the tool_result event, not a `waiting` gate or a `ready` settle. The turn settles to `ready` ONLY at the FINAL text-only `AssistantMessage` → `turn_done` (parser.go:76-79). So the daemon observes exactly the spec arc: one `ready → working`, a single contiguous `working` span across the errored ToolResults AND the corrective AssistantMessage(toolUse)/ToolResults pair, then one `working → ready` at the terminal text-only AssistantMessage. The no-mid-turn-flip invariant is precisely what the parser's mid-turn-toolUse-keeps-working logic plus the IsError-without-transition handling guarantee.\n\nThis cell is observationally distinct from `kiro-cli × session-start` (single happy turn, no tooling): it exercises the classifier's CONTINUITY across an errored tool result followed by a recovery tool within the same working span — the multi-cycle no-flicker invariant a happy path can't reach.\n\n**driver_capability: ready.** The recipe needs only `send` + `wait_turn` + `sleep`, all of which the kiro-cli interactive driver elicits (DRIVE_ELICITS=\"send slash wait_turn sleep\"). The transcript-based `wait_turn` counts text-only AssistantMessages (mirrors the parser's turn_done), so it blocks until the corrective cycle has settled and the trailing sleep never races a still-running turn.\n\n## What irrlicht does NOT see (and why that's OK here)\n\nThe kiro-cli JSONL carries no model/token/cost fields — those live in the `<uuid>.json` sidecar, which the parser does not read (parser.go header; FINDINGS.md §4). Irrelevant to THIS scenario, whose spec asserts only the state arc + tool-call presence. The observations therefore assert model `unknown`, cost/tokens not non-zero — matching what the daemon emits for kiro-cli.\n\nConfidence 0.85 (not higher): the daemon=full read is grounded in the parser plus live-confirmed turn shape (FINDINGS.md §5), but the precise no-flicker continuity across an errored ToolResults is a provisional parser read for THIS multi-cycle case specifically — record's live recording promotes it from provisional to settled.",
+      "caveats": [
+        "Assert user-observable state/topology only — do NOT assert the specific tool error text, which is model/OS-dependent and not stable across re-records.",
+        "kiro-cli JSONL has no model/token/cost fields (sidecar holds them; daemon does not read it) — so observations assert model 'unknown' and cost/tokens not non-zero. Orthogonal to this state-arc scenario.",
+        "Distinct from kiro-cli × session-start: that captures a single happy turn with no tooling; this cell exercises the no-flicker continuity across an errored ToolResults plus a recovery tool within the same working span.",
+        "daemon=full for the no-flicker continuity across an errored ToolResults is a provisional parser read for this multi-cycle case; the live recording in record settles it."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/parser.go",
+          "note": "Mid-turn AssistantMessage with toolUse blocks → assistant + ToolUses, keeps session working (71-79); ToolResults with status != success sets ev.IsError but emits no state transition (99-101); only a text-only AssistantMessage maps to turn_done → ready (76-79). This is the no-flicker-across-failed-tool arc."
+        },
+        {
+          "kind": "file",
+          "ref": ".build/refresh/kiro-cli-smoke/FINDINGS.md",
+          "note": "Live 2.5.1 smoke §5: turn shape confirmed Prompt → AM(text+toolUse) → ToolResults → AM(text+toolUse) → ToolResults → AM(text-only); a failing tool result keeps the turn open and the model self-corrects within the same turn. §4: JSONL carries no model/token/cost (sidecar only)."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/kiro-cli/driver-interactive.sh",
+          "note": "DRIVE_ELICITS=\"send slash wait_turn sleep\" — the recipe's send/wait_turn/sleep steps are all elicited; transcript-based wait_turn counts text-only AssistantMessages (mirrors parser turn_done) so it blocks until the corrective cycle settles."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/codex/scenarios/2-4_self-correction-iteration/metadata.json",
+          "note": "Calibration sibling: the codex cell asserts the same single-contiguous-working-span / no-flicker-across-errored-tool-result invariant (failing function_call_output still closes the open call, never a waiting gate; task_complete is the only ready settle)."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "kiro-cli on PATH and authenticated (subscription auth; trust-all consent already persisted on this machine)",
+        "irrlichd is recording — run-cell.sh in isolated mode, or --attach against a daemon started with --record",
+        "no other kiro-cli session shares the same cwd"
+      ],
+      "setup": [
+        "Create an empty cwd under <staging>/cwd/ (the driver launches kiro-cli chat --trust-all-tools there)",
+        "No auto-mode step is needed: --trust-all-tools assumes the persisted trust-all consent, so both the failing and the corrective tool call auto-execute and neither trips a permission gate (no waiting transition)"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Run the shell command 'false' using your tool. It will fail (non-zero exit). When it fails, do NOT retry that command — instead run 'echo recovered' in the same turn and report what it printed. Then reply 'done'."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        }
+      ],
+      "verify": [
+        "events.jsonl shows exactly one ready→working transition for the UUID session when the prompt is sent",
+        "transcript.jsonl contains at least 2 toolUse blocks inside the working span — the failing 'false' and the corrective 'echo recovered' — and at least one ToolResults with status != success (IsError)",
+        "events.jsonl contains NO state_transition to ready between the failing ToolResults and the corrective AssistantMessage(toolUse)",
+        "events.jsonl contains NO state_transition to waiting at any point during the working span (trust-all auto-executes both commands; no permission gate)",
+        "events.jsonl shows exactly one working→ready transition at the terminal text-only AssistantMessage (turn end)",
+        "final session state is ready",
+        "Do not assert the tool error text — it is model/OS-dependent; assert only the state topology and tool-call presence"
+      ],
+      "settings": {},
+      "timeout_seconds": 180
+    }
+  }
+}

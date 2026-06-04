@@ -1,0 +1,93 @@
+{
+  "scenario_id": "autonomous-loop",
+  "metadata": {
+    "agent_supports": "partial",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "2.5.1",
+    "daemon_version": "0.4.8+17650ec",
+    "confidence": 0.8,
+    "notes": "agent_supports: partial — no native /goal loop; internal multi-tool autonomy within one turn.\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "autonomous-loop",
+      "agent": "kiro-cli",
+      "assessed_at": "2026-06-05T00:00:00Z",
+      "agent_supports": "partial",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: partial\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nThe scenario asserts a strict user-observable arc: `ready -> working` at loop start; state stays `working` for the ENTIRE autonomous run with NO `ready` between internal iterations; `working -> ready` when the goal is reached; final state `ready`; at least 2 turns.\n\n**agent=partial.** kiro-cli (2.5.1) ships NO built-in autonomous self-prompting loop — there is no `/goal <condition>` Stop-hook re-prompt like Claude Code's, no full-auto mode, and no `autonomous_mode` capability. A strings scan of both `kiro-cli` and `kiro-cli-chat` returns ZERO hits for `/goal`, `autonomous_mode`, `goal_status`, `activeGoal`, `reprompt`/`re-prompt`/`self-prompt`, `full-auto`, or `AUTONOMOUS_LOOP`/`PREAMBLE`. The only `stop hook`/`stop_hook` strings are the inherited amazon-q-developer-cli Stop-hook EVENT-payload feature (PR #3070 — \"Include assistant response in stop hook event payload\"), which fires a configured hook AFTER a turn ends; it is not a self-re-prompting goal loop. So kiro-cli cannot drive ITSELF through a multi-turn task goal with no user prompts BETWEEN turns.\n\nWhat kiro-cli CAN do — and what the irrlicht autonomous-loop primitive actually targets for an adapter without native multi-turn autonomy — is an autonomous loop WITHIN a single user turn: with `--trust-all-tools` and a multi-step instruction, the agent generates and executes its OWN sequential tool cycles with no user prompts between them. FINDINGS.md §5 captures the exact shape: `Prompt -> AM(text+toolUse) -> ToolResults -> AM(text+toolUse) -> ToolResults -> AM(text-only)`. The model decides each next step, runs it, observes the result, and iterates until it judges the goal met and emits a final text-only message. This is the honest kiro-cli analogue of the autonomous-loop primitive: an internally-driven iteration loop seeded by one prompt, mirroring how codex's sibling cell relaxed the spec to an externally-seeded loop (agent=partial there too).\n\n**daemon=full — and this is the BEST fit of the three siblings for the spec's strict bullet.** Because kiro-cli's iterations live inside ONE turn, the daemon observes a SINGLE continuous `working` span across all internal tool cycles, with `ready` only at the very end — exactly what the spec's strict reading asserts (\"state stays `working` for the entire autonomous run — no `ready` between internal iterations\"). claudecode flickers ready/working per Stop-hook iteration and codex cycles ready/working per externally-fed turn; kiro-cli does NOT, because the parser maps every mid-turn AssistantMessage (which carries `toolUse` blocks) to `assistant` and every `ToolResults` to `tool_result` (parser.go: a non-empty `toolUses` slice yields `ev.EventType = \"assistant\"`; ToolResults yields `tool_result`), and the state classifier keeps the session `working` for both `assistant` and `tool_result` events. ONLY the FINAL text-only AssistantMessage maps to `turn_done` (parser.go: empty `toolUses` -> `ev.EventType = \"turn_done\"`), which the classifier turns into `working -> ready`. So the observed arc is: session born ready, `ready -> working` on the `Prompt`, a continuous `working` span through N internal `assistant`/`tool_result` cycles, then a single `working -> ready` at the final text-only message. No permission `waiting` state arises under `--trust-all-tools` (tools auto-approved). Topology `ready -> working -> ready` with >= 2 internal tool cycles and final state `ready` is exactly what the recipe elicits.\n\n**driver=ready.** The recipe needs only `send`, `wait_turn`, and `sleep`; all three are in the driver's `DRIVE_ELICITS=\"send slash wait_turn sleep\"`, so no step type must be ported. `wait_turn` blocks on the transcript's text-only-AssistantMessage count, mirroring the parser's turn_done definition — so it returns exactly when the internal loop terminates, not on any mid-turn tool cycle.\n\n## What irrlicht does NOT see (narrow, not a spec failure)\n\nkiro-cli's JSONL carries NO model/token/cost fields (those live only in the `<uuid>.json` sidecar the v1 adapter does not read), so observations assert agent identity but NOT model/cost/tokens nonzero. There is no `goal_status`/iteration-count attachment to surface as an \"iteration 3/N\" counter — that is not a kiro-cli construct at all, same as codex. Neither is a spec-required observable.",
+      "caveats": [
+        "kiro-cli has NO native autonomous self-prompting loop (no /goal, no full-auto, no autonomous_mode). The loop is INTERNAL to one user turn: a single seeded prompt drives the agent's own sequential tool cycles. The recording models this single-turn internal loop, not multi-turn self-prompting. Documented in the recipe so a re-record diff doesn't read as a regression.",
+        "Unlike the claudecode (/goal Stop-hook flicker) and codex (per-turn cycling) siblings, kiro-cli's internal loop stays in ONE continuous working span — so this cell asserts the spec's strict 'stays working throughout, no ready between iterations' bullet literally, with ready ONLY at the final text-only AssistantMessage.",
+        "kiro-cli's JSONL has no model/token/cost (sidecar-only); the spec asserts agent identity in observations but NOT model/cost/tokens nonzero (they would be empty/zero and fail). A sidecar MetricsReader is a documented future enhancement (FINDINGS.md §4).",
+        "daemon=full is PROVISIONAL on emission until the live record run: it rests on a doc/code read of the parser + state classifier (mid-turn assistant/tool_result keep working; text-only AssistantMessage -> turn_done), not a captured multi-tool-cycle events.jsonl. record promotes it from provisional to settled — in particular that the agent reliably runs >= 2 internal tool cycles before the final text-only message."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Applications/Kiro CLI.app/Contents/MacOS/kiro-cli-chat (strings extraction)",
+          "note": "ZERO hits for /goal, autonomous_mode, goal_status, activeGoal, reprompt/re-prompt/self-prompt, full-auto, AUTONOMOUS_LOOP, PREAMBLE. Only stop-hook strings are the inherited amazon-q-developer-cli Stop-hook EVENT-payload feature (PR #3070), not a self-re-prompting goal loop. Confirms agent=partial (no native autonomous loop)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/parser.go",
+          "note": "Mid-turn AssistantMessage with toolUse blocks -> EventType 'assistant' (keeps working); ToolResults -> 'tool_result' (keeps working); text-only AssistantMessage (empty toolUses) -> 'turn_done' (ready). This is why the internal loop is ONE continuous working span with ready only at the end."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go",
+          "note": "assistant and tool_result events keep the session working; turn_done with no open question -> working -> ready. Grounds the continuous-working observation across internal tool cycles."
+        },
+        {
+          "kind": "file",
+          "ref": ".build/refresh/kiro-cli-smoke/FINDINGS.md",
+          "note": "§5: live 2.5.1 turn shape Prompt -> AM(text+toolUse) -> ToolResults -> AM(text+toolUse) -> ToolResults -> AM(text-only); the final text-only AM is turn_done. §4: JSONL has no model/token/cost. §7: --trust-all-tools auto-approves tools (no waiting gate)."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/codex/scenarios/2-7_autonomous-loop/metadata.json",
+          "note": "Sibling: agent=partial because codex lacks native autonomy and the loop is externally seeded; same partial verdict shape. kiro-cli differs in that its loop is INTERNAL to one turn, which is why kiro-cli's daemon arc is a single continuous working span rather than per-iteration cycling."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "kiro-cli 2.5.1 on PATH and authenticated (subscription auth; --trust-all-tools assumes persisted trust-all consent so no per-tool picker stalls the run)",
+        "irrlichd is in --record mode with IRRLICHT_PERMISSION_MODE=grant-all",
+        "no other kiro-cli session shares the recipe's cwd",
+        "kiro-cli has NO built-in autonomous self-prompting loop; the loop is INTERNAL to a single user turn — one multi-step prompt drives the agent's own sequential tool cycles (no user prompts between iterations)"
+      ],
+      "setup": [
+        "Driver launches `kiro-cli chat --trust-all-tools` under tmux in a fresh cwd; kiro mints its own session UUID and writes ~/.kiro/sessions/cli/<uuid>.jsonl lazily after the first prompt (discovered as the newest .jsonl after the launch marker).",
+        "One seeded prompt asks the agent to run several shell commands one at a time and stop when done; the agent iterates internally (AM(toolUse) -> ToolResults -> ... -> AM(text-only)) with no further user input."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Run these three shell commands one at a time, in order, each in its own step, checking the output before moving on: `echo step-one`, then `echo step-two`, then `echo step-three`. Work through all three autonomously without asking me anything in between, then reply with exactly the word: done"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the session born ready, then ready -> working on the seeded Prompt",
+        "the session stays continuously working across at least 2 internal tool cycles (assistant + tool_result events) with NO working -> ready transition between them — the autonomous loop is one continuous working span",
+        "exactly one working -> ready transition fires, at the final text-only AssistantMessage (the agent's 'done' reply)",
+        "no state_transition to waiting (--trust-all-tools auto-approves tools; no permission gates)",
+        "final session state is ready; pid_discovered fired for the session (PID bound via cwd)"
+      ],
+      "settings": {},
+      "timeout_seconds": 180
+    }
+  }
+}
