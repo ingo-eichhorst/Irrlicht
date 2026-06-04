@@ -17,9 +17,9 @@ struct SettingsView: View {
     @AppStorage("taskEtaActivation") private var taskEtaActivation: Bool = false
     @AppStorage("providerMode_anthropic") private var providerModeAnthropic: String = ProviderModePreference.auto.rawValue
     @AppStorage("providerMode_openai") private var providerModeOpenAI: String = ProviderModePreference.auto.rawValue
-    @AppStorage(NotificationEvent.ready.enabledKey) private var notifyOnReady: Bool = true
-    @AppStorage(NotificationEvent.waiting.enabledKey) private var notifyOnWaiting: Bool = true
-    @AppStorage(NotificationEvent.contextPressure.enabledKey) private var notifyOnContextPressure: Bool = true
+    @AppStorage(NotificationEvent.ready.enabledKey) private var notifyOnReady: Bool = false
+    @AppStorage(NotificationEvent.waiting.enabledKey) private var notifyOnWaiting: Bool = false
+    @AppStorage(NotificationEvent.contextPressure.enabledKey) private var notifyOnContextPressure: Bool = false
     // Sources (multi-source): mirror the web dashboard's keys.
     @AppStorage("useLocalDaemon") private var useLocalDaemon: Bool = true
     @AppStorage("useRelayServer") private var useRelayServer: Bool = false
