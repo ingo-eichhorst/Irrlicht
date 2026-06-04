@@ -1,0 +1,74 @@
+{
+  "scenario_id": "subscription-detection",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "incapable",
+    "driver_capability": "ready",
+    "agent_cli_version": "2.5.1",
+    "daemon_version": "0.4.8+202ece9.dirty",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes (kiro auth IS a subscription) but NOTHING subscription/credit-related reaches the tailed .jsonl and the kiro adapter has no statusline/rate-limit/quota integration → daemon=incapable; route frozen"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "subscription-detection",
+      "agent": "kiro-cli",
+      "assessed_at": "2026-06-05T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "incapable",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: incapable; driver_capability: ready (moot)\n→ route: frozen\n\n## The scenario's assertion\n\nThe user-observable signal is whether the daemon surfaces a subscription / billing-model reading per session: a non-nil `RateLimitSnapshot` (with ≥1 `Window`, or a non-empty `PlanType` / non-nil `Credits` for the codex variant) for a subscription session, vs. a nil snapshot for an API-key session. Two sibling adapters record this row, each via a DIFFERENT daemon surface:\n\n- **claudecode = full** — the subscription `rate_limits` block arrives OUT-OF-BAND via the statusline HTTP hook (`POST /api/v1/hooks/claudecode/statusline`); `statuslineToSnapshot()` turns it into a `RateLimitSnapshot`, nil when the block is absent (API-key path). (statusline.go:99-145.)\n- **codex = full** — the `rate_limits` map (+ `plan_type` / `credits`) arrives IN-BAND inside the JSONL `token_count` event; `extractCodexRateLimits()` reads it straight off the tailed transcript (codex/parser.go:96, 374-423). No hook needed.\n\nSo irrlicht has TWO working transports for this signal — an HTTP statusline receiver and an in-band JSONL rate_limits field — but BOTH are adapter-specific, and kiro-cli wires NEITHER.\n\n## Why agent=yes\n\nKiro's auth model IS a subscription. The user runs `kiro-cli login` and authenticates with a Google / AWS Builder ID; `kiro-cli whoami` prints the authenticated subscription identity; `/stats` and the TUI footer render per-turn credits (`▸ Credits: 0.03 • Time: 1s`); models carry credit-rate multipliers; the sidecar `<uuid>.json` carries a per-turn `metering_usage` credit array and a `context_usage_percentage` (FINDINGS.md §4,§6). The agent unambiguously operates on a subscription and exposes subscription/credit state to the user. By the higher-bar rule (the surface need not be a top-level flag — REPL/footer state counts), agent=yes is honest. This is the load-bearing difference from the kiro `token-quota-exhausted` sibling, which is agent=no (kiro performs no observable exhaustion behavior at all).\n\n## Why daemon=incapable (the load-bearing verdict → frozen)\n\nThe block is entirely on the daemon pillar, and it is architectural, not a fixable bug. Two independent reasons, each cited:\n\n1. **The signal never reaches the Source the daemon tails.** Kiro's Source is `FilesUnderRoot{Dir: .kiro/sessions/cli, JSONLineParser}` (agent.go:38-43) — the daemon tails ONLY the `.jsonl`. That JSONL's entire 2.5.1 vocabulary is `Prompt / AssistantMessage / ToolResults / Clear`, with NO model, token, cost, credit, plan, or rate-limit field (FINDINGS.md §4; parser.go:21 documents this in a comment). The subscription/credit accounting lives ONLY in the `<uuid>.json` sidecar's `metering_usage`, which the daemon does not read. There is no event in `events.jsonl` that could prove a per-session subscription-vs-API-key reading, because no such field is in the tailed transport.\n\n2. **The kiro adapter has no quota/statusline/capacity integration.** A repo-wide grep of `core/adapters/inbound/agents/kirocli/` for `statusline|ratelimit|rate_limit|IngestRateLimit|quota|credit|capacity|PlanType` matches exactly ONE line — adapter.go:18, a passing comment that the sidecar carries per-turn credits — and zero handlers. There is no statusline HTTP receiver registered for kiro (the statusline hook path is claudecode-only, hardwired to the `claudecode/statusline` route + the claudecode `transcript_path` shape), and the kiro parser emits only `user_message / assistant / turn_done / tool_result`, never a `RateLimit`-bearing event. The kiro adapter registers a SINGLE permission, `transcripts` (agent.go:44-57) — no quota/statusline permission exists for it.\n\nNeither claudecode's nor codex's transport applies: kiro emits no in-band `rate_limits` JSONL field (unlike codex), and kiro's CLI is not configured/able to POST a statusline payload to the daemon (unlike claudecode's `statusLine.command` hook). The 3-state model + the tailed JSONL simply cannot represent a subscription reading for kiro. That is `daemon=incapable` — no trace exists in the Source — not `daemon=bug` (no mis-handled trace) and not a driver gap (no recipe step is missing; the signal itself is absent).\n\n## driver — moot under daemon=incapable\n\nThe TUI driver is real and could drive a turn (interactive driver exists; FINDINGS.md §6-8), so the driver pillar is `ready`, but it is moot: there is no observation to elicit. No recipe would make the absent signal appear.\n\n## Observations (no model/token/cost in the JSONL)\n\nThe kiro JSONL carries no model/token/cost (parser.go:21), so the cell's observation vector is model=`unknown`, cost_nonzero=false, tokens_nonzero=false. (Moot for a frozen cell — no recording is produced — but recorded for consistency with the other kiro cells.)\n\n## Disposition\n\nFrozen. Kiro genuinely runs on a subscription (agent=yes), but no subscription/credit/rate-limit signal reaches the JSONL the daemon tails and the kiro adapter wires neither of irrlicht's two existing transports (statusline hook / in-band rate_limits), so irrlicht fundamentally cannot observe a per-session subscription reading for kiro today. Re-assessable only if (a) a future kiro release writes a rate-limit/plan/credit field into the tailed `.jsonl`, OR (b) a kiro statusline-style POST hook is added, AND the kiro adapter grows the matching ingestion (e.g. a sidecar MetricsReader reading `metering_usage`, the documented future enhancement, plus a snapshot mapping).",
+      "caveats": [
+        "agent=yes for the RIGHT reason: kiro's auth IS a subscription (kiro-cli login / Google/AWS Builder ID, kiro-cli whoami, /stats + TUI footer credits) — but NONE of that reaches the daemon. The block is purely daemon=incapable, not agent.",
+        "Distinct from the kiro token-quota-exhausted sibling: that cell is agent=no (no exhaustion behavior at all); this one is agent=yes/daemon=incapable (the behavior exists but is invisible to the tailed transport).",
+        "irrlicht HAS two working transports for this signal (claudecode's out-of-band statusline hook; codex's in-band JSONL rate_limits field) — kiro wires NEITHER. This is architecture (incapable), not a mis-handled trace (bug) and not a missing driver step (gap).",
+        "Subscription/credit accounting lives only in the <uuid>.json sidecar (metering_usage, context_usage_percentage); the daemon does not read it. A sidecar MetricsReader is a documented future enhancement and would still need a snapshot mapping before this row could record.",
+        "model=unknown, cost_nonzero=false, tokens_nonzero=false: the kiro JSONL carries no model/token/cost (moot — frozen, no recording produced).",
+        "Re-assess only if a future kiro release surfaces a rate-limit/plan/credit field in the tailed .jsonl (or a kiro statusline POST hook lands) AND the kiro adapter adds matching ingestion."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": ".build/refresh/kiro-cli-smoke/FINDINGS.md §4,§6",
+          "note": "kiro 2.5.1 JSONL vocabulary = Prompt/AssistantMessage/ToolResults/Clear; NO model/token/cost/credit/rate-limit. Subscription/credit data lives only in the <uuid>.json sidecar (per-turn metering_usage credits + context_usage_percentage; input/output_token_count are 0). Credits render in /stats and the TUI footer — never in the tailed transport."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/agent.go:38-43,44-57",
+          "note": "Source = FilesUnderRoot{Dir: .kiro/sessions/cli, JSONLineParser} — the daemon tails ONLY the JSONL (no rate-limit/credit trace). The adapter registers a SINGLE permission, 'transcripts'; there is no quota/statusline permission or handler for kiro."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/parser.go:21,40-113",
+          "note": "Parser emits only user_message/assistant/turn_done/tool_result; the comment states the JSONL carries no model/token/cost and the parser never reads the sidecar. No RateLimit-bearing event is ever produced."
+        },
+        {
+          "kind": "cmd",
+          "ref": "grep -rniE 'statusline|ratelimit|rate_limit|IngestRateLimit|quota|credit|capacity|PlanType' core/adapters/inbound/agents/kirocli/",
+          "note": "Exactly ONE match — adapter.go:18, a passing comment that the sidecar carries per-turn credits — and ZERO handlers. The kiro adapter wires no statusline receiver, no rate-limit ingestion, no quota/capacity integration."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/claudecode/statusline.go:99-145",
+          "note": "Reference transport #1 (claudecode=full): the subscription rate_limits block arrives OUT-OF-BAND via POST /api/v1/hooks/claudecode/statusline; statuslineToSnapshot() builds a RateLimitSnapshot (nil when the block is absent). This route is claudecode-specific (hardwired route + claudecode transcript_path shape); kiro has no equivalent POST hook."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/codex/parser.go:96,374-423",
+          "note": "Reference transport #2 (codex=full): the rate_limits map (+ plan_type / credits) arrives IN-BAND inside the JSONL token_count event; extractCodexRateLimits() reads it off the tailed transcript. Kiro's JSONL has no such field, so this in-band path also does not apply."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/kiro-cli/scenarios/2-9_token-quota-exhausted/metadata.json",
+          "note": "Sibling kiro cell — agent=no there (kiro performs no observable quota-exhaustion behavior). This subscription-detection cell differs on the AGENT pillar (agent=yes: kiro genuinely runs on a subscription); both share daemon=incapable for the same reason — nothing quota/credit-related reaches the tailed .jsonl."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "notes": "Not recordable: frozen on daemon=incapable. Kiro's auth IS a subscription (kiro-cli login / Builder ID, kiro-cli whoami, /stats + TUI footer credits — agent=yes), but NONE of that subscription/credit/rate-limit state reaches the tailed .jsonl (vocabulary = Prompt/AssistantMessage/ToolResults/Clear; no model/token/cost/credit; the data lives only in the <uuid>.json sidecar's metering_usage, which the daemon does not read). The kiro adapter wires NEITHER of irrlicht's two existing transports for this signal — claudecode's out-of-band statusline POST hook nor codex's in-band JSONL rate_limits field — so no RateLimitSnapshot can ever be produced for a kiro session (grep of the adapter for statusline/rate_limit/quota/credit/capacity matches only one comment, zero handlers). The daemon fundamentally cannot observe a per-session subscription reading for kiro; driver is moot. Re-assess only if a future kiro release writes a rate-limit/plan/credit field into the tailed .jsonl (or a kiro statusline POST hook lands) AND the kiro adapter grows matching ingestion (e.g. a sidecar MetricsReader over metering_usage + a snapshot mapping). See assessment.json."
+    }
+  }
+}

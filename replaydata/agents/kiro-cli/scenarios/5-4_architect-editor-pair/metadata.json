@@ -1,0 +1,90 @@
+{
+  "scenario_id": "architect-editor-pair",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "incapable",
+    "driver_capability": "n/a",
+    "agent_cli_version": "2.5.1",
+    "daemon_version": "0.4.8+202ece9.dirty",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes (instantiation b: kiro_planner Plan agent + switch_to_execution y/n approve→execute gate); daemon_capability: incapable (kiro's plan-approval pause produces no waiting-classifiable JSONL line — same root cause as the recorded-frozen sibling 2.18); driver_capability: n/a. Frozen at the DAEMON layer. NOT the Aider two-models-in-one-turn shape (instantiation a): no within-turn dual-model orchestration in kiro."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "architect-editor-pair",
+      "agent": "kiro-cli",
+      "assessed_at": "2026-06-05T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "incapable",
+      "driver_capability": "n/a",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: incapable; driver_capability: n/a\n\nThis is instantiation (b) of architect-editor-pair: a plan→implement MODE pair (one model) captured across the approval gate, asserting the FULL arc ready→working→waiting→working→ready with a USER-VISIBLE waiting episode and ≥1 tool call. It is the post-approval CONTINUATION of kiro's 2.18 (user-blocking-plan-mode-approval). kiro's 2.18 is agent_supports: yes / daemon_capability: incapable / frozen, and this cell inherits that landing for the same reason: kiro DOES ship a real blocking plan-approval gate, but the approval pause produces no daemon-observable waiting trace — and this cell's scenario REQUIRES that user-visible waiting episode, so it is frozen at the daemon layer. It is NOT the Aider two-models-in-one-turn shape (instantiation a); kiro has no within-turn dual-model orchestration.\n\n## How kiro instantiates the agent side (agent_supports: yes)\n\n- **Architect = plan phase.** `/plan` switches to the built-in `kiro_planner` Plan agent (an agent SWITCH, like `/agent swap`, not a settings toggle) — the binary's changelog describes it as \"a specialized built-in agent for breaking down complex tasks into implementation plans.\" When the planner finishes it calls the `switch_to_execution` tool, whose own description is explicit: it \"signals that planning is complete and presents the user with two options: y: Switch to execution agent and begin implementation immediately / n: Continue planning.\" That y/n pause is a genuine propose→approve→execute gate — the structural analog of claudecode's ExitPlanMode and codex's synthetic-from-<proposed_plan> gate.\n- **Editor = implement phase.** On `y`, `switch_to_execution` swaps the active agent to the execution agent (the binary shows `switch_to_execution: target agent ... Implement this plan:` and `switch_to_execution swap failed:`), which applies real edits (kiro's `write`/`fs_write` primitive) and the turn completes. This is the editing/editor contribution.\n- One model is used throughout (the mode-pair instantiation, not the Aider two-model shape). So the AGENT performs instantiation (b) — agent_supports: yes — resting on the binary's own `kiro_planner` + `switch_to_execution` tool/agent definitions (strings scan), not docs alone. Stronger than opencode (partial, tool-restriction-only plan mode) or pi (no plan mode at all).\n\n## Why NOT instantiation (a) — two models in one turn\n\nA recursive strings scan of both kiro binaries for `architect-model`, `editor-model`, `--architect`, `--editor`, `two-model`, `multi-model`, `dual-model` returned ZERO hits. `/model` \"Select AI model for current conversation session\" picks ONE model per session (a cross-turn switch, the model-switch-midsession primitive), and `/agent swap` swaps a single context profile — neither is a within-turn architect+editor dual-model split. So kiro cannot produce two model contributions inside one turn boundary. Instantiation (b) is the only one kiro performs.\n\n## Why daemon_capability: incapable (not bug, not full)\n\nThe scenario asserts a user-visible `working → waiting → working` mid-turn continuation across the approval gate. For kiro that pause leaves NO representable trace in irrlicht's transport — the SAME analysis the recorded-frozen 2.18 sibling settled, re-confirmed against the source:\n\n1. **No user-blocking tool the daemon recognizes.** `waiting` (rule 1) is driven by the closed global set `isUserBlockingToolName` / `isUserBlockingTool` (tailer_config.go + session.go): AskUserQuestion, ExitPlanMode, question. kiro's gate tool is `switch_to_execution`, in neither list, so `NeedsUserAttention()` is false and rule 1 never fires.\n2. **No hooks → PermissionPending (rule 0) never set.** `state.Metrics.PermissionPending` is fed only by the claudecode PreToolUse hook pipeline (session_detector_activity.go); the kirocli adapter ships no hooks. And `switch_to_execution` is not a permission-gated edit tool (Edit/Write/MultiEdit/NotebookEdit), so the OpenToolStalled fallback (rule 1b/#488) cannot fire either.\n3. **The kiro parser has no waiting branch and no plan-gate synthesis.** Unlike codex's parser — which synthesizes a SYNTHETIC ExitPlanMode tool_use from a `<proposed_plan>` text span so the open call survives task_complete and the session sits in waiting (which is exactly why codex's 5.4 is daemon=full) — the kirocli parser (parser.go) maps an AssistantMessage-with-toolUse to `assistant` (working), a text-only AssistantMessage to `turn_done`, ToolResults to `tool_result`, and Clear to skip. There is NO waiting-producing branch and NO switch_to_execution→ExitPlanMode synthesis. While the planner awaits y/n, the session is mid-turn (a `switch_to_execution` toolUse with no following ToolResults) → classified `working`; no `turn_done` fires, so even the turn-end IsWaitingForUserInput cue cannot trigger. The y/n approval itself is an interactive TUI overlay (the binary's `AgentEvent::ApprovalRequest`), not a structured event written to the `~/.kiro/sessions/cli/<uuid>.jsonl` the daemon tails.\n\nThis is `incapable` (not `bug`): there is no mis-handled event — the propose→approve pause produces no JSONL line the 3-state model can represent as `waiting`. (Contrast the sibling 2.19 tool-gate-permission-prompt, which IS a `bug`: there a local trace exists — the open lowercase `write`/`shell` toolUse — that the daemon mis-handles via the PascalCase-only edit-tool allowlist. Here no plan-gate trace reaches the JSONL at all.)\n\n## driver_capability: n/a\n\nBecause daemon_capability is incapable, the cell is frozen at the daemon layer and the driver axis is n/a (mirroring 2.18 and the pi 5.4 sibling). For completeness: even were the gate observable, answering the y/n picker AND keeping the implement turn alive would need the interactive `keys` step, which the kiro driver still STUBS (`not_implemented keys`, driver-interactive.sh:246; DRIVE_ELICITS=\"send slash wait_turn sleep\"). But there is no daemon-observable waiting episode to drive toward, so this is an architectural incapability, not a driver gap.\n\n## What would unblock it\n\nThe same two changes 2.18 names: (a) the daemon growing recognition of kiro's `switch_to_execution` as a user-blocking tool (add it to the global user-blocking list AND have the kiro parser surface its open-tool window — or a switch_to_execution→ExitPlanMode synthesis like codex's <proposed_plan> path — as a waiting signal), AND (b) kiro writing the approval interaction to the session JSONL as a structured event the parser can classify. Until BOTH exist there is nothing daemon-observable to record; a recording would capture an ordinary working arc that never enters waiting and would assert the WRONG thing. Re-assess if either lands.\n\n## Confidence\n\n0.8: the decisive facts are read directly from source — the kiro parser has no waiting branch and no plan-gate synthesis (parser.go), the user-blocking tool list is a closed global set excluding switch_to_execution (tailer_config.go + session.go), kiro has no hooks so PermissionPending cannot fire (session_detector_activity.go + absent hooks.go), the gate tool/agent are confirmed by the binary's own switch_to_execution + kiro_planner definitions, and no dual-model flags exist in the binary. Not higher because the agent-side claim that switch_to_execution's toolUse and the y/n answer never reach the JSONL as a waiting-classifiable event rests on the live 2.5.1 smoke (FINDINGS.md event vocabulary + TUI-overlay ApprovalRequest) rather than a fresh planner-specific live probe — but a live probe could only confirm the ABSENCE of a waiting state, which the adapter is structurally unable to emit regardless.",
+      "caveats": [
+        "agent_supports: yes via instantiation (b): /plan switches to the built-in kiro_planner Plan agent and switch_to_execution presents a y/n approve→execute picker — a real propose→approve→execute gate (the structural analog of claudecode ExitPlanMode and codex's synthetic-from-<proposed_plan> gate). Stronger than opencode (partial) or pi (no). NOT the Aider two-models-in-one-turn shape (instantiation a): zero dual-model flags in the kiro binaries; /model picks one model per session (cross-turn) and /agent swap swaps a single context profile.",
+        "daemon_capability: incapable — kiro's gate tool switch_to_execution is absent from the GLOBAL user-blocking tool list (only AskUserQuestion/ExitPlanMode/question), kiro has no hook system so PermissionPending never fires, and the kirocli parser has no waiting branch and no switch_to_execution→ExitPlanMode synthesis (unlike codex's <proposed_plan> path that makes codex's 5.4 daemon=full). The y/n approval is a TUI overlay (AgentEvent::ApprovalRequest) with no JSONL event. No waiting trace → the 3-state model can't represent the required user-visible waiting episode.",
+        "Direct continuation of the recorded-frozen kiro 2.18 (user-blocking-plan-mode-approval = yes/incapable/n.a.): 2.18 records the SAME /plan→kiro_planner→switch_to_execution entry but its scenario terminates at the (unobservable) waiting gate; this cell's scenario additionally requires the post-approval working→ready implement continuation + a real edit + cross-phase token accumulation — all moot once the entry waiting episode is itself unobservable. Same root-cause daemon-incapability.",
+        "NOT a bug (no mis-handled event — no plan-gate JSONL line exists at all; contrast 2.19 where a local lowercase write/shell trace IS mis-handled). NOT a driver_gap (no daemon-observable waiting episode to elicit, so no driver step changes the verdict; the keys primitive is stubbed in the kiro driver but that's moot under daemon=incapable). driver_capability is n/a.",
+        "PROVISIONAL on emission: the claim that switch_to_execution's toolUse + the y/n answer never land in the JSONL as a waiting-classifiable event is grounded in the live 2.5.1 smoke (FINDINGS.md event vocabulary Prompt/AssistantMessage/ToolResults/Clear + TUI-overlay ApprovalRequest), not a fresh planner-specific probe. A live record could only confirm the absence of a waiting state — which the adapter is structurally unable to emit regardless — so the verdict stands.",
+        "Observations: the kiro JSONL carries no model/token/cost (FINDINGS.md §4 — those live in the <uuid>.json sidecar the v1 parser does not read), so model=unknown, cost_nonzero=false, tokens_nonzero=false. Moot here: frozen route, no recording."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/kiro-cli/scenarios/2-18_user-blocking-plan-mode-approval/metadata.json",
+          "note": "Sibling cell, agent_supports: yes / daemon_capability: incapable / frozen — kiro ships a real blocking plan-approval gate (kiro_planner + switch_to_execution y/n) but it produces no daemon-observable waiting episode. This 5.4 cell is the post-approval continuation and inherits the same daemon-incapability for the entry waiting episode it also requires."
+        },
+        {
+          "kind": "file",
+          "ref": "/Applications/Kiro CLI.app/Contents/MacOS/kiro-cli-chat",
+          "note": "strings scan (kiro-cli 2.5.1 TUI binary): tool name=switch_to_execution, description \"presents the user with two options: y: Switch to execution agent and begin implementation immediately / n: Continue planning\"; agent name=kiro_planner; `switch_to_execution: target agent ... Implement this plan:` and `switch_to_execution swap failed:`; `AgentEvent::ApprovalRequest` (the y/n is a TUI-overlay approval, not a JSONL event). Confirms agent_supports: yes — a real plan→approve→execute gate. ZERO hits for architect-model/editor-model/--architect/--editor/two-model/multi-model/dual-model — so NOT instantiation (a)."
+        },
+        {
+          "kind": "file",
+          "ref": "/Applications/Kiro CLI.app/Contents/MacOS/kiro-cli",
+          "note": "strings scan (main binary changelog): \"Introducing the Plan Agent\"; /model \"Select AI model for current conversation session\" (one model per session, cross-turn — not a within-turn dual-model split); /agent swap swaps a single context profile. No --architect/--editor dual-model orchestration flag exists."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/parser.go",
+          "note": "Parser maps AssistantMessage(toolUse)→assistant(working), text-only AssistantMessage→turn_done, ToolResults→tool_result, Clear→skip. NO waiting branch and NO switch_to_execution→ExitPlanMode synthesis (unlike codex/parser.go which synthesizes a synthetic ExitPlanMode from a <proposed_plan> span → codex 5.4 daemon=full). While awaiting y/n the session is mid-turn (working), so no event proves a working→waiting plan-approval pause — grounds daemon_capability: incapable."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer_config.go",
+          "note": "isUserBlockingToolName is a closed global set: AskUserQuestion, ExitPlanMode, question. kiro's switch_to_execution is not in it, so the user-blocking-tool→waiting path never fires for kiro."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/session.go",
+          "note": "NeedsUserAttention()/isUserBlockingTool match only AskUserQuestion/ExitPlanMode/question (rule 1 cannot fire for switch_to_execution); isPermissionGatedEditTool matches only Edit/Write/MultiEdit/NotebookEdit (OpenToolStalled rule 1b cannot fire for switch_to_execution, which is not an edit tool) — anchors daemon_capability: incapable."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/session_detector_activity.go",
+          "note": "PermissionPending (rule 0) is set only from d.permissionPending[...], fed by the claudecode PreToolUse hook pipeline. kirocli ships no hooks.go, so rule 0 is unavailable for kiro's plan gate."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/codex/scenarios-cross-reference",
+          "note": "Calibration: codex 5.4 = yes/full/ready BECAUSE codex's parser synthesizes a synthetic ExitPlanMode from a <proposed_plan> span (the open tool survives task_complete → observable waiting). kiro's parser has NO such synthesis, so kiro's identical agent-side gate is daemon-unobservable — the cells diverge on the parser, not the agent."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/pi/scenarios/5-4_architect-editor-pair/metadata.json",
+          "note": "Calibration sibling: pi 5.4 = no/n.a./n.a. (frozen at the AGENT layer — pi has neither plan mode nor dual-model). kiro differs: it HAS a real plan-approval gate (agent=yes) but the daemon can't observe its waiting, so kiro is frozen at the DAEMON layer (incapable), not the agent layer."
+        },
+        {
+          "kind": "file",
+          "ref": ".build/refresh/kiro-cli-smoke/FINDINGS.md",
+          "note": "Live 2.5.1 smoke: JSONL event vocabulary is Prompt/AssistantMessage/ToolResults/Clear with NO model/token/cost (sidecar only); permission/approval prompts are TUI-overlay pickers, not transcript events. Grounds the no-waiting-trace emission claim and the unknown/false observation vector."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "scope_note": "Frozen at the daemon layer (daemon_capability: incapable). kiro's /plan + kiro_planner + switch_to_execution y/n gate is a real propose→approve→execute pause (agent_supports: yes, instantiation b), but it produces no JSONL line the daemon can classify as waiting (switch_to_execution is not in the global user-blocking tool list, kiro has no hooks, the kiro parser has no waiting branch and no switch_to_execution→ExitPlanMode synthesis, and the y/n approval is a TUI overlay). The scenario REQUIRES a user-visible waiting episode, so no recipe and no recording: a plan turn would capture an ordinary working arc that never enters waiting and would assert the WRONG thing. (Distinct from the pi 5.4 sibling, which is frozen at the AGENT layer — pi has neither a plan-mode gate nor dual-model.)",
+      "script": []
+    }
+  }
+}

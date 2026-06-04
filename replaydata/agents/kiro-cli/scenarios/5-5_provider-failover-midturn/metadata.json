@@ -1,0 +1,63 @@
+{
+  "scenario_id": "provider-failover-midturn",
+  "metadata": {
+    "agent_supports": "partial",
+    "daemon_capability": "incapable",
+    "driver_capability": "ready",
+    "agent_cli_version": "2.5.1",
+    "daemon_version": "0.4.8+bbd0532.dirty",
+    "confidence": 0.78,
+    "notes": "agent_supports: partial; daemon_capability: incapable; driver_capability: ready (kiro routes ALL models through AWS's own credit-metered endpoint — single provider; 'auto' is task-routing between models, not provider failover. The JSONL carries NO model/provider/token/cost field at all, so even an opaque model reroute leaves no observable trace)"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "provider-failover-midturn",
+      "agent": "kiro-cli",
+      "assessed_at": "2026-06-05T00:00:00Z",
+      "agent_supports": "partial",
+      "daemon_capability": "incapable",
+      "driver_capability": "ready",
+      "confidence": 0.78,
+      "body": "## Verdict\n\nagent_supports: partial\ndaemon_capability: incapable; driver_capability: ready\n\n## Scenario signal\n\n`provider-failover-midturn` (5.5) asserts three user-observable bullets: (a) `ModelName` changes mid-turn with no user action, (b) state stays `working` through the failover with no flicker to `ready`, (c) after the turn completes, `→ ready` with the FALLBACK model's name visible. The defining primitive is an in-turn provider/model swap on a primary error (rate limit, 5xx, timeout) that continues the SAME turn under a secondary model. The canonical spec frames this around adapters with explicit auto-fallback chains (Aider auto-fallback, Crush, Goose); claudecode/codex/pi all landed frozen on this row because they select a single provider at startup and never surface provider identity in the transcript.\n\n## agent_supports: partial\n\nKiro CLI 2.5.1 routes ALL model traffic through AWS's own credit-metered endpoint — there is a SINGLE provider, not a primary/secondary provider pair. The `/model` slash command offers a model picker (incl. an `auto` setting), but `auto` is TASK-ROUTING — Kiro opaquely selecting which model serves a request — not provider FAILOVER on a primary error that continues the same turn. A binary-strings scan of the 2.5.1 binary (`/Applications/Kiro CLI.app/Contents/MacOS/kiro-cli`) for `failover|fall.?back|provider.?chain|cascade|secondary.?model|model_provider|try.?next.?provider` surfaces NO provider/model-failover primitive: the `fallback` hits are unrelated internals (model-reliability 'context size fallback updated', tree-sitter LSP document-symbol fallback, `Fallback to Q_TERM`, `Fallback to standard Kiro.app location`), and the `provider chain` / `token_provider_chain` / `provider in chain did not provide an access token` hits are AWS CREDENTIAL-resolution internals from vendored `aws-config` (web-identity-token / STS credential providers), while `retry_classifiers` / `retry_strategy` are aws-smithy HTTP retry internals — none of which is a model/provider failover chain. On a transient error Kiro retries the same AWS endpoint at the smithy/transport layer and otherwise surfaces a turn-level error the user retries. Held at `partial` (not `no`) because a model-selection mechanism (`auto` re-routing between models) genuinely exists and could opaquely change the serving model — but it is not the scenario's in-turn provider auto-failover. Mirrors the claudecode/codex verdict for this row.\n\n## daemon_capability: incapable; driver_capability: ready\n\nThis is the load-bearing verdict. Even if Kiro DID swap the serving model mid-turn, irrlicht could not observe ANY of the scenario's distinguishing signal — because the Kiro JSONL carries NO model/provider/token/cost field whatsoever. The kiro parser (`parser.go`) reads only `kind` (Prompt / AssistantMessage / ToolResults / Clear) and the message `content[]`; it extracts NO `ModelName`, no `provider`, no `route`. The model id and per-turn credit/usage live ONLY in the sidecar `<uuid>.json` metadata (`rts_model_state.model_info.model_id`, `metering_usage`), which the daemon reads ONLY for the working directory (`GetCWDFromTranscript`) — never for model/provider identity (.build/refresh/kiro-cli-smoke/FINDINGS.md §4, §adapter-decisions). So the scenario's bullet (a) — a mid-turn `ModelName` change — can NEVER fire for kiro-cli, regardless of whether a failover happened: irrlicht has no ModelName for kiro at all in v1. The provider, doubly so, is never written to the JSONL the daemon tails.\n\nState continuity (bullet b: stays `working`, no `ready` flicker) and the closing `→ ready` (bullet c) ARE observable — a mid-turn AssistantMessage with `toolUse` keeps the session `working`, and the final text-only AssistantMessage drives `turn_done`/working→ready — but those halves are already locked down by `basic-turn` (2.1) and `turn-aborted-by-error` (2.14). The provider-failover-qua-provider-failover signal has no transcript trace and no parser branch, so `daemon=incapable` (no trace exists / the model-name extraction cannot even represent the model, let alone provider identity). This is an architecture limit, not a parser bug: there is nothing in `events.jsonl` to mis-handle.\n\n`driver_capability: ready` — the kiro-cli interactive driver (`driver-interactive.sh`) implements `send`/`wait_turn`/`sleep`/`keys`/`slash`/`session`/etc.; a recipe COULD be written, but the route is frozen so none is, and the driver is not the blocker.\n\n## Conclusion\n\nFrozen at applicable=false. Kiro has a single AWS-metered provider and a model-selection (`auto`) mechanism (so not `no` on the agent), but (1) `auto` is task-routing, not in-turn provider failover, and (2) irrlicht observes NO model/provider/token signal for kiro at all in v1 — the JSONL is model-free and the sidecar is read only for the CWD. The genuinely-observable subsets (state stays `working` through transient errors; turn completes → ready) are already covered by `turn-aborted-by-error` and `basic-turn`. No recipe, no recording. This unblocks only if (1) Kiro ships a documented mid-turn provider/model-failover chain that announces the active model/provider in the JSONL the daemon tails AND (2) the kiro parser (or a future sidecar MetricsReader) is extended to extract it. See replaydata/agents/codex/scenarios/5-5_provider-failover-midturn/metadata.json and replaydata/agents/claudecode/scenarios/5-5_provider-failover-midturn/metadata.json.",
+      "caveats": [
+        "agent=partial pivots on EMISSION + routing semantics: the binary-strings scan and the single-AWS-endpoint architecture show no in-turn provider-failover chain, and `auto` is opaque task-routing between models, not a primary→secondary provider failover. A future Kiro could add one. confidence 0.78 reflects a thorough multi-source read (live 2.5.1 smoke + binary strings + adapter source), not a docs-literal statement.",
+        "daemon=incapable is unusually firm here: unlike claudecode/codex (which at least surface a model NAME that a failover MIGHT change), the kiro JSONL has NO model field at all in v1 — so bullet (a)'s mid-turn ModelName change can never fire even if a failover occurred. The model id lives only in the <uuid>.json sidecar, which the daemon reads solely for the working directory.",
+        "This verdict upgrades to partial/partial (and becomes applicable) only if Kiro adds (1) a documented in-turn provider/model-failover chain AND (2) a JSONL field naming the active model/provider/route, AND the kiro parser (or a sidecar MetricsReader) is extended to extract it. The sidecar MetricsReader is already noted as a future enhancement in FINDINGS.md; watch for a per-turn model_id reaching the tailed transcript.",
+        "Mock/synthetic fixture REJECTED (same rationale as claudecode/codex 5.5): this harness records REAL CLI sessions and has no synthetic-fixture mechanism; a kiro provider failover is transport-layer and leaves no trace in the JSONL, so a mock would fabricate events kiro never emits — worse than an honest documentation-only frozen cell."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/parser.go L9-23, L40-118",
+          "note": "Kiro parser reads only `kind` (Prompt/AssistantMessage/ToolResults/Clear) and content[]; it extracts NO ModelName/provider/token/cost — the doc comment (L21-22) states the JSONL carries no model/token/cost fields, which live in the <uuid>.json sidecar this parser does not read. So a provider/model swap is unobservable by construction."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/agent.go L34-43",
+          "note": "Source = FilesUnderRoot over ~/.kiro/sessions/cli/*.jsonl; the daemon tails the model-free transcript. The sidecar <uuid>.json is read only via GetCWDFromTranscript for the working directory (pid.go) — never for model/provider identity."
+        },
+        {
+          "kind": "file",
+          "ref": ".build/refresh/kiro-cli-smoke/FINDINGS.md §4 + adapter-decisions",
+          "note": "Live 2.5.1 smoke: JSONL event vocabulary is Prompt/AssistantMessage/ToolResults/Clear with NO model/usage/cost; per-turn model_id (rts_model_state.model_info.model_id) + metering_usage credits live in the <uuid>.json sidecar only. 'No tokens/cost/model from JSONL in v1; sidecar MetricsReader is a documented future enhancement.'"
+        },
+        {
+          "kind": "binary",
+          "ref": "/Applications/Kiro CLI.app/Contents/MacOS/kiro-cli (kiro-cli 2.5.1): strings | grep -iE 'failover|fall.?back|provider.?chain|cascade|secondary.?model|model_provider|try.?next.?provider'",
+          "note": "NO provider/model-failover primitive. `fallback` hits = model-reliability 'context size fallback', tree-sitter LSP fallback, 'Fallback to Q_TERM', 'Fallback to standard Kiro.app location'. `provider chain`/`token_provider_chain`/`provider in chain did not provide an access token` = vendored aws-config CREDENTIAL-resolution internals; `retry_classifiers`/`retry_strategy` = aws-smithy HTTP retry internals — none is a model/provider failover chain. Authoritative for 'what shipped' in 2.5.1."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/codex/scenarios/5-5_provider-failover-midturn/metadata.json",
+          "note": "codex reference cell for this row: agent=partial, daemon=incapable, driver=ready, frozen/applicable_false — provider is a startup choice, provider identity never reaches the JSONL, failover indistinguishable from an ordinary model switch. Kiro matches and is firmer (no model field at all in the JSONL)."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "notes": "applicable: false (frozen, 2026-06-05: agent_supports=partial, daemon_capability=incapable). The scenario's defining signal is an in-turn provider/model failover that swaps the active provider on a primary error and continues the same turn, with ModelName updating to the fallback. Kiro CLI 2.5.1 routes ALL models through a SINGLE AWS credit-metered endpoint; `auto` is opaque task-routing between models, not a primary→secondary provider-failover chain, and the binary carries no failover primitive (the `fallback`/`provider chain` strings are aws-config credential + aws-smithy retry internals). Even if a model swap occurred, the kiro JSONL carries NO model/provider/token/cost field — the parser extracts none, and the sidecar <uuid>.json is read only for the working directory — so the swap leaves NO observable trace and bullet (a)'s mid-turn ModelName change can never fire. State continuity and the working→ready close ARE observable but are already covered by turn-aborted-by-error and basic-turn. No recipe, no recording. Unblocks only if Kiro ships a documented mid-turn provider/model-failover chain AND announces the model/provider in the tailed JSONL AND the kiro parser (or a sidecar MetricsReader) learns to extract it. See replaydata/agents/codex/scenarios/5-5_provider-failover-midturn/metadata.json.",
+      "script": []
+    }
+  }
+}

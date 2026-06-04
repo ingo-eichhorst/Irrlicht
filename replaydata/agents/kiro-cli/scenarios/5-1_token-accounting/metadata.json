@@ -1,0 +1,66 @@
+{
+  "scenario_id": "token-accounting",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "incapable",
+    "driver_capability": "ready",
+    "agent_cli_version": "2.5.1",
+    "daemon_version": "0.4.8+202ece9",
+    "confidence": 0.8,
+    "notes": "agent meters per-turn (sidecar metering_usage CREDITS + context_usage_percentage) but the daemon observes none: JSONL carries no model/token/cost, and the sidecar's token counts are CREDITS, with input/output_token_count present-but-ZERO — no token/cost trace reaches any Source → daemon incapable, route frozen."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "token-accounting",
+      "agent": "kiro-cli",
+      "assessed_at": "2026-06-05T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "incapable",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: incapable\ndriver_capability: ready\n\nKiro CLI 2.5.1 meters per-turn usage at the agent layer, so `agent_supports: yes`. But the metering NEVER reaches any Source the daemon tails as a token/cost field — and even the closest available signal (the `<uuid>.json` metering sidecar) carries CREDITS, not tokens, with the token counters present-but-ZERO. With no token/cost trace anywhere the adapter watches, the daemon cannot satisfy the scenario's load-bearing observable (`TotalTokens > 0`, non-decreasing) → `daemon_capability: incapable`, route **frozen**. This is the same yes/incapable shape as codex/claudecode × cloud-background-agent (agent does it, but it leaves no observable trace), NOT the aider × token-accounting case (where the multi-turn accumulator IS observed in the markdown and only the cache distinction is blind).\n\n## What token-accounting asserts\n\nPrimitive: *token reporting* — the agent's transcript carries per-turn token counts (input / output / cache read/write) in a parser-extractable field; the User-observable signal is `TotalTokens > 0` after turn 1, `TotalTokens` non-decreasing turn-over-turn, and `CacheReadTokens > 0` (fresh input = 0) on a fully-cached turn (scenario 5.1). The three ready→working→ready cycles are the unremarkable carrier; the token vector is the thing under test.\n\n## agent_supports: yes\n\nKiro DOES meter per turn. The live 2.5.1 smoke (.build/refresh/kiro-cli-smoke/FINDINGS.md §4) confirms the per-turn sidecar `<uuid>.json` carries `metering_usage` (credits — e.g. 0.034), `context_usage_percentage` (populated), and `rts_model_state.model_info.model_id`; the TUI prints a per-turn `▸ Credits: 0.03 • Time: 1s` line (§6). So at the agent layer kiro reports a per-turn usage quantity that accumulates across turns — the agent performs the behavior. (It reports in CREDITS, a provider-billing unit, not raw tokens — see incapable below.)\n\n## daemon_capability: incapable\n\nThe kiro adapter is `Source: FilesUnderRoot{Dir: ~/.kiro/sessions/cli, JSONLineParser}` (`core/adapters/inbound/agents/kirocli/agent.go`). irrlicht observes only what the JSONL parser emits from those `*.jsonl` files. Two independent walls, the first decisive for `incapable`:\n\n  1. **JSONL — no token/cost/model trace at all.** The watched `*.jsonl` event vocabulary is `Prompt` / `AssistantMessage` / `ToolResults` / `Clear` (FINDINGS.md §4); none carry usage, cost, or model. `parser.go` states this explicitly at line 21 — \"The JSONL carries no model/token/cost fields; those live in the <uuid>.json metadata sidecar, which this parser does not read\" — and emits user_message / assistant / turn_done / tool_result events with NO `UsageBreakdown`, `TokenSnapshot`, or `PerTurnContribution`. So `SessionMetrics.TotalTokens` stays 0 across every turn. The scenario's primary assertion (`TotalTokens > 0`, non-decreasing) has no trace in the Source → `incapable` (architecture: no trace), not `bug` (which would need a trace the daemon mis-handles).\n  2. **Sidecar — CREDITS, not tokens; token counters are ZERO.** Even the closest enhancement — a future sidecar `MetricsReader` reading `<uuid>.json` (the documented v1-deferral, parser.go:21 + FINDINGS.md §9) — would NOT close the gap: `metering_usage` is denominated in CREDITS (a provider-billing unit), and the per-turn `input_token_count` / `output_token_count` are present-but-UNPOPULATED (ZERO) (FINDINGS.md §4). So a sidecar reader recovers a credits number and `context_usage_percentage`, but `tokens_nonzero` can never become true from kiro's own data, and `cost_nonzero` would be a credits→USD inference the adapter does not make. The scenario asserts nonzero TOKEN counts (and the cache-bucket distinction), which kiro's transport never carries — the gap is structural even in the best-case sidecar path, which is why this is `incapable` and not a parser `bug`.\n\nNo model is observable either (the JSONL has no model field; `model_id` lives only in the unread sidecar), so the recording's observation vector is `model: unknown`, `cost_nonzero: false`, `tokens_nonzero: false`.\n\n## driver_capability: ready\n\nThe token-accounting recipe needs only `send` + `wait_turn` + `sleep`, all implemented by `replaydata/agents/kiro-cli/driver-interactive.sh` (its step vocabulary is send / wait_turn / sleep / slash / keys / session / start_session / reset_session / restart / resume / interrupt / sigkill / exit_clean — a superset). No gapped primitive is required → `driver_capability: ready`. The driver is NOT the blocker; the observability wall is.\n\n## Routing\n\nyes + incapable + ready → **frozen**: no recording could ever prove `TotalTokens > 0` for kiro, because the token field reaches no Source. The cell documents the freeze and its unblock path; no spec phases are authored beyond the meta + observation vector.\n\n## What would flip the verdict\n\nTwo independent things would have to land: (a) kiro-cli would have to populate real token counts (not just credits) in a place the adapter can read — either inline in the watched `*.jsonl` (which would make a JSONL parser change sufficient, flipping toward `full`/`bug`), or at minimum non-zero `input/output_token_count` in the sidecar; AND (b) irrlicht would add a sidecar `MetricsReader` for `<uuid>.json` (the documented v1 enhancement). Until BOTH hold, `tokens_nonzero` cannot be satisfied — credits alone don't meet the spec.",
+      "caveats": [
+        "kiro DOES meter per-turn at the agent layer (sidecar metering_usage credits + the TUI `▸ Credits: 0.03` line), so agent_supports is yes — but the unit is CREDITS (provider billing), not raw tokens. Don't read 'kiro has no usage' from the incapable verdict; it has usage, just not as an observable token/cost field.",
+        "Even the best-case unblock — a future sidecar MetricsReader reading <uuid>.json — recovers CREDITS and context_usage_percentage, NOT tokens: input/output_token_count are present-but-ZERO in 2.5.1 (FINDINGS.md §4). So tokens_nonzero stays false even with the sidecar; that is why this is incapable (structural, both transports) and not a parser bug.",
+        "The cache-bucket sub-assertion (CacheReadTokens > 0; fresh input = 0 on a fully-cached turn) is doubly unobservable — neither the JSONL nor the sidecar carries cache buckets at all. It rides on the same no-trace wall as the primary token accumulator.",
+        "model is also unobservable from the watched JSONL (model_id lives only in the unread sidecar), so the recording's observation vector is model: unknown — distinct from a recordable cell that pins a concrete model id."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/parser.go",
+          "note": "Line 21 states 'The JSONL carries no model/token/cost fields; those live in the <uuid>.json metadata sidecar, which this parser does not read.' ParseLine emits user_message/assistant/turn_done/tool_result with NO UsageBreakdown / TokenSnapshot / PerTurnContribution — SessionMetrics.TotalTokens stays 0. Grounds daemon: incapable (no token trace in the Source)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/agent.go",
+          "note": "Source = FilesUnderRoot{Dir: ~/.kiro/sessions/cli, JSONLineParser}: irrlicht watches only the *.jsonl session files, never the *.json sidecar (the sidecar is read solely for cwd via GetCWDFromTranscript). So the token/cost/model fields that live only in the sidecar never reach a tailed Source."
+        },
+        {
+          "kind": "file",
+          "ref": ".build/refresh/kiro-cli-smoke/FINDINGS.md",
+          "note": "§4: watched JSONL vocabulary = Prompt/AssistantMessage/ToolResults/Clear, NO model/usage/cost. Sidecar <uuid>.json has per-turn metering_usage (CREDITS), context_usage_percentage (populated), rts_model_state.model_info.model_id — but input/output_token_count are 0 (unpopulated). §6: TUI prints per-turn `▸ Credits: 0.03 • Time: 1s`. Authoritative live-2.5.1 evidence: agent meters in credits, tokens are zero even in the sidecar."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/kiro-cli/driver-interactive.sh",
+          "note": "Interactive driver step vocabulary includes send / wait_turn / sleep (plus slash/keys/session/reset_session/restart/resume/interrupt/sigkill/exit_clean). token-accounting needs only send+wait_turn+sleep → driver_capability: ready; the driver is not the blocker."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/aider/scenarios/5-1_token-accounting/metadata.json",
+          "note": "Sibling token-accounting precedent for the no-trace → incapable derivation (aider's cache report never reaches .aider.chat.history.md). Differs from kiro: aider's multi-turn accumulator IS observed (sent/received reach the markdown); for kiro NO token field reaches the Source at all, so even the primary accumulator is blind — a strictly stronger incapable."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/opencode/scenarios/5-1_token-accounting/metadata.json",
+          "note": "Contrast: opencode reaches daemon: full because its parser HAS a MetricsReader (parseStepFinish reads tokens.input/output + cache into UsageBreakdown). kiro v1 has no such reader and — decisively — no token data to read even if it did (sidecar carries credits, token counts zero), so kiro cannot reach opencode's full."
+        }
+      ]
+    },
+    "recipe": {
+      "script": []
+    }
+  }
+}

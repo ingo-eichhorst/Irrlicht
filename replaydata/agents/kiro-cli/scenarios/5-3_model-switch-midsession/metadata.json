@@ -1,0 +1,66 @@
+{
+  "scenario_id": "model-switch-midsession",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "incapable",
+    "driver_capability": "gap:keys",
+    "agent_cli_version": "2.5.1",
+    "daemon_version": "0.4.8+202ece95",
+    "confidence": 0.85,
+    "notes": "agent=yes (in-REPL /model switches the active model mid-session) but daemon=incapable: kiro-cli's JSONL carries no model/token/cost field and the parser sets NO ModelName ever, so model A->B is unobservable from the tailed transcript -> route frozen."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "model-switch-midsession",
+      "agent": "kiro-cli",
+      "assessed_at": "2026-06-05T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "incapable",
+      "driver_capability": "gap:keys",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: incapable\ndriver_capability: gap:keys\n\n## Primitive\n\nPer-turn model selection: the user swaps kiro-cli's active model between two turns of ONE live session, and the dashboard's ModelName must update to the new model (latest-wins) while TotalTokens keeps accumulating across the switch. The scenario's entire load is the model-identity assertion (turn 1 -> model A, turn 2 -> model B) plus token accumulation.\n\n## agent_supports — yes\n\nKiro CLI 2.5.1 ships an in-REPL `/model` slash command that swaps the active model mid-session WITHOUT minting a new session. The live smoke confirmed `model` in the slash surface (FINDINGS.md §8: \"context, effort, model, plan, rewind …\"), and `chat --help` exposes `--model`/`--list-models`. The switch persists into the SAME session file (a `/clear` continues the same UUID; a model switch likewise produces no new session), so the two-turn mid-session arc is genuinely achievable. This places kiro-cli on the same agent=yes side as pi and aider, which both swap the main model in place via `/model`.\n\n## irrlicht_observes — incapable\n\nThe daemon CANNOT observe the model change from the file it tails. The Source is `FilesUnderRoot{Dir: ~/.kiro/sessions/cli, JSONLineParser}` (agent.go), i.e. the `<uuid>.jsonl` transcript. That JSONL's entire 2.5.1 event vocabulary is `Prompt` / `AssistantMessage` / `ToolResults` / `Clear` (FINDINGS.md §4) — NONE carries a model, token, or cost field, and a `/model` switch writes nothing model-related into it. Reasoning over the parser confirms emission is impossible to recover: `kirocli/parser.go` maps Prompt->user_message, AssistantMessage(toolUse)->assistant, AssistantMessage(text-only)->turn_done, ToolResults->tool_result, Clear->skip, and sets `ev.ModelName` on NO path whatsoever — there is no message.model and no model_change event to read (the parser's own doc comment states \"The JSONL carries no model/token/cost fields; those live in the <uuid>.json metadata sidecar, which this parser does not read.\"). So MergeMetrics' latest-non-unknown-wins rule never sees a non-unknown ModelName; ModelName stays unknown across turn 1 and turn 2 — the A->B assertion can never be satisfied. TotalTokens is equally unobservable: the sidecar's `input/output_token_count` are 0 and the parser reads no token field (FINDINGS.md §4), so TotalTokens stays 0 and never grows.\n\nThis is a SENSOR-INPUT gap (no model trace in the tailed file), NOT a daemon bug: there is no event the daemon mis-handles — there is simply no signal in the watched Source. That is `daemon=incapable`, and it is the dispositive pillar: per the routing table `agent=yes / daemon=incapable / driver=any` is `frozen`.\n\n## Calibration against pi and aider\n\nThis is the structural OPPOSITE of pi and aider on the same scenario, and the contrast is the whole point. pi's parser reads the model in TWO observable places — `message.model` on every assistant message AND an explicit `model_change` event (`core/adapters/inbound/agents/pi/parser.go`) — both flowing into `ev.ModelName`, so pi is daemon=full. aider synthesizes the model from a `> Main model: <name>` blockquote its parser scrapes, so aider is daemon=full. kiro-cli's JSONL has NEITHER an assistant-message model field NOR a model-change line NOR a scrapeable transcript marker — the model lives ONLY in the `<uuid>.json` sidecar (`rts_model_state.model_info.model_id`), which the kirocli adapter does not read. With no model signal in the tailed Source, kiro-cli cannot reach daemon=full the way pi/aider do. (It matches the codex/claudecode × cloud-background-agent shape: agent=yes, daemon=incapable -> frozen — a real capability the daemon's current Source cannot sense — NOT the aider/opencode/pi × cloud shape of agent=no/daemon=n/a.)\n\n## driver_capability — gap:keys\n\nFor completeness on the driver axis: kiro-cli's `/model` is an ARROW-KEY PICKER (the live TUI presents a selectable model list), so a recipe that elicited the switch would need a `keys` step to navigate + select. The kiro-cli interactive driver (`replaydata/agents/kiro-cli/driver-interactive.sh`) stubs the `keys` arm — `DRIVE_ELICITS=\"send slash wait_turn sleep\"` does NOT list `keys`, so recipe-lint's semantic check would flag a `keys`-needing recipe as a gap. Hence `driver=gap:keys`. This is moot for routing (daemon=incapable already freezes the cell), recorded honestly so a future unblock isn't mis-scoped: porting `keys` alone would NOT make the cell recordable — the daemon still has no model signal to verify.\n\n## What would flip the verdict\n\nThe daemon would need a non-JSONL signal: a sidecar MetricsReader that parses the `<uuid>.json` metadata file (`rts_model_state.model_info.model_id`, `metering_usage` credits, `context_usage_percentage`) and feeds ModelName/cost into SessionMetrics. FINDINGS.md §4/adapter-decisions name this as a documented future enhancement (\"sidecar MetricsReader is a documented future enhancement\"). HONEST CAVEAT: even with that reader, `rts_model_state` tracks only the CURRENT model — a single point-in-time value — so PER-TURN attribution (turn 1 == model A AND turn 2 == model B, the exact thing this scenario asserts) may still be impossible from the sidecar alone; at best the reader could prove model B at session END, not the A-then-B sequence. Until both a sidecar reader lands AND per-turn model attribution is solved, this cell stays frozen.",
+      "caveats": [
+        "daemon=incapable is the dispositive pillar and freezes the cell regardless of the driver axis. driver=gap:keys (the /model picker needs an arrow-key `keys` step the kiro-cli driver stubs) is recorded only for honesty: porting `keys` would NOT make the cell recordable, because the tailed JSONL still carries no model signal to verify.",
+        "kiro-cli DOES support mid-session model switching (agent=yes) — this is NOT an agent-feature gap like the cloud-background-agent cell (agent=no/daemon=n/a). It is the codex/claudecode × cloud shape: a real capability the daemon's current file-tailing Source cannot sense.",
+        "The model identity lives ONLY in the `<uuid>.json` metadata sidecar (`rts_model_state.model_info.model_id`), which the kirocli parser does not read; the tailed `<uuid>.jsonl` (Prompt/AssistantMessage/ToolResults/Clear) has no model/token/cost field at all.",
+        "A future sidecar MetricsReader could surface the CURRENT model and credits, but `rts_model_state` holds only the latest model (point-in-time), so per-turn A->B attribution — the scenario's core assertion — may remain impossible even then; note honestly rather than promising daemon=full on a sidecar read."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/parser.go",
+          "note": "ParseLine handles Prompt/AssistantMessage/ToolResults/Clear and sets ev.ModelName on NO path; doc comment: 'The JSONL carries no model/token/cost fields; those live in the <uuid>.json metadata sidecar, which this parser does not read.'"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/agent.go",
+          "note": "Source = FilesUnderRoot{Dir: ~/.kiro/sessions/cli, JSONLineParser}: the daemon tails the <uuid>.jsonl transcript only — the model-bearing <uuid>.json sidecar is read only for cwd, never for model/tokens/cost."
+        },
+        {
+          "kind": "file",
+          "ref": ".build/refresh/kiro-cli-smoke/FINDINGS.md",
+          "note": "§4: JSONL event vocab = Prompt/AssistantMessage/ToolResults/Clear, NO model/usage/cost; sidecar <uuid>.json has rts_model_state.model_info.model_id + metering_usage but token counts are 0; §8: /model in slash surface; 'sidecar MetricsReader is a documented future enhancement'."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/pi/parser.go",
+          "note": "Calibration (daemon=full there): pi reads the model from message.model AND a model_change event into ev.ModelName, which kiro-cli's JSONL has neither of — hence pi=full, kiro-cli=incapable on the same scenario."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/aider/scenarios/5-3_model-switch-midsession/metadata.json",
+          "note": "Calibration: aider scrapes a '> Main model: <name>' transcript blockquote into ModelName (daemon=full); kiro-cli's JSONL has no equivalent scrapeable model marker."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/kiro-cli/driver-interactive.sh",
+          "note": "DRIVE_ELICITS=\"send slash wait_turn sleep\" does NOT list `keys` (the arm is a stubbed not_implemented) -> a /model-picker recipe needing `keys` is a driver gap:keys."
+        }
+      ]
+    },
+    "recipe": {
+      "script": []
+    }
+  }
+}
