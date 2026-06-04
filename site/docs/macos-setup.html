@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>macOS Setup — Irrlicht Docs</title>
+<meta name="description" content="Configure macOS to get the most out of Irrlicht. Keep the status dot visible in full screen, enable login autostart, and grant the permissions Irrlicht needs.">
+<link rel="canonical" href="https://irrlicht.io/docs/macos-setup.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="macOS Setup — Irrlicht Docs">
+<meta property="og:description" content="Configure macOS to get the most out of Irrlicht. Keep the status dot visible in full screen, enable login autostart, and grant the permissions Irrlicht needs.">
+<meta property="og:url" content="https://irrlicht.io/docs/macos-setup.html">
+<meta property="og:site_name" content="Irrlicht">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="macOS Setup — Irrlicht Docs">
+<meta name="twitter:description" content="Configure macOS to get the most out of Irrlicht. Keep the status dot visible in full screen, enable login autostart, and grant the permissions Irrlicht needs.">
+
+<link rel="icon" type="image/svg+xml" href="../assets/favicon.svg">
+<link rel="icon" type="image/png" sizes="32x32" href="../assets/favicon-32x32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="../assets/favicon-16x16.png">
+<link rel="apple-touch-icon" sizes="180x180" href="../assets/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://cdn.counter.dev">
+<link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=DM+Mono:wght@300;400;500&family=Outfit:wght@200;300;400;500;600&display=swap">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=DM+Mono:wght@300;400;500&family=Outfit:wght@200;300;400;500;600&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+<noscript><link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=DM+Mono:wght@300;400;500&family=Outfit:wght@200;300;400;500;600&display=swap" rel="stylesheet"></noscript>
+<link rel="stylesheet" href="docs.css">
+</head>
+<body>
+
+<div class="docs-layout">
+
+  <!-- ─── Sidebar ─── -->
+  <nav class="sidebar">
+    <a href="../index.html" class="sidebar-logo">
+      <span class="dot"></span>
+      <span>Irrlicht</span>
+      <small>docs</small>
+    </a>
+
+    <div class="sidebar-section">
+      <h4>Getting Started</h4>
+      <a href="index.html">Overview</a>
+      <a href="installation.html">Installation</a>
+      <a href="quickstart.html">Quick Start</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Core Concepts</h4>
+      <a href="story.html">The Story</a>
+      <a href="light-system.html">The Light System</a>
+      <a href="state-machine.html">State Machine</a>
+      <a href="session-detection.html">Session Detection</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Usage</h4>
+      <a href="configuration.html">Configuration</a>
+      <a href="macos-setup.html" class="active">macOS Setup</a>
+      <a href="cli-tools.html">CLI Tools</a>
+      <a href="api-reference.html">API Reference</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Architecture</h4>
+      <a href="architecture.html">System Design</a>
+      <a href="adapters.html">Adapters</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Project</h4>
+      <a href="roadmap.html">Roadmap</a>
+      <a href="changelog.html">Changelog</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Community</h4>
+      <a href="contributing.html">Contributing</a>
+      <a href="code-of-conduct.html">Code of Conduct</a>
+    </div>
+  </nav>
+
+  <!-- ─── Main ─── -->
+  <main class="docs-main">
+    <div class="docs-content">
+
+      <h1>macOS Setup</h1>
+      <p class="page-subtitle">A few system settings to make Irrlicht work at its best &mdash; especially when you spend most of your time in full-screen apps.</p>
+
+      <!-- ── Status line in full screen ── -->
+      <h2>Status Line in Full Screen</h2>
+
+      <p>By default, macOS hides the menu bar whenever an app goes full screen. That means the Irrlicht flame &mdash; your live indicator of every agent's state &mdash; disappears exactly when you're heads-down in a terminal or editor.</p>
+
+      <p>Fix it in one step:</p>
+
+      <ol class="steps">
+        <li>
+          Open <strong>System Settings &rarr; Control Center</strong>.
+        </li>
+        <li>
+          Find <strong>"Automatically hide and show the menu bar"</strong> and set it to <strong>Never</strong>.
+        </li>
+      </ol>
+
+      <p>The menu bar &mdash; and the Irrlicht dot &mdash; will now stay visible on every Space, including full-screen ones.</p>
+
+      <p>Irrlicht's popover panel is already configured to appear on any Space (including full-screen Spaces). Once the menu bar is visible, clicking the flame opens the session list wherever you are.</p>
+
+      <!-- ── Launch at login ── -->
+      <h2>Launch at Login</h2>
+
+      <p>Enable the login item so Irrlicht is running before you open your first terminal each day:</p>
+
+      <ol class="steps">
+        <li>Click the flame icon in the menu bar to open the session list.</li>
+        <li>Click the gear icon to open <strong>Settings</strong>.</li>
+        <li>Toggle <strong>Launch at Login</strong> on.</li>
+      </ol>
+
+      <p>Irrlicht registers itself via <code>SMAppService</code> so macOS manages the lifecycle &mdash; it starts early in the login sequence, before most apps open.</p>
+
+      <!-- ── Notification permissions ── -->
+      <h2>Notification Permissions</h2>
+
+      <p>Irrlicht can alert you when an agent transitions to <span class="badge badge-waiting">waiting</span> (needs input) or <span class="badge badge-ready">ready</span> (done). On first launch the system asks for permission.</p>
+
+      <p>If you denied the prompt and want to re-enable notifications:</p>
+
+      <ol class="steps">
+        <li>Open <strong>System Settings &rarr; Notifications</strong>.</li>
+        <li>Find <strong>Irrlicht</strong> in the list.</li>
+        <li>Enable <strong>Allow Notifications</strong> and choose your preferred alert style.</li>
+      </ol>
+
+      <p>Notification thresholds (which transitions trigger an alert) are configurable inside Irrlicht's own Settings panel.</p>
+
+      <!-- ── Accessibility permission ── -->
+      <h2>Accessibility Permission (Window Focus)</h2>
+
+      <p>Clicking a session row in the popover raises the terminal window that owns that session. This uses the macOS Accessibility API, which requires a one-time grant:</p>
+
+      <ol class="steps">
+        <li>Open <strong>System Settings &rarr; Privacy &amp; Security &rarr; Accessibility</strong>.</li>
+        <li>Enable the toggle next to <strong>Irrlicht</strong>.</li>
+      </ol>
+
+      <p>Without this permission the click still works for some terminals but silently fails for others. Grant it once and clicks are always reliable.</p>
+
+      <!-- ── Kitty terminal ── -->
+      <h2 id="kitty">Kitty Terminal — Precise Tab Focus</h2>
+
+      <p>Most terminals work out of the box. Kitty needs one extra line so Irrlicht can target the exact tab (not just the window):</p>
+
+      <p>Add to <code>~/.config/kitty/kitty.conf</code>:</p>
+
+      <pre><code>allow_remote_control yes
+listen_on unix:/tmp/kitty-{kitty_pid}</code></pre>
+
+      <div class="callout callout-tip">
+        <strong>Restart required</strong>
+        A config reload (<code>kitty @ set-colors --all</code> or similar) is not enough &mdash; restart Kitty after saving. New sessions started inside Kitty will then have <code>KITTY_LISTEN_ON</code> set, and Irrlicht will use <code>kitten @ focus-window</code> to land on the exact tab.
+      </div>
+
+      <div class="callout">
+        <strong>Note</strong>
+        macOS does not support Linux-style abstract sockets, so a filesystem path (<code>unix:/tmp/kitty</code>) is required &mdash; the <code>unix:@</code> syntax used on Linux will not work here.
+      </div>
+
+      <!-- ── Bottom nav ── -->
+      <nav class="docs-nav-bottom">
+        <a href="configuration.html">
+          <span class="label">Previous</span>
+          Configuration
+        </a>
+        <a href="cli-tools.html" style="text-align:right">
+          <span class="label">Next</span>
+          CLI Tools &rarr;
+        </a>
+      </nav>
+
+    </div>
+  </main>
+
+</div>
+
+<script async src="https://cdn.counter.dev/script.js" data-id="2d845c2a-ed61-4410-8850-e6339766176f" data-utcoffset="1"></script>
+</body>
+</html>
