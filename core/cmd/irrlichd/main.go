@@ -359,7 +359,7 @@ func main() {
 	}
 
 	// Orchestrator adapters: detect and watch multi-agent orchestration systems.
-	gtAdapter := gastownadapter.NewAdapter(gtResolver.Path(), 5*time.Second, cachedRepo)
+	gtAdapter := gastownadapter.NewAdapter(gtResolver.Path(), cachedRepo)
 	var orchWatchers []inbound.OrchestratorWatcher
 	if gtAdapter.Detected() {
 		logger.LogInfo("startup", "", fmt.Sprintf("Gas Town detected at %s", gtAdapter.Root()))

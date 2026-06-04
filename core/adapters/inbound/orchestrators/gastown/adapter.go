@@ -7,7 +7,7 @@ package gastown
 
 import (
 	"context"
-	"reflect"
+	"encoding/json"
 	"sync"
 	"time"
 
@@ -18,7 +18,6 @@ import (
 type Adapter struct {
 	collector *collector
 	gtBin     string
-	interval  time.Duration
 	sessions  sessionLister
 
 	mu    sync.RWMutex
@@ -30,13 +29,11 @@ type Adapter struct {
 
 // NewAdapter creates a Gas Town OrchestratorWatcher adapter.
 // gtBin is the resolved path to the gt binary (may be empty).
-// interval is how often the poller queries gt CLI.
 // sessions provides active session data for CWD matching (may be nil).
-func NewAdapter(gtBin string, interval time.Duration, sessions sessionLister) *Adapter {
+func NewAdapter(gtBin string, sessions sessionLister) *Adapter {
 	return &Adapter{
 		collector: New(),
 		gtBin:     gtBin,
-		interval:  interval,
 		sessions:  sessions,
 	}
 }
@@ -79,7 +76,7 @@ func (a *Adapter) Watch(ctx context.Context) error {
 	}
 
 	// Run poller loop.
-	poller := newPoller(a.collector, a.gtBin, a.interval, a.sessions)
+	poller := newPoller(a.collector, a.gtBin, a.sessions)
 	return a.runPoller(ctx, poller)
 }
 
@@ -151,63 +148,55 @@ func (a *Adapter) watchDaemonOnly(ctx context.Context) error {
 	}
 }
 
+// pollCooldown is the minimum interval between event-driven polls to prevent
+// back-to-back CLI spawning when files change rapidly (e.g. during git operations).
+const pollCooldown = 2 * time.Second
+
 // runPoller runs the gt CLI poller and converts its output to orchestrator.State.
-// It backs off from the base interval to 3× when the state is stable.
+// It fires immediately when the collector detects a filesystem change, and falls
+// back to a 30 s tick to catch polecat/dog/boot state that the collector doesn't watch.
+// A 2 s cooldown prevents back-to-back CLI spawning on rapid writes. State is only
+// broadcast when it actually changes so idle workspaces produce no downstream work.
 func (a *Adapter) runPoller(ctx context.Context, p *poller) error {
-	// Initial poll.
 	a.setState(p.BuildOrchestratorState(ctx))
 
-	ticker := time.NewTicker(a.interval)
-	defer ticker.Stop()
-
-	stablePolls := 0
-	currentInterval := a.interval
-	backoffInterval := a.interval * 3 // e.g. 5s → 15s
+	onChange := p.collector.OnChange()
+	fallback := time.NewTicker(30 * time.Second)
+	defer fallback.Stop()
+	lastPoll := time.Now()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-ticker.C:
-			newState := p.BuildOrchestratorState(ctx)
-
-			a.mu.RLock()
-			changed := a.state == nil || stateChanged(a.state, newState)
-			a.mu.RUnlock()
-
+		case <-onChange:
+			if gap := pollCooldown - time.Since(lastPoll); gap > 0 {
+				select {
+				case <-time.After(gap):
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}
+		case <-fallback.C:
+		}
+		newState := p.BuildOrchestratorState(ctx)
+		lastPoll = time.Now()
+		a.mu.RLock()
+		changed := stateChanged(a.state, newState)
+		a.mu.RUnlock()
+		if changed {
 			a.setState(newState)
-
-			if changed {
-				stablePolls = 0
-			} else {
-				stablePolls++
-			}
-
-			var targetInterval time.Duration
-			if stablePolls >= 3 {
-				targetInterval = backoffInterval
-			} else {
-				targetInterval = a.interval
-			}
-			if targetInterval != currentInterval {
-				ticker.Reset(targetInterval)
-				currentInterval = targetInterval
-			}
 		}
 	}
 }
 
-// stateChanged returns true if meaningful fields differ between two states.
-// Uses reflect.DeepEqual for correctness — catches content changes within
-// same-length slices (e.g., agent status transitions).
+// stateChanged reports whether meaningful fields differ between two states.
 func stateChanged(prev, curr *orchestrator.State) bool {
-	if prev.Running != curr.Running {
+	if prev == nil || prev.Running != curr.Running {
 		return true
 	}
-	if !reflect.DeepEqual(prev.Codebases, curr.Codebases) ||
-		!reflect.DeepEqual(prev.GlobalAgents, curr.GlobalAgents) ||
-		!reflect.DeepEqual(prev.WorkUnits, curr.WorkUnits) {
-		return true
-	}
-	return false
+	prevB, _ := json.Marshal([2]any{prev.Codebases, prev.GlobalAgents})
+	currB, _ := json.Marshal([2]any{curr.Codebases, curr.GlobalAgents})
+	return string(prevB) != string(currB)
 }
+

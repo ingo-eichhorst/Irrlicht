@@ -26,17 +26,15 @@ type sessionLister interface {
 type poller struct {
 	collector *collector
 	gtBin     string
-	interval  time.Duration
 	sessions  sessionLister
 }
 
 // newPoller creates a poller that reads from the given collector and
 // shells out to gtBin for rig/polecat state.
-func newPoller(collector *collector, gtBin string, interval time.Duration, sessions sessionLister) *poller {
+func newPoller(collector *collector, gtBin string, sessions sessionLister) *poller {
 	return &poller{
 		collector: collector,
 		gtBin:     gtBin,
-		interval:  interval,
 		sessions:  sessions,
 	}
 }
