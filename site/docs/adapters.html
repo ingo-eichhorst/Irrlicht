@@ -152,6 +152,19 @@
         <li>Stage: <strong>alpha</strong> &mdash; closes #100</li>
       </ul>
 
+      <h3>Kiro CLI Adapter</h3>
+
+      <ul>
+        <li><strong>Package:</strong> <code>core/adapters/inbound/agents/kirocli/</code></li>
+        <li><strong>Watches:</strong> JSONL transcripts at <code>~/.kiro/sessions/cli/&lt;uuid&gt;.jsonl</code> (one file per session, live-appended)</li>
+        <li>Versioned event envelope (<code>Prompt</code> / <code>AssistantMessage</code> / <code>ToolResults</code> / <code>Clear</code>); no explicit end-of-turn marker &mdash; a text-only <code>AssistantMessage</code> maps to <code>turn_done</code>, one carrying <code>toolUse</code> blocks keeps the turn open</li>
+        <li>The transcript carries no cwd; the working directory is read from the <code>&lt;uuid&gt;.json</code> metadata sidecar next to it</li>
+        <li>CWD-based PID discovery via <code>pgrep -x kiro-cli</code> (the <code>kiro-cli chat</code> parent owns the session cwd; the transcript is not kept open between writes)</li>
+        <li><code>/clear</code> continues in the same session file (a <code>Clear</code> event, no new UUID); headless <code>--no-interactive</code> runs persist no session files and are invisible</li>
+        <li><strong>Adapter name:</strong> <code>"kiro-cli"</code></li>
+        <li>Stage: <strong>alpha</strong> &mdash; closes #280</li>
+      </ul>
+
       <h3>Process Scanner</h3>
 
       <ul>
