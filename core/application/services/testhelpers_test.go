@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"time"
 
 	"irrlicht/core/application/services"
 	"irrlicht/core/domain/agent"
@@ -40,11 +41,15 @@ func (r *mockRecorder) snapshot() []lifecycle.Event {
 type mockRepo struct {
 	mu     sync.Mutex
 	states map[string]*session.SessionState
+	saved  map[string]string // sessionID → State at last Save; race-free snapshot for polling
 	saves  int
 }
 
 func newMockRepo() *mockRepo {
-	return &mockRepo{states: make(map[string]*session.SessionState)}
+	return &mockRepo{
+		states: make(map[string]*session.SessionState),
+		saved:  make(map[string]string),
+	}
 }
 
 func (r *mockRepo) Load(sessionID string) (*session.SessionState, error) {
@@ -61,6 +66,7 @@ func (r *mockRepo) Save(s *session.SessionState) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.states[s.SessionID] = s
+	r.saved[s.SessionID] = s.State
 	r.saves++
 	return nil
 }
@@ -80,6 +86,25 @@ func (r *mockRepo) ListAll() ([]*session.SessionState, error) {
 		out = append(out, s)
 	}
 	return out, nil
+}
+
+// waitForSessionState polls the repo's Save snapshot until the session was
+// last saved with state want, or the timeout elapses. Lets tests wait for the
+// detector's Run loop to finish async event processing without a fixed sleep
+// (#578). Polling Load instead would race: the detector mutates session
+// structs in place before calling Save, so the only race-free observation
+// point is the state captured inside Save.
+func waitForSessionState(repo *mockRepo, sessionID, want string, timeout time.Duration) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		repo.mu.Lock()
+		got := repo.saved[sessionID]
+		repo.mu.Unlock()
+		if got == want {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }
 
 type mockLogger struct {
