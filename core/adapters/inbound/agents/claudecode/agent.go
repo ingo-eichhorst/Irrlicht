@@ -9,9 +9,10 @@ import (
 // Permission keys for the consent wizard (issue #570). Referenced by the
 // hook/statusline HTTP handlers' consent gates and the daemon wiring.
 const (
-	PermissionKeyHooks       = "hooks"
-	PermissionKeyStatusline  = "statusline"
-	PermissionKeyTranscripts = "transcripts"
+	PermissionKeyHooks        = "hooks"
+	PermissionKeyStatusline   = "statusline"
+	PermissionKeyTranscripts  = "transcripts"
+	PermissionKeyInstructions = "instructions"
 )
 
 // Claude Code mascot — pixel-art rectangular creature with eyes and legs.
@@ -87,6 +88,22 @@ func Agent() agent.Agent {
 					"command (or removes the entry if irrlicht installed it).",
 				Apply:  func() error { _, err := EnsureStatuslineInstalled(); return err },
 				Remove: func() error { _, err := UninstallStatusline(); return err },
+			},
+			{
+				Key:             PermissionKeyInstructions,
+				Kind:            permission.KindModify,
+				Title:           "Install task-progress rule",
+				FeatureUnlocked: "Task-completion ETA chip from agent-reported progress",
+				Touches:         "Maintains a managed block in ~/.claude/CLAUDE.md",
+				Detail: "Writes an irrlicht-managed block (between BEGIN/END " +
+					"sentinels) to ~/.claude/CLAUDE.md instructing the agent to " +
+					"periodically emit a hidden task-progress marker, which " +
+					"irrlicht reads from the transcript to project a completion " +
+					"ETA. All surrounding file content is preserved " +
+					"byte-for-byte. Toggling off removes exactly this block " +
+					"(also available via the macOS Settings toggle).",
+				Apply:  func() error { _, err := EnsureTaskEtaBlockInstalled(); return err },
+				Remove: func() error { _, err := UninstallTaskEtaBlock(); return err },
 			},
 		},
 	}
