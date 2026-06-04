@@ -39,16 +39,16 @@ func (r *mockRecorder) snapshot() []lifecycle.Event {
 // --- shared mock implementations for tests -----------------------------------
 
 type mockRepo struct {
-	mu     sync.Mutex
-	states map[string]*session.SessionState
-	saved  map[string]string // sessionID → State at last Save; race-free snapshot for polling
-	saves  int
+	mu             sync.Mutex
+	states         map[string]*session.SessionState
+	lastSavedState map[string]string // sessionID → State at last Save; race-free snapshot for polling
+	saves          int
 }
 
 func newMockRepo() *mockRepo {
 	return &mockRepo{
-		states: make(map[string]*session.SessionState),
-		saved:  make(map[string]string),
+		states:         make(map[string]*session.SessionState),
+		lastSavedState: make(map[string]string),
 	}
 }
 
@@ -66,7 +66,7 @@ func (r *mockRepo) Save(s *session.SessionState) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.states[s.SessionID] = s
-	r.saved[s.SessionID] = s.State
+	r.lastSavedState[s.SessionID] = s.State
 	r.saves++
 	return nil
 }
@@ -75,6 +75,7 @@ func (r *mockRepo) Delete(sessionID string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	delete(r.states, sessionID)
+	delete(r.lastSavedState, sessionID)
 	return nil
 }
 
@@ -98,7 +99,7 @@ func waitForSessionState(repo *mockRepo, sessionID, want string, timeout time.Du
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		repo.mu.Lock()
-		got := repo.saved[sessionID]
+		got := repo.lastSavedState[sessionID]
 		repo.mu.Unlock()
 		if got == want {
 			return
