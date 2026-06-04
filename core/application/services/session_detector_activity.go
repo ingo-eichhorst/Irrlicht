@@ -64,11 +64,18 @@ func (d *SessionDetector) onNewSession(id agent.Identity, ev agent.Event) {
 			return
 		}
 
-		// Skip orphan transcripts left by exited Claude Code processes.
+		// Skip orphan transcripts left by exited Claude Code processes —
+		// unless a live agent process still owns the transcript's cwd
+		// (issue #576: consent granted after sessions started makes
+		// "stale at first sight" the canonical backfill path).
 		if isStaleTranscript(ev.TranscriptPath) {
+			if !d.isLiveStaleSession(id.Name, ev) {
+				d.log.LogInfo("session-detector", ev.SessionID,
+					"skipping orphan transcript")
+				return
+			}
 			d.log.LogInfo("session-detector", ev.SessionID,
-				"skipping orphan transcript")
-			return
+				"stale transcript but live process owns its cwd — creating session")
 		}
 
 		// Skip zombie sessions whose worktree has been deleted from disk.
@@ -176,6 +183,35 @@ func (d *SessionDetector) onNewSession(id agent.Identity, ev agent.Event) {
 		transcriptPath = existing.TranscriptPath
 	}
 	go d.pidMgr.DiscoverPIDWithRetry(ev.SessionID, cwd, transcriptPath, adapter)
+}
+
+// isLiveStaleSession reports whether a stale transcript should still produce
+// a session because a live agent process owns its cwd (issue #576). Checks
+// run cheapest-first:
+//  1. Subagent transcripts are never rescued — they have no process of their
+//     own, and finished subagents are routinely stale.
+//  2. Only the newest .jsonl in its directory qualifies — the watcher's
+//     initial scan emits every transcript younger than MaxSessionAge, and a
+//     single live process can only correspond to the most recent one.
+//  3. The transcript must yield a cwd (from the event for scanner-sourced
+//     sessions, from transcript content for fswatcher events, which carry
+//     no CWD).
+//  4. A live process of this adapter's binary must own that cwd.
+func (d *SessionDetector) isLiveStaleSession(adapter string, ev agent.Event) bool {
+	if deriveParentSessionID(ev.TranscriptPath) != "" {
+		return false
+	}
+	if !isNewestTranscriptInDir(ev.TranscriptPath) {
+		return false
+	}
+	cwd := ev.CWD
+	if cwd == "" {
+		cwd = d.enricher.git.GetCWDFromTranscript(ev.TranscriptPath)
+	}
+	if cwd == "" {
+		return false
+	}
+	return d.pidMgr.HasLiveProcessInCWD(adapter, cwd)
 }
 
 // onActivity debounces transcript activity events per session. The first event
