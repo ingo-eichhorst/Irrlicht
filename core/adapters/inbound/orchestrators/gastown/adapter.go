@@ -203,8 +203,14 @@ func stateChanged(prev, curr *orchestrator.State) bool {
 	if prev == nil || prev.Running != curr.Running {
 		return true
 	}
-	prevB, _ := json.Marshal([3]any{prev.Codebases, prev.GlobalAgents, prev.WorkUnits})
-	currB, _ := json.Marshal([3]any{curr.Codebases, curr.GlobalAgents, curr.WorkUnits})
+	prevB, err := json.Marshal([3]any{prev.Codebases, prev.GlobalAgents, prev.WorkUnits})
+	if err != nil {
+		return true // treat as changed so broadcasts are never silently suppressed
+	}
+	currB, err := json.Marshal([3]any{curr.Codebases, curr.GlobalAgents, curr.WorkUnits})
+	if err != nil {
+		return true
+	}
 	return string(prevB) != string(currB)
 }
 
