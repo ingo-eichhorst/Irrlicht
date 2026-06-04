@@ -10,26 +10,34 @@ import (
 	services "irrlicht/core/application/services"
 )
 
-type fakeTarget struct {
-	state      services.ActivationState
-	enableErr  error
-	disableErr error
+const (
+	testAgent = "claude-code"
+	testPerm  = "instructions"
+)
+
+// fakeConsent implements consentTarget over a single agent/permission pair,
+// recording the answers the handler submits.
+type fakeConsent struct {
+	enabled   bool
+	answerErr error
+	answers   []services.PermissionAnswer
 }
 
-func (f *fakeTarget) Status() services.ActivationState { return f.state }
-func (f *fakeTarget) Enable() (services.ActivationState, error) {
-	if f.enableErr != nil {
-		return f.state, f.enableErr
-	}
-	f.state.TaskEtaEnabled = true
-	return f.state, nil
+func (f *fakeConsent) Granted(agentName, key string) bool {
+	return agentName == testAgent && key == testPerm && f.enabled
 }
-func (f *fakeTarget) Disable() (services.ActivationState, error) {
-	if f.disableErr != nil {
-		return f.state, f.disableErr
+
+func (f *fakeConsent) Answer(answers []services.PermissionAnswer) error {
+	if f.answerErr != nil {
+		return f.answerErr
 	}
-	f.state.TaskEtaEnabled = false
-	return f.state, nil
+	f.answers = append(f.answers, answers...)
+	for _, a := range answers {
+		if a.Agent == testAgent && a.Permission == testPerm {
+			f.enabled = a.Grant
+		}
+	}
+	return nil
 }
 
 type nopLogger struct{}
@@ -39,26 +47,26 @@ func (nopLogger) LogError(_, _, _ string)                                 {}
 func (nopLogger) LogProcessingTime(_, _ string, _ int64, _ int, _ string) {}
 func (nopLogger) Close() error                                            { return nil }
 
-func do(t *testing.T, target *fakeTarget, method string) *httptest.ResponseRecorder {
+func do(t *testing.T, target *fakeConsent, method string) *httptest.ResponseRecorder {
 	t.Helper()
-	h := NewHandler(target, nopLogger{})
+	h := NewHandler(target, testAgent, testPerm, nopLogger{})
 	req := httptest.NewRequest(method, "/api/v1/activation/task-eta", nil)
 	rec := httptest.NewRecorder()
 	h(rec, req)
 	return rec
 }
 
-func decodeState(t *testing.T, rec *httptest.ResponseRecorder) services.ActivationState {
+func decodeState(t *testing.T, rec *httptest.ResponseRecorder) state {
 	t.Helper()
-	var state services.ActivationState
-	if err := json.NewDecoder(rec.Body).Decode(&state); err != nil {
+	var s state
+	if err := json.NewDecoder(rec.Body).Decode(&s); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	return state
+	return s
 }
 
 func TestHandler_GetReturnsState(t *testing.T) {
-	rec := do(t, &fakeTarget{state: services.ActivationState{TaskEtaEnabled: true}}, http.MethodGet)
+	rec := do(t, &fakeConsent{enabled: true}, http.MethodGet)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("code = %d", rec.Code)
 	}
@@ -67,45 +75,53 @@ func TestHandler_GetReturnsState(t *testing.T) {
 	}
 }
 
-func TestHandler_PostEnables(t *testing.T) {
-	target := &fakeTarget{}
+func TestHandler_PostGrants(t *testing.T) {
+	target := &fakeConsent{}
 	rec := do(t, target, http.MethodPost)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("code = %d", rec.Code)
 	}
-	if !decodeState(t, rec).TaskEtaEnabled || !target.state.TaskEtaEnabled {
-		t.Error("POST should enable")
+	if !decodeState(t, rec).TaskEtaEnabled || !target.enabled {
+		t.Error("POST should grant")
+	}
+	want := services.PermissionAnswer{Agent: testAgent, Permission: testPerm, Grant: true}
+	if len(target.answers) != 1 || target.answers[0] != want {
+		t.Errorf("answers = %+v, want [%+v]", target.answers, want)
 	}
 }
 
-func TestHandler_DeleteDisables(t *testing.T) {
-	target := &fakeTarget{state: services.ActivationState{TaskEtaEnabled: true}}
+func TestHandler_DeleteRevokes(t *testing.T) {
+	target := &fakeConsent{enabled: true}
 	rec := do(t, target, http.MethodDelete)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("code = %d", rec.Code)
 	}
-	if decodeState(t, rec).TaskEtaEnabled || target.state.TaskEtaEnabled {
-		t.Error("DELETE should disable")
+	if decodeState(t, rec).TaskEtaEnabled || target.enabled {
+		t.Error("DELETE should revoke")
+	}
+	want := services.PermissionAnswer{Agent: testAgent, Permission: testPerm, Grant: false}
+	if len(target.answers) != 1 || target.answers[0] != want {
+		t.Errorf("answers = %+v, want [%+v]", target.answers, want)
 	}
 }
 
 func TestHandler_MethodNotAllowed(t *testing.T) {
 	for _, m := range []string{http.MethodPut, http.MethodPatch} {
-		if rec := do(t, &fakeTarget{}, m); rec.Code != http.StatusMethodNotAllowed {
+		if rec := do(t, &fakeConsent{}, m); rec.Code != http.StatusMethodNotAllowed {
 			t.Errorf("%s: code = %d, want 405", m, rec.Code)
 		}
 	}
 }
 
-func TestHandler_EnableErrorIs500(t *testing.T) {
-	rec := do(t, &fakeTarget{enableErr: errors.New("boom")}, http.MethodPost)
+func TestHandler_AnswerErrorIs500(t *testing.T) {
+	rec := do(t, &fakeConsent{answerErr: errors.New("boom")}, http.MethodPost)
 	if rec.Code != http.StatusInternalServerError {
 		t.Errorf("code = %d, want 500", rec.Code)
 	}
 }
 
 func TestHandler_RejectsCrossSiteMutations(t *testing.T) {
-	h := NewHandler(&fakeTarget{}, nopLogger{})
+	h := NewHandler(&fakeConsent{}, testAgent, testPerm, nopLogger{})
 	for _, m := range []string{http.MethodPost, http.MethodDelete} {
 		for _, site := range []string{"cross-site", "same-site"} {
 			req := httptest.NewRequest(m, "/api/v1/activation/task-eta", nil)

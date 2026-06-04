@@ -4,11 +4,13 @@
 // task-progress marker; with it in the user-level file every project inherits
 // the rule without per-repo opt-in.
 //
-// Unlike the hook/statusline installers this is NEVER invoked unconditionally
-// at startup — the user must opt in once (consent lives in the activation
-// service); writes happen only after consent. Install/patch is idempotent and
-// replaces only the managed block, preserving all surrounding user content
-// byte-for-byte; uninstall removes only the managed block.
+// Like the hook/statusline installers, consent lives in the permission
+// wizard (issue #577): install/uninstall run as the claude-code/instructions
+// permission's grant/revoke effects, and PermissionService.Start() re-asserts
+// the block on startup while granted — nothing is written before consent.
+// Install/patch is idempotent and replaces only the managed block, preserving
+// all surrounding user content byte-for-byte; uninstall removes only the
+// managed block.
 package claudecode
 
 import (

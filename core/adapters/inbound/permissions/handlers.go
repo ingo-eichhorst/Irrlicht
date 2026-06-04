@@ -40,8 +40,19 @@ func NewGetHandler(t target, log outbound.Logger) http.HandlerFunc {
 // Responses:
 //   - 200: answers applied; body is the updated permissions snapshot
 //   - 400: malformed JSON or unknown agent/permission pair
+//   - 403: cross-origin browser request
 func NewAnswerHandler(t target, log outbound.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// Granting a modify permission rewrites sensitive user files
+		// (~/.claude/settings.json, ~/.claude/CLAUDE.md), so a cross-origin
+		// POST from any webpage the user visits must be rejected — the JSON
+		// body alone is no defense (a text/plain form can carry one). Same
+		// guard as the activation alias: same-origin (the dashboard) and a
+		// missing header (native clients) pass.
+		if site := r.Header.Get("Sec-Fetch-Site"); site == "cross-site" || site == "same-site" {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
 		var req answerRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "bad request: invalid JSON", http.StatusBadRequest)

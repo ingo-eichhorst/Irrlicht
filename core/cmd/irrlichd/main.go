@@ -423,23 +423,6 @@ func main() {
 	focusService := services.NewFocusService(cachedRepo, push, logger)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/focus", sessionshandler.NewFocusHandler(focusService, logger))
 
-	// Task-eta global activation (issue #558): consent-gated managed block in
-	// ~/.claude/CLAUDE.md. Never written silently — the user opts in via the
-	// API (macOS Settings toggle); once consented, startup re-asserts the
-	// block idempotently. localhostOnly: this endpoint rewrites a sensitive
-	// user file and must not be reachable from the LAN.
-	activationHome, _ := os.UserHomeDir()
-	activationSvc := services.NewActivationService(
-		dataDir(activationHome),
-		services.ActivationInstaller{
-			Install:   claudecode.EnsureTaskEtaBlockInstalled,
-			Uninstall: claudecode.UninstallTaskEtaBlock,
-		},
-		logger,
-	)
-	activationSvc.ReassertOnStartup()
-	mux.HandleFunc("/api/v1/activation/task-eta", localhostOnly(activationhandler.NewHandler(activationSvc, logger)))
-
 	// Suppress ghost proc pre-sessions for live processes whose real session
 	// is already persisted. The PID discriminator in HasRealSessionForPID
 	// prevents historical sessions on disk (GH #113, within MaxSessionAge)
@@ -494,6 +477,10 @@ func main() {
 	// detection are nil — the daemon never monitors anything live.
 	home, _ := os.UserHomeDir()
 	permStore := filesystem.NewPermissionStore(dataDir(home))
+	// Fold the pre-wizard task-eta consent record (activation.json, issue
+	// #558) into the store before the service loads it (issue #577).
+	services.MigrateLegacyTaskEtaConsent(dataDir(home), permStore,
+		claudecode.AdapterName, claudecode.PermissionKeyInstructions, logger)
 	var hasLive services.HasLiveProcessFunc
 	if !demoMode {
 		hasLive = processlifecycle.HasLiveProcess
@@ -555,6 +542,14 @@ func main() {
 		permissionshandler.NewGetHandler(permService, logger))
 	mux.HandleFunc("POST /api/v1/permissions/answer",
 		permissionshandler.NewAnswerHandler(permService, logger))
+	// Task-eta activation (issue #558): legacy alias over the
+	// claude-code/instructions permission (issue #577), kept so the macOS
+	// Settings toggle's wire shape stays stable. localhostOnly: the granted
+	// effect rewrites a sensitive user file (~/.claude/CLAUDE.md) and must
+	// not be reachable from the LAN.
+	mux.HandleFunc("/api/v1/activation/task-eta",
+		localhostOnly(activationhandler.NewHandler(permService,
+			claudecode.AdapterName, claudecode.PermissionKeyInstructions, logger)))
 
 	// Hook receiver: Claude Code PermissionRequest/PostToolUse events.
 	// The detector satisfies claudecode.HookTarget via HandlePermissionHook.

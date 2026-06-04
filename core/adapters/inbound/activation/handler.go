@@ -5,6 +5,11 @@
 //	POST   /api/v1/activation/task-eta  → consent + install the managed block
 //	DELETE /api/v1/activation/task-eta  → revoke + remove the managed block
 //
+// Since issue #577 this endpoint is a thin alias over the permission
+// wizard's claude-code/instructions permission — the PermissionService owns
+// the consent state and the install/uninstall effects; this route only
+// keeps the macOS Settings toggle's wire shape stable.
+//
 // The route must be registered behind localhostOnly — it rewrites a
 // sensitive user file (~/.claude/CLAUDE.md) and must not be reachable from
 // the LAN when the daemon binds 0.0.0.0.
@@ -18,24 +23,26 @@ import (
 	"irrlicht/core/ports/outbound"
 )
 
-// activationTarget is the interface the handler calls into. Satisfied by
-// *services.ActivationService without importing it at construction sites.
-type activationTarget interface {
-	Status() services.ActivationState
-	Enable() (services.ActivationState, error)
-	Disable() (services.ActivationState, error)
+// consentTarget is the slice of *services.PermissionService the handler
+// needs: reading and answering one permission.
+type consentTarget interface {
+	Granted(agentName, key string) bool
+	Answer(answers []services.PermissionAnswer) error
 }
 
-// NewHandler returns the task-eta activation handler.
-func NewHandler(target activationTarget, log outbound.Logger) http.HandlerFunc {
+// state is the response body — the legacy activation wire shape the macOS
+// Settings toggle decodes.
+type state struct {
+	TaskEtaEnabled bool `json:"task_eta_enabled"`
+}
+
+// NewHandler returns the task-eta activation handler aliasing the
+// agentName/permKey permission.
+func NewHandler(target consentTarget, agentName, permKey string, log outbound.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var (
-			state services.ActivationState
-			err   error
-		)
 		switch r.Method {
 		case http.MethodGet:
-			state = target.Status()
+			// fall through to the state reply
 		case http.MethodPost, http.MethodDelete:
 			// localhostOnly is not enough for the mutating verbs: a
 			// safelisted cross-origin POST from any webpage the user visits
@@ -47,21 +54,21 @@ func NewHandler(target activationTarget, log outbound.Logger) http.HandlerFunc {
 				http.Error(w, "forbidden", http.StatusForbidden)
 				return
 			}
-			if r.Method == http.MethodPost {
-				state, err = target.Enable()
-			} else {
-				state, err = target.Disable()
+			answer := services.PermissionAnswer{
+				Agent:      agentName,
+				Permission: permKey,
+				Grant:      r.Method == http.MethodPost,
+			}
+			if err := target.Answer([]services.PermissionAnswer{answer}); err != nil {
+				log.LogError("activation", "", err.Error())
+				http.Error(w, "internal error", http.StatusInternalServerError)
+				return
 			}
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		if err != nil {
-			log.LogError("activation", "", err.Error())
-			http.Error(w, "internal error", http.StatusInternalServerError)
-			return
-		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(state)
+		_ = json.NewEncoder(w).Encode(state{TaskEtaEnabled: target.Granted(agentName, permKey)})
 	}
 }
