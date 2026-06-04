@@ -173,6 +173,76 @@ func TestUninstallKittyConfigNoBlockIsNoop(t *testing.T) {
 	}
 }
 
+func TestEnsureKittyConfigPatchedDanglingStartErrors(t *testing.T) {
+	path := withTempKittyConfig(t)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// User hand-deleted the bottom half of the block: appending a fresh
+	// block here would make the dangling start pair with the new block's
+	// end on the next strip, swallowing user lines in between.
+	mangled := "font_size 12\n" + kittyBlockStart + "\nuser_line yes\n"
+	if err := os.WriteFile(path, []byte(mangled), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	modified, err := EnsureKittyConfigPatched()
+	if err == nil {
+		t.Fatal("expected error for dangling start marker")
+	}
+	if modified {
+		t.Error("expected modified=false on malformed block")
+	}
+	if got := readFile(t, path); got != mangled {
+		t.Errorf("file rewritten despite malformed block: %q", got)
+	}
+}
+
+func TestUninstallKittyConfigDanglingEndErrors(t *testing.T) {
+	path := withTempKittyConfig(t)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mangled := kittyBlockEnd + "\nfont_size 12\n"
+	if err := os.WriteFile(path, []byte(mangled), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	modified, err := UninstallKittyConfig()
+	if err == nil {
+		t.Fatal("expected error for dangling end marker")
+	}
+	if modified {
+		t.Error("expected modified=false on malformed block")
+	}
+	if got := readFile(t, path); got != mangled {
+		t.Errorf("file rewritten despite malformed block: %q", got)
+	}
+}
+
+func TestEnsureKittyConfigPatchedCollapsesDuplicateBlocks(t *testing.T) {
+	path := withTempKittyConfig(t)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	double := "font_size 12\n\n" + kittyManagedBlock + "\n" + kittyManagedBlock
+	if err := os.WriteFile(path, []byte(double), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	modified, err := EnsureKittyConfigPatched()
+	if err != nil {
+		t.Fatalf("EnsureKittyConfigPatched: %v", err)
+	}
+	if !modified {
+		t.Fatal("expected modified=true for duplicate blocks")
+	}
+	got := readFile(t, path)
+	if want := "font_size 12\n\n" + kittyManagedBlock; got != want {
+		t.Errorf("content = %q, want single canonical block", got)
+	}
+}
+
 func TestUninstallKittyConfigMissingFileIsNoop(t *testing.T) {
 	withTempKittyConfig(t)
 

@@ -8,6 +8,7 @@
 package processlifecycle
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +16,15 @@ import (
 	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/permission"
 )
+
+// errKittyBlockMalformed guards the hand-edited-file case: a dangling
+// start or end marker means block matching could span user-authored lines
+// and swallow them on the next apply/remove, so both operations refuse
+// instead. The effect error is logged by the permission service; the file
+// is left exactly as found.
+var errKittyBlockMalformed = errors.New(
+	"kitty.conf contains an unbalanced irrlicht marker block — remove or complete the '" +
+		kittyBlockStart + "' / '" + kittyBlockEnd + "' lines by hand")
 
 // KittyName identifies the kitty config-patch pseudo-entry in the
 // permission store and wizard.
@@ -58,10 +68,12 @@ func KittyPermissionDeclaration() agent.Agent {
 				kittyBlockEnd + "\" markers containing `allow_remote_control yes` " +
 				"and `listen_on unix:/tmp/kitty` to ~/.config/kitty/kitty.conf " +
 				"(XDG_CONFIG_HOME honored; file created if missing). kitty picks " +
-				"the change up the next time it starts. Revoking removes exactly " +
-				"that block — lines you wrote yourself are never modified. " +
-				"Without the grant, clicking a kitty session still raises the " +
-				"right kitty instance but stays on its last-focused tab.",
+				"the change up the next time it starts. Note: while enabled, any " +
+				"process running as your user can control kitty through that " +
+				"socket — not just irrlicht. Revoking removes exactly that block " +
+				"— lines you wrote yourself are never modified. Without the " +
+				"grant, clicking a kitty session still raises the right kitty " +
+				"instance but stays on its last-focused tab.",
 			Apply:  func() error { _, err := EnsureKittyConfigPatched(); return err },
 			Remove: func() error { _, err := UninstallKittyConfig(); return err },
 		}},
@@ -74,15 +86,14 @@ func KittyPermissionDeclaration() agent.Agent {
 // permission is pending, so kitty installed (or first launched) later still
 // surfaces the prompt.
 func KittyDetected() bool {
-	if HasLiveProcess(agent.ExactName{Name: "kitty"}) {
-		return true
+	// Config-dir stat first: ~free, and true for virtually every real kitty
+	// user — the pgrep fork only runs for config-less setups.
+	if dir, err := kittyConfigDir(); err == nil {
+		if _, err := os.Stat(dir); err == nil {
+			return true
+		}
 	}
-	dir, err := kittyConfigDir()
-	if err != nil {
-		return false
-	}
-	_, err = os.Stat(dir)
-	return err == nil
+	return HasLiveProcess(agent.ExactName{Name: "kitty"})
 }
 
 // EnsureKittyConfigPatched adds (or refreshes) the irrlicht-managed block in
@@ -98,7 +109,10 @@ func EnsureKittyConfigPatched() (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	stripped, _ := removeKittyBlock(content)
+	stripped, _, err := stripKittyBlocks(content)
+	if err != nil {
+		return false, err
+	}
 	updated := appendKittyBlock(stripped)
 	if updated == content {
 		return false, nil
@@ -120,7 +134,10 @@ func UninstallKittyConfig() (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	stripped, found := removeKittyBlock(string(data))
+	stripped, found, err := stripKittyBlocks(string(data))
+	if err != nil {
+		return false, err
+	}
 	if !found {
 		return false, nil
 	}
@@ -160,13 +177,37 @@ func readKittyConf(path string) (string, error) {
 }
 
 // appendKittyBlock appends the canonical managed block, separated from any
-// existing content by one blank line.
+// existing content by one blank line. TrimRight collapses extra trailing
+// blank lines of user content on the first apply — a deliberate, harmless
+// normalization so apply→remove round-trips byte-identically afterwards.
 func appendKittyBlock(content string) string {
 	base := strings.TrimRight(content, "\n")
 	if base == "" {
 		return kittyManagedBlock
 	}
 	return base + "\n\n" + kittyManagedBlock
+}
+
+// stripKittyBlocks removes every balanced marker block from content. It
+// errors when a marker survives the strip — a dangling start or end means
+// the block was hand-edited, and matching across it could swallow
+// user-authored lines (the start marker would pair with a later block's
+// end). Callers must not rewrite the file in that state.
+func stripKittyBlocks(content string) (string, bool, error) {
+	stripped := content
+	found := false
+	for {
+		next, ok := removeKittyBlock(stripped)
+		if !ok {
+			break
+		}
+		stripped = next
+		found = true
+	}
+	if strings.Contains(stripped, kittyBlockStart) || strings.Contains(stripped, kittyBlockEnd) {
+		return "", false, errKittyBlockMalformed
+	}
+	return stripped, found, nil
 }
 
 // removeKittyBlock cuts the marker-delimited block (inclusive) plus the
