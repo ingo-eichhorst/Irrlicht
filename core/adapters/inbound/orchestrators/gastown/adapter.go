@@ -177,6 +177,12 @@ func (a *Adapter) runPoller(ctx context.Context, p *poller) error {
 					return ctx.Err()
 				}
 			}
+			// Drain a fallback tick that may have queued during the cooldown wait
+			// to avoid an immediate redundant poll right after this one.
+			select {
+			case <-fallback.C:
+			default:
+			}
 		case <-fallback.C:
 		}
 		newState := p.BuildOrchestratorState(ctx)
@@ -191,12 +197,14 @@ func (a *Adapter) runPoller(ctx context.Context, p *poller) error {
 }
 
 // stateChanged reports whether meaningful fields differ between two states.
+// WorkUnits is included even though it is not currently populated, so future
+// GT commands that set it will broadcast correctly without a code change here.
 func stateChanged(prev, curr *orchestrator.State) bool {
 	if prev == nil || prev.Running != curr.Running {
 		return true
 	}
-	prevB, _ := json.Marshal([2]any{prev.Codebases, prev.GlobalAgents})
-	currB, _ := json.Marshal([2]any{curr.Codebases, curr.GlobalAgents})
+	prevB, _ := json.Marshal([3]any{prev.Codebases, prev.GlobalAgents, prev.WorkUnits})
+	currB, _ := json.Marshal([3]any{curr.Codebases, curr.GlobalAgents, curr.WorkUnits})
 	return string(prevB) != string(currB)
 }
 
