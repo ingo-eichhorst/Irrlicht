@@ -1193,3 +1193,68 @@ func TestParser_RateLimits_OnlyOnTokenCount(t *testing.T) {
 		t.Errorf("expected nil RateLimit on non-token_count event_msg, got %+v", ev.RateLimit)
 	}
 }
+
+// --- Task-estimate marker (issue #558) ---
+
+func TestParser_TaskEstimate_TopLevelContent(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(map[string]interface{}{
+		"type": "message", "role": "assistant", "timestamp": ts(1),
+		"content": []interface{}{
+			map[string]interface{}{"type": "output_text", "text": `Step done. <!-- {"marker":"irrlicht-eta","total_rounds":6,"completed_rounds":2} -->`},
+		},
+	})
+	if ev.TaskEstimate == nil {
+		t.Fatal("expected TaskEstimate from top-level content")
+	}
+	if ev.TaskEstimate.TotalRounds != 6 || ev.TaskEstimate.CompletedRounds != 2 {
+		t.Errorf("rounds = %d/%d, want 2/6", ev.TaskEstimate.CompletedRounds, ev.TaskEstimate.TotalRounds)
+	}
+}
+
+func TestParser_TaskEstimate_NestedMessageContent(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(map[string]interface{}{
+		"type": "message", "role": "assistant", "timestamp": ts(1),
+		"message": map[string]interface{}{
+			"content": []interface{}{
+				map[string]interface{}{"type": "text", "text": `<!-- {"marker":"irrlicht-eta","total_rounds":4,"completed_rounds":1} -->`},
+			},
+		},
+	})
+	if ev.TaskEstimate == nil || ev.TaskEstimate.TotalRounds != 4 {
+		t.Fatalf("TaskEstimate = %+v, want 1/4 from nested message.content", ev.TaskEstimate)
+	}
+}
+
+// Marker early in a long message must survive — AssistantText keeps only the
+// last 200 runes.
+func TestParser_TaskEstimate_SurvivesLongMessage(t *testing.T) {
+	p := &Parser{}
+	long := `<!-- {"marker":"irrlicht-eta","total_rounds":5,"completed_rounds":3} --> `
+	for i := 0; i < 50; i++ {
+		long += "filler prose "
+	}
+	ev := p.ParseLine(map[string]interface{}{
+		"type": "message", "role": "assistant", "timestamp": ts(1),
+		"content": []interface{}{
+			map[string]interface{}{"type": "output_text", "text": long},
+		},
+	})
+	if ev.TaskEstimate == nil || ev.TaskEstimate.CompletedRounds != 3 {
+		t.Fatalf("TaskEstimate = %+v, want 3/5 despite truncated AssistantText", ev.TaskEstimate)
+	}
+}
+
+func TestParser_TaskEstimate_UserMessageIgnored(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(map[string]interface{}{
+		"type": "message", "role": "user", "timestamp": ts(0),
+		"content": []interface{}{
+			map[string]interface{}{"type": "input_text", "text": `<!-- {"marker":"irrlicht-eta","total_rounds":5,"completed_rounds":1} -->`},
+		},
+	})
+	if ev.TaskEstimate != nil {
+		t.Fatalf("user-pasted marker must not feed the estimate, got %+v", ev.TaskEstimate)
+	}
+}

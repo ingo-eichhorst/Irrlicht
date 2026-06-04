@@ -17,6 +17,13 @@ document.body.innerHTML = `
   <div id="gt-container" style="display:none"></div>
   <div id="connection-banner"></div>
   <div id="settings-perm-note"></div>
+  <button id="settings-review-permissions"></button>
+  <div id="permissions-backdrop">
+    <h2 id="permissions-title"></h2>
+    <p id="permissions-intro"></p>
+    <div id="permissions-body"></div>
+    <button id="permissions-apply"></button>
+  </div>
 `;
 
 // jsdom has no canvas — give paintRowHistory the minimal 2D context it uses

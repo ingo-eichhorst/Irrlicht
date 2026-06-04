@@ -224,6 +224,20 @@ if [[ "$ATTACH" == "1" ]]; then
     echo "        is the running irrlichd in --record mode?" >&2
     exit 1
   fi
+  # Consent gate (#570): an attached ask-mode daemon with unanswered/denied
+  # permissions monitors nothing and would record an EMPTY fixture that the
+  # .jsonl check above can't catch (prior recordings satisfy it). Accept
+  # grant-all mode, a fully-granted daemon, or a pre-#570 daemon (no
+  # /api/v1/permissions endpoint → empty response → skip the check).
+  PERM_JSON="$(curl -fsS --max-time 2 "http://$ONBOARD_BIND/api/v1/permissions" 2>/dev/null || true)"
+  if [[ -n "$PERM_JSON" ]]; then
+    PERM_OK="$(jq -r '(.mode == "grant-all") or ([.agents[].permissions[].state] | all(. == "granted"))' <<<"$PERM_JSON" 2>/dev/null || echo false)"
+    if [[ "$PERM_OK" != "true" ]]; then
+      echo "attach: daemon at $ONBOARD_BIND has unanswered/denied permissions — it would monitor nothing and record an empty fixture" >&2
+      echo "        restart it with IRRLICHT_PERMISSION_MODE=grant-all (or grant every permission via the wizard)" >&2
+      exit 1
+    fi
+  fi
   echo "attach: using running daemon's recordings at $ATTACHED_RECORDINGS_DIR"
 else
   DAEMON_LOG="$STAGING/daemon.log"
@@ -231,8 +245,12 @@ else
   # (e.g. an IRRLICHT_HOME path with a space) stays one word — an
   # unquoted ${ONBOARD_HOME:+VAR="$ONBOARD_HOME"} would word-split on it.
   # IRRLICHT_HOME is only added when ONBOARD_HOME is non-empty.
+  # grant-all: the consent-first permission gate (#570) would otherwise
+  # leave a fresh recording daemon monitoring nothing until a wizard is
+  # answered — fixtures must never hang on consent.
   DAEMON_ENV=(IRRLICHT_RECORDINGS_DIR="$STAGING/recordings"
-              IRRLICHT_BIND_ADDR="$ONBOARD_BIND")
+              IRRLICHT_BIND_ADDR="$ONBOARD_BIND"
+              IRRLICHT_PERMISSION_MODE=grant-all)
   [[ -n "$ONBOARD_HOME" ]] && DAEMON_ENV+=(IRRLICHT_HOME="$ONBOARD_HOME")
   env "${DAEMON_ENV[@]}" "$DAEMON" --record >"$DAEMON_LOG" 2>&1 &
   DAEMON_PID=$!

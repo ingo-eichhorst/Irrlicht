@@ -53,6 +53,8 @@ case "${1:-irrlichd}" in
 esac
 
 echo "done."
-echo "Run isolated from the production daemon (separate state dir + port):"
+echo "Run isolated from the production daemon (separate state dir + port)."
+echo "grant-all is needed on a fresh state dir — without it the consent"
+echo "gate (#570) leaves the daemon monitoring nothing:"
 echo "  IRRLICHT_HOME=\"\$PWD/.build/irrlicht-home\" IRRLICHT_BIND_ADDR=127.0.0.1:7838 \\"
-echo "    core/bin/irrlichd --record"
+echo "    IRRLICHT_PERMISSION_MODE=grant-all core/bin/irrlichd --record"

@@ -1,0 +1,115 @@
+{
+  "scenario_id": "task-estimate-marker",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.86.2",
+    "daemon_version": "0.4.8+1ae457d",
+    "confidence": 0.8,
+    "notes": "daemon=full: commit 1ae457d9 ported the marker scan to the aider adapter — closeModelCall now scans the FULL accumulated prose buffer via tailer.ScanTaskEstimate BEFORE display truncation and stamps TaskEstimate with wall-clock ObservedAt (markdown has no timestamps; same convention as IdleFlush). The two blockers of the prior bug verdict — no scan + 200-rune truncation losing early markers — are both closed; unit tests cover prose-parse + the truncation trap through ParseLineRaw. The full pipeline (tailer persistence → domain TaskEstimate/TaskCompletionEta → API) was already in place. The cell's REMAINING blockers are prereqs, not daemon: driver=ready RESTS on a one-time human seed of ~/.aider.conf.yml `read: <persistent CONVENTIONS.md>` (the rig has no instruction-seed primitive; aider's un-isolated $HOME lets the persistent read: entry survive into the run — this is why aider stays ready while opencode/pi are gap:seed_instruction), and recording also needs a provider key (none in this environment; auth is out-of-band like aider's other cells). route record_now; not recordable until the prereqs are satisfied."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "task-estimate-marker",
+      "agent": "aider",
+      "assessed_at": "2026-06-03T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Scenario meaning\n\nWhile working a multi-phase task the agent emits its OWN progress estimate in-band, as a hidden HTML comment in its transcript-visible assistant text — `<!-- {\"marker\":\"irrlicht-eta\",\"total_rounds\":N,\"completed_rounds\":M} -->` — driven by a persistent instruction-file rule (NO hook). irrlicht parses it read-only and projects `task_estimate` {total_rounds, completed_rounds, updated_at} + a `task_completion_eta` onto the session metrics WHILE the session is `working`, burning the ETA down as `completed_rounds` climbs, then dropping the fields once the session leaves `working`. A \"round\" is the agent's own unit; there is no daemon-side round counting. The user-observable signal: progress surfaces on the metrics while working (matching the reported values, non-decreasing, updated_at advancing), the ETA is monotone non-increasing, and the fields are suppressed at `ready`. State arc ready → working → ready.\n\n## agent_supports: yes\n\nAider HAS a persistent-instruction mechanism: a conventions file loaded via `aider --read CONVENTIONS.md`, or the `.aider.conf.yml` `read:` entry, which loads on every run (aider.chat/docs/usage/conventions.html — the `--read` flag marks the file read-only; `read: CONVENTIONS.md` / `read: [..]` in the config loads it persistently). The marker is agent-agnostic plain text, so nothing about aider's surface blocks it from being emitted in assistant prose. The recipe can also fold the rule straight into the first prompt; the daemon parser does not care HOW the marker arrives, only that it lands in the transcript. Verdict `yes` because the mechanism exists and the marker is ordinary text the model can write — NOT a doc-stated guarantee that this model emits it (see caveat).\n\n## daemon_capability: full (was bug — RE-ASSESSED after commit 1ae457d9)\n\nThe prior verdict was `bug` on two cited parser blockers; commit 1ae457d9 (\"feat(adapters): port task-estimate marker scan to codex, pi, aider, opencode (#558)\") closes BOTH, so the daemon now satisfies the canonical spec for aider:\n\n1. **Marker scan is wired.** `Parser.closeModelCall` now calls `tailer.ScanTaskEstimate(text, time.Now())` and sets `ParsedEvent.TaskEstimate` on the emitted assistant_message (core/adapters/inbound/agents/aider/parser.go:176-188). The shared scan moved out of the claudecode adapter into the tailer package (core/pkg/tailer/taskestimate_scan.go) precisely because the marker contract is adapter-agnostic plain text — every adapter feeds its own full text blocks in.\n\n2. **Truncation trap is closed.** The scan runs on `text` — the FULL accumulated prose buffer (assistantBuffer) — BEFORE `truncate(text)` drops all but the last 200 runes for display (parser.go:171-188). Markers early in a long turn survive: TestParser_TaskEstimate_SurvivesLongTurn pushes a 4/5 marker behind 40 filler lines and still recovers it through ParseLineRaw; TestParser_TaskEstimate_FromAssistantProse pins the rounds + a wall-clock-stamped ObservedAt. Markdown carries no per-line timestamps, so ObservedAt is wall-clock at parse — the same convention IdleFlush already uses for its synthesized turn_done.\n\nThe marker physically survives in `.aider.chat.history.md`: an HTML comment in assistant prose is neither a `####` user line nor a `>` blockquote, so ParseLineRaw buffers it as ordinary prose (parser.go:135-143) and the scan over the buffer sees it. The downstream pipeline (tailer persistence of TaskEstimate → domain TaskEstimate/TaskCompletionEta projection at elapsed/completed → API metrics, suppressed off the working state) was already in place and is shared with claudecode, whose cell records this same scenario as `full`/observed. So this cell is now the ordinary `full` shape; there is no longer any daemon-owned blocker. confidence 0.8 (not higher) because emission is model-discretion — see caveat; record promotes provisional emission to settled.\n\n## driver_capability: ready (UNCHANGED — with an explicit human prereq)\n\nVERIFIED FACT (re-confirmed): no script under tools/onboarding-factory/scripts/ executes a recipe `setup` array — the rig has NO instruction-file-seeding primitive, so the recipe cannot create a conventions file fresh each run. The opencode/pi siblings hit gap:seed_instruction for exactly this reason. Aider is the exception that stays `ready`, on a persistent user-level mechanism a human seeds once out-of-band:\n\n- run-cell.sh isolates ONLY the daemon's IRRLICHT_HOME; it never sets `HOME=` and never `env -i`, and its own comment states agents watch the real $HOME regardless of IRRLICHT_HOME. The aider drivers launch `aider` plainly (drive-aider-interactive.sh tmux new-session; drive-aider.sh timeout aider) inheriting the ambient env, so aider reads the REAL ~/.aider.conf.yml during the recording run — the same config that supplies the gpt-5-nano model this cell records against.\n- Aider loads a PERSISTENT read-only instruction file via `~/.aider.conf.yml` `read: <CONVENTIONS.md>` (or `aider --read CONVENTIONS.md`), which applies on every invocation. A human seeds ~/.aider.conf.yml + a persistent CONVENTIONS.md ONCE; because $HOME is not isolated, the `read:` entry survives into the rig's run and the marker rule is in context for every turn — no per-run rig seeding needed.\n\nThe recipe steps themselves need only `send` / `wait_turn` / `sleep`, all implemented by the interactive driver (driver-interactive.sh DRIVE_ELICITS=send slash wait_turn interrupt sleep), so no new step type is required; the prompts still cue each round so completed_rounds advances. Interactive (tmux REPL) over headless `--message` because aider's working→ready settle is IdleFlush-synthesized (~1.5s quiet, clamped to the ~5s SessionDetector poll), so the process must outlive the observation window for the suppress-at-ready phase to be observed.\n\nPREREQ (human, one-time): seed ~/.aider.conf.yml with a `read:` entry pointing at a persistent CONVENTIONS.md that states the irrlicht-eta marker rule. This is an out-of-band human step (like aider auth), NOT a rig step — record assumes it is done. ALSO required to record: a provider key for the recorded model (none in this environment; auth is set up out-of-band). Both are prereqs, NOT daemon blockers.\n\n## Why daemon=full now, not a downgrade\n\nThe spec asserts the claudecode-equivalent behavior and is met by the ported scan — the trace exists, the daemon now handles it correctly, and the 3-state model carries the estimate on `working` metrics over the ordinary ready→working→ready arc. The remaining work to record is entirely prereq (seed + auth), which routes through `prereqs`, not through any pillar downgrade.",
+      "caveats": [
+        "PROVISIONAL emission risk (keeps confidence at 0.8): the recorded aider setup uses gpt-5-nano via ~/.aider.conf.yml; aider's terse, diff-focused output style plus a small model make periodic, format-stable marker emission uncertain. The 2026-05-31 claudecode experiment measured 0% EXACT-format compliance (the model rewrites the marker), which is why the scan is tolerant — but a model that omits the marker entirely emits nothing to parse. record promotes this from provisional to settled.",
+        "daemon=full is grounded in the ported code + its unit tests (prose-parse + truncation-trap through ParseLineRaw); it is PROVISIONAL on live emission only — whether this model actually writes the marker into the transcript is what record confirms. The scan itself is settled.",
+        "driver=ready RESTS on the human prereq: the rig has no setup/seed primitive (verified — no script runs a recipe `setup` array), so the marker rule must arrive via the persistent ~/.aider.conf.yml `read: CONVENTIONS.md` path that survives into the run because run-cell.sh does not isolate the agent's $HOME. If a maintainer prefers a rig-owned seed, that is a driver enhancement (a seed step, or aider_extra_args [\"--read\",\"CONVENTIONS.md\"] plus a workspace file-write) — and absent BOTH the human prereq and that enhancement the cell would degrade to gap:seed_instruction like its opencode/pi siblings."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/aider/parser.go:176-188",
+          "note": "closeModelCall now scans the FULL prose buffer via tailer.ScanTaskEstimate(text, time.Now()) BEFORE truncate and sets ParsedEvent.TaskEstimate — the ported scan (commit 1ae457d9)"
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/taskestimate_scan.go:36-54",
+          "note": "shared adapter-agnostic ScanTaskEstimate moved into the tailer package; must be fed the FULL block text because AssistantText is tail-truncated to 200 runes"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/aider/parser_test.go:584-637",
+          "note": "TestParser_TaskEstimate_FromAssistantProse (rounds + wall-clock ObservedAt) + TestParser_TaskEstimate_SurvivesLongTurn (marker behind 40 filler lines survives display truncation) — both through ParseLineRaw"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/aider/parser.go:135-143",
+          "note": "an HTML-comment marker in assistant prose is buffered as ordinary prose (not #### / not >), so it lands in the buffer the scan reads and in .aider.chat.history.md"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/5-8_task-estimate-marker/expected.jsonl",
+          "note": "claudecode cell records this same scenario as daemon=full/observed via the same shared scan + downstream TaskEstimate/ForecastTaskCompletion pipeline"
+        },
+        {
+          "kind": "url",
+          "ref": "https://aider.chat/docs/usage/conventions.html",
+          "note": "aider persistent-instruction mechanism: aider --read CONVENTIONS.md and .aider.conf.yml read: entry — the driver prereq path"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/aider/driver-interactive.sh:57",
+          "note": "driver DRIVE_ELICITS=send slash wait_turn interrupt sleep — recipe steps all present, driver=ready"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "aider CLI on PATH and authenticated against a model that actually answers (auth set up out-of-band; no provider key in this environment). The recorded setup uses gpt-5-nano via ~/.aider.conf.yml.",
+        "~/.aider.conf.yml seeded with a `read:` entry pointing at a persistent CONVENTIONS.md that states the irrlicht-eta marker rule (one-time human step; survives into the run because run-cell.sh does not isolate the agent's $HOME).",
+        "tmux available — the interactive driver runs aider in a tmux REPL so it stays alive across turns (the working→ready settle is idle-flush-bound and must be observed before teardown).",
+        "irrlichd is recording — run-cell.sh in isolated mode, or --attach against a daemon started with --record."
+      ],
+      "setup": [
+        "The interactive driver git-inits a fresh per-run cwd under <staging>/cwd/ and launches `aider --no-auto-commits --yes-always --no-gitignore` (plus --model if IRRLICHT_AIDER_MODEL is set) in a tmux session, waiting for the `> Repo-map:` banner before sending the first prompt.",
+        "The marker FORMAT rule lives in the human-seeded persistent CONVENTIONS.md (via ~/.aider.conf.yml `read:`), which survives into the run; the prompts below CUE each round so completed_rounds advances. As a belt-and-suspenders fallback the first send also restates the marker fenced so a stripped-config run still sees the literal HTML comment.",
+        "DAEMON NOW HANDLES THIS (was known_failing): commit 1ae457d9 ported the marker scan to the aider adapter — closeModelCall scans the full prose buffer before truncation, so a working aider session emits task_estimate. The spec asserts the correct behavior and record verifies it against the live recording (provisional on model emission only)."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "You will do a 3-round planning task. On EVERY reply, include this exact hidden marker in your prose, updating completed_rounds as you go: <!-- {\"marker\":\"irrlicht-eta\",\"total_rounds\":3,\"completed_rounds\":0} -->. Round 1: list three subtasks for adding a CHANGELOG.md to this repo. Emit the marker with completed_rounds:0 now, then reply."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "send",
+          "text": "Round 1 done. Now do Round 2: draft the CHANGELOG.md header section as text (do not write a file). Update the marker to completed_rounds:1 in this reply."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "send",
+          "text": "Round 2 done. Now Round 3: draft an example entry under the header. Update the marker to completed_rounds:2 in this reply."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "send",
+          "text": "Round 3 done — the task is complete. Confirm completion and emit the marker with completed_rounds:3."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 10
+        }
+      ]
+    }
+  }
+}

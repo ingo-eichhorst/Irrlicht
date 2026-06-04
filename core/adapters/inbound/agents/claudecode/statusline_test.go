@@ -34,7 +34,7 @@ func (silentLogger) Close() error                                       { return
 
 func TestStatuslineHandler_IngestsRateLimits(t *testing.T) {
 	target := &fakeRateLimitTarget{}
-	h := NewStatuslineHandler(target, silentLogger{})
+	h := NewStatuslineHandler(target, nil, silentLogger{})
 
 	body := `{
 		"session_id": "abc",
@@ -71,7 +71,7 @@ func TestStatuslineHandler_IngestsRateLimits(t *testing.T) {
 
 func TestStatuslineHandler_NoRateLimitsBlockIsOk(t *testing.T) {
 	target := &fakeRateLimitTarget{}
-	h := NewStatuslineHandler(target, silentLogger{})
+	h := NewStatuslineHandler(target, nil, silentLogger{})
 
 	body := `{"session_id":"abc","transcript_path":"/tmp/abc.jsonl"}`
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/x", bytes.NewBufferString(body))
@@ -87,7 +87,7 @@ func TestStatuslineHandler_NoRateLimitsBlockIsOk(t *testing.T) {
 }
 
 func TestStatuslineHandler_RejectsMissingTranscriptPath(t *testing.T) {
-	h := NewStatuslineHandler(&fakeRateLimitTarget{}, silentLogger{})
+	h := NewStatuslineHandler(&fakeRateLimitTarget{}, nil, silentLogger{})
 	body := `{"session_id":"abc"}`
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/x", bytes.NewBufferString(body))
 	rr := httptest.NewRecorder()
@@ -98,7 +98,7 @@ func TestStatuslineHandler_RejectsMissingTranscriptPath(t *testing.T) {
 }
 
 func TestStatuslineHandler_RejectsNonPost(t *testing.T) {
-	h := NewStatuslineHandler(&fakeRateLimitTarget{}, silentLogger{})
+	h := NewStatuslineHandler(&fakeRateLimitTarget{}, nil, silentLogger{})
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/x", nil)
 	rr := httptest.NewRecorder()
 	h(rr, req)
@@ -114,7 +114,7 @@ func TestStatuslineHandler_SampledAtUsesClock(t *testing.T) {
 	t.Cleanup(func() { statuslineNow = prev })
 
 	target := &fakeRateLimitTarget{}
-	h := NewStatuslineHandler(target, silentLogger{})
+	h := NewStatuslineHandler(target, nil, silentLogger{})
 	body := `{"transcript_path":"/tmp/x.jsonl","rate_limits":{"five_hour":{"used_percentage":1,"resets_at":2}}}`
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/x", bytes.NewBufferString(body))
 	rr := httptest.NewRecorder()
@@ -255,5 +255,28 @@ func TestChainStatuslineCommand_MigratesOldWrapsToV3(t *testing.T) {
 		if !strings.Contains(got, userCmd) {
 			t.Errorf("expected user command to survive migration, got %q", got)
 		}
+	}
+}
+
+func TestStatuslineHandler_ConsentGateDropsWhenNotGranted(t *testing.T) {
+	target := &fakeRateLimitTarget{}
+	h := NewStatuslineHandler(target, fakeGate(false), silentLogger{})
+
+	body := `{
+		"session_id": "abc",
+		"transcript_path": "/tmp/sessions/abc.jsonl",
+		"rate_limits": {
+			"five_hour": {"used_percentage": 47, "resets_at": 1778761800}
+		}
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/hooks/claudecode/statusline", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	h(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if len(target.calls) != 0 {
+		t.Fatalf("ingested %d snapshots while permission not granted", len(target.calls))
 	}
 }

@@ -208,6 +208,9 @@ func TestShouldForward(t *testing.T) {
 	if shouldForward(outbound.PushMessage{Type: outbound.PushTypeFocusRequested}) {
 		t.Fatal("focus_requested must not be forwarded")
 	}
+	if shouldForward(outbound.PushMessage{Type: outbound.PushTypePermissionsUpdated}) {
+		t.Fatal("permissions_updated is host-local consent state and must not be forwarded")
+	}
 	for _, ty := range []string{
 		outbound.PushTypeCreated, outbound.PushTypeUpdated, outbound.PushTypeDeleted,
 		outbound.PushTypeHistoryTick, outbound.PushTypeHistorySnapshot,

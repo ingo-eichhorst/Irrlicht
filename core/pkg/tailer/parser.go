@@ -189,6 +189,12 @@ type ParsedEvent struct {
 	// them in via the statusline hook (different path — parser only fills this
 	// for in-band transcript signals).
 	RateLimit *RateLimitSnapshot
+
+	// TaskEstimate, when non-nil, is the agent's self-reported task progress,
+	// parsed from an in-band HTML-comment marker in this event's assistant
+	// text (issue #558). Latest valid marker wins; the tailer keeps the most
+	// recent one across passes.
+	TaskEstimate *TaskEstimate
 }
 
 // RateLimitSnapshot mirrors session.RateLimitSnapshot inside the tailer
@@ -215,6 +221,25 @@ type CreditsSnapshot struct {
 	HasCredits bool
 	Unlimited  bool
 	Balance    float64
+}
+
+// TaskEstimate mirrors session.TaskEstimate inside the tailer package so
+// parsers can emit estimates without importing the domain (same boundary as
+// RateLimitSnapshot above). It carries the agent's self-reported progress
+// from an in-band marker like
+//
+//	<!-- {"marker":"irrlicht-eta","total_rounds":10,"completed_rounds":2} -->
+//
+// A "round" is the agent's own unit (≈ a task phase) — never counted
+// daemon-side. See issue #558.
+type TaskEstimate struct {
+	TotalRounds     int
+	CompletedRounds int
+	Risk            string
+	Confidence      *float64
+	// ObservedAt is the unix-seconds timestamp of the transcript event the
+	// marker appeared in (replay-deterministic, unlike daemon wall-clock).
+	ObservedAt int64
 }
 
 // TokenSnapshot holds a token breakdown from a single event.
@@ -329,6 +354,15 @@ type LedgerState struct {
 	// tool_result can still attribute the termination and clear the process.
 	// See issue #445.
 	PendingBashPolls map[string]string `json:"pending_bash_polls,omitempty"`
+	// LastTaskEstimate / FirstTaskEstimate persist the agent's task-progress
+	// marker and the current task's rate baseline (issue #558). MergeMetrics
+	// no longer carries the estimate across markerless passes (so a
+	// user-message reset propagates), which means a daemon restart would
+	// otherwise blank the ETA chip and lose the baseline until the next
+	// marker — persisting them here keeps both across restarts. A reset
+	// stores nil, so the reset survives a restart too.
+	LastTaskEstimate  *TaskEstimate `json:"last_task_estimate,omitempty"`
+	FirstTaskEstimate *TaskEstimate `json:"first_task_estimate,omitempty"`
 	// ModelName is the last observed model for the session. Persisted so that
 	// applyContribution's fallback (used when a contribution event carries no
 	// model — codex token_count) still routes to the right pricing bucket

@@ -783,3 +783,35 @@ func TestParser_TextPart_NoRole_DefaultsAssistant(t *testing.T) {
 		t.Errorf("EventType = %q, want assistant_message", ev.EventType)
 	}
 }
+
+// --- Task-estimate marker (issue #558) ---
+
+func TestParser_TaskEstimate_FromTextPart(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(rawPart(map[string]interface{}{
+		"type": "text",
+		"text": `Working. <!-- {"marker":"irrlicht-eta","total_rounds":9,"completed_rounds":4} -->`,
+	}))
+	if ev.TaskEstimate == nil {
+		t.Fatal("expected TaskEstimate from assistant text part")
+	}
+	if ev.TaskEstimate.TotalRounds != 9 || ev.TaskEstimate.CompletedRounds != 4 {
+		t.Errorf("rounds = %d/%d, want 4/9", ev.TaskEstimate.CompletedRounds, ev.TaskEstimate.TotalRounds)
+	}
+}
+
+// Marker early in a long part must survive the 200-rune display truncation.
+func TestParser_TaskEstimate_SurvivesLongPart(t *testing.T) {
+	p := &Parser{}
+	long := `<!-- {"marker":"irrlicht-eta","total_rounds":5,"completed_rounds":1} --> `
+	for i := 0; i < 50; i++ {
+		long += "filler prose "
+	}
+	ev := p.ParseLine(rawPart(map[string]interface{}{
+		"type": "text",
+		"text": long,
+	}))
+	if ev.TaskEstimate == nil || ev.TaskEstimate.CompletedRounds != 1 {
+		t.Fatalf("TaskEstimate = %+v, want 1/5 despite display truncation", ev.TaskEstimate)
+	}
+}

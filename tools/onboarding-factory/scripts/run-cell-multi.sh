@@ -168,9 +168,12 @@ write_error_manifest() {
 
 # --- Spawn ONE isolated --record daemon ---------------------------------
 DAEMON_LOG="$STAGING/daemon.log"
+# grant-all: the consent-first permission gate (#570) would otherwise leave
+# a fresh recording daemon monitoring nothing until a wizard is answered.
 env IRRLICHT_RECORDINGS_DIR="$STAGING/recordings" \
   IRRLICHT_BIND_ADDR="$ONBOARD_BIND" \
   IRRLICHT_HOME="$ONBOARD_HOME" \
+  IRRLICHT_PERMISSION_MODE=grant-all \
   "$DAEMON" --record >"$DAEMON_LOG" 2>&1 &
 DAEMON_PID=$!
 echo "daemon started (pid $DAEMON_PID, bind=$ONBOARD_BIND, home=$ONBOARD_HOME)"

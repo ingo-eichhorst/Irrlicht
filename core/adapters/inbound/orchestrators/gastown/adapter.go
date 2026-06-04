@@ -39,7 +39,7 @@ func NewAdapter(gtBin string, sessions sessionLister) *Adapter {
 }
 
 // Name returns the orchestrator identifier.
-func (a *Adapter) Name() string { return "gastown" }
+func (a *Adapter) Name() string { return Name }
 
 // Detected returns true if a valid Gas Town installation was found.
 func (a *Adapter) Detected() bool { return a.collector.Detected() }

@@ -2,7 +2,16 @@ package claudecode
 
 import (
 	"irrlicht/core/domain/agent"
+	"irrlicht/core/domain/permission"
 	"irrlicht/core/pkg/tailer"
+)
+
+// Permission keys for the consent wizard (issue #570). Referenced by the
+// hook/statusline HTTP handlers' consent gates and the daemon wiring.
+const (
+	PermissionKeyHooks       = "hooks"
+	PermissionKeyStatusline  = "statusline"
+	PermissionKeyTranscripts = "transcripts"
 )
 
 // Claude Code mascot — pixel-art rectangular creature with eyes and legs.
@@ -37,6 +46,47 @@ func Agent() agent.Agent {
 			Dir: transcriptsDir(),
 			Parser: agent.JSONLineParser{
 				NewParser: func() agent.LineParser { return &Parser{} },
+			},
+		},
+		Permissions: []agent.Permission{
+			{
+				Key:             PermissionKeyTranscripts,
+				Kind:            permission.KindObserve,
+				Title:           "Read session transcripts",
+				FeatureUnlocked: "Session list, timeline, cost & token metrics",
+				Touches:         "Reads session transcripts under ~/.claude/projects/",
+				Detail: "Tails *.jsonl transcript files under ~/.claude/projects/ " +
+					"to derive session state, cost, and token metrics. Read-only — " +
+					"no transcript file is ever modified. Toggling off stops all " +
+					"reading immediately.",
+			},
+			{
+				Key:             PermissionKeyHooks,
+				Kind:            permission.KindModify,
+				Title:           "Install status hooks",
+				FeatureUnlocked: "Instant waiting-state detection (permission prompts, plan approval, questions)",
+				Touches:         "Writes 4 hook entries to ~/.claude/settings.json",
+				Detail: "Adds PermissionRequest, PreToolUse, PostToolUse, and " +
+					"PostToolUseFailure hook entries whose command is: " +
+					installedHookCommand + " — each POSTs the hook payload to the " +
+					"local daemon. Toggling off removes exactly these entries " +
+					"(also available via `irrlichd --uninstall-hooks`).",
+				Apply:  func() error { _, err := EnsureHooksInstalled(); return err },
+				Remove: func() error { _, err := UninstallHooks(); return err },
+			},
+			{
+				Key:             PermissionKeyStatusline,
+				Kind:            permission.KindModify,
+				Title:           "Install statusline feed",
+				FeatureUnlocked: "Rate-limit / quota forecast for Pro & Max subscriptions",
+				Touches:         "Sets statusLine.command in ~/.claude/settings.json",
+				Detail: "Sets statusLine.command to: " + installedStatuslineCommand +
+					" — POSTs Claude Code's statusline JSON (carrying rate-limit " +
+					"data) to the local daemon. An existing user statusline is " +
+					"chained, not replaced. Toggling off restores the previous " +
+					"command (or removes the entry if irrlicht installed it).",
+				Apply:  func() error { _, err := EnsureStatuslineInstalled(); return err },
+				Remove: func() error { _, err := UninstallStatusline(); return err },
 			},
 		},
 	}

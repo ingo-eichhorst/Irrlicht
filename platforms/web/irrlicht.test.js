@@ -1,11 +1,15 @@
 import { describe, test, expect, beforeEach } from 'vitest'
 import {
+  pendingWizardAgents,
+  stillPendingForAgents,
+  buildPermissionAnswers,
   resolvedTheme,
   rowLabel,
   maybeNotifyOnUpdate,
   formatCost,
   formatUsageCost,
   pressureClass,
+  taskEtaPresentation,
   historyPriorityForState,
   lastNotifiedPressure,
   relayFrameKind,
@@ -337,6 +341,67 @@ describe('daemonSessionIds (#540 drop a disconnected daemon\'s rows)', () => {
   })
 })
 
+describe('taskEtaPresentation', () => {
+  const now = 1769000000
+  const metricsFor = (over) => ({
+    task_estimate: { total_rounds: 10, completed_rounds: 6, updated_at: now - 30, ...((over && over.est) || {}) },
+    task_completion_eta: now + 720,
+    ...((over && over.metrics) || {}),
+  })
+
+  test('point estimate once half the rounds are done', () => {
+    const info = taskEtaPresentation(metricsFor(), 'working', now)
+    expect(info).not.toBeNull()
+    expect(info.text).toBe('~12m left')
+    expect(info.stale).toBe(false)
+    expect(info.title).toContain('6/10 rounds')
+  })
+
+  test('range when completed fraction is below half — high pinned at the marker', () => {
+    // high = 1.5 × (eta − updated_at) = 1.5 × 750s = 1125s → 19m
+    const info = taskEtaPresentation(metricsFor({ est: { completed_rounds: 2 } }), 'working', now)
+    expect(info.text).toBe('~12m–19m left')
+  })
+
+  test('low bound counts down between markers; high stays pinned', () => {
+    const m = metricsFor({ est: { completed_rounds: 2 } })
+    expect(taskEtaPresentation(m, 'working', now).text).toBe('~12m–19m left')
+    expect(taskEtaPresentation(m, 'working', now + 120).text).toBe('~10m–19m left')
+  })
+
+  test('range with sub-minute low collapses to its upper bound — one sign', () => {
+    const m = metricsFor({ est: { completed_rounds: 2 }, metrics: { task_completion_eta: now + 30 } })
+    // high = 1.5 × (30 + 30) = 90s → 2m; low <1m → "<2m left", never "~<1m–2m"
+    expect(taskEtaPresentation(m, 'working', now).text).toBe('<2m left')
+  })
+
+  test('stale when the last marker is older than 3 minutes', () => {
+    const info = taskEtaPresentation(metricsFor({ est: { updated_at: now - 200 } }), 'working', now)
+    expect(info.stale).toBe(true)
+  })
+
+  test('suppressed when not working', () => {
+    expect(taskEtaPresentation(metricsFor(), 'waiting', now)).toBeNull()
+    expect(taskEtaPresentation(metricsFor(), 'ready', now)).toBeNull()
+  })
+
+  test('suppressed without estimate, eta, or reported progress', () => {
+    expect(taskEtaPresentation({}, 'working', now)).toBeNull()
+    expect(taskEtaPresentation(metricsFor({ metrics: { task_completion_eta: undefined } }), 'working', now)).toBeNull()
+    expect(taskEtaPresentation(metricsFor({ est: { completed_rounds: 0 } }), 'working', now)).toBeNull()
+  })
+
+  test('eta in the past clamps to <1m, never negative — one sign only', () => {
+    const info = taskEtaPresentation(metricsFor({ metrics: { task_completion_eta: now - 5 } }), 'working', now)
+    expect(info.text).toBe('<1m left')
+  })
+
+  test('hour-scale remaining uses h+m resolution', () => {
+    const info = taskEtaPresentation(metricsFor({ metrics: { task_completion_eta: now + 5400 } }), 'working', now)
+    expect(info.text).toBe('~1h30m left')
+  })
+})
+
 describe('group traversal recurses Gas Town rig sub-groups (#559)', () => {
   // A gastown group with a global agent plus two nested rigs whose worker
   // sessions live in `groups[].agents`, not the top-level `agents`.
@@ -402,5 +467,119 @@ describe('structureSignature (#559 — detects nesting/role changes the WS delta
       ]},
     ]
     expect(structureSignature(nested)).not.toBe(structureSignature(flat))
+  })
+})
+
+describe('permission wizard (#570)', () => {
+  const snap = (overrides = {}) => ({
+    mode: 'ask',
+    agents: [
+      {
+        name: 'claude-code', display_name: 'Claude Code', detected: true,
+        permissions: [
+          { key: 'transcripts', kind: 'observe', state: 'pending', title: 'Read transcripts' },
+          { key: 'hooks', kind: 'modify', state: 'pending', title: 'Install hooks' },
+        ],
+      },
+      {
+        name: 'codex', display_name: 'Codex', detected: false,
+        permissions: [{ key: 'transcripts', kind: 'observe', state: 'pending' }],
+      },
+      {
+        name: 'pi', display_name: 'Pi', detected: true,
+        permissions: [{ key: 'transcripts', kind: 'observe', state: 'granted' }],
+      },
+    ],
+    ...overrides,
+  })
+
+  test('pendingWizardAgents: only detected agents with pending permissions', () => {
+    const got = pendingWizardAgents(snap())
+    expect(got.map(a => a.name)).toEqual(['claude-code'])
+  })
+
+  test('pendingWizardAgents: empty in grant-all mode (wizard suppressed)', () => {
+    expect(pendingWizardAgents(snap({ mode: 'grant-all' }))).toEqual([])
+  })
+
+  test('pendingWizardAgents: tolerates null/missing fields', () => {
+    expect(pendingWizardAgents(null)).toEqual([])
+    expect(pendingWizardAgents({})).toEqual([])
+    expect(pendingWizardAgents({ mode: 'ask', agents: [{ name: 'x', detected: true }] })).toEqual([])
+  })
+
+  test('pendingWizardAgents: an upgrade-added pending item re-triggers for an answered agent', () => {
+    const s = snap()
+    s.agents[2].permissions.push({ key: 'newthing', kind: 'observe', state: 'pending' })
+    expect(pendingWizardAgents(s).map(a => a.name)).toEqual(['claude-code', 'pi'])
+  })
+
+  test('buildPermissionAnswers: auto mode answers every displayed pending item explicitly', () => {
+    const draft = {
+      'claude-code/transcripts': true,
+      'claude-code/hooks': false,
+    }
+    const got = buildPermissionAnswers(snap(), draft, true)
+    expect(got).toEqual([
+      { agent: 'claude-code', permission: 'transcripts', grant: true },
+      { agent: 'claude-code', permission: 'hooks', grant: false },
+    ])
+  })
+
+  test('buildPermissionAnswers: auto mode never touches already-answered items', () => {
+    const draft = { 'pi/transcripts': false } // answered (granted) — not in the auto wizard
+    expect(buildPermissionAnswers(snap(), draft, true)).toEqual([])
+  })
+
+  test('buildPermissionAnswers: review mode submits only changes', () => {
+    const draft = {
+      'pi/transcripts': false,        // granted → off: revoke
+      'claude-code/hooks': true,      // pending → answered grant
+      'codex/transcripts': false,     // pending → answered deny
+    }
+    const got = buildPermissionAnswers(snap(), draft, false)
+    expect(got).toContainEqual({ agent: 'pi', permission: 'transcripts', grant: false })
+    expect(got).toContainEqual({ agent: 'claude-code', permission: 'hooks', grant: true })
+    expect(got).toContainEqual({ agent: 'codex', permission: 'transcripts', grant: false })
+    expect(got).toHaveLength(3)
+  })
+
+  test('buildPermissionAnswers: review mode skips unchanged grants', () => {
+    const draft = { 'pi/transcripts': true } // granted → on: unchanged
+    expect(buildPermissionAnswers(snap(), draft, false)).toEqual([])
+  })
+
+  test('buildPermissionAnswers: ignores draft keys not in the snapshot', () => {
+    const draft = { 'ghost/agent': true }
+    expect(buildPermissionAnswers(snap(), draft, false)).toEqual([])
+    expect(buildPermissionAnswers(null, draft, false)).toEqual([])
+  })
+})
+
+describe('stillPendingForAgents (#570 locked-set dismissal)', () => {
+  const snap = (state) => ({
+    mode: 'ask',
+    agents: [
+      { name: 'claude-code', detected: false, // process exited mid-decision
+        permissions: [{ key: 'transcripts', state }] },
+      { name: 'codex', detected: true,
+        permissions: [{ key: 'transcripts', state: 'pending' }] },
+    ],
+  })
+
+  test('locked agent still pending keeps the wizard up even when undetected', () => {
+    expect(stillPendingForAgents(snap('pending'), ['claude-code'])).toBe(true)
+  })
+
+  test('locked agent fully answered dismisses (other agents do not count)', () => {
+    // codex is still pending but was NOT locked into this wizard.
+    expect(stillPendingForAgents(snap('granted'), ['claude-code'])).toBe(false)
+    expect(stillPendingForAgents(snap('denied'), ['claude-code'])).toBe(false)
+  })
+
+  test('tolerates null/missing input', () => {
+    expect(stillPendingForAgents(null, ['x'])).toBe(false)
+    expect(stillPendingForAgents({}, ['x'])).toBe(false)
+    expect(stillPendingForAgents(snap('pending'), null)).toBe(false)
   })
 })

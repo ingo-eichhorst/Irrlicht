@@ -203,6 +203,11 @@ func parseTextPart(raw map[string]interface{}, ev *tailer.ParsedEvent) *tailer.P
 	// Assistant text part.
 	ev.EventType = "assistant_message"
 	if text, ok := raw["text"].(string); ok {
+		// Scan the FULL part text for the task-estimate marker (issue #558)
+		// before the display truncation below drops all but the last 200 runes.
+		if est := tailer.ScanTaskEstimate(text, ev.Timestamp); est != nil {
+			ev.TaskEstimate = est
+		}
 		runes := []rune(text)
 		if len(runes) > 200 {
 			ev.AssistantText = "…" + string(runes[len(runes)-200:])

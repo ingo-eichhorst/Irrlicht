@@ -20,6 +20,12 @@ type OrchestratorMonitor struct {
 	broadcaster outbound.PushBroadcaster
 	log         outbound.Logger
 
+	// merged is created at construction (not in Run) so watchers can be
+	// registered via AddWatcher before or after Run starts — orchestrator
+	// monitoring is consent-gated and starts/stops at grant/revoke time
+	// (#570). Never closed; Run exits on ctx cancellation.
+	merged chan orchestrator.State
+
 	mu     sync.RWMutex
 	states map[string]*orchestrator.State // name → latest state
 }
@@ -34,7 +40,40 @@ func NewOrchestratorMonitor(
 		watchers:    watchers,
 		broadcaster: broadcaster,
 		log:         log,
+		merged:      make(chan orchestrator.State, 4),
 		states:      make(map[string]*orchestrator.State),
+	}
+}
+
+// AddWatcher registers an orchestrator watcher with the running (or
+// not-yet-running) monitor: a drain goroutine forwards its state snapshots
+// into the merged channel until ctx is cancelled. The caller owns the
+// watcher's Watch lifecycle under the same ctx — this is how the
+// permission service starts/stops orchestrator monitoring on grant/revoke
+// (#570).
+func (m *OrchestratorMonitor) AddWatcher(ctx context.Context, w inbound.OrchestratorWatcher) {
+	go m.drainWatcher(ctx, w)
+}
+
+// drainWatcher subscribes to one watcher and forwards its snapshots into
+// the merged channel until ctx is cancelled or the subscription closes.
+func (m *OrchestratorMonitor) drainWatcher(ctx context.Context, w inbound.OrchestratorWatcher) {
+	ch := w.Subscribe()
+	defer w.Unsubscribe(ch)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case state, ok := <-ch:
+			if !ok {
+				return
+			}
+			select {
+			case m.merged <- state:
+			case <-ctx.Done():
+				return
+			}
+		}
 	}
 }
 
@@ -49,45 +88,13 @@ func (m *OrchestratorMonitor) State(name string) *orchestrator.State {
 	return nil
 }
 
-// Run subscribes to all OrchestratorWatcher event streams, fans them into a
-// single channel, and broadcasts updates. It blocks until ctx is cancelled.
+// Run drains all OrchestratorWatcher event streams into the merged channel
+// and records state updates. It blocks until ctx is cancelled. Watchers
+// registered later via AddWatcher feed the same channel.
 func (m *OrchestratorMonitor) Run(ctx context.Context) error {
-	if len(m.watchers) == 0 {
-		<-ctx.Done()
-		return ctx.Err()
-	}
-
-	merged := make(chan orchestrator.State, 4)
-	var wg sync.WaitGroup
-
 	for _, w := range m.watchers {
-		ch := w.Subscribe()
-		wg.Add(1)
-		go func(watcher inbound.OrchestratorWatcher, ch <-chan orchestrator.State) {
-			defer wg.Done()
-			defer watcher.Unsubscribe(ch)
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case state, ok := <-ch:
-					if !ok {
-						return
-					}
-					select {
-					case merged <- state:
-					case <-ctx.Done():
-						return
-					}
-				}
-			}
-		}(w, ch)
+		go m.drainWatcher(ctx, w)
 	}
-
-	go func() {
-		wg.Wait()
-		close(merged)
-	}()
 
 	m.log.LogInfo("orchestrator-monitor", "", fmt.Sprintf("started — watching %d orchestrator(s)", len(m.watchers)))
 
@@ -95,10 +102,7 @@ func (m *OrchestratorMonitor) Run(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case state, ok := <-merged:
-			if !ok {
-				return nil
-			}
+		case state := <-m.merged:
 			m.mu.Lock()
 			cp := state
 			m.states[state.Adapter] = &cp

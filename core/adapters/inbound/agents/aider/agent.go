@@ -4,7 +4,11 @@ import (
 	"regexp"
 
 	"irrlicht/core/domain/agent"
+	"irrlicht/core/domain/permission"
 )
+
+// PermissionKeyHistory gates all Aider monitoring (issue #570).
+const PermissionKeyHistory = "history"
 
 // Aider's actual OS process is `python` invoking the aider script (uv/pipx
 // wrapper), so `pgrep -x aider` finds nothing. The leading slash anchors
@@ -46,6 +50,19 @@ func Agent() agent.Agent {
 			Filename: transcriptFilename,
 			Parser: agent.RawLineParser{
 				NewParser: func() agent.RawParser { return &Parser{} },
+			},
+		},
+		Permissions: []agent.Permission{
+			{
+				Key:             PermissionKeyHistory,
+				Kind:            permission.KindObserve,
+				Title:           "Read chat history",
+				FeatureUnlocked: "Session list, timeline, cost & token metrics",
+				Touches:         "Reads " + transcriptFilename + " in each project directory",
+				Detail: "Tails the " + transcriptFilename + " file Aider writes in " +
+					"the working directory of each running aider process. Read-only " +
+					"— no file is ever modified. Toggling off stops all reading " +
+					"immediately.",
 			},
 		},
 	}

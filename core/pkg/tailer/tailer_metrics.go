@@ -315,6 +315,11 @@ func (t *TranscriptTailer) computeMetrics() {
 		t.metrics.RateLimitHistory = nil
 	}
 
+	// The task-estimate marker is sporadic like the rate-limit snapshot —
+	// surface the last-seen one even on an empty pass (issue #558).
+	t.metrics.TaskEstimate = t.lastTaskEstimate
+	t.metrics.TaskEstimateBase = t.firstTaskEstimate
+
 	// Background-process count + output paths share the rate-limit block's
 	// "must run even on an empty pass" property: the open set can be
 	// rehydrated from the ledger after a daemon restart and must surface

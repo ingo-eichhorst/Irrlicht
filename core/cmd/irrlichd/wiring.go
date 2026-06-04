@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"irrlicht/core/adapters/inbound/agents/fswatcher"
+	"irrlicht/core/adapters/inbound/agents/opencode"
 	"irrlicht/core/adapters/inbound/agents/processlifecycle"
 	"irrlicht/core/domain/agent"
 	"irrlicht/core/ports/inbound"
@@ -18,8 +19,10 @@ import (
 // Dir and a process scanner keyed on the matcher. FilesUnderCWD adapters
 // get only a scanner, configured with the variant's Filename so it emits
 // transcript_new events on first appearance of the per-process file
-// inside CWD. ProcessOwnedStore adapters get only a scanner; their
-// dedicated DB-aware watcher is constructed separately by main.go.
+// inside CWD. ProcessOwnedStore adapters get a scanner plus their
+// dedicated store watcher (OpenCode's SQLite poller — panics loudly for
+// any other ProcessOwnedStore adapter, which must wire its watcher here;
+// grant-all daemons exercise every factory at boot, so CI catches it).
 //
 // Returns the list of watchers and a human-readable label for the
 // startup log line ("<adapter> (<root>)").
@@ -37,6 +40,15 @@ func buildAgentWatchers(
 		w := fswatcher.New(s.RootDirFor(runtime.GOOS), a.Identity.Name, maxSessionAge).WithIdentity(a.Identity)
 		watchers = append(watchers, w)
 		labels = append(labels, fmt.Sprintf("%s (%s)", a.Identity.Name, w.Root()))
+	}
+
+	if _, ok := a.Source.(agent.ProcessOwnedStore); ok {
+		if a.Identity.Name != opencode.AdapterName {
+			panic(fmt.Sprintf("buildAgentWatchers: no store watcher wired for ProcessOwnedStore adapter %q — add its construction here", a.Identity.Name))
+		}
+		w := opencode.New(maxSessionAge).WithIdentity(a.Identity)
+		watchers = append(watchers, w)
+		labels = append(labels, fmt.Sprintf("%s-db (%s)", a.Identity.Name, w.Root()))
 	}
 
 	scanner := processlifecycle.NewScanner(processNameFor(a), a.Identity.Name, 0).WithIdentity(a.Identity)

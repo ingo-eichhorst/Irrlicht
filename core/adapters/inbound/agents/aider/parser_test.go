@@ -578,3 +578,60 @@ func TestParser_NewUserPromptAfterMultiCall_StaysWorking(t *testing.T) {
 	}
 }
 
+
+// --- Task-estimate marker (issue #558) ---
+
+func TestParser_TaskEstimate_FromAssistantProse(t *testing.T) {
+	lines := []string{
+		"#### Build the thing step by step",
+		"",
+		"Starting step 1.",
+		"",
+		`<!-- {"marker":"irrlicht-eta","total_rounds":6,"completed_rounds":2} -->`,
+		"",
+		"Step 2 done.",
+		"",
+		"> Tokens: 500 sent, 120 received.",
+	}
+	p := &Parser{}
+	var got *tailer.ParsedEvent
+	for _, e := range drive(p, lines) {
+		if e.EventType == "assistant_message" {
+			got = e
+		}
+	}
+	if got == nil || got.TaskEstimate == nil {
+		t.Fatal("expected TaskEstimate on the assistant_message event")
+	}
+	if got.TaskEstimate.TotalRounds != 6 || got.TaskEstimate.CompletedRounds != 2 {
+		t.Errorf("rounds = %d/%d, want 2/6", got.TaskEstimate.CompletedRounds, got.TaskEstimate.TotalRounds)
+	}
+	if got.TaskEstimate.ObservedAt == 0 {
+		t.Error("ObservedAt should be stamped (wall-clock)")
+	}
+}
+
+// Marker early in a long turn must survive — AssistantText keeps only the
+// last 200 runes of the accumulated prose.
+func TestParser_TaskEstimate_SurvivesLongTurn(t *testing.T) {
+	lines := []string{
+		"#### Long task",
+		"",
+		`<!-- {"marker":"irrlicht-eta","total_rounds":5,"completed_rounds":4} -->`,
+	}
+	for i := 0; i < 40; i++ {
+		lines = append(lines, "filler prose line that pushes the marker out of the display window")
+	}
+	lines = append(lines, "", "> Tokens: 900 sent, 300 received.")
+
+	p := &Parser{}
+	var got *tailer.ParsedEvent
+	for _, e := range drive(p, lines) {
+		if e.EventType == "assistant_message" {
+			got = e
+		}
+	}
+	if got == nil || got.TaskEstimate == nil || got.TaskEstimate.CompletedRounds != 4 {
+		t.Fatalf("TaskEstimate = %+v, want 4/5 despite display truncation", got.TaskEstimate)
+	}
+}

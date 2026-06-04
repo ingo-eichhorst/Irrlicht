@@ -19,8 +19,12 @@
 # then discard it. Nothing per-OS is committed; the corpus stays OS-neutral.
 #
 # Procedure on the Linux host:
-#   1. Build + run a dev recording daemon (the prod daemon has no --record):
+#   1. Build + run a dev recording daemon (the prod daemon has no --record).
+#      IRRLICHT_PERMISSION_MODE=grant-all is required: a fresh IRRLICHT_HOME
+#      has no consent answers (#570), so without it the daemon monitors
+#      nothing and events.jsonl comes out empty:
 #        tools/build-dev.sh && IRRLICHT_HOME=$(mktemp -d) \
+#          IRRLICHT_PERMISSION_MODE=grant-all \
 #          IRRLICHT_DAEMON_PORT=7838 core/bin/irrlichd --record /tmp/rec &
 #   2. Drive the cell's recipe (tmux send-keys; never human-in-loop) so the
 #      live Linux sensor emits the event stream into /tmp/rec/.../events.jsonl.

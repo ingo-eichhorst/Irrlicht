@@ -162,14 +162,20 @@ user chooses up front:
    ```
 
 5. **Start the daemon** with `--record` for lifecycle event capture. In
-   **separate** mode it gets `IRRLICHT_HOME` (isolated state); in **replace**
-   mode `IRRLICHT_HOME` is omitted so it reads/writes the production state dir.
+   **separate** mode it gets `IRRLICHT_HOME` (isolated state) plus
+   `IRRLICHT_PERMISSION_MODE=grant-all` — a fresh isolated state dir has no
+   consent answers (#570), so without it the daemon monitors nothing until
+   the permission wizard is answered. Drop that variable when the point of
+   the session is to test the wizard itself. In **replace** mode
+   `IRRLICHT_HOME` is omitted so it reads/writes the production state dir —
+   including the user's real permission answers (no grant-all there).
    ```bash
    if [ "$MODE" = "replace" ]; then
      IRRLICHT_BIND_ADDR=127.0.0.1:$PORT \
        nohup "$IRRLICHTD_BIN" --record > /tmp/irrlichd-dev.log 2>&1 & disown
    else
      IRRLICHT_HOME="$DEV_HOME" IRRLICHT_BIND_ADDR=127.0.0.1:$PORT \
+       IRRLICHT_PERMISSION_MODE=grant-all \
        nohup "$IRRLICHTD_BIN" --record > /tmp/irrlichd-dev.log 2>&1 & disown
    fi
    ```

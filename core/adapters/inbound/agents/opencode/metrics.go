@@ -87,6 +87,7 @@ func querySessionMetrics(db *sql.DB, sessionID, dbPath string) (*session.Session
 	var lastEventType string
 	openTools := make(map[string]string) // callID → toolName
 	var lastAssistantText string
+	var lastTaskEstimate, firstTaskEstimate *tailer.TaskEstimate
 	var cumCost float64
 	var cumInput, cumOutput, cumCacheRead int64
 	hasData := false
@@ -227,6 +228,23 @@ func querySessionMetrics(db *sql.DB, sessionID, dbPath string) (*session.Session
 		if ev.AssistantText != "" {
 			lastAssistantText = ev.AssistantText
 		}
+
+		// Track the latest task-estimate marker (issue #558) — mirrors the
+		// tailer's lastTaskEstimate persistence, which this path bypasses.
+		// A real user part resets it (new task/redirect — same rule as the
+		// tailer, including the tool-result guard): only markers after the
+		// last user message count.
+		if ev.TaskEstimate != nil {
+			if firstTaskEstimate == nil ||
+				(lastTaskEstimate != nil && ev.TaskEstimate.CompletedRounds < lastTaskEstimate.CompletedRounds) {
+				firstTaskEstimate = ev.TaskEstimate
+			}
+			lastTaskEstimate = ev.TaskEstimate
+		}
+		if ev.ClearToolNames && len(ev.ToolResultIDs) == 0 {
+			lastTaskEstimate = nil
+			firstTaskEstimate = nil
+		}
 	}
 
 	if !hasData {
@@ -250,6 +268,29 @@ func querySessionMetrics(db *sql.DB, sessionID, dbPath string) (*session.Session
 	metrics.CumCacheReadTokens = cumCacheRead
 	metrics.ElapsedSeconds = int64(lastTS.Sub(firstTS).Seconds())
 	metrics.Tasks = tasks
+
+	// Surface the agent-authored task estimate + projected completion ETA
+	// (issue #558) — mirrors the conversion the shared metrics adapter does
+	// for tailer-path agents (metrics/adapter.go), which this path bypasses.
+	if lastTaskEstimate != nil {
+		toDomain := func(src *tailer.TaskEstimate) *session.TaskEstimate {
+			if src == nil {
+				return nil
+			}
+			return &session.TaskEstimate{
+				TotalRounds:     src.TotalRounds,
+				CompletedRounds: src.CompletedRounds,
+				Risk:            src.Risk,
+				Confidence:      src.Confidence,
+				UpdatedAt:       src.ObservedAt,
+			}
+		}
+		metrics.TaskEstimate = toDomain(lastTaskEstimate)
+		if eta := session.ForecastTaskCompletion(metrics.TaskEstimate, toDomain(firstTaskEstimate), metrics.ElapsedSeconds, time.Now()); eta != nil {
+			etaUnix := eta.Unix()
+			metrics.TaskCompletionEta = &etaUnix
+		}
+	}
 
 	cm := capacity.DefaultCapacityManager()
 	metrics.ContextWindow, metrics.ContextUtilization, metrics.PressureLevel, metrics.ContextWindowUnknown =

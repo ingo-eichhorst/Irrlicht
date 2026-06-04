@@ -372,6 +372,72 @@
       return '';
     }
 
+    // Minute-resolution duration for the task-ETA chip — fmtDuration's
+    // second-level detail would make the chip flicker every tick for a
+    // number that is inherently rough.
+    function fmtEtaDuration(secs) {
+      if (secs < 60) return '<1m';
+      const mins = Math.round(secs / 60);
+      const h = Math.floor(mins / 60);
+      const m = mins % 60;
+      if (h > 0) return h + 'h' + (m > 0 ? m + 'm' : '');
+      return m + 'm';
+    }
+
+    // fmtEtaText renders the remaining-time text with exactly ONE sign —
+    // "~" (approximate) or "<" (upper bound), never both, never a degenerate
+    // "2m–2m" range. highSecs null → point estimate.
+    //   point, ≥1m   → "~12m left"
+    //   point, <1m   → "<1m left"
+    //   range, low <1m → "<2m left"   (the range collapses to its upper bound)
+    //   range, low==high → point rules
+    //   range        → "~8m–12m left"
+    function fmtEtaText(remaining, highSecs) {
+      const low = fmtEtaDuration(remaining);
+      if (highSecs !== null) {
+        const high = fmtEtaDuration(highSecs);
+        if (low !== high) {
+          if (remaining < 60) return '<' + high + ' left';
+          return '~' + low + '–' + high + ' left';
+        }
+      }
+      if (remaining < 60) return '<1m left';
+      return '~' + low + ' left';
+    }
+
+    // taskEtaPresentation decides the task-completion ETA chip for a session
+    // (issue #558, agent-authored estimate). Returns null when the chip must
+    // be hidden: session not `working`, no estimate, no reported progress, or
+    // no projected eta. Otherwise { text, stale, title }: a point estimate
+    // ("~12m left") once half the rounds are done, a range ("~8m–12m left")
+    // below that, and stale=true when the last marker is older than 3min so
+    // the chip degrades instead of letting the ETA drift.
+    //
+    // The eta is anchored at the marker (daemon-side), so the LOW bound
+    // counts down in real time between marker updates while the HIGH bound
+    // — 1.5× the remaining time as projected AT the marker — stays pinned
+    // until the agent reports fresh progress: "~3m–5m left" becomes
+    // "~2m–5m left" a minute later, never the other way around.
+    function taskEtaPresentation(metrics, state, nowSec) {
+      const est = metrics && metrics.task_estimate;
+      const eta = metrics && metrics.task_completion_eta;
+      if (state !== 'working' || !est || !eta || !(est.completed_rounds > 0)) return null;
+      const remaining = Math.max(0, Math.floor(eta - nowSec));
+      const frac = est.total_rounds > 0 ? est.completed_rounds / est.total_rounds : 0;
+      let highSecs = null;
+      if (frac < 0.5) {
+        highSecs = est.updated_at > 0
+          ? Math.max(remaining, Math.floor((eta - est.updated_at) * 1.5))
+          : Math.floor(remaining * 1.5);
+      }
+      const text = fmtEtaText(remaining, highSecs);
+      const ageSec = est.updated_at > 0 ? Math.max(0, Math.floor(nowSec - est.updated_at)) : 0;
+      const stale = est.updated_at > 0 && ageSec > 180;
+      let title = 'Task ETA — agent-reported ' + est.completed_rounds + '/' + est.total_rounds + ' rounds';
+      if (est.updated_at > 0) title += ', updated ' + fmtDuration(ageSec) + ' ago';
+      return { text: text, stale: stale, title: title };
+    }
+
     function shortID(id) { return id ? displaySessionId(id).slice(0, 6) : ''; }
 
     function pressureClass(level) {
@@ -736,6 +802,7 @@
         '<span class="row-ctx-pct"></span>' +
         '<span class="row-cost"></span>' +
         '<canvas class="row-history"></canvas>' +
+        '<span class="row-eta" style="display:none"></span>' +
         '<span class="row-spacer"></span>' +
         '<span class="row-model"></span>' +
         '<span class="row-adapter-icon" style="display:none"></span>' +
@@ -894,6 +961,25 @@
       elapsedEl.dataset.firstSeen = isActive ? (agent.first_seen || '') : '';
       elapsedEl.dataset.elapsedStored = metrics.elapsed_seconds || '';
       elapsedEl.dataset.active = isActive ? '1' : '0';
+
+      // Task-completion ETA chip (issue #558) — agent-authored estimate,
+      // shown only while working. The 1s tickElapsed loop re-derives the
+      // countdown from the dataset between polls.
+      const etaEl = el.querySelector('.row-eta');
+      const etaInfo = taskEtaPresentation(metrics, state, Date.now() / 1000);
+      if (etaInfo) {
+        etaEl.style.display = '';
+        etaEl.textContent = etaInfo.text;
+        etaEl.title = etaInfo.title;
+        etaEl.classList.toggle('stale', etaInfo.stale);
+        etaEl.dataset.eta = metrics.task_completion_eta;
+        etaEl.dataset.total = metrics.task_estimate.total_rounds;
+        etaEl.dataset.completed = metrics.task_estimate.completed_rounds;
+        etaEl.dataset.updatedAt = metrics.task_estimate.updated_at || '';
+      } else {
+        etaEl.style.display = 'none';
+        etaEl.dataset.eta = '';
+      }
 
       // Created chip — only stamp the first_seen on the element; the 1s
       // tickElapsed loop owns the textContent. first_seen is immutable per
@@ -1194,6 +1280,27 @@
         if (el.dataset.active === '1') {
           const fs = parseFloat(el.dataset.firstSeen);
           if (fs) el.textContent = fmtDuration(Math.max(0, Math.floor(now - fs)));
+        }
+      }
+      // Task-ETA chips burn down between polls. Only rows whose chip is
+      // visible carry dataset.eta (updateSessionRow clears it otherwise),
+      // and visibility/suppression decisions stay with updateSessionRow —
+      // the tick only refreshes the countdown and staleness.
+      for (const el of document.querySelectorAll('.row-eta')) {
+        const eta = parseFloat(el.dataset.eta);
+        if (!eta) continue;
+        const info = taskEtaPresentation({
+          task_completion_eta: eta,
+          task_estimate: {
+            total_rounds: parseInt(el.dataset.total, 10) || 0,
+            completed_rounds: parseInt(el.dataset.completed, 10) || 0,
+            updated_at: parseFloat(el.dataset.updatedAt) || 0,
+          },
+        }, 'working', now);
+        if (info) {
+          el.textContent = info.text;
+          el.title = info.title;
+          el.classList.toggle('stale', info.stale);
         }
       }
       // Debug-mode "created" chip — only iterate when the toggle is on so
@@ -1722,6 +1829,13 @@
     // here, so the render/history/notification paths are unchanged.
     function dispatchRawFrame(msg) {
       if (!msg) return;
+      if (msg.type === 'permissions_updated') {
+        // Consent state changed (agent detected, or the other surface
+        // answered the wizard). Dataless by design — re-fetch and let
+        // updatePermissionsWizard open/dismiss the overlay (#570).
+        refreshPermissions();
+        return;
+      }
       if (msg.type === 'history_snapshot' && msg.session_id && msg.history) {
         applyHistorySnapshot(msg.session_id, msg.history, msg.generations);
         repaintHistory();
@@ -2404,12 +2518,260 @@
       if (el && v && v.version) el.textContent = 'v' + v.version;
     });
 
+    // --- Permission wizard (issue #570) ---
+    // The daemon is consent-first: every read/modification it performs is a
+    // declared per-agent permission, and the wizard collects the answers.
+    // State lives with the daemon (GET /api/v1/permissions); this overlay
+    // appears when a detected agent has pending permissions and dismisses
+    // live when the other surface (macOS app) answers first — the daemon
+    // broadcasts `permissions_updated` and we re-fetch.
+    let permissionsSnapshot = null;
+    // 'auto' = new-agent wizard (pending items only); 'review' = Settings
+    // re-entry (all items, toggles preloaded with current grants).
+    let permissionsWizardMode = null;
+    // Agent names LOCKED into the open auto wizard at presentation time:
+    // a mid-decision detection flip (the agent's process exited) can't
+    // tear it down, and a newly detected agent can't inject rows into it —
+    // it gets its own prompt once this one resolves.
+    let permissionsWizardAgents = null;
+
+    // pendingWizardAgents returns the agents that should trigger the auto
+    // wizard: detected, with at least one pending permission, in ask mode.
+    // Pure; exported for tests.
+    function pendingWizardAgents(snap) {
+      if (!snap || snap.mode !== 'ask' || !Array.isArray(snap.agents)) return [];
+      return snap.agents.filter(a =>
+        a.detected && (a.permissions || []).some(p => p.state === 'pending'));
+    }
+
+    // stillPendingForAgents reports whether any of the named agents still
+    // has a pending permission. Drives auto-wizard dismissal: only answers
+    // dismiss an open wizard (submitted here or on the macOS app — first
+    // answer wins); a detection flip alone must not. Pure; exported for
+    // tests.
+    function stillPendingForAgents(snap, names) {
+      if (!snap || !Array.isArray(snap.agents) || !Array.isArray(names)) return false;
+      return snap.agents.some(a => names.includes(a.name) &&
+        (a.permissions || []).some(p => p.state === 'pending'));
+    }
+
+    // buildPermissionAnswers computes the POST payload from the wizard's
+    // toggle states. draft maps "agent/key" → bool. In onlyPending mode
+    // (auto wizard) every displayed pending item is answered explicitly;
+    // in review mode unchanged already-answered items are skipped. Pure;
+    // exported for tests.
+    function buildPermissionAnswers(snap, draft, onlyPending) {
+      const out = [];
+      if (!snap || !Array.isArray(snap.agents)) return out;
+      for (const a of snap.agents) {
+        for (const p of (a.permissions || [])) {
+          const k = a.name + '/' + p.key;
+          if (!(k in draft)) continue;
+          const grant = !!draft[k];
+          if (p.state === 'pending') {
+            out.push({ agent: a.name, permission: p.key, grant });
+            continue;
+          }
+          if (onlyPending) continue;
+          if (grant !== (p.state === 'granted')) {
+            out.push({ agent: a.name, permission: p.key, grant });
+          }
+        }
+      }
+      return out;
+    }
+
+    function refreshPermissions() {
+      return fetch('/api/v1/permissions')
+        .then(r => r.ok ? r.json() : null)
+        .catch(() => null)
+        .then(snap => {
+          if (!snap) return;
+          permissionsSnapshot = snap;
+          updatePermissionsWizard();
+        });
+    }
+
+    // updatePermissionsWizard reconciles overlay visibility with the
+    // snapshot: opens the auto wizard when a detected agent has pending
+    // permissions, and dismisses it once its LOCKED agents have no pending
+    // items left — answered here or on the macOS app (first answer wins).
+    // A detection flip alone never dismisses an open wizard, and an open
+    // wizard is not re-rendered, so in-flight toggling isn't clobbered.
+    function updatePermissionsWizard() {
+      const backdrop = document.getElementById('permissions-backdrop');
+      if (!backdrop) return;
+      if (backdrop.classList.contains('open')) {
+        if (permissionsWizardMode !== 'auto') return;
+        if (stillPendingForAgents(permissionsSnapshot, permissionsWizardAgents)) return;
+        closePermissionsWizard();
+        // Fall through: another agent may be waiting for its own prompt.
+      }
+      if (pendingWizardAgents(permissionsSnapshot).length > 0) openPermissionsWizard('auto');
+    }
+
+    function openPermissionsWizard(mode) {
+      const backdrop = document.getElementById('permissions-backdrop');
+      if (!backdrop || !permissionsSnapshot) return;
+      permissionsWizardMode = mode;
+      permissionsWizardAgents = mode === 'auto'
+        ? pendingWizardAgents(permissionsSnapshot).map(a => a.name)
+        : null;
+      renderPermissionsWizard();
+      backdrop.classList.add('open');
+    }
+
+    function closePermissionsWizard() {
+      const backdrop = document.getElementById('permissions-backdrop');
+      if (backdrop) backdrop.classList.remove('open');
+      permissionsWizardMode = null;
+      permissionsWizardAgents = null;
+    }
+
+    // renderPermissionsWizard rebuilds the overlay body. Auto mode shows
+    // the LOCKED agents' unanswered items only (an upgrade that adds one
+    // new permission re-asks just that one); review mode shows everything
+    // with current grants preloaded.
+    function renderPermissionsWizard() {
+      const body = document.getElementById('permissions-body');
+      const title = document.getElementById('permissions-title');
+      const intro = document.getElementById('permissions-intro');
+      if (!body || !permissionsSnapshot) return;
+      const auto = permissionsWizardMode === 'auto';
+      const agents = auto
+        ? (permissionsSnapshot.agents || []).filter(a =>
+            (permissionsWizardAgents || []).includes(a.name))
+        : (permissionsSnapshot.agents || []);
+      if (title) title.textContent = auto ? 'Agent detected — choose permissions' : 'Agent permissions';
+      if (intro) {
+        intro.textContent = auto
+          ? 'irrlicht monitors coding agents only with your consent. Choose what it may do for each detected agent.'
+          : 'Everything irrlicht may read or modify, per agent. Toggling off undoes the modification and stops all reading.';
+      }
+      body.innerHTML = '';
+      for (const a of agents) {
+        const perms = auto ? a.permissions.filter(p => p.state === 'pending') : a.permissions;
+        if (!perms.length) continue;
+        const section = document.createElement('div');
+        section.className = 'perm-agent';
+        const h = document.createElement('h3');
+        h.textContent = a.display_name || a.name;
+        if (a.detected) {
+          const badge = document.createElement('span');
+          badge.className = 'perm-detected';
+          badge.textContent = 'running';
+          h.appendChild(badge);
+        }
+        section.appendChild(h);
+        for (const p of perms) {
+          section.appendChild(renderPermissionRow(a, p));
+        }
+        body.appendChild(section);
+      }
+    }
+
+    function renderPermissionRow(a, p) {
+      const row = document.createElement('div');
+      row.className = 'perm-row';
+      const label = document.createElement('label');
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.dataset.permAgent = a.name;
+      cb.dataset.permKey = p.key;
+      // Pending items default on (granting is the value proposition; the
+      // explicit Apply click is the consent). Answered items show their
+      // current state.
+      cb.checked = p.state === 'pending' ? true : p.state === 'granted';
+      const text = document.createElement('span');
+      text.className = 'settings-label-text';
+      const titleEl = document.createElement('span');
+      titleEl.className = 'settings-title';
+      titleEl.textContent = p.title || p.key;
+      const hint = document.createElement('span');
+      hint.className = 'settings-hint';
+      hint.textContent = p.feature_unlocked || '';
+      text.appendChild(titleEl);
+      text.appendChild(hint);
+      label.appendChild(cb);
+      label.appendChild(text);
+      row.appendChild(label);
+      // The (i) affordance: an expander with what it touches + full detail.
+      const details = document.createElement('details');
+      details.className = 'perm-details';
+      const summary = document.createElement('summary');
+      summary.textContent = 'ⓘ ' + (p.touches || 'details');
+      const detail = document.createElement('div');
+      detail.className = 'perm-detail-text';
+      detail.textContent = p.detail || '';
+      details.appendChild(summary);
+      details.appendChild(detail);
+      row.appendChild(details);
+      return row;
+    }
+
+    function submitPermissionsWizard() {
+      const body = document.getElementById('permissions-body');
+      if (!body) return;
+      const draft = {};
+      for (const cb of body.querySelectorAll('input[data-perm-agent]')) {
+        draft[cb.dataset.permAgent + '/' + cb.dataset.permKey] = cb.checked;
+      }
+      const answers = buildPermissionAnswers(permissionsSnapshot, draft, permissionsWizardMode === 'auto');
+      if (!answers.length) {
+        closePermissionsWizard();
+        return;
+      }
+      // Keep the wizard up until the daemon confirms: a failed POST must
+      // not silently drop consent decisions while monitoring stays paused
+      // — the user can just hit Apply again.
+      const applyBtn = document.getElementById('permissions-apply');
+      if (applyBtn) applyBtn.disabled = true;
+      const review = permissionsWizardMode === 'review';
+      fetch('/api/v1/permissions/answer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ answers }),
+      }).then(r => r.ok ? r.json() : null).catch(() => null).then(snap => {
+        if (applyBtn) applyBtn.disabled = false;
+        if (!snap) return; // failed — wizard stays for retry
+        permissionsSnapshot = snap;
+        if (review) closePermissionsWizard();
+        updatePermissionsWizard();
+      });
+    }
+
+    {
+      const applyBtn = document.getElementById('permissions-apply');
+      if (applyBtn) applyBtn.addEventListener('click', submitPermissionsWizard);
+      const backdrop = document.getElementById('permissions-backdrop');
+      if (backdrop) backdrop.addEventListener('click', (e) => {
+        if (e.target.id === 'permissions-backdrop') closePermissionsWizard();
+      });
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && backdrop && backdrop.classList.contains('open')) {
+          closePermissionsWizard();
+        }
+      });
+      const review = document.getElementById('settings-review-permissions');
+      if (review) review.addEventListener('click', () => {
+        closeSettings();
+        // Re-fetch so the review view reflects the live state, then open.
+        refreshPermissions().then(() => {
+          if (permissionsSnapshot) openPermissionsWizard('review');
+        });
+      });
+    }
+
+    refreshPermissions();
+
 export {
   resolvedTheme, rowLabel, maybeNotifyOnUpdate,
   formatCost, formatUsageCost, pressureClass, historyPriorityForState,
+  taskEtaPresentation,
   lastNotifiedPressure,
   relayFrameKind, aggregateConnState, relayWsUrl,
   compoundSessionId, displaySessionId,
   sessionOrigin, sourceIdOf, localBareIds, isShadowedRemote,
   daemonSessionIds, structureSignature,
+  pendingWizardAgents, buildPermissionAnswers, stillPendingForAgents,
 };
