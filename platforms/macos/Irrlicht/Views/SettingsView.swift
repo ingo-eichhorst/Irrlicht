@@ -195,7 +195,7 @@ struct SettingsView: View {
                                 Circle()
                                     .fill(sessionManager.relayConnectionState.dotColor)
                                     .frame(width: 8, height: 8)
-                                    .help(sessionManager.relayConnectionState.shortLabel)
+                                    .tooltip(sessionManager.relayConnectionState.shortLabel)
                             }
                             SecureField("Relay token (leave empty if the relay has no auth)", text: $relayTokenDraft)
                                 .textFieldStyle(.roundedBorder)

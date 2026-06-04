@@ -631,6 +631,15 @@ class SessionManager: ObservableObject {
         groupedSessionIds = Set(localApiGroups.flatMap { collectSessionIds(from: $0) })
     }
 
+    /// Test seam: install local (non-relay) groups and recompose the published
+    /// surfaces, mirroring how the hydration path installs groups. Setting the
+    /// published `apiGroups` directly is not enough — `patchApiGroups` /
+    /// `removeFromApiGroups` operate on `localApiGroups` and recompose over it.
+    func seedLocalApiGroups(_ groups: [AgentGroup]) {
+        localApiGroups = groups
+        recomposeApiGroups()
+    }
+
     /// Groups relay-only sessions (ids not present locally) by project name.
     /// No orchestrator handling or child nesting in v0; the common same-daemon
     /// case yields no relay-only rows, so this only renders a genuine second
