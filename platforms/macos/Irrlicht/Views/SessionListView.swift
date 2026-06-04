@@ -189,6 +189,20 @@ struct SessionListView: View {
     @State private var isSettingsButtonHovered = false
     @State private var isUpdatesButtonHovered = false
     @State private var showSettings = false
+    /// Settings → "Review agent permissions…" swaps the panel body to the
+    /// wizard in review mode (issue #570).
+    @State private var showPermissionsReview = false
+    /// Non-nil while the auto consent wizard is presented: the agent set
+    /// LOCKED at presentation time. Locking means a mid-decision detection
+    /// flip (agent process exits) can't tear the wizard down, and a newly
+    /// detected agent can't inject default-on rows into an open wizard —
+    /// it gets its own prompt once this one resolves. reconcileAutoWizard
+    /// owns the lifecycle.
+    @State private var autoWizardAgents: [String]?
+    /// "Decide Later" remembers which agent set was dismissed so the auto
+    /// wizard doesn't bounce right back; a different agent appearing (new
+    /// signature) re-triggers it.
+    @State private var dismissedWizardSignature: String?
     @AppStorage("displayMode") private var displayModeRaw: String = DisplayMode.context.rawValue
     @AppStorage("showQuotaForecast") private var showQuotaForecast: Bool = true
     // Shared timeframe for all provider usage chips; clicking any chip cycles
@@ -199,10 +213,71 @@ struct SessionListView: View {
     private var usageCostTimeframe: CostTimeframe { .from(usageCostTimeframeRaw) }
     private func cycleUsageTimeframe() { usageCostTimeframeRaw = usageCostTimeframe.next().rawValue }
 
+    /// Stable identity of the current pending-wizard agent set, for the
+    /// "Decide Later" suppression above.
+    private var wizardSignature: String {
+        sessionManager.pendingWizardAgents.map(\.name).sorted().joined(separator: ",")
+    }
+
+    /// Reconciles auto-wizard visibility with the consent snapshot (#570).
+    /// Presentation: a detected agent has pending permissions and the set
+    /// wasn't just dismissed. Dismissal: every LOCKED agent has no pending
+    /// permissions left — i.e. answered, here or on the web dashboard
+    /// (first answer wins). A detection flip alone (agent exited while the
+    /// user is deciding) never dismisses an open wizard.
+    private func reconcileAutoWizard() {
+        let snapAgents = sessionManager.permissionsSnapshot?.agents ?? []
+        if let locked = autoWizardAgents {
+            let stillPending = locked.contains { name in
+                snapAgents.first(where: { $0.name == name })?
+                    .permissions.contains { $0.state == .pending } ?? false
+            }
+            if !stillPending {
+                autoWizardAgents = nil
+            }
+        }
+        if autoWizardAgents == nil {
+            let names = sessionManager.pendingWizardAgents.map(\.name).sorted()
+            if !names.isEmpty && dismissedWizardSignature != names.joined(separator: ",") {
+                autoWizardAgents = names
+            }
+        }
+    }
+
     var body: some View {
-        if showSettings {
-            SettingsView(isPresented: $showSettings)
-        } else {
+        Group {
+            if showSettings {
+                SettingsView(
+                    isPresented: $showSettings,
+                    onReviewPermissions: {
+                        showSettings = false
+                        showPermissionsReview = true
+                    }
+                )
+            } else if showPermissionsReview {
+                PermissionWizardView(mode: .review, onClose: { showPermissionsReview = false })
+            } else if let locked = autoWizardAgents {
+                PermissionWizardView(
+                    mode: .auto,
+                    lockedAgents: locked,
+                    onClose: {
+                        // "Decide Later": suppress until the pending set
+                        // changes (or next app launch — consent stays
+                        // pending daemon-side).
+                        dismissedWizardSignature = wizardSignature
+                        autoWizardAgents = nil
+                    }
+                )
+            } else {
+                mainPanel
+            }
+        }
+        .onAppear { reconcileAutoWizard() }
+        .onChange(of: sessionManager.permissionsSnapshot) { _ in reconcileAutoWizard() }
+    }
+
+    private var mainPanel: some View {
+        Group {
             VStack(alignment: .leading, spacing: 0) {
                 if sessionManager.apiGroups.isEmpty && sessionManager.sessions.isEmpty {
                     emptyStateView

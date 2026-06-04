@@ -59,7 +59,7 @@ func TestSessionIDFromTranscriptPath(t *testing.T) {
 
 func TestHookHandler_PermissionRequest(t *testing.T) {
 	target := &mockTarget{}
-	handler := NewHookHandler(target, mockLogger{})
+	handler := NewHookHandler(target, nil, mockLogger{})
 
 	payload := hookPayload{
 		TranscriptPath: "/Users/u/.claude/projects/p/sess-123.jsonl",
@@ -90,7 +90,7 @@ func TestHookHandler_PermissionRequest(t *testing.T) {
 
 func TestHookHandler_PostToolUse(t *testing.T) {
 	target := &mockTarget{}
-	handler := NewHookHandler(target, mockLogger{})
+	handler := NewHookHandler(target, nil, mockLogger{})
 
 	payload := hookPayload{
 		TranscriptPath: "/Users/u/.claude/projects/p/sess-456.jsonl",
@@ -115,7 +115,7 @@ func TestHookHandler_PostToolUse(t *testing.T) {
 
 func TestHookHandler_PreToolUse(t *testing.T) {
 	target := &mockTarget{}
-	handler := NewHookHandler(target, mockLogger{})
+	handler := NewHookHandler(target, nil, mockLogger{})
 
 	payload := hookPayload{
 		TranscriptPath: "/Users/u/.claude/projects/p/sess-pre.jsonl",
@@ -150,7 +150,7 @@ func TestHookHandler_PreToolUse(t *testing.T) {
 // the sole filter.
 func TestHookHandler_PreToolUse_RejectsUnexpectedTool(t *testing.T) {
 	target := &mockTarget{}
-	handler := NewHookHandler(target, mockLogger{})
+	handler := NewHookHandler(target, nil, mockLogger{})
 
 	payload := hookPayload{
 		TranscriptPath: "/Users/u/.claude/projects/p/sess-x.jsonl",
@@ -174,7 +174,7 @@ func TestHookHandler_PreToolUse_RejectsUnexpectedTool(t *testing.T) {
 
 func TestHookHandler_PostToolUseFailure(t *testing.T) {
 	target := &mockTarget{}
-	handler := NewHookHandler(target, mockLogger{})
+	handler := NewHookHandler(target, nil, mockLogger{})
 
 	payload := hookPayload{
 		TranscriptPath: "/Users/u/.claude/projects/p/sess-789.jsonl",
@@ -199,7 +199,7 @@ func TestHookHandler_PostToolUseFailure(t *testing.T) {
 
 func TestHookHandler_UnrecognizedEvent(t *testing.T) {
 	target := &mockTarget{}
-	handler := NewHookHandler(target, mockLogger{})
+	handler := NewHookHandler(target, nil, mockLogger{})
 
 	payload := hookPayload{
 		TranscriptPath: "/Users/u/.claude/projects/p/sess.jsonl",
@@ -222,7 +222,7 @@ func TestHookHandler_UnrecognizedEvent(t *testing.T) {
 
 func TestHookHandler_MissingTranscriptPath(t *testing.T) {
 	target := &mockTarget{}
-	handler := NewHookHandler(target, mockLogger{})
+	handler := NewHookHandler(target, nil, mockLogger{})
 
 	payload := hookPayload{
 		HookEventName: "PermissionRequest",
@@ -241,7 +241,7 @@ func TestHookHandler_MissingTranscriptPath(t *testing.T) {
 
 func TestHookHandler_WrongMethod(t *testing.T) {
 	target := &mockTarget{}
-	handler := NewHookHandler(target, mockLogger{})
+	handler := NewHookHandler(target, nil, mockLogger{})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/hooks/claudecode", nil)
 	rec := httptest.NewRecorder()
@@ -254,7 +254,7 @@ func TestHookHandler_WrongMethod(t *testing.T) {
 
 func TestHookHandler_MalformedJSON(t *testing.T) {
 	target := &mockTarget{}
-	handler := NewHookHandler(target, mockLogger{})
+	handler := NewHookHandler(target, nil, mockLogger{})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/hooks/claudecode", bytes.NewReader([]byte("not json")))
 	rec := httptest.NewRecorder()
@@ -262,5 +262,55 @@ func TestHookHandler_MalformedJSON(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+// fakeGate is a ConsentGate with a fixed answer.
+type fakeGate bool
+
+func (g fakeGate) Granted(_, _ string) bool { return bool(g) }
+
+func TestHookHandler_ConsentGateDropsWhenNotGranted(t *testing.T) {
+	target := &mockTarget{}
+	handler := NewHookHandler(target, fakeGate(false), mockLogger{})
+
+	payload := hookPayload{
+		TranscriptPath: "/Users/u/.claude/projects/p/sess-123.jsonl",
+		HookEventName:  "PermissionRequest",
+		ToolName:       "Bash",
+	}
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/hooks/claudecode", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+
+	// 200 keeps the curl hook quiet, but nothing is dispatched.
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if calls := target.getCalls(); len(calls) != 0 {
+		t.Fatalf("dispatched %d calls while permission not granted", len(calls))
+	}
+}
+
+func TestHookHandler_ConsentGatePassesWhenGranted(t *testing.T) {
+	target := &mockTarget{}
+	handler := NewHookHandler(target, fakeGate(true), mockLogger{})
+
+	payload := hookPayload{
+		TranscriptPath: "/Users/u/.claude/projects/p/sess-123.jsonl",
+		HookEventName:  "PermissionRequest",
+		ToolName:       "Bash",
+	}
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/hooks/claudecode", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if calls := target.getCalls(); len(calls) != 1 {
+		t.Fatalf("calls = %d, want 1", len(calls))
 	}
 }

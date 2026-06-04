@@ -205,8 +205,12 @@ func (f *Forwarder) snapshotState() ([]*session.SessionState, []AgentInfo) {
 // shouldForward drops messages meaningless across hosts. focus_requested asks a
 // client to raise the local terminal/IDE window of a session — nonsensical for
 // a session on a different machine, so the forwarder filters it (wiki §5.4).
+// permissions_updated is likewise host-local (#570): consent is managed on the
+// daemon's own machine, and a forwarded copy would make remote dashboards
+// re-fetch (and potentially re-open) their LOCAL wizard on this host's churn.
 func shouldForward(msg outbound.PushMessage) bool {
-	return msg.Type != outbound.PushTypeFocusRequested
+	return msg.Type != outbound.PushTypeFocusRequested &&
+		msg.Type != outbound.PushTypePermissionsUpdated
 }
 
 // jitter returns a random duration in [0, d/2] to spread reconnect attempts.

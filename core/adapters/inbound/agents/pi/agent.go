@@ -1,6 +1,12 @@
 package pi
 
-import "irrlicht/core/domain/agent"
+import (
+	"irrlicht/core/domain/agent"
+	"irrlicht/core/domain/permission"
+)
+
+// PermissionKeyTranscripts gates all Pi monitoring (issue #570).
+const PermissionKeyTranscripts = "transcripts"
 
 // Pi coding agent — Greek letter pi in a circle. Color picks contrast against
 // the surrounding chrome: near-black on light themes, near-white on dark.
@@ -35,6 +41,19 @@ func Agent() agent.Agent {
 			Dir: sessionsDir(),
 			Parser: agent.JSONLineParser{
 				NewParser: func() agent.LineParser { return &Parser{} },
+			},
+		},
+		Permissions: []agent.Permission{
+			{
+				Key:             PermissionKeyTranscripts,
+				Kind:            permission.KindObserve,
+				Title:           "Read session transcripts",
+				FeatureUnlocked: "Session list, timeline, cost & token metrics",
+				Touches:         "Reads session transcripts under ~/.pi/agent/sessions/",
+				Detail: "Tails *.jsonl session files under ~/.pi/agent/sessions/ to " +
+					"derive session state, cost, and token metrics. Read-only — no " +
+					"file is ever modified. Toggling off stops all reading " +
+					"immediately.",
 			},
 		},
 	}

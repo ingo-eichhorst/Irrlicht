@@ -52,6 +52,19 @@ class SessionManager: ObservableObject {
     @Published var stateHistory: [String: [String]] = [:]  // session_id → oldest→newest state strings (active granularity)
     @Published var historyBucketCount: Int = 60          // matches HistoryBucketCount on the daemon
 
+    /// Consent state for the permission wizard (issue #570). Refreshed on
+    /// connect and on every `permissions_updated` push — which is also how
+    /// the wizard dismisses live when the web dashboard answers first.
+    @Published var permissionsSnapshot: PermissionsSnapshot?
+
+    /// Agents the auto wizard should show: detected, with at least one
+    /// pending permission, in ask mode. Empty in grant-all mode (wizard
+    /// suppressed for demo/record/test daemons).
+    var pendingWizardAgents: [AgentPermissions] {
+        guard let snap = permissionsSnapshot, snap.mode == "ask" else { return [] }
+        return snap.agents.filter(\.needsWizard)
+    }
+
     /// All three granularities held in parallel so toggling 1s/10s/60s is
     /// instant — the WebSocket streams every granularity continuously, the
     /// view just picks which dict to mirror into `stateHistory`.
@@ -263,6 +276,7 @@ class SessionManager: ObservableObject {
     private func connect() async {
         await hydrateAgents()
         await hydrateSessions()
+        await refreshPermissions()
 
         guard let url = URL(string: "\(DaemonEndpoint.wsBase)/api/v1/sessions/stream") else { return }
         let task = URLSession.shared.webSocketTask(with: url)
@@ -898,6 +912,46 @@ class SessionManager: ObservableObject {
         }
     }
 
+    /// Fetches the consent state from the local daemon. Older daemons
+    /// (pre-#570) have no /api/v1/permissions — the snapshot stays nil and
+    /// no wizard ever appears.
+    func refreshPermissions() async {
+        guard let url = URL(string: "\(DaemonEndpoint.httpBase)/api/v1/permissions") else { return }
+        do {
+            let (data, response) = try await URLSession.shared.data(from: url)
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else { return }
+            permissionsSnapshot = try JSONDecoder().decode(PermissionsSnapshot.self, from: data)
+        } catch {
+            print("🔐 Permissions refresh failed: \(error.localizedDescription)")
+        }
+    }
+
+    /// Submits wizard/Settings decisions. The daemon applies effects
+    /// (installs/uninstalls hooks, starts/stops watchers), persists, and
+    /// broadcasts `permissions_updated` so the web dashboard dismisses its
+    /// wizard — first answer wins. The response body is the updated
+    /// snapshot, applied immediately so the UI doesn't wait on the push.
+    /// Returns false on failure so the wizard can stay up for a retry
+    /// instead of silently losing the user's consent decisions.
+    @discardableResult
+    func answerPermissions(_ answers: [PermissionAnswer]) async -> Bool {
+        guard !answers.isEmpty,
+              let url = URL(string: "\(DaemonEndpoint.httpBase)/api/v1/permissions/answer") else { return false }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        do {
+            request.httpBody = try JSONEncoder().encode(["answers": answers])
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else { return false }
+            permissionsSnapshot = try JSONDecoder().decode(PermissionsSnapshot.self, from: data)
+            return true
+        } catch {
+            print("🔐 Permissions answer failed: \(error.localizedDescription)")
+            return false
+        }
+    }
+
     private func hydrateSessions() async {
         // The Local source feeds sessionMap/localApiGroups from the local
         // daemon's REST API. When Local is disabled this must not run, or the
@@ -1026,6 +1080,11 @@ class SessionManager: ObservableObject {
                 if let sid = envelope.sessionID, let prio = envelope.priority {
                     applyHistoryUpgrade(sessionID: sid, priority: prio)
                 }
+            case "permissions_updated":
+                // Consent state changed (agent detected, or the web
+                // dashboard answered the wizard). Dataless by design —
+                // re-fetch; pendingWizardAgents drives the overlay (#570).
+                Task { await refreshPermissions() }
             default:
                 break
             }

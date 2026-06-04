@@ -38,6 +38,10 @@ description: >
 4. **A recording daemon is up.** Use `--attach` against the user's running
    `irrlichd --record` (the dashboard stays connected; the session shows up
    live). The precheck refuses if no `--record` daemon is found — `infra_fail`.
+   A recording daemon must run with `IRRLICHT_PERMISSION_MODE=grant-all` —
+   the consent-first gate (#570) otherwise leaves a fresh daemon monitoring
+   nothing until its wizard is answered. (run-cell.sh / run-cell-multi.sh
+   set it on the daemons they spawn.)
 
 ## Steps
 

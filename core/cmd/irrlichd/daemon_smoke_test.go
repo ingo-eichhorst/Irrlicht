@@ -17,93 +17,139 @@ import (
 	"irrlicht/core/adapters/inbound/agents"
 )
 
-// TestDaemonStartupSmoke boots a real irrlichd in a child process and verifies
-// the socket protocol survives every commit. It is fully hermetic and parallel-
-// safe: HOME and IRRLICHT_HOME both point at fresh temp dirs (so it neither
-// reads nor mutates the production install or the user's ~/.claude config), and
-// IRRLICHT_BIND_ADDR=127.0.0.1:0 binds an OS-assigned port (so N worktrees can
-// run it at once). IRRLICHT_DEMO_MODE=1 keeps the file/process watchers off so
-// the daemon serves only what's wired at startup — exactly the surface we want
-// to smoke-test.
+// TestDaemonStartupSmoke boots real irrlichd daemons in child processes and
+// verifies the startup surface survives every commit. It is fully hermetic
+// and parallel-safe: HOME and IRRLICHT_HOME both point at fresh temp dirs
+// (so it neither reads nor mutates the production install or the user's
+// ~/.claude config), and IRRLICHT_BIND_ADDR=127.0.0.1:0 binds an OS-assigned
+// port (so N worktrees can run it at once).
 //
-// What it asserts:
-//   - the daemon publishes its resolved port to IRRLICHT_HOME/irrlichd.addr,
-//   - GET /api/v1/agents over TCP returns the full adapter registry,
-//   - the same endpoint works over the unix socket,
-//   - SIGTERM shuts it down cleanly and removes the addr file.
+// Two boots:
+//   - demo: IRRLICHT_DEMO_MODE=1 (watchers off; the daemon serves only
+//     what's wired at startup). Asserts the addr file, GET /api/v1/agents
+//     over TCP and the unix socket, and clean SIGTERM shutdown.
+//   - ask: production permission mode WITHOUT demo. Asserts consent-first
+//     (#570) on the path where effects could actually run — every declared
+//     permission is pending and ~/.claude/settings.json was never created
+//     (the pre-#570 daemon auto-created it at startup; demo mode skips the
+//     install path entirely, so asserting there would prove nothing).
 func TestDaemonStartupSmoke(t *testing.T) {
-	homeDir := t.TempDir()  // isolates ~/.claude hooks + Application Support logs
-	stateDir := t.TempDir() // IRRLICHT_HOME: socket, addr file, recordings, history
-
-	// Build the daemon binary. Done lazily here (not in TestMain) so unrelated
-	// `go test -run …` invocations don't pay the build cost.
+	// Build the daemon binary once for both boots. Done lazily here (not in
+	// TestMain) so unrelated `go test -run …` invocations don't pay the cost.
 	bin := filepath.Join(t.TempDir(), "irrlichd")
 	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
 		t.Fatalf("build irrlichd: %v\n%s", err, out)
 	}
 
-	cmd := exec.Command(bin)
-	cmd.Env = append(os.Environ(),
-		"HOME="+homeDir,
-		"IRRLICHT_HOME="+stateDir,
+	t.Run("demo", func(t *testing.T) {
+		d := bootSmokeDaemon(t, bin, "IRRLICHT_DEMO_MODE=1")
+
+		// 1. TCP round-trip.
+		assertAgentsEndpoint(t, http.DefaultClient, "http://"+d.addr+"/api/v1/agents")
+
+		// 2. Unix socket round-trip.
+		sockPath := filepath.Join(d.stateDir, "irrlichd.sock")
+		unixClient := &http.Client{Transport: &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				return (&net.Dialer{}).DialContext(ctx, "unix", sockPath)
+			},
+		}}
+		assertAgentsEndpoint(t, unixClient, "http://unix/api/v1/agents")
+
+		unixClient.CloseIdleConnections()
+		d.shutdown(t)
+	})
+
+	t.Run("ask", func(t *testing.T) {
+		d := bootSmokeDaemon(t, bin)
+
+		// Consent-first: a fresh install answers nothing, so every declared
+		// permission is pending and no file under the user's home was
+		// modified — in particular ~/.claude/settings.json must not exist.
+		// This boot runs the REAL ask-mode startup (permService.Start), so a
+		// regression re-introducing boot-time hook install is caught here.
+		assertPermissionsAllPending(t, http.DefaultClient, "http://"+d.addr+"/api/v1/permissions")
+		if _, err := os.Stat(filepath.Join(d.homeDir, ".claude", "settings.json")); !os.IsNotExist(err) {
+			t.Errorf("~/.claude/settings.json exists on a fresh consent-first install (stat err = %v)", err)
+		}
+
+		d.shutdown(t)
+	})
+}
+
+// smokeDaemon is one booted child daemon plus its teardown handles.
+type smokeDaemon struct {
+	cmd      *exec.Cmd
+	exited   chan struct{}
+	stopped  bool
+	homeDir  string
+	stateDir string
+	addrPath string
+	addr     string
+}
+
+// bootSmokeDaemon starts the built daemon with fresh HOME/IRRLICHT_HOME temp
+// dirs, an ephemeral port, and any extra env entries, then waits for the
+// addr file. A kill-backstop is registered via t.Cleanup.
+func bootSmokeDaemon(t *testing.T, bin string, extraEnv ...string) *smokeDaemon {
+	t.Helper()
+	d := &smokeDaemon{
+		homeDir:  t.TempDir(), // isolates ~/.claude hooks + Application Support logs
+		stateDir: t.TempDir(), // IRRLICHT_HOME: socket, addr file, recordings, history
+		exited:   make(chan struct{}),
+	}
+	d.cmd = exec.Command(bin)
+	d.cmd.Env = append(os.Environ(),
+		"HOME="+d.homeDir,
+		"IRRLICHT_HOME="+d.stateDir,
 		"IRRLICHT_BIND_ADDR=127.0.0.1:0",
-		"IRRLICHT_DEMO_MODE=1",
 	)
-	if err := cmd.Start(); err != nil {
+	d.cmd.Env = append(d.cmd.Env, extraEnv...)
+	if err := d.cmd.Start(); err != nil {
 		t.Fatalf("start daemon: %v", err)
 	}
 	// A single reaper goroutine owns cmd.Wait(); the backstop and the SIGTERM
 	// path coordinate through `exited` rather than calling Wait themselves, so
 	// Wait is never invoked twice (which `go test -race` flags as "Wait was
 	// already called").
-	exited := make(chan struct{})
-	go func() { _ = cmd.Wait(); close(exited) }()
-	stopped := false
-	stop := func() { _ = cmd.Process.Kill(); <-exited }
-	defer func() {
-		if !stopped {
-			stop()
+	go func() { _ = d.cmd.Wait(); close(d.exited) }()
+	t.Cleanup(func() {
+		if !d.stopped {
+			_ = d.cmd.Process.Kill()
+			<-d.exited
 		}
-	}()
-	dumpLogsOnFail(t, homeDir)
+	})
+	dumpLogsOnFail(t, d.homeDir)
 
 	// The daemon writes its resolved address here once listening.
-	addrPath := filepath.Join(stateDir, "irrlichd.addr")
-	addr := waitForAddr(t, addrPath, 5*time.Second)
+	d.addrPath = filepath.Join(d.stateDir, "irrlichd.addr")
+	d.addr = waitForAddr(t, d.addrPath, 5*time.Second)
+	return d
+}
 
-	// 1. TCP round-trip.
-	assertAgentsEndpoint(t, http.DefaultClient, "http://"+addr+"/api/v1/agents")
-
-	// 2. Unix socket round-trip.
-	sockPath := filepath.Join(stateDir, "irrlichd.sock")
-	unixClient := &http.Client{Transport: &http.Transport{
-		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			return (&net.Dialer{}).DialContext(ctx, "unix", sockPath)
-		},
-	}}
-	assertAgentsEndpoint(t, unixClient, "http://unix/api/v1/agents")
-
-	// Drop client-side keep-alive conns so the daemon's graceful shutdown isn't
-	// waiting on them, then SIGTERM and confirm a clean exit.
+// shutdown SIGTERMs the daemon, asserts a clean exit, and checks the addr
+// file was removed. The timeout exceeds the daemon's own 5s graceful-
+// shutdown budget so a clean (but not instant) shutdown isn't mistaken for
+// a hang.
+func (d *smokeDaemon) shutdown(t *testing.T) {
+	t.Helper()
+	// Drop client-side keep-alive conns so the daemon's graceful shutdown
+	// isn't waiting on them.
 	http.DefaultClient.CloseIdleConnections()
-	unixClient.CloseIdleConnections()
-
-	// 3. Clean shutdown on SIGTERM. The timeout exceeds the daemon's own 5s
-	// graceful-shutdown budget so a clean (but not instant) shutdown isn't
-	// mistaken for a hang.
-	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+	if err := d.cmd.Process.Signal(syscall.SIGTERM); err != nil {
 		t.Fatalf("send SIGTERM: %v", err)
 	}
 	select {
-	case <-exited:
+	case <-d.exited:
 	case <-time.After(6 * time.Second):
-		stop()
-		stopped = true
+		_ = d.cmd.Process.Kill()
+		<-d.exited
+		d.stopped = true
 		t.Fatalf("daemon did not exit within 6s of SIGTERM")
 	}
-	stopped = true
-	if _, err := os.Stat(addrPath); !os.IsNotExist(err) {
-		t.Errorf("addr file %s should be removed after shutdown, stat err = %v", addrPath, err)
+	d.stopped = true
+	if _, err := os.Stat(d.addrPath); !os.IsNotExist(err) {
+		t.Errorf("addr file %s should be removed after shutdown, stat err = %v", d.addrPath, err)
 	}
 }
 
@@ -163,6 +209,59 @@ func assertAgentsEndpoint(t *testing.T, client *http.Client, url string) {
 	for i := range want {
 		if got[i] != want[i] {
 			t.Fatalf("GET %s agent names = %v, want %v", url, got, want)
+		}
+	}
+}
+
+// assertPermissionsAllPending GETs /api/v1/permissions and checks that every
+// agent with declared permissions appears and every permission is pending —
+// the consent-first fresh-install state.
+func assertPermissionsAllPending(t *testing.T, client *http.Client, url string) {
+	t.Helper()
+	resp, err := client.Get(url)
+	if err != nil {
+		t.Fatalf("GET %s: %v", url, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET %s: status %d, want 200", url, resp.StatusCode)
+	}
+	var snap struct {
+		Mode   string `json:"mode"`
+		Agents []struct {
+			Name        string `json:"name"`
+			Permissions []struct {
+				Key   string `json:"key"`
+				State string `json:"state"`
+			} `json:"permissions"`
+		} `json:"agents"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&snap); err != nil {
+		t.Fatalf("decode %s: %v", url, err)
+	}
+	if snap.Mode != "ask" {
+		t.Fatalf("permission mode = %q, want ask", snap.Mode)
+	}
+	// Every agent adapter with declared permissions, plus the Gas Town
+	// orchestrator's consent declaration (wired in main.go, not part of
+	// agents.All()).
+	declared := 1
+	for _, a := range agents.All() {
+		if len(a.Permissions) > 0 {
+			declared++
+		}
+	}
+	if len(snap.Agents) != declared {
+		t.Fatalf("GET %s returned %d agents, want %d", url, len(snap.Agents), declared)
+	}
+	for _, a := range snap.Agents {
+		if len(a.Permissions) == 0 {
+			t.Errorf("agent %s has no permissions in the snapshot", a.Name)
+		}
+		for _, p := range a.Permissions {
+			if p.State != "pending" {
+				t.Errorf("%s/%s state = %q, want pending on fresh install", a.Name, p.Key, p.State)
+			}
 		}
 	}
 }

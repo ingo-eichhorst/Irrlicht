@@ -20,9 +20,9 @@ import (
 	"irrlicht/core/adapters/inbound/agents"
 	"irrlicht/core/adapters/inbound/agents/agentwiring"
 	"irrlicht/core/adapters/inbound/agents/claudecode"
-	"irrlicht/core/adapters/inbound/agents/opencode"
 	"irrlicht/core/adapters/inbound/agents/processlifecycle"
 	gastownadapter "irrlicht/core/adapters/inbound/orchestrators/gastown"
+	permissionshandler "irrlicht/core/adapters/inbound/permissions"
 	sessionshandler "irrlicht/core/adapters/inbound/sessions"
 	"irrlicht/core/adapters/outbound/filesystem"
 	"irrlicht/core/adapters/outbound/git"
@@ -34,7 +34,9 @@ import (
 	"irrlicht/core/adapters/outbound/relay"
 	wshub "irrlicht/core/adapters/outbound/websocket"
 	"irrlicht/core/application/services"
+	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/config"
+	"irrlicht/core/domain/permission"
 	"irrlicht/core/domain/session"
 	"irrlicht/core/pkg/capacity"
 	"irrlicht/core/ports/inbound"
@@ -89,6 +91,21 @@ func main() {
 		} else {
 			fmt.Println("No irrlicht hooks found in ~/.claude/settings.json")
 		}
+		// Record the decision in the consent store (#570) — a persisted
+		// "granted" would otherwise re-install the hooks on the next
+		// daemon start, silently reverting this explicit opt-out.
+		uhHome, _ := os.UserHomeDir()
+		uhStore := filesystem.NewPermissionStore(dataDir(uhHome))
+		if set, err := uhStore.Load(); err == nil {
+			if set.Get(claudecode.AdapterName, claudecode.PermissionKeyHooks) == permission.StateGranted {
+				set.Put(claudecode.AdapterName, claudecode.PermissionKeyHooks, permission.StateDenied)
+				if err := uhStore.Save(set); err != nil {
+					fmt.Printf("warning: failed to record hooks permission as denied: %v\n", err)
+				} else {
+					fmt.Println("Recorded the hooks permission as denied (re-grant via the permission wizard)")
+				}
+			}
+		}
 		os.Exit(0)
 	}
 
@@ -100,29 +117,10 @@ func main() {
 	}
 	defer logger.Close()
 
-	// Auto-install Claude Code hooks for permission-pending detection.
-	if modified, err := claudecode.EnsureHooksInstalled(); err != nil {
-		logger.LogError("startup", "", fmt.Sprintf("failed to install hooks: %v", err))
-	} else if modified {
-		logger.LogInfo("startup", "", "installed Claude Code hooks for permission tracking")
-	}
-
-	// The installed hooks POST via curl; without it they silently no-op and
-	// tool-use permission prompts never surface as `waiting`. Warn loudly so
-	// this isn't an invisible failure (the transcript heuristic still covers
-	// held file-edit prompts). See #488.
-	if !claudecode.HookDeliveryAvailable() {
-		logger.LogError("startup", "", "curl not found on PATH — Claude Code permission-prompt detection is degraded: hooks POST via curl, so without it permission prompts may not surface as 'waiting'. Install curl to restore full detection (#488).")
-	}
-
-	// Auto-install Claude Code statusLine.command for rate-limit ingestion
-	// (issue #309). Chains any user-configured statusline so we don't clobber
-	// it.
-	if modified, err := claudecode.EnsureStatuslineInstalled(); err != nil {
-		logger.LogError("startup", "", fmt.Sprintf("failed to install statusline: %v", err))
-	} else if modified {
-		logger.LogInfo("startup", "", "installed Claude Code statusline hook for rate-limit ingestion")
-	}
+	// Hook + statusline installation is consent-gated (issue #570): the
+	// PermissionService applies them when (and only when) the user grants
+	// the corresponding permission — see permService.Start below. Nothing
+	// under the user's home is modified before that.
 
 	// Configuration.
 	cfg := config.Default()
@@ -358,33 +356,51 @@ func main() {
 		logger.LogInfo("startup", "", "mDNS: disabled (set IRRLICHT_MDNS=1 to advertise)")
 	}
 
-	// Orchestrator adapters: detect and watch multi-agent orchestration systems.
-	gtAdapter := gastownadapter.NewAdapter(gtResolver.Path(), 5*time.Second, cachedRepo)
-	var orchWatchers []inbound.OrchestratorWatcher
-	if gtAdapter.Detected() {
-		logger.LogInfo("startup", "", fmt.Sprintf("Gas Town detected at %s", gtAdapter.Root()))
-		orchWatchers = append(orchWatchers, gtAdapter)
-	} else {
-		logger.LogInfo("startup", "", "Gas Town not detected — skipping orchestrator watcher")
-	}
-
-	orchMonitor := services.NewOrchestratorMonitor(orchWatchers, push, logger)
-	{
-		orchCtx, orchCancel := context.WithCancel(context.Background())
-		defer orchCancel()
-		// Start each orchestrator watcher.
-		for _, ow := range orchWatchers {
-			go func() {
-				if err := ow.Watch(orchCtx); err != nil && err != context.Canceled {
-					logger.LogError("orchestrator-watcher", "", fmt.Sprintf("watcher error: %v", err))
-				}
-			}()
+	// Orchestrator adapters: detect and watch multi-agent orchestration
+	// systems. Gas Town is consent-gated (#570): even constructing the
+	// adapter reads ~/gt state files, so nothing is built until the
+	// "gastown/state" permission is granted — the PermissionService runs
+	// the start/stop closures below as that permission's effects. The
+	// monitor runs regardless (idle until a watcher registers) so
+	// /api/v1/sessions can always consult it.
+	orchMonitor := services.NewOrchestratorMonitor(nil, push, logger)
+	orchCtx, orchCancel := context.WithCancel(context.Background())
+	defer orchCancel()
+	go func() {
+		if err := orchMonitor.Run(orchCtx); err != nil && err != context.Canceled {
+			logger.LogError("orchestrator-monitor", "", fmt.Sprintf("monitor error: %v", err))
 		}
+	}()
+
+	// Effect closures for the gastown/state permission. The service
+	// serializes effect execution, so no extra locking around gtWatchCancel.
+	var gtWatchCancel context.CancelFunc
+	startGastown := func() error {
+		if gtWatchCancel != nil {
+			return nil
+		}
+		gtAdapter := gastownadapter.NewAdapter(gtResolver.Path(), 5*time.Second, cachedRepo)
+		if !gtAdapter.Detected() {
+			logger.LogInfo("permissions", "", "gastown granted but no Gas Town root detected — nothing to watch")
+			return nil
+		}
+		logger.LogInfo("permissions", "", fmt.Sprintf("Gas Town detected at %s", gtAdapter.Root()))
+		watchCtx, cancel := context.WithCancel(orchCtx)
+		gtWatchCancel = cancel
+		orchMonitor.AddWatcher(watchCtx, gtAdapter)
 		go func() {
-			if err := orchMonitor.Run(orchCtx); err != nil && err != context.Canceled {
-				logger.LogError("orchestrator-monitor", "", fmt.Sprintf("monitor error: %v", err))
+			if err := gtAdapter.Watch(watchCtx); err != nil && err != context.Canceled {
+				logger.LogError("orchestrator-watcher", "", fmt.Sprintf("watcher error: %v", err))
 			}
 		}()
+		return nil
+	}
+	stopGastown := func() error {
+		if gtWatchCancel != nil {
+			gtWatchCancel()
+			gtWatchCancel = nil
+		}
+		return nil
 	}
 
 	// Register API endpoints (after orchMonitor is available).
@@ -405,33 +421,31 @@ func main() {
 		return processlifecycle.HasRealSessionForPID(sessions, projectDir, pid)
 	}
 
-	// Per-adapter inbound wiring: dispatch on each Agent's Source variant via
-	// buildAgentWatchers (see wiring.go). FilesUnderRoot adapters get both an
-	// fswatcher and a process scanner; FilesUnderCWD and ProcessOwnedStore
-	// adapters get only a scanner. Skipped entirely under IRRLICHT_DEMO_MODE=1
-	// — daemon serves only what's already on disk in instances/.
-	var watchers []inbound.Watcher
-	watcherRoots := make([]string, 0, len(allAgents))
+	// Per-adapter inbound wiring is consent-gated (issue #570): instead of
+	// starting every agent's watchers at boot, each agent gets a factory
+	// (dispatching on its Source variant via buildAgentWatchers, see
+	// wiring.go) that the PermissionService invokes when the user grants
+	// that agent's observe permission — and cancels on revoke. Skipped
+	// entirely under IRRLICHT_DEMO_MODE=1 — daemon serves only what's
+	// already on disk in instances/.
+	var watcherFactories map[string]services.WatcherFactory
 	if !demoMode {
+		watcherFactories = make(map[string]services.WatcherFactory, len(allAgents))
 		for _, a := range allAgents {
-			aws, labels := buildAgentWatchers(a, cfg.MaxSessionAge, realSessionCheck)
-			watchers = append(watchers, aws...)
-			watcherRoots = append(watcherRoots, labels...)
+			watcherFactories[a.Identity.Name] = func() []inbound.Watcher {
+				ws, _ := buildAgentWatchers(a, cfg.MaxSessionAge, realSessionCheck)
+				return ws
+			}
 		}
-
-		// OpenCode uses a SQLite database instead of JSONL files, so it needs
-		// its own dedicated watcher in addition to the process scanner above.
-		ocw := opencode.New(cfg.MaxSessionAge).WithIdentity(opencode.Agent().Identity)
-		watchers = append(watchers, ocw)
-		watcherRoots = append(watcherRoots, fmt.Sprintf("%s-db (%s)", opencode.AdapterName, ocw.Root()))
 	}
 
 	pidDiscovers := agents.PIDDiscoverers(allAgents)
 	processNames := agents.ProcessNames(allAgents)
 
-	// SessionDetector: orchestrates Watchers + ProcessWatcher.
+	// SessionDetector: orchestrates Watchers + ProcessWatcher. Watchers
+	// register dynamically via AddWatcher as permissions are granted.
 	detector = services.NewSessionDetector(
-		watchers, pwPort,
+		nil, pwPort,
 		cachedRepo, logger, gitResolver, metricsCollector, push,
 		Version, cfg.ReadySessionTTL,
 		pidDiscovers, processNames, processlifecycle.LiveCWDs,
@@ -444,16 +458,56 @@ func main() {
 	// app can jump back to the launching terminal on row/notification click.
 	detector.SetLauncherEnvReader(processlifecycle.ReadLauncherEnv)
 
+	// PermissionService: single source of truth for consent state (issue
+	// #570). Exercises grants (hook install, watcher start), undoes
+	// revokes, arbitrates wizard answers between the macOS and web UIs,
+	// and feeds the always-on detection poller that makes the wizard
+	// appear when a new agent shows up. Under demo mode the factories and
+	// detection are nil — the daemon never monitors anything live.
+	home, _ := os.UserHomeDir()
+	permStore := filesystem.NewPermissionStore(dataDir(home))
+	var hasLive services.HasLiveProcessFunc
+	if !demoMode {
+		hasLive = processlifecycle.HasLiveProcess
+	}
+	// The consent catalog is the agent adapters plus the Gas Town
+	// orchestrator — gastown isn't in agents.All() (it has no Source/
+	// Process axes) but its ~/gt reads are consent-gated all the same.
+	permissionAgents := append(append([]agent.Agent{}, allAgents...),
+		gastownadapter.PermissionDeclaration(startGastown, stopGastown))
+	permService := services.NewPermissionService(
+		permissionAgents, permStore, push, logger,
+		cfg.PermissionMode, detector, watcherFactories, hasLive,
+	)
+	// Gas Town is detected by root-directory presence (stat-only), not by
+	// a live process matcher.
+	permService.SetDetectionProbe(gastownadapter.Name, gastownadapter.RootDetected)
+	// Consent gate for the detector's own transcript reads (startup seed +
+	// stale-working refresh of PERSISTED sessions) — the watcher pipeline
+	// is gated by construction, but these two paths read repo-listed
+	// transcripts directly and must honor per-adapter consent too (#570).
+	// Demo mode keeps the gate open: it serves synthetic seeded sessions
+	// and never reads live agent files in the first place.
+	if !demoMode {
+		detector.SetConsentGate(permService.ObserveGranted)
+	}
+	mux.HandleFunc("GET /api/v1/permissions",
+		permissionshandler.NewGetHandler(permService, logger))
+	mux.HandleFunc("POST /api/v1/permissions/answer",
+		permissionshandler.NewAnswerHandler(permService, logger))
+
 	// Hook receiver: Claude Code PermissionRequest/PostToolUse events.
 	// The detector satisfies claudecode.HookTarget via HandlePermissionHook.
+	// Consent-gated: hooks installed by a pre-consent daemon keep firing
+	// until the wizard is answered, so payloads are dropped while pending.
 	mux.HandleFunc("POST /api/v1/hooks/claudecode",
-		claudecode.NewHookHandler(detector, logger))
+		claudecode.NewHookHandler(detector, permService, logger))
 
 	// Statusline receiver: Claude Code's per-tick statusline JSON, carrying
 	// rate_limits for Pro/Max subscribers (issue #309). Routes to the
 	// metrics adapter so the snapshot lands in the right session's tailer.
 	mux.HandleFunc("POST /api/v1/hooks/claudecode/statusline",
-		claudecode.NewStatuslineHandler(metricsCollector, logger))
+		claudecode.NewStatuslineHandler(metricsCollector, permService, logger))
 
 	// Lifecycle recording: opt-in via --record flag or IRRLICHT_RECORD=1.
 	// Recordings default to <dataDir>/recordings, so IRRLICHT_HOME already
@@ -488,19 +542,29 @@ func main() {
 	{
 		detectorCtx, detectorCancel := context.WithCancel(context.Background())
 		defer detectorCancel()
-		logger.LogInfo("startup", "", fmt.Sprintf("watching %s", strings.Join(watcherRoots, ", ")))
-		for _, w := range watchers {
-			go func() {
-				if err := w.Watch(detectorCtx); err != nil && err != context.Canceled {
-					logger.LogError("agent-watcher", "", fmt.Sprintf("watcher error: %v", err))
-				}
-			}()
-		}
 		go func() {
 			if err := detector.Run(detectorCtx); err != nil && err != context.Canceled {
 				logger.LogError("session-detector", "", fmt.Sprintf("detector error: %v", err))
 			}
 		}()
+
+		// Exercise granted permissions (re-apply hook/statusline installs,
+		// start watchers) and launch the detection poller. Effects run
+		// synchronously so a grant-all daemon (demo/record/test) is fully
+		// monitoring before startup proceeds. Skipped under demo mode —
+		// nothing live is watched, so consent effects must not run either.
+		if !demoMode {
+			permService.Start(detectorCtx)
+			// The installed hooks POST via curl; without it they silently
+			// no-op and tool-use permission prompts never surface as
+			// `waiting`. Warn loudly so this isn't an invisible failure
+			// (the transcript heuristic still covers held file-edit
+			// prompts). See #488.
+			if permService.Granted(claudecode.AdapterName, claudecode.PermissionKeyHooks) &&
+				!claudecode.HookDeliveryAvailable() {
+				logger.LogError("startup", "", "curl not found on PATH — Claude Code permission-prompt detection is degraded: hooks POST via curl, so without it permission prompts may not surface as 'waiting'. Install curl to restore full detection (#488).")
+			}
+		}
 	}
 
 	logger.LogInfo("startup", "", fmt.Sprintf("irrlichd %s listening on unix:%s and tcp:%s", Version, sockPath, resolvedAddr))

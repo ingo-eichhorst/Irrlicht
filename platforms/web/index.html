@@ -81,6 +81,15 @@
                placeholder="bearer token" spellcheck="false" autocomplete="off">
       </label>
 
+      <h2>Permissions</h2>
+      <div class="settings-action-row">
+        <span class="settings-label-text">
+          <span class="settings-title">Agent permissions</span>
+          <span class="settings-hint">Review what irrlicht may read or modify, per agent.</span>
+        </span>
+        <button class="settings-action-btn" id="settings-review-permissions" type="button">Review…</button>
+      </div>
+
       <h2>Provider quota</h2>
       <label>
         <input type="checkbox" data-quota-setting="showQuotaForecast">
@@ -117,6 +126,18 @@
       <div class="settings-modal-footer">
         <span class="settings-perm-note" id="settings-perm-note"></span>
         <button class="settings-modal-close" id="settings-close" type="button">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="settings-modal-backdrop" id="permissions-backdrop" role="dialog" aria-modal="true" aria-label="Agent permissions">
+    <div class="settings-modal permissions-modal">
+      <h2 id="permissions-title">Agent permissions</h2>
+      <p class="permissions-intro" id="permissions-intro"></p>
+      <div id="permissions-body"></div>
+      <div class="settings-modal-footer">
+        <span class="settings-perm-note">Nothing is read or modified until you grant it.</span>
+        <button class="settings-modal-close" id="permissions-apply" type="button">Apply</button>
       </div>
     </div>
   </div>

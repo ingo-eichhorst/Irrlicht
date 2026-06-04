@@ -53,6 +53,14 @@ type HookTarget interface {
 	HandlePermissionHook(sessionID, transcriptPath, hookEventName string)
 }
 
+// ConsentGate reports whether the user has granted a permission (issue
+// #570). Satisfied by *services.PermissionService. Hooks installed by a
+// pre-consent daemon version keep firing until answered, so the receivers
+// drop payloads while their permission is pending or denied.
+type ConsentGate interface {
+	Granted(agentName, key string) bool
+}
+
 // sessionIDFromTranscriptPath extracts irrlicht's session ID (the UUID
 // filename stem) from a Claude Code transcript path. The hook payload's
 // session_id may differ from the transcript filename, so we always derive
@@ -71,10 +79,19 @@ func sessionIDFromTranscriptPath(p string) string {
 // The handler returns 200 with an empty body for recognized events. For
 // PermissionRequest, an empty response means Claude Code shows its normal
 // permission prompt (no auto-approve/deny).
-func NewHookHandler(target HookTarget, log outbound.Logger) http.HandlerFunc {
+//
+// gate is the consent check for the "hooks" permission; while not granted
+// the payload is dropped with 200 (so the curl hook stays quiet). A nil
+// gate means no gating — used by tests.
+func NewHookHandler(target HookTarget, gate ConsentGate, log outbound.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		if gate != nil && !gate.Granted(AdapterName, PermissionKeyHooks) {
+			w.WriteHeader(http.StatusOK)
 			return
 		}
 

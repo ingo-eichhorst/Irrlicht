@@ -1,16 +1,39 @@
 package agent
 
+import "irrlicht/core/domain/permission"
+
 // Agent is the registration record each inbound agent adapter exports.
-// It collapses identity, process recognition, and session source into
-// three orthogonal axes. Each adapter package's Agent() constructor
-// returns one value; the daemon wires per-adapter behavior off it via
-// the map projections in core/adapters/inbound/agents (Parsers,
-// PIDDiscoverers, ProcessNames, SubagentCounters, MetricsProviders) and
-// the Source-variant dispatch in core/cmd/irrlichd/wiring.go.
+// It collapses identity, process recognition, session source, and
+// consent-gated permissions into four orthogonal axes. Each adapter
+// package's Agent() constructor returns one value; the daemon wires
+// per-adapter behavior off it via the map projections in
+// core/adapters/inbound/agents (Parsers, PIDDiscoverers, ProcessNames,
+// SubagentCounters, MetricsProviders) and the Source-variant dispatch
+// in core/cmd/irrlichd/wiring.go.
 type Agent struct {
-	Identity Identity
-	Process  Process
-	Source   Source
+	Identity    Identity
+	Process     Process
+	Source      Source
+	Permissions []Permission
+}
+
+// Permission declares one consent-gated capability of an adapter: what
+// it touches, what feature it unlocks, and (for modify-kind entries) how
+// to apply and undo the modification. The daemon exercises nothing — no
+// install, no read — until the user grants the permission (issue #570).
+type Permission struct {
+	Key             string          // stable identifier, e.g. "hooks", "transcripts"
+	Kind            permission.Kind // modify (writes a file) or observe (reads only)
+	Title           string          // short label for the wizard row
+	FeatureUnlocked string          // what granting enables
+	Touches         string          // what the daemon reads/writes when granted
+	Detail          string          // expanded (i) text: exact paths/commands, how to undo
+
+	// Apply performs the modification on grant; Remove undoes it on
+	// revoke. Nil for observe-kind permissions — their effect (starting
+	// and stopping the agent's watchers) is owned by the daemon wiring.
+	Apply  func() error
+	Remove func() error
 }
 
 // Identity is the always-required adapter metadata served via
