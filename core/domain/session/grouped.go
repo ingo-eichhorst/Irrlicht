@@ -156,8 +156,19 @@ func BuildDashboard(sessions []*SessionState, orch *orchestrator.State) []*Agent
 }
 
 // buildAgent recursively creates an Agent tree from a session and its children.
+//
+// The Agent embeds a shallow COPY of the session, not the caller's pointer:
+// unifySubagents writes Subagents through the embedded SessionState, and the
+// input sessions are routinely shared with concurrent JSON marshals (the
+// daemon's websocket fan-out, the relay hub's push encode) — writing in place
+// is a data race (#572: TSan flagged hub.go's encode racing this write via
+// the relay's /api/v1/sessions handler). The group tree owning its own
+// structs makes BuildAgentGroups non-mutating; nothing reads the input's
+// Subagents afterwards (the detector populates session.Subagents itself
+// before save/broadcast — session_detector_subagent.go).
 func buildAgent(s *SessionState, workerMap map[string]*workerInfo, parentChildren map[string][]*SessionState) *Agent {
-	agent := &Agent{SessionState: s}
+	cp := *s
+	agent := &Agent{SessionState: &cp}
 
 	// Annotate with orchestrator role.
 	if wi, ok := workerMap[s.SessionID]; ok {

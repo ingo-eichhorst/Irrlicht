@@ -1,8 +1,10 @@
 package session
 
 import (
-	"irrlicht/core/domain/orchestrator"
+	"encoding/json"
 	"testing"
+
+	"irrlicht/core/domain/orchestrator"
 )
 
 func TestBuildDashboard_NoOrchestrator(t *testing.T) {
@@ -286,4 +288,61 @@ func TestBuildDashboard_RecursiveChildren(t *testing.T) {
 	if p.Children[0].SessionID != "child" {
 		t.Error("wrong grandchild")
 	}
+}
+
+// TestBuildDashboard_DoesNotMutateInput is the deterministic half of the
+// #572 regression: BuildAgentGroups used to write the unified Subagents
+// summary through the embedded *SessionState into the CALLER's session —
+// racing every concurrent JSON marshal of those shared pointers (daemon
+// websocket fan-out, relay hub push). The group tree must own copies.
+func TestBuildDashboard_DoesNotMutateInput(t *testing.T) {
+	parent := &SessionState{
+		SessionID: "parent", State: StateWorking, ProjectName: "proj",
+		Metrics: &SessionMetrics{OpenSubagents: 2},
+	}
+	sessions := []*SessionState{
+		parent,
+		{SessionID: "child1", State: StateWorking, ParentSessionID: "parent"},
+	}
+
+	groups := BuildDashboard(sessions, nil)
+
+	if got := groups[0].Agents[0].Subagents; got == nil {
+		t.Fatal("group tree should carry the unified subagents summary")
+	}
+	if parent.Subagents != nil {
+		t.Fatalf("BuildDashboard mutated its input: parent.Subagents = %+v", *parent.Subagents)
+	}
+}
+
+// TestBuildDashboard_ConcurrentWithMarshal is the racing half of the #572
+// regression: build the dashboard while another goroutine JSON-encodes the
+// same shared sessions, exactly like the relay's /api/v1/sessions handler
+// racing the hub's websocket push encode. Run under -race this fails
+// without the copy in buildAgent.
+func TestBuildDashboard_ConcurrentWithMarshal(t *testing.T) {
+	sessions := []*SessionState{
+		{
+			SessionID: "parent", State: StateWorking, ProjectName: "proj",
+			Metrics: &SessionMetrics{OpenSubagents: 2},
+		},
+		{SessionID: "child1", State: StateWorking, ParentSessionID: "parent"},
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 200; i++ {
+			for _, s := range sessions {
+				if _, err := json.Marshal(s); err != nil {
+					t.Errorf("marshal: %v", err)
+					return
+				}
+			}
+		}
+	}()
+	for i := 0; i < 200; i++ {
+		BuildDashboard(sessions, nil)
+	}
+	<-done
 }
