@@ -133,19 +133,30 @@
 
       <ul>
         <li><code>-w</code>, <code>--watch</code> &mdash; Watch mode &mdash; updates every second (clears screen between refreshes)</li>
+        <li><code>--format text|json</code> &mdash; Output format; <code>json</code> emits the same grouped tree as <code>GET /api/v1/sessions</code> (minus cost aggregation)</li>
+        <li><code>--id &lt;prefix&gt;</code> &mdash; Filter by session ID prefix (case-insensitive)</li>
+        <li><code>--state working|waiting|ready</code> &mdash; Filter by session state</li>
+        <li><code>--project &lt;substring&gt;</code> &mdash; Filter by project name (case-insensitive substring)</li>
+        <li><code>--adapter &lt;name&gt;</code> &mdash; Filter by agent adapter (e.g. <code>claude-code</code>, <code>codex</code>)</li>
       </ul>
 
       <h3>Output Format</h3>
 
-      <p>Columns: state, project name, session ID (8 chars), model, context window, subagent badge, age. Child sessions are indented below their parent.</p>
+      <p>Columns: state, project name, session ID (8 chars), model, context utilization (percent, color-coded by pressure level on a TTY; set <code>NO_COLOR</code> to disable) with context window, cost (USD), adapter, subagent badge, age. Child sessions are indented below their parent. When sessions span multiple projects, each project gets a header line with its session count. <code>waiting</code> sessions show the assistant's last message beneath the row; sessions with a task list show <code>N/M completed</code>.</p>
 
       <p>Example output:</p>
 
-      <pre><code>working  irrlicht     52d087d1 claude-opus-4-6 1000k [3 agents: 3w/0r]  (2s ago)
-  working  irrlicht     agent-a1 claude-haiku-4-5 200k  (5s ago)
-  working  irrlicht     agent-a4 claude-haiku-4-5 200k  (8s ago)
-  working  irrlicht     agent-ab claude-haiku-4-5 200k  (6s ago)
-ready    api-server   e5f6g7h8 claude-opus-4-6 1000k  (1m ago)</code></pre>
+      <pre><code>irrlicht (5 sessions)
+working  irrlicht     52d087d1 claude-opus-4-6 47% 1000k $3.21 claude-code [3 agents: 3w/0r]  (2s ago)
+  working  irrlicht     agent-a1 claude-haiku-4-5 8% 200k $0.04 claude-code  (5s ago)
+  working  irrlicht     agent-a4 claude-haiku-4-5 6% 200k $0.03 claude-code  (8s ago)
+  working  irrlicht     agent-ab claude-haiku-4-5 5% 200k $0.02 claude-code  (6s ago)
+waiting  irrlicht     99887766 claude-opus-4-6 92% 1000k $7.80 claude-code  (12s ago)
+    ? Should I delete the legacy migration before running the suite?
+    2/5 completed
+
+api-server (1 session)
+ready    api-server   e5f6g7h8 gpt-5 3% 400k codex  (1m ago)</code></pre>
 
       <h3>Data Source</h3>
 
