@@ -54,6 +54,38 @@ func TestGoRunFromRepoRoot(t *testing.T) {
 			t.Fatalf("output %q does not contain %q", got, want)
 		}
 	}
+
+	// --format json emits the grouped tree.
+	cmd = exec.Command("go", "run", "./core/cmd/irrlicht-ls", "--format", "json")
+	cmd.Dir = repoRoot
+	cmd.Env = append(os.Environ(),
+		"HOME="+homeDir,
+		"GOCACHE="+t.TempDir(),
+		"GOPATH="+goPath,
+	)
+	out, err = cmd.Output()
+	if err != nil {
+		t.Fatalf("go run ./core/cmd/irrlicht-ls --format json: %v\n%s", err, out)
+	}
+
+	var payload struct {
+		Groups []struct {
+			Name   string `json:"name"`
+			Agents []struct {
+				SessionID string `json:"session_id"`
+				State     string `json:"state"`
+			} `json:"agents"`
+		} `json:"groups"`
+	}
+	if err := json.Unmarshal(out, &payload); err != nil {
+		t.Fatalf("unmarshal json output: %v\n%s", err, out)
+	}
+	if len(payload.Groups) != 1 || payload.Groups[0].Name != "fixture-project" {
+		t.Fatalf("json groups = %+v, want one group named fixture-project", payload.Groups)
+	}
+	if len(payload.Groups[0].Agents) != 1 || payload.Groups[0].Agents[0].SessionID != state.SessionID {
+		t.Fatalf("json agents = %+v, want the fixture session", payload.Groups[0].Agents)
+	}
 }
 
 func repoRoot(t *testing.T) string {

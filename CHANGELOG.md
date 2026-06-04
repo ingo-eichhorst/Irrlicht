@@ -12,6 +12,14 @@ beyond), see the [Roadmap](https://irrlicht.io/docs/roadmap.html).
 
 ## [Unreleased]
 
+### Added — CLI
+- `irrlicht-ls` dashboard parity (#554): hierarchical subagent display with
+  indented children and `[N agents: Ww/Rr]` badges, project group headers,
+  context-utilization percent color-coded by pressure level, cost and adapter
+  columns, waiting-question and `N/M completed` task-progress detail lines,
+  `--format json` (grouped `/api/v1/sessions` shape), and `--id`/`--state`/
+  `--project`/`--adapter` filters. Still file-only — no daemon required.
+
 ## [0.4.8] — 2026-05-30
 
 ### Watch your agents from any machine — the `irrlichtrelay` ships, alongside a Linux daemon and per-provider quota tracking.
