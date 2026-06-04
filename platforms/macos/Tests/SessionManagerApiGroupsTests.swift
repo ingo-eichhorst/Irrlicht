@@ -15,13 +15,23 @@ final class SessionManagerApiGroupsTests: XCTestCase {
     typealias AgentGroup = SessionManager.AgentGroup
 
     private var sut: SessionManager!
+    private var originalProjectGroupOrder: Any?
 
     override func setUp() async throws {
         try await super.setUp()
+        // seedLocalApiGroups → orderedGroups persists projectGroupOrder to
+        // UserDefaults.standard. Snapshot + restore so the developer's real
+        // group order survives the test run (same pattern as the snapshot tests).
+        originalProjectGroupOrder = UserDefaults.standard.object(forKey: "projectGroupOrder")
         sut = SessionManager()
     }
 
     override func tearDown() async throws {
+        if let originalProjectGroupOrder {
+            UserDefaults.standard.set(originalProjectGroupOrder, forKey: "projectGroupOrder")
+        } else {
+            UserDefaults.standard.removeObject(forKey: "projectGroupOrder")
+        }
         sut = nil
         try await super.tearDown()
     }
@@ -125,8 +135,7 @@ final class SessionManagerApiGroupsTests: XCTestCase {
 
     func testPatchApiGroups_updatesAgentMetricsWhenIdKnown() {
         let original = makeSession(id: "live", cost: 1.00)
-        sut.apiGroups = [AgentGroup(name: "proj", agents: [original])]
-        sut.groupedSessionIds = ["live"]
+        sut.seedLocalApiGroups([AgentGroup(name: "proj", agents: [original])])
 
         let update = makeSession(id: "live", cost: 7.77)
         sut.patchApiGroups(session: update)
@@ -144,8 +153,7 @@ final class SessionManagerApiGroupsTests: XCTestCase {
         // invariant here is that an unknown session id never corrupts
         // apiGroups by emitting a bogus agent row.
         let original = makeSession(id: "known", cost: 1.00)
-        sut.apiGroups = [AgentGroup(name: "proj", agents: [original])]
-        sut.groupedSessionIds = ["known"]
+        sut.seedLocalApiGroups([AgentGroup(name: "proj", agents: [original])])
 
         let ghost = makeSession(id: "unknown", cost: 999)
         sut.patchApiGroups(session: ghost)
@@ -158,8 +166,7 @@ final class SessionManagerApiGroupsTests: XCTestCase {
 
     func testRemoveFromApiGroups_dropsTopLevelAgentAndEmptyGroup() {
         let lone = makeSession(id: "live")
-        sut.apiGroups = [AgentGroup(name: "irrlicht", agents: [lone])]
-        sut.groupedSessionIds = ["live"]
+        sut.seedLocalApiGroups([AgentGroup(name: "irrlicht", agents: [lone])])
 
         sut.removeFromApiGroups(sessionId: "live")
 
@@ -171,8 +178,7 @@ final class SessionManagerApiGroupsTests: XCTestCase {
     func testRemoveFromApiGroups_dropsChild_keepsParent() {
         let child = makeSession(id: "child")
         let parent = makeSession(id: "parent", cost: 2.00, children: [child])
-        sut.apiGroups = [AgentGroup(name: "irrlicht", agents: [parent])]
-        sut.groupedSessionIds = ["parent", "child"]
+        sut.seedLocalApiGroups([AgentGroup(name: "irrlicht", agents: [parent])])
 
         sut.removeFromApiGroups(sessionId: "child")
 
@@ -197,8 +203,7 @@ final class SessionManagerApiGroupsTests: XCTestCase {
             agents: nil,
             groups: [rigGroup]
         )
-        sut.apiGroups = [gasTown]
-        sut.groupedSessionIds = ["rig-1"]
+        sut.seedLocalApiGroups([gasTown])
 
         sut.removeFromApiGroups(sessionId: "rig-1")
 
@@ -219,8 +224,7 @@ final class SessionManagerApiGroupsTests: XCTestCase {
             agents: [makeSession(id: "sibling")],
             groups: [inner]
         )
-        sut.apiGroups = [outer]
-        sut.groupedSessionIds = ["sibling", "deep"]
+        sut.seedLocalApiGroups([outer])
 
         sut.removeFromApiGroups(sessionId: "deep")
 
@@ -237,8 +241,7 @@ final class SessionManagerApiGroupsTests: XCTestCase {
         // update slips past the patchApiGroups guard with no row to land in.
         let child = makeSession(id: "child")
         let parent = makeSession(id: "parent", children: [child])
-        sut.apiGroups = [AgentGroup(name: "irrlicht", agents: [parent])]
-        sut.groupedSessionIds = ["parent", "child"]
+        sut.seedLocalApiGroups([AgentGroup(name: "irrlicht", agents: [parent])])
 
         sut.removeFromApiGroups(sessionId: "parent")
 
@@ -250,8 +253,7 @@ final class SessionManagerApiGroupsTests: XCTestCase {
 
     func testRemoveFromApiGroups_isNoOpForUnknownId() {
         let original = makeSession(id: "alive", cost: 1.00)
-        sut.apiGroups = [AgentGroup(name: "irrlicht", agents: [original])]
-        sut.groupedSessionIds = ["alive"]
+        sut.seedLocalApiGroups([AgentGroup(name: "irrlicht", agents: [original])])
 
         sut.removeFromApiGroups(sessionId: "ghost")
 
@@ -266,8 +268,7 @@ final class SessionManagerApiGroupsTests: XCTestCase {
         let id = UUID().uuidString
         let session = makeSession(id: id, cost: 1.00)
         sut.sessions = [session]
-        sut.apiGroups = [AgentGroup(name: "proj", agents: [session])]
-        sut.groupedSessionIds = [id]
+        sut.seedLocalApiGroups([AgentGroup(name: "proj", agents: [session])])
 
         sut.deleteSession(sessionId: id)
 
@@ -295,8 +296,7 @@ final class SessionManagerApiGroupsTests: XCTestCase {
 
         sut.sessionMap[id] = working
         sut.sessions = [working]
-        sut.apiGroups = [AgentGroup(name: "proj", agents: [working])]
-        sut.groupedSessionIds = [id]
+        sut.seedLocalApiGroups([AgentGroup(name: "proj", agents: [working])])
 
         sut.resetSessionState(sessionId: id)
 

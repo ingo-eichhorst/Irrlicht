@@ -27,15 +27,20 @@ final class UpdateManager: ObservableObject {
     private let controller: SPUStandardUpdaterController
     private let logger = Logger(subsystem: "io.irrlicht.app", category: "UpdateManager")
 
-    init() {
+    /// `startingUpdater: false` skips starting Sparkle's update cycle — for
+    /// tests, which run outside an app bundle where Sparkle's start would
+    /// fail its bundle checks.
+    init(startingUpdater: Bool = true) {
         controller = SPUStandardUpdaterController(
-            startingUpdater: true,
+            startingUpdater: startingUpdater,
             updaterDelegate: nil,
             userDriverDelegate: nil
         )
         automaticallyChecksForUpdates = controller.updater.automaticallyChecksForUpdates
         lastUpdateCheckDate = controller.updater.lastUpdateCheckDate
-        logger.info("Sparkle updater started (auto checks: \(self.automaticallyChecksForUpdates, privacy: .public))")
+        if startingUpdater {
+            logger.info("Sparkle updater started (auto checks: \(self.automaticallyChecksForUpdates, privacy: .public))")
+        }
     }
 
     func checkForUpdates() {

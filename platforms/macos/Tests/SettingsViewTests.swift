@@ -15,7 +15,12 @@ final class SettingsViewTests: XCTestCase {
     // samples the four corners + center of the resulting bitmap, and asserts
     // every sampled pixel is fully opaque.
     func testSettingsViewBackgroundIsOpaque() throws {
+        // SettingsView requires both environment objects (crashes without
+        // them). startingUpdater: false keeps Sparkle from starting its
+        // update cycle, which would fail outside an app bundle.
         let view = SettingsView(isPresented: .constant(true))
+            .environmentObject(UpdateManager(startingUpdater: false))
+            .environmentObject(SessionManager())
         let hosting = NSHostingView(rootView: view)
         // Pin to dark aqua so NSColor.windowBackgroundColor resolves
         // deterministically — the test verifies opacity, not hue, but
