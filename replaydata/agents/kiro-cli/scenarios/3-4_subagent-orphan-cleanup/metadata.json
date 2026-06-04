@@ -1,0 +1,78 @@
+{
+  "scenario_id": "subagent-orphan-cleanup",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "incapable",
+    "driver_capability": "n/a",
+    "agent_cli_version": "2.5.1",
+    "daemon_version": "0.4.8+7042b3f.dirty",
+    "confidence": 0.8,
+    "notes": "agent=yes (InvokeSubagents tool + /spawn; changelog 'Record parent session ID in persisted subagent sessions'); daemon=incapable — kiro records the parent link only in the .json sidecar (loop_id.agent_id.parent_id), never in the .jsonl the daemon tails, so no parent-child link is ever derived; frozen."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "subagent-orphan-cleanup",
+      "agent": "kiro-cli",
+      "assessed_at": "2026-06-05T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "incapable",
+      "driver_capability": "n/a",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: incapable (no kiro-cli parent-child linking path; the link lives only in the .json sidecar the adapter never reads)\ndriver_capability: n/a (frozen — no recording)\n\n## Scenario\n\nThe parent session launches a foreground subagent; once the child is linked and its sidechain transcript is visible, the recipe SIGKILLs the parent's process group, leaving the child orphaned, and the daemon's pid_manager sweep must remove both rows with no spurious `working` transition for the orphan (issue #321 regression). The user-observable signal this asserts is `>= 1 child session linked to a parent` and `>= 1 subagent transcript` — i.e. the daemon must first SEE the child as a linked child session. That precondition is what fails for kiro-cli.\n\n## Agent pillar (yes)\n\nkiro-cli 2.5.1 ships subagents as a first-class capability. From the live binaries (`/opt/homebrew/bin/kiro-cli` 2.5.1 and `~/.local/bin/kiro-cli-chat`):\n\n- The chat binary embeds an `InvokeSubagents` tool — \"Array of subagent invocations to execute in parallel\" — plus the slash surface includes `/spawn` (FINDINGS.md §8) and a changelog line \"Introducing Subagents - Delegate complex tasks to specialized agents with live progress tracking\". So the agent genuinely spawns child agent sessions.\n- A changelog string in the binary, \"Record parent session ID in persisted subagent sessions\", confirms kiro persists the parent→child link to disk. The live smoke session's `.json` sidecar exposes exactly that shape: `session_created_reason: \"subagent\"` and `session_state.conversation_metadata.user_turn_metadatas[].loop_id.agent_id.parent_id`. So `agent=yes` for spawning AND for persisting the link — the scenario's precondition (a child session linked to a parent) is producible by the agent.\n\n## Daemon pillar (incapable)\n\nThe irrlicht daemon establishes a parent→child link by exactly the methods in `deriveParentSession` (`core/application/services/helpers.go:90`), plus a parser that sets `event.ParentSessionID`. NONE fire for kiro-cli:\n\n1. Path pattern `.../<parent>/subagents/<child>.jsonl` — `deriveParentSessionID` (helpers.go:100). kiro session files are FLAT: `~/.kiro/sessions/cli/<uuid>.jsonl` with no `subagents/` directory (adapter Source is `FilesUnderRoot{Dir: ~/.kiro/sessions/cli}`, agent.go:38), so this never matches.\n2. Header `{\"type\":\"session\",\"parentSession\":\"...\"}` — `deriveParentSessionFromTranscript` (helpers.go:111). A kiro `.jsonl`'s first line is `{\"version\":\"v1\",\"kind\":\"Prompt\",...}` (confirmed in the smoke transcript) — no `type:session` header, no `parentSession` field — so this never matches.\n3. A parser that sets `ev.ParentSessionID` (consumed at `session_detector_activity.go`). The kiro parser (`core/adapters/inbound/agents/kirocli/parser.go`) never sets `ParentSessionID`; the entire kirocli package has zero parent/child/subagent/spawn references (grep-confirmed).\n\nDecisively, the parent link kiro DOES persist lives ONLY in the `<uuid>.json` sidecar (`loop_id.agent_id.parent_id` and `session_created_reason`), NOT in the `<uuid>.jsonl` the daemon tails — a grep of the smoke `.jsonl` for any parent/session_meta/parentSession reference returns empty. The kiro adapter reads the sidecar only for the working directory (`GetCWDFromTranscript` → top-level `cwd`), not for parent linkage. So the daemon never sees a kiro subagent as a *linked child session* — the core observable this scenario asserts.\n\nThis is not a narrow `bug` (a spec-required observable mis-handled on a trace the daemon already reads) — there is no kiro parent-linking code path at all, and the only on-disk source of the link (the sidecar) is outside what the JSONL Source tails. It is a missing capability → `incapable`. Building it is new adapter work: read `loop_id.agent_id.parent_id` (and gate on `session_created_reason == \"subagent\"`) out of the `.json` sidecar and surface it as `ParentSessionID`.\n\n## Why frozen\n\nWith `agent=yes` and `daemon=incapable`, the route is `frozen` per the routing table. As a corollary, even the recipe's `sigkill` step is a stubbed driver arm for kiro (`DRIVE_ELICITS=\"send slash wait_turn sleep\"`), but that is moot under `frozen` — no recording runs, so `driver=n/a` (matching the codex cell). Re-assess once the kiro adapter learns to read the sidecar parent link; the orphan-sweep / no-working-transition invariant (#321) is daemon-internal and agent-agnostic, already covered by the claudecode and opencode cells, so the kiro-specific blocker is strictly the parent-child link.",
+      "caveats": [
+        "Calibrated against the codex subagent-orphan-cleanup cell (agent=yes, daemon=incapable, frozen, applicable_false): same structural blocker — the parent->child link exists in agent-internal metadata the adapter's JSONL Source does not read.",
+        "Unblock path: extend the kiro adapter (or GetCWDFromTranscript's sidecar read) to also pull session_state.conversation_metadata...loop_id.agent_id.parent_id from the <uuid>.json sidecar, gated on session_created_reason == 'subagent', and surface it as event.ParentSessionID. That alone flips daemon -> full and unfreezes this cell; the JSONL transport needs no change.",
+        "Provisional emission: the live smoke session was a top-level chat (its sidecar's parent_id is None despite session_created_reason 'subagent'); no genuine spawned child rollout was captured, so the exact populated value of loop_id.agent_id.parent_id in a real subagent's sidecar is inferred from the schema + the 'Record parent session ID in persisted subagent sessions' changelog, not from an observed child sidecar.",
+        "The sigkill driver step is a stubbed arm for kiro (not in DRIVE_ELICITS); it would be a driver gap to port IF the cell were ever recordable, but under frozen no recording runs so driver=n/a."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/parser.go",
+          "note": "Kiro parser never sets event.ParentSessionID; the entire kirocli package has zero parent/child/subagent/spawn linking references (grep-confirmed)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/agent.go",
+          "note": "Source is FilesUnderRoot{Dir: ~/.kiro/sessions/cli} tailing flat <uuid>.jsonl files (no subagents/ subdir); the adapter reads the .json sidecar only for cwd, never for parent linkage."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/helpers.go",
+          "note": "deriveParentSession (line 90): deriveParentSessionID (line 100) matches only .../subagents/<child>.jsonl; deriveParentSessionFromTranscript (line 111) matches only a {type:session, parentSession:...} header. A kiro flat path + {version:v1, kind:Prompt} first line match neither."
+        },
+        {
+          "kind": "file",
+          "ref": ".build/refresh/kiro-cli-smoke/c423461a-e49e-4d30-8101-6ee082d28483.json",
+          "note": "Live 2.5.1 sidecar: top-level session_created_reason='subagent'; session_state.conversation_metadata.user_turn_metadatas[].loop_id.agent_id.parent_id present (None in this top-level session). The parent link is recorded ONLY here, not in the .jsonl the daemon tails."
+        },
+        {
+          "kind": "file",
+          "ref": ".build/refresh/kiro-cli-smoke/c423461a-e49e-4d30-8101-6ee082d28483.jsonl",
+          "note": "Live 2.5.1 transcript: first line {version:v1, kind:Prompt, ...}; grep for parentSession/parent_session/session_meta/type:session/created_reason returns empty — the JSONL carries NO parent reference and no model/token/cost."
+        },
+        {
+          "kind": "file",
+          "ref": "/opt/homebrew/bin/kiro-cli + ~/.local/bin/kiro-cli-chat (strings, 2.5.1)",
+          "note": "InvokeSubagents tool ('Array of subagent invocations to execute in parallel'); /spawn background sessions; changelog 'Introducing Subagents...' and 'Record parent session ID in persisted subagent sessions' — agent spawns AND persists the parent link to disk."
+        },
+        {
+          "kind": "file",
+          "ref": ".build/refresh/kiro-cli-smoke/FINDINGS.md",
+          "note": "kiro-cli 2.5.1 live smoke (§4, §8): JSONL event vocab Prompt/AssistantMessage/ToolResults/Clear with NO model/usage/cost; slash surface includes spawn; sidecar <uuid>.json carries per-turn metering/model but the parser does not read it for linkage."
+        },
+        {
+          "kind": "issue",
+          "ref": "ingo-eichhorst/Irrlicht#321",
+          "note": "Zombie-on-restart fix establishing the no-working-transition-during-cleanup invariant; agent-agnostic, already covered by claudecode + opencode cells — not the kiro blocker."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "note": "Frozen: agent=yes but daemon=incapable. No recipe runs because the daemon cannot observe a kiro-cli subagent as a linked child session (no kiro parent-child linking path; the parent_id lives only in the .json sidecar the JSONL Source never reads). Recipe would otherwise mirror claudecode's 3-4 cell (use InvokeSubagents/spawn a subagent that reads a file and waits; SIGKILL the process group; observe the sweep) AND would need the stubbed sigkill driver arm ported. Re-author once kiro parent-linking lands in the adapter.",
+      "script": []
+    }
+  }
+}

@@ -1,0 +1,107 @@
+{
+  "scenario_id": "foreground-subagent",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "incapable",
+    "driver_capability": "ready",
+    "agent_cli_version": "2.5.1",
+    "daemon_version": "0.4.8+7042b3f",
+    "confidence": 0.75,
+    "notes": "agent_supports: yes (use_subagent synchronous subagent + /spawn + delegate, changelog 'Introducing Subagents'); daemon_capability: incapable (no kiro parent-link path — flat sessions/cli layout, parser sets no ParentSessionID, deriveParentSession misses); driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "foreground-subagent",
+      "agent": "kiro-cli",
+      "agent_supports": "yes",
+      "daemon_capability": "incapable",
+      "driver_capability": "ready",
+      "confidence": 0.75,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: incapable\ndriver_capability: ready\n\nRoute: frozen — kiro-cli CAN run a foreground (synchronous, blocking) subagent that reports results back to the parent, but the irrlicht kiro-cli adapter has no mechanism to bind a kiro child session to its parent, so none of this scenario's load-bearing observables (ParentSessionID linkage, SubagentCount, parent_linked, the parent held working across the child's lifetime) can be emitted today.\n\n## agent_supports = yes\n\nkiro-cli 2.5.1 ships a first-class, default-on subagent surface (kiro-cli is a fork of aws/amazon-q-developer-cli, ahead of upstream `main` on this feature — upstream main's `crates/agent/src/agent/tools/` has no subagent tool yet, but the shipped binary's strings do):\n\n- The `kiro-cli-chat` (bun TUI) binary's tool catalog exposes `use_subagent` — \"This tool ... runs synchronously (blocking)\", \"Delegate tasks to specialized subagents running in parallel with isolated context\", and a sibling \"Subagent tool for reporting task results back to the main agent\". Synchronous + reports-back-to-parent IS the foreground semantics this scenario asserts (parent blocks on child).\n- A `delegate` tool (the async/background sibling, \"runs tasks asynchronously in the background (non-blocking) ... Files are stored in `.kiro/.subagents/`\") and `spawn_session` (\"Initial task/prompt for spawn_session\", agent/group/role params) round out the surface; the `/spawn` slash command (\"Spawn a new agent session with a task\") is the interactive entry point.\n- Changelog strings in the binary: \"Introducing Subagents - Delegate complex tasks to specialized agents with live progress tracking\", \"Subagent pipelines now support review loops\", \"Record parent session ID in persisted subagent sessions\", \"Fix subagents not respecting the model field\".\n\nSo kiro genuinely performs the behavior: a parent delegates a bounded subtask to a synchronous child agent, waits, and integrates the result.\n\n## daemon_capability = incapable (the freeze)\n\nThe irrlicht kiro-cli adapter cannot OBSERVE the parent/child binding — structurally the same failure as the codex foreground-subagent cell:\n\n1. **No parent signal in the kiro parser.** `core/adapters/inbound/agents/kirocli/parser.go` sets no `ParentSessionID` on any ParsedEvent (it emits only user_message / assistant+ToolUses / turn_done / tool_result from Prompt / AssistantMessage / ToolResults / Clear). The JSONL transcript carries no parent field at all.\n2. **Flat on-disk layout — no `<parent>/subagents/` directory.** The kiro Source is `FilesUnderRoot{~/.kiro/sessions/cli}` (agent.go) and every session — parent OR child — is a sibling `<uuid>.jsonl` (+ `<uuid>.json` sidecar). There is no `subagents/` subtree under the tailed root.\n3. **`deriveParentSession` recognizes only two formats, neither kiro's.** `core/application/services/helpers.go` derives a parent ID from (a) the Claude-Code path pattern `.../<parent>/subagents/<agent>.jsonl` or (b) a Pi-style `{\"type\":\"session\",\"parentSession\":\"...\"}` first-line header. A kiro child matches NEITHER: its path is a flat `sessions/cli/<uuid>.jsonl`, and its JSONL first line is a `Prompt`/event envelope, not a `type:session` header.\n4. **The parent link kiro DOES persist is in a shape/location no irrlicht path reads.** The binary's \"Record parent session ID in persisted subagent sessions\" changelog confirms kiro writes a parent reference, but the live sidecar (`<uuid>.json`) shows the only parent-ish field is `session_state.conversation_metadata.user_turn_metadatas[].loop_id.agent_id.parent_id` (an in-process agent-loop id, `null` for a top-level chat) — and the kiro adapter reads the sidecar ONLY for top-level `cwd` (`transcript.ExtractCWDFromSidecar`), never a parent. The async `delegate` variant stores its files under `.kiro/.subagents/` — a directory the adapter does NOT watch at all, so a child written there is invisible end-to-end.\n\nConsequence: a kiro parent + foreground child surface to the daemon as TWO UNRELATED top-level sessions (or the child is wholly invisible if it lands under `.kiro/.subagents/`). `ParentSessionID` stays empty, so `SubagentCount(parent)` is 0, no `parent_linked` event ever fires (`session_detector_activity.go:123-124` only records it when `state.ParentSessionID != \"\"`), and the parent's `working→ready` is governed only by its own turn — it does NOT wait on the child. Every load-bearing assertion of this scenario is unobservable.\n\nThis is `incapable` rather than `bug`: there is no kiro trace UNDER THE TAILED ROOT that the daemon mis-handles — the adapter has no parent-link rule at all, and the parent reference kiro persists lives in a sidecar/`.subagents` shape that no kiro parser or `deriveParentSession` path reads. Representing it would require a NEW kiro-specific linkage rule (parser emits ParentSessionID from the persisted parent field, or a kiro branch in `deriveParentSession`), i.e. an adapter capability that does not exist — not a fix to a mishandled in-root signal.\n\n## driver_capability = ready\n\nNot the constraint, recorded honestly: `replaydata/agents/kiro-cli/driver-interactive.sh` genuinely elicits `send`, `slash`, `wait_turn`, `sleep` (DRIVE_ELICITS). The recipe below (a single `send` asking kiro to use_subagent to read a file and wait + a wait_turn + a settle sleep) needs only `send`/`wait_turn`/`sleep` — all present. The driver could elicit the behavior the moment the daemon could observe it.\n\n## What would unblock\n\nA kiro-adapter change that binds child→parent: emit `ParentSessionID` from the persisted parent-session reference kiro writes for a subagent (the changelog confirms one exists), or add a kiro branch to `deriveParentSession`, AND ensure the foreground child's transcript lands under a tailed root (it may write under `.kiro/.subagents/`, which the adapter does not watch). Once a kiro child carries a daemon-readable parent link under a watched root, re-assess: agent=yes + driver=ready means the cell would flip to `record`.",
+      "caveats": [
+        "agent_supports=yes is grounded in the kiro-cli-chat binary's tool catalog strings (`use_subagent`/`delegate`/`spawn_session`) + changelog strings, NOT a captured use_subagent recording — the local ~/.kiro/sessions/cli store has no real subagent child to inspect (every sidecar there has loop_id.agent_id.parent_id=null and is a top-level chat). The EXACT on-disk shape + location of a synchronous subagent's persisted session (does it write a sibling <uuid>.jsonl under sessions/cli, or only under .kiro/.subagents/?) and the precise field that 'Record parent session ID in persisted subagent sessions' populates are INFERRED from strings, not observed. Confidence is held at 0.75 for that reason; a live use_subagent capture would settle both the storage location and the parent-id field name an adapter fix must read.",
+        "If kiro's foreground subagent runs in-process and persists NO separate child session file (only the parent transcript records the use_subagent tool call + result), then there is no child SessionState to link at all — the daemon would see a single working session whose turn spans the subagent. That hardens the verdict toward incapable for a no-second-session reason too. Either way (separate-but-unlinked, .subagents-only, or no-separate-file) every parent/child observable this scenario asserts is unobservable today."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/parser.go",
+          "note": "Parser emits user_message/assistant+ToolUses/turn_done/tool_result only; sets no ParentSessionID on any ParsedEvent"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/agent.go",
+          "note": "Source = FilesUnderRoot{~/.kiro/sessions/cli} — flat layout, no <parent>/subagents/ subtree"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/pid.go",
+          "note": "Sidecar (<uuid>.json) is read ONLY for cwd via transcript.ExtractCWDFromSidecar — never for a parent link"
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/helpers.go",
+          "note": "deriveParentSession recognizes only Claude path-pattern .../<parent>/subagents/<agent>.jsonl + Pi {type:session,parentSession} header — kiro matches neither"
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/session_detector_activity.go",
+          "note": "parent_linked event recorded only when state.ParentSessionID != \"\" (L102-124); kiro never populates it"
+        },
+        {
+          "kind": "file",
+          "ref": "/Applications/Kiro CLI.app/Contents/MacOS/kiro-cli-chat (strings)",
+          "note": "Tool catalog: use_subagent 'runs synchronously (blocking)', 'Delegate tasks to specialized subagents running in parallel with isolated context', 'Subagent tool for reporting task results back to the main agent'; delegate 'Files are stored in .kiro/.subagents/'; spawn_session params"
+        },
+        {
+          "kind": "file",
+          "ref": "/opt/homebrew/bin/kiro-cli (strings, changelog)",
+          "note": "'Introducing Subagents - Delegate complex tasks to specialized agents with live progress tracking'; 'Record parent session ID in persisted subagent sessions'; 'Subagent pipelines now support review loops'"
+        },
+        {
+          "kind": "file",
+          "ref": ".build/refresh/kiro-cli-smoke/c423461a-e49e-4d30-8101-6ee082d28483.json",
+          "note": "Live 2.5.1 sidecar: only parent-ish field is loop_id.agent_id.parent_id (null for top-level chat); session_created_reason='subagent' present even for a plain chat (no parent_session_id key)"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/codex/scenarios/3-1_foreground-subagent/metadata.json",
+          "note": "Calibration: codex foreground-subagent is the same structural incapable/frozen verdict (agent=yes, no parser ParentSessionID, flat layout, deriveParentSession misses)"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "kiro-cli 2.5.1+ on PATH and authenticated (subscription auth); subagent tools (use_subagent) exposed in the default agent",
+        "irrlichd is recording (dev daemon with --record, isolated IRRLICHT_HOME)",
+        "FROZEN: this recipe is documentary — the daemon cannot bind the kiro child to the parent today (daemon=incapable), so a recording would NOT satisfy the spec until an adapter parent-link rule lands (and the child's transcript lands under a tailed root)"
+      ],
+      "setup": [
+        "Driver launches `kiro-cli chat --trust-all-tools` under tmux in a fresh cwd under <staging>/cwd/",
+        "A README.md with a single H1 heading is seeded into the cwd so the subagent has a deterministic file to read"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Use the use_subagent tool to launch a subagent that reads the README.md in the current directory and reports its first heading. Wait for the subagent to finish, then reply 'done'."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        }
+      ],
+      "verify": [
+        "(unblock-time) events.jsonl contains >= 1 parent_linked event binding the kiro child session to the parent UUID",
+        "(unblock-time) the parent stays working until the child reports back, then a single working->ready",
+        "(unblock-time) final parent state is ready"
+      ],
+      "settings": {},
+      "timeout_seconds": 240
+    }
+  }
+}

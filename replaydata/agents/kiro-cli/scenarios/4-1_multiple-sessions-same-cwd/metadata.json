@@ -1,0 +1,130 @@
+{
+  "scenario_id": "multiple-sessions-same-cwd",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "gap:start_session",
+    "agent_cli_version": "2.5.1",
+    "daemon_version": "0.4.8+7042b3f.dirty",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes; daemon_capability: full; driver_capability: gap:start_session"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "multiple-sessions-same-cwd",
+      "agent": "kiro-cli",
+      "assessed_at": "2026-06-05T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "gap:start_session",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: gap:start_session\n\nTwo concurrent `kiro-cli chat` sessions in the SAME cwd produce two distinct session rows with stable, non-cross-contaminating PID bindings. Structurally identical to the codex/pi `multiple-sessions-same-cwd` cells (both yes/full), and slightly STRONGER on transcript identity: each kiro session writes its own `<uuid>.jsonl` rather than sharing a directory-keyed store. The only gap is tooling — the kiro interactive driver has not yet ported the `start_session` / `session` (multi-slot) seams.\n\n## Agent — yes\n\nLive smoke of kiro-cli 2.5.1 confirms each `kiro-cli chat` launch is its own parent process (comm=`kiro-cli`) whose OS cwd == the session cwd, and mints its own session UUID, writing `~/.kiro/sessions/cli/<uuid>.jsonl` (+ a `<uuid>.json` sidecar) (FINDINGS.md §1, §4). Two launches in the same directory therefore yield two independent transcripts and two independent processes; nothing in kiro serializes them. `pgrep -x kiro-cli` matches ONLY the parent (the bun/acp children and the `kiro_cli_desktop` companion carry different names), so two concurrent sessions surface as exactly two matching PIDs (FINDINGS.md §1).\n\n## Daemon — full\n\nEach user-observable signal the scenario asserts maps to an emitted event the adapter handles, with no cross-contamination:\n\n- **Two distinct session rows, each its own session_id** — `agent.go` declares `Source: FilesUnderRoot{Dir: \".kiro/sessions/cli\", Parser: JSONLineParser{NewParser: () => &Parser{}}}`. The fswatcher picks up two new `<uuid>.jsonl` files; the tailer instantiates a FRESH stateful `&Parser{}` per file via `NewParser`, so the two sessions never share parser state. session_id is the filename stem (one per kiro UUID) — two files → two rows.\n- **Independent state arcs, no flapping** — the parser emits `user_message` (Prompt), `assistant` (AssistantMessage with toolUse), `turn_done` (text-only final AssistantMessage), `tool_result` (ToolResults) per file (parser.go; FINDINGS.md §5). A turn on session A's transcript drives only A's working→ready arc because the tailer goroutine + Parser are per-file; there is no shared-cwd state on the session domain object.\n- **Stable, non-cross-contaminating PID-to-session binding** — `pid.go::DiscoverPID` calls `processlifecycle.DiscoverPIDByCWD(\"kiro-cli\", cwd, disambiguate)`. When two live `kiro-cli` processes share the cwd, `narrowByCWD` (discovery.go) hands BOTH matching PIDs to the caller's `disambiguate` callback. The daemon's `PIDManager.TryDiscoverPID` (pid_manager.go) supplies a prefer-UNCLAIMED-else-highest disambiguator built from `claimedPIDs(sessionID)`: once session 1's PID is bound (claimed), session 2's discovery skips it and binds the remaining unclaimed PID. This is the SAME mechanism codex and pi use (they wrap the identical `DiscoverPIDByCWD` with this generic disambiguator) and both are rated daemon=full — so kiro inherits the proven non-cross-contamination property. kiro does NOT override the disambiguator the strict-metadata way claudecode does, but it does not need to: the two distinct `<uuid>.jsonl` files give clean transcript identity, and the prefer-unclaimed rule keeps the two PIDs from swapping.\n\n## Driver — gap:start_session\n\nThe recipe (templated from codex/claudecode for this scenario) needs the multi-slot primitives: a `start_session` step to launch session 2 without tearing session 1 down, and `{\"session\":N}` targeting to re-drive session 1 while session 2 is alive. The kiro interactive driver scaffolds every standard arm but stubs these: `DRIVE_ELICITS=\"send slash wait_turn sleep\"` and the `start_session` / `session` case arms call `not_implemented` (driver-interactive.sh, lines 86, 252-253). recipe-lint reads `DRIVE_ELICITS` directly, so a recipe needing `start_session` flags a semantic_gap before recording. This is TOOLING work, not an observability limit: `record` ports the `start_session` / `session` seams from drive-codex-interactive.sh / drive-claudecode-interactive.sh, then drives. The cell keeps its real recipe + spec.\n\n## Observations\n\nThe `<uuid>.jsonl` carries NO model / token / cost (FINDINGS.md §4) — those live only in the `<uuid>.json` sidecar (metering_usage credits, model_id), which the v1 adapter does not read (FINDINGS.md adapter decisions; sidecar MetricsReader is a documented future enhancement). So the spec asserts model `unknown`, cost_nonzero false, tokens_nonzero false.",
+      "caveats": [
+        "Recording is BLOCKED on the driver gap until record ports the start_session / session seams (and the {\"session\":N} routing of send/wait_turn) into drive-kiro-cli-interactive.sh from the codex/claudecode reference drivers. The scaffold's start_session and session arms currently call not_implemented (exit 3).",
+        "PID disambiguation for two same-cwd kiro processes rests on the daemon's prefer-unclaimed-else-highest disambiguator (pid_manager.go), NOT on a kiro-specific metadata-first rule like claudecode's. During the brief startup window before session 2's PID is claimed, a tick of momentarily-late PID is possible, but cross-contamination is not (the unclaimed-PID preference prevents a swap). Anchor PID-stability phases after both transcripts have written ≥1 line — record proves this live.",
+        "daemon=full is doc+code provisional for the live concurrency stress (two identical-cwd kiro processes simultaneously). The prefer-unclaimed mechanism is proven for codex/pi; record promotes this from provisional to settled for kiro specifically.",
+        "kiro mints its own session UUID per chat launch (no --session-id injection at the kiro level), so the two distinct session_ids are asserted via new_session / same_session_as relations, not literal ids — exactly as in the codex cell."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": ".build/refresh/kiro-cli-smoke/FINDINGS.md",
+          "note": "Live smoke of kiro-cli 2.5.1. §1: kiro-cli chat parent comm=kiro-cli, its OS cwd == session cwd, pgrep -x matches only the parent → DiscoverPIDByCWD works. §4: event vocab Prompt/AssistantMessage/ToolResults/Clear, NO model/usage/cost in the .jsonl (those are sidecar-only). §5: text-only final AssistantMessage = turn_done. Each chat launch writes its own <uuid>.jsonl."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/agent.go",
+          "note": "Source: FilesUnderRoot{Dir: \".kiro/sessions/cli\", Parser: JSONLineParser{NewParser: () => &Parser{}}} — a fresh stateful Parser per <uuid>.jsonl means two same-cwd sessions do not share parser state; Process.Match = ExactName{ProcessName \"kiro-cli\"} returns every live kiro-cli parent PID; PIDForSession = DiscoverPID."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/pid.go",
+          "note": "DiscoverPID delegates to processlifecycle.DiscoverPIDByCWD(\"kiro-cli\", cwd, disambiguate) with a sidecar-cwd fallback. No kiro-specific metadata-first override — it relies on the caller's disambiguator for the two-same-cwd case."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/processlifecycle/discovery.go",
+          "note": "narrowByCWD: when ≥2 live kiro-cli PIDs share the cwd it calls disambiguate(matches) (falling back to highest PID only when the callback is nil). This is the exact seam the two-same-cwd scenario stresses."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/pid_manager.go",
+          "note": "TryDiscoverPID builds the disambiguate callback as prefer-UNCLAIMED-else-highest using claimedPIDs(sessionID): once session 1's PID is claimed, session 2's discovery binds the remaining unclaimed PID — the non-cross-contamination guarantee for two same-cwd processes. Identical mechanism to codex/pi (both daemon=full)."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/kiro-cli/driver-interactive.sh",
+          "note": "DRIVE_ELICITS=\"send slash wait_turn sleep\" (line 86); the start_session and session case arms call not_implemented (lines 252-253). recipe-lint reads DRIVE_ELICITS directly, so a recipe needing start_session is a semantic_gap → driver=gap:start_session. record ports the seams from the codex/claudecode drivers before driving."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/codex/scenarios/4-1_multiple-sessions-same-cwd/metadata.json",
+          "note": "Calibration anchor: codex (yes/full, confidence 0.95) wraps the same DiscoverPIDByCWD + prefer-unclaimed disambiguator; its spec anchors every phase on a WORKING transition (never ready) to skip the born-ready proc-<PID> placeholder, and asserts the two ids via new_session/same_session_as. kiro mirrors this shape with cleaner transcript identity (own <uuid>.jsonl per session)."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "kiro-cli 2.5.1 on PATH and authenticated (subscription/Pro auth — the headless --no-interactive path writes NO session file and is invisible to the daemon, FINDINGS.md §7; TUI driving is mandatory)",
+        "irrlichd is recording (run-cell isolated --record daemon, or --attach against a --record daemon)",
+        "drive-kiro-cli-interactive.sh has the start_session / session seams ported (DRIVER GAP — record does this first)"
+      ],
+      "setup": [
+        "Driver auto-launches session 1 (slot 1) via `kiro-cli chat --trust-all-tools` in <staging>/cwd; --trust-all-tools suppresses the per-tool approval picker",
+        "The start_session step launches session 2 (slot 2) via a second `kiro-cli chat --trust-all-tools` in the SAME <staging>/cwd, keeping session 1 alive",
+        "Steps carrying {\"session\":1} route send/wait_turn back to session 1 while session 2 stays alive — exercising the concurrent, independent arcs and the PID-stability re-drive"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: alpha"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "start_session"
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: bravo"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: alpha2",
+          "session": 1
+        },
+        {
+          "type": "wait_turn",
+          "session": 1
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        }
+      ],
+      "verify": [
+        "events.jsonl contains 2 distinct kiro session UUIDs, both keyed to the same cwd slug",
+        "each UUID has its own independent working->ready arc; no transition on one UUID is attributed to the other",
+        "session 1 shows TWO working->ready arcs (turn1 + the post-start_session re-drive); session 2 shows ONE — proving session 1 stayed bound and independent while session 2 was alive",
+        "no state flapping: the daemon never swaps the PID-to-session binding between the two rows (the prefer-unclaimed disambiguator holds)",
+        "model unknown, cost zero, tokens zero (the .jsonl carries no model/usage/cost)"
+      ],
+      "settings": {},
+      "timeout_seconds": 240
+    }
+  }
+}

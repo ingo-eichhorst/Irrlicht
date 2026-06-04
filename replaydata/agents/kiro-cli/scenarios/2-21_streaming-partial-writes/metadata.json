@@ -1,0 +1,78 @@
+{
+  "scenario_id": "streaming-partial-writes",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "incapable",
+    "driver_capability": "ready",
+    "agent_cli_version": "2.5.1",
+    "daemon_version": "0.4.8+7042b3f.dirty",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes\ndaemon_capability: incapable — kiro appends each AssistantMessage as one whole JSONL line after generation; streaming is TUI-render only, so no partial-flush trace reaches the file the daemon tails\ndriver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "streaming-partial-writes",
+      "agent": "kiro-cli",
+      "assessed_at": "2026-06-05T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "incapable",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: incapable — kiro appends each AssistantMessage as one whole JSONL line after generation; the streamed reply reaches the on-disk transcript all-at-once, so the no-flicker invariant this scenario pins has no kiro trace to observe\ndriver_capability: ready\n\nRoute: frozen. Same shape as the pi and codex cells for this row: the agent streams to the terminal, but the transcript the daemon tails carries only whole, atomically-appended assistant lines — there is no non-terminal streaming-chunk family for the parser to hold `working` across.\n\n## What the scenario pins\n\n`streaming-partial-writes` (primitive `streaming_output`): the assistant message arrives in multiple partial flushes before the turn-end signal, and the irrlicht invariant is that those partial flushes MUST NOT trigger a premature `→ ready` (no `ready → working → ready` flicker before end-of-turn). The canonical claudecode mechanism is `resolveAssistantStreaming` (parser.go:288) downgrading non-terminal `stop_reason` lines to `assistant_streaming`, excluded from `IsAgentDone()` — Bug-D streaming-flicker family, issue #102. The `streaming_window` phase pins the no-`→ready` invariant across the flush window.\n\n## agent_supports: yes\n\nkiro-cli streams assistant output incrementally: the live 2.5.1 smoke recorded a per-turn TUI completion marker (`▸ Credits: 0.03 • Time: 1s`) and the reply renders token-by-token in the TUI (FINDINGS.md §6). So the agent performs streaming output — same as pi (agent=yes).\n\n## daemon_capability: incapable\n\nThe live 2.5.1 smoke is decisive: kiro appends the COMPLETE `AssistantMessage` as ONE whole JSONL line AFTER generation finishes — turn 1's `.jsonl` held exactly `Prompt + AssistantMessage` immediately after the reply, with no intermediate partial-assistant lines (FINDINGS.md §5). Streaming happens only in the TUI render, never in the transcript file the daemon tails.\n\nThe kiro parser (`core/adapters/inbound/agents/kirocli/parser.go:45-83`) only ever sees whole atomic lines: an `AssistantMessage` with `toolUse` blocks → `assistant` (mid-turn, sustains `working`); a text-only `AssistantMessage` → `turn_done` (the working→ready settle). There is NO `assistant_streaming` / non-terminal `stop_reason` concept — the kiro JSONL vocabulary is `Prompt`, `AssistantMessage`, `ToolResults`, `Clear` (FINDINGS.md §4), with no partial-flush family. So the specific `resolveAssistantStreaming` flicker invariant this scenario pins has no kiro analogue: the completed reply lands all-at-once, the daemon emits `ready → working → ready` essentially instantaneously, and there are no intermediate partial flushes for the streaming_window to assert over.\n\nThe partial-write tolerance the scenario name evokes — a TORN trailing line (assistant bytes flushed mid-line, no `\\n`) — is the SHARED tailer's job (`core/pkg/tailer/tailer.go` `errPartialAtEOF`: stop without advancing past the partial bytes, re-read next tick), already locked down by synthetic unit tests (`core/pkg/tailer/large_line_test.go` `TestTailAndProcess_PartialTrailingLine`, `TestReadLineCapped_PartialAtEOF`). It is parser-agnostic and a byte-timing artifact a live driver cannot deterministically force, so a kiro recording adds no fidelity there.\n\n## driver_capability: ready\n\nThe recipe needs only `send` / `wait_turn` / `sleep`, all listed in the kiro driver's `DRIVE_ELICITS=\"send slash wait_turn sleep\"` (`replaydata/agents/kiro-cli/driver-interactive.sh`). No primitive gap.\n\n## Conclusion\n\nCell frozen at `daemon=incapable`. The recipe + spec are retained as the DOCUMENTED TARGET (the state-stability arc a recording would show, and the no-flicker ideal) should kiro ever switch to incremental rollout writes — but as of 2.5.1 the transcript records whole assistant lines atomically, so the streaming-flicker invariant is unobservable for kiro and no live recording is taken.",
+      "caveats": [
+        "agent_supports is yes (kiro streams to the TUI), but daemon_capability is incapable: the live 2.5.1 smoke (FINDINGS.md §5) proved each AssistantMessage lands as ONE whole JSONL line after generation — incremental streaming is TUI-render only and never reaches the JSONL the daemon tails, so the streaming-window no-flicker invariant has no on-disk trace to assert over.",
+        "The torn/partial-trailing-line robustness the scenario name evokes is a shared-tailer property (tailer.go errPartialAtEOF) covered by synthetic unit tests (large_line_test.go), not a kiro-recordable behavior; a live CLI cannot be forced to emit a mid-line flush on demand (that concern lives in the separate oversized-transcript-line cell).",
+        "JSONL carries no model/token/cost (FINDINGS.md §4) — sidecar <uuid>.json only — so any kiro recording observes model unknown, cost_nonzero false, tokens_nonzero false. Frozen here, so no recording is taken.",
+        "expected.jsonl is retained as the documented target (one contiguous working→ready arc, no premature ready, no waiting) should kiro switch to incremental rollout writes; today the turn lands all-at-once so there is no partial-flush window to validate."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": ".build/refresh/kiro-cli-smoke/FINDINGS.md",
+          "note": "§5: kiro appends the COMPLETE AssistantMessage as one whole JSONL line after generation; turn 1's .jsonl had exactly Prompt+AssistantMessage immediately after the reply — no intermediate partial-assistant lines. §6: streaming is TUI-render only (per-turn ▸ Credits marker). §4: event vocabulary is Prompt/AssistantMessage/ToolResults/Clear with no model/usage/cost and no streaming-chunk family."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/parser.go",
+          "note": "Lines 45-83: AssistantMessage with toolUse → assistant (mid-turn, sustains working); text-only AssistantMessage → turn_done. No assistant_streaming / non-terminal stop_reason concept — the parser only ever sees whole atomic lines, so there is no partial-flush family for a streaming_window to hold working across."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/agent.go",
+          "note": "Source is FilesUnderRoot{Dir: ~/.kiro/sessions/cli, JSONLineParser} — append-only JSONL the daemon tails; streamed partial content never reaches it."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer.go",
+          "note": "errPartialAtEOF path: on a torn trailing line the tailer stops without advancing the offset and re-reads next tick — the actual partial-write robustness mechanism, parser-agnostic, not kiro-specific."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/large_line_test.go",
+          "note": "TestTailAndProcess_PartialTrailingLine / TestReadLineCapped_PartialAtEOF: synthetic unit tests that already lock down partial-line tolerance and re-read-once-flushed settling, independent of any adapter."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/pi/scenarios/2-21_streaming-partial-writes/metadata.json",
+          "note": "Calibration: pi is the same shape (agent=yes, daemon=incapable) — pi writes completed messages atomically with no partial-flush trace; streaming is terminal-UI only. kiro matches this exactly per the live smoke."
+        }
+      ]
+    },
+    "recipe": {
+      "script": [
+        {
+          "type": "send",
+          "text": "Write me a six-line poem about the ocean, one short line at a time."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 12
+        }
+      ]
+    }
+  }
+}
