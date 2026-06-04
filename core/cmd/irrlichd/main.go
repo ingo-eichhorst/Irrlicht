@@ -454,9 +454,6 @@ func main() {
 		detector.SetCostTracker(costTracker)
 	}
 	detector.SetHistoryTracker(historyTracker)
-	// Capture terminal/IDE identity at first PID assignment so the menu-bar
-	// app can jump back to the launching terminal on row/notification click.
-	detector.SetLauncherEnvReader(processlifecycle.ReadLauncherEnv)
 
 	// PermissionService: single source of truth for consent state (issue
 	// #570). Exercises grants (hook install, watcher start), undoes
@@ -470,11 +467,13 @@ func main() {
 	if !demoMode {
 		hasLive = processlifecycle.HasLiveProcess
 	}
-	// The consent catalog is the agent adapters plus the Gas Town
-	// orchestrator — gastown isn't in agents.All() (it has no Source/
-	// Process axes) but its ~/gt reads are consent-gated all the same.
+	// The consent catalog is the agent adapters plus two daemon-wide
+	// entries with no Source/Process axes: the Gas Town orchestrator
+	// (reads ~/gt) and launcher-identity capture (reads whitelisted env
+	// vars from agent processes for click-to-focus).
 	permissionAgents := append(append([]agent.Agent{}, allAgents...),
-		gastownadapter.PermissionDeclaration(startGastown, stopGastown))
+		gastownadapter.PermissionDeclaration(startGastown, stopGastown),
+		processlifecycle.LauncherPermissionDeclaration())
 	permService := services.NewPermissionService(
 		permissionAgents, permStore, push, logger,
 		cfg.PermissionMode, detector, watcherFactories, hasLive,
@@ -482,6 +481,30 @@ func main() {
 	// Gas Town is detected by root-directory presence (stat-only), not by
 	// a live process matcher.
 	permService.SetDetectionProbe(gastownadapter.Name, gastownadapter.RootDetected)
+	// Launcher capture is relevant whenever ANY agent runs, so its wizard
+	// row appears alongside the first detected agent's. Short-circuits on
+	// the first live match, and the detection poller only runs while
+	// something is pending, so the extra scans are bounded.
+	permService.SetDetectionProbe(processlifecycle.LauncherName, func() bool {
+		for _, a := range allAgents {
+			if processlifecycle.HasLiveProcess(a.Process.Match) {
+				return true
+			}
+		}
+		return false
+	})
+
+	// Capture terminal/IDE identity at first PID assignment so the menu-bar
+	// app can jump back to the launching terminal on row/notification click.
+	// Consent-gated per capture (#570): checked on every call so a revoke
+	// takes effect immediately; without the grant, click-to-focus falls
+	// back to app-level activation.
+	detector.SetLauncherEnvReader(func(pid int) *session.Launcher {
+		if !permService.Granted(processlifecycle.LauncherName, processlifecycle.PermissionKeyLauncherEnv) {
+			return nil
+		}
+		return processlifecycle.ReadLauncherEnv(pid)
+	})
 	// Consent gate for the detector's own transcript reads (startup seed +
 	// stale-working refresh of PERSISTED sessions) — the watcher pipeline
 	// is gated by construction, but these two paths read repo-listed

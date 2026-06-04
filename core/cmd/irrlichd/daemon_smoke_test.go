@@ -242,10 +242,10 @@ func assertPermissionsAllPending(t *testing.T, client *http.Client, url string) 
 	if snap.Mode != "ask" {
 		t.Fatalf("permission mode = %q, want ask", snap.Mode)
 	}
-	// Every agent adapter with declared permissions, plus the Gas Town
-	// orchestrator's consent declaration (wired in main.go, not part of
-	// agents.All()).
-	declared := 1
+	// Every agent adapter with declared permissions, plus the two daemon-
+	// wide entries wired in main.go outside agents.All(): the Gas Town
+	// orchestrator and launcher-identity capture.
+	declared := 2
 	for _, a := range agents.All() {
 		if len(a.Permissions) > 0 {
 			declared++
