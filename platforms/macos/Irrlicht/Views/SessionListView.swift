@@ -1269,10 +1269,9 @@ struct SessionRowView: View {
                 .tooltip(isCritical ? "Context window critically full" : "Context window nearing limit")
             }
 
-            // Task list (Claude Code TaskCreate / TaskUpdate)
-            if let tasks = session.metrics?.tasks, !tasks.isEmpty, !tasks.allSatisfy(\.isCompleted) {
-                TaskListView(tasks: tasks)
-            }
+            // Task progress + completion ETA share one line: dots left, ETA
+            // right (issue #558).
+            taskProgressRow
 
             // Debug info
             if debugMode {
@@ -1329,6 +1328,123 @@ struct SessionRowView: View {
             return String(format: "%d:%02d:%02d", h, m, s)
         }
         return String(format: "%d:%02d", m, s)
+    }
+
+    /// The session's task list when it should render — non-empty and not
+    /// fully completed (same gate the standalone dots row used).
+    private var activeTasks: [SessionTask]? {
+        guard let tasks = session.metrics?.tasks, !tasks.isEmpty, !tasks.allSatisfy(\.isCompleted) else { return nil }
+        return tasks
+    }
+
+    private struct TaskEtaPresentation {
+        let text: String
+        let stale: Bool
+        let title: String
+    }
+
+    /// One sub-row: task dots left, completion ETA right (issue #558). It's a
+    /// sub-row rather than part of the main HStack because the ETA, placed
+    /// inline next to the cost, truncated to "…" at menu-bar width (the model
+    /// label's layoutPriority wins the squeeze); the ETA label is fixed-size
+    /// so the wrapping dots can't compress it. taskEtaPresentation() is
+    /// computed exactly once here.
+    @ViewBuilder
+    private var taskProgressRow: some View {
+        let eta = taskEtaPresentation()
+        if activeTasks != nil || eta != nil {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                if let tasks = activeTasks {
+                    TaskListView(tasks: tasks)
+                }
+                Spacer(minLength: 8)
+                if let eta, let est = session.metrics?.taskEstimate {
+                    // Progress as a percentage — the raw rounds (5/10) read
+                    // like a second task counter next to the dots; the tooltip
+                    // still carries the exact rounds.
+                    let percent = Int((Double(est.completedRounds) / Double(max(est.totalRounds, 1)) * 100).rounded())
+                    HStack(spacing: 4) {
+                        Image(systemName: "timer")
+                            .font(.system(size: 9))
+                            .foregroundColor(.secondary)
+                        Text("\(eta.text) · \(percent)%")
+                            .font(.system(size: 9, design: .monospaced))
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                    }
+                    .fixedSize()
+                    .opacity(eta.stale ? 0.5 : 1.0)
+                    .tooltip(eta.title)
+                }
+            }
+            .padding(.top, 2)
+        }
+    }
+
+    /// Decides the task-completion ETA chip (issue #558) — mirrors the web's
+    /// taskEtaPresentation. Nil hides the chip: session not working, no
+    /// estimate, or no reported progress. A point estimate once half the
+    /// rounds are done, a range below that, and stale dimming when the last
+    /// marker is older than 3 minutes.
+    private func taskEtaPresentation(now: Date = Date()) -> TaskEtaPresentation? {
+        guard session.state == .working,
+              let metrics = session.metrics,
+              let est = metrics.taskEstimate,
+              let eta = metrics.taskCompletionEta,
+              est.completedRounds > 0 else { return nil }
+        let remaining = max(0, eta.timeIntervalSince(now))
+        let frac = est.totalRounds > 0 ? Double(est.completedRounds) / Double(est.totalRounds) : 0
+        // The eta is anchored at the marker (daemon-side): the LOW bound
+        // counts down between marker updates while the HIGH bound — 1.5×
+        // the remaining time as projected AT the marker — stays pinned
+        // until the agent reports fresh progress.
+        var highSecs: TimeInterval? = nil
+        if frac < 0.5 {
+            if let updated = est.updatedAt {
+                highSecs = max(remaining, eta.timeIntervalSince(updated) * 1.5)
+            } else {
+                highSecs = remaining * 1.5
+            }
+        }
+        let text = etaText(remaining: remaining, highSecs: highSecs)
+        var stale = false
+        var title = "Task ETA — agent-reported \(est.completedRounds)/\(est.totalRounds) rounds"
+        if let updated = est.updatedAt {
+            let age = max(0, now.timeIntervalSince(updated))
+            stale = age > 180
+            title += ", updated \(Int(age))s ago"
+        }
+        return TaskEtaPresentation(text: text, stale: stale, title: title)
+    }
+
+    /// Renders the remaining-time text with exactly ONE sign — "~"
+    /// (approximate) or "<" (upper bound), never both, never a degenerate
+    /// "2m–2m" range (mirrors the web's fmtEtaText). highSecs nil → point.
+    ///   point, ≥1m → "~12m left" · point, <1m → "<1m left"
+    ///   range, low <1m → "<2m left" (collapses to its upper bound)
+    ///   range, low==high → point rules · range → "~8m–12m left"
+    private func etaText(remaining: TimeInterval, highSecs: TimeInterval?) -> String {
+        let low = etaDurationString(remaining)
+        if let highSecs {
+            let high = etaDurationString(highSecs)
+            if low != high {
+                if remaining < 60 { return "<\(high) left" }
+                return "~\(low)–\(high) left"
+            }
+        }
+        if remaining < 60 { return "<1m left" }
+        return "~\(low) left"
+    }
+
+    /// Minute-resolution duration for the ETA chip — second-level detail
+    /// would flicker for a number that is inherently rough.
+    private func etaDurationString(_ seconds: TimeInterval) -> String {
+        if seconds < 60 { return "<1m" }
+        let mins = Int((seconds / 60).rounded())
+        let h = mins / 60
+        let m = mins % 60
+        if h > 0 { return m > 0 ? "\(h)h\(m)m" : "\(h)h" }
+        return "\(m)m"
     }
 }
 

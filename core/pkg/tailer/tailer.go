@@ -170,6 +170,16 @@ type SessionMetrics struct {
 	// slope calculation isn't diluted by zero-delta statusline ticks
 	// (issue #309). Capped at rateLimitHistoryCap entries.
 	RateLimitHistory []RateLimitSnapshot `json:"-"`
+
+	// TaskEstimate is the most recent agent-emitted task-progress marker
+	// (issue #558). Sporadic like RateLimit — the last one seen persists
+	// across passes. Nil when the session never emitted a marker.
+	TaskEstimate *TaskEstimate `json:"task_estimate,omitempty"`
+
+	// TaskEstimateBase is the first marker of the current task — the rate
+	// baseline for the completion forecast. Computation-only (the API
+	// surfaces the derived eta, not the baseline).
+	TaskEstimateBase *TaskEstimate `json:"-"`
 }
 
 // TranscriptTailer monitors transcript files and computes metrics.
@@ -260,6 +270,20 @@ type TranscriptTailer struct {
 	// lastAssistantText holds the text content of the most recent assistant
 	// message, truncated to ~200 characters.
 	lastAssistantText string
+
+	// lastTaskEstimate holds the most recent agent-emitted task-progress
+	// marker. Markers are sporadic (model-discretion, every few turns), so
+	// the last one seen persists across passes that carry no fresh marker.
+	// See issue #558.
+	lastTaskEstimate *TaskEstimate
+
+	// firstTaskEstimate is the first marker of the CURRENT task — the rate
+	// baseline. Measuring perRound from marker deltas (latest − first)
+	// instead of session elapsed keeps multi-task sessions honest: after a
+	// reset, session elapsed includes all previous tasks and idle gaps and
+	// inflated projections ~2×. Re-anchored when completed_rounds goes
+	// backwards (agent started a new count without a user prompt).
+	firstTaskEstimate *TaskEstimate
 
 	// tasks accumulates the session's task list from TaskCreate / TaskUpdate
 	// tool_use events parsed by the Claude Code adapter.
@@ -361,6 +385,11 @@ func (t *TranscriptTailer) GetLedgerState() LedgerState {
 		maps.Copy(pp, t.pendingBashPolls)
 		s.PendingBashPolls = pp
 	}
+	// Estimate pointers are only ever reassigned (fresh allocations from
+	// ScanTaskEstimate), never mutated in place, so direct assignment is
+	// safe under the same marshal-while-locked guarantee as CumByModel.
+	s.LastTaskEstimate = t.lastTaskEstimate
+	s.FirstTaskEstimate = t.firstTaskEstimate
 	return s
 }
 
@@ -403,6 +432,8 @@ func (t *TranscriptTailer) SetLedgerState(s LedgerState) {
 		t.pendingBashPolls = make(map[string]string, len(s.PendingBashPolls))
 		maps.Copy(t.pendingBashPolls, s.PendingBashPolls)
 	}
+	t.lastTaskEstimate = s.LastTaskEstimate
+	t.firstTaskEstimate = s.FirstTaskEstimate
 }
 
 // TailAndProcess reads new transcript content from the last offset (or from the
@@ -888,6 +919,24 @@ func (t *TranscriptTailer) processParsedEvent(parsed *ParsedEvent, sawUserBlocki
 	}
 	if parsed.ClearToolNames {
 		t.lastAssistantText = ""
+	}
+	if parsed.TaskEstimate != nil {
+		if t.firstTaskEstimate == nil ||
+			(t.lastTaskEstimate != nil && parsed.TaskEstimate.CompletedRounds < t.lastTaskEstimate.CompletedRounds) {
+			t.firstTaskEstimate = parsed.TaskEstimate
+		}
+		t.lastTaskEstimate = parsed.TaskEstimate
+	}
+	if parsed.ClearToolNames && len(parsed.ToolResultIDs) == 0 {
+		// A REAL user message (new prompt, ESC, answer) starts a new task or
+		// redirects the current one — the previous estimate no longer
+		// describes what the agent is doing, so reset it like
+		// lastAssistantText above. The ToolResultIDs guard matters: Claude
+		// Code delivers tool results as user-role lines that also raise
+		// ClearToolNames, and resetting on those wiped the estimate on every
+		// tool call — the chip vanished mid-task until the next marker (#558).
+		t.lastTaskEstimate = nil
+		t.firstTaskEstimate = nil
 	}
 
 	t.contentChars += parsed.ContentChars

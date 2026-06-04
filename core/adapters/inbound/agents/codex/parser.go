@@ -188,12 +188,46 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 	return ev
 }
 
+// scanCodexTaskEstimate scans the FULL assistant text blocks for the
+// task-estimate marker (issue #558) and sets ev.TaskEstimate to the latest
+// valid one. It walks the same two content paths as ExtractAssistantText
+// (top-level content[] and message.content[]) but over the untruncated text —
+// AssistantText keeps only the last 200 runes and would lose early markers.
+func scanCodexTaskEstimate(raw map[string]interface{}, ev *tailer.ParsedEvent) {
+	scan := func(arr []interface{}) {
+		for _, item := range arr {
+			block, ok := item.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			bt, _ := block["type"].(string)
+			if bt != "text" && bt != "output_text" {
+				continue
+			}
+			if text, ok := block["text"].(string); ok {
+				if est := tailer.ScanTaskEstimate(text, ev.Timestamp); est != nil {
+					ev.TaskEstimate = est
+				}
+			}
+		}
+	}
+	if arr, ok := raw["content"].([]interface{}); ok {
+		scan(arr)
+	}
+	if msg, ok := raw["message"].(map[string]interface{}); ok {
+		if arr, ok := msg["content"].([]interface{}); ok {
+			scan(arr)
+		}
+	}
+}
+
 func parseCodexMessage(raw map[string]interface{}, ev *tailer.ParsedEvent) bool {
 	role, _ := raw["role"].(string)
 	switch role {
 	case "assistant":
 		ev.EventType = "assistant_message"
 		ev.AssistantText = tailer.ExtractAssistantText(raw)
+		scanCodexTaskEstimate(raw, ev)
 		// Codex's `<proposed_plan>` block has no structured tool-use; map
 		// it to ExitPlanMode so the classifier treats it as user-blocking.
 		if assistantContentContainsBlock(raw, "<proposed_plan>", "</proposed_plan>") {

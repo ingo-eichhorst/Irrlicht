@@ -173,12 +173,19 @@ func (p *Parser) closeModelCall(m []string) *tailer.ParsedEvent {
 	p.assistantBuffer.Reset()
 	// turnOpen intentionally stays true: another model call may follow.
 
+	// Scan the FULL accumulated prose for the task-estimate marker
+	// (issue #558) before truncate drops all but the last 200 runes. The
+	// markdown transcript carries no timestamps, so the observation time is
+	// wall-clock at parse — same convention as IdleFlush.
+	taskEstimate := tailer.ScanTaskEstimate(text, time.Now())
+
 	return &tailer.ParsedEvent{
 		EventType:     "assistant_message",
 		ModelName:     p.model,
 		AssistantText: truncate(text),
 		ContentChars:  contentChars,
 		Contribution:  contribution,
+		TaskEstimate:  taskEstimate,
 		Tokens: &tailer.TokenSnapshot{
 			Input:  sent,
 			Output: received,

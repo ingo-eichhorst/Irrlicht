@@ -188,6 +188,18 @@ type SessionMetrics struct {
 	// not possible — insufficient history, flat or decreasing burn rate,
 	// or the projected ETA exceeds the window's ResetsAt.
 	RateLimitForecastEta *int64 `json:"rate_limit_forecast_eta,omitempty"`
+
+	// TaskEstimate is the agent's self-reported task progress, parsed from
+	// the most recent in-band marker in its transcript (issue #558). Nil
+	// when the session never emitted a marker.
+	TaskEstimate *TaskEstimate `json:"task_estimate,omitempty"`
+
+	// TaskCompletionEta is the projected wall-clock time (Unix seconds) at
+	// which the agent's current task completes, derived from TaskEstimate
+	// via ForecastTaskCompletion. Nil when no projection is possible (no
+	// marker, or no reported progress yet). UIs additionally suppress the
+	// chip when the session is not `working`.
+	TaskCompletionEta *int64 `json:"task_completion_eta,omitempty"`
 }
 
 // SubagentCompletion is the domain mirror of tailer.SubagentCompletion. The
@@ -682,6 +694,8 @@ func MergeMetrics(newM, oldM *SessionMetrics) *SessionMetrics {
 		NoSubstantiveActivity:    newM.NoSubstantiveActivity,
 		RateLimit:                newM.RateLimit,
 		RateLimitForecastEta:     newM.RateLimitForecastEta,
+		TaskEstimate:             newM.TaskEstimate,
+		TaskCompletionEta:        newM.TaskCompletionEta,
 	}
 	if merged.ContextWindow == 0 && oldM.ContextWindow > 0 {
 		merged.ContextWindow = oldM.ContextWindow
@@ -739,5 +753,10 @@ func MergeMetrics(newM, oldM *SessionMetrics) *SessionMetrics {
 	if merged.RateLimitForecastEta == nil && oldM.RateLimitForecastEta != nil {
 		merged.RateLimitForecastEta = oldM.RateLimitForecastEta
 	}
+	// TaskEstimate/TaskCompletionEta deliberately get NO nil carry-over:
+	// the tailer itself persists the last-seen marker across markerless
+	// passes (lastTaskEstimate), so a nil here is a real signal — the
+	// estimate was reset by a new user message and must not be
+	// resurrected from the previous task (issue #558).
 	return merged
 }

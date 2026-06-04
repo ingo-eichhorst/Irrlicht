@@ -173,6 +173,14 @@ func (a *Adapter) ComputeMetrics(transcriptPath, adapter string) (*session.Sessi
 			result.RateLimitForecastEta = &etaUnix
 		}
 	}
+	if m.TaskEstimate != nil {
+		result.TaskEstimate = tailerTaskEstimateToDomain(m.TaskEstimate)
+		base := tailerTaskEstimateToDomain(m.TaskEstimateBase)
+		if eta := session.ForecastTaskCompletion(result.TaskEstimate, base, m.ElapsedSeconds, time.Now()); eta != nil {
+			etaUnix := eta.Unix()
+			result.TaskCompletionEta = &etaUnix
+		}
+	}
 	if result.ModelName == "" {
 		result.ModelName = "unknown"
 	}
@@ -327,6 +335,21 @@ func tailerRateLimitToDomain(src *tailer.RateLimitSnapshot) *session.RateLimitSn
 		}
 	}
 	return dst
+}
+
+// tailerTaskEstimateToDomain converts a tailer-side task estimate to its
+// domain mirror.
+func tailerTaskEstimateToDomain(src *tailer.TaskEstimate) *session.TaskEstimate {
+	if src == nil {
+		return nil
+	}
+	return &session.TaskEstimate{
+		TotalRounds:     src.TotalRounds,
+		CompletedRounds: src.CompletedRounds,
+		Risk:            src.Risk,
+		Confidence:      src.Confidence,
+		UpdatedAt:       src.ObservedAt,
+	}
 }
 
 // tailerRateLimitHistoryToDomain copies the rolling history into the

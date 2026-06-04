@@ -504,3 +504,65 @@ func TestParser_BashExecutionSkipped_PreservesLastEvent(t *testing.T) {
 		t.Errorf("LastEventType = %q, want turn_done (bashExecution should be skipped)", m.LastEventType)
 	}
 }
+
+// --- Task-estimate marker (issue #558) ---
+
+func TestParser_TaskEstimate_FromAssistantText(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(map[string]interface{}{
+		"type":      "message",
+		"timestamp": ts(1),
+		"message": map[string]interface{}{
+			"role": "assistant",
+			"content": []interface{}{
+				map[string]interface{}{"type": "text", "text": `On it. <!-- {"marker":"irrlicht-eta","total_rounds":8,"completed_rounds":3} -->`},
+			},
+		},
+	})
+	if ev.TaskEstimate == nil {
+		t.Fatal("expected TaskEstimate on assistant message")
+	}
+	if ev.TaskEstimate.TotalRounds != 8 || ev.TaskEstimate.CompletedRounds != 3 {
+		t.Errorf("rounds = %d/%d, want 3/8", ev.TaskEstimate.CompletedRounds, ev.TaskEstimate.TotalRounds)
+	}
+}
+
+// Marker early in a long message must survive — extractPiAssistantText keeps
+// only the last text block, tail-truncated to 200 runes.
+func TestParser_TaskEstimate_SurvivesLongMessage(t *testing.T) {
+	p := &Parser{}
+	long := `<!-- {"marker":"irrlicht-eta","total_rounds":5,"completed_rounds":2} --> `
+	for i := 0; i < 50; i++ {
+		long += "filler prose "
+	}
+	ev := p.ParseLine(map[string]interface{}{
+		"type":      "message",
+		"timestamp": ts(1),
+		"message": map[string]interface{}{
+			"role": "assistant",
+			"content": []interface{}{
+				map[string]interface{}{"type": "text", "text": long},
+			},
+		},
+	})
+	if ev.TaskEstimate == nil || ev.TaskEstimate.CompletedRounds != 2 {
+		t.Fatalf("TaskEstimate = %+v, want 2/5 despite display truncation", ev.TaskEstimate)
+	}
+}
+
+func TestParser_TaskEstimate_UserMessageIgnored(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(map[string]interface{}{
+		"type":      "message",
+		"timestamp": ts(0),
+		"message": map[string]interface{}{
+			"role": "user",
+			"content": []interface{}{
+				map[string]interface{}{"type": "text", "text": `<!-- {"marker":"irrlicht-eta","total_rounds":5,"completed_rounds":1} -->`},
+			},
+		},
+	})
+	if ev.TaskEstimate != nil {
+		t.Fatalf("user-pasted marker must not feed the estimate, got %+v", ev.TaskEstimate)
+	}
+}
