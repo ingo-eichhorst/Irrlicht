@@ -22,6 +22,8 @@ type collector struct {
 	state *daemonState // latest parsed state
 	rigs  []rigState   // latest parsed rigs.json
 
+	trigger chan struct{} // fired (non-blocking) on any state.json or rigs.json change
+
 	subMu sync.Mutex
 	subs  []chan daemonState
 }
@@ -30,7 +32,9 @@ type collector struct {
 // Detection order: GT_ROOT env var → ~/gt (default location).
 // A directory is accepted when it contains both daemon/ and rigs.json.
 func New() *collector {
-	c := &collector{}
+	c := &collector{
+		trigger: make(chan struct{}, 1),
+	}
 
 	root := resolveRoot()
 	if root != "" && isGasTownRoot(root) {
@@ -127,6 +131,11 @@ func (c *collector) Watch(ctx context.Context) error {
 	}
 }
 
+// OnChange returns a channel that receives a signal whenever daemon/state.json
+// or rigs.json changes. The channel is buffered (1); signals may be coalesced
+// if the consumer is slow. Intended for event-driven polling.
+func (c *collector) OnChange() <-chan struct{} { return c.trigger }
+
 // Subscribe returns a channel that receives a copy of the daemon state on
 // every file change. The channel is buffered (1) so a slow consumer doesn't
 // block the watcher.
@@ -162,6 +171,11 @@ func (c *collector) reload(path string) {
 	c.state = s
 	c.mu.Unlock()
 
+	select {
+	case c.trigger <- struct{}{}:
+	default:
+	}
+
 	c.subMu.Lock()
 	snapshot := *s
 	for _, ch := range c.subs {
@@ -184,6 +198,11 @@ func (c *collector) reloadRigs(path string) {
 	c.mu.Lock()
 	c.rigs = rigs
 	c.mu.Unlock()
+
+	select {
+	case c.trigger <- struct{}{}:
+	default:
+	}
 }
 
 // --- helpers ----------------------------------------------------------------

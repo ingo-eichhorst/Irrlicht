@@ -393,7 +393,7 @@ func main() {
 		if gtWatchCancel != nil {
 			return nil
 		}
-		gtAdapter := gastownadapter.NewAdapter(gtResolver.Path(), 5*time.Second, cachedRepo)
+		gtAdapter := gastownadapter.NewAdapter(gtResolver.Path(), cachedRepo)
 		if !gtAdapter.Detected() {
 			logger.LogInfo("permissions", "", "gastown granted but no Gas Town root detected — nothing to watch")
 			return nil
