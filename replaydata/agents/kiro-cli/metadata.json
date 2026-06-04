@@ -1,0 +1,10 @@
+{
+  "id": "kiro-cli",
+  "name": "Kiro CLI",
+  "provider": "aws",
+  "prerequisites": [
+    "kiro-cli >=2.5.1 installed (Kiro CLI.app) and on PATH (e.g. /opt/homebrew/bin/kiro-cli symlink)",
+    "Logged in via `kiro-cli login` (subscription auth; no env var)",
+    "trust-all-tools consent persisted: run `kiro-cli chat --trust-all-tools` once and pick 'Yes, and don't ask again' (already done on this machine)"
+  ]
+}
