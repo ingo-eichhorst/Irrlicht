@@ -1,0 +1,153 @@
+{
+  "scenario_id": "checkpoint-rewind",
+  "metadata": {
+    "agent_supports": "partial",
+    "daemon_capability": "full",
+    "driver_capability": "gap:keys",
+    "agent_cli_version": "2.5.1",
+    "daemon_version": "0.4.8+17650ec.dirty",
+    "confidence": 0.8,
+    "notes": "agent_supports: partial — /rewind forks the conversation into a NEW session; no file-revert checkpoint."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "checkpoint-rewind",
+      "agent": "kiro-cli",
+      "assessed_at": "2026-06-05T00:00:00Z",
+      "agent_supports": "partial",
+      "daemon_capability": "full",
+      "driver_capability": "gap:keys",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: partial\ndaemon_capability: full\ndriver_capability: gap:keys\n\nkiro-cli is the FORK variant of checkpoint-rewind — the kiro analogue of codex's `/fork`. The verdict is judged from primary evidence on the installed kiro-cli 2.5.1: the live smoke (.build/refresh/kiro-cli-smoke/FINDINGS.md) plus the binary's embedded changelog strings, plus the kiro adapter source on this branch.\n\n## What the scenario asks\n\nThe scenario-meaning is explicit that adapters exercise checkpoint-rewind differently: \"same `session_id` if rewound in place, **or a linked new `session_id` if the adapter forks**; turns after the rewind follow a clean arc.\" kiro is the fork variant. The signal to observe is therefore a NEW session row in `ready` after the rewind, with a clean `ready → working → ready` arc on the next turn.\n\n## agent_supports: partial\n\nkiro-cli 2.5.1 ships a `/rewind` slash command, but a conversation-only one that FORKS:\n\n- The binary's embedded changelog (strings of /opt/homebrew/bin/kiro-cli) describes it as \"`/rewind` to jump back to an earlier prompt in a conversation and **continue in a new session**.\" That is a fork — it restores conversation context to an earlier prompt and continues in a fresh session, leaving the original session file intact (FINDINGS.md §8 slash surface: \"rewind (forks→new session)\").\n- `/rewind` opens an interactive PICKER (changelog: \"`/rewind` picker now adapts to small terminal panes\") navigated by arrow keys (changelog: \"Fixed approval UX keybindings for arrow navigation, esc, and tab\").\n\nIt is `partial` (not `yes`) because, exactly like codex, the rewind reverts CONVERSATION state only — there is no evidence of a file-edit checkpoint restore; prior tool-applied edits remain in the working tree. The scenario's \"files and/or conversation\" is satisfied by the conversation arm alone, so `partial` (covers conversation, not files) is the honest verdict — matching the reconciled codex/checkpoint-rewind cell.\n\n## daemon_capability: full\n\nThe kiro Source is `FilesUnderRoot{Dir: \".kiro/sessions/cli\"}` with the JSONLineParser (agent.go:38-43). A `/rewind` fork \"continues in a new session\" — kiro mints a NEW session UUID and writes a NEW `<uuid>.jsonl` under that watched root (the same mechanism by which every kiro session materializes, FINDINGS.md §8: `/quit` prints `Resume with: kiro-cli --resume-id <uuid>`; a new top-level session is a new file). A new file under the watched root is exactly what produces a new session row in `ready`, and the post-rewind turn's `working→ready` cycle is on that new session. The user-observable signal — a (linked) new session_id with a clean arc — is therefore emitted by the daemon as it exists today.\n\nPROVENANCE CAVEAT (not a bug): the fork's linkage to the original is dropped. The kiro JSONL carries no parent/forked-from field, the parser handles only Prompt/AssistantMessage/ToolResults/Clear (parser.go:40-113) and nothing in the kiro adapter populates `ParentSessionID`. So the daemon surfaces the rewind as an INDEPENDENT new session_id, not a parent-linked child. Under the caveats-over-downgrades rule this stays `full` + caveat, NOT `bug`: the scenario's spec-required observable is \"a (linked) new session_id appears with a clean arc,\" which IS satisfied — the new row appears and transitions correctly. The lost linkage LABEL is a narrow provenance gap the spec does not require. (Same shape as codex/checkpoint-rewind, where the parser skips session_meta and supersession/fork is still observed.)\n\nThe original session file is NOT removed at rewind time (it remains so you can `--resume-id` it), so the daemon emits no transcript_removed for the original; the original row stays `ready` until its process exits. (FINDINGS.md §3: process exit removes the `.lock` marker; FINDINGS.md §8: the resume path leaves the file in place.)\n\nNo model/token/cost in the JSONL (FINDINGS.md §4; parser.go does not read the sidecar). Observations are therefore model \"unknown\", cost_nonzero false, tokens_nonzero false.\n\n## driver_capability: gap:keys\n\nThe recipe must navigate the `/rewind` PICKER to select the earlier prompt to fork from, then confirm — this is an arrow-key picker (changelog above), so the recipe needs `keys` steps (`Down`, `Enter`), exactly as the canonical claudecode/checkpoint-rewind recipe drives ITS `/rewind` picker with `keys: Down` + `keys: Enter`. The kiro interactive driver does NOT elicit `keys`: its `DRIVE_ELICITS=\"send slash wait_turn sleep\"` (driver-interactive.sh:86), and the `keys` arm is a stubbed `not_implemented` (driver-interactive.sh:246). recipe-lint's SEMANTIC check (which reads DRIVE_ELICITS) flags a `keys`-using recipe as a semantic_gap before recording. This is a tooling gap, NOT an observability limit — the cell keeps a full recipe + spec; `record` ports the `keys` arm from drive-claudecode-interactive.sh before it drives. Hence `driver=gap:keys`, route driver-gap.\n\n(Not a false gap: `/rewind` is not an inline-argument slash like `/model <id>` — it opens a picker that requires raw key navigation, so `slash` alone cannot select the target prompt.)\n\n## Primitive / capability key\n\nPrimitive exercised: the canonical `checkpoint_rewind` capability (the legacy per-adapter capabilities.json was deleted in the #511 shard migration, so there is no key file to confirm against).",
+      "caveats": [
+        "provenance-only (feature-invisible-but-spec-compliant): the kiro JSONL has no forked-from field, the parser handles only Prompt/AssistantMessage/ToolResults/Clear (parser.go:40-113) and nothing sets ParentSessionID, so the daemon shows the rewind-fork as an independent new session_id, not a parent-linked child — the new row + clean arc are observed, only the linkage label is lost. Same shape as codex/checkpoint-rewind.",
+        "/rewind reverts conversation state only (continues in a new session from an earlier prompt); no evidence of a file-edit checkpoint restore, so prior tool-applied edits stay in the working tree — hence agent_supports: partial, not yes.",
+        "PROVISIONAL on emission: that /rewind writes a NEW <uuid>.jsonl under the watched root (vs. appending to the same file) is inferred from the changelog (\"continue in a new session\") + FINDINGS.md, not yet observed live in this dir's smoke session (which contains no rewind). The live record run promotes daemon=full from provisional to settled.",
+        "No model/token/cost in the kiro JSONL (FINDINGS.md §4); observations assert model unknown, cost_nonzero false, tokens_nonzero false — consistent with the v1 kiro adapter which does not read the metadata sidecar."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": ".build/refresh/kiro-cli-smoke/FINDINGS.md",
+          "note": "Live kiro-cli 2.5.1 smoke (§8): slash surface includes 'rewind (forks→new session)'; transcript live-appends; process exit removes the .lock marker; --resume-id leaves the original file in place; JSONL carries no model/usage/cost (§4)."
+        },
+        {
+          "kind": "file",
+          "ref": "/opt/homebrew/bin/kiro-cli",
+          "note": "Binary embedded changelog strings: '`/rewind` to jump back to an earlier prompt in a conversation and continue in a new session' (=fork, conversation-only); '`/rewind` picker now adapts to small terminal panes' (=interactive picker); 'Fixed approval UX keybindings for arrow navigation, esc, and tab' (=arrow-key navigation → needs a `keys` step)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/agent.go",
+          "note": "Source is FilesUnderRoot{Dir: \".kiro/sessions/cli\"} (lines 38-43); a /rewind's new <uuid>.jsonl lands under the watched root → new session row observable (daemon=full)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/parser.go",
+          "note": "Parser handles only Prompt/AssistantMessage/ToolResults/Clear (lines 40-113); no forked-from / session_meta handling and nothing sets ParentSessionID — the fork's linkage label is dropped (the caveat behind partial+full, not a bug). JSONL has no model/token/cost (lines 19-22)."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/kiro-cli/driver-interactive.sh",
+          "note": "DRIVE_ELICITS=\"send slash wait_turn sleep\" (line 86); the `keys` arm is a stubbed not_implemented (line 246). A /rewind-picker recipe needs `keys` (Down/Enter) → recipe-lint semantic_gap → driver=gap:keys; record ports the keys arm from drive-claudecode-interactive.sh."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/1-6_checkpoint-rewind/metadata.json",
+          "note": "Canonical /rewind-picker recipe template: drives the picker with `keys: Down` then `keys: Enter` after the `/rewind` send — the same picker-navigation the kiro recipe needs, proving the keys requirement is real, not a slash-only inline argument."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/codex/scenarios/1-6_checkpoint-rewind/metadata.json",
+          "note": "Reference fork variant: codex landed agent=partial / daemon=full (conversation-only fork; new session under the watched root; provenance dropped). kiro reconciles to the same partial/full with the same provenance caveat; the only difference is the driver gap (kiro needs `keys` for its picker, codex sent /fork as a plain step)."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "kiro-cli >=2.5.1 on PATH and logged in (subscription auth) — verified kiro-cli 2.5.1.",
+        "trust-all-tools consent persisted (run `kiro-cli chat --trust-all-tools` once and pick 'Yes, and don't ask again').",
+        "irrlichd is recording — run-cell.sh in isolated mode, or --attach against a daemon started with --record.",
+        "DRIVER GAP (keys): this recipe drives the /rewind PICKER with `keys` steps (Down/Enter). The kiro interactive driver's DRIVE_ELICITS lacks `keys` (the arm is a stubbed not_implemented). `record` MUST port the `keys` arm from drive-claudecode-interactive.sh (and add `keys` to DRIVE_ELICITS) before driving — same step the claudecode/checkpoint-rewind recipe uses for ITS picker.",
+        "FORK semantics (per assessment): kiro /rewind continues in a NEW session (fresh UUID, new <uuid>.jsonl under ~/.kiro/sessions/cli/), leaving the original file intact. The daemon observes a NEW linked session_id (not a same-session in-place rewind). The parser drops the forked-from linkage, so the daemon shows the fork as an independent new session; kiro emits NO transcript_removed for the original (it stays ready until process exit)."
+      ],
+      "setup": [
+        "Driver launches `kiro-cli chat --trust-all-tools` under tmux in a fresh per-run cwd (isolates trust state); the parent's OS cwd == session cwd so DiscoverPIDByCWD binds.",
+        "kiro mints its own session UUID per chat launch and writes ~/.kiro/sessions/cli/<uuid>.jsonl lazily after the first prompt; wait_turn counts text-only AssistantMessages as completed turns.",
+        "/rewind is sent as a `send` step (text + Enter), which opens the picker; the picker is then navigated with `keys: Down` (move to an earlier prompt) and confirmed with `keys: Enter`, after which kiro forks into a new session and replays the pre-rewind history."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: one"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: two"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        },
+        {
+          "type": "send",
+          "text": "/rewind"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "keys",
+          "keys": "Down"
+        },
+        {
+          "type": "sleep",
+          "seconds": 1
+        },
+        {
+          "type": "keys",
+          "keys": "Enter"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: three"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the launch pre-session entering ready, handing off to the FIRST kiro session (UUID-1) in ready after the first prompt",
+        "UUID-1 runs two working→ready turns ('one', 'two') — the checkpoints to rewind back from",
+        "after /rewind + picker confirm, a DIFFERENT session_id (UUID-2, new <uuid>.jsonl) appears in ready — the 'a linked new session_id if the adapter forks' signal, observed live on the dashboard",
+        "the post-rewind turn ('three') drives working→ready on the NEW session UUID-2, not the original — a clean ready → working → ready arc from the rewound point",
+        "kiro does NOT emit transcript_removed for UUID-1 at rewind time (the original file lingers, resumable); the UUID-1 row stays ready until process exit — do not assert a removal and do not assert a same-session in-place rewind (kiro forks)",
+        "observations: model unknown, cost_nonzero false, tokens_nonzero false (kiro JSONL carries no model/token/cost)",
+        "final live state is ready"
+      ],
+      "settings": {},
+      "timeout_seconds": 180
+    }
+  }
+}
