@@ -1,0 +1,111 @@
+{
+  "scenario_id": "user-esc-interrupt",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "incapable",
+    "driver_capability": "gap:interrupt",
+    "agent_cli_version": "2.5.1",
+    "daemon_version": "0.4.8+b5e84238",
+    "confidence": 0.78,
+    "notes": "agent_supports: yes\ndaemon_capability: incapable; driver_capability: gap:interrupt\n=> frozen: kiro emits NO interrupt marker in the tailed .jsonl (cancellation lands only in the <uuid>.json sidecar's end_reason: Cancelled, which the parser never reads), so the post-ESC working→ready settle is unobservable."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "user-esc-interrupt",
+      "agent": "kiro-cli",
+      "assessed_at": "2026-06-05T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "incapable",
+      "driver_capability": "gap:interrupt",
+      "confidence": 0.78,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: incapable; driver_capability: gap:interrupt\n=> route: frozen (daemon-incapable outranks the driver gap — the more fundamental observability problem wins; computeRoute checks `daemon == \"incapable\"` before the `gap:` prefix, router.go:43-48).\n\n## Scenario\n\nuser-esc-interrupt asserts the user-observable arc `ready → working → ready`: the user sends a prompt that takes >2s, state flips to `working`, the user presses ESC to cancel the in-flight turn BEFORE the agent emits a turn-done marker, and state must settle back to `ready` (must NOT stick in `working`). A follow-up prompt then drives a fresh `ready → working → ready` arc proving the parser reset. The load-bearing assertion is the post-interrupt `working → ready` settle.\n\n## agent_supports: yes\n\nkiro-cli 2.5.1 records turn cancellation. A sibling binary scan found the turn-end reason enum includes `Cancelled` alongside `UserTurnEnd`, and the live smoke confirms `end_reason` is a real per-turn field at `session_state.conversation_metadata.user_turn_metadatas[].end_reason` in the `<uuid>.json` sidecar (the smoke session captured `UserTurnEnd` for its two clean turns; FINDINGS.md §4). The TUI binds ESC/Ctrl-C to cancel an in-flight turn (interactive REPL with a per-turn completion footer `▸ Credits: … • Time: …s`). So the agent unambiguously supports user ESC cancellation, and it persists the fact in the sidecar.\n\n## daemon_capability: incapable\n\nThe daemon tails the `.jsonl` Source (`agent.FilesUnderRoot{Dir: \".kiro/sessions/cli\", JSONLineParser}`, agent.go) — NOT the `<uuid>.json` sidecar (the adapter reads the sidecar only for cwd, via `transcript.ExtractCWDFromSidecar` in pid.go). The interrupt signal is invisible to that tailed Source for three compounding reasons:\n\n1. **The `.jsonl` event vocabulary carries no cancellation kind.** The only kinds kiro writes to the transcript are `Prompt`, `AssistantMessage`, `ToolResults`, `Clear` (FINDINGS.md §4, confirmed against the live smoke `.jsonl`). There is no `turn_aborted`/`Cancelled` line in the `.jsonl` — the cancellation lands ONLY in the sidecar's `user_turn_metadatas[].end_reason`. The parser only reads the `.jsonl`.\n\n2. **The kiro parser sets NO `IsUserInterrupt`.** `grep -ni interrupt|abort|cancel core/adapters/inbound/agents/kirocli/*.go` returns nothing. parser.go maps `Prompt→user_message`, `AssistantMessage(toolUse)→assistant`, `AssistantMessage(text-only)→turn_done`, `ToolResults→tool_result`, `Clear→skip` — and never emits the `IsUserInterrupt` flag that classifier rule 3 keys on. So rule 3 (state_classifier.go:86-95: `working/waiting + LastEventType==\"user\" + LastWasUserInterrupt + !HasOpenToolCall → ready`) can NEVER fire for kiro-cli, because `LastWasUserInterrupt` is promoted from `parsed.IsUserInterrupt` (tailer.go:904) which kiro never sets.\n\n3. **No turn_done fires on the truncated turn.** After an ESC mid-turn, the `.jsonl` is a truncated turn whose last line is an `AssistantMessage` carrying a `toolUse` block (mid-turn → `assistant`, keeps the session `working`) or a `ToolResults` — with NO trailing text-only `AssistantMessage`. Since the turn-end marker is precisely \"a text-only AssistantMessage\" (parser.go:76-79), no `turn_done` is emitted, so classifier rule 2 (`IsAgentDone()`) never fires either. The session was driven to `working` by the `Prompt` and STAYS `working`.\n\nWith neither rule 2 nor rule 3 able to fire, there is no `working → ready` settle. There is also no idle-sweep fallback: the PID-liveness sweep only TTL-cleans `ready` sessions or reaps PID-dead ones — a `working` session with a live REPL PID is never settled to `ready`. Recording this cell today would capture a stuck-`working` shape (until the follow-up prompt or `process_exited`), which proves the OPPOSITE of the scenario's intent. This is the codex/user-esc-interrupt precedent exactly: agent=yes, daemon=incapable, frozen.\n\n## daemon: incapable vs bug (the line)\n\nThis is `incapable`, not `bug`, under the SKILL's definition: `bug` requires a trace in the tailed Source that the daemon mis-handles; `incapable` is when no trace exists in that Source. The cancellation trace exists ONLY in the sidecar, which is NOT the tailed Source — from the `.jsonl` the daemon tails for state, no interrupt signal exists, so the 3-state model cannot represent the settle. (It is materially weaker than codex, where the unparsed `turn_aborted` at least lived in the SAME transcript the daemon tails — there the fix is a pure parser addition. For kiro the fix would require wiring a NEW Source: a sidecar end_reason reader feeding the state pipeline.)\n\n## driver_capability: gap:interrupt\n\nThe recipe needs an `interrupt` step (Escape/Ctrl-C to the tmux pane mid-turn). The kiro interactive driver stubs it: `interrupt) not_implemented interrupt` (driver-interactive.sh:245), and `DRIVE_ELICITS=\"send slash wait_turn sleep\"` (line 86) does NOT list `interrupt`, so recipe-lint flags it as a semantic_gap. The seam must be ported from drive-claudecode/codex-interactive.sh (`tmux send-keys Escape`). This is tooling work, NOT the observability limit — it does not change the route (frozen wins), but it is the honest driver verdict.\n\n## Why frozen (route), and what would unblock it\n\nThe load-bearing user-observable assertion — state returns to `ready` after the ESC interrupt, not stuck in `working` — cannot be observed by the daemon as it exists today. Per the pipeline rule the cell is frozen: no recording. Two things must land to unfreeze it: (a) DAEMON — teach the kiro adapter to read `<uuid>.json`'s `user_turn_metadatas[].end_reason == \"Cancelled\"` and emit a turn-end/interrupt signal feeding the classifier (a new sidecar Source/MetricsReader, already noted as a future enhancement in the adapter decisions), so the working→ready settle fires; and (b) DRIVER — port the `interrupt` step. Re-assess to yes/full/ready and proceed to record once both land.\n\n## Confidence 0.78\n\nThe parser/classifier read is high-confidence and code-grounded (the kiro parser provably sets no IsUserInterrupt; rule 3 provably cannot fire). The residual uncertainty is the EXACT post-ESC `.jsonl` shape: the live smoke never performed an interrupt, so whether the truncated turn ends on an `assistant`(toolUse) line vs a `ToolResults` line (both leave the session `working`) is inferred, not observed. Either way the settle is unobservable, so the incapable verdict holds; a live recording in a future record pass is the only thing that can promote this from provisional to settled (backflow loop).",
+      "caveats": [
+        "BACKFLOW (provisional): the exact post-ESC .jsonl shape was NOT observed live — the 2.5.1 smoke captured only clean turns (end_reason UserTurnEnd). The incapable verdict is inferred from the .jsonl event vocabulary (no Cancelled kind) + the parser setting no IsUserInterrupt; a future live interrupt recording is the only thing that can settle whether the truncated turn leaves any .jsonl-observable trace the daemon could settle on. If it does, record's backflow loop should correct the pillar via of cell write in the same commit.",
+        "The cancellation IS persisted by kiro — but only in the <uuid>.json sidecar (session_state.conversation_metadata.user_turn_metadatas[].end_reason == Cancelled), which the adapter reads for cwd only (ExtractCWDFromSidecar) and never for state. Unfreezing the daemon pillar is a sidecar end_reason reader, not a .jsonl parser tweak — materially more work than the codex turn_aborted fix.",
+        "driver:gap:interrupt does not change the route (frozen, because daemon-incapable outranks a driver gap per computeRoute). It is recorded honestly so that if the daemon pillar is later unfrozen, the driver gap is already flagged for record to port the interrupt seam."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/parser.go",
+          "note": "Sets NO IsUserInterrupt anywhere; event kinds handled are Prompt/AssistantMessage/ToolResults/Clear only. Turn-end = text-only AssistantMessage (lines 76-79). After an ESC the truncated turn has no trailing text-only AssistantMessage → no turn_done."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go",
+          "note": "Rule 3 (lines 86-95) requires LastWasUserInterrupt (+ LastEventType==user + !HasOpenToolCall) to drive working→ready on ESC; rule 2 requires IsAgentDone(). kiro emits neither signal, so no working→ready settle fires — the session sticks in working."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer.go",
+          "note": "LastWasUserInterrupt is promoted from parsed.IsUserInterrupt (line ~904). The kiro parser never sets IsUserInterrupt, so this sticky flag is always false for kiro-cli — classifier rule 3 is unreachable."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/agent.go",
+          "note": "Source is FilesUnderRoot{Dir: \".kiro/sessions/cli\", JSONLineParser} — the daemon tails the .jsonl, NOT the <uuid>.json sidecar. pid.go reads the sidecar only for cwd (ExtractCWDFromSidecar). The cancellation end_reason lives only in the untailed sidecar."
+        },
+        {
+          "kind": "file",
+          "ref": ".build/refresh/kiro-cli-smoke/FINDINGS.md",
+          "note": "§4: .jsonl event vocabulary is Prompt/AssistantMessage/ToolResults/Clear — no model/usage/cost and no cancellation kind; sidecar <uuid>.json holds per-turn metadata. §5: turn-end is the final text-only AssistantMessage. The smoke recorded NO interrupt (end_reason captured = UserTurnEnd only), so the post-ESC .jsonl shape is unobserved."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/kiro-cli/driver-interactive.sh",
+          "note": "interrupt) not_implemented interrupt (line 245, stubbed); DRIVE_ELICITS=\"send slash wait_turn sleep\" (line 86) omits interrupt → recipe-lint semantic_gap. The interrupt seam (tmux send-keys Escape) must be ported from drive-claudecode/codex-interactive.sh → driver_capability: gap:interrupt."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/codex/scenarios/2-20_interrupted-turn/metadata.json",
+          "note": "Calibration precedent (codex's interrupted-turn cell, scenario_id user-esc-interrupt): agent=yes, daemon=incapable, frozen for the same root cause (the turn_aborted cancellation marker is unparsed; no working→ready settle observable). kiro is the same shape, with the wrinkle that kiro's Cancelled marker is in a separate sidecar, not the tailed transcript — a strictly weaker daemon position than codex."
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/internal/matrix/router.go",
+          "note": "computeRoute (lines 39-51): daemon==\"incapable\" returns RouteFrozen BEFORE the driver gap:* check — so the route is frozen regardless of driver_capability=gap:interrupt. The daemon (observability) problem outranks the tooling (driver) gap."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "preconditions": [
+        "FROZEN — not recordable today. The daemon cannot observe the post-ESC working→ready settle (kiro emits no interrupt marker in the tailed .jsonl; the Cancelled end_reason lives only in the untailed <uuid>.json sidecar). Recording would capture a stuck-working shape that contradicts the scenario.",
+        "UNFREEZE (daemon): teach the kiro adapter to read <uuid>.json user_turn_metadatas[].end_reason==Cancelled and feed a turn-end/interrupt signal to the classifier (sidecar end_reason reader / MetricsReader — already a documented future enhancement).",
+        "UNFREEZE (driver): port the interrupt step (tmux send-keys Escape) into replaydata/agents/kiro-cli/driver-interactive.sh and add `interrupt` to DRIVE_ELICITS."
+      ],
+      "setup": [],
+      "script": [
+        {
+          "type": "send",
+          "text": "Write a long detailed essay about the history of computing, at least 500 words. Take your time and stream the response."
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        },
+        {
+          "type": "interrupt"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        }
+      ],
+      "verify": [
+        "FROZEN: no recording. Once unfrozen, the spec to verify is ready → working → ready: the post-ESC interrupt must settle the session back to ready (not stick in working), and the follow-up prompt drives a clean ready → working → ready second turn.",
+        "final session state is ready"
+      ],
+      "settings": {},
+      "timeout_seconds": 360
+    }
+  }
+}

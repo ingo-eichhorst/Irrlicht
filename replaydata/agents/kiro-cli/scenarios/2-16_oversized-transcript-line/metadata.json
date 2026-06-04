@@ -1,0 +1,103 @@
+{
+  "scenario_id": "oversized-transcript-line",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "2.5.1",
+    "daemon_version": "0.4.8+b5e8423.dirty",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "oversized-transcript-line",
+      "agent": "kiro-cli",
+      "assessed_at": "2026-06-05T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nThe scenario's exercised primitive is parser robustness: the transcript tailer + line parser must ingest a single JSONL line that exceeds normal size WITHOUT stalling, so the session still arcs `ready → working → ready` (no stuck `working`). No special agent capability is required.\n\n**agent_supports: yes.** kiro-cli writes an append-only JSONL transcript under `~/.kiro/sessions/cli/<uuid>.jsonl`, one `\\n`-terminated record per event (Prompt / AssistantMessage / ToolResults / Clear — FINDINGS.md §4). A `ToolResults` event embeds the FULL tool-output JSON in one line, so a single tool call that reads a large file produces one oversized JSONL line naturally — there is nothing kiro-specific to 'support', the flusher writes whatever the tool returned terminated by `\\n`. So agent_supports is trivially yes (the same way it is for every JSONL adapter).\n\n**daemon_capability: full.** kiro is a line_based adapter: `core/adapters/inbound/agents/kirocli/agent.go` declares `Source: agent.FilesUnderRoot{Dir: sessionsDir(), Parser: agent.JSONLineParser{...}}`, so kiro transcripts run through the SHARED tailer — the oversized-line handling is parser-agnostic. `core/pkg/tailer/tailer.go` reads each line via `bufio.NewReaderSize(file, 64*1024)` + a custom `readLineCapped` (NOT `bufio.Scanner`, whose old ~2 MB cap would wedge), with `maxTranscriptLineSize = 64 MB` (issue #270). A line under the cap parses normally; a line beyond it is logged ('skipping oversized line at offset N') and the offset is advanced past it so processing continues with the next line; an `errPartialAtEOF` re-read path handles a partially-written giant line. kiro's `JSONLineParser` + `kirocli.Parser` run on top of this, so kiro inherits the identical robustness as claudecode/codex/pi — the cap path is shared, agent-agnostic code, already pinned by `core/pkg/tailer/large_line_test.go` (#270 regression). The kiro parser then maps the post-tool text-only `AssistantMessage` to `turn_done`, driving the working→ready settle.\n\n**driver_capability: ready.** The recipe needs only `send` / `wait_turn` / `sleep`, all of which the kiro interactive driver elicits (`DRIVE_ELICITS=\"send slash wait_turn sleep\"` in `replaydata/agents/kiro-cli/driver-interactive.sh`). No `keys`/signal/multi-session primitive is required, so there is no driver gap.\n\nNet for the cell: a large tool result (file read) flushes one big JSONL line; it either fits under 64 MB (parsed normally) or is logged-and-skipped past — either way the `ready → working → ready` arc completes. The completion of the working→ready transition IS the parser-resilience proof: had the tailer wedged on the long line, that transition would never fire and the phase contract would time out.\n\n**Observations.** kiro's JSONL carries NO model / token / cost fields — those live in the `<uuid>.json` sidecar, which the v1 parser does NOT read (FINDINGS.md §4, kirocli/parser.go). So the recording's observation vector reports model `unknown` and zero cost/tokens; the spec asserts NO hard model/cost/tokens metrics (matching the pi line_based precedent), only the user-observable state arc.",
+      "caveats": [
+        "A live kiro-cli session cannot be deterministically driven to emit a >64 MB (or even >2 MB) single JSONL line; the recipe provokes a LARGE single line by having kiro read a sizable file in one tool call (ToolResults embeds the full output → ~tens of KB on one line), which is well under the 64 MB cap. So this live recording is a sanity-check that the arc survives a large single line — the genuine >64 MB cap behavior is pinned by the agent-agnostic unit test core/pkg/tailer/large_line_test.go (readLineCapped / skip-past, issue #270), not by this recording.",
+        "Lines above the 64 MB cap are dropped silently from the parser's point of view (offset advances, content lost) and surface only as an operator log line; the spec asserts the state arc, not content, so this is fine for the cell.",
+        "kiro JSONL has no model/token/cost (those live in the unread <uuid>.json sidecar), so the recording's observation vector is model=unknown, cost=0, tokens=0; the spec asserts no hard metric and relies on the state arc only.",
+        "daemon=full for the large-single-line arc is grounded in the shared-tailer code path (which kiro provably runs on via FilesUnderRoot{JSONLineParser}); the LIVE settle on a kiro oversized line is promoted from provisional to settled by record."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/agent.go",
+          "note": "Source: FilesUnderRoot{Dir: sessionsDir(), Parser: JSONLineParser} — kiro transcripts run through the shared tailer, inheriting the same oversized-line handling as every JSONL adapter."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/parser.go",
+          "note": "ToolResults event embeds the full tool-output JSON in one line; a text-only AssistantMessage maps to turn_done (the working→ready settle). No model/token/cost read from JSONL — sidecar-only."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer.go",
+          "note": "bufio.NewReaderSize + readLineCapped + maxTranscriptLineSize=64MB; oversized lines logged ('skipping oversized line at offset N') and skipped past, not stalled — references issue #270."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/large_line_test.go",
+          "note": "Agent-agnostic regression for #270: TestTailAndProcess_LargeToolResultLine (3 MB line still yields turn_done) + TestReadLineCapped_OversizedLineSkipped (direct skip path). Authoritative coverage for the cap."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/kiro-cli/driver-interactive.sh",
+          "note": "DRIVE_ELICITS=\"send slash wait_turn sleep\" — the interactive driver elicits exactly the step types the recipe needs; no driver gap."
+        },
+        {
+          "kind": "file",
+          "ref": ".build/refresh/kiro-cli-smoke/FINDINGS.md",
+          "note": "Live kiro-cli 2.5.1 smoke (§4,§5): JSONL events Prompt/AssistantMessage/ToolResults/Clear, no model/usage/cost in JSONL; text-only final AssistantMessage = turn_done; ToolResults carry full tool output."
+        },
+        {
+          "kind": "issue",
+          "ref": "ingo-eichhorst/Irrlicht#270",
+          "note": "Oversized JSONL line wedge fixed by switching the shared tailer from bufio.Scanner to bufio.Reader + readLineCapped."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "kiro-cli on PATH and authenticated (subscription auth; FINDINGS.md §7)",
+        "irrlichd is recording (--attach against a daemon with --record, isolated mode)"
+      ],
+      "setup": [
+        "Driver stages a fresh cwd under <staging>/cwd/ and writes a sizable text file into it (so a single Read tool call produces one large ToolResults line)"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Write a single very long sentence on one line. Make it at least 5000 words. Do not use newlines anywhere in the sentence."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the kiro session (UUID stem of ~/.kiro/sessions/cli/<uuid>.jsonl) born ready within ~2s of REPL launch (a transient proc-<PID> pre-session may also appear at launch; the turn arc + pid_discovered land on the UUID-keyed session)",
+        "events.jsonl shows exactly one ready→working transition for the kiro session as the large-reply turn begins",
+        "events.jsonl shows exactly one working→ready transition at turn end — completion of the arc is the parser-resilience proof; if the tailer wedged on the oversized single line this transition would never fire (the genuine >64 MB cap behavior is pinned by core/pkg/tailer/large_line_test.go, issue #270; this live recording is a sanity-check on a large single line)",
+        "events.jsonl shows a pid_discovered event bound to the kiro session",
+        "irrlichd logs do NOT contain a 'skipping oversized line' warning for the session's transcript (a large file read / 5000-word reply is well under the 64 MB cap)",
+        "no state_transition to waiting appears for the session at any point",
+        "final session state is ready before the driver tears the TUI down",
+        "transcript.jsonl contains 1 Prompt line and at least 1 text-only AssistantMessage line; the large reply / tool result is flushed as a single JSONL row with no embedded newlines"
+      ],
+      "settings": {},
+      "timeout_seconds": 300
+    }
+  }
+}

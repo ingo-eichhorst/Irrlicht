@@ -1,0 +1,100 @@
+{
+  "scenario_id": "tool-gate-permission-prompt",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "bug",
+    "driver_capability": "gap:keys",
+    "agent_cli_version": "2.5.1",
+    "daemon_version": "0.4.8+bbd0532.dirty",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes — kiro-cli 2.5.1 raises an explicit permission picker for every write/shell mutation by default (Yes / Trust always in session / No; FINDINGS.md §6). daemon_capability: bug — kiro's lowercase write/shell tool names are not in the daemon's permission-gated edit-tool allowlist, so while the picker is pending the open toolUse classifies as working, never waiting. driver_capability: gap:keys — answering the picker needs arrow-key+Enter and launching plain `kiro-cli chat` without --trust-all-tools."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "tool-gate-permission-prompt",
+      "agent": "kiro-cli",
+      "assessed_at": "2026-06-05T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "bug",
+      "driver_capability": "gap:keys",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: bug\ndriver_capability: gap:keys\n\n## Reasoning\n\nThis scenario (2.19) is the EXPLICIT permission-gate prompt arc: the agent attempts a tool call that requires permission, the prompt opens (working → waiting), the user approves or denies (waiting → working), the tool runs, and the turn completes (working → ready). It is distinct from the sibling 2.11 auto-classified-permission, whose load-bearing claim is an in-product auto-classifier deciding safe-vs-risky per call. 2.19 asserts only the explicit gate prompt itself, which kiro-cli performs unambiguously.\n\n**agent = yes.** kiro-cli 2.5.1 gates every mutating tool (`write`, `shell`) behind an explicit permission picker by default — read-only `read` auto-runs. The live 2.5.1 smoke observed `\"write requires approval\"` / `\"shell requires approval\"` with options Yes (this once) / Trust always in session / No (FINDINGS.md §6). That is exactly the scenario's behavior: a tool call requiring permission opens a deterministic prompt the user resolves, after which the call runs and the turn completes. Because 2.19 does not name an auto-classifier mechanism (the thing kiro lacks), the agent fully performs the asserted arc → `yes` (not `partial`, which 2.11 earns only because the auto-classifier it names is absent).\n\n**daemon = bug.** The arc requires the daemon to emit `working → waiting` while the approval picker is pending. For kiro this CANNOT happen today, and a local trace exists, so it is a fixable product bug — not architectural incapability:\n\n- kiro has no hook/permission event kind (unlike claudecode), so `metrics.PermissionPending` is never set — `state_classifier.go` rule 0 (PermissionPending → waiting) cannot fire.\n- `isUserBlockingTool` (session.go) matches only `AskUserQuestion` / `ExitPlanMode` / `question`; kiro's tools are `write` / `shell`, so rule 1 (NeedsUserAttention) cannot fire.\n- The only remaining path to waiting for a held edit-permission is the OpenToolStalled fallback (rule 1b / #488). It is gated by `HasOpenEditPermissionTool` → `isPermissionGatedEditTool`, which matches the EXACT PascalCase names `Edit` / `Write` / `MultiEdit` / `NotebookEdit` (session.go:268). kiro emits lowercase `write` / `shell` (verified in the live smoke JSONL; the parser passes the raw tool name through), which does NOT match — so OpenToolStalled is never set for kiro.\n\nWhile the picker is pending, the kiro JSONL already contains the AssistantMessage with the pending `toolUse` and NO further events until approval (FINDINGS.md §2/§5). The parser maps an AssistantMessage-with-toolUse to `assistant` + an open ToolUse → `HasOpenToolCall=true` → classifier rule 4 returns `working`. The session sits in `working` for the entire pending-approval window and never reaches `waiting`. The local trace plainly carries the open write/shell call, so this is a parser/allowlist bug (the fix: recognise kiro's lowercase `write`/`shell` in the permission-gated edit-tool set, e.g. a per-adapter edit-tool name set), not incapability. record files the issue and records `known_failing`. (This is the same root-cause bug the sibling 2.11 cell flagged — `write` absent from `isPermissionGatedEditTool` — surfaced here as the explicit-gate arc.)\n\n**driver = gap:keys.** Answering kiro's permission picker (Yes / Trust always in session / No) is an arrow-key + Enter interaction → a `keys` step. The interactive driver stubs `keys` (`not_implemented keys`, line 246) and the elicit set omits it, so recipe-lint flags it as a gap before recording. Additionally `launch_repl` hard-codes `kiro-cli chat --trust-all-tools`; for THIS scenario it must launch plain `kiro-cli chat` so the prompt actually appears. Both are tooling ports `record` performs from the reference driver. → gap:keys.\n\n## What the recording must do\n\nLaunch plain `kiro-cli chat` WITHOUT --trust-all-tools, send a prompt that asks kiro to write a file (mutating → picker appears), drive the picker via `keys` to select 'Yes' (this once), and the write runs and the turn completes. The spec asserts the CORRECT explicit-gate arc ready → working → waiting → working → ready and is flagged known_failing on the daemon waiting observable until the allowlist bug is fixed.\n\n## Observations\n\nThe kiro JSONL carries no model/token/cost — those live only in the `<uuid>.json` metadata sidecar, which the v1 parser does not read (FINDINGS.md §4). So observations are model=unknown, cost_nonzero=false, tokens_nonzero=false.",
+      "caveats": [
+        "PROVISIONAL on emission: the daemon=bug verdict is doc/code-derived. The live 2.5.1 smoke confirmed the write/shell approval picker exists and that the pending toolUse lands in the JSONL before approval (FINDINGS.md §2/§6), but did NOT record the daemon's state output across a pending picker. record promotes this from provisional to settled — and confirms whether the OpenToolStalled lowercase-allowlist miss is the only blocker.",
+        "'Trust always in session' would suppress the picker for the rest of the session; the recipe must pick 'Yes' (this once) so the call re-prompts and the gate stays observable.",
+        "agent=yes here vs partial on the sibling 2.11: 2.19 asserts only the explicit permission-gate prompt arc, which kiro performs in full; 2.11 additionally names an auto-classifier mechanism kiro lacks, which is why that cell is partial. Same daemon bug, different agent verdict.",
+        "The kiro JSONL carries no model/token/cost — observations are model=unknown, cost_nonzero=false, tokens_nonzero=false (the sidecar <uuid>.json holds metering/model but the v1 parser does not read it; FINDINGS.md §4)."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": ".build/refresh/kiro-cli-smoke/FINDINGS.md",
+          "note": "§6: live 2.5.1 'write requires approval' / 'shell requires approval' picker (Yes / Trust always in session / No). §2/§5: the pending toolUse lands in the JSONL BEFORE approval and no further events follow until approval. §4: JSONL has no model/token/cost (sidecar-only)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go",
+          "note": "Rule 0 (PermissionPending→waiting) is claudecode-hook-only; rule 1b (OpenToolStalled→waiting) is the only fallback path to waiting for a held edit-permission. An open tool with no result alone returns working (rule 4 default)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/session.go",
+          "note": "isPermissionGatedEditTool (line 268) matches only the exact names Edit/Write/MultiEdit/NotebookEdit; isUserBlockingTool matches only AskUserQuestion/ExitPlanMode/question. kiro's lowercase write/shell match neither, so OpenToolStalled is never set for kiro and the pending approval window stays working — the bug."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/parser.go",
+          "note": "AssistantMessage-with-toolUse → assistant + open ToolUse (raw tool name passed through, e.g. lowercase 'write'); text-only AssistantMessage → turn_done. No permission/hook event kind exists in the kiro vocabulary."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/kiro-cli/driver-interactive.sh",
+          "note": "keys is stubbed (not_implemented keys, line 246) and the elicit set omits it → driver gap; launch_repl hard-codes --trust-all-tools which must be dropped so the picker appears. record ports both from the reference driver."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "kiro-cli 2.5.1 on PATH and authenticated (subscription auth) — FINDINGS.md §7",
+        "irrlichd is recording (--attach against a daemon with --record, or isolated mode)",
+        "Launch plain `kiro-cli chat` WITHOUT --trust-all-tools so the write-approval picker appears (record must drop the driver's hard-coded --trust-all-tools)"
+      ],
+      "setup": [
+        "Driver launches kiro-cli chat (no --trust-all-tools) under tmux in a fresh cwd under <staging>/cwd/",
+        "The prompt must request a file WRITE (mutating) so kiro raises the 'write requires approval' picker — read-only calls would auto-run and never gate"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Create a file named hello.txt containing exactly the text: hello world"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        },
+        {
+          "type": "keys",
+          "keys": "Enter"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the UUID session entering ready, then ready→working on the prompt",
+        "events.jsonl shows working→waiting while the write-approval picker is pending (KNOWN FAILING until the daemon's permission-gated edit-tool allowlist recognises kiro's lowercase write/shell)",
+        "after the picker is answered (keys → 'Yes'), events.jsonl shows waiting→working then working→ready at turn end",
+        "final session state is ready",
+        "transcript.jsonl contains the write toolUse and its toolResult after approval"
+      ],
+      "settings": {},
+      "timeout_seconds": 180
+    }
+  }
+}
