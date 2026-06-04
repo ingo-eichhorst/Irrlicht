@@ -116,14 +116,35 @@ type effectCounter struct {
 	mu      sync.Mutex
 	applied int
 	removed int
+	last    string // "apply" or "remove" — the last executed closure effect
 }
 
-func (c *effectCounter) apply() error  { c.mu.Lock(); c.applied++; c.mu.Unlock(); return nil }
-func (c *effectCounter) remove() error { c.mu.Lock(); c.removed++; c.mu.Unlock(); return nil }
+func (c *effectCounter) apply() error {
+	c.mu.Lock()
+	c.applied++
+	c.last = "apply"
+	c.mu.Unlock()
+	return nil
+}
+
+func (c *effectCounter) remove() error {
+	c.mu.Lock()
+	c.removed++
+	c.last = "remove"
+	c.mu.Unlock()
+	return nil
+}
+
 func (c *effectCounter) counts() (int, int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.applied, c.removed
+}
+
+func (c *effectCounter) lastEffect() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.last
 }
 
 func testAgentDecl(c *effectCounter) agent.Agent {
@@ -530,4 +551,44 @@ func TestPermissionServiceDetectionProbeOverride(t *testing.T) {
 		snap := svc.Snapshot()
 		return len(snap.Agents) == 1 && snap.Agents[0].Detected
 	})
+}
+
+// TestPermissionServiceConflictingAnswersConverge stresses the race where
+// both surfaces answer the SAME permission near-simultaneously with
+// opposite decisions. State mutations serialize under the state mutex and
+// effect batches under the effect mutex, so without the stale-effect skip
+// the last EXECUTED effect could belong to the losing answer (state
+// granted but Remove ran last, or vice versa). The invariant: after both
+// answers settle, the last executed closure effect always matches the
+// recorded state.
+func TestPermissionServiceConflictingAnswersConverge(t *testing.T) {
+	c := &effectCounter{}
+	svc := services.NewPermissionService(
+		[]agent.Agent{testAgentDecl(c)}, &mockPermStore{}, &mockPush{}, &mockLogger{},
+		config.PermissionModeAsk, &mockRegistrar{}, nil, nil,
+	)
+	svc.Start(context.Background())
+
+	for i := 0; i < 100; i++ {
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			_ = svc.Answer([]services.PermissionAnswer{{Agent: "testagent", Permission: "config", Grant: true}})
+		}()
+		go func() {
+			defer wg.Done()
+			_ = svc.Answer([]services.PermissionAnswer{{Agent: "testagent", Permission: "config", Grant: false}})
+		}()
+		wg.Wait()
+
+		granted := svc.Granted("testagent", "config")
+		last := c.lastEffect()
+		if granted && last != "apply" {
+			t.Fatalf("round %d: state granted but last executed effect was %q", i, last)
+		}
+		if !granted && last != "remove" {
+			t.Fatalf("round %d: state denied but last executed effect was %q", i, last)
+		}
+	}
 }

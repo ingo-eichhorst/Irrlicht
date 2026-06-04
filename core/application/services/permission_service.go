@@ -360,6 +360,20 @@ func (s *PermissionService) runEffects(effects []pendingEffect) {
 	s.effectMu.Lock()
 	defer s.effectMu.Unlock()
 	for _, e := range effects {
+		// A conflicting answer may have superseded this effect while the
+		// batch waited on effectMu: state mutations serialize under mu,
+		// effect batches under effectMu, and the two orders can differ
+		// when both surfaces answer the same permission near-
+		// simultaneously. Skip stale effects so the executed side effects
+		// always converge to the recorded state — the superseding answer
+		// carries its own effect.
+		s.mu.Lock()
+		current := s.set.Get(e.agentName, e.perm.Key)
+		s.mu.Unlock()
+		if current != e.target {
+			s.log.LogInfo("permissions", "", fmt.Sprintf("%s/%s: skipping stale %s effect (state is now %s)", e.agentName, e.perm.Key, e.target, current))
+			continue
+		}
 		s.runClosureEffect(e)
 		if e.perm.Kind == permission.KindObserve {
 			if e.target == permission.StateGranted {
