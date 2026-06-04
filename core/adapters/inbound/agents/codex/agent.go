@@ -1,6 +1,12 @@
 package codex
 
-import "irrlicht/core/domain/agent"
+import (
+	"irrlicht/core/domain/agent"
+	"irrlicht/core/domain/permission"
+)
+
+// PermissionKeyTranscripts gates all Codex monitoring (issue #570).
+const PermissionKeyTranscripts = "transcripts"
 
 // Codex — circle with >_ terminal prompt. Color picks contrast against
 // the surrounding chrome: near-black on light themes, near-white on dark.
@@ -33,6 +39,19 @@ func Agent() agent.Agent {
 			Dir: sessionsDir(),
 			Parser: agent.JSONLineParser{
 				NewParser: func() agent.LineParser { return &Parser{} },
+			},
+		},
+		Permissions: []agent.Permission{
+			{
+				Key:             PermissionKeyTranscripts,
+				Kind:            permission.KindObserve,
+				Title:           "Read session transcripts",
+				FeatureUnlocked: "Session list, timeline, cost & token metrics",
+				Touches:         "Reads session transcripts under ~/.codex/sessions/",
+				Detail: "Tails *.jsonl session files under ~/.codex/sessions/YYYY/MM/DD/ " +
+					"to derive session state, cost, and token metrics. Read-only — " +
+					"no file is ever modified. Toggling off stops all reading " +
+					"immediately.",
 			},
 		},
 	}

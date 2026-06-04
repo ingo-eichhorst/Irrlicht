@@ -1019,6 +1019,77 @@
       color: var(--muted);
       flex: 1;
     }
+    /* Settings row with a trailing action button (Review permissions…). */
+    .settings-modal .settings-action-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 6px 4px;
+    }
+    .settings-modal .settings-action-btn {
+      font-family: inherit;
+      font-size: 11px;
+      color: var(--text-bright);
+      background: var(--surface-hover);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 4px 10px;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    .settings-modal .settings-action-btn:hover { border-color: var(--working); }
+
+    /* Permission wizard (issue #570) — shares the settings modal chrome. */
+    .permissions-modal .permissions-intro {
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 10px;
+      line-height: 1.45;
+    }
+    .permissions-modal .perm-agent h3 {
+      font-family: var(--font-mono);
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--text-bright);
+      margin: 12px 0 6px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .permissions-modal .perm-agent:first-child h3 { margin-top: 0; }
+    .permissions-modal .perm-detected {
+      font-size: 9px;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--working);
+      border: 1px solid var(--working);
+      border-radius: 3px;
+      padding: 1px 5px;
+    }
+    .permissions-modal .perm-row { padding: 2px 0 6px; }
+    .permissions-modal .perm-details {
+      margin: 2px 0 0 44px;
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .permissions-modal .perm-details summary {
+      cursor: pointer;
+      list-style: none;
+      user-select: none;
+    }
+    .permissions-modal .perm-details summary::-webkit-details-marker { display: none; }
+    .permissions-modal .perm-details[open] summary { color: var(--text); }
+    .permissions-modal .perm-detail-text {
+      margin-top: 4px;
+      padding: 6px 8px;
+      background: var(--surface-hover);
+      border: 1px solid var(--border-subtle);
+      border-radius: 4px;
+      line-height: 1.5;
+      word-break: break-word;
+    }
     .settings-modal .settings-modal-close {
       background: none;
       border: 1px solid var(--border);

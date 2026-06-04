@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"irrlicht/core/domain/lifecycle"
+	"irrlicht/core/domain/permission"
 	"irrlicht/core/domain/session"
 )
 
@@ -54,7 +55,23 @@ const (
 	// client merges the priority into the current bucket of all three
 	// rings using max-priority aggregation.
 	PushTypeHistoryUpgrade = "history_upgrade"
+
+	// PushTypePermissionsUpdated signals that consent state changed
+	// (agent detected, answer applied, or new permission declared). The
+	// envelope carries no payload: clients re-fetch GET /api/v1/permissions
+	// and show or dismiss the wizard accordingly — which is also how the
+	// surface that answered second dismisses live (issue #570).
+	PushTypePermissionsUpdated = "permissions_updated"
 )
+
+// PermissionStore persists the user's per-agent consent answers for the
+// permission wizard (issue #570).
+type PermissionStore interface {
+	// Load returns the persisted set; a missing file yields an empty set
+	// (every declared permission pending).
+	Load() (permission.Set, error)
+	Save(permission.Set) error
+}
 
 // SessionRepository loads, saves, and deletes session state files.
 type SessionRepository interface {

@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -2341,5 +2342,61 @@ func TestSessionDetector_Activity_SubagentCompletion_TransitionsChildToReady(t *
 	child, _ := repo.Load(childID)
 	if child.State != session.StateReady {
 		t.Errorf("child state: got %q, want ready (parent task-notification should transition child)", child.State)
+	}
+}
+
+// TestSessionDetector_SeedFromDisk_ConsentGated verifies the #570 consent
+// gate: persisted sessions of an un-consented adapter must NOT have their
+// transcripts re-read at startup (the upgrade contract — previously
+// monitored agents pause until the wizard is answered), while consented
+// adapters keep the normal seed refresh.
+func TestSessionDetector_SeedFromDisk_ConsentGated(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+	myPID := os.Getpid()
+
+	mk := func(id, adapter string) *session.SessionState {
+		return &session.SessionState{
+			SessionID:      id,
+			State:          session.StateReady,
+			Adapter:        adapter,
+			PID:            myPID,
+			TranscriptPath: "/tmp/" + id + ".jsonl",
+			FirstSeen:      time.Now().Unix(),
+			UpdatedAt:      time.Now().Unix(),
+		}
+	}
+	repo.states["granted-session"] = mk("granted-session", "codex")
+	repo.states["pending-session"] = mk("pending-session", "claude-code")
+
+	var mu sync.Mutex
+	read := map[string]bool{}
+	metrics := &funcMetrics{
+		fn: func(path, adapter string) (*session.SessionMetrics, error) {
+			mu.Lock()
+			read[path] = true
+			mu.Unlock()
+			return nil, nil
+		},
+	}
+
+	det := newDetectorWithMetrics(tw, pw, repo, metrics)
+	det.SetConsentGate(func(adapter string) bool { return adapter == "codex" })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !read["/tmp/granted-session.jsonl"] {
+		t.Error("consented adapter's transcript was not refreshed at seed")
+	}
+	if read["/tmp/pending-session.jsonl"] {
+		t.Error("un-consented adapter's transcript was read at seed — consent gate bypassed")
 	}
 }

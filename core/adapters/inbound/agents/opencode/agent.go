@@ -2,8 +2,12 @@ package opencode
 
 import (
 	"irrlicht/core/domain/agent"
+	"irrlicht/core/domain/permission"
 	"irrlicht/core/domain/session"
 )
+
+// PermissionKeyDatabase gates all OpenCode monitoring (issue #570).
+const PermissionKeyDatabase = "database"
 
 // OpenCode — curly braces { } in a circle, rendered in OpenCode's brand blue.
 // Background swaps for theme so the icon doesn't blow out against light or
@@ -46,6 +50,19 @@ func Agent() agent.Agent {
 				panic("opencode.Agent().Source.PathForPID: resolver not installed")
 			},
 			Reader: metricsReader{},
+		},
+		Permissions: []agent.Permission{
+			{
+				Key:             PermissionKeyDatabase,
+				Kind:            permission.KindObserve,
+				Title:           "Read session database",
+				FeatureUnlocked: "Session list, timeline, cost & token metrics",
+				Touches:         "Reads ~/.local/share/opencode/opencode.db (read-only polling)",
+				Detail: "Polls OpenCode's SQLite database at " +
+					"~/.local/share/opencode/opencode.db in read-only mode to derive " +
+					"session state, cost, and token metrics. No row is ever written. " +
+					"Toggling off stops all polling immediately.",
+			},
 		},
 	}
 }

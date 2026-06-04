@@ -81,6 +81,13 @@ type SessionDetector struct {
 	broadcaster outbound.PushBroadcaster // optional
 	version     string                   // daemon version stamped on new sessions
 
+	// merged is the fan-in channel every per-watcher drain goroutine sends
+	// into and Run consumes. Created at construction (not in Run) so
+	// watchers can be registered via AddWatcher before or after Run starts
+	// — the consent wizard grants/revokes monitoring at any time (#570).
+	// Never closed; Run exits on ctx cancellation instead.
+	merged chan identifiedEvent
+
 	enricher       *metadataEnricher
 	pidMgr         *PIDManager
 	costTracker    outbound.CostTracker    // optional; nil = disabled
@@ -146,6 +153,14 @@ type SessionDetector struct {
 	bgMu      sync.Mutex
 	bgLive    map[string]bool
 	bgProbing map[string]bool
+
+	// consentGate (optional) reports whether an adapter's transcripts may
+	// be read (#570). Gates the two paths that read PERSISTED sessions'
+	// transcripts outside the (already consent-gated) watcher pipeline:
+	// the startup seed and the stale-working refresh. Nil = allow all —
+	// tests and replay tooling that construct detectors directly are not
+	// consent-managed.
+	consentGate func(adapter string) bool
 }
 
 // NewSessionDetector creates a SessionDetector with all required
@@ -177,6 +192,7 @@ func NewSessionDetector(
 	}
 	det := &SessionDetector{
 		watchers:          watchers,
+		merged:            make(chan identifiedEvent, 16),
 		repo:              repo,
 		log:               log,
 		broadcaster:       broadcaster,
@@ -255,6 +271,18 @@ func (d *SessionDetector) SetLauncherEnvReader(fn LauncherEnvReader) {
 	d.pidMgr.SetLauncherEnvReader(fn)
 }
 
+// SetConsentGate installs the per-adapter observe-consent check (#570).
+// Call before Run. Production wires PermissionService.ObserveGranted; nil
+// (the default) allows everything.
+func (d *SessionDetector) SetConsentGate(fn func(adapter string) bool) {
+	d.consentGate = fn
+}
+
+// observeAllowed reports whether the adapter's transcripts may be read.
+func (d *SessionDetector) observeAllowed(adapter string) bool {
+	return d.consentGate == nil || d.consentGate(adapter)
+}
+
 // recordCost is a helper that calls the optional CostTracker and logs but
 // does not propagate errors — cost tracking must never block the detector.
 func (d *SessionDetector) recordCost(state *session.SessionState) {
@@ -286,7 +314,46 @@ func (d *SessionDetector) record(ev lifecycle.Event) {
 	d.recorder.Record(ev)
 }
 
-// Run subscribes to all Watcher event streams, fans them into a single
+// AddWatcher registers a watcher with the running (or not-yet-running)
+// detector: a drain goroutine subscribes to the watcher's events and fans
+// them into the merged channel until ctx is cancelled. The caller owns the
+// watcher's Watch lifecycle and shares the same ctx, so cancelling it stops
+// both the watcher and its drain — this is how the permission service
+// starts/stops per-agent monitoring on grant/revoke (#570).
+//
+// Panics on a zero-value Identity, matching the NewSessionDetector contract.
+func (d *SessionDetector) AddWatcher(ctx context.Context, w inbound.Watcher) {
+	if w.Identity() == (agent.Identity{}) {
+		panic(fmt.Sprintf("session_detector: AddWatcher(%T) has no Identity — call .WithIdentity() first", w))
+	}
+	go d.drainWatcher(ctx, w)
+}
+
+// drainWatcher subscribes to one watcher and forwards its events (tagged
+// with the watcher's Identity) into the merged channel until ctx is
+// cancelled or the watcher closes the subscription.
+func (d *SessionDetector) drainWatcher(ctx context.Context, w inbound.Watcher) {
+	ch := w.Subscribe()
+	defer w.Unsubscribe(ch)
+	id := w.Identity()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case ev, ok := <-ch:
+			if !ok {
+				return
+			}
+			select {
+			case d.merged <- identifiedEvent{Identity: id, Event: ev}:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}
+}
+
+// Run subscribes to all Watcher event streams, fans them into the merged
 // channel, and processes events until ctx is cancelled. It blocks for the
 // lifetime of the detector.
 //
@@ -295,39 +362,9 @@ func (d *SessionDetector) record(ev lifecycle.Event) {
 // channel; this is how the adapter name reaches handleTranscriptEvent
 // for lifecycle recording and SessionState bootstrap.
 func (d *SessionDetector) Run(ctx context.Context) error {
-	merged := make(chan identifiedEvent, 16)
-	var wg sync.WaitGroup
-
 	for _, w := range d.watchers {
-		ch := w.Subscribe()
-		wg.Add(1)
-		go func(watcher inbound.Watcher, ch <-chan agent.Event) {
-			defer wg.Done()
-			defer watcher.Unsubscribe(ch)
-			id := watcher.Identity()
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case ev, ok := <-ch:
-					if !ok {
-						return
-					}
-					select {
-					case merged <- identifiedEvent{Identity: id, Event: ev}:
-					case <-ctx.Done():
-						return
-					}
-				}
-			}
-		}(w, ch)
+		go d.drainWatcher(ctx, w)
 	}
-
-	// Close merged when all watcher goroutines exit.
-	go func() {
-		wg.Wait()
-		close(merged)
-	}()
 
 	// Seed project sessions map from existing sessions on disk.
 	d.seedFromDisk()
@@ -350,12 +387,7 @@ func (d *SessionDetector) Run(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case idEv, ok := <-merged:
-			if !ok {
-				// Watcher goroutines exited (usually because ctx was cancelled).
-				// Return the context error if set, nil otherwise.
-				return ctx.Err()
-			}
+		case idEv := <-d.merged:
 			d.handleTranscriptEvent(idEv.Identity, idEv.Event)
 		case ev := <-d.debouncedEvents:
 			// Coalesced events from debounce timers — process in the event

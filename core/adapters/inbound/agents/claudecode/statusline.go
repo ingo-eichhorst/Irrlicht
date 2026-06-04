@@ -67,10 +67,19 @@ type RateLimitTarget interface {
 // empty body on success; on bad input or missing transcript_path it returns
 // the appropriate 4xx. It never blocks: target.IngestRateLimit is a no-op
 // when the session hasn't been seen yet, so the handler returns immediately.
-func NewStatuslineHandler(target RateLimitTarget, log outbound.Logger) http.HandlerFunc {
+//
+// gate is the consent check for the "statusline" permission; while not
+// granted the payload is dropped with 200. A nil gate means no gating —
+// used by tests.
+func NewStatuslineHandler(target RateLimitTarget, gate ConsentGate, log outbound.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		if gate != nil && !gate.Granted(AdapterName, PermissionKeyStatusline) {
+			w.WriteHeader(http.StatusOK)
 			return
 		}
 

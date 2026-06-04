@@ -591,6 +591,14 @@ func (d *SessionDetector) refreshStaleSessions() {
 		if state.TranscriptPath == "" {
 			continue
 		}
+		// Consent-gated per adapter (#570): this refresh re-reads the
+		// transcript independently of the (gated) watcher pipeline. After
+		// a revoke, persisted working sessions would otherwise keep being
+		// re-read and re-broadcast every tick — "existing sessions stop
+		// updating" must hold.
+		if !d.observeAllowed(state.Adapter) {
+			continue
+		}
 		if now.Sub(time.Unix(state.UpdatedAt, 0)) < staleWorkingRefreshInterval {
 			continue
 		}

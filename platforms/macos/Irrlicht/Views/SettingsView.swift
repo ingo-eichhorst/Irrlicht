@@ -5,6 +5,9 @@ import UserNotifications
 
 struct SettingsView: View {
     @Binding var isPresented: Bool
+    /// Opens the permission wizard in review mode (issue #570). Wired by
+    /// SessionListView, which owns the panel-body swap.
+    var onReviewPermissions: () -> Void = {}
     @EnvironmentObject var updateManager: UpdateManager
     @EnvironmentObject var sessionManager: SessionManager
     @AppStorage("debugMode") private var debugMode: Bool = false
@@ -215,6 +218,23 @@ struct SettingsView: View {
                             relayURLDraft = "ws://localhost:7839"
                         }
                         commitRelayURL()
+                    }
+
+                    Divider()
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 6) {
+                            Text("Permissions")
+                                .font(.subheadline)
+                                .fontWeight(.medium)
+                            InfoIcon(text: "Everything irrlicht may read or modify, per agent. Toggling a grant off undoes the modification and stops all reading.")
+                            Spacer()
+                        }
+                        Button("Review agent permissions…") {
+                            onReviewPermissions()
+                        }
+                        .controlSize(.small)
+                        .tooltip("Open the per-agent permission toggles")
                     }
 
                     Divider()
@@ -546,7 +566,8 @@ private struct NotificationEventRow: View {
 /// Left-aligned switch + label, rendered by `IrrlichtSwitchToggleStyle`.
 /// An optional `info` string adds a hover-reveal ⓘ next to the label so the
 /// explanation doesn't cost a permanent block of caption text below the row.
-private struct LeadingToggle: View {
+/// Internal (not private): PermissionWizardView reuses it.
+struct LeadingToggle: View {
     @Binding var isOn: Bool
     let label: String
     var info: String? = nil
@@ -565,7 +586,8 @@ private struct LeadingToggle: View {
 
 /// Small ⓘ affordance: reveals a one-line explainer on hover instead of
 /// spending vertical space on a caption paragraph under every control.
-private struct InfoIcon: View {
+/// Internal (not private): PermissionWizardView reuses it.
+struct InfoIcon: View {
     let text: String
 
     var body: some View {
@@ -581,7 +603,8 @@ private struct InfoIcon: View {
 /// white knob. Replaces `ToggleStyle.switch` because macOS's NSSwitch-backed
 /// switch ignores `.tint(_:)` — its on color is locked to the system accent.
 /// Drawing the pill ourselves makes the color independent of System Settings.
-private struct IrrlichtSwitchToggleStyle: ToggleStyle {
+/// Internal (not private): PermissionWizardView applies it too.
+struct IrrlichtSwitchToggleStyle: ToggleStyle {
     func makeBody(configuration: Configuration) -> some View {
         HStack(spacing: 8) {
             ZStack(alignment: configuration.isOn ? .trailing : .leading) {

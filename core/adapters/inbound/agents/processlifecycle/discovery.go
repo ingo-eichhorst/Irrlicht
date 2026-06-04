@@ -4,7 +4,28 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"irrlicht/core/domain/agent"
 )
+
+// HasLiveProcess reports whether at least one running process matches m.
+// It is the always-on detection primitive behind the consent wizard
+// (issue #570): pure observation through the ProcessObserver seam, with
+// no session side-effects — unlike the Scanner, which emits proc-<pid>
+// pre-sessions and is therefore permission-gated.
+func HasLiveProcess(m agent.ProcessMatcher) bool {
+	var pids []int
+	var err error
+	switch v := m.(type) {
+	case agent.ExactName:
+		pids, err = osProc.FindByName(v.Name)
+	case agent.CommandPattern:
+		pids, err = osProc.FindByCmdline(v.Regex.String())
+	default:
+		return false
+	}
+	return err == nil && len(pids) > 0
+}
 
 // DiscoverPIDByCWD finds a process by exact name whose CWD matches the given
 // directory. When multiple processes match, disambiguate selects one.

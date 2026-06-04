@@ -155,8 +155,16 @@ func (d *SessionDetector) seedFromDisk() {
 	// that stale persisted metrics from an older daemon version (e.g. pre-
 	// PR #110 codex cumulative token counts) are overwritten with a fresh
 	// recomputation under the current parser.
+	//
+	// Consent-gated per adapter (#570): RefreshMetrics re-reads the
+	// transcript file, which a pending/denied observe permission forbids —
+	// the upgrade contract is that previously monitored agents pause until
+	// the wizard is answered. Un-consented sessions stay persisted as-is.
 	for _, state := range states {
 		if state.TranscriptPath == "" {
+			continue
+		}
+		if !d.observeAllowed(state.Adapter) {
 			continue
 		}
 		d.enricher.RefreshMetrics(state)
@@ -192,8 +200,15 @@ func (d *SessionDetector) seedFromDisk() {
 	}
 
 	// Backfill ProjectName / CWD / GitBranch for sessions that were saved
-	// before these fields were populated.
-	for _, state := range d.enricher.BackfillMetadata(states) {
+	// before these fields were populated. Same consent gate as above —
+	// BackfillMetadata reads transcripts (GetCWDFromTranscript).
+	allowed := states[:0:0]
+	for _, state := range states {
+		if d.observeAllowed(state.Adapter) {
+			allowed = append(allowed, state)
+		}
+	}
+	for _, state := range d.enricher.BackfillMetadata(allowed) {
 		state.UpdatedAt = time.Now().Unix()
 		if err := d.repo.Save(state); err != nil {
 			d.log.LogError("session-detector-seed", state.SessionID,
