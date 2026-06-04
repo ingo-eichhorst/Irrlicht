@@ -121,7 +121,7 @@ func runScenario(t *testing.T, scenarioDir string) {
 	if !c.Detected() {
 		t.Fatalf("collector did not detect scratch GT_ROOT %s", gtRoot)
 	}
-	p := newPoller(c, fakeGT, time.Second, &fakeSessionLister{sessions: sessions})
+	p := newPoller(c, fakeGT, &fakeSessionLister{sessions: sessions})
 
 	goldenDir := filepath.Join(scenarioDir, "golden")
 	if *updateGoldens {

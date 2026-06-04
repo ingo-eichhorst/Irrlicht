@@ -189,10 +189,12 @@ class SessionManager: ObservableObject {
         self.instancesPath = supportPath.appendingPathComponent("instances")
         self.orderFilePath = supportPath.appendingPathComponent("session-order.json")
 
-        // Out-of-the-box defaults. Notifications: all three events enabled,
-        // each with a distinguishable sound (Ready=Funk, Waiting=Ping,
-        // Context=Sosumi). Login item: opt the user in on first launch, with
-        // the gate flag tracking that we've applied the default once.
+        // Out-of-the-box defaults. Notifications: all three events disabled —
+        // the macOS permission prompt only appears when the user first switches
+        // one on in Settings (#425). Sounds stay pre-picked so enabling an
+        // event is one click (Ready=Funk, Waiting=Ping, Context=Sosumi).
+        // Login item: opt the user in on first launch, with the gate flag
+        // tracking that we've applied the default once.
         // register(defaults:) only seeds unset keys, so it never overrides a
         // user who has explicitly picked something else.
         var defaultsSeed: [String: Any] = [
@@ -205,7 +207,7 @@ class SessionManager: ObservableObject {
             "relayServerURL": "",
         ]
         for event in NotificationEvent.allCases {
-            defaultsSeed[event.enabledKey] = true
+            defaultsSeed[event.enabledKey] = false
             defaultsSeed[event.soundKey] = event.defaultSound.rawValue
         }
         UserDefaults.standard.register(defaults: defaultsSeed)
@@ -222,7 +224,7 @@ class SessionManager: ObservableObject {
         Task {
             loadSessionOrder()
             loadProjectGroupOrder()
-            requestNotificationPermission()
+            setupNotificationDelegate()
             self.sourcesSettingsChanged()
             self.startProjectCostsPolling()
         }
@@ -1277,12 +1279,15 @@ class SessionManager: ObservableObject {
         return Bundle.main.bundleURL.pathExtension == "app"
     }
 
-    private func requestNotificationPermission() {
+    /// Registers the notification click-forwarder delegate. Does NOT request
+    /// macOS notification authorization — events default to off, and the
+    /// permission prompt fires from Settings when the user first switches a
+    /// notification on (#425, `SettingsView.checkNotificationAuth`).
+    private func setupNotificationDelegate() {
         guard canUseUserNotifications else {
             print("⚠️ Skipping notification setup outside app bundle")
             return
         }
-        let center = UNUserNotificationCenter.current()
 
         // Register the click-forwarder delegate before the first notification
         // is scheduled, otherwise macOS drops notification taps silently.
@@ -1294,62 +1299,7 @@ class SessionManager: ObservableObject {
                 focusMonitor: focusMonitor
             )
             notificationForwarder = forwarder
-            center.delegate = forwarder
-        }
-        center.getNotificationSettings { settings in
-            switch settings.authorizationStatus {
-            case .notDetermined:
-                // LSUIElement apps can't show the permission prompt — temporarily
-                // become a regular app with a visible window so macOS presents the dialog.
-                DispatchQueue.main.async {
-                    Self.requestWithTemporaryWindow(center: center)
-                }
-            case .authorized, .provisional, .ephemeral:
-                print("✅ Notification permission already granted")
-            case .denied:
-                print("⚠️ Notification permission denied — user can re-enable in System Settings")
-            @unknown default:
-                break
-            }
-        }
-    }
-
-    /// Temporarily becomes a regular app with a visible window so macOS will present
-    /// the notification permission dialog. Restores LSUIElement behavior afterwards.
-    /// Note: ad-hoc signed dev builds won't get the prompt — macOS silently denies them.
-    /// The dialog works correctly with Developer ID / notarized builds (release flow).
-    private static func requestWithTemporaryWindow(center: UNUserNotificationCenter) {
-        NSApp.setActivationPolicy(.regular)
-
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 340, height: 80),
-            styleMask: [.titled],
-            backing: .buffered,
-            defer: false
-        )
-        window.title = "Irrlicht — Notification Setup"
-        window.center()
-        window.isReleasedWhenClosed = false
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
-
-        // Give LaunchServices time to register the policy change and window
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-            center.requestAuthorization(options: [.alert, .sound]) { granted, error in
-                DispatchQueue.main.async {
-                    window.close()
-                    NSApp.setActivationPolicy(.accessory)
-                }
-                if granted {
-                    print("✅ Notification permission granted")
-                } else if let error = error {
-                    print("⚠️ Notification permission denied: \(error.localizedDescription)")
-                    print("ℹ️ Enable notifications in System Settings → Notifications → Irrlicht")
-                } else {
-                    print("⚠️ Notification permission denied")
-                    print("ℹ️ Enable notifications in System Settings → Notifications → Irrlicht")
-                }
-            }
+            UNUserNotificationCenter.current().delegate = forwarder
         }
     }
 

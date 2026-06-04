@@ -393,7 +393,7 @@ func main() {
 		if gtWatchCancel != nil {
 			return nil
 		}
-		gtAdapter := gastownadapter.NewAdapter(gtResolver.Path(), 5*time.Second, cachedRepo)
+		gtAdapter := gastownadapter.NewAdapter(gtResolver.Path(), cachedRepo)
 		if !gtAdapter.Detected() {
 			logger.LogInfo("permissions", "", "gastown granted but no Gas Town root detected — nothing to watch")
 			return nil
@@ -485,13 +485,16 @@ func main() {
 	if !demoMode {
 		hasLive = processlifecycle.HasLiveProcess
 	}
-	// The consent catalog is the agent adapters plus two daemon-wide
+	// The consent catalog is the agent adapters plus three daemon-wide
 	// entries with no Source/Process axes: the Gas Town orchestrator
-	// (reads ~/gt) and launcher-identity capture (reads whitelisted env
-	// vars from agent processes for click-to-focus).
+	// (reads ~/gt), launcher-identity capture (reads whitelisted env
+	// vars from agent processes for click-to-focus), and the kitty
+	// remote-control config patch (writes kitty.conf for tab-precise
+	// click-to-focus, #425).
 	permissionAgents := append(append([]agent.Agent{}, allAgents...),
 		gastownadapter.PermissionDeclaration(startGastown, stopGastown),
-		processlifecycle.LauncherPermissionDeclaration())
+		processlifecycle.LauncherPermissionDeclaration(),
+		processlifecycle.KittyPermissionDeclaration())
 	permService := services.NewPermissionService(
 		permissionAgents, permStore, push, logger,
 		cfg.PermissionMode, detector, watcherFactories, hasLive,
@@ -511,6 +514,9 @@ func main() {
 		}
 		return false
 	})
+	// kitty is a host integration, not an agent: detected by a live kitty
+	// process or an existing kitty config directory.
+	permService.SetDetectionProbe(processlifecycle.KittyName, processlifecycle.KittyDetected)
 
 	// Capture terminal/IDE identity at first PID assignment so the menu-bar
 	// app can jump back to the launching terminal on row/notification click.
