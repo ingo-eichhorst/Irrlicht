@@ -2335,7 +2335,10 @@ func TestSessionDetector_Activity_SubagentCompletion_TransitionsChildToReady(t *
 		TranscriptPath: parentTranscript,
 	}
 
-	time.Sleep(50 * time.Millisecond)
+	// Poll instead of a fixed sleep: under full-suite -race load the Run
+	// loop can take >50ms to process the event, and cancelling too early
+	// kills the detector before the transition lands (#578).
+	waitForSessionState(repo, childID, session.StateReady, 3*time.Second)
 	cancel()
 	<-done
 
