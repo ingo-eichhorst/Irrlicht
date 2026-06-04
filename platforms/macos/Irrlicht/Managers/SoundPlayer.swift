@@ -68,15 +68,17 @@ enum SoundPlayer {
 
     /// Resolves a SpokenVoice to a concrete AVSpeechSynthesisVoice. Picks
     /// the highest-installed quality (premium > enhanced > default) for the
-    /// canonical name, so once the user downloads Ava-Premium / Tom-Premium
-    /// in System Settings the upgrade is automatic. Falls back to the
-    /// system en-US voice when no name match exists at all.
+    /// canonical name, so once the user downloads Zoe/Jamie Premium in
+    /// System Settings the upgrade is automatic. Matching goes through
+    /// `SpokenVoice.matches(installedName:)` because newer macOS reports
+    /// names with the quality suffixed ("Zoe (Premium)"). Falls back to
+    /// the system en-US voice when no name match exists at all.
     static func voice(for spoken: SpokenVoice) -> AVSpeechSynthesisVoice? {
-        guard let name = spoken.canonicalName else {
+        guard spoken.canonicalName != nil else {
             return AVSpeechSynthesisVoice(language: "en-US")
         }
         if let best = AVSpeechSynthesisVoice.speechVoices()
-            .filter({ $0.name == name })
+            .filter({ spoken.matches(installedName: $0.name) })
             .max(by: { $0.quality.rawValue < $1.quality.rawValue }) {
             return best
         }
