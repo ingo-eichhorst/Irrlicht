@@ -61,13 +61,13 @@ func main() {
 		}
 
 		sessions = filterSessions(sessions, f)
-		sort.Slice(sessions, func(i, j int) bool {
+		sort.SliceStable(sessions, func(i, j int) bool {
 			return sessions[i].UpdatedAt > sessions[j].UpdatedAt
 		})
 		groups := session.BuildDashboard(sessions, nil)
 
-		if watch {
-			fmt.Print("\033[H\033[2J") // clear screen
+		if watch && format != "json" {
+			fmt.Print("\033[H\033[2J") // clear screen — never into a JSON stream
 		}
 
 		if format == "json" {

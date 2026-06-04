@@ -67,6 +67,18 @@ func adapterName(s *session.SessionState) string {
 	return s.Adapter
 }
 
+// sanitizeTerminal strips control characters (ANSI/OSC escapes, BEL, …)
+// from transcript-derived text so agent output cannot inject terminal
+// sequences into the user's terminal.
+func sanitizeTerminal(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, s)
+}
+
 func shortID(id string) string {
 	if len(id) > 8 {
 		return id[:8]
@@ -113,7 +125,7 @@ func renderAgent(w io.Writer, a *session.Agent, depth int, useColor bool) {
 
 	detailIndent := indent + "    "
 	if a.State == session.StateWaiting && a.Metrics != nil && a.Metrics.LastAssistantText != "" {
-		text := strings.Join(strings.Fields(a.Metrics.LastAssistantText), " ")
+		text := sanitizeTerminal(strings.Join(strings.Fields(a.Metrics.LastAssistantText), " "))
 		fmt.Fprintf(w, "%s? %s\n", detailIndent, text)
 	}
 	if a.Metrics != nil && len(a.Metrics.Tasks) > 0 {

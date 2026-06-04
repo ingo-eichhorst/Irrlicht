@@ -183,6 +183,23 @@ func TestRenderGroupsWaitingQuestion(t *testing.T) {
 	}
 }
 
+// Transcript-derived text must not smuggle terminal escapes into the output.
+func TestWaitingQuestionStripsControlChars(t *testing.T) {
+	s := fixture("wait-12345678", session.StateWaiting, "proj")
+	s.Metrics = &session.SessionMetrics{
+		LastAssistantText: "evil \x1b]52;c;cGF5bG9hZA==\x07 title \x1b[31mred?",
+	}
+
+	out := render(t, []*session.SessionState{s}, false)
+
+	if strings.ContainsAny(out, "\x1b\x07") {
+		t.Errorf("output contains control characters:\n%q", out)
+	}
+	if !strings.Contains(out, "? evil ]52;c;cGF5bG9hZA== title [31mred?") {
+		t.Errorf("sanitized question text mangled beyond control-char removal:\n%s", out)
+	}
+}
+
 func TestRenderGroupsTaskProgress(t *testing.T) {
 	s := fixture("task-12345678", session.StateWorking, "proj")
 	s.Metrics = &session.SessionMetrics{Tasks: []session.Task{
