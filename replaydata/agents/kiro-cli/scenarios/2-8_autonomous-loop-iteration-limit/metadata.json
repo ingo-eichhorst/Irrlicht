@@ -1,0 +1,100 @@
+{
+  "scenario_id": "autonomous-loop-iteration-limit",
+  "metadata": {
+    "agent_supports": "partial",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "2.5.1",
+    "daemon_version": "0.4.8+9598e19.dirty",
+    "confidence": 0.8,
+    "notes": "agent_supports: partial — no native autonomous loop AND no native per-turn iteration cap; the bounded internal loop hits its self-imposed limit and ends in a single text-only AssistantMessage (turn end → ready), then dwells.\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "autonomous-loop-iteration-limit",
+      "agent": "kiro-cli",
+      "assessed_at": "2026-06-05T00:00:00Z",
+      "agent_supports": "partial",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: partial\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nThis cell is the termination twin of the kiro-cli `autonomous-loop` cell (just assessed: agent=partial — no native self-prompting loop; the loop is INTERNAL to one user turn). The scenario asserts only the graceful-termination SHAPE: a loop runs a few iterations, then STOPS at its limit, and the session resolves to `ready` cleanly rather than sticking in `working` (acceptance: `working → ready`; reaches `ready` even though the agent didn't fully succeed; does not stick in `working`; final state `ready`; at least 2 turns).\n\n**agent=partial — for TWO compounding reasons.** First, as in the autonomous-loop sibling, kiro-cli (2.5.1) ships NO built-in autonomous self-prompting loop: a strings scan of `kiro-cli-chat` returns ZERO hits for `/goal`, `autonomous_mode`, `goal_status`, `activeGoal`, `reprompt`/`self-prompt`, or `full-auto`. Second — and specific to THIS scenario — kiro-cli has NO native per-turn ITERATION CAP that halts a chat loop with a distinct cap-hit signal. The strings scan DOES surface `max_iterations`, but only as a field of `LoopConfig` inside the `Agent`/`AgentCrew`/`PipelineStage` MULTI-AGENT pipeline config (sibling fields `target`, `trigger`, `loop_to`, `NEEDS_CHANGES` stage routing, `loop_iteration`/`loop_max_iterations` on `ConversationState`) — a stage-pipeline orchestration construct in `.kiro` agent-crew configs, NOT a per-turn cycle cap reachable from a `kiro-cli chat` session. The chat turn's per-turn telemetry carries `number_of_cycles`/`total_request_count` (in the `<uuid>.json` sidecar `UserTurnMetadata`), but these only COUNT cycles; there is NO terminal cap-hit reason or message: the turn-end reason enum is `UserTurnEnd | ToolUseRejected | Cancelled | Error | Rewind`, with no \"maximum cycles/iterations reached\" variant and no \"too many tool uses\"/\"hit the limit\" termination string anywhere in the binary. So kiro-cli cannot enforce — or signal — its own max-iteration cap in a chat session.\n\nWhat kiro-cli CAN model — and what scenario 2.8's Essence actually targets for an adapter without native autonomy or a native cap — is the graceful-termination shape: a bounded internal loop runs a few tool cycles within one user turn and then STOPS, with the session settling to `ready` and DWELLING there with no spurious post-limit `working` flip. As in the autonomous-loop sibling, the loop is INTERNAL to a single seeded multi-step prompt (FINDINGS.md §5: `Prompt → AM(text+toolUse) → ToolResults → … → AM(text-only)`). The \"iteration limit\" is modeled by asking the agent for a small, EXPLICITLY-BOUNDED number of sequential steps (\"do exactly N steps, then stop\"): the agent works through its self-imposed cap and ends in a final text-only AssistantMessage. This mirrors how the codex iteration-limit sibling relaxed the spec — codex too lacks a native cap, so its 'limit' is modeled by the driver simply not feeding a further prompt; kiro-cli's loop differs in being INTERNAL to one turn, so the bound is expressed IN the prompt and the agent self-terminates at it.\n\n**daemon=full.** The observability is identical to the autonomous-loop sibling and the best of the three iteration-limit siblings for the spec's strict bullet: because kiro-cli's iterations live inside ONE turn, the daemon observes a SINGLE continuous `working` span across all internal tool cycles, then exactly one `working → ready` at the cap (the final text-only AssistantMessage). parser.go maps every mid-turn AssistantMessage carrying `toolUse` blocks to `assistant` (non-empty `toolUses` → `ev.EventType = \"assistant\"`, keeps working), every `ToolResults` to `tool_result` (keeps working), and ONLY the final text-only AssistantMessage (empty `toolUses`) to `turn_done`; the state_classifier keeps the session `working` for `assistant`/`tool_result` and turns `turn_done` (no open question) into `working → ready`. So the cap-hit observable IS the single terminal `working → ready`. The DISTINGUISHING assertion vs the autonomous-loop sibling is the terminal idle DWELL: after that terminal `working → ready`, a long trailing idle window during which the state DWELLS in `ready` with the invariant of NO further `state_transition` to `working` — proving the loop stopped at its limit and did not stick in working or spuriously re-prompt. No `waiting` arises under `--trust-all-tools` (tools auto-approved).\n\n**driver=ready.** The recipe needs only `send`, `wait_turn`, and `sleep`; all three are in the driver's `DRIVE_ELICITS=\"send slash wait_turn sleep\"`, so no step type must be ported. `wait_turn` blocks on the transcript's text-only-AssistantMessage count, so it returns exactly when the bounded internal loop terminates (the cap), not on any mid-turn tool cycle; the trailing `sleep` realizes the dwell window.\n\n## What irrlicht does NOT see (narrow, not a spec failure)\n\nkiro-cli's JSONL carries NO model/token/cost (those live only in the `<uuid>.json` sidecar the v1 adapter does not read), so observations assert agent identity but NOT model/cost/tokens nonzero. There is no native iteration-count/`goal_status` attachment to surface as an \"iteration 3/N\" cap counter in a chat session — `max_iterations` is a multi-agent-pipeline `LoopConfig` field, not a chat construct, same as codex. Neither is a spec-required observable.",
+      "caveats": [
+        "kiro-cli has NEITHER a native autonomous self-prompting loop NOR a native per-turn iteration cap in chat. The `max_iterations` string in the binary is a multi-agent `LoopConfig`/`AgentCrew`/`PipelineStage` field (stage-pipeline `loop_to`/`trigger`/`NEEDS_CHANGES` routing), not a chat per-turn cycle cap; `number_of_cycles`/`total_request_count` only COUNT cycles and the turn-end reason enum has no cap-hit variant (`UserTurnEnd|ToolUseRejected|Cancelled|Error|Rewind`). The 'iteration limit' is modeled by an explicitly-bounded multi-step prompt the agent self-terminates at. The recording models the graceful-termination SHAPE, not kiro enforcing/signalling its own cap. Documented in the recipe so a re-record diff doesn't read as a regression.",
+        "Like the autonomous-loop sibling and unlike the claudecode (/goal Stop-hook flicker) and codex (per-turn externally-fed cycling) siblings, kiro-cli's bounded internal loop stays in ONE continuous working span — so the cap-hit lands as a single terminal `working → ready` at the final text-only AssistantMessage. The DISTINGUISHING assertion vs the autonomous-loop sibling is the terminal idle DWELL: a long final sleep with the invariant of no further `state_transition` to `working`, proving the session settles to ready and stays there after the limit is reached.",
+        "kiro-cli's JSONL has no model/token/cost (sidecar-only); the spec asserts agent identity in observations but NOT model/cost/tokens nonzero (they would be empty/zero and fail). A sidecar MetricsReader is a documented future enhancement (FINDINGS.md §4).",
+        "daemon=full is PROVISIONAL on emission until the live record run: it rests on a doc/code read of the parser + state classifier (mid-turn assistant/tool_result keep working; text-only AssistantMessage → turn_done) plus the turn-end-reason strings scan, not a captured multi-tool-cycle events.jsonl. record promotes it from provisional to settled — in particular that the agent reliably runs >= 2 internal tool cycles before the final text-only message and then DWELLS in ready with no post-limit working flip."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Applications/Kiro CLI.app/Contents/MacOS/kiro-cli-chat (strings extraction)",
+          "note": "ZERO hits for /goal, autonomous_mode, goal_status, full-auto, reprompt/self-prompt (no native autonomous loop). `max_iterations` appears ONLY as a LoopConfig field of Agent/AgentCrew/PipelineStage (siblings target, trigger, loop_to, NEEDS_CHANGES, loop_iteration/loop_max_iterations on ConversationState) — a multi-agent stage-pipeline construct, not a chat per-turn cycle cap. Turn-end reason enum is UserTurnEnd|ToolUseRejected|Cancelled|Error|Rewind with NO cap-hit variant and no 'maximum cycles/iterations reached' / 'too many tool uses' termination string. Confirms agent=partial (no native autonomy AND no native chat iteration cap)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/parser.go",
+          "note": "Mid-turn AssistantMessage with toolUse blocks -> EventType 'assistant' (keeps working); ToolResults -> 'tool_result' (keeps working); text-only AssistantMessage (empty toolUses) -> 'turn_done' (ready). This is why the bounded internal loop is ONE continuous working span with the cap-hit landing as a single terminal working -> ready."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go",
+          "note": "assistant and tool_result events keep the session working; turn_done with no open question -> working -> ready. Grounds the continuous-working observation across internal tool cycles and the single terminal ready at the cap."
+        },
+        {
+          "kind": "file",
+          "ref": ".build/refresh/kiro-cli-smoke/FINDINGS.md",
+          "note": "§5: live 2.5.1 turn shape Prompt -> AM(text+toolUse) -> ToolResults -> AM(text+toolUse) -> ToolResults -> AM(text-only); the final text-only AM is turn_done. §4: JSONL has no model/token/cost; sidecar has number_of_cycles/total_request_count but input/output_token_count are 0. §7: --trust-all-tools auto-approves tools (no waiting gate)."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/kiro-cli/scenarios/2-7_autonomous-loop/metadata.json",
+          "note": "Autonomous-loop sibling (just assessed: agent=partial, daemon=full, driver=ready). This cell is its termination twin: same internal-loop observability, plus the terminal idle DWELL asserting no post-limit working flip."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/codex/scenarios/2-8_autonomous-loop-iteration-limit/metadata.json",
+          "note": "Cross-agent iteration-limit sibling (recorded 8/8): codex also lacks a native cap, so its 'limit' is modeled by the driver simply not feeding a further prompt, with a terminal idle dwell asserting no post-limit working transition. kiro-cli differs in that its loop is INTERNAL to one turn (bound expressed in the prompt; single terminal working->ready), but the terminal-dwell assertion is the same."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "kiro-cli 2.5.1 on PATH and authenticated (subscription auth; --trust-all-tools assumes persisted trust-all consent so no per-tool picker stalls the run)",
+        "irrlichd is in --record mode with IRRLICHT_PERMISSION_MODE=grant-all",
+        "no other kiro-cli session shares the recipe's cwd",
+        "kiro-cli has NEITHER a native autonomous self-prompting loop NOR a native per-turn iteration cap in chat; the loop is INTERNAL to one user turn and the 'iteration limit' is modeled by an explicitly-bounded multi-step prompt (do exactly N steps, then stop) the agent self-terminates at"
+      ],
+      "setup": [
+        "Driver launches `kiro-cli chat --trust-all-tools` under tmux in a fresh cwd; kiro mints its own session UUID and writes ~/.kiro/sessions/cli/<uuid>.jsonl lazily after the first prompt (discovered as the newest .jsonl after the launch marker).",
+        "One seeded prompt asks the agent to run a small bounded number of shell commands one at a time and STOP at the limit; the agent iterates internally (AM(toolUse) -> ToolResults -> ... -> AM(text-only)) with no further user input, then ends in a final text-only message.",
+        "After the final text-only AssistantMessage (the cap-hit terminal working -> ready), the driver idles (no further prompt) for a long trailing window so the recording captures the terminal DWELL in ready with no post-limit working flip."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "We are running a small iterative loop with a hard limit of exactly 2 iterations. Iteration 1: run `echo iteration-1`. Iteration 2: run `echo iteration-2`. That is the iteration limit — after iteration 2, STOP. Do exactly these two steps one at a time, checking each output before the next, work through both autonomously without asking me anything, and do NOT run any further iterations. When you have reached the limit, reply with exactly the word: done"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 10
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the session born ready, then ready -> working on the seeded Prompt",
+        "the session stays continuously working across at least 2 internal tool cycles (assistant + tool_result events) with NO working -> ready transition between them — the bounded internal loop is one continuous working span",
+        "exactly one working -> ready transition fires, at the final text-only AssistantMessage (the agent's 'done' reply) — this is the cap-hit terminal transition",
+        "after that terminal working -> ready, the session DWELLS in ready for the entire trailing idle window with NO further state_transition to working — the loop stopped at its limit and did not stick in working or spuriously re-prompt",
+        "no state_transition to waiting (--trust-all-tools auto-approves tools; no permission gates)",
+        "final session state is ready; pid_discovered fired for the session (PID bound via cwd)"
+      ],
+      "settings": {},
+      "timeout_seconds": 180
+    }
+  }
+}

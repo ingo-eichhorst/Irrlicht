@@ -1,0 +1,96 @@
+{
+  "scenario_id": "turn-end-terminal-text",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "2.5.1",
+    "daemon_version": "0.4.8+9598e19",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "turn-end-terminal-text",
+      "agent": "kiro-cli",
+      "assessed_at": "2026-06-05T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nturn-end-terminal-text pins the smallest tool-less round-trip that isolates the TERMINAL-TEXT end signal: the assistant produces a final plain-text message with no tool use and no pending question, and the classifier drives working→ready off the adapter-specific end token. The user-observable signal is exactly the `ready → working → ready` arc reaching `ready` regardless of which adapter-specific signal closes the turn, with ≤ 0 tool calls. It overlaps intentionally with basic-turn but focuses on the end-of-turn mechanism, not the broader happy-path lifecycle.\n\n**agent: yes.** kiro-cli 2.5.1 completes a plain prompt → text reply turn. The live smoke confirms the turn shape `Prompt → AssistantMessage(text-only)`, where the FINAL text-only AssistantMessage of a turn is the turn-end marker (FINDINGS.md §5). A no-tool declarative answer is the simplest case of that sequence — the terminal text IS the text-only AssistantMessage that maps to turn_done.\n\n**daemon: full.** The kiro-cli adapter observes the complete arc and the end-signal mechanism this cell asserts. The `Prompt` event maps to `user_message` (parser.go); because the transcript live-appends turn-by-turn (FINDINGS.md §2) the session flips to `working` the moment the prompt lands. The closing text-only `AssistantMessage` carries NO `toolUse` block, so the parser emits `turn_done` (parser.go lines 76-79), `IsAgentDone()` fires, and classifier rule 2b settles working→ready. The parser sets `ev.AssistantText` from the LAST text block of the AssistantMessage (≤ 200 runes; parser.go lines 62-83), which feeds `SessionMetrics.LastAssistantText`. The classifier's `IsWaitingForUserInput()` (session.go) reads that text and only diverts to `waiting` on a trailing question mark (ExtractQuestionSnippet) or an imperative cue (ExtractWaitingCue). The recipe elicits a DECLARATIVE answer with no trailing `?` and no imperative cue, so the classifier never reads a waiting cue and the turn settles on the ready path — kiro sessions land ready (not waiting) after a plain statement turn (daemon facts, verified live). Tool calls ≤ 0 is satisfied trivially (no toolUse blocks), so the HasOpenToolCall guard never blocks the settle. The canonical end-signal observable the scenario asserts is fully captured.\n\nThe scenario asserts only the state arc + tool-count topology — no token/cost/model criterion — so the kiro-cli JSONL's absence of model/token/cost fields (those live in the `<uuid>.json` sidecar, which the parser deliberately does not read; FINDINGS.md §4, where `input/output_token_count` are 0 even in the sidecar) does NOT touch this verdict. The observations vector still records the daemon's real metric output for this agent: `tokens_nonzero=false`, `cost_nonzero=false`, model unknown — matching the sibling basic-turn / session-start cells.\n\n**driver: ready.** The recipe needs only `send`, `wait_turn`, `sleep`. driver-interactive.sh's semantic `DRIVE_ELICITS=\"send slash wait_turn sleep\"` lists all three as genuinely ported (line 86), so recipe-lint passes with no gap. An INTERACTIVE recipe is mandatory: kiro-cli's headless `--no-interactive` mode writes NO session file and is invisible to the daemon (FINDINGS.md §7), and the TUI process must outlive the daemon's observation window so the working→ready settle is observed as a distinct arc (a short trailing sleep after wait_turn holds the REPL alive). Launch is `kiro-cli chat --trust-all-tools`.\n\nConfidence 0.85 (not higher): the working→ready settle and the lazy-transcript timing are a provisional parser+adapter read for kiro-cli specifically — in particular that kiro actually EMITS a text-only final AssistantMessage for a no-tool declarative turn (not one carrying a stray toolUse). The live recording in `record` promotes this from provisional to settled.",
+      "caveats": [
+        "Overlaps heavily with basic-turn. The two cells differ in intent: basic-turn asserts the overall happy-path lifecycle (session detection + ready→working→ready + token criterion); turn-end-terminal-text specifically asserts that the terminal-text end signal closes the turn with no tool call and no pending question. The recipe is a deliberately tool-less prompt eliciting a plain declarative answer with NO trailing question mark, to keep the cell focused on the end-of-turn mechanism.",
+        "The scenario intent allows a waiting settle if the classifier reads a trailing cue. Eliciting a declarative answer with NO trailing question mark and NO imperative cue keeps the turn on the ready path (IsWaitingForUserInput reads ev.AssistantText, set from the last text block of the AssistantMessage); if a future kiro-cli release added a terminal-text waiting heuristic this cell would surface it as drift.",
+        "kiro-cli writes its <uuid>.jsonl lazily — only after the first prompt lands (FINDINGS.md §2, §7). The on-time ready birth is satisfied by the pre-session (proc-<PID>) row; the UUID-keyed session reconciles in once the transcript appears on first input, and the working→ready arc then plays out on the UUID session.",
+        "The working→ready settle is anchored to a text-only AssistantMessage being the turn-end marker (parser.go); the live recording confirms kiro-cli actually emits a text-only final AssistantMessage for a no-tool declarative turn (provisional → settled in record). No token/cost/model is observable (JSONL carries none; the parser does not read the sidecar), so the observations vector asserts tokens_nonzero=false, cost_nonzero=false, model unknown — but the scenario asserts no token criterion, so this does not weaken the state-arc verdict."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/parser.go",
+          "note": "AssistantMessage with no toolUse → turn_done (lines 76-79), settles to ready via rule 2b; ev.AssistantText set from the LAST text block, ≤ 200 runes (lines 62-83); Prompt → user_message (working). JSONL carries no model/token/cost — those live in the <uuid>.json sidecar, which this parser does not read."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/session.go",
+          "note": "IsWaitingForUserInput() reads LastAssistantText (fed by the parser's ev.AssistantText) and diverts to waiting only on a trailing question mark (ExtractQuestionSnippet) or an imperative cue (ExtractWaitingCue) — a plain declarative statement stays on the ready path, so kiro lands ready not waiting after a statement turn."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go",
+          "note": "Rule 2b: when IsAgentDone() is true and not waiting for user input, working/waiting → ready. The text-only AssistantMessage drives turn_done → IsAgentDone → this settle; no open tool call so HasOpenToolCall never blocks it."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/kiro-cli/driver-interactive.sh",
+          "note": "DRIVE_ELICITS=\"send slash wait_turn sleep\" (line 86) — the recipe's send/wait_turn/sleep steps are all genuinely elicited → driver ready. TUI-only (kiro-cli chat --trust-all-tools); headless --no-interactive writes no session file (NO HEADLESS PATH block). wait_turn counts text-only AssistantMessages, mirroring the turn_done parser rule."
+        },
+        {
+          "kind": "file",
+          "ref": ".build/refresh/kiro-cli-smoke/FINDINGS.md",
+          "note": "Live 2.5.1 smoke: §1 DiscoverPIDByCWD works; §2 transcript live-appends turn-by-turn (working flips on prompt); §4 JSONL has no model/usage/cost, sidecar input/output_token_count are 0; §5 turn-end = final text-only AssistantMessage; §7 headless writes NO session file so the TUI launch is mandatory."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "kiro-cli on PATH and authenticated (subscription auth; trust-all consent already persisted on this machine)",
+        "irrlichd is recording — run-cell.sh in isolated mode, or --attach against a daemon started with --record",
+        "no other kiro-cli session shares the same cwd"
+      ],
+      "setup": [
+        "Create an empty cwd under <staging>/cwd/ (the driver launches kiro-cli chat --trust-all-tools there)",
+        "Each send bumps the expected-turn counter; wait_turn blocks until a new text-only AssistantMessage (turn_done) appears in the transcript, so the trailing sleep never races a still-running turn"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly this sentence and nothing else: The capital of France is Paris."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        }
+      ],
+      "verify": [
+        "events.jsonl contains a presession_created event for proc-<PID> in ready within 1000 ms of the tmux new-session timestamp",
+        "events.jsonl contains a transcript_new event for the UUID session after the first send (kiro writes the .jsonl lazily on first prompt), born ready",
+        "events.jsonl contains a pid_discovered event bound to the UUID session_id",
+        "events.jsonl contains a state_transition to working for the UUID session when the Prompt lands (the single tool-less assistant turn)",
+        "events.jsonl contains a state_transition to ready for the UUID session once the terminal text turn completes — kiro emits a text-only AssistantMessage, the parser maps it to turn_done, and rule 2b settles working→ready",
+        "events.jsonl contains NO tool_use / tool-call events for the UUID session (deliberately tool-less prompt)",
+        "no state_transition to waiting occurs for the UUID session at any point (the declarative answer has no trailing question mark and no imperative cue, so the classifier never reads a waiting cue)",
+        "final session state is ready before the driver tears the REPL down",
+        "transcript.jsonl contains exactly 1 Prompt line and a final text-only AssistantMessage line, with no toolUse blocks"
+      ],
+      "settings": {},
+      "timeout_seconds": 90
+    }
+  }
+}
