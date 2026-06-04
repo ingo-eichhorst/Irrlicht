@@ -140,6 +140,243 @@ func TestSessionDetector_NewSession_SkipsWhenCWDDeleted(t *testing.T) {
 	}
 }
 
+// --- stale-transcript rescue (issue #576) -------------------------------------
+//
+// When observe consent is granted after agent sessions are already running,
+// the backfill sweep sees transcripts idle beyond orphanTranscriptAge whose
+// process is still alive. These tests cover the rescue path that creates the
+// session anyway when a live process owns the transcript's cwd.
+
+// writeOldTranscript writes a .jsonl transcript whose mtime is age in the past.
+func writeOldTranscript(t *testing.T, path string, age time.Duration) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(`{"type":"user"}`+"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-age)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// liveCWDSet returns a LiveCWDsFunc reporting the given cwds as owned by
+// live processes, regardless of binary name.
+func liveCWDSet(cwds ...string) services.LiveCWDsFunc {
+	return func(string) (map[string]struct{}, error) {
+		set := make(map[string]struct{}, len(cwds))
+		for _, c := range cwds {
+			set[c] = struct{}{}
+		}
+		return set, nil
+	}
+}
+
+// claudeProcessNames maps the default test watcher identity to a binary name
+// so HasLiveProcessInCWD's processNames lookup succeeds.
+func claudeProcessNames() map[string]string {
+	return map[string]string{"claude-code": "claude"}
+}
+
+// rescueCWD returns an existing directory in OS-canonical form — LiveCWDs
+// builds its set from symlink-resolved CWDOf paths, so the test set must be
+// keyed the same way (t.TempDir is a symlink on macOS: /var → /private/var).
+func rescueCWD(t *testing.T) string {
+	t.Helper()
+	cwd, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cwd
+}
+
+func TestSessionDetector_NewSession_RescuesStaleTranscriptWithLiveProcess(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	cwd := rescueCWD(t)
+	det := newDetectorWithLiveCWDs(tw, pw, repo, nil, claudeProcessNames(), liveCWDSet(cwd))
+
+	transcriptPath := filepath.Join(t.TempDir(), "idle1.jsonl")
+	writeOldTranscript(t, transcriptPath, 10*time.Minute)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	tw.ch <- agent.Event{
+		Type:           agent.EventNewSession,
+		SessionID:      "idle1",
+		ProjectDir:     "-Users-test-project",
+		TranscriptPath: transcriptPath,
+		CWD:            cwd,
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+
+	state, err := repo.Load("idle1")
+	if err != nil {
+		t.Fatalf("stale transcript with live process should be rescued: %v", err)
+	}
+	if state.State != session.StateReady {
+		t.Errorf("state: got %q, want ready", state.State)
+	}
+}
+
+func TestSessionDetector_NewSession_NoRescueWithoutLiveProcess(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	cwd := rescueCWD(t)
+	det := newDetectorWithLiveCWDs(tw, pw, repo, nil, claudeProcessNames(), liveCWDSet( /* none */ ))
+
+	transcriptPath := filepath.Join(t.TempDir(), "idle2.jsonl")
+	writeOldTranscript(t, transcriptPath, 10*time.Minute)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	tw.ch <- agent.Event{
+		Type:           agent.EventNewSession,
+		SessionID:      "idle2",
+		ProjectDir:     "-Users-test-project",
+		TranscriptPath: transcriptPath,
+		CWD:            cwd,
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+
+	if state, _ := repo.Load("idle2"); state != nil {
+		t.Errorf("stale transcript without live process should be skipped, got state %q", state.State)
+	}
+}
+
+// Only the newest transcript in a project directory may be rescued — the
+// watcher's initial scan emits every transcript younger than MaxSessionAge,
+// and a single live process corresponds to at most the most recent one.
+// Older stale siblings rescued alongside it would be ghost sessions.
+func TestSessionDetector_NewSession_NoRescueWhenNotNewestInDir(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	cwd := rescueCWD(t)
+	det := newDetectorWithLiveCWDs(tw, pw, repo, nil, claudeProcessNames(), liveCWDSet(cwd))
+
+	projectDir := t.TempDir()
+	olderPath := filepath.Join(projectDir, "older.jsonl")
+	writeOldTranscript(t, olderPath, 10*time.Minute)
+	newerPath := filepath.Join(projectDir, "newer.jsonl")
+	writeOldTranscript(t, newerPath, 5*time.Minute)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	tw.ch <- agent.Event{
+		Type:           agent.EventNewSession,
+		SessionID:      "older",
+		ProjectDir:     "-Users-test-project",
+		TranscriptPath: olderPath,
+		CWD:            cwd,
+	}
+	tw.ch <- agent.Event{
+		Type:           agent.EventNewSession,
+		SessionID:      "newer",
+		ProjectDir:     "-Users-test-project",
+		TranscriptPath: newerPath,
+		CWD:            cwd,
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+
+	if state, _ := repo.Load("older"); state != nil {
+		t.Errorf("older stale sibling should not be rescued, got state %q", state.State)
+	}
+	if _, err := repo.Load("newer"); err != nil {
+		t.Errorf("newest stale transcript with live process should be rescued: %v", err)
+	}
+}
+
+func TestSessionDetector_NewSession_NoRescueForSubagentTranscript(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	cwd := rescueCWD(t)
+	det := newDetectorWithLiveCWDs(tw, pw, repo, nil, claudeProcessNames(), liveCWDSet(cwd))
+
+	subagentsDir := filepath.Join(t.TempDir(), "parent-1", "subagents")
+	if err := os.MkdirAll(subagentsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	transcriptPath := filepath.Join(subagentsDir, "sub1.jsonl")
+	writeOldTranscript(t, transcriptPath, 10*time.Minute)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	tw.ch <- agent.Event{
+		Type:           agent.EventNewSession,
+		SessionID:      "sub1",
+		ProjectDir:     "subagents",
+		TranscriptPath: transcriptPath,
+		CWD:            cwd,
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+
+	if state, _ := repo.Load("sub1"); state != nil {
+		t.Errorf("stale subagent transcript should not be rescued, got state %q", state.State)
+	}
+}
+
+// In production, fswatcher events carry no CWD — the rescue must fall back to
+// extracting the cwd from transcript content (GetCWDFromTranscript).
+func TestSessionDetector_NewSession_RescueUsesGetCWDFromTranscript(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	cwd := rescueCWD(t)
+	det := newDetectorWithLiveCWDs(tw, pw, repo, &cwdGit{cwd: cwd},
+		claudeProcessNames(), liveCWDSet(cwd))
+
+	transcriptPath := filepath.Join(t.TempDir(), "idle3.jsonl")
+	writeOldTranscript(t, transcriptPath, 10*time.Minute)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	tw.ch <- agent.Event{
+		Type:           agent.EventNewSession,
+		SessionID:      "idle3",
+		ProjectDir:     "-Users-test-project",
+		TranscriptPath: transcriptPath,
+		// CWD intentionally empty — the fswatcher never sets it.
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+
+	if _, err := repo.Load("idle3"); err != nil {
+		t.Fatalf("rescue should fall back to transcript-derived cwd: %v", err)
+	}
+}
+
 func TestSessionDetector_Activity_TransitionsToWaiting_WhenToolUseOpen(t *testing.T) {
 	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()

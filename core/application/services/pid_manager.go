@@ -7,6 +7,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -273,6 +274,34 @@ func (pm *PIDManager) newLiveLookupCache() func(adapter string) map[string]struc
 		cache[adapter] = live
 		return live
 	}
+}
+
+// HasLiveProcessInCWD reports whether a live process of adapter's binary
+// currently has cwd as its working directory. Used by the stale-transcript
+// rescue (issue #576): when consent is granted after sessions started, the
+// backfill sweep sees idle transcripts whose process is still alive. Returns
+// false when the lookup is unavailable or fails — "unknown" must preserve
+// the orphan-skip behavior, never force a session into existence. The cwd is
+// canonicalized via EvalSymlinks before the membership test because LiveCWDs
+// builds its set from OS-canonical CWDOf paths, while transcript-derived
+// cwds may carry symlink components (macOS /var → /private/var).
+func (pm *PIDManager) HasLiveProcessInCWD(adapter, cwd string) bool {
+	if pm.liveCWDs == nil || cwd == "" {
+		return false
+	}
+	name, ok := pm.processNames[adapter]
+	if !ok || name == "" {
+		return false
+	}
+	live, err := pm.liveCWDs(name)
+	if err != nil || len(live) == 0 {
+		return false
+	}
+	if resolved, err := filepath.EvalSymlinks(cwd); err == nil {
+		cwd = resolved
+	}
+	_, alive := live[cwd]
+	return alive
 }
 
 // isStartupZombie returns true for sessions whose process is provably gone.

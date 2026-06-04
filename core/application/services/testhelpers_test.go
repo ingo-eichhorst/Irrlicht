@@ -11,6 +11,7 @@ import (
 	"irrlicht/core/domain/lifecycle"
 	"irrlicht/core/domain/session"
 	"irrlicht/core/ports/inbound"
+	"irrlicht/core/ports/outbound"
 )
 
 // mockRecorder captures lifecycle events for assertions. Safe for
@@ -139,6 +140,16 @@ func (g *mockGit) GetProjectName(dir string) string {
 func (g *mockGit) GetGitRoot(dir string) string               { return "" }
 func (g *mockGit) GetBranchFromTranscript(path string) string { return "" }
 func (g *mockGit) GetCWDFromTranscript(path string) string    { return "" }
+
+// cwdGit is a mockGit whose GetCWDFromTranscript returns a fixed cwd. It
+// mimics the production fswatcher path, where EventNewSession carries no
+// CWD and the cwd comes from transcript content (issue #576 rescue).
+type cwdGit struct {
+	mockGit
+	cwd string
+}
+
+func (g *cwdGit) GetCWDFromTranscript(path string) string { return g.cwd }
 
 type mockMetrics struct {
 	pruned []string
@@ -284,6 +295,28 @@ func newDetectorWithMetrics(
 		[]inbound.Watcher{tw}, pw, repo,
 		&mockLogger{}, &mockGit{}, metrics, nil,
 		"test", 0, nil, nil, nil,
+	)
+}
+
+// newDetectorWithLiveCWDs builds a SessionDetector with a process-name map
+// and a live-CWD lookup injected, for stale-transcript rescue tests
+// (issue #576). git may be nil, defaulting to mockGit (whose
+// GetCWDFromTranscript returns "").
+func newDetectorWithLiveCWDs(
+	tw *mockAgentWatcher,
+	pw *mockProcessWatcher,
+	repo *mockRepo,
+	git outbound.GitResolver,
+	processNames map[string]string,
+	liveCWDs services.LiveCWDsFunc,
+) *services.SessionDetector {
+	if git == nil {
+		git = &mockGit{}
+	}
+	return services.NewSessionDetector(
+		[]inbound.Watcher{tw}, pw, repo,
+		&mockLogger{}, git, &mockMetrics{}, nil,
+		"test", 0, nil, processNames, liveCWDs,
 	)
 }
 

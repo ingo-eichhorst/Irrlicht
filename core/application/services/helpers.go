@@ -37,6 +37,42 @@ func isStaleTranscript(path string) bool {
 	return time.Since(info.ModTime()) > orphanTranscriptAge
 }
 
+// isNewestTranscriptInDir reports whether the transcript at path has the
+// newest mtime among the sibling .jsonl files in its directory. Used as the
+// ghost-guard for the stale-transcript rescue (issue #576): a live agent
+// process corresponds to at most one transcript per project directory — the
+// most recently written one — so older stale siblings must never be rescued.
+// Ties (>=) count as newest so coarse mtime granularity can't exclude the
+// event's own file. Fails open (true) on ReadDir or sibling-stat errors —
+// the downstream cwd and process-liveness checks still gate the rescue. A
+// stat failure on path itself returns false (unreachable in practice: the
+// caller only gets here after isStaleTranscript stat'd the same path).
+func isNewestTranscriptInDir(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	mtime := info.ModTime()
+	entries, err := os.ReadDir(filepath.Dir(path))
+	if err != nil {
+		return true
+	}
+	base := filepath.Base(path)
+	for _, e := range entries {
+		if e.IsDir() || e.Name() == base || !strings.HasSuffix(e.Name(), ".jsonl") {
+			continue
+		}
+		sibling, err := e.Info()
+		if err != nil {
+			continue
+		}
+		if sibling.ModTime().After(mtime) {
+			return false
+		}
+	}
+	return true
+}
+
 // cwdMissing reports whether cwd refers to a directory that no longer
 // exists. Returns false for empty or relative paths to avoid second-guessing
 // callers when the cwd metadata is incomplete.
