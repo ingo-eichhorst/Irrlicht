@@ -43,8 +43,10 @@ func isStaleTranscript(path string) bool {
 // process corresponds to at most one transcript per project directory — the
 // most recently written one — so older stale siblings must never be rescued.
 // Ties (>=) count as newest so coarse mtime granularity can't exclude the
-// event's own file. Fails open (true) on ReadDir/stat errors — the
-// downstream cwd and process-liveness checks still gate the rescue.
+// event's own file. Fails open (true) on ReadDir or sibling-stat errors —
+// the downstream cwd and process-liveness checks still gate the rescue. A
+// stat failure on path itself returns false (unreachable in practice: the
+// caller only gets here after isStaleTranscript stat'd the same path).
 func isNewestTranscriptInDir(path string) bool {
 	info, err := os.Stat(path)
 	if err != nil {

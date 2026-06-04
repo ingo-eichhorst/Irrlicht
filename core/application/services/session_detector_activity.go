@@ -69,10 +69,17 @@ func (d *SessionDetector) onNewSession(id agent.Identity, ev agent.Event) {
 		// (issue #576: consent granted after sessions started makes
 		// "stale at first sight" the canonical backfill path).
 		if isStaleTranscript(ev.TranscriptPath) {
-			if !d.isLiveStaleSession(id.Name, ev) {
+			liveCWD, live := d.isLiveStaleSession(id.Name, ev)
+			if !live {
 				d.log.LogInfo("session-detector", ev.SessionID,
 					"skipping orphan transcript")
 				return
+			}
+			// Thread the transcript-derived cwd into the event so
+			// EnrichNewSession doesn't re-read the transcript for it (and
+			// PID discovery gets a usable cwd for its fallback).
+			if ev.CWD == "" {
+				ev.CWD = liveCWD
 			}
 			d.log.LogInfo("session-detector", ev.SessionID,
 				"stale transcript but live process owns its cwd — creating session")
@@ -197,21 +204,24 @@ func (d *SessionDetector) onNewSession(id agent.Identity, ev agent.Event) {
 //     sessions, from transcript content for fswatcher events, which carry
 //     no CWD).
 //  4. A live process of this adapter's binary must own that cwd.
-func (d *SessionDetector) isLiveStaleSession(adapter string, ev agent.Event) bool {
+//
+// The resolved cwd is returned alongside the verdict so the caller can reuse
+// it instead of re-extracting it from the transcript during enrichment.
+func (d *SessionDetector) isLiveStaleSession(adapter string, ev agent.Event) (string, bool) {
 	if deriveParentSessionID(ev.TranscriptPath) != "" {
-		return false
+		return "", false
 	}
 	if !isNewestTranscriptInDir(ev.TranscriptPath) {
-		return false
+		return "", false
 	}
 	cwd := ev.CWD
 	if cwd == "" {
 		cwd = d.enricher.git.GetCWDFromTranscript(ev.TranscriptPath)
 	}
 	if cwd == "" {
-		return false
+		return "", false
 	}
-	return d.pidMgr.HasLiveProcessInCWD(adapter, cwd)
+	return cwd, d.pidMgr.HasLiveProcessInCWD(adapter, cwd)
 }
 
 // onActivity debounces transcript activity events per session. The first event
