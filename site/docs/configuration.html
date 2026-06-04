@@ -302,12 +302,7 @@ launchctl setenv IRRLICHT_DEBUG 1
 
       <h3>Kitty</h3>
 
-      <p>Kitty&apos;s inter-process control is opt-in. Without it, Irrlicht can raise the kitty window but cannot switch to the tab that owns the clicked session &mdash; the last-focused tab stays visible. Enable remote control in <code>~/.config/kitty/kitty.conf</code>:</p>
-
-      <pre><code>allow_remote_control yes
-listen_on            unix:/tmp/kitty-{kitty_pid}</code></pre>
-
-      <p>Restart kitty after editing &mdash; a config reload alone has no effect. New sessions started inside kitty will then have <code>KITTY_LISTEN_ON</code> set, and clicks land on the exact tab via <code>kitten @ focus-window</code>. (Note: macOS does not support Linux-style abstract sockets, so a filesystem path is required.)</p>
+      <p>Kitty needs two lines in <code>~/.config/kitty/kitty.conf</code> to enable precise tab focus. See <a href="macos-setup.html#kitty">macOS Setup &rarr; Kitty Terminal</a> for the full steps.</p>
 
       <!-- ── Bottom nav ── -->
       <nav class="docs-nav-bottom">

@@ -106,11 +106,6 @@
 
       <p>The menu bar &mdash; and the Irrlicht dot &mdash; will now stay visible on every Space, including full-screen ones.</p>
 
-      <div class="callout callout-tip">
-        <strong>Stage Manager users</strong>
-        If you use Stage Manager, make sure its menu-bar setting isn't overriding Control Center. Check <strong>System Settings &rarr; Desktop &amp; Dock &rarr; Stage Manager</strong> and disable "Show menu bar in Stage Manager" auto-hide if it conflicts.
-      </div>
-
       <p>Irrlicht's popover panel is already configured to appear on any Space (including full-screen Spaces). Once the menu bar is visible, clicking the flame opens the session list wherever you are.</p>
 
       <!-- ── Launch at login ── -->
@@ -154,14 +149,14 @@
       <p>Without this permission the click still works for some terminals but silently fails for others. Grant it once and clicks are always reliable.</p>
 
       <!-- ── Kitty terminal ── -->
-      <h2>Kitty Terminal — Precise Tab Focus</h2>
+      <h2 id="kitty">Kitty Terminal — Precise Tab Focus</h2>
 
       <p>Most terminals work out of the box. Kitty needs one extra line so Irrlicht can target the exact tab (not just the window):</p>
 
       <p>Add to <code>~/.config/kitty/kitty.conf</code>:</p>
 
       <pre><code>allow_remote_control yes
-listen_on unix:/tmp/kitty</code></pre>
+listen_on unix:/tmp/kitty-{kitty_pid}</code></pre>
 
       <div class="callout callout-tip">
         <strong>Restart required</strong>
