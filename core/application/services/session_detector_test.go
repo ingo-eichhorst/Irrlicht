@@ -3131,7 +3131,19 @@ func TestSessionDetector_ParentBadgeCleared_WhenChildSweptWhileParentWaiting(t *
 
 	// Trigger the sweep directly instead of waiting the real ticker.
 	det.RunPIDLivenessSweepForTest()
-	time.Sleep(30 * time.Millisecond)
+
+	// Poll for the sweep's effects instead of a fixed sleep — the tight
+	// readyTTL (1s) can be outrun by scheduling starvation under parallel
+	// load, so a fixed window flakes (issue #624). The corrective parent
+	// re-evaluation clears the badge and deletes the child; wait on both via
+	// race-free repo probes before quiescing.
+	waitForSessionDeleted(repo, "stuck-child", time.Second)
+	waitForCondition(func() bool {
+		repo.mu.Lock()
+		defer repo.mu.Unlock()
+		p, ok := repo.states["parent-waiting"]
+		return ok && p.Subagents == nil
+	}, time.Second)
 
 	// Quiesce the detector before reading shared state.
 	cancel()
