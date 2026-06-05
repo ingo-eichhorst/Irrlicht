@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'vitest'
-import { inferDriverLabel, renderMarkdown } from './viewer.js'
+import { agentsPerPage, inferDriverLabel, paginateAgents, renderMarkdown } from './viewer.js'
 
 describe('renderMarkdown', () => {
   test('## / ### headings → h4 / h5', () => {
@@ -73,5 +73,75 @@ describe('inferDriverLabel', () => {
 
   test('empty object → Headless one-shot', () => {
     expect(inferDriverLabel({})).toBe('Headless one-shot')
+  })
+})
+
+// Thresholds derive from AGENT_COL_PX=220 + MATRIX_RESERVED_PX=240:
+// n columns fit at width ≥ 240 + 220·n (2→680, 3→900, 4→1120).
+describe('agentsPerPage', () => {
+  test('clamps to 2 on very narrow panes', () => {
+    expect(agentsPerPage(0)).toBe(2)
+    expect(agentsPerPage(400)).toBe(2)
+    expect(agentsPerPage(679)).toBe(2)
+  })
+
+  test('steps 2 → 3 → 4 with width', () => {
+    expect(agentsPerPage(680)).toBe(2)
+    expect(agentsPerPage(899)).toBe(2)
+    expect(agentsPerPage(900)).toBe(3)
+    expect(agentsPerPage(1119)).toBe(3)
+    expect(agentsPerPage(1120)).toBe(4)
+  })
+
+  test('clamps to 4 on wide panes', () => {
+    expect(agentsPerPage(2000)).toBe(4)
+    expect(agentsPerPage(10000)).toBe(4)
+  })
+})
+
+describe('paginateAgents', () => {
+  const six = ['claudecode', 'codex', 'pi', 'aider', 'opencode', 'kiro-cli']
+
+  test('first page of 6 agents at perPage 4', () => {
+    expect(paginateAgents(six, 0, 4)).toEqual({
+      visible: ['claudecode', 'codex', 'pi', 'aider'],
+      page: 0, pages: 2, start: 0, end: 4,
+    })
+  })
+
+  test('last page holds the remainder', () => {
+    expect(paginateAgents(six, 1, 4)).toEqual({
+      visible: ['opencode', 'kiro-cli'],
+      page: 1, pages: 2, start: 4, end: 6,
+    })
+  })
+
+  test('out-of-range page clamps to the last page', () => {
+    expect(paginateAgents(six, 9, 4).page).toBe(1)
+    expect(paginateAgents(six, 9, 4).visible).toEqual(['opencode', 'kiro-cli'])
+  })
+
+  test('negative page clamps to the first page', () => {
+    expect(paginateAgents(six, -1, 4).page).toBe(0)
+  })
+
+  test('agent count ≤ perPage → a single page with everything visible', () => {
+    expect(paginateAgents(['a', 'b', 'c'], 0, 4)).toEqual({
+      visible: ['a', 'b', 'c'],
+      page: 0, pages: 1, start: 0, end: 3,
+    })
+  })
+
+  test('empty agent list → one empty page', () => {
+    expect(paginateAgents([], 3, 4)).toEqual({
+      visible: [], page: 0, pages: 1, start: 0, end: 0,
+    })
+  })
+
+  test('perPage change re-windows correctly (resize path)', () => {
+    expect(paginateAgents(six, 2, 2)).toEqual({
+      visible: ['opencode', 'kiro-cli'],
+      page: 2, pages: 3, start: 4, end: 6,
+    })
   })
 })

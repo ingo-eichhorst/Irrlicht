@@ -14,6 +14,41 @@ export function inferDriverLabel(a) {
   return "Headless one-shot";
 }
 
+// --- Agent-column pagination (overview matrix) ---------------------------
+// The 7-segment pipeline strip makes each agent column ~220px wide, so the
+// coverage matrix overflows the main pane once more than a handful of agents
+// are onboarded. The matrix therefore windows the agent columns: 2–4 at a
+// time depending on pane width, with ◀ ▶ pager controls in the panel header.
+
+// AGENT_COL_PX approximates one agent column (7 chips + gaps + cell
+// padding); MATRIX_RESERVED_PX approximates the scenario-name column plus
+// panel padding.
+const AGENT_COL_PX = 220;
+const MATRIX_RESERVED_PX = 240;
+
+let agentPage = 0;     // current agent-column page (session-scoped)
+let lastPerPage = 0;   // page size at last matrix render, for the resize listener
+
+// agentsPerPage returns how many agent columns fit in availableWidth,
+// clamped to 2..4 — never fewer than 2 (a comparison needs a pair), never
+// more than 4 (the strip stays readable). Pure — exported for unit tests.
+export function agentsPerPage(availableWidth) {
+  const fit = Math.floor((availableWidth - MATRIX_RESERVED_PX) / AGENT_COL_PX);
+  return Math.max(2, Math.min(4, fit));
+}
+
+// paginateAgents slices the agent list into the visible column window. The
+// page index is clamped into range so a stale value (pane narrowed, agent
+// list changed) degrades to the nearest valid page instead of an empty
+// table. Pure — exported for unit tests.
+export function paginateAgents(agents, page, perPage) {
+  const pages = Math.max(1, Math.ceil(agents.length / perPage));
+  const p = Math.min(Math.max(0, page), pages - 1);
+  const start = p * perPage;
+  const end = Math.min(start + perPage, agents.length);
+  return {visible: agents.slice(start, end), page: p, pages, start, end};
+}
+
 // Module-level handles populated during init() and reused by the
 // Overview button + scenario clicks to swap views in the main pane.
 let scenariosList = [];   // live recordings from /api/scenarios
@@ -61,6 +96,21 @@ function folderToCoverageId(folder, agent) {
       if (r.coverage_id) recipesByCoverageId.set(r.coverage_id, r);
     }
   }
+  // Re-render the overview when a window resize changes how many agent
+  // columns fit (debounced; no-op on detail pages and when the fit count
+  // is unchanged). Registered once for both init paths below.
+  let resizeTimer = 0;
+  window.addEventListener("resize", () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      const h = location.hash || "#/";
+      if (h.startsWith("#/scenario/") || h.startsWith("#/recording/")) return;
+      if (!catalog) return;
+      const main = document.getElementById("main");
+      if (agentsPerPage((main && main.clientWidth) || 1200) !== lastPerPage) loadOverview();
+    }, 150);
+  });
+
   // Map scenario id → catalog code (e.g. "5.4") so the sidebar can
   // prefix labels and sort in the same order as the overview matrix.
   // Regression-subtree recordings aren't in the catalog and stay
@@ -372,19 +422,32 @@ function renderCoverageMatrix(detail) {
     if (r.subtree === "scenarios") recIndex.set(`${r.agent}/${r.id}`, r);
   }
 
+  // Window the agent columns to what fits the pane (2–4); the pager in the
+  // panel header walks through the rest. The clamped page is written back so
+  // it survives re-renders.
+  const main = document.getElementById("main");
+  const perPage = agentsPerPage((main && main.clientWidth) || 1200);
+  lastPerPage = perPage;
+  const pg = paginateAgents(agents, agentPage, perPage);
+  agentPage = pg.page;
+
   // Scenarios are agent-agnostic now (no section/feature) — list them flat in
   // catalog (code) order; the per-row code chip carries the "<section>.<index>".
   const panel = document.createElement("div");
   panel.className = "panel";
+  const head = document.createElement("div");
+  head.style.cssText = "display: flex; align-items: baseline; gap: 12px; justify-content: space-between; flex-wrap: wrap;";
   const h3 = document.createElement("h3");
   h3.textContent = `Scenario coverage — ${catalog.scenarios.length} scenarios × ${agents.length} agents`;
-  panel.appendChild(h3);
+  head.appendChild(h3);
+  if (pg.pages > 1) head.appendChild(renderAgentPager(pg, agents));
+  panel.appendChild(head);
 
   const table = document.createElement("table");
   table.className = "overview-matrix";
   const thead = document.createElement("thead");
   const headRow = document.createElement("tr");
-  ["Scenario", ...agents].forEach(h => {
+  ["Scenario", ...pg.visible].forEach(h => {
     const th = document.createElement("th");
     th.textContent = h;
     headRow.appendChild(th);
@@ -406,7 +469,7 @@ function renderCoverageMatrix(detail) {
     nameLink.addEventListener("click", () => navigate(`#/scenario/${sc.id}`));
     nameCell.appendChild(nameLink);
     row.appendChild(nameCell);
-    for (const agent of agents) {
+    for (const agent of pg.visible) {
       const cov = sc.coverage && sc.coverage[agent];
       const cell = document.createElement("td");
       cell.style.textAlign = "center";
@@ -545,6 +608,39 @@ function renderCoverageMatrix(detail) {
     </div>
   `;
   panel.appendChild(legend);
+}
+
+// renderAgentPager builds the ◀ "1–4 of 6 agents" ▶ control for the
+// coverage matrix's windowed agent columns. Buttons disable at the bounds;
+// a click moves the page and re-renders the overview from the module-cached
+// catalog (loadOverview fetches nothing).
+function renderAgentPager(pg, agents) {
+  const pager = document.createElement("div");
+  pager.style.cssText = "display: inline-flex; gap: 6px; align-items: center; font-size: 11px; color: #555; white-space: nowrap;";
+  pager.title = `Agents: ${agents.join(", ")}`;
+
+  const btn = (label, delta, disabled) => {
+    const b = document.createElement("button");
+    b.textContent = label;
+    b.disabled = disabled;
+    b.style.cssText = `padding: 2px 8px; border-radius: 3px; border: 1px solid #d8d6cc; ` +
+      `background: ${disabled ? "#f0efe9" : "#fff"}; color: ${disabled ? "#bbb" : "#333"}; ` +
+      `font: inherit; font-weight: 600; cursor: ${disabled ? "default" : "pointer"};`;
+    if (!disabled) {
+      b.addEventListener("click", () => {
+        agentPage = pg.page + delta;
+        loadOverview();
+      });
+    }
+    return b;
+  };
+
+  pager.appendChild(btn("◀", -1, pg.page === 0));
+  const label = document.createElement("span");
+  label.textContent = `${pg.start + 1}–${pg.end} of ${agents.length} agents`;
+  pager.appendChild(label);
+  pager.appendChild(btn("▶", +1, pg.page >= pg.pages - 1));
+  return pager;
 }
 
 // loadCoverageDetail shows the per-agent testing plan for one scenario.
