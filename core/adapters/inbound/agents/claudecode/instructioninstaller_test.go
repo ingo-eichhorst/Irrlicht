@@ -112,10 +112,29 @@ func TestEnsureTaskEtaBlock_UpgradesStaleBlock(t *testing.T) {
 	}
 }
 
-func TestEnsureTaskEtaBlock_V1BlockUpgradesToV2(t *testing.T) {
+// assertCurrentEtaContract checks the phrases every shipped-block upgrade
+// must land on: first marker before any tool call (#604/#602), the Bash
+// description carrier as the mandatory per-phase update channel (#617), and
+// the command-field prohibition (permission matching).
+func assertCurrentEtaContract(t *testing.T, content string) {
+	t.Helper()
+	if !strings.Contains(content, "first marker in your first response") {
+		t.Error("block must ask for the first marker before any tool call")
+	}
+	if !strings.Contains(content, "After each phase you complete") {
+		t.Error("block must make the per-phase update mandatory")
+	}
+	if !strings.Contains(content, "`description` of the next Bash call") {
+		t.Error("block must name the Bash description carrier as the update channel")
+	}
+	if !strings.Contains(content, "never to the command itself") {
+		t.Error("block must forbid the command field (permission matching)")
+	}
+}
+
+func TestEnsureTaskEtaBlock_V1BlockUpgrades(t *testing.T) {
 	// The exact v1 block (shipped with #558) must upgrade in place to the
-	// v2 contract (#604/#602): first marker before any tool call + the Bash
-	// description carrier.
+	// current contract.
 	home := withTempHome(t)
 	path := memoryPathFor(home)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -144,18 +163,55 @@ is how many you've finished. Update every few steps.
 		t.Fatal(err)
 	}
 	if !modified {
-		t.Fatal("v1 block should upgrade to v2")
+		t.Fatal("v1 block should upgrade in place")
+	}
+	assertCurrentEtaContract(t, readFileString(t, path))
+}
+
+func TestEnsureTaskEtaBlock_V2BlockUpgradesToV3(t *testing.T) {
+	// The exact v2 block (shipped with #604/#602) must upgrade in place to
+	// the v3 contract (#617): the description carrier becomes the mandatory
+	// per-phase update channel instead of an optional one — v2's "you may
+	// also" under-bound in prose-less sessions, pinning the chip at
+	// "estimating…" (session ad880389).
+	home := withTempHome(t)
+	path := memoryPathFor(home)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	v2 := taskEtaBeginSentinel + `
+## Task progress markers (managed by Irrlicht)
+
+As you work on a multi-step task, periodically emit a hidden progress marker
+so tools can show a task-completion estimate. Emit it as an HTML comment in
+your response text, and update it as you make progress:
+
+` + "```" + `
+<!-- {"marker":"irrlicht-eta","total_rounds":N,"completed_rounds":M} -->
+` + "```" + `
+
+` + "`total_rounds`" + ` is your estimate of the task's phases; ` + "`completed_rounds`" + `
+is how many you've finished. Emit the first marker in your first response,
+right before your first tool call. Update every few steps; you may also
+append the marker to the ` + "`description`" + ` of a Bash call you are
+already making (never to the command itself).
+` + taskEtaEndSentinel
+	if err := os.WriteFile(path, []byte(v2+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	modified, err := EnsureTaskEtaBlockInstalled()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !modified {
+		t.Fatal("v2 block should upgrade to v3")
 	}
 	content := readFileString(t, path)
-	if !strings.Contains(content, "first marker in your first response") {
-		t.Error("v2 block must ask for the first marker before any tool call")
+	if strings.Contains(content, "you may also") {
+		t.Error("v2's permissive carrier phrasing survived the upgrade")
 	}
-	if !strings.Contains(content, "`description` of a Bash call") {
-		t.Error("v2 block must permit the Bash description carrier")
-	}
-	if !strings.Contains(content, "never to the command itself") {
-		t.Error("v2 block must forbid the command field (permission matching)")
-	}
+	assertCurrentEtaContract(t, content)
 }
 
 func TestPatchManagedBlock_AppendAddsSingleBlankLine(t *testing.T) {
