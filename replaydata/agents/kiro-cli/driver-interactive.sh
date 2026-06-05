@@ -88,7 +88,12 @@ SCRIPT_JSON="$5"
 # trust-all consent so no per-tool picker stalls the run); a cell opts out with
 # settings.trust_all_tools=false to make the approval picker appear.
 TRUST_ALL=true
-if [[ -f "$SETTINGS_PATH" ]] && [[ "$(jq -r '.trust_all_tools // "true"' "$SETTINGS_PATH" 2>/dev/null)" == "false" ]]; then
+# NB: test `== false` directly — do NOT `jq -r '.trust_all_tools // "true"'`.
+# jq's `//` treats a literal `false` as empty and falls through to the default,
+# so an explicit `trust_all_tools:false` would be silently coerced back to true
+# and the launch would (wrongly) pass --trust-all-tools, suppressing the picker
+# this cell needs. `jq -e '.x == false'` is true ONLY for an explicit false.
+if [[ -f "$SETTINGS_PATH" ]] && jq -e '.trust_all_tools == false' "$SETTINGS_PATH" >/dev/null 2>&1; then
   TRUST_ALL=false
 fi
 
