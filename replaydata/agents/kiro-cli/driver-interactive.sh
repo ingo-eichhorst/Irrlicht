@@ -13,9 +13,12 @@
 # the codex slot model and these teardown/resume primitives transplant cleanly).
 # resume relaunches `kiro-cli chat --trust-all-tools --resume-id <uuid>`, which
 # re-opens the SAME <uuid>.jsonl and appends under a NEW PID (one session, two
-# lifetimes — same as codex's `codex resume`). The remaining multi-session /
-# signal primitives (interrupt, reset_session, start_session, session) stay
-# stubbed — `record` ports each when a recipe first needs it.
+# lifetimes — same as codex's `codex resume`). start_session / session (the
+# concurrent multi-slot primitives) are ALSO ported from
+# drive-codex-interactive.sh — kiro's per-slot MARKER + transcript_claimed model
+# is byte-identical to codex's, so two concurrent same-cwd sessions each resolve
+# to a distinct <uuid>.jsonl. The remaining signal primitives (interrupt,
+# reset_session) stay stubbed — `record` ports each when a recipe first needs it.
 #
 # IMPORTANT — how a stubbed arm is caught: every standard arm is PRESENT here
 # (so recipe-lint's GRAMMAR check treats it as handled and will NOT report a
@@ -150,7 +153,7 @@ source "$_DRIVE_LIB/contracts.sh"
 # it is invisible to the daemon and MUST NOT be used for recording (FINDINGS.md
 # §7). slash commands reach the live TUI directly (a bare send "/cmd" is NOT
 # stored as literal text), so DRIVE_SLASH_REQUIRES_STEP_TYPE stays false.
-DRIVE_ELICITS="send slash wait_turn sleep keys restart resume sigkill exit_clean"
+DRIVE_ELICITS="send slash wait_turn sleep keys restart resume sigkill exit_clean start_session session"
 DRIVE_SLASH_REQUIRES_STEP_TYPE=false
 
 remaining_seconds() { local now; now=$(date +%s); (( now >= DEADLINE )) && echo 0 || echo $((DEADLINE - now)); }
@@ -483,9 +486,48 @@ step_resume() {
   fi
 }
 
+# --- CONCURRENCY SEAM E: start_session ---------------------------------------
+# Launch a NEW concurrent kiro-cli session WITHOUT tearing down the active one.
+# Mirrors step_start_session in drive-codex-interactive.sh: the previous session
+# keeps running (its tmux survives), so the daemon observes both as independent
+# session rows. Defaults to session 1's cwd — the multiple-sessions-same-cwd
+# case: two kiro-cli sessions in ONE cwd. The daemon's DiscoverPIDByCWD
+# disambiguates the two same-cwd PIDs (prefer-unclaimed-else-highest), so each
+# row binds a distinct PID. Pass {"type":"start_session","cwd":"…"} to launch
+# elsewhere.
+#
+# Same-cwd transcript bookkeeping (the subtle part): two slots in the same cwd
+# create two <uuid>.jsonl files. Claim the prior slot's transcript BEFORE
+# spawning the concurrent one — resolve_transcript||save_active binds slot 1's
+# .jsonl so transcript_claimed excludes it from the new slot's discovery. The new
+# slot's fresh MARKER (minted by alloc_slot, then re-touched after a 1s sleep so
+# it sorts strictly after slot 1's .jsonl at 1s mtime granularity) makes the new
+# slot's resolve_transcript pick the NEWER .jsonl — the second slot's UUID is the
+# newest .jsonl created after ITS launch. Without the claim, a turn still
+# streaming in slot 1 could advance its mtime past the new marker and the new
+# slot would re-bind slot 1's .jsonl.
+step_start_session() {
+  local req_cwd="$1"
+  # Claim the current slot's transcript before spawning a concurrent one in the
+  # same cwd (see header). resolve_transcript binds it; save_active persists the
+  # binding so transcript_claimed sees it from the new slot.
+  resolve_transcript || true
+  save_active
+  local idx=$(( N_SLOTS + 1 ))
+  local new_cwd="${req_cwd:-$RUN_CWD}"
+  alloc_slot "kiro-clidrv-$$-$(date +%s)-${idx}" "$new_cwd"
+  # alloc_slot touched the new MARKER already; sleep 1 then re-touch so it sorts
+  # strictly AFTER slot 1's just-written .jsonl (1s mtime granularity) — the new
+  # slot's resolve_transcript then only sees the .jsonl this launch creates.
+  sleep 1
+  touch "$MARKER"
+  echo "[driver] start_session: concurrent session slot #${ACTIVE} (cwd=$new_cwd)" >&2
+  boot_session
+}
+
 # --- Step dispatch: ALL standard arms present; stubs fail loudly -------------
-# Bring up the first session as slot 1. SCRIPT_JSON's restart steps allocate
-# further slots.
+# Bring up the first session as slot 1. SCRIPT_JSON's restart / start_session
+# steps allocate further slots.
 alloc_slot "kiro-clidrv-$$-$(date +%s)" "$RUN_CWD"
 boot_session
 
@@ -493,6 +535,26 @@ STEP_OK=true
 while IFS= read -r step; do
   $STEP_OK || break
   type="$(jq -r '.type' <<<"$step")"
+
+  # Optional inline session target: switch the active context to slot N before
+  # executing the step (mirrors drive-codex-interactive.sh). start_session is
+  # exempt — it allocates its OWN slot. A bare {"type":"session","session":N} is
+  # a pure focus switch (the case arm below is a no-op once this has run). The
+  # target slot must already exist.
+  tgt="$(jq -r '.session // empty' <<<"$step")"
+  if [[ -n "$tgt" && "$type" != "start_session" && "$tgt" != "$ACTIVE" ]]; then
+    if [[ "$tgt" =~ ^[0-9]+$ && "$tgt" -ge 1 && "$tgt" -le "$N_SLOTS" ]]; then
+      save_active
+      load_slot "$tgt"
+      echo "[driver] switch -> session slot $tgt (uuid=$UUID)" >&2
+    else
+      echo "[driver] switch: invalid session slot '$tgt' (have $N_SLOTS)" >&2
+      EXIT_REASON="nonzero(2)"
+      STEP_OK=false
+      continue
+    fi
+  fi
+
   case "$type" in
     send)            send_text "$(jq -r '.text' <<<"$step")" ;;
     slash)           send_slash "$(jq -r '.text' <<<"$step")" ;;
@@ -505,8 +567,8 @@ while IFS= read -r step; do
     resume)          step_resume || STEP_OK=false ;;
     sigkill)         step_sigkill ;;
     exit_clean)      step_exit_clean ;;
-    start_session)   not_implemented start_session || STEP_OK=false ;; # TODO(kiro-cli): concurrent session, keep first alive
-    session)         not_implemented session || STEP_OK=false ;;       # TODO(kiro-cli): switch active slot
+    start_session)   step_start_session "$(jq -r '.cwd // empty' <<<"$step")" ;;
+    session)         : ;;  # pure focus switch — handled by the inline target block above
     *)               echo "[driver] unknown step type: $type" >&2; EXIT_REASON="nonzero(2)"; STEP_OK=false ;;
   esac
   (( $(remaining_seconds) <= 0 )) && { EXIT_REASON="timeout"; STEP_OK=false; }
