@@ -2,8 +2,13 @@ package kirocli
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"irrlicht/core/pkg/tailer"
 )
 
 // line parses a raw JSONL string into the map shape ParseLine receives.
@@ -245,6 +250,94 @@ func TestParser_FullTurnSequence(t *testing.T) {
 		}
 		if ev.EventType != step.want {
 			t.Errorf("step %d: EventType = %q, want %q", i, ev.EventType, step.want)
+		}
+	}
+}
+
+// The todo_list test lines below are verbatim from the recorded fixture
+// replaydata/agents/kiro-cli/scenarios/2-3_task-list/ (kiro-cli 2.5.1): a
+// `create` with three distinct tasks followed by three `complete` calls, each
+// marking one item by its kiro id (1-based, passed back as a string in
+// completed_task_ids). See #589.
+
+// A todo_list `create` emits one TaskCreate per task, subject from
+// task_description — and still keeps the turn open as a mid-turn assistant
+// tool use.
+func TestParser_TodoListCreate_EmitsTaskCreates(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(line(t, `{"version":"v1","kind":"AssistantMessage","data":{"content":[{"kind":"text","data":""},{"kind":"toolUse","data":{"toolUseId":"tooluse_c1YaFxm7SWDhQHrMausVMy","name":"todo_list","input":{"command":"create","task_list_description":"Read and summarize README","tasks":[{"task_description":"read README"},{"task_description":"summarize README"},{"task_description":"reply done"}],"__tool_use_purpose":"Creating the task list"}}}]}}`))
+	if ev.EventType != "assistant" {
+		t.Fatalf("EventType = %q, want assistant (todo_list is a mid-turn tool use)", ev.EventType)
+	}
+	if len(ev.ToolUses) != 1 || ev.ToolUses[0].Name != "todo_list" {
+		t.Errorf("ToolUses = %+v, want one todo_list", ev.ToolUses)
+	}
+	want := []tailer.TaskDelta{
+		{Op: tailer.TaskOpCreate, Subject: "read README"},
+		{Op: tailer.TaskOpCreate, Subject: "summarize README"},
+		{Op: tailer.TaskOpCreate, Subject: "reply done"},
+	}
+	if len(ev.TaskDeltas) != len(want) {
+		t.Fatalf("TaskDeltas = %+v, want %+v", ev.TaskDeltas, want)
+	}
+	for i, d := range ev.TaskDeltas {
+		if d != want[i] {
+			t.Errorf("TaskDeltas[%d] = %+v, want %+v", i, d, want[i])
+		}
+	}
+}
+
+// A todo_list `complete` emits a TaskUpdate→completed for the named kiro id,
+// using the synthetic ID assigned to that task at create time.
+func TestParser_TodoListComplete_EmitsTaskUpdate(t *testing.T) {
+	p := &Parser{}
+	p.ParseLine(line(t, `{"version":"v1","kind":"AssistantMessage","data":{"content":[{"kind":"toolUse","data":{"toolUseId":"tooluse_c1","name":"todo_list","input":{"command":"create","tasks":[{"task_description":"read README"},{"task_description":"summarize README"},{"task_description":"reply done"}]}}}]}}`))
+	ev := p.ParseLine(line(t, `{"version":"v1","kind":"AssistantMessage","data":{"content":[{"kind":"toolUse","data":{"toolUseId":"tooluse_TJ","name":"todo_list","input":{"command":"complete","completed_task_ids":["2"],"context_update":"x"}}}]}}`))
+	if len(ev.TaskDeltas) != 1 {
+		t.Fatalf("TaskDeltas = %+v, want one update", ev.TaskDeltas)
+	}
+	want := tailer.TaskDelta{Op: tailer.TaskOpUpdate, ID: "2", Status: tailer.TaskStatusCompleted}
+	if ev.TaskDeltas[0] != want {
+		t.Errorf("TaskDeltas[0] = %+v, want %+v", ev.TaskDeltas[0], want)
+	}
+}
+
+// End-to-end through the tailer: the full create→complete×3 fixture walk folds
+// into three tracked tasks, all completed, subjects matching task_description.
+func TestParser_TodoList_FoldsToCompletedTasks(t *testing.T) {
+	lines := []string{
+		`{"version":"v1","kind":"Prompt","data":{"content":[{"kind":"text","data":"track three tasks"}],"meta":{"timestamp":1780627216}}}`,
+		`{"version":"v1","kind":"AssistantMessage","data":{"content":[{"kind":"text","data":""},{"kind":"toolUse","data":{"toolUseId":"tooluse_c1","name":"todo_list","input":{"command":"create","tasks":[{"task_description":"read README"},{"task_description":"summarize README"},{"task_description":"reply done"}]}}}]}}`,
+		`{"version":"v1","kind":"ToolResults","data":{"content":[{"kind":"toolResult","data":{"toolUseId":"tooluse_c1","status":"success"}}]}}`,
+		`{"version":"v1","kind":"AssistantMessage","data":{"content":[{"kind":"text","data":""},{"kind":"toolUse","data":{"toolUseId":"tooluse_a","name":"todo_list","input":{"command":"complete","completed_task_ids":["1"]}}}]}}`,
+		`{"version":"v1","kind":"ToolResults","data":{"content":[{"kind":"toolResult","data":{"toolUseId":"tooluse_a","status":"success"}}]}}`,
+		`{"version":"v1","kind":"AssistantMessage","data":{"content":[{"kind":"text","data":""},{"kind":"toolUse","data":{"toolUseId":"tooluse_b","name":"todo_list","input":{"command":"complete","completed_task_ids":["2"]}}}]}}`,
+		`{"version":"v1","kind":"ToolResults","data":{"content":[{"kind":"toolResult","data":{"toolUseId":"tooluse_b","status":"success"}}]}}`,
+		`{"version":"v1","kind":"AssistantMessage","data":{"content":[{"kind":"text","data":""},{"kind":"toolUse","data":{"toolUseId":"tooluse_c","name":"todo_list","input":{"command":"complete","completed_task_ids":["3"]}}}]}}`,
+		`{"version":"v1","kind":"ToolResults","data":{"content":[{"kind":"toolResult","data":{"toolUseId":"tooluse_c","status":"success"}}]}}`,
+		`{"version":"v1","kind":"AssistantMessage","data":{"content":[{"kind":"text","data":"done"}]}}`,
+	}
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m, err := tailer.NewTranscriptTailer(path, &Parser{}, "kiro-cli").TailAndProcess()
+	if err != nil {
+		t.Fatalf("TailAndProcess: %v", err)
+	}
+	want := []struct {
+		id, subject, status string
+	}{
+		{"1", "read README", tailer.TaskStatusCompleted},
+		{"2", "summarize README", tailer.TaskStatusCompleted},
+		{"3", "reply done", tailer.TaskStatusCompleted},
+	}
+	if len(m.Tasks) != len(want) {
+		t.Fatalf("Tasks = %+v, want %d items", m.Tasks, len(want))
+	}
+	for i, w := range want {
+		if m.Tasks[i].ID != w.id || m.Tasks[i].Subject != w.subject || m.Tasks[i].Status != w.status {
+			t.Errorf("Tasks[%d] = %+v, want {ID:%q Subject:%q Status:%q}", i, m.Tasks[i], w.id, w.subject, w.status)
 		}
 	}
 }
