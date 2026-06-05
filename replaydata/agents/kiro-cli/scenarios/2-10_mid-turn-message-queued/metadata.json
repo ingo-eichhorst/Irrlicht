@@ -21,9 +21,10 @@
       "confidence": 0.8,
       "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\n**agent (yes).** kiro-cli's V2 TUI explicitly queues a follow-up message typed while the model is working — it is NOT dropped or sent as literal text. The kiro-cli 2.5.1 binary's embedded changelog carries two decisive entries: `\"Added UX for managing queued messages in V2 TUI\"` and `\"Reject queued ! shell-escape commands during processing instead of sending them as literal text\"`. The second confirms that messages typed *during processing* are queued (the special-case is only the `!` shell-escape, which is rejected) — so a plain follow-up is queued and consumed at the next safe point, exactly like Claude Code. This resolves the question the dispatch flagged as unverified (some TUIs drop or block mid-turn input): kiro V2 queues.\n\n**daemon (full).** The spec asserts three observables: (1) state stays `working` through the queued-message arrival, (2) no `→ ready` flicker when the queued input lands, (3) the cycle still ends at `ready`. irrlicht's kirocli parser drives state off transcript-line shape, not off keystrokes. The queued text is buffered inside the kiro process and is NOT appended to `~/.kiro/sessions/cli/<uuid>.jsonl` until the current turn ends — so the daemon's transcript order is `Prompt(A) … turn_done, Prompt(B) …`. Throughout turn A the trailing line is an `AssistantMessage` carrying `toolUse` blocks (parsed `assistant`) or a `ToolResults` line (parsed `tool_result`) — neither is `turn_done`, so the session stays `working` with no flicker to `ready`. Only the FINAL text-only `AssistantMessage` of turn A maps to `turn_done` (parser.go lines 71-79, confirmed by parser_test.go's multi-tool sequence ending in a text-only `turn_done`). The queued `Prompt(B)` then drives a fresh `working` span that ends at `ready`. All three observables are produced.\n\n**driver (ready).** The recipe needs `send` (the mid-turn follow-up, with NO preceding `wait_turn` so it lands while turn A is still in flight), `wait_turn`, and `sleep`. All three are in the driver's `DRIVE_ELICITS=\"send slash wait_turn sleep\"`. kiro's `send_text` uses `tmux send-keys -l -- \"$text\"` then `Enter` — the same keystroke mechanism the claudecode reference recipe expressed via its `keys` step — so a queued mid-turn send is just a `send`; no `keys` primitive is required and there is no driver gap.\n\n## What irrlicht does NOT see (and why that's OK)\n\nThe queue itself is invisible — there is no event for \"user typed text that is now buffered.\" The spec asserts no such event; it asserts only state invariants on the working span, which the daemon verifies from its event stream. The kiro JSONL also carries NO model/token/cost (those live in the `<uuid>.json` sidecar the v1 parser does not read), so the observation vector is `model: unknown`, `cost_nonzero: false`, `tokens_nonzero: false`.",
       "caveats": [
-        "PROVISIONAL on emission ordering: that the queued Prompt(B) line is appended to the JSONL only AFTER turn A's text-only turn_done (never interleaved mid-turn as a synthetic user-line that the parser would read as a boundary) is inferred from the smoke FINDINGS turn-shape and parser.go, not from a live mid-turn-queue recording. If kiro ever wrote the queued Prompt before consumption, the parser could briefly flip toward a boundary — exactly the regression these invariants guard. record settles this from provisional to confirmed.",
-        "Mid-turn send is a single `send` with NO preceding `wait_turn` (unlike the consume-then-send sequence): the second prompt must land while turn A is still working. The driver's send_text bumps EXPECTED_TURNS, so the trailing wait_turn must expect both turns (A then the queued B) before declaring ready.",
-        "kiro may either fold the queued message into the current turn or consume it as a new turn after turn A's boundary; the spec accommodates both — the phase contract does not assume one shape.",
+        "CONFIRMED by live recording 2026-06-05 (replaced the PROVISIONAL emission-ordering caveat): the queued Prompt(B) line is appended to the <uuid>.jsonl only AFTER turn A's text-only turn_done — never interleaved mid-turn — and turn A is one contiguous working span (AssistantMessage(text,toolUse) → ToolResults → text-only AssistantMessage). daemon=full holds.",
+        "RECIPE BACKFLOW (2026-06-05): the original count-to-10 prompt did NOT exercise the mid-turn queue — kiro ignores the 'pause between each' instruction and finishes turn A in ~2s, so the follow-up landed after turn A reached ready (recordings 20260605T011455 + 011556 both showed ready-flicker + a waiting transition). The recipe now forces a BLOCKING shell tool (sleep 8) under --trust-all-tools for a genuine long working span, and a plain-word follow-up ('acknowledged') so turn B ends in ready not waiting.",
+        "Mid-turn send is a single `send` with NO preceding `wait_turn`: the second prompt must land while turn A is still working. The driver's send_text bumps EXPECTED_TURNS, so the trailing wait_turn expects both turns (A then queued B) before declaring ready.",
+        "kiro may either fold the queued message into the current turn or consume it as a new turn after turn A's boundary; the spec accommodates both — the phase contract does not assume one shape. (Observed: consumed as a new turn.)",
         "No model/token/cost in the kiro JSONL (sidecar-only, unread in v1) — observations assert model unknown, cost/tokens zero; not a daemon downgrade for this lifecycle-only scenario."
       ],
       "sources": [
@@ -64,17 +65,17 @@
       "preconditions": [
         "kiro-cli 2.5.1 on PATH and authenticated (subscription auth; KIRO_API_KEY not required)",
         "irrlichd is recording (--record / grant-all) and tailing ~/.kiro/sessions/cli/",
-        "Launched as `kiro-cli chat --trust-all-tools` so neither prompt trips a per-tool approval picker"
+        "Launched as `kiro-cli chat --trust-all-tools` so the blocking shell tool runs without a per-tool approval picker"
       ],
       "setup": [
         "Driver launches the TUI under tmux, waits for the idle input line, and discovers the fresh <uuid>.jsonl as the newest session file after the launch MARKER",
-        "The first prompt must keep kiro busy long enough to type a follow-up into the TUI — a slow count-to-10 with explicit pauses is sufficient",
-        "The mid-turn follow-up is a single `send` (tmux send-keys -l + Enter) with NO preceding wait_turn, so it lands while turn A is still working; kiro's V2 TUI queues it until the next safe point"
+        "The first prompt must keep kiro WORKING long enough to type a follow-up into the TUI. A count-to-10 does NOT suffice — kiro ignores the 'pause between each' instruction and flushes all 10 lines in one ~2s turn (live recording 20260605T011455/011556), so the follow-up lands AFTER turn A reached ready, never mid-turn. The reliable long working span is a BLOCKING shell tool call (sleep 8) under --trust-all-tools: kiro stays working across the toolUse/ToolResults cycle (pane shows '● Shell sleep 8 … esc to cancel').",
+        "The mid-turn follow-up is a single `send` (tmux send-keys -l + Enter) with NO preceding wait_turn, so it lands while turn A is still working; kiro's V2 TUI queues it until the next safe point. The follow-up text must elicit a PLAIN-WORD reply (not a question) so turn B ends in ready, not waiting — kiro's 'what's your follow-up?' reply otherwise trips the question/cue → waiting heuristic."
       ],
       "script": [
         {
           "type": "send",
-          "text": "Count from 1 to 10, one number per line, with a brief pause between each. Then on the last line reply with exactly the word: done"
+          "text": "Run this shell command using your shell tool: sleep 8 && echo finished. After it completes, reply with exactly the word: done"
         },
         {
           "type": "sleep",
@@ -82,7 +83,7 @@
         },
         {
           "type": "send",
-          "text": "followup queued"
+          "text": "Reply with exactly the word: acknowledged"
         },
         {
           "type": "wait_turn"
@@ -101,10 +102,10 @@
       ],
       "verify": [
         "events.jsonl shows the UUID entering ready, then a ready→working transition for the first prompt",
-        "events.jsonl contains NO state_transition to ready between the first ready→working and the queued-message consumption (the working span is contiguous through the queued arrival)",
-        "events.jsonl contains NO state_transition to waiting at any point during the working span",
+        "events.jsonl shows turn A as a contiguous working span across the toolUse/ToolResults cycle (the blocking shell tool); the queued follow-up's Prompt line is appended only AFTER turn A's text-only turn_done",
+        "events.jsonl contains NO state_transition to waiting at any point (turn B's terminal reply is a plain word, not a question)",
         "events.jsonl eventually shows a working→ready transition; final session state is ready",
-        "transcript.jsonl contains at least 1 Prompt line for the initial prompt; the queued follow-up appears as a second Prompt line consumed after turn A's turn_done, or is folded in — either shape is acceptable per spec"
+        "transcript.jsonl: Prompt(A) → AssistantMessage(text,toolUse) → ToolResults → AssistantMessage(text)=turn_done, THEN Prompt(B) → AssistantMessage(text); the queued follow-up appears as a second Prompt consumed after turn A's turn_done"
       ],
       "settings": {},
       "timeout_seconds": 240
