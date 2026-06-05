@@ -1,0 +1,137 @@
+{
+  "scenario_id": "task-estimate-marker",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "2.5.1",
+    "daemon_version": "0.4.8+202ece9.dirty",
+    "confidence": 0.8,
+    "notes": "agent=yes (kiro emits the marker when the rule is delivered in the prompt — no instruction file needed; kiro writes raw assistant text verbatim) / daemon=full (kirocli parser scans the FULL text block with tailer.ScanTaskEstimate before the 200-rune display truncation, feeds the shared task_estimate/task_completion_eta pipeline) / driver=ready (send+wait_turn+sleep, all in the kiro interactive TUI driver; the rule rides the prompt so NO seed_instruction step is needed). Route: record. No model/token/cost in the kiro JSONL → observations model unknown, cost/tokens false."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "task-estimate-marker",
+      "agent": "kiro-cli",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes (provisional on emission) · daemon_capability: full · driver_capability: ready → route record.\n\n## Reasoning\n\n### agent_supports: yes (confidence 0.8, provisional on emission)\n\nThe behavior is not a kiro CLI feature flag — it is the model following an instruction to emit a hidden HTML-comment marker in its own reply text. The scenario's `process` permits delivering that rule either via a persistent instruction file (the agent's CLAUDE.md/AGENTS.md equivalent) OR — as the sibling **aider** cell already does (agent=yes, driver=ready, route record) — directly in the `send` prompt. For kiro the recipe takes the in-prompt path: ~/.kiro/steering/ files could carry the rule, but the recipe just asks for it in the prompt, which is sufficient. The load-bearing emission fact: kiro writes raw assistant text **verbatim** into its <uuid>.jsonl (live-append of plain text confirmed, .build/refresh/kiro-cli-smoke/FINDINGS.md §2,§5), so an HTML-comment marker the model emits survives into the transcript text block the daemon tails — there is no markdown render or comment-stripping step between the model's reply and the .jsonl. What stays PROVISIONAL (hence 0.8, not higher) is purely model discretion: whether kiro's model re-emits the marker turn-over-turn with climbing completed_rounds is a behavior only a live recording settles — the 2026-05-31 marker experiment was claudecode/sonnet only.\n\n### daemon_capability: full (confidence 0.85)\n\nEvery user-observable signal the scenario asserts has a correct producing path today. The kiro parser (core/adapters/inbound/agents/kirocli/parser.go) handles an `AssistantMessage` by walking `data.content[]`; for each `text` block it calls `tailer.ScanTaskEstimate(text, ev.Timestamp)` on the **FULL** block text (parser.go:62-68) and sets `ev.TaskEstimate` to the latest valid marker. Critically this scan runs on the untruncated `text` — the 200-rune tail truncation that builds `ev.AssistantText` (parser.go:80-83) happens AFTERWARD and only to the display field, so a marker anywhere in a long reply is not lost (the truncation-trap the shared scan's doc-comment warns about is avoided here). The shared scan (core/pkg/tailer/taskestimate_scan.go) is tolerant: marker-key drift `irrlicht[-_]e(stimate|ta)`, completed_rounds/done_rounds/round, clamps 1≤total≤100 and 0≤completed≤total, rejects absurd markers wholesale, latest-valid-wins. From there the pipeline is the shared one already proven for claudecode/aider: tailer persistence carries the last-seen marker across empty passes → domain `TaskEstimate{total_rounds,completed_rounds,updated_at}` → `ForecastTaskCompletion` projects `task_completion_eta = now + (total−completed)×(elapsed/completed)` (core/domain/session/task_estimate.go) → metrics adapter serializes both on `SessionMetrics` while working (core/adapters/outbound/metrics/adapter.go). Suppression-at-ready is a client presentation gate (web taskEtaPresentation / macOS SessionListView), not a daemon drop. So every assertion — estimate present after the first marker, updated_at advancing, completed_rounds non-decreasing to total, ETA burning down, fields visible only while working — has a producing path → daemon=full.\n\n### driver_capability: ready (confidence 0.9)\n\nThe recipe elicits the behavior with `send` / `wait_turn` / `sleep` only — the rule is delivered IN the first prompt, so no `seed_instruction` step is required (this is what separates kiro from the codex/opencode/pi cells, which route driver_gap:seed_instruction because they rely on a seeded AGENTS.md). recipe-lint over replaydata/agents/kiro-cli/driver-interactive.sh reports step types: exit_clean, interrupt, keys, reset_session, restart, resume, send, session, sigkill, slash, sleep, start_session, wait_turn — send/wait_turn/sleep all present → driver=ready. The recipe uses the INTERACTIVE TUI driver (kiro-cli chat --trust-all-tools): headless --no-interactive writes NO session file and is invisible to the daemon (FINDINGS.md §7), and the REPL must outlive the observation window so each working→ready settle and the final ready-suppression are captured.\n\n## Provisional emission caveat\n\nThe parse/forecast/suppression path is code-certain (and proven live for claudecode/aider). The provisional element is emission: a live record run must confirm kiro re-emits the marker on ≥2 turns with climbing completed_rounds AND that the fields drop at ready. The exact recorded model id is unknown (the JSONL has no model field; the sidecar holds model_id but the parser does not read it) → observations.model is omitted (unknown).",
+      "caveats": [
+        "agent=yes is PROVISIONAL on emission (confidence 0.8): kiro's model re-emitting the marker turn-over-turn with climbing completed_rounds is unverified (the 2026-05-31 experiment was claudecode/sonnet only). record promotes this from provisional to settled.",
+        "The marker rule is delivered IN the prompt (send), mirroring the aider cell — no instruction file is seeded, so there is no seed_instruction driver gap. ~/.kiro/steering/ files could carry the rule as an alternative but the in-prompt path is sufficient and avoids the gap.",
+        "No model/token/cost in the kiro JSONL: those live in the <uuid>.json sidecar (metering_usage credits, rts_model_state.model_info.model_id; input/output_token_count are 0) which the parser does not read (FINDINGS.md §4). So observations.model is unknown (omitted), cost_nonzero=false, tokens_nonzero=false. The scenario's rate/ETA assertions are still fully observable — they derive from the marker + the daemon's own elapsed wall-clock, not from agent-reported tokens.",
+        "Suppression-by-state is a CLIENT presentation gate (web taskEtaPresentation / macOS SessionListView), not a daemon drop — the daemon keeps the fields on metrics across passes. The user-observable chip-present-while-working / gone-at-ready assertion holds via the clients; verify asserts the working-window values and the ready settle.",
+        "kiro writes its <uuid>.jsonl lazily (only after the first prompt): the on-time ready birth is the pre-session proc-<PID> row and the UUID session reconciles in on first input — the working/ready arc then plays out on the UUID session (same convention as the kiro basic-turn cell)."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/parser.go:62-83",
+          "note": "AssistantMessage text blocks feed tailer.ScanTaskEstimate(text, ev.Timestamp) on the FULL block text (line 65); the 200-rune truncation at lines 80-83 only builds the display AssistantText afterward, so a marker in a long reply survives the scan. Text-only AM → turn_done; toolUse-bearing AM → assistant (working)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/taskestimate_scan.go:37-61",
+          "note": "ScanTaskEstimate — the shared adapter-agnostic marker scan; tolerant parse (marker-key drift irrlicht[-_]e(stimate|ta), completed_rounds/done_rounds/round), clamps 1≤total≤100 and 0≤completed≤total, rejects absurd markers, latest-valid-wins. Doc-comment notes it MUST be fed the full block text, not the tail-truncated AssistantText — which is exactly what the kiro parser does."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/task_estimate.go",
+          "note": "TaskEstimate {total_rounds, completed_rounds, updated_at}; ForecastTaskCompletion = now + (total−completed) × (elapsed/completed), measured rate from the daemon's own elapsed wall-clock, nil until ≥1 round. Shared burndown math — fires for any agent populating ev.TaskEstimate, kiro included."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/outbound/metrics/adapter.go",
+          "note": "Shared projection: when m.TaskEstimate is non-nil, derives task_completion_eta and serializes task_estimate + task_completion_eta on SessionMetrics. Adapter-agnostic — already proven for claudecode/aider, applies to kiro with no new wiring."
+        },
+        {
+          "kind": "file",
+          "ref": ".build/refresh/kiro-cli-smoke/FINDINGS.md",
+          "note": "Live smoke of kiro-cli 2.5.1: §2 .jsonl grows turn-by-turn (live append of raw assistant text verbatim → marker survives into the transcript); §4 no model/usage/cost in the JSONL (sidecar holds credits + model_id, input/output_token_count=0); §5 turn-end shape (text-only AM = turn_done); §7 headless writes NO session file → interactive TUI driving is mandatory for recordings."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/kiro-cli/driver-interactive.sh",
+          "note": "recipe-lint driver_step_types: send, wait_turn, sleep present (plus slash, keys, start_session, session, resume, restart, reset_session, interrupt, sigkill, exit_clean). The recipe needs only send/wait_turn/sleep (the marker rule rides the prompt), so driver=ready — NO seed_instruction gap (unlike codex/opencode/pi)."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/aider/scenarios/5-8_task-estimate-marker/metadata.json",
+          "note": "Calibration sibling: aider agent=yes daemon=full driver=ready route record, delivering the marker rule via the send prompt (no seed_instruction). kiro mirrors this in-prompt pattern."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "kiro-cli >=2.5.1 on PATH and logged in (kiro-cli login; subscription auth, no env var); 2.5.1 validated",
+        "trust-all-tools consent persisted (kiro-cli chat --trust-all-tools picked 'Yes, and don't ask again' once)",
+        "irrlichd is recording in isolated mode (dev irrlichd --record; the prod daemon runs without --record)",
+        "tmux installed (kiro interactive TUI driver pane control)"
+      ],
+      "setup": [
+        "Driver launches the interactive TUI: kiro-cli chat --trust-all-tools in a fresh per-run cwd (headless --no-interactive writes NO session file and is invisible to the daemon — FINDINGS.md §7)",
+        "The first send carries the marker rule IN the prompt (no instruction file is seeded); subsequent sends advance the rounds"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "You will do a 3-round planning task. On EVERY reply, include this exact hidden marker in your prose, updating completed_rounds as you go: <!-- {\"marker\":\"irrlicht-eta\",\"total_rounds\":3,\"completed_rounds\":0} -->. Round 1: list three subtasks for adding a CHANGELOG.md to this repo. Emit the marker with completed_rounds:0 now, then reply and stop — do not continue to later rounds until I say so."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 10
+        },
+        {
+          "type": "send",
+          "text": "Round 1 done. Now do Round 2: draft the CHANGELOG.md header section as text (do not write a file). Update the marker to completed_rounds:1 in this reply, then stop."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 10
+        },
+        {
+          "type": "send",
+          "text": "Round 2 done. Now Round 3: draft an example entry under the header. Update the marker to completed_rounds:2 in this reply, then stop."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 10
+        },
+        {
+          "type": "send",
+          "text": "Round 3 done — the task is complete. Confirm completion and emit the marker with completed_rounds:3."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 30
+        }
+      ],
+      "verify": [
+        "While working, session metrics carry task_estimate {total_rounds:3, completed_rounds:M} matching the values kiro reported in its marker (completed_rounds <= total_rounds).",
+        "task_estimate.updated_at advances each time a fresher marker is observed (not pinned to a stale snapshot).",
+        "task_estimate.completed_rounds is non-decreasing across turns and reaches 3 on the final working turn.",
+        "task_completion_eta is present once completed_rounds >= 1 and a later projection <= an earlier one (burns down).",
+        "task_estimate / task_completion_eta are present only while working; absent at ready (suppressed-by-state, client gate).",
+        "State topology ready -> working -> ready across the rounds; final state ready (the >=10s trailing sleep captures the post-turn settle)."
+      ],
+      "settings": {},
+      "timeout_seconds": 420
+    }
+  }
+}

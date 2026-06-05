@@ -1,0 +1,2 @@
+{"version":"v1","kind":"Prompt","data":{"message_id":"77928209-2a6c-4454-846e-72a356fc6c9a","content":[{"kind":"text","data":"Reply with exactly this sentence and nothing else: The capital of France is Paris."}],"meta":{"timestamp":1780619304}}}
+{"version":"v1","kind":"AssistantMessage","data":{"message_id":"1ddf3b7d-e35b-4adc-88d5-93fd0ac9e52b","content":[{"kind":"text","data":"The capital of France is Paris."}]}}

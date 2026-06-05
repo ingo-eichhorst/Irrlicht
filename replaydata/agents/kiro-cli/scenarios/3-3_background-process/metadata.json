@@ -1,0 +1,68 @@
+{
+  "scenario_id": "background-process",
+  "metadata": {
+    "agent_supports": "no",
+    "daemon_capability": "n/a",
+    "driver_capability": "n/a",
+    "agent_cli_version": "2.5.1",
+    "daemon_version": "0.4.8+7042b3f.dirty",
+    "confidence": 0.85,
+    "notes": "agent_supports: no — kiro-cli's shell tool (execute_bash) is synchronous; required:[\"command\"], no run_in_background flag. Async/background lives only in the delegate/use_subagent tools (subagent dispatch), not the shell tool."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "background-process",
+      "agent": "kiro-cli",
+      "assessed_at": "2026-06-05T00:00:00Z",
+      "agent_supports": "no",
+      "daemon_capability": "n/a",
+      "driver_capability": "n/a",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: no\ndaemon_capability: n/a; driver_capability: n/a\n\n## What the scenario requires\n\nbackground-process (id 3.3) asserts the user-observable arc PR #450 / issue #445 added for Claude Code: the agent's SHELL tool dispatches a long-running process in the background, the tool call returns immediately (the turn closes around the still-running process), the daemon holds the session `working` while the detached process is alive (`BackgroundProcessCount > 0`), and a single `working → ready` fires once the process exits. The fixed structural arc is one `ready → working`, an extended `working` dwell with no settle while the process is alive, then exactly one `working → ready` after it exits.\n\n## Why agent_supports: no\n\nThe scenario's core primitive — the SHELL tool launching a process that the agent leaves running in the background past its own turn — does not exist in kiro-cli 2.5.1. kiro-cli is a fork of amazon-q-developer-cli; its shell tool is `execute_bash` (canonical name; aliases `execute_cmd` / `shell`). Read from the bundled `kiro-cli-chat` binary's tool-schema strings:\n\n- **`execute_bash`** — \"Execute shell commands with output capture.\" Its input schema declares `\"required\": [\"command\"]` and exactly two properties: `command` (\"Bash command to execute\") and `cwd` (\"Working directory for command execution\"). There is NO `run_in_background` / `background` / `async` / `detach` parameter. The tool is synchronous: it runs the command and returns its captured output. The whole binary has ZERO `run_in_background` tokens.\n- A user could append `&` inside the `command` string, but that backgrounds a child within the single synchronous `execute_bash` invocation — the tool still returns when the foreground command returns, the detached child is untracked, there is no id to poll, and nothing in the transcript marks a process as outliving the turn.\n\nThe ONLY async/background surface in kiro-cli is the `delegate` tool (and its replacement `use_subagent`): \"The delegate tool runs tasks asynchronously in the background (non-blocking) … Launch and manage asynchronous agent processes.\" But delegate/use_subagent dispatch SUBAGENTS (files under `.kiro/.subagents/`), not detached SHELL processes — that is the subagent/background-subagent scenario family, a different row. This resolves issue #280's history: the FIRST pass correctly demoted kiro's background_process to unknown (the `/spawn` and delegate evidence was subagent dispatch, not shell-bg); the LATER re-run that promoted it citing \"Delegate = BashOutput-shape, dispatches a long-running task while parent returns to ready\" conflated subagent delegation with the shell-tool background-process scenario. For the SHELL tool specifically, kiro has no background/async mode.\n\nBecause the agent cannot perform the behavior with its shell tool, the daemon and driver pillars are `n/a`: there is no behavior to observe and no recipe to drive. Even were the feature present, the kiro-cli parser (core/adapters/inbound/agents/kirocli/parser.go) emits no BackgroundSpawns / TerminatedBackgroundTaskIDs / BashOutputPolls — those fields are claudecode-specific and are the sole feed for the daemon's BackgroundProcessCount path — so the daemon pillar would be incapable/bug regardless. But the load-bearing verdict is at the agent: `agent=no`, route frozen.\n\n## What would flip agent_supports to yes\n\nA future kiro-cli release adding a true detached/background mode to the `execute_bash` shell tool — a `run_in_background` flag or a dedicated background-shell-task tool that returns a task id, keeps the process alive past the turn, and exposes a poll/terminate surface a tailer can observe. None of that exists in 2.5.1.",
+      "caveats": [
+        "agent_supports: no is anchored to the kiro-cli 2.5.1 vendor binary (kiro-cli-chat) tool-schema strings: execute_bash is synchronous (\"Execute shell commands with output capture\") with \"required\": [\"command\"] and only command + cwd properties — no run_in_background flag; 0 run_in_background tokens in the whole binary.",
+        "The delegate / use_subagent tools DO run \"asynchronously in the background (non-blocking)\", but they dispatch subagents (files in .kiro/.subagents/), not detached shell processes — that is the subagent scenario family, not shell-tool background-process. Issue #280's later promotion conflated the two; the earlier demotion (delegate evidence = subagents) was correct for THIS scenario.",
+        "A user-supplied `&` inside an execute_bash command backgrounds a child within the single synchronous invocation, but it is untracked, has no id to poll, and is not surfaced in the transcript as outliving the turn — it does not satisfy the scenario's tracked-background-process arc.",
+        "daemon/driver are n/a (not incapable): the agent's shell tool lacks the primitive, so there is no signal to observe and no recipe to drive. Independently, the kirocli parser emits no background-tracking fields, so the daemon pillar would also fail — but the load-bearing block is at the agent.",
+        "JSONL carries no model/token/cost; not material here (frozen cell, no spec phases / no observations to record)."
+      ],
+      "sources": [
+        {
+          "kind": "command",
+          "ref": "strings '/Applications/Kiro CLI.app/Contents/MacOS/kiro-cli-chat' | grep -c run_in_background  → 0",
+          "note": "Zero run_in_background tokens in the entire kiro-cli 2.5.1 chat binary. The #445/#450 mechanism is keyed on run_in_background + backgroundTaskId + BashOutput/KillShell; kiro emits none of these."
+        },
+        {
+          "kind": "command",
+          "ref": "strings kiro-cli-chat | grep 'Execute shell commands with output capture' ; grep '\"required\": [\"command\"]' ; grep '\"Bash command to execute\"'",
+          "note": "The execute_bash (canonical; aliases execute_cmd/shell) tool is synchronous: \"Execute shell commands with output capture\", input schema required:[\"command\"], properties = command (\"Bash command to execute\") + cwd (\"Working directory for command execution\"). No background/async/detach parameter."
+        },
+        {
+          "kind": "command",
+          "ref": "strings kiro-cli-chat | grep 'The delegate tool runs tasks asynchronously in the background'",
+          "note": "The ONLY async/background surface is delegate/use_subagent — \"Launch and manage asynchronous agent processes … Files are stored in .kiro/.subagents/\". These dispatch SUBAGENTS, not detached shell processes; this is the subagent scenario family, not shell-tool background-process. Anchors the #280 disambiguation."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/parser.go",
+          "note": "The kirocli parser produces no BackgroundSpawns / TerminatedBackgroundTaskIDs / BashOutputPolls — zero background-process handling. The daemon's BackgroundProcessCount path (core/pkg/tailer/tailer.go) is fed only by those parser fields, which only claudecode emits. (Confirms daemon would also fail, though the load-bearing verdict is agent=no.)"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/3-3_background-process/metadata.json",
+          "note": "Canonical anchor (claudecode yes/full/ready): the scenario's observability is built entirely on Claude Code's run_in_background + backgroundTaskId + BashOutput/KillShell, none of which kiro-cli's shell tool has."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "preconditions": [],
+      "setup": [],
+      "script": [],
+      "verify": [],
+      "settings": {},
+      "timeout_seconds": 0
+    }
+  }
+}

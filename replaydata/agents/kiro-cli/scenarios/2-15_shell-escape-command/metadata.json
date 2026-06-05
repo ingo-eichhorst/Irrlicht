@@ -1,0 +1,127 @@
+{
+  "scenario_id": "shell-escape-command",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "2.5.1",
+    "daemon_version": "0.4.8+b5e8423.dirty",
+    "confidence": 0.75,
+    "notes": "agent_supports: yes; daemon_capability: full; driver_capability: ready — kiro's TUI ! shell-escape runs locally with no LLM round-trip; the kirocli parser emits state only for Prompt/AssistantMessage/ToolResults/Clear, so the escape (no-trace, or an unrecognized kind hitting default:Skip) fires no transition and the session stays ready — it does not flap states."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "shell-escape-command",
+      "agent": "kiro-cli",
+      "assessed_at": "2026-06-05T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.75,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Reasoning\n\n### Agent supports the primitive (yes)\n\nThe scenario's primitive is a shell-escape mechanism — Claude Code's `!cmd` (run a local shell command in the REPL with no LLM round-trip), or analogous. kiro-cli's TUI supports the SAME primitive: a `!command` shell escape. The surface is confirmed by kiro's own changelog line \"Reject queued ! shell-escape commands during processing\" — kiro would not have a queue-rejection rule for `!` escapes if the `!` shell-escape surface did not exist. The live 2.5.1 smoke (.build/refresh/kiro-cli-smoke/FINDINGS.md) inventories the TUI (idle input line, picker, slash surface) and confirms the interactive REPL is the only persisted mode. So `!echo hello` typed into the kiro-cli TUI is a direct one-to-one analog of Claude Code's `!cmd`, not a loose stand-in — agent_supports: yes.\n\n### daemon_capability (full) — the spec-required observable is met\n\nThe user-observable signal the scenario asserts is exactly: `ready → working → ready`, and crucially state does NOT stick in `working` after the shell command exits; the scenario verify adds `tool_calls_max: 0`. The load-bearing invariant for a session-monitor is that a user-side shell escape does NOT flap the session's state.\n\nkiro's transport is `FilesUnderRoot{Dir: .kiro/sessions/cli, JSONLineParser}` (core/adapters/inbound/agents/kirocli/agent.go:38-43): the daemon tails the `<uuid>.jsonl`. The kirocli parser (core/adapters/inbound/agents/kirocli/parser.go) emits state ONLY for four kinds — `Prompt`→user_message, `AssistantMessage`(toolUse)→assistant, `AssistantMessage`(text-only)→turn_done, `ToolResults`→tool_result, and `Clear`→skip; EVERY other kind falls through `default: ev.Skip = true` (parser.go:110-112). There is no `bashExecution` / shell-escape handler in the parser (grep for bash/shell/exec returns only unrelated Go negation operators).\n\nA `!command` shell escape runs LOCALLY in the TUI with no LLM round-trip, so it produces no `AssistantMessage` (no working transition, no turn_done). What it writes to the `.jsonl` is UNKNOWN for kiro: the live 2.5.1 event vocabulary observed in the smoke is `Prompt`, `AssistantMessage`, `ToolResults`, `Clear` only (FINDINGS.md §4), with no shell-escape kind seen. Two possibilities, and BOTH satisfy the invariant: (a) kiro writes NOTHING for the escape (a no-trace escape) — the tailer fires no event and the session stays ready trivially; (b) kiro writes some user-side wrapper line of an unrecognized kind — it hits `default: ev.Skip` and again fires no transition. This is the SAME outcome as pi 2.15 (pi writes a `bashExecution` rollout line that the pi parser deliberately skips, parser.go:128-131) and the no-trace half of aider 2.15 — the escape is invisible to events.jsonl and the session stays ready across it.\n\nEvery spec-required observable is therefore represented by the daemon as it exists today: a warm-up real prompt drives a genuine `ready → working → ready` arc, the `!` escape drives NO further working/waiting transition (state stays ready, never stuck in working), tool_calls = 0, and a trailing real prompt proves the session is still alive with a second `ready → working → ready` arc. No spec-required observable is mis-handled → `full`, not `bug`. A trace (or no-trace) for the escape leaves the session observable throughout → not `incapable`.\n\n### Why full + a caveat, not bug or partial\n\nThe escape itself is INVISIBLE to events.jsonl — irrlicht cannot tell the `!` shell escape apart from \"the session is idle in ready\", because the escape never reaches the four kinds the parser maps. The canonical spec does NOT require a distinct shell-escape event (it asserts the arc + no-stuck-working + zero tools), so this indistinguishability is a CAVEAT, not a daemon defect. Per the authoring rule (caveats over downgrades), daemon stays `full`.\n\n### Confidence 0.75\n\nThe negative invariant (no working/waiting transition fires for the escape) is robust under BOTH the no-trace and the unrecognized-kind-skipped readings, and the parser's four-kind whitelist + `default: Skip` is read directly from source. What is genuinely UNKNOWN — and what `record` will settle — is whether kiro writes ANY line for a `!` escape (pi writes one; kiro may write nothing). That uncertainty does not threaten the invariant (both readings hold) but caps confidence below the docs-literally-say-this band. EMISSION CAVEAT: this daemon=full is doc+source derived; the property that the escape emits no parser-mapped event is provisional until a live recording confirms kiro writes nothing of kind Prompt/AssistantMessage/ToolResults for `!echo hello`.\n\n### driver_capability (ready)\n\nThe recipe steps are `send` (warm-up + liveness prompts), `keys` (the `!echo hello` escape itself — delivered as the raw tmux key sequence `! e c h o Space h e l l o Enter`, because a `keys` step does NOT bump EXPECTED_TURNS whereas a `send` would, and the escape produces no text-only AssistantMessage so a spurious bump would make the trailing liveness `wait_turn` time out), `wait_turn`, and `sleep`. The kiro-cli interactive driver's DRIVE_ELICITS is `send slash wait_turn sleep keys` (driver-interactive.sh) — every step the recipe needs is genuinely elicited; the `keys` seam was ported from drive-claudecode-interactive.sh in this cell's driver commit (the same step claudecode 2.15 uses for its `!echo hello` escape). None of the remaining stubbed primitives (interrupt, reset_session, restart, resume, sigkill, exit_clean, start_session, session) is on this recipe's path → driver_capability: ready.\n\n## Routing\n\nagent=yes, daemon=full, driver=ready → route: record. The recorded spec asserts the warm-up arc, a ready dwell across the `!` escape window with no working/waiting transition, a liveness arc, and a final ready state; the kiro JSONL carries no model key, so observations OMIT model (the live recording records it EMPTY, not the literal 'unknown' — matching the recorded sibling cells 2-1/2-13/2-5), with cost_nonzero:false, tokens_nonzero:false (the kiro JSONL carries no model/token/cost — those live only in the <uuid>.json sidecar the v1 parser does not read).",
+      "caveats": [
+        "FEATURE-INVISIBLE-BUT-SPEC-COMPLIANT: a `!command` shell escape never reaches the four kinds the kirocli parser maps (Prompt/AssistantMessage/ToolResults/Clear), so irrlicht cannot distinguish the escape from an idle ready session — it is observed only as the absence of a transition across the escape window, never as a distinct shell-escape event. The canonical spec does not require a distinct event, so this is a caveat, not a daemon defect.",
+        "UNKNOWN (to be settled by record): whether kiro writes ANY .jsonl line for a `!` escape. The live 2.5.1 smoke observed only Prompt/AssistantMessage/ToolResults/Clear (FINDINGS.md §4) and saw no shell-escape kind. Calibration: pi writes a bashExecution rollout line its parser skips (parser.go:128-131); kiro may write nothing at all. BOTH readings satisfy the invariant — a no-trace escape holds it trivially, and an unrecognized kind hits the parser's `default: ev.Skip` (parser.go:110-112) — so the verdict does not hinge on which is true, but confidence is capped at 0.75 until a recording confirms it.",
+        "EMISSION CAVEAT (provisional daemon=full): this verdict is derived from reading the kirocli parser's kind whitelist; the property that the `!` escape emits no parser-mapped event is provisional for what the agent actually WRITES to its transcript and is promoted from provisional to settled only by a live recording (the assess→record backflow).",
+        "The kiro JSONL carries no model/token/cost (those live only in the <uuid>.json metadata sidecar the v1 parser does not read, FINDINGS.md §4), so observations OMIT model (the live recording records it EMPTY, not 'unknown'), with cost_nonzero:false, tokens_nonzero:false — there is no usage vector to verify against, only the lifecycle arc. RECORD CONFIRMED 2026-06-05: the escape left zero transcript trace (transcript = warm Prompt/AssistantMessage + alive Prompt/AssistantMessage only) and fired no working/waiting transition across the escape window."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": ".build/refresh/kiro-cli-smoke/FINDINGS.md",
+          "note": "§4 live 2.5.1 event vocabulary is Prompt/AssistantMessage/ToolResults/Clear ONLY — no model/usage/cost in the JSONL (those live in the <uuid>.json sidecar); no shell-escape kind observed. §6/§8 inventory the TUI surface (idle input line, picker, slash commands); §7 the TUI is the only persisted mode (headless writes no session file). Grounds agent=yes (TUI exists), the no-trace UNKNOWN, and observations model:unknown/cost:false/tokens:false."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/parser.go",
+          "note": "The parser maps ONLY Prompt→user_message (L41-43), AssistantMessage→assistant/turn_done (L45-83), ToolResults→tool_result (L85-102), Clear→skip (L104-108). Every other kind hits `default: ev.Skip = true; return` (L110-112). There is NO bashExecution / shell-escape handler — so a user-side `!` escape (no LLM round-trip → no AssistantMessage) fires no state transition, whether it writes nothing or an unrecognized kind. Grounds daemon=full + the feature-invisible caveat."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/agent.go",
+          "note": "Source = FilesUnderRoot{Dir:.kiro/sessions/cli, JSONLineParser} (L38-43): the daemon tails the <uuid>.jsonl. Confirms the transport whose four-kind parser whitelist the escape never reaches."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/pi/scenarios/2-15_shell-escape-command/metadata.json",
+          "note": "CALIBRATION: pi's `!`-escape writes a bashExecution rollout line that the pi parser deliberately SKIPS (parser.go:128-131), so the escape is invisible and the session stays ready — the same observable shape and the same NEGATIVE-invariant assertion (no stuck working, no waiting) this kiro cell adopts. pi rated agent=yes daemon=full(observes:partial era→full+caveat) confidence 0.75."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/aider/scenarios/2-15_shell-escape-command/metadata.json",
+          "note": "CALIBRATION: aider's `/run` (alias `!`) escape produces ZERO parseable tool line in 0.86.2, so irrlicht observes it only as the surrounding state arc, never as a distinct shell-escape event — the same feature-invisible-but-spec-compliant caveat pattern (daemon=full + caveat, not bug)."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/kiro-cli/driver-interactive.sh",
+          "note": "DRIVE_ELICITS=\"send slash wait_turn sleep keys\" — the recipe's send/wait_turn/sleep/keys steps are all genuinely elicited. The `!echo hello` escape is delivered via the `keys` step (raw tmux key sequence `! e c h o Space h e l l o Enter`), which does NOT bump EXPECTED_TURNS (a `send` would, and the no-LLM escape produces no text-only AssistantMessage, so a bump would time out the trailing liveness wait_turn); the `keys` seam was ported from drive-claudecode-interactive.sh. None of the remaining stubbed primitives is on the recipe path → driver=ready."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/kiro-cli/scenarios/2-5_synchronous-slash-command/expected.jsonl",
+          "note": "TEMPLATE: the kiro synchronous-slash cell asserts the identical shape — warm-up arc to materialize the <uuid>.jsonl, a window phase pinning state ready (duration_at_least_ms + invariants forbidding working/waiting) across a no-LLM action, then a liveness turn. This shell-escape cell reuses that structure with the escape in place of the slashes."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "kiro-cli 2.5.1 on PATH and authenticated out-of-band (subscription auth — the live smoke ran on subscription auth; #280's KIRO_API_KEY + Pro+ friction is obsolete for this auth, FINDINGS.md §7).",
+        "tmux available — the interactive driver runs kiro-cli's TUI in a tmux session so the warm-up turn, the `!` escape, and the liveness turn all land on one long-lived session.",
+        "irrlichd is recording — run-cell.sh in isolated mode, or --attach against a daemon started with --record (the prod daemon has no --record).",
+        "INTERACTIVE (TUI) ONLY: a `!` shell escape exists only inside the kiro-cli TUI; headless `kiro-cli chat --no-interactive` writes NO session file under ~/.kiro/sessions/cli/ and is invisible to the daemon (FINDINGS.md §7), so it MUST NOT be used for recording.",
+        "OBSERVES (per assessment): the `!` escape is invisible to events.jsonl (it never reaches the four kinds the kirocli parser maps). This cell asserts the SAFETY invariant — the escape must not flap the session's state (no working, no waiting; not left stuck in working) — observed as a continuous ready dwell across the escape window, NOT as a distinct shell-escape event."
+      ],
+      "setup": [
+        "The interactive driver boots a fresh kiro-cli TUI (`kiro-cli chat --trust-all-tools`) in a per-run cwd under <staging>/cwd/; kiro mints its own <uuid> and writes ~/.kiro/sessions/cli/<uuid>.jsonl only after the first prompt, so resolve_transcript binds the UUID after the warm-up turn.",
+        "WARM-UP FIRST: a real `send`+`wait_turn` warm-up prompt drives a genuine ready→working→ready arc and materializes the <uuid>.jsonl so the driver can bind the session before the escape (the escape itself writes no AssistantMessage, so without a warm-up turn there is nothing to bind).",
+        "The `!echo hello` shell escape is issued via a `keys` step — the raw tmux key sequence `! e c h o Space h e l l o Enter` (each token one tmux key event, no -l, no implicit Enter), so the leading `!` is delivered verbatim and kiro runs it as a LOCAL shell command with no LLM round-trip. A `keys` step does NOT bump EXPECTED_TURNS (unlike `send`): the escape produces no text-only AssistantMessage, so a bump would make the trailing liveness `wait_turn` block on a turn that never materializes and time out. NO wait_turn follows the escape; a trailing sleep holds the ready dwell open instead.",
+        "LIVENESS: a final normal `send`+`wait_turn` drives a SECOND ready→working→ready arc on the same <uuid> session, proving the session is still alive and uncorrupted after the escape.",
+        "After the final turn + trailing sleep the driver tears the tmux session down once → a single process_exited; final session state is ready."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: warm"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        },
+        {
+          "type": "keys",
+          "keys": "! e c h o Space h e l l o Enter"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: alive"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the warm-up 'warm' prompt drive a genuine ready→working→ready arc on the minted <uuid> session (materializes the transcript and supplies the legitimate arc to contrast against the escape's silence).",
+        "events.jsonl contains NO state_transition to working AND NO state_transition to waiting across the `!echo hello` escape window (≥4s after the warm-up turn settles) — the escape runs locally with no LLM round-trip and never reaches the four kinds the kirocli parser maps, so the session stays continuously ready and is NOT left stuck in working.",
+        "the escape is observed only as the ready dwell — NO distinct shell-escape event appears in events.jsonl (the feature-invisible-but-spec-compliant scope); tool_calls = 0.",
+        "after the trailing 'alive' prompt, events.jsonl shows a SECOND ready→working→ready arc on the SAME <uuid> session — proves the session is still alive and a real prompt still drives state after the escape.",
+        "events.jsonl contains a pid_discovered bound to the <uuid> session; exactly one process_exited at teardown; final session state is ready."
+      ],
+      "settings": {},
+      "timeout_seconds": 150,
+      "notes": "kiro-cli vs claudecode/codex/pi/aider for this scenario: kiro's TUI `!command` is the direct analog of Claude Code's `!cmd` shell-escape (the changelog line 'Reject queued ! shell-escape commands during processing' confirms the surface). The recipe is templated from the kiro synchronous-slash-command recipe (warm-up turn → no-LLM action window → liveness turn) — the SAME structure, with the `!echo hello` escape in place of /help+/session-id. UNLIKE pi (whose parser skips a bashExecution rollout line) and LIKE the no-trace reading, the kirocli parser has no shell-escape handler at all: a `!` escape produces no AssistantMessage (no LLM round-trip) and either writes nothing or an unrecognized kind that hits `default: ev.Skip` (parser.go:110-112) — either way no state transition fires and the session stays ready. The whole observable is the ABSENCE of a working/waiting transition across the escape window plus the proof (warm-up + liveness arcs) that a NORMAL prompt still drives state. RECIPE SHAPE: warm-up FIRST (kiro writes the <uuid>.jsonl only after the first prompt, so the driver's resolve_transcript needs a real turn to bind the UUID); the escape via `keys` (the raw tmux key sequence `! e c h o Space h e l l o Enter` — the kiro driver now elicits send/slash/wait_turn/sleep/keys; a `keys` step delivers the escape verbatim WITHOUT bumping EXPECTED_TURNS, which a `send` would, mirroring claudecode 2.15), NO wait_turn after the escape (it produces no text-only AssistantMessage, so wait_turn would time out), a 6s sleep to hold the ready dwell open past any debounce, then the liveness send+wait_turn, then a 4s trailing sleep so the final settle lands before the tmux kill. OBSERVATIONS: the kiro JSONL carries no model/token/cost (sidecar-only, FINDINGS.md §4), so observations OMIT model (kiro records it EMPTY, not 'unknown' — confirmed by record, matching sibling cells 2-1/2-13), cost_nonzero:false, tokens_nonzero:false. WHAT record SETTLES: whether kiro writes ANY .jsonl line for the `!` escape (pi writes a skipped bashExecution line; kiro may write nothing). The invariant holds under both, but the emission is the provisional bit. If it broke, look at core/adapters/inbound/agents/kirocli/parser.go (the four-kind whitelist + default:Skip) and whether a kiro update started writing a shell-escape event of a kind the parser would (wrongly) map to a transition."
+    }
+  }
+}

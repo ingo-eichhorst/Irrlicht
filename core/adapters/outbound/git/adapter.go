@@ -142,6 +142,11 @@ func (a *Adapter) GetCWDFromTranscript(transcriptPath string) string {
 			lastCWD = cwd
 		}
 	}
+	if lastCWD == "" {
+		// Some agents (Kiro CLI) record the cwd only in a metadata sidecar
+		// next to the transcript, never in the JSONL lines themselves.
+		lastCWD = transcript.ExtractCWDFromSidecar(transcriptPath)
+	}
 	return lastCWD
 }
 

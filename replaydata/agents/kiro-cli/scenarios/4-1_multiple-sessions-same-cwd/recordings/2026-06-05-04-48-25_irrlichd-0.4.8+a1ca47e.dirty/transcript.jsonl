@@ -1,0 +1,6 @@
+{"version":"v1","kind":"Prompt","data":{"message_id":"566bbf23-67f6-4bc7-846a-6f4f126f7715","content":[{"kind":"text","data":"Reply with exactly the word: alpha"}],"meta":{"timestamp":1780627705}}}
+{"version":"v1","kind":"AssistantMessage","data":{"message_id":"93ffb2c1-9318-4543-8b14-27900e77de20","content":[{"kind":"text","data":"alpha"}]}}
+{"version":"v1","kind":"Prompt","data":{"message_id":"8be5e982-a061-461a-9d08-7ab0e19d9194","content":[{"kind":"text","data":"Reply with exactly the word: alpha2"}],"meta":{"timestamp":1780627722}}}
+{"version":"v1","kind":"AssistantMessage","data":{"message_id":"0e344e62-0523-4b83-bdf8-94ccfcdcb187","content":[{"kind":"text","data":"alpha2"}]}}
+{"version":"v1","kind":"Prompt","data":{"message_id":"279143fa-7b23-4200-97ce-cf51de409519","content":[{"kind":"text","data":"Reply with exactly the word: bravo"}],"meta":{"timestamp":1780627716}}}
+{"version":"v1","kind":"AssistantMessage","data":{"message_id":"ee00d686-8bb9-49fb-bee6-9b86a46b031f","content":[{"kind":"text","data":"bravo"}]}}

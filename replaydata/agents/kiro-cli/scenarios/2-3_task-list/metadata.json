@@ -1,0 +1,111 @@
+{
+  "scenario_id": "task-list",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "bug",
+    "driver_capability": "ready",
+    "agent_cli_version": "2.5.1",
+    "daemon_version": "0.4.8+f22f3be.dirty",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes (todo_list built-in tool, gated by experimental chat.enableTodoList)\ndaemon_capability: bug — the kiro parser routes todo_list through the generic opaque ToolUse{ID,Name} path and emits no TaskDelta/TaskSnapshot, so the session API tasks field stays empty\ndriver_capability: ready\nTracked as ingo-eichhorst/Irrlicht#589."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "task-list",
+      "agent": "kiro-cli",
+      "assessed_at": "2026-06-05T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "bug",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: bug; driver_capability: ready\n\n## Reasoning\n\n### agent_supports: yes\n\nKiro CLI's task-list equivalent is the built-in **`todo_list`** tool. Claude Code uses `TaskCreate`/`TaskUpdate` and OpenCode uses `todowrite` (full-list replace); kiro-cli ships `todo_list` — a single-session TODO/checklist tool that lives in the agent's own session and spawns no child session. The kiro-cli 2.5.1 binary is the authoritative source: its embedded tool catalog declares `todo_list` (surface alias `todo`) with the description \"Create and manage TODO lists for tracking multi-step tasks with progress and context\" / \"Task list tool for tracking multi-step work with create, complete, add, remove, and list commands\". Its `command` parameter is \"one of `create`, `complete`, `load`, `add`, `remove`, and `lookup`\": `create` takes \"the list of DISTINCT tasks to be added to the TODO list\" plus a brief summary; `complete` takes \"the 0-INDEXED numbers of EVERY completed task\" and the model is instructed to mark \"Each task ... as completed IMMEDIATELY after it is finished\"; the tool returns a serialized todo-list state with an ID that is threaded back through subsequent calls. The feature is gated by the experimental setting `chat.enableTodoList` (\"Enable TODO list feature for task tracking\"). The tool runs inside the agent's own session, renders a checklist to the user, creates no ParentSessionID link and spawns no child session, so SubagentCount stays 0 — the same single-session task-list primitive the scenario asserts, distinct from foreground/background-subagent (which use the real subagent/delegate spawn). NOTE: kiro's model is create→complete (tasks are created, then individually marked complete), not a per-item `pending|in_progress|completed` status array like claudecode/codex — the in_progress middle state is not a first-class field of kiro's todo schema. The scenario's load-bearing assertion is still met at the agent layer: three distinct items are created and walked to completed within one session.\n\n### daemon_capability: bug\n\nA local trace EXISTS but the kiro parser mis-handles it, so the load-bearing observable — the three items surfacing in the session API `tasks` field with subject + status — is NOT produced today.\n\n- The kiro JSONL records each `todo_list` call as an `AssistantMessage` whose `data.content[]` carries a `toolUse` block (`data.name=\"todo_list\"`, `data.toolUseId`) — the same envelope shape the live 2.5.1 smoke confirmed for read/shell/write (FINDINGS.md §4–5). The signal reaches the Source the daemon tails (`FilesUnderRoot{Dir:\".kiro/sessions/cli\"}`); this is NOT a cloud-only / unobservable behavior.\n- The kiro parser (`core/adapters/inbound/agents/kirocli/parser.go`) dispatches on event KIND, not tool NAME: a `toolUse` block becomes a generic opaque `tailer.ToolUse{ID:toolUseId, Name:\"todo_list\"}` (lines 53–61) and the message is emitted as `assistant` (mid-turn) with `ev.ToolUses` set. The parser emits NO `TaskDelta` and NO `TaskSnapshot` for it — the only task-shaped thing it produces is `TaskEstimate` from free-text scanning (the eta marker, line 65), which is unrelated to the task list.\n- The daemon's session `tasks` field is fed ONLY from the tailer's accumulated `t.tasks` slice (`core/pkg/tailer/tailer.go:376`, `tailer_metrics.go:397`), which the tailer folds exclusively from parser-emitted `TaskDelta`/`TaskSnapshot` (`core/pkg/tailer/parser.go:49–60`); `replayengine/metrics.go:40` copies it verbatim into the session summary, and `session.SessionMetrics.Tasks` is documented \"populated from TaskCreate / TaskUpdate ... Nil for ... non-Claude-Code adapters\" (`core/domain/session/session.go:172`). With no kiro `todo_list`→Task mapping, the kiro session's `tasks` field stays empty.\n\nClassification: `bug`, not `incapable` — a trace is present and structurally complete (the todo_list call and its task arguments reach the transcript the daemon tails); the daemon simply lacks a kiro `todo_list`→Task path (the analog of opencode's `todowrite` synthesis and the same gap codex has for `update_plan`). It is the product/parser's job to add it; file an issue. The OTHER user-observable signals hold: with `--trust-all-tools` the tool auto-executes (no permission gate), so the arc is a clean ready → working → ready and SubagentCount stays 0 — those phases pass; only the tasks-content assertion is `known_failing`.\n\n### driver_capability: ready\n\nThe scenario is elicited with `send` / `wait_turn` / `sleep` steps. The kiro-cli interactive driver's semantic manifest is `DRIVE_ELICITS=\"send slash wait_turn sleep\"` (`replaydata/agents/kiro-cli/driver-interactive.sh:86`) — all three needed step types are genuinely ported (TUI launch `kiro-cli chat --trust-all-tools`, transcript-based wait_turn keyed on the text-only AssistantMessage turn_done, send via tmux). No missing step type, so `ready`.\n\n## Daemon-facts caveat (observations)\n\nThe kiro JSONL carries NO model/token/cost (those live only in the `<uuid>.json` sidecar, which the v1 parser does not read — FINDINGS.md §4). So this cell's observation vector is model=`unknown`, `cost_nonzero=false`, `tokens_nonzero=false` — a parser-shape fact, not a task-list gap.\n\n## Provisional emission caveat\n\nThe `agent=yes` verdict is grounded in the kiro 2.5.1 binary's tool catalog (todo_list declaration, command set, and prompt text) — emission of a todo_list toolUse into the JSONL is highly likely given the read/shell/write toolUse shape was directly observed live, but a todo_list call was NOT in the smoke session, so the exact serialized envelope is doc/code-derived, not yet recording-confirmed. The `daemon=bug` verdict is grounded in the parser code path (opaque ToolUse, no TaskDelta) plus the tailer/session task contract, not a guess. Confidence 0.8: the gap mechanism is certain from code; a live recording will confirm that a 3-item create→complete walk emits the expected todo_list toolUse sequence and that the daemon indeed leaves tasks empty (promoting the bug from doc/code-derived to recording-proven).",
+      "caveats": [
+        "kiro's todo_list is create→complete (tasks created, then marked completed by 0-indexed number), NOT a per-item pending|in_progress|completed status array like claudecode TaskCreate/TaskUpdate or codex update_plan — the in_progress middle state is not a first-class field of kiro's todo schema. A future kiro Task path would map create→one Task per item (status pending) and complete→status completed; the intermediate in_progress is not separately surfaced by the tool.",
+        "The todo_list feature is gated by the experimental setting chat.enableTodoList — recording must run with that setting enabled (an experimental flag), or the tool is unavailable to the model. This is the recording prerequisite.",
+        "The tasks-content assertion is not expressible in the phase DSL (mirroring claudecode/opencode/codex task-list, whose tasks pin lives in the replay golden's summary.tasks). For this known_failing cell the phase spec asserts the lifecycle arc + SubagentCount=0 (which pass) and the meta flags known_failing for the tasks-content observable.",
+        "The kiro JSONL carries no model/token/cost — observations are model=unknown, cost_nonzero=false, tokens_nonzero=false (the sidecar <uuid>.json holds metering/model but the v1 parser does not read it; FINDINGS.md §4).",
+        "PROVISIONAL on emission: the live 2.5.1 smoke exercised read/shell/write (toolUse envelope confirmed) but NOT todo_list, so the exact serialized todo_list toolUse shape is doc/code-derived; record promotes it from provisional to settled."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Applications/Kiro CLI.app/Contents/MacOS/kiro-cli-chat",
+          "note": "Strings scan of the kiro-cli 2.5.1 native binary: built-in tool registry includes todo_list (alias todo) with description 'Create and manage TODO lists for tracking multi-step tasks with progress and context' / 'Task list tool for tracking multi-step work with create, complete, add, remove, and list commands'; command param 'create|complete|load|add|remove|lookup'; create takes 'the list of DISTINCT tasks'; complete takes 'the 0-INDEXED numbers of EVERY completed task' + 'Each task should be marked as completed IMMEDIATELY after it is finished'; setting chat.enableTodoList 'Enable TODO list feature for task tracking' (experimental)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/parser.go",
+          "note": "Lines 45-83: AssistantMessage toolUse blocks become generic opaque tailer.ToolUse{ID:toolUseId, Name} and emit event_type=assistant; the parser produces NO TaskDelta/TaskSnapshot (only TaskEstimate from free-text eta-marker scanning, line 65, which is unrelated to the task list). So todo_list reaches the daemon as an opaque tool use and the session tasks field stays empty."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/parser.go",
+          "note": "Lines 49-60: TaskDelta / TaskSnapshotEntry are defined as Claude Code TaskCreate/TaskUpdate constructs; the tailer folds them into its tasks slice. claudecode emits them directly, opencode synthesises them from todowrite; kiro-cli emits neither."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer.go",
+          "note": "Line 376: the session Tasks field is copied from the tailer's accumulated t.tasks slice (also tailer_metrics.go:397) — fed only by parser-emitted TaskDelta/TaskSnapshot, which the kiro parser never produces."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/session.go",
+          "note": "Line 172: SessionMetrics.Tasks doc: 'populated from TaskCreate / TaskUpdate ... Nil for sessions that have not used TaskCreate (including non-Claude-Code adapters).' Task struct = {ID, Subject, Status: pending|in_progress|completed}."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/replayengine/metrics.go",
+          "note": "Lines 40-51: the session/golden tasks field is copied verbatim from m.Tasks (the tailer's accumulated task list); empty for kiro-cli because the parser emits no task deltas."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/kiro-cli/driver-interactive.sh",
+          "note": "Line 86 DRIVE_ELICITS='send slash wait_turn sleep' — the task-list recipe needs only send/wait_turn/sleep, all genuinely ported (TUI launch kiro-cli chat --trust-all-tools, transcript-based wait_turn on the text-only AssistantMessage turn_done). driver=ready."
+        },
+        {
+          "kind": "file",
+          "ref": ".build/refresh/kiro-cli-smoke/FINDINGS.md",
+          "note": "Live kiro-cli 2.5.1 smoke: §4-5 the JSONL carries no model/token/cost (sidecar-only) and AssistantMessage toolUse envelope confirmed for read/shell/write; §7 headless writes no session file so TUI driving is mandatory. todo_list itself was not exercised in the smoke (emission is doc/code-derived, provisional)."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "kiro-cli on PATH (TUI: `kiro-cli chat --trust-all-tools`); min version 2.5.1; subscription auth set up out-of-band",
+        "The experimental setting chat.enableTodoList is ENABLED so the todo_list tool is available to the model",
+        "irrlichd is recording with grant-all — either run-cell.sh in isolated mode, or --attach against a daemon started with --record",
+        "kiro is driven in the interactive TUI (headless --no-interactive writes no session file and is invisible to the daemon — FINDINGS.md §7)"
+      ],
+      "setup": [
+        "The interactive driver launches `kiro-cli chat --trust-all-tools` in a fresh per-run cwd under <staging>/cwd/, waits for the idle input line ('ask a question or describe a task'), then sends the prompt via tmux",
+        "No auto-mode step is needed: --trust-all-tools assumes the persisted trust-all consent so todo_list auto-executes with no permission picker, and the session never enters waiting",
+        "wait_turn blocks until a text-only AssistantMessage (turn_done) appears in the .jsonl, so the trailing sleep never races a still-running turn"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Use your todo_list tool to track exactly three short tasks, in this order: 'read README', 'summarize README', 'reply done'. Create the todo list with those three distinct tasks, then work them one at a time, calling todo_list to mark each task completed immediately after you finish it, until all three are completed. Do NOT spawn any subagent or delegate — keep everything in this one session. When all three tasks are completed, reply with exactly the word: done"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the kiro session born ready, then a single ready->working transition when the prompt is sent",
+        "transcript.jsonl (~/.kiro/sessions/cli/<uuid>.jsonl) contains at least two AssistantMessage toolUse blocks with name=todo_list — a create with three distinct tasks and a complete carrying all three task indices",
+        "transcript.jsonl contains NO toolUse resembling a subagent/delegate spawn; no parent_linked events and no child sessions appear (SubagentCount stays 0)",
+        "events.jsonl contains NO state_transition to waiting (todo_list auto-executes under --trust-all-tools, no permission gate)",
+        "events.jsonl shows a working->ready transition at turn end (the final text-only AssistantMessage); final session state is ready",
+        "KNOWN FAILING: the session API tasks field stays EMPTY (the kiro parser emits no TaskDelta/TaskSnapshot for todo_list) — the correct behavior is three items with matching subjects and final completed status; this gap is the filed bug. Observations: model=unknown, cost_nonzero=false, tokens_nonzero=false (kiro JSONL carries no model/token/cost)."
+      ],
+      "settings": {},
+      "timeout_seconds": 300
+    }
+  }
+}

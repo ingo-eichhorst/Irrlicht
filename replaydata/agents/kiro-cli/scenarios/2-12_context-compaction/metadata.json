@@ -1,0 +1,110 @@
+{
+  "scenario_id": "context-compaction",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "2.5.1",
+    "daemon_version": "0.4.8+9598e19.dirty",
+    "confidence": 0.6,
+    "notes": "agent_supports: yes (/compact ships + auto-compaction documented)\ndaemon_capability: full (state arc carried by standard Prompt/AssistantMessage events); driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "context-compaction",
+      "agent": "kiro-cli",
+      "assessed_at": "2026-06-05T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.6,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\n### agent (yes)\n\nkiro-cli is the Amazon Q Developer CLI fork; `/compact` is a first-class REPL slash command (it appears in the live slash surface — FINDINGS.md §8) and auto-compaction on context-window overflow is a documented, shipped behavior. The `kiro-cli-chat` binary's bundled changelog carries explicit `/compact` and auto-compaction entries ('Auto compaction for context window overflow errors', 'A new command `/compact` in `q chat` for summarizing the conversation history'), and the summarizer path is present in the binary ('Creating summary...', 'compacting history', 'failed to send compaction request', 'Stream failed during compaction'). The agent unambiguously performs the behavior.\n\n### daemon (full)\n\nThe scenario asserts only the visible state arc `ready→working→ready→working→ready` — a normal turn, then `/compact`, then a second normal turn proving the session continues. It does NOT require irrlicht to label compaction (mirroring the claudecode cell, where the `CompactionState` domain field is dead code) and the `compact_window` phase only asserts the post-`/compact` settle to ready, with any mid-compaction `working` blip explicitly non-required.\n\nEvery spec-required observable is carried by the standard event kinds the kiro parser already handles (kirocli/parser.go): the pre- and post-compaction user prompts are `Prompt`→user_message; the assistant turns are `AssistantMessage` (mid-turn toolUse→assistant/working, final text-only→turn_done→ready). The session sits in `working` for each turn and settles to `ready` on the text-only AssistantMessage. So `ready→working→ready` on both sides of `/compact` is observable today.\n\n### What is NOT settleable from docs (provisional)\n\nThe live 2.5.1 smoke confirmed only `Prompt`/`AssistantMessage`/`ToolResults`/`Clear` in the `.jsonl`; the smoke did not run `/compact`, so what `/compact` itself appends is UNKNOWN. The `kiro-cli-chat` JS bundle stores the compaction result under a `contextSummary` key in conversation state (not a top-level `.jsonl` kind) and rewrites history in place; there is no `CompactionSummary`/`compaction` event-kind constant in the writer (only `Clear` surfaces as a discrete history-mutation marker, written as a bare `{\"version\":\"v1\",\"kind\":\"Clear\"}`). Two cases:\n\n1. `/compact`'s summarizer turn lands as a standard `AssistantMessage` → parser handles it as a normal turn → an extra `working→ready` blip during compaction (harmless; spec doesn't forbid it).\n2. `/compact` writes a NEW event kind (Clear-like marker, or nothing in the `.jsonl` history stream, with the summary only in `contextSummary`) → the kiro parser's `default` case SKIPS it → NO state change from the compaction marker itself.\n\nEither case still satisfies the spec, because the asserted arc is driven by the surrounding normal prompts/turns, not by a compaction-specific signal. The ONLY way this would degrade to `bug` is if the spec asserted a visible `working` span DURING compaction and `/compact` wrote a skipped marker that produced no transition — but the spec (like claudecode's) asserts only the settle, so `full` holds. Per the SKILL's observation-vs-emission rule this `full` is PROVISIONAL on what `/compact` emits; `record` settles which case is real (backflow note below). Confidence is deliberately low (0.6) for that reason.\n\n### driver (ready)\n\nThe recipe needs `send`, `slash`, `wait_turn`, `sleep`. The kiro driver's `DRIVE_ELICITS=\"send slash wait_turn sleep\"` lists all four as genuinely ported seams (`/compact` is an inline-argument-free slash → a `slash` step, not a `keys` gap; `DRIVE_SLASH_REQUIRES_STEP_TYPE=false` because the TUI receives slash text directly). No primitive gap.\n\n### Backflow note for record\n\nDuring recording, capture what `/compact` appends to the `.jsonl`: a standard `AssistantMessage` (case 1), a new/Clear-like marker the parser skips (case 2a), or nothing in the history stream (case 2b). If it's a new kind that the scenario would want surfaced as `working`, that becomes a candidate `daemon=bug` + parser-enhancement ticket (the pi adapter maps its `compaction` event→working as precedent). For the arc this spec asserts, no change is expected.",
+      "caveats": [
+        "Provisional emission: the live 2.5.1 smoke did NOT exercise /compact, so what /compact writes to the .jsonl is unverified. The binary stores the compaction result under a `contextSummary` key in conversation state and rewrites history in place; there is no compaction event-kind in the writer, so a compaction marker (if any) would hit the kiro parser's default-skip case. The asserted state arc is carried by the surrounding standard Prompt/AssistantMessage turns regardless, so daemon stays full — record promotes this from provisional to settled.",
+        "Like claudecode, irrlicht cannot distinguish a compaction working-episode from a normal long turn (the domain CompactionState field is unused). The spec only asserts state arcs, so this is fine; richer 'show compaction in UI' is separate work.",
+        "If a live recording proves /compact emits a trace the scenario would want surfaced as a visible working span and the parser skips it, re-route to daemon=bug + parser enhancement (precedent: pi adapter maps its compaction event → working)."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": ".build/refresh/kiro-cli-smoke/FINDINGS.md",
+          "note": "§4 event vocabulary (Prompt/AssistantMessage/ToolResults/Clear; no model/token/cost in JSONL); §5 turn-end shape (text-only AssistantMessage = turn_done); §8 slash surface includes `compact`."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/parser.go",
+          "note": "Handles only Prompt/AssistantMessage/ToolResults/Clear; the default case (lines 110-112) skips any unknown kind, so a hypothetical compaction event kind produces NO state change. The standard Prompt/AssistantMessage path carries the asserted ready→working→ready arc on both sides of /compact."
+        },
+        {
+          "kind": "file",
+          "ref": "/Applications/Kiro CLI.app/Contents/MacOS/kiro-cli-chat",
+          "note": "Bundled JS+changelog: `/compact` and auto-compaction ship ('Auto compaction for context window overflow errors'; 'A new command `/compact` in `q chat`'); summarizer strings present ('Creating summary...', 'compacting history', 'failed to send compaction request'); compaction result stored under a `contextSummary` key (history rewritten in place), with NO CompactionSummary/compaction top-level JSONL kind — only `Clear` is a discrete history-mutation marker."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/kiro-cli/driver-interactive.sh",
+          "note": "DRIVE_ELICITS=\"send slash wait_turn sleep\" and DRIVE_SLASH_REQUIRES_STEP_TYPE=false — every step the recipe needs is a ported seam; /compact reaches the live TUI directly as a slash send."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/pi/parser.go",
+          "note": "Lines 55-57: pi maps its `compaction` event → working as precedent for surfacing compaction; cited as the record-time backflow target if kiro turns out to emit a skipped compaction trace."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "kiro-cli on PATH and authenticated (subscription auth; --no-interactive is NOT used — TUI only persists a session file)",
+        "irrlichd is recording (--attach against a daemon with --record, or isolated mode)",
+        "kiro-cli supports /compact (2.x ships it; verified 2.5.1)"
+      ],
+      "setup": [
+        "Driver launches `kiro-cli chat --trust-all-tools` under tmux; kiro mints its own session UUID and writes ~/.kiro/sessions/cli/<uuid>.jsonl after the first prompt"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        },
+        {
+          "type": "slash",
+          "text": "/compact"
+        },
+        {
+          "type": "sleep",
+          "seconds": 12
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: still-here"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the kiro session entering ready after launch",
+        "events.jsonl shows ready→working→ready for the first turn",
+        "after /compact runs, the session settles back to ready (no stuck working, no waiting)",
+        "events.jsonl shows ready→working→ready for the post-compaction turn",
+        "final session state is ready",
+        "transcript .jsonl contains at least 2 Prompt lines and at least 2 text-only AssistantMessage lines (pre- and post-compaction turns); RECORD MUST capture what /compact itself appended (a standard AssistantMessage, a Clear-like/new marker, or nothing in the history stream) and feed it back to the assessment"
+      ],
+      "settings": {},
+      "timeout_seconds": 240
+    }
+  }
+}

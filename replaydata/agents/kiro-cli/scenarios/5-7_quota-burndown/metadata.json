@@ -1,0 +1,68 @@
+{
+  "scenario_id": "quota-burndown",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "incapable",
+    "driver_capability": "ready",
+    "agent_cli_version": "2.5.1",
+    "daemon_version": "0.4.8+202ece9.dirty",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes (kiro surfaces a per-turn burning-down credit/capacity progression — sidecar context_usage_percentage + metering_usage credits, TUI footer ▸ Credits, /stats); daemon_capability: incapable (the burndown lives only in the <uuid>.json sidecar, never in the tailed .jsonl, and the kiro adapter has no quota/metrics integration); driver_capability: ready → route frozen."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "quota-burndown",
+      "agent": "kiro-cli",
+      "assessed_at": "2026-06-05T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "incapable",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: incapable (the cross-turn burndown progression leaves NO trace in the tailed .jsonl; the kiro adapter has no quota/metrics integration)\ndriver_capability: ready (moot — the blocker is observability, not a missing step primitive)\n\n→ route: frozen\n\n## The scenario, restated for kiro-cli\n\nquota-burndown asserts that across ≥2 turns that approach but do NOT cross the cap, `RateLimitSnapshot.Windows[0].UsedPercent` is observed non-decreasing (P2 ≥ P1) with `SampledAt` advancing (T2 > T1) and no spurious reset to 0 between turns. The reference codex spec evidences this from a `token_count` event_msg per turn carrying `rate_limits.primary.used_percent`, which `extractCodexRateLimits` reads DIRECTLY into `RateLimitSnapshot.Windows[].UsedPercent` on replay (codex/parser.go:374-439). The question for kiro is whether that progression is observable from the transport the daemon tails.\n\n## agent_supports: yes\n\nKiro DOES surface a per-turn burning-down usage progression to the user — this is the distinguishing difference from the sibling token-quota-exhausted cell (assessed agent=no). Three independent kiro surfaces show it:\n\n1. **Sidecar `<uuid>.json`** carries a `context_usage_percentage` that rises turn-by-turn and a per-turn `metering_usage` array of credit deltas (FINDINGS.md §4). This IS a burndown: capacity consumed approaching the cap.\n2. **TUI footer** renders per-turn `▸ Credits: 0.03 • Time: 1s` (FINDINGS.md §6) — the user watches credits debit each turn.\n3. **`/stats`** renders cumulative usage (FINDINGS.md §8 slash surface).\n\nSo kiro performs a user-observable burndown — like claudecode (agent=yes for the same scenario), and UNLIKE token-quota-exhausted where kiro emits no cap-hit signal at all. The mechanism is a CREDIT meter (not a token/cost rate-limit window), but the scenario's user-observable assertion — usage growing monotonically toward a cap without resetting — is satisfied by the agent.\n\n## daemon_capability: incapable — and WHY it differs from codex\n\nThis is the load-bearing finding. Replay (and the golden tests / viewer that consume fixtures) reconstruct metrics by re-running the captured transcript.jsonl (and/or the events.jsonl lifecycle sidecar) through the production tailer + parser, so the assertion is only satisfiable if the burndown data lives in one of those two captured files. For kiro it lives in NEITHER:\n\n1. **Not in the tailed .jsonl.** The kiro `.jsonl` event vocabulary is `Prompt / AssistantMessage / ToolResults / Clear` only — no model, token, cost, credit, or capacity field (FINDINGS.md §4; parser.go:21 documents this explicitly). The Source is `FilesUnderRoot{Dir: .kiro/sessions/cli, JSONLineParser}` (agent.go:38-43) — the daemon tails ONLY the JSONL. The parser emits `user_message / assistant / turn_done / tool_result` and skips everything else; it has zero rate-limit/credit/metering path (grep over the kirocli adapter finds no RateLimitSnapshot/UsedPercent/quota/credit code — only a doc comment noting the sidecar holds per-turn credits the parser does NOT read).\n2. **Only in the sidecar, which the adapter doesn't read for metrics.** The burndown evidence (`context_usage_percentage`, `metering_usage`) lives exclusively in the `<uuid>.json` sidecar. The kiro adapter reads the sidecar ONLY for `cwd` (GetCWDFromTranscript fallback, FINDINGS.md §Adapter) — there is no MetricsReader. `input/output_token_count` in the sidecar are 0 (unpopulated) anyway.\n3. **Not representable in events.jsonl.** `lifecycle.Event` has no rate-limit/credit field and there is no `KindRateLimit`; the sidecar fixture format physically cannot carry a per-turn burndown snapshot for ANY adapter (same structural fact established for claudecode/quota-burndown).\n\nSo a recorded kiro fixture contains NO trace of the burndown — not the progression, not even a single sample. The behavior leaves no trace in the Source → `incapable` (architecture: the recording format / Source can't represent it), NOT `bug` (the daemon does the right thing live — there is nothing live to do, since the adapter never reads the sidecar metrics) and NOT a driver gap.\n\n**Why codex is `full` and kiro is `incapable` for the SAME signal:** codex carries `rate_limits.primary.used_percent` natively INSIDE its tailed transcript on every `token_count` event, so replaying the codex transcript re-derives the full per-turn history (extractCodexRateLimits, parser.go:374-439). Kiro's analogous burndown data exists only in an out-of-band sidecar the metrics path never touches.\n\n## driver_capability: ready\n\nNo missing step primitive. If the signal were recordable, a 2-3 turn send / wait_turn recipe with a settle would suffice — the kiro interactive driver already has send / wait_turn / sleep / slash (driver-interactive.sh step types: send, wait_turn, sleep, slash, …). The gap is NOT in the driver; it is that there is nothing in the captured Source to assert against. Marked `ready` (not `gap:*`) precisely to route this to the right owner: observability-architecture, not tooling.\n\n## Conclusion / route\n\nFROZEN. The agent has the feature (yes — credit/capacity burndown via sidecar context_usage_percentage + metering credits, TUI footer, /stats) and the driver is ready, but irrlicht's kiro adapter fundamentally cannot capture the progression (incapable): the burndown data lives only in the out-of-band `<uuid>.json` sidecar, never in the tailed .jsonl, and the kiro adapter has no quota/metrics integration (parser explicitly skips the sidecar; sidecar read only for cwd). This is a legitimate incapable verdict, not a recording failure. What would unblock it: a sidecar **MetricsReader** that reads per-turn `metering_usage` credits + `context_usage_percentage` into a RateLimitSnapshot/metrics surface (the documented future enhancement, FINDINGS.md §Adapter) AND a fixture format that captures that per-turn snapshot history (e.g. a `KindRateLimit` lifecycle event with rate-limit fields, the same enhancement quota-burndown needs for claudecode). Re-assess when that lands.",
+      "caveats": [
+        "Distinct mechanism from codex: codex carries rate_limits.primary.used_percent inside its tailed transcript (daemon=full); kiro's burndown lives only in the out-of-band <uuid>.json sidecar (context_usage_percentage + metering_usage credits) that the adapter reads ONLY for cwd — no MetricsReader (daemon=incapable).",
+        "Distinct from the sibling token-quota-exhausted cell (agent=no): that asserts a cap-HIT/exhaustion signal kiro never emits; quota-burndown asserts a monotonic usage progression toward the cap, which kiro DOES surface to the user (sidecar %, TUI footer ▸ Credits, /stats) → agent=yes here.",
+        "Kiro meters CREDITS, not a token/cost rate-limit window; input/output_token_count in the sidecar are 0 (unpopulated). The user-observable burndown is credit/context-capacity consumption, which satisfies the scenario's monotonic-growth assertion at the agent layer.",
+        "The sidecar MetricsReader is an unimplemented future enhancement. Even with it, a fixture would also need a way to capture per-turn snapshot history (a KindRateLimit lifecycle event / rate-limit fields on lifecycle.Event) — the same format gap quota-burndown has for claudecode.",
+        "Re-assess only if a future irrlicht release adds a kiro sidecar MetricsReader AND a fixture format that records per-turn burndown snapshots; then daemon_capability moves toward full and the cell becomes recordable."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": ".build/refresh/kiro-cli-smoke/FINDINGS.md §4,§6,§8,§Adapter",
+          "note": "kiro 2.5.1 JSONL vocabulary = Prompt/AssistantMessage/ToolResults/Clear; NO model/token/cost. Burndown evidence lives only in sidecar <uuid>.json: per-turn metering_usage (credits) + context_usage_percentage (rising), input/output_token_count=0. TUI footer ▸ Credits per turn; /stats shows cumulative usage. Sidecar read by the adapter only for cwd; sidecar MetricsReader = documented future enhancement."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/parser.go:21,40-113",
+          "note": "Parser emits only user_message/assistant/turn_done/tool_result and skips everything else; comment (line 21) states the JSONL carries no model/token/cost and the parser does NOT read the <uuid>.json sidecar. No rate-limit/credit/capacity path — grep over the kirocli adapter finds no RateLimitSnapshot/UsedPercent/quota/credit code (only a doc comment in adapter.go noting the sidecar holds per-turn credits)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/agent.go:38-43",
+          "note": "Source = FilesUnderRoot{Dir: .kiro/sessions/cli, JSONLineParser}. The daemon tails only the JSONL, which has no burndown/credit/capacity trace. The sidecar is described as read for cwd + per-turn credits, but no metrics path consumes it."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/codex/parser.go:374-439",
+          "note": "Contrast: codex's rate_limits.primary.used_percent is carried natively in its tailed transcript on every token_count event and re-parsed by extractCodexRateLimits into RateLimitSnapshot.Windows[].UsedPercent on replay — the structural reason codex/quota-burndown is daemon=full while kiro is incapable for the same signal."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/5-7_quota-burndown/metadata.json",
+          "note": "Calibration: the same scenario for claudecode is agent=yes / daemon=incapable / driver=ready → frozen, because claudecode's burndown is out-of-band (statusline HTTP, never in the transcript/events fixture). Kiro mirrors this verdict for the analogous reason (burndown in out-of-band sidecar, not the tailed JSONL); both name a future enhancement (recordable rate-limit snapshot) as the unblock."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/codex/scenarios/5-7_quota-burndown/expected.jsonl",
+          "note": "Reference spec: asserts Windows[0].UsedPercent non-decreasing across turns (P2 ≥ P1) with SampledAt advancing, no reset to 0. Implemented from codex's transcript-native rate_limits; kiro cannot satisfy it from a transcript+events fixture because its burndown data is sidecar-only and unread by any metrics path."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "notes": "Not recordable: frozen on daemon=incapable. Kiro DOES surface a per-turn burning-down credit/capacity progression to the user (sidecar <uuid>.json context_usage_percentage + metering_usage credits; TUI footer ▸ Credits: 0.03 per turn; /stats), so agent=yes. But that burndown lives ONLY in the out-of-band sidecar — the daemon tails only the .jsonl (FilesUnderRoot .kiro/sessions/cli), whose vocabulary is Prompt/AssistantMessage/ToolResults/Clear with no model/token/cost/credit/capacity field, and the kiro adapter has no quota/metrics integration (parser explicitly skips the sidecar; sidecar read only for cwd). No event in events.jsonl could carry the snapshot either (lifecycle.Event has no rate-limit field, no KindRateLimit). So no replayable trace exists (daemon=incapable). The driver is ready (send/wait_turn/sleep present) — moot here. Contrast codex/quota-burndown (daemon=full): codex carries rate_limits.primary.used_percent inside its tailed transcript. Unblock: a sidecar MetricsReader reading per-turn credits + context_usage_percentage (documented future enhancement) AND a fixture format that records per-turn burndown snapshots. See assessment.json."
+    }
+  }
+}

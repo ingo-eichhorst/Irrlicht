@@ -1,0 +1,81 @@
+{
+  "scenario_id": "turn-aborted-by-error",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "incapable",
+    "driver_capability": "ready",
+    "agent_cli_version": "2.5.1",
+    "daemon_version": "0.4.8+bbd0532.dirty",
+    "confidence": 0.82,
+    "notes": "agent_supports: yes; daemon_capability: incapable; driver_capability: ready => frozen. A mid-turn API abort is written ONLY to kiro's sidecar <uuid>.json (end_reason: Error), never to the .jsonl the daemon tails, and there is no working-state idle sweep — so working->ready is unobservable. Same shape as codex."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "turn-aborted-by-error",
+      "agent": "kiro-cli",
+      "assessed_at": "2026-06-05T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "incapable",
+      "driver_capability": "ready",
+      "confidence": 0.82,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: incapable\ndriver_capability: ready\n=> route: frozen — irrlicht fundamentally cannot observe the post-abort `working -> ready` settle for kiro-cli today (same architecture gap as the codex sibling), so no recording is produced.\n\n## Scenario\n\nturn-aborted-by-error asserts the user-observable arc `ready -> working -> ready`: the model call fails mid-turn (network error, provider 5xx, timeout) with NO normal turn-end signal, the agent gives up, and the daemon's sweep must settle the still-`working` session back to `ready` within one sweep interval. Final state `ready`; it must NOT stick in `working`.\n\n## agent_supports: yes\n\nkiro-cli surfaces an aborted/failed turn. The binary's `RecordUserTurnCompletionArgs`/`AgentLoopEvent` telemetry struct carries an `end_reason` enum whose variants are `UserTurnEnd | ToolUseRejected | Cancelled | Error | Rewind` (strings of `/Applications/Kiro CLI.app/Contents/MacOS/kiro-cli-chat`), and the provider-failure classes are present as Smithy errors: `ModelOverloadedError` / `ThrottlingError` / `ContextWindowOverflow` / `InvalidModelId` plus aws-smithy `ServiceError`/`ResponseError`. So the agent DOES recognise and record an `Error` turn end. The behavior exists.\n\n## daemon_capability: incapable (the load-bearing gap)\n\nThe abort end_reason is written ONLY to the sidecar `<uuid>.json` metadata, NEVER to the `.jsonl` the daemon tails. In the live 2.5.1 smoke session the sidecar key is `session_state.conversation_metadata.user_turn_metadatas[].end_reason` (`.build/refresh/kiro-cli-smoke/c423461a-*.json`), while the `.jsonl` carries only `Prompt | AssistantMessage | ToolResults | Clear` (`jq .kind` over the smoke transcript: NO Error/Abort/Cancel/Fail kind). The kiro-cli adapter's Source is `FilesUnderRoot{.kiro/sessions/cli, JSONLineParser}` (agent.go) — it tails the `.jsonl`, not the sidecar (the parser doc explicitly notes \"this parser does not read\" the `<uuid>.json` metadata).\n\nThe parser (`core/adapters/inbound/agents/kirocli/parser.go`) emits `turn_done` on EXACTLY one shape: a text-only `AssistantMessage` (no `toolUse` blocks). There is NO error/abort epilogue path — no analog to aider's `errorRE`/`flushErrorTurn`. `Clear` is skipped; every other kind hits `default` and is skipped; a non-success `ToolResults` sets `IsError` but that is a TOOL failure, not a turn-end, and produces no `turn_done`. So when a mid-turn provider error aborts the turn and kiro writes no terminal text-only `AssistantMessage`, the parser emits no `turn_done`, `IsAgentDone()` never fires, and the session has no in-band `working -> ready` signal.\n\nNor is there a daemon-side backstop: `SessionDetector.refreshStaleSessions` (`core/application/services/session_detector_activity.go:627`) only RE-READS the working session's transcript every 5s to catch missed events — re-reading a transcript with no terminal AssistantMessage produces nothing new; it does NOT synthesize a turn_done on silence (unlike aider's parser-level `IdleFlush`, which kiro's parser lacks). `PIDManager.SweepDeadPIDs` (`core/application/services/pid_manager.go`) only TTL-cleans `StateReady` sessions or reaps PID-dead ones — a live-PID `working` session is never settled to `ready`. So the session sticks in `working` until process exit. This is the identical stuck-working-until-exit shape the frozen codex sibling documents (codex parser maps only `task_complete -> turn_done`, skips `turn_aborted`; no working-state idle sweep post-PR #106).\n\nA trace of the abort DOES exist in the sidecar, but it is NOT in the watched Source and the 3-state model has no working-state settle for it → `incapable`, not `bug`. (A `bug` would be a trace IN the watched `.jsonl` that the parser mis-handles; here the watched file has no abort trace at all. A future `MetricsReader` on the sidecar — flagged as a documented enhancement in FINDINGS.md §Adapter decisions — could read `end_reason`, but that is new architecture, not a mis-handled existing signal.)\n\n## driver_capability: ready (orthogonal — does not change the freeze)\n\nThe scenario's recipe needs only `send` + `sleep` (prompt, then a settle window), both of which `replaydata/agents/kiro-cli/driver-interactive.sh` implements (`DRIVE_ELICITS=\"send slash wait_turn sleep\"`). No gapped primitive is required. The driver is ready; the freeze is purely the daemon axis.\n\n## Why this cannot be recorded even if the driver is ready (deterministic-elicitation blocker)\n\nBeyond the observability gap, there is no deterministic way to inject a mid-turn provider error against kiro-cli:\n\n- kiro talks to AWS Bedrock/CodeWhisperer endpoints via aws-smithy. The binary honors `AWS_IGNORE_CONFIGURED_ENDPOINT_URLS` / `ignore_configured_endpoint_urls` — there is NO Anthropic-style base-URL override for a mock 5xx server to interpose on (the claudecode `mock-anthropic-5xx` path does NOT transfer). No mock-server interposition path exists.\n- `kiro-cli chat --model <id>` exists, but `--list-models` enumerates only valid server models; a bogus id resolves to `InvalidModelId` / `DefaultModelNotFound` / `No default model found`, a model-RESOLUTION refusal (likely pre-turn, like aider's bogus-model). Even if it surfaced as a mid-turn `Error` end_reason, that abort lands only in the sidecar `.json`, never in the watched `.jsonl` — so the aider bogus-model elicitation (which works only because aider writes the error blockquote into ITS watched transcript) does not transfer.\n- A genuine network/5xx error is non-deterministic and cannot become a committed, re-recordable fixture.\n\nSo: no deterministic in-`.jsonl` elicitation AND no observable settle → frozen, calibrated exactly against the codex sibling (which is frozen `agent=yes daemon=incapable driver=ready` for the same two reasons).\n\n## What would unblock it\n\n1. Teach the kiro-cli adapter to read the sidecar `<uuid>.json` `end_reason` (the documented future `MetricsReader` enhancement) and synthesize a `turn_done`/settle when `end_reason == Error` for the active turn — i.e. give the daemon an in-band signal for the abort that today lives only in the sidecar.\n2. OR add a working-state inactivity sweep that settles a long-silent `working` session to `ready` (the daemon-wide gap the codex `interrupted-turn`/`user-esc-interrupt` cells also call for).\n3. AND a deterministic kiro-side error-injection path (a Bedrock/CodeWhisperer-compatible mock the binary can be aimed at, which `ignore_configured_endpoint_urls` currently blocks).\n\nWith an observable abort signal in place, re-assess to yes/full and proceed to recipe + record.",
+      "caveats": [
+        "agent_supports=yes is anchored in the binary's RecordUserTurnCompletion telemetry (end_reason enum includes Error) — but that telemetry is sidecar-only; confidence is held at 0.82 because no LIVE aborted-turn .jsonl was captured to confirm the .jsonl truly stays error-free on abort (the smoke session only exercised normal turns). A live abort recording could only ever PROMOTE the daemon verdict to bug if it turned out kiro DOES write an abort line to the .jsonl — the doc+code read says it does not.",
+        "No deterministic in-.jsonl error-injection path exists: aws-smithy ignores configured endpoint URLs (no mock interposition), and a bogus --model is a pre-turn resolution refusal (InvalidModelId) whose abort, even if mid-turn, lands only in the sidecar .json the daemon does not tail. The aider bogus-model elicitation does not transfer.",
+        "Same daemon architecture gap as the codex sibling (frozen): no turn-end signal in the watched Source on abort, and no working-state idle sweep (refreshStaleSessions only re-reads; pid_manager TTL-cleans only ready/PID-dead). A sidecar MetricsReader is a documented future kiro adapter enhancement, not a mis-handled existing signal — so incapable, not bug."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/parser.go",
+          "note": "turn_done emitted ONLY on a text-only AssistantMessage (no toolUse); no error/abort epilogue path (no errorRE/flushErrorTurn analog); Clear + every other kind skipped; non-success ToolResults sets IsError but that is a tool failure, not a turn-end — so a mid-turn abort with no terminal AssistantMessage yields no turn_done."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/agent.go",
+          "note": "Source = FilesUnderRoot{.kiro/sessions/cli, JSONLineParser}: the daemon tails the .jsonl transcript, NOT the <uuid>.json sidecar where end_reason lives."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/session_detector_activity.go",
+          "note": "refreshStaleSessions (line 627): re-reads working-session transcripts every 5s to catch MISSED events; it does NOT synthesize a turn_done on transcript silence — re-reading an abort transcript with no terminal AssistantMessage produces nothing."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/pid_manager.go",
+          "note": "SweepDeadPIDs TTL-cleans only StateReady or PID-dead sessions; a live-PID working session is never settled to ready — no working-state idle settle exists."
+        },
+        {
+          "kind": "file",
+          "ref": ".build/refresh/kiro-cli-smoke/c423461a-e49e-4d30-8101-6ee082d28483.json",
+          "note": "Live 2.5.1 sidecar: abort/turn-end metadata lives at session_state.conversation_metadata.user_turn_metadatas[].end_reason (+ metering_usage, model_info) — the .json sidecar, which the parser does not read."
+        },
+        {
+          "kind": "file",
+          "ref": ".build/refresh/kiro-cli-smoke/FINDINGS.md",
+          "note": "§4: .jsonl event vocabulary is Prompt|AssistantMessage|ToolResults|Clear, NO model/usage/cost; end_reason enum (UserTurnEnd|ToolUseRejected|Cancelled|Error|Rewind) + tokens/credits are sidecar-only; §Adapter: sidecar MetricsReader is a documented FUTURE enhancement, not present in v1."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/codex/scenarios/2-14_turn-aborted-by-error/metadata.json",
+          "note": "Calibration sibling: frozen agent=yes daemon=incapable driver=ready for the identical pair of blockers — no deterministic provider-error injection AND no observable post-abort working->ready settle (parser skips abort marker; no working-state idle sweep)."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/aider/scenarios/2-14_turn-aborted-by-error/metadata.json",
+          "note": "Contrast sibling (daemon=full): works ONLY because aider's parser has flushErrorTurn (errorRE) writing a synthetic turn_done from an error blockquote IN its watched transcript, plus a parser-level IdleFlush backstop — kiro's parser has neither, and its abort signal is not in the watched Source."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/kiro-cli/driver-interactive.sh",
+          "note": "DRIVE_ELICITS=\"send slash wait_turn sleep\": the send+sleep recipe this scenario needs is fully supported — driver_capability: ready (the freeze is the daemon axis, not the driver)."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "notes": "Frozen (daemon_capability: incapable). No recipe/spec is recorded: even with a working send+sleep driver, a mid-turn kiro abort writes its end_reason ONLY to the sidecar <uuid>.json (never the watched .jsonl), the kiro parser emits turn_done only on a text-only AssistantMessage (no error epilogue path), and no working-state idle sweep settles a stuck working session — so the spec's ready->working->ready arc is unobservable. There is also no deterministic in-.jsonl error-injection path (aws-smithy ignores configured endpoint URLs → no mock interposition; a bogus --model is a pre-turn InvalidModelId resolution refusal). Unblocks when the kiro adapter reads the sidecar end_reason (the documented future MetricsReader) to synthesize a turn_done on Error, OR a working-state inactivity sweep is added, PLUS a kiro-compatible error-injection path. Calibrated against the frozen codex sibling. See assessment body."
+    }
+  }
+}

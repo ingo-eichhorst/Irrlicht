@@ -1,0 +1,73 @@
+{
+  "scenario_id": "token-quota-exhausted",
+  "metadata": {
+    "agent_supports": "no",
+    "daemon_capability": "incapable",
+    "driver_capability": "ready",
+    "agent_cli_version": "2.5.1",
+    "daemon_version": "0.4.8+9598e19.dirty",
+    "confidence": 0.75,
+    "notes": "agent_supports: no — kiro meters per-turn CREDITS; no quota-exhaustion signal in the JSONL transcript and no cap-hit error string in the 2.5.1 binary"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "token-quota-exhausted",
+      "agent": "kiro-cli",
+      "assessed_at": "2026-06-05T00:00:00Z",
+      "agent_supports": "no",
+      "daemon_capability": "incapable",
+      "driver_capability": "ready",
+      "confidence": 0.75,
+      "body": "## Verdict\n\nagent_supports: no\ndaemon_capability: incapable; driver_capability: ready (moot)\n→ route: frozen\n\n## Reasoning\n\nKiro CLI meters usage with a CREDIT system, not a token/cost rate-limit window. Each turn debits subscription credits (the sidecar `<uuid>.json` carries a per-turn `metering_usage` array of credits and a `context_usage_percentage`; `/stats` and the TUI footer render `▸ Credits: 0.03 • Time: 1s`; models have credit-rate multipliers). Quota exhaustion for kiro means running out of subscription credits.\n\n**Why agent=no (not yes like codex).** The codex sibling cell assessed `agent=yes` because codex emits a first-class quota signal — the v3 `rate_limit_reached_type` field — that irrlicht's parser reads into `RateLimitSnapshot.ReachedType`. Kiro emits NO equivalent. Two independent checks confirm it:\n\n1. **The transcript carries nothing.** The kiro `.jsonl` event vocabulary is `Prompt / AssistantMessage / ToolResults / Clear` only — no model, token, cost, credit, or rate-limit fields (FINDINGS.md §4; parser.go:21 documents this). The credit accounting lives ONLY in the sidecar `<uuid>.json` `metering_usage`, and `input/output_token_count` there are 0 (unpopulated). There is no cap-hit / exhaustion event anywhere in the local transport the daemon tails.\n2. **The binary has no exhaustion error string.** `strings $(which kiro-cli) | grep -iE 'quota|exhaust|out of credit|reach.*limit|too many request'` on 2.5.1 surfaces ONLY generic libc/Rust IO error-enum members (`QuotaExceeded` = filesystem disc-quota; `Disc quota exceeded` = errno text) and AWS-smithy retry internals (`not enough retry quota is available for another attempt`, `TokenBucketProvider`). None is a subscription-credit / monthly-limit / 429-from-the-model signal. (Contrast the `claude --goal` precedent where the binary scan FLIPPED a verdict to yes — here it confirms the absence.)\n\nSo kiro performs no observable, transport-visible \"quota exhausted, turn blocked\" behavior. A credit-capped turn would simply fail server-side; the local JSONL would show no distinguishing event, and the three-state machine has no way to derive an exhaustion arc from it.\n\n## daemon=incapable (subordinate, but named)\n\nEven setting the agent verdict aside: the kiro parser emits `user_message / assistant / turn_done / tool_result` and skips everything else. The `FilesUnderRoot{Dir: .kiro/sessions/cli}` Source tails the JSONL, which has no rate-limit/cost/credit trace. No event in `events.jsonl` could prove a quota-exhaustion arc, so the signal does not reach the Source the daemon observes — architecture, not a fixable bug. (The sidecar `metering_usage` is a documented FUTURE MetricsReader enhancement, FINDINGS.md §Adapter, and even it has no cap-hit field — only per-turn credit deltas.)\n\n## driver — moot, and a mock is structurally impossible\n\nThe driver pillar is moot under agent=no, but worth recording so a future re-assessment doesn't chase a mock that can't exist. The codex/claudecode 429 path works by pointing the agent at a local Anthropic-compatible stub via `ANTHROPIC_BASE_URL` + `ANTHROPIC_API_KEY` under `claude --bare` (record-token-quota-exhausted.sh). Kiro CANNOT be interposed this way:\n\n- The 2.5.1 binary links `aws-smithy-runtime` (the AWS SDK for Rust) and talks to AWS endpoints with sigv4-style signed requests. A man-in-the-middle 429 stub would fail signature/TLS validation.\n- The binary scan exposes NO base-URL / endpoint / API-key override env var (no `KIRO_*`/`Q_*`/`AWS_*_ENDPOINT`/`*_BASE_URL` hook) — there is no `--bare`-equivalent escape hatch to redirect kiro at a localhost mock.\n\nAnd the credits themselves cannot be burned on demand without exhausting the entire real subscription, which is not a viable elicitation path.\n\n## Disposition\n\nFrozen. Kiro does not surface a transport-visible quota-exhaustion signal, irrlicht cannot observe one, and no deterministic elicitation (mock or credit-burn) exists. This is a genuine agent/architecture limit, not a driver-tooling gap — unlike codex/token-quota-exhausted which is `driver_gap:429-mock` (codex DOES emit the signal; it only lacks a mock to elicit it). The cell becomes re-assessable only if a future kiro release emits a cap-hit signal into the JSONL (or a sidecar MetricsReader lands AND kiro adds an exhaustion field) and an endpoint-override / fixture-injection path appears.",
+      "caveats": [
+        "Distinct mechanism from codex: codex emits a first-class rate_limit_reached_type the daemon reads (agent=yes, driver_gap:429-mock); kiro meters per-turn CREDITS and emits NO exhaustion signal into the local JSONL (agent=no).",
+        "Credit accounting exists only in the sidecar <uuid>.json metering_usage (per-turn credit deltas, input/output_token_count=0) — there is no cap-hit field even there; the sidecar MetricsReader is an unimplemented future enhancement.",
+        "kiro-cli 2.5.1 binary scan found no subscription/quota/credit-exhaustion error string — only generic libc disc-quota and AWS-smithy retry-token-bucket internals.",
+        "A mock-429 interposition (codex/claudecode style ANTHROPIC_BASE_URL + --bare) is structurally impossible: kiro signs AWS-smithy/sigv4 requests to AWS endpoints and exposes no base-URL/API-key override env var.",
+        "Re-assess only if a future kiro release emits a transport-visible cap-hit signal AND an endpoint-override or fixture-injection elicitation path becomes available."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": ".build/refresh/kiro-cli-smoke/FINDINGS.md §4,§Adapter",
+          "note": "kiro 2.5.1 JSONL vocabulary = Prompt/AssistantMessage/ToolResults/Clear; NO model/token/cost. Sidecar <uuid>.json has per-turn metering_usage (credits) + context_usage_percentage; input/output_token_count are 0. No cap-hit/exhaustion event."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/parser.go:21,40-113",
+          "note": "Parser emits only user_message/assistant/turn_done/tool_result; comment states the JSONL carries no model/token/cost and the parser does not read the sidecar. No rate-limit/credit path."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/agent.go:38-43",
+          "note": "Source = FilesUnderRoot{Dir: .kiro/sessions/cli, JSONLineParser}. The daemon tails only the JSONL, which has no quota-exhaustion trace."
+        },
+        {
+          "kind": "cmd",
+          "ref": "strings $(which kiro-cli) | grep -iE 'quota|exhaust|out of credit|reach.*limit|429|too many request' (kiro-cli 2.5.1)",
+          "note": "Only generic libc disc-quota (QuotaExceeded, 'Disc quota exceeded') and aws-smithy-runtime retry-token-bucket strings ('not enough retry quota', TokenBucketProvider). NO subscription/credit-exhaustion or model-429 signal. Confirms agent=no per the higher-bar binary-scan rule."
+        },
+        {
+          "kind": "cmd",
+          "ref": "strings $(which kiro-cli) | grep -oE '(KIRO|Q_|AWS_)[A-Z_]*(ENDPOINT|BASE_URL|URL|API_KEY)' (kiro-cli 2.5.1)",
+          "note": "No base-URL/endpoint/API-key override env var. Combined with aws-smithy sigv4 signing, no mock-429 interposition is possible (no --bare/ANTHROPIC_BASE_URL equivalent)."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/codex/scenarios/2-9_token-quota-exhausted/metadata.json",
+          "note": "Reference cell: codex emits rate_limit_reached_type → RateLimitSnapshot.ReachedType (agent=yes, daemon=full, driver=gap:429-mock). Kiro differs on the AGENT pillar — it has no equivalent emitted signal, so it routes frozen, not driver_gap."
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/recording/mock-anthropic-429/main.go + record-token-quota-exhausted.sh",
+          "note": "The 429-injection path is Anthropic-only and launches claude --bare so it reads ANTHROPIC_BASE_URL/_API_KEY from env. No OpenAI/AWS-sigv4 equivalent; kiro cannot be redirected at this mock."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "notes": "Not recordable: frozen on agent=no. Kiro meters per-turn CREDITS and emits NO quota-exhaustion signal into its JSONL transcript (vocabulary = Prompt/AssistantMessage/ToolResults/Clear, no model/token/cost; the 2.5.1 binary has no cap-hit error string — only generic libc disc-quota + aws-smithy retry-token-bucket internals). The daemon tails only that JSONL (FilesUnderRoot .kiro/sessions/cli), so even if a turn were credit-blocked, no event would reach the Source (daemon=incapable). No deterministic elicitation exists: credits cannot be burned on demand without exhausting the whole subscription, and a mock-429 interposition is structurally impossible — kiro signs AWS-smithy/sigv4 requests to AWS endpoints and exposes no base-URL/API-key override env var, so the codex/claudecode ANTHROPIC_BASE_URL + claude --bare path has no kiro equivalent. Contrast codex/token-quota-exhausted (driver_gap:429-mock): codex DOES emit the signal; kiro does not. Re-assess only if a future kiro release writes a cap-hit signal into the JSONL AND an endpoint-override/fixture-injection path appears. See assessment.json."
+    }
+  }
+}

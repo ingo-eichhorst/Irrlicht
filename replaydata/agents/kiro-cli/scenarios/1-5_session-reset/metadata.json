@@ -1,0 +1,75 @@
+{
+  "scenario_id": "session-reset",
+  "metadata": {
+    "agent_supports": "partial",
+    "daemon_capability": "incapable",
+    "driver_capability": "gap:reset_session",
+    "agent_cli_version": "2.5.1",
+    "daemon_version": "0.4.8+17650ec.dirty",
+    "confidence": 0.8,
+    "notes": "agent_supports: partial (/clear resets context in the SAME session file, no new session_id; old does not disappear) — daemon faithfully observes one continuous session, so the canonical reset arc cannot be produced; frozen."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "session-reset",
+      "agent": "kiro-cli",
+      "assessed_at": "2026-06-05T00:00:00Z",
+      "agent_supports": "partial",
+      "daemon_capability": "incapable",
+      "driver_capability": "gap:reset_session",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: partial\ndaemon_capability: incapable\ndriver_capability: gap:reset_session\nroute: frozen\n\n## The scenario's user-observable signal\n\nsession-reset (1.5) asserts a session ROTATION: the old session row disappears and a NEW session row appears with a DIFFERENT `session_id` in `ready` (topology `ready → working → ready → ready → working → ready`). For claudecode and codex this is satisfied because their in-REPL reset (`/clear` / `/new`) materializes a brand-new transcript file with a fresh UUID — the daemon's FilesUnderRoot detects the new session_id and the #169 same-PID cleanup removes the old. kiro-cli does NOT behave this way.\n\n## agent_supports: partial — kiro-cli's reset semantics DIVERGE\n\nkiro-cli has reset commands, but the one verified by live smoke (`/clear`) is an in-place CONTEXT wipe, not a session rotation:\n\n- **`/clear` (VERIFIED, decisive)**: the SAME `~/.kiro/sessions/cli/<uuid>.jsonl` continues — same UUID, no new file. The only thing appended is a single `Clear` event (smoke session `c423461a…jsonl`: 4 Prompt / 7 AssistantMessage / 3 ToolResults / **1 Clear**, one UUID throughout). The embedded changelog confirms the intent: \"Reset context manager on `/clear` so loaded skills revert to frontmatter-only\" — it resets CONTEXT, not the session id. So NO new session_id appears and the old session does NOT disappear. The scenario's two core assertions are unmet by the only verified in-REPL reset.\n- **`/chat new` (UNVERIFIED)**: the embedded changelog says it \"start[s] a fresh conversation without restarting the CLI.\" Whether it mints a NEW `<uuid>.jsonl` under the watched root (which the daemon WOULD observe as a fresh session_id) or continues the same file is NOT established by the live smoke — FINDINGS §8 leaves it open. I do not route on an unverified rotation: per the assess evidence rule a non-full verdict must cite a confirmed mechanism, not a plausible one.\n- **`restart` (quit + relaunch)**: the only UNAMBIGUOUS new-UUID/new-PID path, but it is a fresh process launch, not an in-REPL reset — and the intervening process EXIT deletes the old session via process_exited (a process-death artifact, not the in-place old→new handoff the scenario models). It belongs to a launch scenario, not session-reset.\n\nSo kiro-cli's reset is partial-by-divergence: a reset command exists, but the recordable, verified in-REPL path (`/clear`) does not rotate the session.\n\n## daemon_capability: incapable (for THIS scenario via the verified path) — and why it is NOT a bug\n\nThe daemon observes kiro-cli FAITHFULLY. `kirocli/agent.go:38` sets Source = FilesUnderRoot(~/.kiro/sessions/cli) — a new UUID-keyed file WOULD be detected as a fresh session_id exactly as it is for codex. The reason the scenario's signal is unobservable is that, via `/clear`, kiro emits NO rotation trace: the same file continues and the parser SKIPS the `Clear` event (`kirocli/parser.go:104-108` — \"the marker itself carries no state transition\"). With no new transcript file and no removal event, there is simply no trace for the daemon to surface — `incapable` per the contract (\"no trace exists\"), NOT `bug` (the daemon mis-handles nothing — emitting a state change on a context-only `Clear` would be wrong) and NOT a daemon defect.\n\n## driver_capability: gap:reset_session\n\nA recipe for this cell would need a `reset_session` step (send `/clear` or `/chat new`); `drive-kiro-cli-interactive.sh` still stubs that arm (`not_implemented reset_session`, DRIVE_ELICITS = \"send slash wait_turn sleep\"). This is moot under the frozen route but recorded honestly.\n\n## Route: frozen\n\nPer the routing table `partial | incapable | any → frozen`. There is no honest spec to record: driving `/clear` live would show a single continuous session (no new session_id, no removal), which does NOT satisfy session-reset — recording it would either fail the spec or require weakening the spec to assert a non-reset. The cell is frozen with a precise unblock path (below).\n\n## What would unblock this cell\n\n1. Live-verify `/chat new`'s ON-DISK behavior: drive `/chat new` and check whether a NEW `~/.kiro/sessions/cli/<uuid2>.jsonl` appears (distinct UUID) while the first session's row is removed. If it rotates to a fresh file, re-assess to agent=yes / daemon=full and port the driver's `reset_session` step to send `/chat new` → route record. If it continues the same file (like `/clear`), kiro has no in-REPL session-rotation and the cell stays frozen (agent=no for the rotation semantics).",
+      "caveats": [
+        "DECISIVE evidence is for `/clear` only (live smoke 2.5.1): same UUID, same .jsonl, a single `Clear` event appended, parser skips it — no new session_id, no removal. `/chat new`'s on-disk file behavior is UNVERIFIED (changelog says 'fresh conversation without restarting'); it is the single load-bearing unknown and the named unblock.",
+        "daemon=incapable here is scenario-scoped and NOT an architectural defect: kiro's Source=FilesUnderRoot WOULD detect a new UUID file (as for codex). The signal is absent because `/clear` produces no rotation trace — the daemon correctly skips the context-only `Clear` event (parser.go:104-108).",
+        "A full `restart` (quit + relaunch) is the only verified new-UUID/new-PID path, but it is a fresh process launch (old session removed via process_exited), not the in-place reset the scenario models — out of scope for session-reset.",
+        "driver=gap:reset_session is recorded for completeness; it is moot while the route is frozen and would only be ported once `/chat new` is verified to rotate."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": ".build/refresh/kiro-cli-smoke/FINDINGS.md",
+          "note": "§8: `/clear` continues the SAME session file (no new UUID, unlike claudecode); appends a Clear event. `/chat new` MAY start a new session (left UNVERIFIED). restart mints a new UUID/PID but the process exit removes the old session."
+        },
+        {
+          "kind": "file",
+          "ref": ".build/refresh/kiro-cli-smoke/c423461a-e49e-4d30-8101-6ee082d28483.jsonl",
+          "note": "Live 2.5.1 smoke: ONE UUID throughout, 4 Prompt / 7 AssistantMessage / 3 ToolResults / exactly 1 Clear — `/clear` did not rotate the session id."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/parser.go",
+          "note": "Lines 104-108: the `Clear` event is ev.Skip = true — it carries no state transition, so `/clear` emits no new session_id and no removal the daemon could surface."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/agent.go",
+          "note": "Line 38: Source = FilesUnderRoot(~/.kiro/sessions/cli). A new UUID-keyed file WOULD be detected as a fresh session_id (as for codex) — confirming daemon=incapable is the absence of a trace, not a daemon defect."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/kiro-cli/driver-interactive.sh",
+          "note": "DRIVE_ELICITS = 'send slash wait_turn sleep'; the reset_session arm is still not_implemented — the driver gap a record run would need to port (moot while frozen)."
+        },
+        {
+          "kind": "binary",
+          "ref": "strings /Applications/Kiro CLI.app/Contents/MacOS/kiro-cli",
+          "note": "Embedded changelog: 'Reset context manager on /clear so loaded skills revert to frontmatter-only' (context reset, not session rotation) and 'Added /chat new command in V2 TUI to start a fresh conversation without restarting the CLI' (in-process; on-disk file behavior unverified)."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "preconditions": [
+        "FROZEN: no live recording. kiro-cli's verified in-REPL reset (`/clear`) does NOT rotate the session_id — the same .jsonl continues and the old session does not disappear, so the session-reset spec (new session_id in ready + old disappears) cannot be produced via the recordable path.",
+        "UNBLOCK: live-verify whether `/chat new` mints a new ~/.kiro/sessions/cli/<uuid>.jsonl while removing the old session row. If yes → re-assess agent=yes / daemon=full, port the driver's reset_session step to send `/chat new`, route record. If no → kiro has no in-REPL session rotation; cell stays frozen."
+      ],
+      "setup": [],
+      "script": [],
+      "verify": [],
+      "settings": {},
+      "timeout_seconds": 0
+    }
+  }
+}

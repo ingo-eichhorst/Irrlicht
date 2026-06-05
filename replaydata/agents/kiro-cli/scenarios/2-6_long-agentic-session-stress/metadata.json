@@ -1,0 +1,99 @@
+{
+  "scenario_id": "long-agentic-session-stress",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "2.5.1",
+    "daemon_version": "0.4.8+f22f3be.dirty",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready\nMany sequential ungated tool calls in ONE turn (--trust-all-tools) stay one contiguous working span; settles ready only at the text-only AssistantMessage. JSONL carries no model/token/cost, so observations assert agent identity only."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "long-agentic-session-stress",
+      "agent": "kiro-cli",
+      "assessed_at": "2026-06-05T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nThe scenario asserts a high-volume single-turn burst: within a turn state stays continuously `working` (no flicker to `ready` or `waiting` between successive tool-call/result pairs or between assistant text fragments), the turn settles cleanly to `ready`, and the session is never stuck. Topology `ready -> working -> ready -> working -> ready -> working -> ready -> working -> ready`, final state `ready`, at least one tool call.\n\n**agent=yes.** `kiro-cli chat --trust-all-tools` runs every tool autonomously with NO per-tool permission picker (the `--trust-all-tools` flag assumes persisted trust-all consent), so the agent never stops to ask the user mid-burst. A single self-contained prompt that tells kiro-cli to create files and then run many separate shell commands on them (pwd, three file creates, ls, three wc -l, cat, head, then summarize) deterministically produces a chain of many `AssistantMessage(toolUse)` -> `ToolResults` pairs in ONE turn before the final text-only `AssistantMessage`. This is the same native many-tool-call shape the committed codex cell exercises (codex has no permission gate either); unlike claudecode — whose modern Sonnet default refuses auto-mode for paid models and stalls tool-call turns at the permission gate, forcing the claudecode recipe into a 4-plain-prompt proxy — kiro-cli with --trust-all-tools captures the REAL burst. The live 2.5.1 smoke confirmed the turn shape directly: `Prompt -> AM(text+toolUse) -> ToolResults -> AM(text+toolUse) -> ToolResults -> AM(text-only)`, with the final text-only AssistantMessage being the turn-done marker (FINDINGS.md §5).\n\n**daemon=full.** The kiro-cli parser (parser.go) maps an `AssistantMessage` carrying any `toolUse` block to `assistant` + ToolUses (EventType `assistant`, keeps the session `working`), a `ToolResults` line to `tool_result` (closing the open call), and ONLY a text-only `AssistantMessage` to `turn_done` (the single `ready` settle). A `Prompt` maps to `user_message` (drives `working`). There is no permission/`waiting` path on the trust-all launch — kiro-cli emits no AskUser/permission event into the JSONL, and the parser produces no `waiting` for any of these kinds — so an intermediate tool result is never treated as a settle or a gate, and the whole many-call burst is one contiguous `working` span. Live append survives long turns and the pending `toolUse` lands BEFORE approval (moot under --trust-all-tools), and the PID stays bound via `ExactName{kiro-cli}` + `DiscoverPIDByCWD` across the turn (FINDINGS.md §1, §2). Net observable: proc-PID pre-session born `ready`, the rollout session reconcile (new session_id) born `ready`, ONE `ready -> working` at the prompt, ONE contiguous `working` span across the burst (no flicker to `ready`/`waiting`), ONE `working -> ready` at the text-only AssistantMessage, final `ready`. This matches the codex cell's `daemon=full` for the structurally identical burst.\n\n**driver=ready.** The recipe needs only `send`, `wait_turn`, and `sleep`, all three in the driver's `DRIVE_ELICITS=\"send slash wait_turn sleep\"` — no step type must be ported. `wait_turn` counts text-only AssistantMessages (mirroring the parser's turn_done rule) and uses a generous timeout for the deliberately long turn; the trailing sleep never races a still-running turn.\n\n## Caveats\n\nThe spec asserts user-observable state/topology only — never the exact number of commands kiro-cli chooses to run, tool output text, or token totals (model/OS-dependent, not stable across re-records). The burst_working dwell with no-ready/no-waiting invariants is the load-bearing no-flicker assertion.\n\n## Conclusion\n\nApplicable: yes. kiro-cli with --trust-all-tools natively runs a long single-turn tool-call burst with no permission gate, and the daemon observes the full arc as one contiguous working span (each ToolResults closes its open call; the text-only AssistantMessage is the only ready settle). daemon=full is PROVISIONAL on emission until the live record run promotes it from a doc/code read to a captured events.jsonl.",
+      "caveats": [
+        "Assert user-observable state/topology only — do NOT assert specific shell tool output text, the exact number of commands kiro-cli chooses to run, or token totals; all are model/OS-dependent and not stable across re-records.",
+        "kiro-cli's JSONL carries NO model/token/cost fields (those live only in the <uuid>.json metadata sidecar, which the v1 adapter does not read), so observations assert agent identity only — model is unknown and cost/tokens are NOT asserted nonzero (they would be empty/zero and fail). A sidecar MetricsReader is a documented future enhancement (FINDINGS.md §4).",
+        "daemon=full is PROVISIONAL on emission until the live record run: it rests on a doc/code read of the parser's no-flicker rules, not a captured many-call events.jsonl. record promotes it from provisional to settled.",
+        "The recipe keeps kiro-cli's DEFAULT model (no --model pin) to match the codex/claudecode stress recipes, which pin no model. The driver's fixed launch line is `kiro-cli chat --trust-all-tools` with no model-injection seam; if a cheaper model is wanted later (e.g. qwen3-coder-next at 0.05x credits), it needs a driver launch-flag change, not a recipe edit. Distinct from kiro-cli x self-correction / auto-executed-tool-call (single happy-path call): this cell stresses coherence across a HIGH VOLUME of sequential tool calls in one turn."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/parser.go",
+          "note": "AssistantMessage(toolUse) -> assistant (stays working); ToolResults -> tool_result (closes the open call); ONLY a text-only AssistantMessage -> turn_done (the single ready settle); Prompt -> user_message (working). No waiting/permission path, so an intermediate tool result is never a settle/gate — the whole burst is one contiguous working span."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/agent.go",
+          "note": "Process.Match = ExactName{Name: \"kiro-cli\"}; Source FilesUnderRoot{Dir: ~/.kiro/sessions/cli, JSONLineParser}; PID bound via DiscoverPID (cwd match) across the long turn."
+        },
+        {
+          "kind": "file",
+          "ref": ".build/refresh/kiro-cli-smoke/FINDINGS.md",
+          "note": "Live 2.5.1 smoke: turn shape Prompt -> AM(text+toolUse) -> ToolResults -> AM(text+toolUse) -> ToolResults -> AM(text-only); text-only AM = turn_done; live append survives long turns; PID stays bound; JSONL has NO model/token/cost (sidecar holds credits/model); --trust-all-tools runs tools with no picker."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/codex/scenarios/2-6_long-agentic-session-stress/metadata.json",
+          "note": "Sibling stress cell: structurally identical native many-tool-call single-turn burst (no permission gate). daemon=full / driver=ready, one contiguous working span, settles only at the turn-done signal. Calibration target for the kiro-cli recipe (kiro-cli --trust-all-tools matches codex's ungated tool execution); pins no model."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/kiro-cli/driver-interactive.sh",
+          "note": "DRIVE_ELICITS=\"send slash wait_turn sleep\" — the recipe's three step types are all present and elicited; wait_turn counts text-only AssistantMessages (mirrors the parser's turn_done rule). driver=ready, no step to port."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "kiro-cli 2.5.1 on PATH and authenticated (subscription auth)",
+        "irrlichd is in --record mode with IRRLICHT_PERMISSION_MODE=grant-all",
+        "--trust-all-tools assumes persisted trust-all consent so no per-tool picker stalls the run",
+        "no other kiro-cli session shares the recipe's cwd"
+      ],
+      "setup": [
+        "The interactive driver launches `kiro-cli chat --trust-all-tools` under tmux in a fresh per-run cwd under <staging>/cwd/; kiro mints its own session UUID and writes ~/.kiro/sessions/cli/<uuid>.jsonl lazily after the first prompt (discovered as the newest .jsonl after the launch marker).",
+        "No auto-mode step is needed: --trust-all-tools runs every tool with no permission gate (kiro-cli emits no AskUser/permission event), so the shell tool runs every command autonomously — this is exactly why kiro-cli captures the REAL many-tool-call single-turn burst, whereas the claudecode recipe for this scenario must fall back to 4 plain prompts.",
+        "The prompt is fully self-contained — it tells kiro-cli to CREATE its own files and then run many commands on them, so the per-run cwd starting empty does not shrink the burst.",
+        "wait_turn blocks until the turn's text-only AssistantMessage appears (mirroring the parser's turn_done rule), so the trailing sleep never races a still-running turn; the timeout is generous because this is a deliberately LONG turn."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Do all of the following in THIS single turn, using your shell tool, running each as a SEPARATE command one at a time (do not combine them, do not write a script, do not ask me anything): 1) run `pwd`; 2) create three files with `printf 'line1\\nline2\\nline3\\n' > a.txt`, then `printf 'x\\ny\\n' > b.txt`, then `seq 1 20 > c.txt` (three separate commands); 3) run `ls -la`; 4) run `wc -l a.txt`, then `wc -l b.txt`, then `wc -l c.txt` (three separate commands); 5) run `cat a.txt`; 6) run `head -3 c.txt`; then finally summarize in one short paragraph how many lines each file had. Run every numbered command individually so I can see each one execute."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        }
+      ],
+      "verify": [
+        "events.jsonl contains a presession_created (proc-<PID>) row in ready within 1000 ms of agent launch",
+        "events.jsonl contains the rollout session (kiro mints its own UUID) with a distinct session_id, born ready",
+        "events.jsonl contains a pid_discovered event bound to the rollout session_id (cwd match)",
+        "events.jsonl contains exactly one state_transition to working on the rollout session_id when the prompt is sent (start of the agentic burst)",
+        "transcript.jsonl contains MANY AssistantMessage(toolUse) / ToolResults pairs in the single turn (at least 5: pwd, ls, and >=3 wc -l calls) — the high-volume burst",
+        "across the entire turn, NO state_transition to ready fires between successive tool-call/result pairs (one contiguous working span, no flicker mid-burst)",
+        "across the entire turn, NO state_transition to waiting fires (--trust-all-tools means no permission gate)",
+        "events.jsonl contains exactly one state_transition to ready on the rollout session_id once the final text-only AssistantMessage lands (turn end)",
+        "final session state is ready (not stuck working)"
+      ],
+      "settings": {},
+      "timeout_seconds": 240
+    }
+  }
+}

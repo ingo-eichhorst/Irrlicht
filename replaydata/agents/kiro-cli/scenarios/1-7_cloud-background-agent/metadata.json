@@ -1,0 +1,60 @@
+{
+  "scenario_id": "cloud-background-agent",
+  "metadata": {
+    "agent_supports": "no",
+    "daemon_capability": "n/a",
+    "driver_capability": "ready",
+    "agent_cli_version": "2.5.1",
+    "daemon_version": "0.3.13",
+    "confidence": 0.85,
+    "notes": "agent_supports: no\ndaemon_capability: n/a\ndriver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "cloud-background-agent",
+      "agent": "kiro-cli",
+      "assessed_at": "2026-06-05T00:00:00Z",
+      "agent_supports": "no",
+      "daemon_capability": "n/a",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: no\ndaemon_capability: n/a\ndriver_capability: ready\n\n## Reasoning\n\nKiro CLI 2.5.1 ships NO first-party cloud/remote background-agent dispatch surface — there is no way to hand a task off to remote infrastructure that runs the agent server-side with no local process. The scenario requires a session that appears with PID = 0 / absent, whose state mirrors a remote run and that disappears on remote completion; kiro-cli has no surface that produces such a thing. This places it with aider / opencode / pi (agent_supports: no → frozen), NOT with codex / claudecode (which have a genuine remote-infra dispatch — e.g. `codex cloud exec --env <ENV_ID>` — and so are agent: yes / daemon: incapable).\n\nEvidence the cloud-agent feature is absent:\n\n- **CLI surface (`--help-all`, 2.5.1):** the full subcommand list is debug, settings, setup, update, diagnostic, init, theme, issue, login, logout, whoami, profile, user, doctor, launch, quit, restart, integrations, translate, dashboard, chat, mcp, inline, agent, acp. There is NO `cloud` / `remote` / background-dispatch subcommand. `chat --help` exposes only local-session flags (`--resume`, `--resume-id`, `--agent`, `--model`, `--trust-all-tools`, `--no-interactive`, `--list-sessions`, `--list-models`) — every one drives a LOCAL session. `agent --help` (list/create/edit/validate/migrate/set-default) manages local agent CONFIG files, not remote execution.\n- **Binary string scan** (`strings \"/Applications/Kiro CLI.app/Contents/MacOS/kiro-cli-chat\" | grep -iE 'cloud|remote|background.?agent|dispatch|delegate'`): the only `\"cloud\"` / `\"govcloud\"` hits sit inside an AWS region/endpoint config list (next to `\"delegate\"`), i.e. AWS partition identifiers for the CodeWhisperer/Q model endpoint — not a cloud-agent CLI surface. No `kiro-cli cloud`-style command, env-id flag, or remote-task feed exists.\n- **`delegate` / `use_subagent` / `/spawn` are LOCAL, not cloud.** The `delegate` tool's own description: \"runs tasks asynchronously in the background (non-blocking)… Launch and manage asynchronous agent processes… Files are stored in `.kiro/.subagents/`.\" `use_subagent`/`/spawn` likewise \"delegate to specialized subagents that run in parallel with isolated context.\" These spawn LOCAL child processes that write LOCAL files and own LOCAL PIDs — the exact OPPOSITE of a PID-less remote run. (FINDINGS.md §8 lists `/spawn` as a LOCAL subagent session.) They are the basis of the LOCAL background/subagent scenarios, not this cloud one.\n- **The AWS model endpoints are LLM transport, not agent dispatch.** `ConverseStream` / `api.q.service` / CodeWhisperer endpoints in the binary are the inference API client (kiro-cli streams tokens from an AWS-hosted model), exactly as every local CLI calls a hosted model. That is not a remote-AGENT-execution surface where the agent itself runs off-box with no local process.\n\nBecause `agent_supports` is `no`, the daemon-observation question is moot: `daemon_capability: n/a`. For completeness on transport: even if kiro-cli later shipped a hosted variant, the adapter could not observe it as specified. `core/adapters/inbound/agents/kirocli/agent.go` uses `Source: FilesUnderRoot{Dir: ~/.kiro/sessions/cli, JSONLineParser}` + `Process.Match = ExactName{kiro-cli}` with CWD-based `DiscoverPID` (pid.go). Both axes require a LOCAL OS process with a LOCAL working directory and a LOCAL transcript; a PID-less, file-less cloud run leaves neither. There is no remote-feed Source variant (the Source sum is FilesUnderRoot / FilesUnderCWD / ProcessOwnedStore — AGENTS.md).\n\n`driver_capability: ready` — the interactive driver (`replaydata/agents/kiro-cli/driver-interactive.sh`) is not the blocker; the agent simply lacks the feature. Per the #476 frozen-no-feature convention a no-feature cell parks the driver axis at `ready`, not at a `gap` (mirrors the aider × cloud-background-agent precedent). No spec phases are authored for a frozen cell; the expected.jsonl carries only the meta + observation vector.\n\n## What would flip the verdict\n\nUpstream (Amazon Q Developer CLI / Kiro) would need to ship a hosted remote-execution product — a `kiro-cli cloud`-style dispatch that runs the agent off-box and exposes a server-side task feed. Only then would `agent_supports` move off `no`. Observing it would ADDITIONALLY require a new non-file Source variant (RemoteAPI / webhook / SSE) in the adapter model, since the FilesUnderRoot Source watches only a local transcript — so `daemon_capability` would then become `incapable` until such a transport landed (the same structural gap noted for codex/claudecode × cloud-background-agent).",
+      "caveats": [
+        "kiro-cli HAS local async/background subagents (delegate / use_subagent / /spawn → .kiro/.subagents/) — those are LOCAL processes with local PIDs and files, and feed the LOCAL background/subagent scenarios, not this cloud one. Don't conflate 'background' (local async) with 'cloud' (remote-infra, PID-less).",
+        "The AWS CodeWhisperer/Q (`ConverseStream`, api.q.service) endpoints are the model-inference transport, not a remote-agent dispatch surface; a hosted model backend does not make a local CLI a cloud-agent.",
+        "If kiro-cli ever shipped a hosted/remote variant, daemon_capability would become incapable (not n/a): the FilesUnderRoot Source watches only a local transcript, so a PID-less, file-less cloud run would leave no trace under the watch — same structural gap as codex/claudecode."
+      ],
+      "sources": [
+        {
+          "kind": "cli",
+          "ref": "kiro-cli --help-all (kiro-cli 2.5.1)",
+          "note": "Full subcommand list has no cloud/remote/background-dispatch command; chat --help is local-session flags only (resume/agent/model/trust-all/no-interactive/list-sessions); agent --help manages local config, not remote execution"
+        },
+        {
+          "kind": "file",
+          "ref": "/Applications/Kiro CLI.app/Contents/MacOS/kiro-cli-chat",
+          "note": "strings | grep -iE 'cloud|remote|delegate|dispatch': only 'cloud'/'govcloud' hits are in an AWS region/endpoint config list; the delegate tool desc = 'runs tasks asynchronously in the background … Files are stored in .kiro/.subagents/' (LOCAL async subagent, not remote dispatch)"
+        },
+        {
+          "kind": "file",
+          "ref": ".build/refresh/kiro-cli-smoke/FINDINGS.md",
+          "note": "§8 slash surface: /spawn is a LOCAL subagent session; no cloud/remote handoff. §4 JSONL carries no model/usage/cost. Headless writes NO session file (§7) — but that is orthogonal here: there is no cloud surface to record at all"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/agent.go",
+          "note": "Source = FilesUnderRoot{~/.kiro/sessions/cli, JSONLineParser}; Process.Match = ExactName{kiro-cli} + DiscoverPID by CWD — local file + local PID only; no remote-feed Source"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/aider/scenarios/1-7_cloud-background-agent/metadata.json",
+          "note": "Sibling precedent: agent lacks the cloud feature → agent_supports no / daemon n/a / driver ready (#476 frozen-no-feature parks driver at ready); kiro-cli is the same shape (NOT the codex/claudecode yes/incapable shape)"
+        }
+      ]
+    },
+    "recipe": {
+      "script": []
+    }
+  }
+}

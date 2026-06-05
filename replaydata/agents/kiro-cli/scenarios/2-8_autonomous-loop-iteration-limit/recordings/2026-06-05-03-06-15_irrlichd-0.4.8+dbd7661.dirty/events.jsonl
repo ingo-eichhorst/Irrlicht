@@ -1,0 +1,14 @@
+{"seq":2759,"ts":"2026-06-05T03:06:15.154935+02:00","kind":"transcript_new","session_id":"4a3424c5-c4ea-43bf-9ac5-23ccfcfb9da3","adapter":"kiro-cli","transcript_path":"/Users/ingo/.kiro/sessions/cli/4a3424c5-c4ea-43bf-9ac5-23ccfcfb9da3.jsonl","project_dir":"cli"}
+{"seq":2760,"ts":"2026-06-05T03:06:15.195013+02:00","kind":"state_transition","session_id":"4a3424c5-c4ea-43bf-9ac5-23ccfcfb9da3","new_state":"ready","reason":"new session created"}
+{"seq":2761,"ts":"2026-06-05T03:06:15.242434+02:00","kind":"pid_discovered","session_id":"4a3424c5-c4ea-43bf-9ac5-23ccfcfb9da3","pid":77522}
+{"seq":2762,"ts":"2026-06-05T03:06:19.512271+02:00","kind":"transcript_activity","session_id":"4a3424c5-c4ea-43bf-9ac5-23ccfcfb9da3","adapter":"kiro-cli","transcript_path":"/Users/ingo/.kiro/sessions/cli/4a3424c5-c4ea-43bf-9ac5-23ccfcfb9da3.jsonl","file_size":620}
+{"seq":2763,"ts":"2026-06-05T03:06:19.51334+02:00","kind":"state_transition","session_id":"4a3424c5-c4ea-43bf-9ac5-23ccfcfb9da3","prev_state":"ready","new_state":"working","reason":"force ready→working on first activity"}
+{"seq":2764,"ts":"2026-06-05T03:06:19.519286+02:00","kind":"transcript_activity","session_id":"4a3424c5-c4ea-43bf-9ac5-23ccfcfb9da3","adapter":"kiro-cli","transcript_path":"/Users/ingo/.kiro/sessions/cli/4a3424c5-c4ea-43bf-9ac5-23ccfcfb9da3.jsonl","file_size":924}
+{"seq":2765,"ts":"2026-06-05T03:06:19.519324+02:00","kind":"debounce_coalesced","session_id":"4a3424c5-c4ea-43bf-9ac5-23ccfcfb9da3"}
+{"seq":2766,"ts":"2026-06-05T03:06:21.909754+02:00","kind":"transcript_activity","session_id":"4a3424c5-c4ea-43bf-9ac5-23ccfcfb9da3","adapter":"kiro-cli","transcript_path":"/Users/ingo/.kiro/sessions/cli/4a3424c5-c4ea-43bf-9ac5-23ccfcfb9da3.jsonl","file_size":1520}
+{"seq":2767,"ts":"2026-06-05T03:06:21.911685+02:00","kind":"transcript_activity","session_id":"4a3424c5-c4ea-43bf-9ac5-23ccfcfb9da3","adapter":"kiro-cli","transcript_path":"/Users/ingo/.kiro/sessions/cli/4a3424c5-c4ea-43bf-9ac5-23ccfcfb9da3.jsonl","file_size":1824}
+{"seq":2768,"ts":"2026-06-05T03:06:21.911695+02:00","kind":"debounce_coalesced","session_id":"4a3424c5-c4ea-43bf-9ac5-23ccfcfb9da3"}
+{"seq":2769,"ts":"2026-06-05T03:06:23.771878+02:00","kind":"transcript_activity","session_id":"4a3424c5-c4ea-43bf-9ac5-23ccfcfb9da3","adapter":"kiro-cli","transcript_path":"/Users/ingo/.kiro/sessions/cli/4a3424c5-c4ea-43bf-9ac5-23ccfcfb9da3.jsonl","file_size":2566}
+{"seq":2770,"ts":"2026-06-05T03:06:23.771889+02:00","kind":"debounce_coalesced","session_id":"4a3424c5-c4ea-43bf-9ac5-23ccfcfb9da3"}
+{"seq":2771,"ts":"2026-06-05T03:06:25.776976+02:00","kind":"state_transition","session_id":"4a3424c5-c4ea-43bf-9ac5-23ccfcfb9da3","prev_state":"working","new_state":"ready","reason":"agent finished turn → ready"}
+{"seq":2772,"ts":"2026-06-05T03:06:33.991644+02:00","kind":"process_exited","session_id":"4a3424c5-c4ea-43bf-9ac5-23ccfcfb9da3","pid":77522}

@@ -1,0 +1,106 @@
+{
+  "scenario_id": "user-blocking-question",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "2.5.1",
+    "daemon_version": "0.4.8+b5e8423.dirty",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "user-blocking-question",
+      "agent": "kiro-cli",
+      "assessed_at": "2026-06-05T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Scenario\n\nuser-blocking-question asserts the `ready → working → waiting` entry: the assistant ends its turn with a clarifying question and the session classifies `waiting` (not ready), gated on the user. The canonical `process` lists \"calls AskUserQuestion (or equivalent)\", but the load-bearing user-observable signal the scenario validates is the trailing-`?` path through the state classifier — the recipe \"deliberately stops at the waiting episode and does not answer the question\" (scenario description), so the asserted arc is `ready → working → waiting` with `waiting` user-visible. Final state = waiting. The coalesced-flush #150 synthesis variant is covered by unit tests (ShouldSynthesizeCollapsedWaiting), not by this recipe.\n\n## agent: yes\n\nkiro-cli has NO AskUserQuestion-style STRUCTURED question tool — its slash surface (agent, chat, clear, compact, context, effort, model, plan, rewind, session-id, spawn, stats, tools, transcript, quit) carries no question primitive, and the JSONL event vocabulary is Prompt / AssistantMessage / ToolResults / Clear only (FINDINGS.md §4, §8). But unlike claudecode (which routes this scenario through the AskUserQuestion tool), kiro-cli expresses a clarifying question as plain prose in the FINAL text-only AssistantMessage of the turn — which is EXACTLY the natural-language trailing-`?` contract this scenario's classifier path tests. A prompt that asks for one short clarifying question ending in `?` reliably elicits that turn shape (Prompt → AssistantMessage(text-only) per FINDINGS.md §5). So the agent performs the behavior the cell asserts (end a turn gated on the user with a question) — verdict `yes`, not `partial`, because for kiro-cli the question IS the observable text path, with no separate structured-tool primitive to split off (contrast aider, whose 2.17 cell is the structured-tool verdict with the text path living in a sibling cell — kiro-cli has only this one blocking-question cell, and it is the text-path cell).\n\n## daemon: full\n\nThe kiro-cli adapter observes the complete `ready → working → waiting` arc via the trailing-`?` text classifier. The closing text-only `AssistantMessage` carries NO `toolUse` block, so the parser emits `turn_done` AND sets `ev.AssistantText` from the last text block (≤ 200 runes, no punctuation stripped — the trailing `?` survives the rune-count truncation; parser.go lines 76-83). The tailer copies that non-empty text into `lastAssistantText` (tailer.go lines 917-918) and exposes it as `SessionMetrics.LastAssistantText` (tailer_metrics.go line 392). At turn end `IsAgentDone()` fires off `LastEventType == \"turn_done\"` (session.go line 541), then classifier decision 2a (state_classifier.go lines 60-66) checks `IsWaitingForUserInput()`, whose `ExtractQuestionSnippet` (session.go) finds the trailing `?` in `LastAssistantText` and returns waiting — so the turn settles `working → waiting` instead of `working → ready`. The `Prompt` event maps to `user_message` (working) the moment it live-appends (FINDINGS.md §2). No structured tool marker is needed: the entire waiting verdict rides the text path, which kiro-cli's parser feeds correctly. This is `full`, not `incapable` (a trace exists in the watched Source — the text-only AssistantMessage with the question text — and the parser handles it) and not `bug` (nothing is mis-handled).\n\nThe scenario asserts only the state arc — no token/cost/model criterion — so the kiro-cli JSONL's absence of model/token/cost (those live in the `<uuid>.json` sidecar, which the parser deliberately does not read; sidecar `input/output_token_count` are 0 even there; FINDINGS.md §4) does NOT touch this verdict. The observations vector records the daemon's real metric output: `tokens_nonzero=false`, `cost_nonzero=false`, model unknown — matching the sibling turn-end-terminal-text / basic-turn / session-start cells.\n\n## driver: ready\n\nThe recipe needs only `send`, `wait_turn`, `sleep`. driver-interactive.sh's semantic `DRIVE_ELICITS=\"send slash wait_turn sleep\"` (line 86) lists all three as genuinely ported, so recipe-lint passes with no gap (no `keys` / `restart` / `reset_session` / `sigkill` primitive is required to elicit a single question turn). An INTERACTIVE recipe is mandatory: kiro-cli's headless `--no-interactive` mode writes NO session file and is invisible to the daemon (FINDINGS.md §7), and the TUI process must outlive the daemon's observation window so the post-turn waiting dwell is observable — NO reply is sent to the question; after wait_turn a trailing sleep holds the REPL alive in waiting before teardown. Launch is `kiro-cli chat --trust-all-tools`.\n\nConfidence 0.85 (not higher): the working→waiting settle is a provisional parser+adapter read for kiro-cli specifically — in particular that kiro actually EMITS a text-only final AssistantMessage whose text retains the trailing `?` (not one carrying a stray toolUse, and not a question the model softens into a non-`?` sentence). The kirocli parser_test pins turn_done + AssistantText preservation (TestParser_AssistantTextOnly_TurnDone) and the ≤200-rune truncation (TestParser_AssistantTextTruncated), but there is no dedicated trailing-`?`-preservation test for this adapter; the live recording in `record` promotes the verdict from provisional to settled.",
+      "caveats": [
+        "kiro-cli has NO structured AskUserQuestion tool (FINDINGS.md §4/§8 event vocabulary + slash surface). The waiting verdict rides ENTIRELY on the natural-language trailing-`?` text classifier (IsWaitingForUserInput → ExtractQuestionSnippet on LastAssistantText, state_classifier decision 2a), not a tool-open/tool-result gate. This is why agent_supports is yes (the question IS the text path for kiro-cli) rather than the aider-style partial split into a separate text-path sibling cell.",
+        "Provisional emission: the verdict assumes kiro actually emits a text-only final AssistantMessage whose text retains the trailing `?`. The kirocli parser preserves AssistantText (TestParser_AssistantTextOnly_TurnDone) and truncates by rune count without stripping punctuation (parser.go 80-83, TestParser_AssistantTextTruncated), so a trailing `?` within 200 runes survives — but no dedicated trailing-`?` test pins THIS adapter, and the prompt-induced question wording can vary. record promotes provisional → settled.",
+        "The recipe deliberately does NOT answer the question — the session dwells in waiting until REPL teardown (tmux kill-session). The spec asserts the entry arc only (ready→working→waiting) and final state waiting, mirroring the aider/claudecode 2.17 recipes; the waiting→working→ready resumption half of the scenario process is out of scope for this entry-locking recipe.",
+        "No token/cost/model is observable (JSONL carries none; the parser does not read the sidecar; sidecar token counts are 0), so the observations vector asserts tokens_nonzero=false, cost_nonzero=false, model unknown — but the scenario asserts no token criterion, so this does not weaken the state-arc verdict."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/parser.go",
+          "note": "AssistantMessage with no toolUse → turn_done (lines 76-79) AND ev.AssistantText set from the last text block, ≤200 runes truncated by rune count with NO punctuation stripping (lines 80-83) — so a trailing '?' survives. Prompt → user_message (working). JSONL carries no model/token/cost (those live in the <uuid>.json sidecar this parser does not read)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer.go",
+          "note": "Lines 917-918: a non-empty parsed.AssistantText is copied into t.lastAssistantText; tailer_metrics.go:392 exposes it as SessionMetrics.LastAssistantText — the text the waiting classifier inspects."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/session.go",
+          "note": "IsAgentDone() returns true on LastEventType=='turn_done' (line 541 — kiro's text-only AssistantMessage). IsWaitingForUserInput() reads LastAssistantText and returns true when ExtractQuestionSnippet finds a trailing '?', so a question turn diverts working→waiting rather than working→ready."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go",
+          "note": "Decision 2a (lines 60-66): when IsAgentDone() is true, IsWaitingForUserInput() → StateWaiting (\"turn ended with question or cue → waiting\"). The text-only AssistantMessage drives turn_done → IsAgentDone → this divert; no open tool call so HasOpenToolCall never blocks it."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/parser_test.go",
+          "note": "TestParser_AssistantTextOnly_TurnDone pins text-only AssistantMessage → turn_done with AssistantText preserved; TestParser_AssistantTextTruncated pins the 200-rune cap. Together they pin the preservation mechanism the trailing-? waiting path relies on (no dedicated trailing-? test for this adapter — hence confidence 0.85)."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/kiro-cli/driver-interactive.sh",
+          "note": "DRIVE_ELICITS=\"send slash wait_turn sleep\" (line 86) — the recipe's send/wait_turn/sleep are all genuinely elicited → driver ready. TUI-only (kiro-cli chat --trust-all-tools); headless --no-interactive writes no session file (NO HEADLESS PATH block). wait_turn counts text-only AssistantMessages, mirroring the turn_done parser rule."
+        },
+        {
+          "kind": "file",
+          "ref": ".build/refresh/kiro-cli-smoke/FINDINGS.md",
+          "note": "Live 2.5.1 smoke: §4 event vocabulary Prompt/AssistantMessage/ToolResults/Clear, no model/usage/cost in JSONL, sidecar token counts 0; §5 turn-end = final text-only AssistantMessage; §7 headless writes NO session file so the TUI launch is mandatory; §8 slash surface carries no structured question tool."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "kiro-cli on PATH and authenticated (subscription auth; trust-all consent already persisted on this machine)",
+        "irrlichd is recording — run-cell.sh in isolated mode, or --attach against a daemon started with --record",
+        "no other kiro-cli session shares the same cwd"
+      ],
+      "setup": [
+        "Create an empty cwd under <staging>/cwd/ (the driver launches kiro-cli chat --trust-all-tools there)",
+        "Each send bumps the expected-turn counter; wait_turn blocks until a new text-only AssistantMessage (turn_done) appears in the transcript, so the trailing sleep never races a still-running turn",
+        "NO reply is sent to the question — after wait_turn + the trailing sleep the session dwells in waiting, then the driver tears the REPL down (tmux kill-session) while it is still waiting"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "I want to add a feature to my project but I'm not sure which file it should go in. Ask me exactly ONE short clarifying question to scope it, ending in a question mark, and then stop and wait for my answer. Output only that one question and nothing else."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        }
+      ],
+      "verify": [
+        "events.jsonl contains a presession_created event for proc-<PID> in ready within 1000 ms of the tmux new-session timestamp",
+        "events.jsonl contains a transcript_new event for the UUID session after the first send (kiro writes the .jsonl lazily on first prompt), born ready",
+        "events.jsonl contains a pid_discovered event bound to the UUID session_id",
+        "events.jsonl contains a state_transition to working for the UUID session when the Prompt lands (the single clarifying-question turn)",
+        "events.jsonl contains a state_transition to waiting for the UUID session once the turn ends — kiro emits a text-only AssistantMessage whose text ends in '?', the parser maps it to turn_done with AssistantText preserved, and classifier decision 2a (IsWaitingForUserInput) diverts working→waiting",
+        "events.jsonl contains NO state_transition to ready for the UUID session after the waiting transition (the recipe does not answer; the session dwells in waiting until teardown)",
+        "the session's final live state is waiting and it persists for the trailing sleep — no settle back to ready before the REPL is torn down",
+        "transcript.jsonl contains exactly 1 Prompt line and a final text-only AssistantMessage line ending in '?', with no toolUse blocks"
+      ],
+      "settings": {},
+      "timeout_seconds": 90
+    }
+  }
+}

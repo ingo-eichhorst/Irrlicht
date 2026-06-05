@@ -1,0 +1,82 @@
+{
+  "scenario_id": "auto-executed-tool-call",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "2.5.1",
+    "daemon_version": "0.4.8+17650ec.dirty",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "auto-executed-tool-call",
+      "agent": "kiro-cli",
+      "assessed_at": "2026-06-05T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nThe scenario asserts the `ready → working → ready` arc for a single auto-approved tool call, with the invariant that state NEVER enters `waiting`. Every clause lands inside the kiro-cli adapter's observability surface.\n\n**agent_supports: yes.** kiro-cli launched as `kiro-cli chat --trust-all-tools` auto-executes tool calls with NO approval prompt — verified live on 2.5.1: a single turn issuing write + read + shell ran with all tools auto-resolving, the session stayed `working` throughout, and went `ready` at the final text-only AssistantMessage (FINDINGS.md §5 turn-end shape; the `--trust-all-tools` auto-executed path was exercised live with write/read/shell in one turn — tool open/close visible in the transcript events). This is the auto-approved happy path the scenario locks down.\n\n**daemon_capability: full.** The kiro-cli JSONL emits the exact event arc the scenario needs and `kirocli/parser.go` maps each one (FINDINGS.md §4-§5):\n\n- `Prompt` → `user_message` (`ClearToolNames=true`) drives `ready → working`.\n- A mid-turn `AssistantMessage` carrying `toolUse` blocks → `EventType: \"assistant\"` with `ToolUses` populated (parser.go:71-79); the session STAYS `working` and the tool span opens (the open tool is tracked by `toolUseId`).\n- `ToolResults` → `EventType: \"tool_result\"`, collecting `ToolResultIDs` from each `toolResult` block (parser.go:85-102) — this closes the open tool. State stays `working`.\n- The FINAL text-only `AssistantMessage` of the turn → `EventType: \"turn_done\"` (parser.go:76-78) drives `working → ready`.\n\nThe daemon emits the two `state_transition` events (`ready → working`, `working → ready`) plus the mid-turn tool_use/tool_result pair the scenario asserts. Intra-turn tool events do NOT flicker session state — by design, the tool span lives inside the `working` span — so the topology is exactly `ready → working → ready`.\n\n**State never enters `waiting`.** `waiting` is reserved for a user-blocking signal (a permission prompt / AskUserQuestion). With `--trust-all-tools` the tool approval picker never appears (consent persisted), so no PermissionPending signal is written to the transcript and the parser produces none — `waiting` is unreachable for this recipe. (kiro-cli's permission prompt — `\"<tool> requires approval\"` — only surfaces WITHOUT `--trust-all-tools`; that is the distinct `tool-gate` feature, out of scope here.)\n\n## What irrlicht does NOT see (and why that's OK here)\n\nThe kiro-cli JSONL carries no model/token/cost fields — those live in the `<uuid>.json` metadata sidecar, which the parser does not read (parser.go header; FINDINGS.md §4). The verify therefore observes model `unknown`, `cost_nonzero` false, `tokens_nonzero` false. That is orthogonal to THIS scenario, whose spec asserts only the state arc + the presence of a tool call — no metric vector.\n\nConfidence 0.85 (not higher): the auto-executed tool arc + the no-waiting invariant are anchored to a live 2.5.1 smoke (write/read/shell in one turn) and a direct read of the shipped parser, but the precise event-ordering on the recording (tool open before close, no transient waiting flicker) is a provisional parser+adapter read for kiro-cli specifically — `record`'s live recording promotes it from provisional to settled.",
+      "caveats": [
+        "Recording REQUIRES `kiro-cli chat --trust-all-tools` (the driver launches exactly this). WITHOUT the flag, the safe tool would trip the `\"<tool> requires approval\"` picker and push state to `waiting` — a different feature (tool-gate). The trust-all consent must be persisted on the recording machine (it is, per the smoke).",
+        "The kiro-cli JSONL has no model/token/cost fields (the sidecar holds credits/model, the daemon does not read it), so the verify observes model unknown, cost/tokens false. Orthogonal to this state+tool-call scenario.",
+        "daemon_capability=full for the mid-turn tool span is a provisional read of kirocli/parser.go (assistant+ToolUses opens, ToolResults closes via ToolResultIDs, text-only AssistantMessage = turn_done). The live recording in record confirms the tool open/close and the absence of any transient waiting flicker."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/parser.go",
+          "note": "AssistantMessage with toolUse blocks → EventType 'assistant' + ToolUses (mid-turn, stays working, parser.go:71-79); ToolResults → 'tool_result' collecting ToolResultIDs (closes the tool, parser.go:85-102); text-only AssistantMessage → 'turn_done' (working→ready, parser.go:76-78); Prompt → user_message (ready→working)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/agent.go",
+          "note": "Adapter Source FilesUnderRoot{Dir: .kiro/sessions/cli, JSONLineParser}; process matcher ExactName{Name: kiro-cli} — the tailed transcript is the basis for the state arc."
+        },
+        {
+          "kind": "file",
+          "ref": ".build/refresh/kiro-cli-smoke/FINDINGS.md",
+          "note": "Live 2.5.1 smoke: §4 event vocabulary (Prompt/AssistantMessage/ToolResults) + no model/token/cost in JSONL; §5 turn-end shape confirmed (Prompt → AM(text+toolUse) → ToolResults → … → AM(text-only)); §6 permission prompt only WITHOUT --trust-all-tools. With --trust-all-tools tools run with no approval (auto-executed path verified live: write/read/shell in one turn, working throughout, ready at the final text-only AssistantMessage)."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "kiro-cli on PATH and authenticated (subscription auth; trust-all consent already persisted on this machine)",
+        "irrlichd is recording — run-cell.sh in isolated mode, or --attach against a daemon started with --record",
+        "no other kiro-cli session shares the same cwd",
+        "the driver launches `kiro-cli chat --trust-all-tools` so the safe tool call auto-executes and never trips the approval picker (no waiting)"
+      ],
+      "setup": [
+        "Create an empty cwd under <staging>/cwd/ (the driver launches kiro-cli chat --trust-all-tools there)"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Run the shell command 'echo hello' using your shell tool, then reply with exactly the word: done"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the pre-session entering ready, then the UUID session handing off to ready (kiro writes the .jsonl lazily on the first prompt)",
+        "events.jsonl shows exactly one ready→working transition and one working→ready transition for the UUID session",
+        "events.jsonl contains at least one tool_use event (from the mid-turn AssistantMessage toolUse) inside the working span, closed by a tool_result",
+        "events.jsonl contains NO state_transition to waiting for the UUID session during the entire run (--trust-all-tools → no approval prompt)",
+        "final session state is ready",
+        "transcript.jsonl contains 1 Prompt line, at least one AssistantMessage with a toolUse block, a ToolResults line, and a final text-only AssistantMessage"
+      ],
+      "settings": {},
+      "timeout_seconds": 120
+    }
+  }
+}

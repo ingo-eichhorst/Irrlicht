@@ -56,6 +56,7 @@ Stages: `stable` production-ready · `beta` feature-complete, edge cases remain 
 | Pi             | alpha   |
 | Aider          | alpha   |
 | OpenCode       | alpha   |
+| Kiro CLI       | alpha   |
 | Gemini CLI     | planned |
 | Cursor Agent   | planned |
 | Amp            | planned |

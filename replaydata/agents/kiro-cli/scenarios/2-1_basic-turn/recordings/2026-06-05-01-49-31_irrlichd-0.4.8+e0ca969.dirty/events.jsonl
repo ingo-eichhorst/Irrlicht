@@ -1,0 +1,11 @@
+{"seq":269,"ts":"2026-06-05T01:49:31.613698+02:00","kind":"transcript_new","session_id":"e470701b-8b16-4675-9097-0cad5ac15ec0","adapter":"kiro-cli","transcript_path":"/Users/ingo/.kiro/sessions/cli/e470701b-8b16-4675-9097-0cad5ac15ec0.jsonl","project_dir":"cli"}
+{"seq":270,"ts":"2026-06-05T01:49:31.651895+02:00","kind":"state_transition","session_id":"e470701b-8b16-4675-9097-0cad5ac15ec0","new_state":"ready","reason":"new session created"}
+{"seq":271,"ts":"2026-06-05T01:49:31.733228+02:00","kind":"pid_discovered","session_id":"e470701b-8b16-4675-9097-0cad5ac15ec0","pid":49455}
+{"seq":272,"ts":"2026-06-05T01:49:34.392091+02:00","kind":"transcript_activity","session_id":"e470701b-8b16-4675-9097-0cad5ac15ec0","adapter":"kiro-cli","transcript_path":"/Users/ingo/.kiro/sessions/cli/e470701b-8b16-4675-9097-0cad5ac15ec0.jsonl","file_size":195}
+{"seq":273,"ts":"2026-06-05T01:49:34.39366+02:00","kind":"state_transition","session_id":"e470701b-8b16-4675-9097-0cad5ac15ec0","prev_state":"ready","new_state":"working","reason":"force ready→working on first activity"}
+{"seq":274,"ts":"2026-06-05T01:49:34.395161+02:00","kind":"state_transition","session_id":"e470701b-8b16-4675-9097-0cad5ac15ec0","prev_state":"working","new_state":"ready","reason":"agent finished turn → ready"}
+{"seq":275,"ts":"2026-06-05T01:49:34.399469+02:00","kind":"transcript_activity","session_id":"e470701b-8b16-4675-9097-0cad5ac15ec0","adapter":"kiro-cli","transcript_path":"/Users/ingo/.kiro/sessions/cli/e470701b-8b16-4675-9097-0cad5ac15ec0.jsonl","file_size":339}
+{"seq":276,"ts":"2026-06-05T01:49:34.39948+02:00","kind":"debounce_coalesced","session_id":"e470701b-8b16-4675-9097-0cad5ac15ec0"}
+{"seq":277,"ts":"2026-06-05T01:49:36.402031+02:00","kind":"state_transition","session_id":"e470701b-8b16-4675-9097-0cad5ac15ec0","prev_state":"ready","new_state":"working","reason":"force ready→working on first activity"}
+{"seq":278,"ts":"2026-06-05T01:49:36.402658+02:00","kind":"state_transition","session_id":"e470701b-8b16-4675-9097-0cad5ac15ec0","prev_state":"working","new_state":"ready","reason":"agent finished turn → ready"}
+{"seq":279,"ts":"2026-06-05T01:49:38.745488+02:00","kind":"process_exited","session_id":"e470701b-8b16-4675-9097-0cad5ac15ec0","pid":49455}

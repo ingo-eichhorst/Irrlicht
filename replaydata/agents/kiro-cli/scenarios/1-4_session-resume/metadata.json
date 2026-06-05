@@ -1,0 +1,124 @@
+{
+  "scenario_id": "session-resume",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "full",
+    "agent_cli_version": "2.5.1",
+    "daemon_version": "0.4.8+17650ec",
+    "confidence": 0.95,
+    "notes": "agent_supports: yes (resume live-verified, same UUID 0c971d39 across two PIDs); daemon_capability: full (recording 2026-06-05 proved the same session row re-creates after the >10s deletedCooldown — 7/7 phases); driver_capability: full (resume arm ported from drive-codex-interactive.sh, commit b777714f). Model observation corrected from placeholder \"unknown\" to ABSENT: kiro JSONL has no model field and the v1 adapter reads no metering sidecar — model/cost/tokens all empty."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "session-resume",
+      "agent": "kiro-cli",
+      "assessed_at": "2026-06-05T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "full",
+      "confidence": 0.95,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: gap:resume\n\n## Reasoning\n\n**Agent (yes).** Resume is verified LIVE on kiro-cli 2.5.1 on this machine: `kiro-cli chat --resume-id <uuid>` reopens the SAME session UUID and appends to the same `~/.kiro/sessions/cli/<uuid>.jsonl` with a NEW PID (FINDINGS.md §8 — `/quit` even prints `Resume with: kiro-cli --resume-id <uuid>`, and the `.lock` reappears for the resumed lifetime). `--resume` (most recent in cwd) and `--resume-picker` also exist. This is one session identity across two process lifetimes — exactly the scenario's contract.\n\n**Daemon (full).** The adapter Source is `FilesUnderRoot{Dir: \".kiro/sessions/cli\"}` (agent.go), so the daemon keys the session row on the `.jsonl` filename stem = the UUID. Because resume appends to the SAME `<uuid>.jsonl`, the SAME `session_id` row reappears — not a new row (scenario AC #1). PID discovery is `DiscoverPIDByCWD(\"kiro-cli\", cwd)` (pid.go), and the resumed parent keeps the session cwd as its OS cwd (FINDINGS.md §1), so the new PID rebinds to the same UUID. The intervening clean exit DELETES the session (recorded in `deletedSessions` with a timestamp); genuine resume activity arriving after the `deletedCooldown` window RE-CREATES the same session row from transcript activity — the same `--continue` re-creation path proven by `TestSessionDetector_*` (session_detector.go lines 100-121; the late-write-within-cooldown ghost guard at session_detector_test.go:1166 and the post-cooldown re-creation at :1156). So the full arc — v1 ready→working→ready, clean exit (process_exited + delete), v2 same-UUID reappears in ready, ready→working→ready — is observable, with one session row across both lifetimes. The parser maps Prompt→user_message, AssistantMessage(text-only)→turn_done, AssistantMessage(toolUse)→working (parser.go), giving the per-lifetime state cycles.\n\n**Driver (gap:resume).** The recipe needs a `resume` step (relaunch the SAME id+cwd). kiro-cli's interactive driver has a `resume` arm but it is a stubbed `not_implemented` (driver-interactive.sh:249), and the semantic `DRIVE_ELICITS=\"send slash wait_turn sleep\"` (line 86) does NOT list it — recipe-lint flags this as a semantic_gap before recording. The recipe also uses `exit_clean` for the clean shutdown, likewise stubbed (line 251) and unlisted. This is TOOLING work, not an observability limit: `record` ports the `resume` (and `exit_clean`) seam from the codex/claudecode reference drivers (both list `resume` in their `DRIVE_ELICITS`; codex `step_resume` relaunches `codex resume <uuid>`, kiro's analogue is `kiro-cli chat --resume-id <uuid>`) before it drives, then the cell records.\n\nObservations: the JSONL carries NO model/token/cost fields (FINDINGS.md §4 — the sidecar `<uuid>.json` has them but the v1 adapter does not read it), so the spec asserts model `unknown`, cost_nonzero false, tokens_nonzero false.",
+      "caveats": [
+        "Driver gap is the only thing between this cell and a recording: kiro-cli's `resume` and `exit_clean` arms are stubbed (not in DRIVE_ELICITS). `record` ports both from drive-codex-interactive.sh / drive-claudecode-interactive.sh (kiro's resume = `kiro-cli chat --resume-id <uuid>` with the same cwd) before driving.",
+        "Recording prerequisite: the sleep between exit and resume MUST exceed the daemon's deletedCooldown (10s) — a resume launch within the cooldown is suppressed as a ghost-write and the same UUID will not re-create. The recipe sleeps 12s post-exit to clear it.",
+        "Observations are model `unknown` / cost 0 / tokens 0: kiro-cli's JSONL has no usage fields and the v1 adapter does not read the metering sidecar (FINDINGS.md §4). A future sidecar MetricsReader would flip these.",
+        "daemon=full is doc+code derived; the delete-at-quit → reappear-on-resume re-creation is read from the session-detector cooldown logic and its tests, not from a live kiro-cli resume recording. `record` promotes it from provisional to settled."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": ".build/refresh/kiro-cli-smoke/FINDINGS.md",
+          "note": "§8: `kiro-cli chat --resume-id <uuid>` reopens the SAME UUID, appends to the same .jsonl, .lock reappears, /quit prints the resume hint. §1: resumed parent's OS cwd == session cwd (DiscoverPIDByCWD works). §4: JSONL has no model/token/cost."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/agent.go",
+          "note": "Source FilesUnderRoot{Dir: \".kiro/sessions/cli\"} keys the session row on the <uuid>.jsonl filename stem — resume appends to the same file, so the same session_id reappears (not a new row)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/pid.go",
+          "note": "DiscoverPID = DiscoverPIDByCWD(\"kiro-cli\", cwd) (sidecar cwd fallback) — the resumed new PID rebinds to the same UUID via the shared cwd."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/session_detector.go",
+          "note": "deletedSessions + deletedCooldown (lines 100-121): a process-exit-deleted session is re-created from transcript activity arriving after the cooldown — the mechanism that makes the same UUID reappear on resume."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/session_detector_test.go",
+          "note": "TestSessionDetector --continue re-creation (:1156-1164) and LateWriteAfterQuit ghost guard (:1166-1222) prove post-cooldown re-creation of the same session id vs in-cooldown suppression."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/kiro-cli/driver-interactive.sh",
+          "note": "resume arm stubbed not_implemented (line 249); exit_clean stubbed (line 251); DRIVE_ELICITS=\"send slash wait_turn sleep\" (line 86) omits both — driver=gap:resume. record ports them from the codex/claudecode reference drivers."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/codex/scenarios/1-4_session-resume/metadata.json",
+          "note": "Reference recipe for the same scenario (codex resume <uuid>): send/wait_turn/sleep/resume/sleep/send/wait_turn/sleep — kiro's recipe mirrors it with a clean exit and a >10s cooldown sleep."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "kiro-cli on PATH and authenticated (subscription auth; --trust-all-tools persists the trust consent so no per-tool picker stalls the run)",
+        "irrlichd recording with permissions granted (grant-all dev daemon)",
+        "the `resume` and `exit_clean` driver arms ported into drive-kiro-cli-interactive.sh (currently stubbed)"
+      ],
+      "setup": [
+        "Driver launches `kiro-cli chat --trust-all-tools` in a single cwd and discovers the minted UUID from the newest ~/.kiro/sessions/cli/<uuid>.jsonl after the first prompt.",
+        "The resume step relaunches `kiro-cli chat --resume-id <uuid>` in the SAME cwd so kiro appends to the existing transcript (same UUID, new PID)."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 2
+        },
+        {
+          "type": "exit_clean"
+        },
+        {
+          "type": "sleep",
+          "seconds": 12
+        },
+        {
+          "type": "resume"
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: again"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        }
+      ],
+      "verify": [
+        "events.jsonl: first launch's session enters ready, then ready→working→ready for turn 1 on the UUID",
+        "events.jsonl: a process_exited for the UUID after turn 1 (clean exit), and the session row is removed",
+        "events.jsonl: after the >10s cooldown sleep, the SAME UUID session_id re-appears in ready (not a new UUID) — proves the row persisted across PID lifetimes",
+        "events.jsonl: second-lifetime ready→working→ready fires on the SAME UUID, attributed to the new PID",
+        "final session state is ready; one session_id row across both lifetimes",
+        "transcript <uuid>.jsonl contains both turns' Prompt + text-only AssistantMessage lines, appended across both lifetimes"
+      ],
+      "settings": {},
+      "timeout_seconds": 180
+    }
+  }
+}

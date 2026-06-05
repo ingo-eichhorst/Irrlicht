@@ -1,0 +1,2 @@
+{"version":"v1","kind":"Prompt","data":{"message_id":"f823e40a-d381-4a98-be4c-678febfb09e6","content":[{"kind":"text","data":"Reply with exactly the word: ok"}],"meta":{"timestamp":1780617364}}}
+{"version":"v1","kind":"AssistantMessage","data":{"message_id":"8d913af6-0687-4552-ab61-df1c7b0e5728","content":[{"kind":"text","data":"ok"}]}}

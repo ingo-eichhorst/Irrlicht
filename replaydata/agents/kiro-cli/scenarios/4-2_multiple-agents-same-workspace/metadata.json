@@ -1,0 +1,97 @@
+{
+  "scenario_id": "multiple-agents-same-workspace",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "2.5.1",
+    "daemon_version": "0.4.8+f22f3be",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes (coexistence imposes no constraint); daemon_capability: full (ExactName{kiro-cli} + FilesUnderRoot{.kiro/sessions/cli} disjoint from claudecode's matcher + ~/.claude/projects root); driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "multiple-agents-same-workspace",
+      "agent": "kiro-cli",
+      "assessed_at": "2026-06-05T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nThis scenario is about COEXISTENCE: one kiro-cli session and one DIFFERENT-adapter session (claudecode) running concurrently in the SAME project directory, each shown with its correct adapter label and fully independent state + metrics — no cross-contamination of PID discovery or per-session projections.\n\n### agent_supports: yes\n\nkiro-cli has no notion of, and imposes no constraint on, what other agent CLIs run in the same cwd. A `kiro-cli chat` process is an ordinary CLI that materializes its own transcript under `~/.kiro/sessions/cli/<uuid>.jsonl` (see `core/adapters/inbound/agents/kirocli/adapter.go`, `defaultRootDir = \".kiro/sessions/cli\"`). The live 2.5.1 smoke confirmed the parent `kiro-cli` process's OS CWD == the session cwd and `pgrep -x kiro-cli` matches ONLY that parent (no collision with `kiro_cli_desktop`), so launching a second, unrelated agent (claude) in the same directory cannot interfere with a running kiro-cli session. The agent trivially \"supports\" coexistence — there is nothing for it to support or block.\n\n### daemon_capability: full; driver_capability: ready\n\nThe daemon labels each session by its adapter INDEPENDENTLY, by construction:\n\n1. **Per-adapter process matching, no cross-contamination.** kiro-cli registers `Process.Match = agent.ExactName{Name: \"kiro-cli\"}` (`core/adapters/inbound/agents/kirocli/agent.go`), while claudecode registers its own distinct matcher. `ExactName{\"kiro-cli\"}` never matches a `claude`/`node` process and claudecode's matcher never matches `kiro-cli`. The process scanner runs every adapter's matcher separately, so the adapter label is derived from which matcher hit, never from the cwd. Two different agents in one directory therefore get two correct, distinct labels. PID discovery is `DiscoverPIDByCWD(\"kiro-cli\", cwd)` (`kirocli/pid.go`), keyed on the kiro-cli process name + cwd — it cannot bind a claude process.\n\n2. **Disjoint transcript roots.** kiro-cli's `Source` is `FilesUnderRoot{Dir: \".kiro/sessions/cli\"}` (`agent.go`), whereas claudecode watches `~/.claude/projects/`. The fswatcher roots are per-adapter (derived from the `allAgents` slice via `maps.go`), so a kiro-cli transcript and a Claude transcript never land in the same watch root and cannot be confused or merged, regardless of sharing a cwd.\n\n3. **Per-(adapter, session_id) state + metrics.** Each session's state arc comes from that adapter's own parser applied to that session's own transcript file. kiro-cli's parser maps Prompt->user_message, AssistantMessage(toolUse)->assistant, AssistantMessage(text-only)->turn_done, ToolResults->tool_result (FINDINGS.md). There is no cwd-keyed merging — sessions are keyed by their own UUID under their own adapter. A turn in the kiro-cli session drives only the kiro-cli transcript and thus only the kiro-cli session's working->ready arc; the claudecode session's state is unaffected, and vice versa.\n\nThis is the same independence the existing `multiple-sessions-same-cwd` capability relies on, generalized across DIFFERENT adapters. Because each adapter's matcher + watch root + parser are wired separately off the `allAgents` projections, independent labeling and metrics fall out of the architecture rather than needing special-case code — the codex and claudecode 4.2 cells assert the identical mechanism and are recorded full.\n\n### Observations\n\nkiro-cli's JSONL carries NO model/usage/cost (FINDINGS.md §4: `metering_usage` + `model_id` live only in the sidecar `<uuid>.json`, and `input/output_token_count` are 0). The v1 adapter does not read the sidecar, so this cell's observation vector is model `unknown`, cost_nonzero false, tokens_nonzero false. This is an observation-richness limitation, NOT a coexistence failure — the working->ready independence the scenario asserts is fully observable from the JSONL state arc alone.\n\n## Recording plan\n\nDriven by run-cell-multi.sh: it launches the kiro-cli and claudecode interactive drivers concurrently against ONE shared cwd (IRRLICHT_ONBOARD_CWD / IRRLICHT_ONBOARD_MULTI) under a single isolated --record daemon, then curates one per-adapter fixture each. The workspace events.jsonl (shared) shows two rows — a kiro-cli session and a claudecode session, each keyed to the same cwd slug, each with its own working->ready arc, no merge or flap. This cell stores the kiro-cli transcript for the replay golden; events.jsonl + expected.jsonl span the whole workspace.",
+      "caveats": [
+        "Recorded by run-cell-multi.sh, which launches the kiro-cli and claudecode drivers concurrently against one shared cwd under a single isolated --record daemon. The daemon observes claudecode via its transcript fswatcher (the isolated daemon is not on :7837 where claudecode's hooks POST), which suffices for this scenario's per-session working->ready arcs.",
+        "kiro-cli's JSONL has no model/token/cost (they live only in the sidecar .json, unread by the v1 adapter), so this cell's observations are model=unknown, cost/tokens zero. This narrows observation richness only; the coexistence independence the scenario asserts is fully observable from the state arc.",
+        "Independent labeling/metrics rely on the daemon scanning each adapter's process matcher and transcript root separately. kiro-cli's ExactName{kiro-cli} + .kiro/sessions/cli root are disjoint from claudecode's today; if a future adapter ever shared a transcript root or process name, that assumption would need re-checking.",
+        "Provisional on emission: the two-distinct-arcs independence is read from the adapter wiring + the codex/claudecode siblings; the live run-cell-multi recording promotes it from provisional to settled."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/agent.go",
+          "note": "kiro-cli registers Process.Match = agent.ExactName{Name: \"kiro-cli\"} (line 35) and Source = agent.FilesUnderRoot{Dir: sessionsDir()} (lines 38-39) — per-adapter matcher + disjoint watch root"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/adapter.go",
+          "note": "ProcessName = \"kiro-cli\"; defaultRootDir = \".kiro/sessions/cli\" — distinct from claudecode's ~/.claude/projects/ root and claude/node process name"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/pid.go",
+          "note": "DiscoverPIDByCWD(\"kiro-cli\", cwd, disambiguate) — PID discovery keyed on the kiro-cli process name + cwd; cannot bind a claude process"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/maps.go",
+          "note": "fswatcher roots, process scanners, and parser-factory map are all per-adapter projections of the allAgents slice — independent labeling/metrics fall out of the wiring"
+        },
+        {
+          "kind": "file",
+          "ref": ".build/refresh/kiro-cli-smoke/FINDINGS.md",
+          "note": "Live 2.5.1 smoke: parent kiro-cli OS CWD == session cwd, pgrep -x kiro-cli matches ONLY the parent (no kiro_cli_desktop collision); JSONL has no model/usage/cost (sidecar-only); turn-end = text-only AssistantMessage"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/codex/scenarios/4-2_multiple-agents-same-workspace/metadata.json",
+          "note": "Sibling cross-adapter cell: same independence mechanism (disjoint matcher + root + per-session projections), recorded full via run-cell-multi.sh; this cell's partner is claudecode, codex's was claudecode too"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "partner_adapter": "claudecode",
+      "preconditions": [
+        "kiro-cli AND claude CLIs on PATH and authenticated",
+        "irrlichd is recording — run-cell-multi.sh isolated coexist mode (spawns its own --record daemon on an alternate port with its own IRRLICHT_HOME, so production keeps running)",
+        "no other kiro-cli/claudecode session is live in the run cwd"
+      ],
+      "setup": [
+        "run-cell-multi.sh creates ONE shared cwd and launches the kiro-cli and claudecode interactive drivers concurrently, both pointed at it via IRRLICHT_ONBOARD_CWD / IRRLICHT_ONBOARD_MULTI",
+        "kiro-cli registers Process.Match=ExactName{kiro-cli} + Source=FilesUnderRoot{.kiro/sessions/cli}, disjoint from claudecode's matcher and ~/.claude/projects root, so the daemon keys the two sessions independently",
+        "this cell stores the kiro-cli transcript for the replay golden; its events.jsonl and expected.jsonl span the whole workspace (both adapters)"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: bravo"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        }
+      ],
+      "verify": [
+        "events.jsonl contains TWO distinct session_ids from two different adapters (kiro-cli + claudecode), both keyed to the same cwd slug",
+        "each session has its own independent working->ready arc; no transition on one is attributed to the other",
+        "no cross-contamination: the daemon never merges or flaps the two adapters' rows"
+      ],
+      "settings": {},
+      "timeout_seconds": 240
+    }
+  }
+}

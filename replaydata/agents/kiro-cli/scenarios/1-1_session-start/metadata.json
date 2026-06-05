@@ -1,0 +1,82 @@
+{
+  "scenario_id": "session-start",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "2.5.1",
+    "daemon_version": "0.4.8+17650ec",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "session-start",
+      "agent": "kiro-cli",
+      "assessed_at": "2026-06-05T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nThe scenario's two user-observable bullets are (1) the session row appears in `ready` within 1s of agent launch and (2) the PID is bound within 1s. Both land inside irrlicht's observability surface for the kiro-cli adapter.\n\n**Session appears in `ready` within 1s.** The kiro-cli adapter matches the process with `agent.ExactName{Name: \"kiro-cli\"}` (core/adapters/inbound/agents/kirocli/agent.go) and `pgrep -x kiro-cli` matches ONLY the `kiro-cli chat` parent — no collision with `kiro_cli_desktop` (FINDINGS.md §1). On first detection the daemon's process scanner materializes a pre-session (`proc-<PID>`) row in the `ready` state, independent of any transcript file existing on disk. kiro writes `<uuid>.jsonl` lazily (only after the first prompt — FINDINGS.md §2, §7), so this is the same lazy-materialization / pre-session pattern as claudecode: the on-time `ready` row is the `proc-<PID>` pre-session, and the UUID session reconciles in once the transcript appears on first input.\n\n**PID bound within 1s.** `DiscoverPID` (core/adapters/inbound/agents/kirocli/pid.go) calls `processlifecycle.DiscoverPIDByCWD(ProcessName, cwd, …)`. The `kiro-cli chat` parent keeps the session cwd as its OS cwd, so `DiscoverPIDByCWD(\"kiro-cli\", cwd)` resolves the PID (verified live — FINDINGS.md §1). The pre-session row is PID-keyed from inception, so PID binding happens at the same scanner tick as session birth — both bullets are anchored to the process-scan, not to transcript materialization.\n\n## What irrlicht does NOT see (and why that's OK here)\n\nThe kiro-cli JSONL carries no model/token/cost fields — those live in the `<uuid>.json` sidecar, which the parser does not read (parser.go header comment; FINDINGS.md §4). That is irrelevant to THIS scenario, whose spec asserts only state arc + PID timing; it bears on token/cost/model scenarios, not session-start. The session-start observations therefore assert model `unknown` and cost/tokens not-asserted (no JSONL backing), matching what the daemon emits.\n\nConfidence 0.85 (not higher) because the on-time pre-session `ready` row and the precise sub-1s PID bind are a provisional parser+adapter read for kiro-cli specifically — the live recording in `record` promotes it from provisional to settled.",
+      "caveats": [
+        "kiro-cli uses lazy transcript materialization: the UUID-keyed session row only appears after the first prompt lands. The spec's 'within 1s of agent launch' bullet is satisfied by the pre-session (proc-<PID>) row, not the UUID session — the same user-mental-model vs matrix-verdict divergence as claudecode.",
+        "The JSONL has no model/token/cost fields (sidecar holds them, daemon does not read it). Irrelevant to this scenario (state+PID only) but means token/cost/model scenarios for kiro-cli will observe model 'unknown', cost/tokens not asserted.",
+        "Both timing bullets are anchored to the daemon's process-scan tick; a scan interval longer than ~1s would violate the spec. record's live recording confirms the budget is met in practice."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/agent.go",
+          "note": "Identity DisplayName 'Kiro CLI', Source FilesUnderRoot{Dir: .kiro/sessions/cli, JSONLineParser}, process matcher ExactName{Name: kiro-cli}."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/pid.go",
+          "note": "DiscoverPID calls processlifecycle.DiscoverPIDByCWD(ProcessName, cwd, …) with a sidecar-cwd fallback — feeds the pid_discovered event; the kiro-cli chat parent's OS cwd == session cwd."
+        },
+        {
+          "kind": "file",
+          "ref": ".build/refresh/kiro-cli-smoke/FINDINGS.md",
+          "note": "Live 2.5.1 smoke: §1 pgrep -x kiro-cli matches only the parent and DiscoverPIDByCWD works; §2 transcript live-appends; §7 headless writes NO session file so TUI launch (kiro-cli chat --trust-all-tools) is mandatory for a daemon-visible session."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "kiro-cli on PATH and authenticated (subscription auth; trust-all consent already persisted on this machine)",
+        "irrlichd is recording — run-cell.sh in isolated mode, or --attach against a daemon started with --record",
+        "no other kiro-cli session shares the same cwd"
+      ],
+      "setup": [
+        "Create an empty cwd under <staging>/cwd/ (the driver launches kiro-cli chat --trust-all-tools there)"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        }
+      ],
+      "verify": [
+        "events.jsonl contains a presession_created event for proc-<PID> within 1000 ms of the tmux new-session timestamp",
+        "events.jsonl contains a state_transition to ready for proc-<PID> within 100 ms of presession_created (pre-session immediately in ready)",
+        "events.jsonl contains a pid_discovered event for proc-<PID> within 1000 ms",
+        "events.jsonl contains a transcript_new event for the UUID session after the first send (kiro writes the .jsonl lazily on first prompt)",
+        "events.jsonl contains a state_transition to ready for the UUID session after transcript_new",
+        "final session state is ready",
+        "transcript.jsonl contains at least 1 Prompt line and 1 text-only AssistantMessage line"
+      ],
+      "settings": {},
+      "timeout_seconds": 90
+    }
+  }
+}
