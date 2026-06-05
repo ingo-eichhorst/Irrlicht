@@ -284,9 +284,18 @@ type TranscriptTailer struct {
 	// tasks accumulates the session's task list from TaskCreate / TaskUpdate
 	// tool_use events parsed by the Claude Code adapter.
 	tasks []Task
-	// taskSeq is the next sequential ID to assign on TaskCreate.
-	// Invariant: taskSeq == len(tasks) always (tasks are never removed).
+	// taskSeq is the provisional ID counter for TaskCreate. The authoritative
+	// ID arrives one line later in the create's tool_result (assign_id delta)
+	// and replaces the provisional one; the counter is only the fallback for
+	// transcripts that never carry toolUseResult.task.id. NOT len(tasks):
+	// completed batches are pruned by reconcileTaskSnapshot while Claude's
+	// numbering keeps climbing. See issue #615.
 	taskSeq int
+	// pendingTaskCreates maps a TaskCreate's tool_use id to the provisional
+	// task ID it was assigned, so the tool_result's authoritative ID
+	// (assign_id delta) can be applied to the right task. Entries resolve on
+	// the result line either way. See issue #615.
+	pendingTaskCreates map[string]string
 
 	// openBackgroundProcs is the set of agent-spawned background processes
 	// still believed running, keyed by background id with the output-file
@@ -335,6 +344,7 @@ func NewTranscriptTailer(path string, parser TranscriptParser, adapter string) *
 		openToolCalls:       make(map[string]string),
 		openBackgroundProcs: make(map[string]string),
 		pendingBashPolls:    make(map[string]string),
+		pendingTaskCreates:  make(map[string]string),
 		cumByModel:          make(map[string]*UsageBreakdown),
 		metrics: &SessionMetrics{
 			MessageHistory: make([]MessageEvent, 0),
@@ -356,7 +366,7 @@ func (t *TranscriptTailer) DisableModelConfigFallback() {
 // can be persisted to disk and rehydrated after a daemon restart.
 func (t *TranscriptTailer) GetLedgerState() LedgerState {
 	s := LedgerState{
-		SchemaVersion:      2,
+		SchemaVersion:      3,
 		LastOffset:         t.lastOffset,
 		CumProviderCostUSD: t.cumProviderCostUSD,
 		ModelName:          t.metrics.ModelName,
@@ -373,6 +383,12 @@ func (t *TranscriptTailer) GetLedgerState() LedgerState {
 	}
 	if len(t.tasks) > 0 {
 		s.Tasks = append([]Task(nil), t.tasks...)
+	}
+	s.TaskSeq = t.taskSeq
+	if len(t.pendingTaskCreates) > 0 {
+		ptc := make(map[string]string, len(t.pendingTaskCreates))
+		maps.Copy(ptc, t.pendingTaskCreates)
+		s.PendingTaskCreates = ptc
 	}
 	if len(t.openBackgroundProcs) > 0 {
 		bp := make(map[string]string, len(t.openBackgroundProcs))
@@ -421,7 +437,16 @@ func (t *TranscriptTailer) SetLedgerState(s LedgerState) {
 	}
 	if len(s.Tasks) > 0 {
 		t.tasks = append([]Task(nil), s.Tasks...)
-		t.taskSeq = len(t.tasks)
+	}
+	// Restore the provisional-ID counter from the persisted value, falling
+	// back to len(Tasks) only for pre-#615 ledgers that didn't carry TaskSeq.
+	// len(Tasks) alone understates the counter once completed batches have
+	// been pruned, desyncing every later TaskCreate from Claude's monotonic
+	// numbering (issue #615).
+	t.taskSeq = max(s.TaskSeq, len(t.tasks))
+	if len(s.PendingTaskCreates) > 0 {
+		t.pendingTaskCreates = make(map[string]string, len(s.PendingTaskCreates))
+		maps.Copy(t.pendingTaskCreates, s.PendingTaskCreates)
 	}
 	if len(s.BackgroundProcs) > 0 {
 		t.openBackgroundProcs = make(map[string]string, len(s.BackgroundProcs))
@@ -486,6 +511,7 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 		t.cumProviderCostUSD = 0
 		t.tasks = nil
 		t.taskSeq = 0
+		t.pendingTaskCreates = make(map[string]string)
 		// Background-process set belongs to the prior file; drop it so a
 		// rotated/truncated transcript doesn't keep a stale session `working`.
 		// See issue #445.
@@ -751,9 +777,10 @@ func (t *TranscriptTailer) FlushIdle() (*SessionMetrics, bool) {
 //     that emitted any deltas for that turn.
 //
 // Snapshots that mention IDs we never saw a TaskCreate for are ignored;
-// the reconcile only acts on pre-existing tasks. t.taskSeq is never reset,
-// so monotonic IDs continue to match Claude's sequential numbering across
-// pruned batches. See issues #282 and #389.
+// the reconcile only acts on pre-existing tasks. Task IDs come from the
+// TaskCreate tool_result (assign_id delta), so they match Claude's
+// numbering even when the tailer started mid-session (issue #615).
+// See issues #282 and #389.
 // eventUnix is the unix-seconds time of a parsed event, 0 when the event
 // carries no timestamp (a 0 CompletedAt means "unstamped", never a stamp at
 // the zero time).
@@ -832,14 +859,40 @@ func (t *TranscriptTailer) processParsedEvent(parsed *ParsedEvent, sawUserBlocki
 	for _, d := range parsed.TaskDeltas {
 		switch d.Op {
 		case TaskOpCreate:
+			// The ID assigned here is provisional — the authoritative one
+			// arrives in the create's tool_result as an assign_id delta and
+			// replaces it. The counter only carries transcripts whose results
+			// don't include toolUseResult.task.id. See issue #615.
 			t.taskSeq++
+			provisional := strconv.Itoa(t.taskSeq)
 			t.tasks = append(t.tasks, Task{
-				ID:          strconv.Itoa(t.taskSeq),
+				ID:          provisional,
 				Subject:     d.Subject,
 				Description: d.Description,
 				ActiveForm:  d.ActiveForm,
 				Status:      TaskStatusPending,
 			})
+			if d.ToolUseID != "" {
+				t.pendingTaskCreates[d.ToolUseID] = provisional
+			}
+		case TaskOpAssignID:
+			provisional, ok := t.pendingTaskCreates[d.ToolUseID]
+			if !ok || d.ID == "" {
+				break
+			}
+			delete(t.pendingTaskCreates, d.ToolUseID)
+			for i := range t.tasks {
+				if t.tasks[i].ID == provisional {
+					t.tasks[i].ID = d.ID
+					break
+				}
+			}
+			// Keep the provisional counter at least at Claude's numbering so
+			// a create whose result never lands (interrupt) still gets a
+			// non-colliding, aligned fallback ID.
+			if n, err := strconv.Atoi(d.ID); err == nil && n > t.taskSeq {
+				t.taskSeq = n
+			}
 		case TaskOpUpdate:
 			for i := range t.tasks {
 				if t.tasks[i].ID == d.ID {
@@ -853,6 +906,14 @@ func (t *TranscriptTailer) processParsedEvent(parsed *ParsedEvent, sawUserBlocki
 				}
 			}
 		}
+	}
+	// A create's pending entry resolves when its tool_result arrives — via
+	// the assign_id delta above when the result carried the ID, or here for
+	// results that didn't (error results), so the map only ever holds
+	// in-flight creates. Runs after the delta loop: the assign_id delta and
+	// its ToolResultID arrive on the same parsed event.
+	for _, id := range parsed.ToolResultIDs {
+		delete(t.pendingTaskCreates, id)
 	}
 
 	// Background-process tracking (Bash run_in_background). A spawn adds the

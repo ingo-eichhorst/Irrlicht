@@ -1340,9 +1340,13 @@ func TestParser_TaskCreate_EmitsTaskDelta(t *testing.T) {
 	if d.ActiveForm != "Writing tests" {
 		t.Errorf("ActiveForm = %q", d.ActiveForm)
 	}
-	// ID is empty on create — the tailer assigns it sequentially.
+	// ID is empty on create — the authoritative one arrives in the
+	// tool_result (assign_id delta); the tailer numbers provisionally.
 	if d.ID != "" {
 		t.Errorf("ID should be empty on create, got %q", d.ID)
+	}
+	if d.ToolUseID != "tu_1" {
+		t.Errorf("ToolUseID = %q, want tu_1 (pairs the create with its result)", d.ToolUseID)
 	}
 }
 
@@ -1652,5 +1656,240 @@ func TestTailer_TaskReminder_SyncsDivergingStatus(t *testing.T) {
 	}
 	if len(m.Tasks) != 1 || m.Tasks[0].Status != tailer.TaskStatusCompleted {
 		t.Errorf("expected task 1 reconciled to completed, got %+v", m.Tasks)
+	}
+}
+
+// --- authoritative task IDs from TaskCreate tool_results (issue #615) ---
+
+// makeTaskCreateResultEvent builds the user event Claude Code writes for a
+// TaskCreate's tool_result: the assigned ID lives in the structured
+// `toolUseResult.task.id` (sibling to `message`), not in the tool_use input.
+func makeTaskCreateResultEvent(toolUseID, taskID string) map[string]interface{} {
+	return map[string]interface{}{
+		"type":      "user",
+		"timestamp": "2026-04-05T22:00:01Z",
+		"message": map[string]interface{}{
+			"role": "user",
+			"content": []interface{}{
+				map[string]interface{}{
+					"type":        "tool_result",
+					"tool_use_id": toolUseID,
+					"content":     "Task #" + taskID + " created successfully",
+				},
+			},
+		},
+		"toolUseResult": map[string]interface{}{
+			"task": map[string]interface{}{"id": taskID, "subject": "whatever"},
+		},
+	}
+}
+
+// appendTranscript appends more JSONL lines to an existing transcript, so a
+// test can model new activity arriving between TailAndProcess passes.
+func appendTranscript(t *testing.T, path string, lines []map[string]interface{}) {
+	t.Helper()
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	enc := json.NewEncoder(f)
+	for _, line := range lines {
+		if err := enc.Encode(line); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestParser_TaskCreateResult_EmitsAssignIDDelta(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(makeTaskCreateResultEvent("tu_1", "10"))
+	if ev == nil {
+		t.Fatal("expected non-nil event")
+	}
+	if len(ev.TaskDeltas) != 1 {
+		t.Fatalf("TaskDeltas len = %d, want 1", len(ev.TaskDeltas))
+	}
+	d := ev.TaskDeltas[0]
+	if d.Op != tailer.TaskOpAssignID {
+		t.Errorf("Op = %q, want %q", d.Op, tailer.TaskOpAssignID)
+	}
+	if d.ID != "10" {
+		t.Errorf("ID = %q, want 10", d.ID)
+	}
+	if d.ToolUseID != "tu_1" {
+		t.Errorf("ToolUseID = %q, want tu_1", d.ToolUseID)
+	}
+}
+
+func TestParser_PlainToolResult_NoAssignIDDelta(t *testing.T) {
+	// A tool_result without toolUseResult.task (any non-TaskCreate tool)
+	// must not fabricate an assign_id delta.
+	p := &Parser{}
+	ev := p.ParseLine(map[string]interface{}{
+		"type":      "user",
+		"timestamp": "2026-04-05T22:00:01Z",
+		"message": map[string]interface{}{
+			"role": "user",
+			"content": []interface{}{
+				map[string]interface{}{
+					"type":        "tool_result",
+					"tool_use_id": "tu_9",
+					"content":     "ok",
+				},
+			},
+		},
+		"toolUseResult": map[string]interface{}{"success": true},
+	})
+	if ev == nil {
+		t.Fatal("expected non-nil event")
+	}
+	if len(ev.TaskDeltas) != 0 {
+		t.Errorf("TaskDeltas = %+v, want none", ev.TaskDeltas)
+	}
+}
+
+// TestTailer_TaskCreateResult_AlignsIDsMidSession models the #615 trigger: a
+// tailer that starts mid-session (live-session adoption, daemon restart with
+// a pruned ledger) cannot reconstruct Claude's monotonic task numbering by
+// counting creates. The result-carried IDs must win, so TaskUpdates and
+// task_reminder snapshots referencing the real IDs keep matching.
+func TestTailer_TaskCreateResult_AlignsIDsMidSession(t *testing.T) {
+	// Transcript begins at Claude's third batch — IDs 10..12.
+	events := []map[string]interface{}{
+		makeToolUseEvent("tu_1", "TaskCreate", map[string]interface{}{
+			"subject": "Scripts", "activeForm": "Scripting",
+		}),
+		makeTaskCreateResultEvent("tu_1", "10"),
+		makeToolUseEvent("tu_2", "TaskCreate", map[string]interface{}{
+			"subject": "Swift", "activeForm": "Swifting",
+		}),
+		makeTaskCreateResultEvent("tu_2", "11"),
+		makeToolUseEvent("tu_3", "TaskCreate", map[string]interface{}{
+			"subject": "Docs", "activeForm": "Docsing",
+		}),
+		makeTaskCreateResultEvent("tu_3", "12"),
+		makeToolUseEvent("tu_4", "TaskUpdate", map[string]interface{}{
+			"taskId": "10", "status": "completed",
+		}),
+		makeToolUseEvent("tu_5", "TaskUpdate", map[string]interface{}{
+			"taskId": "11", "status": "in_progress",
+		}),
+		// Reminder carries the real IDs — with counter-derived IDs (1..3)
+		// this snapshot used to prune the whole batch.
+		makeReminderEvent([]map[string]interface{}{
+			{"id": "10", "subject": "Scripts", "status": "completed"},
+			{"id": "11", "subject": "Swift", "status": "in_progress"},
+			{"id": "12", "subject": "Docs", "status": "pending"},
+		}),
+	}
+
+	m, err := newCCTailer(writeTranscript(t, events)).TailAndProcess()
+	if err != nil {
+		t.Fatalf("TailAndProcess: %v", err)
+	}
+	if len(m.Tasks) != 3 {
+		t.Fatalf("Tasks len = %d, want 3; tasks=%+v", len(m.Tasks), m.Tasks)
+	}
+	want := []struct{ id, status string }{
+		{"10", tailer.TaskStatusCompleted},
+		{"11", tailer.TaskStatusInProgress},
+		{"12", tailer.TaskStatusPending},
+	}
+	for i, w := range want {
+		if m.Tasks[i].ID != w.id || m.Tasks[i].Status != w.status {
+			t.Errorf("task[%d] = %+v, want id=%s status=%s", i, m.Tasks[i], w.id, w.status)
+		}
+	}
+}
+
+// TestTailer_TaskSeq_SurvivesLedgerRestart pins the counter-fallback half of
+// #615: even for transcripts whose results carry no toolUseResult.task.id,
+// the provisional counter must survive a daemon restart. Restoring it as
+// len(Tasks) understated it after completed batches were pruned, so the next
+// batch reused low IDs and every TaskUpdate missed.
+func TestTailer_TaskSeq_SurvivesLedgerRestart(t *testing.T) {
+	path := writeTranscript(t, []map[string]interface{}{
+		// Batch 1 — IDs 1 and 2, completed, pruned by the empty reminder.
+		makeToolUseEvent("tu_1", "TaskCreate", map[string]interface{}{
+			"subject": "Old A", "activeForm": "Old-Aing",
+		}),
+		makeToolUseEvent("tu_2", "TaskCreate", map[string]interface{}{
+			"subject": "Old B", "activeForm": "Old-Bing",
+		}),
+		makeToolUseEvent("tu_3", "TaskUpdate", map[string]interface{}{
+			"taskId": "1", "status": "completed",
+		}),
+		makeToolUseEvent("tu_4", "TaskUpdate", map[string]interface{}{
+			"taskId": "2", "status": "completed",
+		}),
+		makeReminderEvent([]map[string]interface{}{}),
+	})
+	tl1 := newCCTailer(path)
+	if _, err := tl1.TailAndProcess(); err != nil {
+		t.Fatalf("TailAndProcess: %v", err)
+	}
+
+	// Persist + rehydrate through JSON, as the daemon's ledger store does.
+	raw, err := json.Marshal(tl1.GetLedgerState())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var restored tailer.LedgerState
+	if err := json.Unmarshal(raw, &restored); err != nil {
+		t.Fatal(err)
+	}
+	if restored.TaskSeq != 2 {
+		t.Fatalf("persisted TaskSeq = %d, want 2", restored.TaskSeq)
+	}
+
+	// Batch 2 arrives after the restart — Claude numbers it 3 and 4.
+	appendTranscript(t, path, []map[string]interface{}{
+		makeToolUseEvent("tu_5", "TaskCreate", map[string]interface{}{
+			"subject": "New A", "activeForm": "New-Aing",
+		}),
+		makeToolUseEvent("tu_6", "TaskCreate", map[string]interface{}{
+			"subject": "New B", "activeForm": "New-Bing",
+		}),
+		makeToolUseEvent("tu_7", "TaskUpdate", map[string]interface{}{
+			"taskId": "3", "status": "completed",
+		}),
+	})
+	tl2 := newCCTailer(path)
+	tl2.SetLedgerState(restored)
+	m, err := tl2.TailAndProcess()
+	if err != nil {
+		t.Fatalf("TailAndProcess after restart: %v", err)
+	}
+	if len(m.Tasks) != 2 {
+		t.Fatalf("Tasks len = %d, want 2; tasks=%+v", len(m.Tasks), m.Tasks)
+	}
+	if m.Tasks[0].ID != "3" || m.Tasks[0].Status != tailer.TaskStatusCompleted {
+		t.Errorf("task[0] = %+v, want id=3 completed (update must match)", m.Tasks[0])
+	}
+	if m.Tasks[1].ID != "4" || m.Tasks[1].Status != tailer.TaskStatusPending {
+		t.Errorf("task[1] = %+v, want id=4 pending", m.Tasks[1])
+	}
+}
+
+// TestTailer_PrunedToEmpty_EmitsNonNilTasks pins the bug-B half of #615: once
+// a session has seen tasks, an emptied list must surface as a non-nil empty
+// slice. MergeMetrics reads nil as "no data yet" and would resurrect the
+// stale pre-prune list in the session record forever.
+func TestTailer_PrunedToEmpty_EmitsNonNilTasks(t *testing.T) {
+	m, err := newCCTailer(writeTranscript(t, []map[string]interface{}{
+		makeToolUseEvent("tu_1", "TaskCreate", map[string]interface{}{
+			"subject": "A", "activeForm": "Aing",
+		}),
+		makeReminderEvent([]map[string]interface{}{}),
+	})).TailAndProcess()
+	if err != nil {
+		t.Fatalf("TailAndProcess: %v", err)
+	}
+	if m.Tasks == nil {
+		t.Fatal("Tasks = nil after prune-to-empty, want non-nil empty slice")
+	}
+	if len(m.Tasks) != 0 {
+		t.Fatalf("Tasks = %+v, want empty", m.Tasks)
 	}
 }

@@ -34,6 +34,12 @@ const (
 
 	TaskOpCreate = "create"
 	TaskOpUpdate = "update"
+	// TaskOpAssignID carries the authoritative task ID from a TaskCreate
+	// tool_result back to the provisionally-numbered task created by the
+	// matching tool_use (paired via ToolUseID). Claude Code's task IDs are
+	// monotonic per session, so a tailer that starts (or restarts) mid-session
+	// cannot reconstruct them by counting creates — see issue #615.
+	TaskOpAssignID = "assign_id"
 )
 
 // Task represents a single item in the session's Claude Code task list,
@@ -52,14 +58,16 @@ type Task struct {
 }
 
 // TaskDelta is emitted by the Claude Code parser for each TaskCreate or
-// TaskUpdate tool_use block. The tailer folds deltas into its tasks slice.
+// TaskUpdate tool_use block, and for each TaskCreate tool_result carrying the
+// authoritative task ID. The tailer folds deltas into its tasks slice.
 type TaskDelta struct {
-	Op          string // "create" | "update"
-	ID          string // set on update (matches taskId input); empty on create
+	Op          string // "create" | "update" | "assign_id"
+	ID          string // update: taskId input; assign_id: toolUseResult.task.id; empty on create
 	Subject     string // TaskCreate only
 	Description string // TaskCreate only
 	ActiveForm  string // TaskCreate only
 	Status      string // TaskUpdate only; "pending" on create is applied by tailer
+	ToolUseID   string // create: the TaskCreate tool_use id; assign_id: the result's tool_use_id
 }
 
 // TaskSnapshotEntry is one row in a Claude Code task_reminder attachment, an
@@ -357,6 +365,15 @@ type LedgerState struct {
 	CumProviderCostUSD float64                    `json:"cum_provider_cost_usd,omitempty"`
 	ParserState        *ParserLedger              `json:"parser_state,omitempty"`
 	Tasks              []Task                     `json:"tasks,omitempty"`
+	// TaskSeq persists the provisional-ID counter. Claude Code's task IDs are
+	// monotonic per session while completed batches are pruned from Tasks, so
+	// len(Tasks) understates the counter after a restart and every subsequent
+	// TaskUpdate would miss its target. See issue #615.
+	TaskSeq int `json:"task_seq,omitempty"`
+	// PendingTaskCreates persists in-flight TaskCreate calls (tool_use id →
+	// provisional task ID) so a restart between a create's tool_use and its
+	// result can still apply the authoritative ID. See issue #615.
+	PendingTaskCreates map[string]string `json:"pending_task_creates,omitempty"`
 	// BackgroundProcs persists the open-background-process set (background id
 	// → output path) so a daemon restart keeps holding the session `working`
 	// for processes still alive. See issue #445.

@@ -363,6 +363,7 @@ func scanMessageContent(raw map[string]interface{}, ev *tailer.ParsedEvent) stri
 	// background with ID: …" from creating a phantom background process.
 	// See issue #445.
 	bgTaskID := backgroundTaskIDOf(raw)
+	createdTaskID := createdTaskIDOf(raw)
 	var askUserQuestion string
 	for _, item := range contentArr {
 		block, ok := item.(map[string]interface{})
@@ -375,7 +376,7 @@ func scanMessageContent(raw map[string]interface{}, ev *tailer.ParsedEvent) stri
 				askUserQuestion = q
 			}
 		case "tool_result":
-			collectToolResult(block, ev, bgTaskID)
+			collectToolResult(block, ev, bgTaskID, createdTaskID)
 		case "text":
 			// Task-estimate markers live in the agent's own prose, so only
 			// assistant events qualify (a user pasting a marker must not feed
@@ -417,6 +418,10 @@ func collectToolUse(block map[string]interface{}, ev *tailer.ParsedEvent) string
 			Subject:     subject,
 			Description: desc,
 			ActiveForm:  activeForm,
+			// The authoritative task ID only exists in the tool_result
+			// (`toolUseResult.task.id`); carry the tool_use id so the tailer
+			// can pair the later assign_id delta with this create. See #615.
+			ToolUseID: id,
 		})
 	case "TaskUpdate":
 		taskID, _ := input["taskId"].(string)
@@ -473,13 +478,23 @@ func backgroundID(input map[string]interface{}) string {
 // `toolUseResult.backgroundTaskId` ("" when absent) — a spawn is recorded only
 // when it is present, so arbitrary tool output echoing the launch phrase can't
 // fabricate a background process. See issue #445.
-func collectToolResult(block map[string]interface{}, ev *tailer.ParsedEvent, bgTaskID string) {
+// createdTaskID is the event's structured `toolUseResult.task.id` ("" when
+// absent) — the authoritative ID of a task created by the matching TaskCreate
+// tool_use; forwarded to the tailer as an assign_id delta. See issue #615.
+func collectToolResult(block map[string]interface{}, ev *tailer.ParsedEvent, bgTaskID, createdTaskID string) {
 	toolUseID, _ := block["tool_use_id"].(string)
 	if toolUseID != "" {
 		ev.ToolResultIDs = append(ev.ToolResultIDs, toolUseID)
 	}
 	if isErr, ok := block["is_error"].(bool); ok && isErr {
 		ev.IsError = true
+	}
+	if createdTaskID != "" && toolUseID != "" {
+		ev.TaskDeltas = append(ev.TaskDeltas, tailer.TaskDelta{
+			Op:        tailer.TaskOpAssignID,
+			ID:        createdTaskID,
+			ToolUseID: toolUseID,
+		})
 	}
 
 	text := toolResultText(block)
@@ -521,6 +536,24 @@ func backgroundTaskIDOf(raw map[string]interface{}) string {
 		return ""
 	}
 	id, _ := tur["backgroundTaskId"].(string)
+	return id
+}
+
+// createdTaskIDOf returns the structured `toolUseResult.task.id` from a Claude
+// Code event, or "" when absent. This top-level field is Claude Code's
+// authoritative record of the ID assigned by a TaskCreate — the tool_use input
+// carries no ID, and reconstructing it by counting creates desyncs whenever a
+// tailer starts mid-session (issue #615).
+func createdTaskIDOf(raw map[string]interface{}) string {
+	tur, ok := raw["toolUseResult"].(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	task, ok := tur["task"].(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	id, _ := task["id"].(string)
 	return id
 }
 
