@@ -556,7 +556,7 @@ func main() {
 	// Consent-gated: hooks installed by a pre-consent daemon keep firing
 	// until the wizard is answered, so payloads are dropped while pending.
 	mux.HandleFunc("POST /api/v1/hooks/claudecode",
-		claudecode.NewHookHandler(detector, permService, logger))
+		claudecode.NewHookHandler(detector, metricsCollector, permService, logger))
 
 	// Statusline receiver: Claude Code's per-tick statusline JSON, carrying
 	// rate_limits for Pro/Max subscribers (issue #309). Routes to the

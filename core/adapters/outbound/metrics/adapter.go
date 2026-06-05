@@ -173,10 +173,19 @@ func (a *Adapter) ComputeMetrics(transcriptPath, adapter string) (*session.Sessi
 			result.RateLimitForecastEta = &etaUnix
 		}
 	}
+	// A fresh in-band marker is the agent's own holistic estimate and wins;
+	// when none survives (claude ≥2.1.162 drops mid-task text blocks, #604)
+	// the estimate is derived from the task list's completion stamps.
+	var estBase *session.TaskEstimate
 	if m.TaskEstimate != nil {
 		result.TaskEstimate = tailerTaskEstimateToDomain(m.TaskEstimate)
-		base := tailerTaskEstimateToDomain(m.TaskEstimateBase)
-		if eta := session.ForecastTaskCompletion(result.TaskEstimate, base, m.ElapsedSeconds, time.Now()); eta != nil {
+		result.TaskEstimate.Source = "marker"
+		estBase = tailerTaskEstimateToDomain(m.TaskEstimateBase)
+	} else {
+		result.TaskEstimate, estBase = session.TaskEstimateFromTasks(result.Tasks)
+	}
+	if result.TaskEstimate != nil {
+		if eta := session.ForecastTaskCompletion(result.TaskEstimate, estBase, m.ElapsedSeconds, time.Now()); eta != nil {
 			etaUnix := eta.Unix()
 			result.TaskCompletionEta = &etaUnix
 		}
@@ -251,6 +260,32 @@ func (a *Adapter) IngestRateLimit(transcriptPath string, snap *session.RateLimit
 	tailerSnap := domainRateLimitToTailer(snap)
 	lt.mu.Lock()
 	lt.t.IngestRateLimit(tailerSnap)
+	lt.mu.Unlock()
+}
+
+// IngestTaskEstimate implements ports/outbound.MetricsCollector. Mirrors
+// IngestRateLimit: hook-delivered estimates (#604) reach the session's
+// tailer when one exists; otherwise no-op — the next ComputeMetrics creates
+// the tailer and the next hook delivery lands.
+func (a *Adapter) IngestTaskEstimate(transcriptPath string, est *session.TaskEstimate) {
+	if transcriptPath == "" || est == nil {
+		return
+	}
+	a.mu.Lock()
+	lt, ok := a.tailers[transcriptPath]
+	a.mu.Unlock()
+	if !ok {
+		return
+	}
+	tailerEst := &tailer.TaskEstimate{
+		TotalRounds:     est.TotalRounds,
+		CompletedRounds: est.CompletedRounds,
+		Risk:            est.Risk,
+		Confidence:      est.Confidence,
+		ObservedAt:      est.UpdatedAt,
+	}
+	lt.mu.Lock()
+	lt.t.IngestTaskEstimate(tailerEst)
 	lt.mu.Unlock()
 }
 
@@ -379,6 +414,7 @@ func tailerTasksToDomain(src []tailer.Task) []session.Task {
 			Description: t.Description,
 			ActiveForm:  t.ActiveForm,
 			Status:      t.Status,
+			CompletedAt: t.CompletedAt,
 		}
 	}
 	return dst

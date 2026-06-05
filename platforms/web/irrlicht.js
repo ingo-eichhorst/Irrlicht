@@ -421,7 +421,19 @@
     function taskEtaPresentation(metrics, state, nowSec) {
       const est = metrics && metrics.task_estimate;
       const eta = metrics && metrics.task_completion_eta;
-      if (state !== 'working' || !est || !eta || !(est.completed_rounds > 0)) return null;
+      if (state !== 'working' || !est) return null;
+      const sourceLabel = est.source === 'tasks' ? 'from task list' : 'agent-reported';
+      // No completed rounds yet: no measurable rate, but the agent HAS
+      // committed to a plan — show a progress-only chip so the user gets
+      // feedback within seconds of the first marker (issue #604/#602).
+      if (!(est.completed_rounds > 0)) {
+        if (!(est.total_rounds > 0)) return null;
+        const age = est.updated_at > 0 ? Math.max(0, Math.floor(nowSec - est.updated_at)) : 0;
+        let zeroTitle = 'Task ETA — ' + sourceLabel + ' 0/' + est.total_rounds + ' rounds';
+        if (est.updated_at > 0) zeroTitle += ', updated ' + fmtDuration(age) + ' ago';
+        return { text: 'estimating…', stale: est.updated_at > 0 && age > 180, title: zeroTitle };
+      }
+      if (!eta) return null;
       const remaining = Math.max(0, Math.floor(eta - nowSec));
       const frac = est.total_rounds > 0 ? est.completed_rounds / est.total_rounds : 0;
       let highSecs = null;
@@ -433,7 +445,7 @@
       const text = fmtEtaText(remaining, highSecs);
       const ageSec = est.updated_at > 0 ? Math.max(0, Math.floor(nowSec - est.updated_at)) : 0;
       const stale = est.updated_at > 0 && ageSec > 180;
-      let title = 'Task ETA — agent-reported ' + est.completed_rounds + '/' + est.total_rounds + ' rounds';
+      let title = 'Task ETA — ' + sourceLabel + ' ' + est.completed_rounds + '/' + est.total_rounds + ' rounds';
       if (est.updated_at > 0) title += ', updated ' + fmtDuration(ageSec) + ' ago';
       return { text: text, stale: stale, title: title };
     }
@@ -972,7 +984,7 @@
         etaEl.textContent = etaInfo.text;
         etaEl.title = etaInfo.title;
         etaEl.classList.toggle('stale', etaInfo.stale);
-        etaEl.dataset.eta = metrics.task_completion_eta;
+        etaEl.dataset.eta = metrics.task_completion_eta || '';
         etaEl.dataset.total = metrics.task_estimate.total_rounds;
         etaEl.dataset.completed = metrics.task_estimate.completed_rounds;
         etaEl.dataset.updatedAt = metrics.task_estimate.updated_at || '';

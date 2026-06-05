@@ -755,6 +755,16 @@ func (t *TranscriptTailer) FlushIdle() (*SessionMetrics, bool) {
 // the reconcile only acts on pre-existing tasks. t.taskSeq is never reset,
 // so monotonic IDs continue to match Claude's sequential numbering across
 // pruned batches. See issues #282 and #389.
+// eventUnix is the unix-seconds time of a parsed event, 0 when the event
+// carries no timestamp (a 0 CompletedAt means "unstamped", never a stamp at
+// the zero time).
+func eventUnix(parsed *ParsedEvent) int64 {
+	if parsed == nil || parsed.Timestamp.IsZero() {
+		return 0
+	}
+	return parsed.Timestamp.Unix()
+}
+
 func (t *TranscriptTailer) reconcileTaskSnapshot(parsed *ParsedEvent) {
 	if parsed == nil || parsed.TaskSnapshot == nil || len(t.tasks) == 0 {
 		return
@@ -778,6 +788,9 @@ func (t *TranscriptTailer) reconcileTaskSnapshot(parsed *ParsedEvent) {
 		}
 		if entry.Status != "" && entry.Status != t.tasks[i].Status {
 			log.Printf("irrlicht/tailer: reconciling task id=%s status %s → %s from task_reminder in %s", t.tasks[i].ID, t.tasks[i].Status, entry.Status, t.path)
+			if entry.Status == TaskStatusCompleted {
+				t.tasks[i].CompletedAt = eventUnix(parsed)
+			}
 			t.tasks[i].Status = entry.Status
 		}
 		kept = append(kept, t.tasks[i])
@@ -832,6 +845,9 @@ func (t *TranscriptTailer) processParsedEvent(parsed *ParsedEvent, sawUserBlocki
 			for i := range t.tasks {
 				if t.tasks[i].ID == d.ID {
 					if d.Status != "" {
+						if d.Status == TaskStatusCompleted && t.tasks[i].Status != TaskStatusCompleted {
+							t.tasks[i].CompletedAt = eventUnix(parsed)
+						}
 						t.tasks[i].Status = d.Status
 					}
 					break
@@ -921,11 +937,7 @@ func (t *TranscriptTailer) processParsedEvent(parsed *ParsedEvent, sawUserBlocki
 		t.lastAssistantText = ""
 	}
 	if parsed.TaskEstimate != nil {
-		if t.firstTaskEstimate == nil ||
-			(t.lastTaskEstimate != nil && parsed.TaskEstimate.CompletedRounds < t.lastTaskEstimate.CompletedRounds) {
-			t.firstTaskEstimate = parsed.TaskEstimate
-		}
-		t.lastTaskEstimate = parsed.TaskEstimate
+		t.applyTaskEstimate(parsed.TaskEstimate)
 	}
 	if parsed.ClearToolNames && len(parsed.ToolResultIDs) == 0 {
 		// A REAL user message (new prompt, ESC, answer) starts a new task or
@@ -945,4 +957,36 @@ func (t *TranscriptTailer) processParsedEvent(parsed *ParsedEvent, sawUserBlocki
 		Timestamp: parsed.Timestamp,
 		EventType: parsed.EventType,
 	})
+}
+
+// applyTaskEstimate runs the marker anchor bookkeeping shared by the
+// transcript scan and the hook ingest path (#604): track the CURRENT task's
+// first marker (re-anchored when completed_rounds goes backwards — an
+// agent-initiated new count) and let the latest marker win. An estimate
+// observed BEFORE the current latest is dropped — a late hook delivery must
+// not regress a fresher transcript marker (and a stale re-delivery must not
+// falsely re-anchor the rate base). The user-message reset stays in
+// processParsedEvent: it is transcript-line-driven.
+func (t *TranscriptTailer) applyTaskEstimate(est *TaskEstimate) {
+	if est == nil {
+		return
+	}
+	if t.lastTaskEstimate != nil && est.ObservedAt < t.lastTaskEstimate.ObservedAt {
+		return
+	}
+	if t.firstTaskEstimate == nil ||
+		(t.lastTaskEstimate != nil && est.CompletedRounds < t.lastTaskEstimate.CompletedRounds) {
+		t.firstTaskEstimate = est
+	}
+	t.lastTaskEstimate = est
+}
+
+// IngestTaskEstimate feeds an out-of-band task-progress estimate into the
+// same anchor/reset/ledger state as a transcript-scanned marker. Used by the
+// Claude Code hook receiver (#604): markers carried in tool inputs reach the
+// daemon via PreToolUse payloads, bypassing the transcript writer that drops
+// mid-task text blocks on claude ≥2.1.162. Caller (the metrics adapter)
+// holds the per-tailer lock, mirroring IngestRateLimit.
+func (t *TranscriptTailer) IngestTaskEstimate(est *TaskEstimate) {
+	t.applyTaskEstimate(est)
 }

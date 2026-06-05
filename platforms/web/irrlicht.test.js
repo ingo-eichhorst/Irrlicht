@@ -385,10 +385,33 @@ describe('taskEtaPresentation', () => {
     expect(taskEtaPresentation(metricsFor(), 'ready', now)).toBeNull()
   })
 
-  test('suppressed without estimate, eta, or reported progress', () => {
+  test('suppressed without estimate, or with progress but no eta', () => {
     expect(taskEtaPresentation({}, 'working', now)).toBeNull()
     expect(taskEtaPresentation(metricsFor({ metrics: { task_completion_eta: undefined } }), 'working', now)).toBeNull()
-    expect(taskEtaPresentation(metricsFor({ est: { completed_rounds: 0 } }), 'working', now)).toBeNull()
+  })
+
+  test('zero completed rounds renders a progress-only chip (#602)', () => {
+    // No measurable rate yet, but the agent committed to a plan — show
+    // "estimating…" immediately instead of waiting for the first round.
+    const m = metricsFor({ est: { completed_rounds: 0 }, metrics: { task_completion_eta: undefined } })
+    const info = taskEtaPresentation(m, 'working', now)
+    expect(info).not.toBeNull()
+    expect(info.text).toBe('estimating…')
+    expect(info.stale).toBe(false)
+    expect(info.title).toContain('0/10 rounds')
+  })
+
+  test('zero completed rounds: stale past 3min, hidden without total or while not working', () => {
+    const zero = (over) => metricsFor({ est: { completed_rounds: 0, ...(over || {}) }, metrics: { task_completion_eta: undefined } })
+    expect(taskEtaPresentation(zero({ updated_at: now - 200 }), 'working', now).stale).toBe(true)
+    expect(taskEtaPresentation(zero({ total_rounds: 0 }), 'working', now)).toBeNull()
+    expect(taskEtaPresentation(zero(), 'ready', now)).toBeNull()
+  })
+
+  test('tooltip attributes the estimate source (#604)', () => {
+    expect(taskEtaPresentation(metricsFor(), 'working', now).title).toContain('agent-reported')
+    const tasks = metricsFor({ est: { source: 'tasks' } })
+    expect(taskEtaPresentation(tasks, 'working', now).title).toContain('from task list')
   })
 
   test('eta in the past clamps to <1m, never negative — one sign only', () => {

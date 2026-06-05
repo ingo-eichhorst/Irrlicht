@@ -1457,16 +1457,30 @@ struct SessionRowView: View {
     }
 
     /// Decides the task-completion ETA chip (issue #558) — mirrors the web's
-    /// taskEtaPresentation. Nil hides the chip: session not working, no
-    /// estimate, or no reported progress. A point estimate once half the
-    /// rounds are done, a range below that, and stale dimming when the last
-    /// marker is older than 3 minutes.
+    /// taskEtaPresentation. Nil hides the chip: session not working or no
+    /// estimate. Zero completed rounds renders a progress-only "estimating…"
+    /// chip (#602); with progress, a point estimate once half the rounds are
+    /// done, a range below that, and stale dimming when the last marker is
+    /// older than 3 minutes.
     private func taskEtaPresentation(now: Date = Date()) -> TaskEtaPresentation? {
         guard session.state == .working,
               let metrics = session.metrics,
-              let est = metrics.taskEstimate,
-              let eta = metrics.taskCompletionEta,
-              est.completedRounds > 0 else { return nil }
+              let est = metrics.taskEstimate else { return nil }
+        let sourceLabel = est.source == "tasks" ? "from task list" : "agent-reported"
+        guard est.completedRounds > 0 else {
+            // No measurable rate yet, but the agent committed to a plan —
+            // immediate feedback beats waiting for the first round (#602).
+            guard est.totalRounds > 0 else { return nil }
+            var stale = false
+            var title = "Task ETA — \(sourceLabel) 0/\(est.totalRounds) rounds"
+            if let updated = est.updatedAt {
+                let age = max(0, now.timeIntervalSince(updated))
+                stale = age > 180
+                title += ", updated \(Int(age))s ago"
+            }
+            return TaskEtaPresentation(text: "estimating…", stale: stale, title: title)
+        }
+        guard let eta = metrics.taskCompletionEta else { return nil }
         let remaining = max(0, eta.timeIntervalSince(now))
         let frac = est.totalRounds > 0 ? Double(est.completedRounds) / Double(est.totalRounds) : 0
         // The eta is anchored at the marker (daemon-side): the LOW bound
@@ -1483,7 +1497,7 @@ struct SessionRowView: View {
         }
         let text = etaText(remaining: remaining, highSecs: highSecs)
         var stale = false
-        var title = "Task ETA — agent-reported \(est.completedRounds)/\(est.totalRounds) rounds"
+        var title = "Task ETA — \(sourceLabel) \(est.completedRounds)/\(est.totalRounds) rounds"
         if let updated = est.updatedAt {
             let age = max(0, now.timeIntervalSince(updated))
             stale = age > 180

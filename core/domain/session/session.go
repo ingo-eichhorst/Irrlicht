@@ -219,6 +219,10 @@ type Task struct {
 	Description string `json:"description,omitempty"`
 	ActiveForm  string `json:"active_form,omitempty"`
 	Status      string `json:"status"` // "pending" | "in_progress" | "completed"
+	// CompletedAt is the unix-seconds transcript-event time the task was
+	// observed transitioning to "completed" (0 = unstamped, e.g. completed
+	// before stamping existed). Feeds the tasks-derived ETA rate (#604).
+	CompletedAt int64 `json:"completed_at,omitempty"`
 }
 
 // NeedsUserAttention returns true when a user-blocking tool is open — one

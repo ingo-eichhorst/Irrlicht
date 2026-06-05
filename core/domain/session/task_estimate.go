@@ -22,6 +22,63 @@ type TaskEstimate struct {
 	// marker was last observed in. UIs use it to degrade a stale estimate
 	// ("updated 42s ago") instead of letting the ETA drift forever.
 	UpdatedAt int64 `json:"updated_at"`
+	// Source is where the estimate came from: "marker" for the agent's
+	// in-band self-report, "tasks" when derived from the task list (#604).
+	// UIs use it to attribute the estimate in tooltips.
+	Source string `json:"source,omitempty"`
+}
+
+// TaskEstimateFromTasks derives a fallback estimate from the session's task
+// list (#604): claude ≥2.1.162 drops assistant text blocks followed by
+// interleaved thinking from the transcript, so in-band markers rarely
+// survive mid-task — but TaskCreate/TaskUpdate tool calls always persist.
+// One task ≈ one round. Returns (nil, nil) until a task has completed.
+//
+// The pair feeds ForecastTaskCompletion unchanged: est.UpdatedAt anchors at
+// the latest stamped completion, and base reconstructs the state at the
+// FIRST stamped completion so the delta rate spans (latest − first) over
+// the completions between them. Tasks completed before stamping existed
+// (CompletedAt == 0, e.g. restored from an older ledger) still count toward
+// progress but are treated as completed before the first stamp.
+func TaskEstimateFromTasks(tasks []Task) (est, base *TaskEstimate) {
+	completed, stamped := 0, 0
+	var first, latest int64
+	for _, t := range tasks {
+		if t.Status != "completed" {
+			continue
+		}
+		completed++
+		if t.CompletedAt <= 0 {
+			continue
+		}
+		stamped++
+		if first == 0 || t.CompletedAt < first {
+			first = t.CompletedAt
+		}
+		if t.CompletedAt > latest {
+			latest = t.CompletedAt
+		}
+	}
+	if completed == 0 {
+		return nil, nil
+	}
+	est = &TaskEstimate{
+		TotalRounds:     len(tasks),
+		CompletedRounds: completed,
+		UpdatedAt:       latest,
+		Source:          "tasks",
+	}
+	if stamped >= 2 {
+		// At the first stamp, every unstamped completion plus that task
+		// itself was done: perRound = (latest − first) / (stamped − 1).
+		base = &TaskEstimate{
+			TotalRounds:     len(tasks),
+			CompletedRounds: completed - stamped + 1,
+			UpdatedAt:       first,
+			Source:          "tasks",
+		}
+	}
+	return est, base
 }
 
 // ForecastTaskCompletion projects the wall-clock completion time from the
