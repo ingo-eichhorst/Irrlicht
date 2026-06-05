@@ -3,7 +3,7 @@
   <desc id="desc">The Irrlicht eyed-flame mark — a flame silhouette with two oval eye cutouts — with a restrained purple brand gradient centered on #8B5CF6 and a subtle glow on a transparent background.</desc>
 
   <defs>
-    <linearGradient id="flameGradient" x1="0.38" y1="0.08" x2="0.62" y2="0.95">
+    <linearGradient id="flameGradient" x1="0.62" y1="0.95" x2="0.38" y2="0.08">
       <stop offset="0%" stop-color="#E9DDFF"/>
       <stop offset="24%" stop-color="#C9B2FF"/>
       <stop offset="50%" stop-color="#8B5CF6"/>

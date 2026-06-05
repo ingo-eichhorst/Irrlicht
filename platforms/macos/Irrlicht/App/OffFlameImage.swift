@@ -41,7 +41,7 @@ enum OffFlameImage {
         let svg = """
         <svg xmlns="http://www.w3.org/2000/svg" width="\(size)" height="\(size)" viewBox="0 0 1254 1254">
         <defs>
-        <linearGradient id="wisp-off-body" x1="50%" y1="0%" x2="50%" y2="100%">
+        <linearGradient id="wisp-off-body" x1="50%" y1="100%" x2="50%" y2="0%">
         \(config.bodyStops)
         </linearGradient>
         </defs>

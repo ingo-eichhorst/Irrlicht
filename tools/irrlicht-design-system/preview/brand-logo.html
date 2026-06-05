@@ -59,7 +59,7 @@ const stops = arr => arr.map(([o,c,a]) => `<stop offset="${o}" stop-color="${c}"
 function flameFull(uid, hue) {
   const h = HUES[hue];
   return `<defs>
-    <linearGradient id="fg${uid}" x1="0.38" y1="0.08" x2="0.62" y2="0.95">${stops(h.linear)}</linearGradient>
+    <linearGradient id="fg${uid}" x1="0.62" y1="0.95" x2="0.38" y2="0.08">${stops(h.linear)}</linearGradient>
     <radialGradient id="gt${uid}" cx="0.35" cy="0.18" r="0.85">${stops(h.innerTop)}</radialGradient>
     <radialGradient id="gb${uid}" cx="0.53" cy="0.92" r="0.42">${stops(h.innerBottom)}</radialGradient>
     <filter id="og${uid}" x="-30%" y="-30%" width="160%" height="180%">
@@ -82,7 +82,7 @@ function flameFull(uid, hue) {
 
 function flameOff(uid) {
   return `<defs>
-    <linearGradient id="ob${uid}" x1="50%" y1="0%" x2="50%" y2="100%">
+    <linearGradient id="ob${uid}" x1="50%" y1="100%" x2="50%" y2="0%">
       <stop offset="0%" stop-color="#6b7280" stop-opacity="0.7"/><stop offset="100%" stop-color="#3f4551" stop-opacity="0.95"/>
     </linearGradient>
   </defs>
