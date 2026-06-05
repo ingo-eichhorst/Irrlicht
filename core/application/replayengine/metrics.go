@@ -46,6 +46,7 @@ func TailerToDomain(m *tailer.SessionMetrics) *session.SessionMetrics {
 				Description: t.Description,
 				ActiveForm:  t.ActiveForm,
 				Status:      t.Status,
+				CompletedAt: t.CompletedAt,
 			}
 		}
 	}
