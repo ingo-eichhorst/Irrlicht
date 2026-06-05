@@ -57,9 +57,10 @@
     "recipe": {
       "applicable": true,
       "preconditions": [
-        "kiro-cli 2.5.1 on PATH and authenticated (subscription auth) — FINDINGS.md §7",
+        "kiro-cli >=2.5.1 on PATH and authenticated (subscription auth) — FINDINGS.md §7",
         "irrlichd is recording (--attach against a daemon with --record, or isolated mode)",
-        "Launch plain `kiro-cli chat` WITHOUT --trust-all-tools so the write-approval picker appears (record must drop the driver's hard-coded --trust-all-tools)"
+        "Launch plain `kiro-cli chat` WITHOUT --trust-all-tools so the write-approval picker appears (driver honors settings.trust_all_tools=false)",
+        "kiro-cli 2.6.0 only: chat.disableTrustAllConfirmation MUST be false in ~/.kiro/settings/cli.json. 2.6.0 honors this persisted global key and suppresses the write-approval picker when it is true — which CONFLICTS with the trust-all consent other kiro cells persist. The dispatcher flips it to false for this run and restores it afterwards."
       ],
       "setup": [
         "Driver launches kiro-cli chat (no --trust-all-tools) under tmux in a fresh cwd under <staging>/cwd/",
@@ -72,7 +73,7 @@
         },
         {
           "type": "sleep",
-          "seconds": 8
+          "seconds": 14
         },
         {
           "type": "keys",
