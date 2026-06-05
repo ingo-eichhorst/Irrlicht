@@ -38,7 +38,7 @@ func writeSidecar(t *testing.T, body string) string {
 }
 
 func TestReadSidecarModelState_LiveShape(t *testing.T) {
-	state := readSidecarModelState(writeSidecar(t, liveSidecar))
+	state := readSidecarModelState(writeSidecar(t, liveSidecar), nil)
 	if state == nil {
 		t.Fatal("expected model state from live-shaped sidecar")
 	}
@@ -63,7 +63,7 @@ func TestReadSidecarModelState_KeyOrder(t *testing.T) {
 	    "conversation_metadata": {"deep": [1, {"rts_model_state": {"model_info": {"model_id": "decoy-nested"}}}]}
 	  }
 	}`
-	state := readSidecarModelState(writeSidecar(t, body))
+	state := readSidecarModelState(writeSidecar(t, body), nil)
 	if state == nil {
 		t.Fatal("expected model state")
 	}
@@ -80,7 +80,7 @@ func TestReadSidecarModelState_Absent(t *testing.T) {
 		"no state key": writeSidecar(t, `{"session_state":{"agent_name":"kiro_default"}}`),
 		"flat doc":     writeSidecar(t, `{"cwd":"/x"}`),
 	} {
-		if state := readSidecarModelState(path); state != nil {
+		if state := readSidecarModelState(path, nil); state != nil {
 			t.Errorf("%s: expected nil, got %+v", name, state)
 		}
 	}
@@ -98,8 +98,35 @@ func TestReadSidecarModelState_HugeBlobSkipped(t *testing.T) {
 		sb.WriteString(`{"text":"` + strings.Repeat("x", 200) + `"}`)
 	}
 	sb.WriteString(`]},"rts_model_state":{"model_info":{"model_id":"auto","context_window_tokens":200000},"context_usage_percentage":7.5}}}`)
-	state := readSidecarModelState(writeSidecar(t, sb.String()))
+	state := readSidecarModelState(writeSidecar(t, sb.String()), nil)
 	if state == nil || state.ContextUsagePercentage != 7.5 {
 		t.Fatalf("expected state with 7.5%% after ~1MB skip, got %+v", state)
+	}
+}
+
+// The cache must serve an unchanged sidecar from memory (backfill case) and
+// invalidate when the file changes (live case: kiro rewrites it every turn).
+func TestReadSidecarModelState_Cache(t *testing.T) {
+	transcriptPath := writeSidecar(t, liveSidecar)
+	sidecar := strings.TrimSuffix(transcriptPath, ".jsonl") + ".json"
+
+	var cache sidecarCache
+	first := readSidecarModelState(transcriptPath, &cache)
+	if first == nil || cache.state == nil {
+		t.Fatal("expected first read to fill the cache")
+	}
+	if second := readSidecarModelState(transcriptPath, &cache); second != first {
+		t.Error("unchanged sidecar: expected the cached pointer back")
+	}
+
+	// Change the file (different size guarantees invalidation even when the
+	// filesystem's mtime granularity makes back-to-back writes equal-time).
+	updated := strings.Replace(liveSidecar, `"model_id": "auto"`, `"model_id": "claude-haiku-4.5"`, 1)
+	if err := os.WriteFile(sidecar, []byte(updated), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	third := readSidecarModelState(transcriptPath, &cache)
+	if third == nil || third.ModelInfo.ModelID != "claude-haiku-4.5" {
+		t.Errorf("changed sidecar: got %+v, want re-read with claude-haiku-4.5", third)
 	}
 }

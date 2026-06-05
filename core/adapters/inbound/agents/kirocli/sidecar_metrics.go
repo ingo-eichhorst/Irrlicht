@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"strings"
+	"time"
 
 	"irrlicht/core/pkg/transcript"
 )
@@ -20,6 +21,17 @@ type sidecarModelState struct {
 	ContextUsagePercentage float64 `json:"context_usage_percentage"`
 }
 
+// sidecarCache memoizes one readSidecarModelState result keyed by the
+// sidecar's (mtime, size). Live tailing sees a fresh sidecar every turn, so
+// the cache is a no-op there — it exists for BACKFILL of a long transcript,
+// where every historical turn_done would otherwise re-scan the same static
+// file: N turn_dones × an O(N)-sized sidecar is O(N²) without it.
+type sidecarCache struct {
+	mtime time.Time
+	size  int64
+	state *sidecarModelState
+}
+
 // readSidecarModelState extracts rts_model_state from the metadata sidecar
 // next to a Kiro transcript (<base>.jsonl → <base>.json). Returns nil when
 // there is no sidecar or the path is absent.
@@ -29,12 +41,21 @@ type sidecarModelState struct {
 // huge. The decoder therefore token-walks to session_state.rts_model_state
 // and unmarshals only that small object, skipping every sibling — the same
 // strategy as transcript.ExtractCWDFromSidecar. Called once per turn_done,
-// not per line.
-func readSidecarModelState(transcriptPath string) *sidecarModelState {
+// not per line, and memoized via cache while the file is unchanged.
+func readSidecarModelState(transcriptPath string, cache *sidecarCache) *sidecarModelState {
 	if !strings.HasSuffix(transcriptPath, ".jsonl") {
 		return nil
 	}
-	f, err := os.Open(strings.TrimSuffix(transcriptPath, ".jsonl") + ".json")
+	sidecar := strings.TrimSuffix(transcriptPath, ".jsonl") + ".json"
+	fi, err := os.Stat(sidecar)
+	if err != nil {
+		return nil
+	}
+	if cache != nil && cache.state != nil &&
+		fi.ModTime().Equal(cache.mtime) && fi.Size() == cache.size {
+		return cache.state
+	}
+	f, err := os.Open(sidecar)
 	if err != nil {
 		return nil
 	}
@@ -54,6 +75,9 @@ func readSidecarModelState(transcriptPath string) *sidecarModelState {
 	var state sidecarModelState
 	if err := dec.Decode(&state); err != nil {
 		return nil
+	}
+	if cache != nil {
+		*cache = sidecarCache{mtime: fi.ModTime(), size: fi.Size(), state: &state}
 	}
 	return &state
 }

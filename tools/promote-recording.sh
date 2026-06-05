@@ -64,10 +64,12 @@ for irrlichd_bin in "$REPO_ROOT/.build/refresh/bin/irrlichd" "$REPO_ROOT/.build/
   fi
 done
 case "$AGENT" in
-  claudecode) CLI_BIN="claude"; VER_FIELD=1 ;;
-  codex)      CLI_BIN="codex";  VER_FIELD=2 ;;
-  pi)         CLI_BIN="pi";     VER_FIELD=1 ;;
-  aider)      CLI_BIN="aider";  VER_FIELD=2 ;;
+  claudecode) CLI_BIN="claude";   VER_FIELD=1 ;;
+  codex)      CLI_BIN="codex";    VER_FIELD=2 ;;
+  pi)         CLI_BIN="pi";       VER_FIELD=1 ;;
+  aider)      CLI_BIN="aider";    VER_FIELD=2 ;;
+  opencode)   CLI_BIN="opencode"; VER_FIELD=1 ;;
+  kiro-cli)   CLI_BIN="kiro-cli"; VER_FIELD=2 ;;
   *)          CLI_BIN=""; VER_FIELD=1 ;;
 esac
 AGENT_VER="unknown"

@@ -26,6 +26,10 @@ type Parser struct {
 	// construction. Empty when the runtime predates the injection (or in
 	// path-less tests) — sidecar enrichment is then skipped.
 	path string
+	// sidecar memoizes the last model-state read by (mtime, size) so a
+	// backfill of a long transcript scans the static sidecar once, not once
+	// per historical turn_done.
+	sidecar sidecarCache
 }
 
 // SetTranscriptPath implements tailer.TranscriptPathAware.
@@ -142,7 +146,7 @@ func (p *Parser) applySidecarMetrics(ev *tailer.ParsedEvent) {
 	if p.path == "" {
 		return
 	}
-	state := readSidecarModelState(p.path)
+	state := readSidecarModelState(p.path, &p.sidecar)
 	if state == nil || state.ModelInfo.ModelID == "" {
 		return
 	}
