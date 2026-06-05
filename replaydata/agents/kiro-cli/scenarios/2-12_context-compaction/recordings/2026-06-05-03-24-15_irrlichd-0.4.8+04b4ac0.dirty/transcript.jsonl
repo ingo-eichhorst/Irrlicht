@@ -1,0 +1,4 @@
+{"version":"v1","kind":"Prompt","data":{"message_id":"12c4a990-722d-4a13-b63e-0203832e554a","content":[{"kind":"text","data":"Reply with exactly the word: ok"}],"meta":{"timestamp":1780622655}}}
+{"version":"v1","kind":"AssistantMessage","data":{"message_id":"d81ce3d4-0c6e-4e2b-8f54-5d46500412fb","content":[{"kind":"text","data":"ok"}]}}
+{"version":"v1","kind":"Prompt","data":{"message_id":"e8d1b7ae-6763-49d2-862d-818dd125939b","content":[{"kind":"text","data":"Reply with exactly the word: still-here"}],"meta":{"timestamp":1780622676}}}
+{"version":"v1","kind":"AssistantMessage","data":{"message_id":"bcf16f89-55a6-41c4-b77a-9ef5bb5c4a29","content":[{"kind":"text","data":"still-here"}]}}
