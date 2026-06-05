@@ -3,11 +3,11 @@
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
-    "driver_capability": "gap:resume",
+    "driver_capability": "full",
     "agent_cli_version": "2.5.1",
     "daemon_version": "0.4.8+17650ec",
-    "confidence": 0.85,
-    "notes": "agent_supports: yes (resume live-verified, same UUID); daemon_capability: full; driver_capability: gap:resume"
+    "confidence": 0.95,
+    "notes": "agent_supports: yes (resume live-verified, same UUID 0c971d39 across two PIDs); daemon_capability: full (recording 2026-06-05 proved the same session row re-creates after the >10s deletedCooldown — 7/7 phases); driver_capability: full (resume arm ported from drive-codex-interactive.sh, commit b777714f). Model observation corrected from placeholder \"unknown\" to ABSENT: kiro JSONL has no model field and the v1 adapter reads no metering sidecar — model/cost/tokens all empty."
   },
   "details": {
     "assessment": {
@@ -17,8 +17,8 @@
       "assessed_at": "2026-06-05T00:00:00Z",
       "agent_supports": "yes",
       "daemon_capability": "full",
-      "driver_capability": "gap:resume",
-      "confidence": 0.85,
+      "driver_capability": "full",
+      "confidence": 0.95,
       "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: gap:resume\n\n## Reasoning\n\n**Agent (yes).** Resume is verified LIVE on kiro-cli 2.5.1 on this machine: `kiro-cli chat --resume-id <uuid>` reopens the SAME session UUID and appends to the same `~/.kiro/sessions/cli/<uuid>.jsonl` with a NEW PID (FINDINGS.md §8 — `/quit` even prints `Resume with: kiro-cli --resume-id <uuid>`, and the `.lock` reappears for the resumed lifetime). `--resume` (most recent in cwd) and `--resume-picker` also exist. This is one session identity across two process lifetimes — exactly the scenario's contract.\n\n**Daemon (full).** The adapter Source is `FilesUnderRoot{Dir: \".kiro/sessions/cli\"}` (agent.go), so the daemon keys the session row on the `.jsonl` filename stem = the UUID. Because resume appends to the SAME `<uuid>.jsonl`, the SAME `session_id` row reappears — not a new row (scenario AC #1). PID discovery is `DiscoverPIDByCWD(\"kiro-cli\", cwd)` (pid.go), and the resumed parent keeps the session cwd as its OS cwd (FINDINGS.md §1), so the new PID rebinds to the same UUID. The intervening clean exit DELETES the session (recorded in `deletedSessions` with a timestamp); genuine resume activity arriving after the `deletedCooldown` window RE-CREATES the same session row from transcript activity — the same `--continue` re-creation path proven by `TestSessionDetector_*` (session_detector.go lines 100-121; the late-write-within-cooldown ghost guard at session_detector_test.go:1166 and the post-cooldown re-creation at :1156). So the full arc — v1 ready→working→ready, clean exit (process_exited + delete), v2 same-UUID reappears in ready, ready→working→ready — is observable, with one session row across both lifetimes. The parser maps Prompt→user_message, AssistantMessage(text-only)→turn_done, AssistantMessage(toolUse)→working (parser.go), giving the per-lifetime state cycles.\n\n**Driver (gap:resume).** The recipe needs a `resume` step (relaunch the SAME id+cwd). kiro-cli's interactive driver has a `resume` arm but it is a stubbed `not_implemented` (driver-interactive.sh:249), and the semantic `DRIVE_ELICITS=\"send slash wait_turn sleep\"` (line 86) does NOT list it — recipe-lint flags this as a semantic_gap before recording. The recipe also uses `exit_clean` for the clean shutdown, likewise stubbed (line 251) and unlisted. This is TOOLING work, not an observability limit: `record` ports the `resume` (and `exit_clean`) seam from the codex/claudecode reference drivers (both list `resume` in their `DRIVE_ELICITS`; codex `step_resume` relaunches `codex resume <uuid>`, kiro's analogue is `kiro-cli chat --resume-id <uuid>`) before it drives, then the cell records.\n\nObservations: the JSONL carries NO model/token/cost fields (FINDINGS.md §4 — the sidecar `<uuid>.json` has them but the v1 adapter does not read it), so the spec asserts model `unknown`, cost_nonzero false, tokens_nonzero false.",
       "caveats": [
         "Driver gap is the only thing between this cell and a recording: kiro-cli's `resume` and `exit_clean` arms are stubbed (not in DRIVE_ELICITS). `record` ports both from drive-codex-interactive.sh / drive-claudecode-interactive.sh (kiro's resume = `kiro-cli chat --resume-id <uuid>` with the same cwd) before driving.",
