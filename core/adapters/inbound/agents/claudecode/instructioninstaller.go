@@ -45,6 +45,13 @@ const (
 // survive the claude ≥2.1.162 transcript text-drop that eats mid-task prose.
 // patchManagedBlock's content compare upgrades installed v1 blocks in place
 // on the next daemon start.
+//
+// v3 (#617): the v2 "you may also" phrasing under-binds in prose-less
+// sessions — a live debugging session (ad880389) emitted the first 0/5
+// marker and then nothing across 41 Bash calls and two prose blocks,
+// pinning the chip at "estimating…" for its whole duration. v3 makes the
+// per-phase update mandatory and names the Bash `description` field as the
+// required carrier when no response text is coming.
 const managedTaskEtaBlock = taskEtaBeginSentinel + `
 ## Task progress markers (managed by Irrlicht)
 
@@ -58,9 +65,11 @@ your response text, and update it as you make progress:
 
 ` + "`total_rounds`" + ` is your estimate of the task's phases; ` + "`completed_rounds`" + `
 is how many you've finished. Emit the first marker in your first response,
-right before your first tool call. Update every few steps; you may also
-append the marker to the ` + "`description`" + ` of a Bash call you are
-already making (never to the command itself).
+right before your first tool call. After each phase you complete, emit
+the updated marker: append it to the ` + "`description`" + ` of the next Bash call
+you make (never to the command itself), or include it in your response
+text when no Bash call is coming — long tool-call stretches with no prose
+must still carry markers via the description field.
 ` + taskEtaEndSentinel
 
 // claudeMemoryPath returns the user-level Claude Code instruction file path.
