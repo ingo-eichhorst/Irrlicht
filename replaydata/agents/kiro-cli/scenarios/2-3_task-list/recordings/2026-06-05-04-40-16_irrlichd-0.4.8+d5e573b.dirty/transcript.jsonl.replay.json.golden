@@ -17,7 +17,24 @@
     "state_durations": {},
     "flicker_count": 0,
     "flickers_by_category": {},
-    "flickers_by_reason": {}
+    "flickers_by_reason": {},
+    "tasks": [
+      {
+        "id": "1",
+        "subject": "read README",
+        "status": "completed"
+      },
+      {
+        "id": "2",
+        "subject": "summarize README",
+        "status": "completed"
+      },
+      {
+        "id": "3",
+        "subject": "reply done",
+        "status": "completed"
+      }
+    ]
   },
   "transitions": [
     {

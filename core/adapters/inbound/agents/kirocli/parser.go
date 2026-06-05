@@ -1,6 +1,7 @@
 package kirocli
 
 import (
+	"strconv"
 	"time"
 
 	"irrlicht/core/pkg/tailer"
@@ -30,6 +31,13 @@ type Parser struct {
 	// backfill of a long transcript scans the static sidecar once, not once
 	// per historical turn_done.
 	sidecar sidecarCache
+	// nextTaskID mirrors the tailer's monotonic taskSeq so the Update deltas
+	// emitted on `complete` carry the same IDs the tailer assigns at Create
+	// time. todoIDByKiroID maps kiro's own todo id (the string id the model
+	// passes back in completed_task_ids) to that synthetic ID. Lazily
+	// initialized; one Parser instance per transcript scan.
+	nextTaskID     int
+	todoIDByKiroID map[string]string
 }
 
 // SetTranscriptPath implements tailer.TranscriptPathAware.
@@ -70,6 +78,10 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 					name, _ := d["name"].(string)
 					if name != "" {
 						toolUses = append(toolUses, tailer.ToolUse{ID: id, Name: name})
+					}
+					if name == "todo_list" {
+						input, _ := d["input"].(map[string]interface{})
+						p.appendTodoListDeltas(input, ev)
 					}
 				}
 			case "text":
@@ -161,6 +173,64 @@ func (p *Parser) applySidecarMetrics(ev *tailer.ParsedEvent) {
 			// token total so ComputeContextUtilization (total/window)
 			// reproduces kiro's own number exactly.
 			ev.Tokens = &tailer.TokenSnapshot{Total: int64(pct / 100 * float64(w))}
+		}
+	}
+}
+
+// appendTodoListDeltas synthesizes TaskCreate/TaskUpdate deltas from a kiro
+// `todo_list` toolUse input, so kiro's built-in checklist surfaces in the
+// session `tasks` field the same way opencode's `todowrite` does (#589).
+//
+// kiro's model is create→complete (NOT a per-item status array): a `create`
+// command carries the full `tasks[]` (each `{task_description}`); subsequent
+// `complete` commands carry `completed_task_ids[]` (the kiro todo ids the
+// model passes back as strings). kiro never surfaces an intermediate
+// in_progress state, so items go straight pending → completed.
+//
+// kiro assigns each created task an id; the ids in the live transcript are the
+// 1-based create order ("1","2","3"). We map each kiro id to the synthetic ID
+// the tailer will assign at Create time (nextTaskID, mirroring its taskSeq) so
+// the complete-time Update deltas target the right task regardless of kiro's
+// id scheme.
+func (p *Parser) appendTodoListDeltas(input map[string]interface{}, ev *tailer.ParsedEvent) {
+	if input == nil {
+		return
+	}
+	switch cmd, _ := input["command"].(string); cmd {
+	case "create":
+		tasks, _ := input["tasks"].([]interface{})
+		for i, raw := range tasks {
+			task, _ := raw.(map[string]interface{})
+			desc, _ := task["task_description"].(string)
+			if desc == "" {
+				continue
+			}
+			p.nextTaskID++
+			if p.todoIDByKiroID == nil {
+				p.todoIDByKiroID = make(map[string]string)
+			}
+			// kiro ids the created tasks 1-based in create order; record both
+			// the create-order key and the synthetic id so complete lookups
+			// resolve whichever form kiro echoes back.
+			p.todoIDByKiroID[strconv.Itoa(i+1)] = strconv.Itoa(p.nextTaskID)
+			ev.TaskDeltas = append(ev.TaskDeltas, tailer.TaskDelta{
+				Op:      tailer.TaskOpCreate,
+				Subject: desc,
+			})
+		}
+	case "complete":
+		ids, _ := input["completed_task_ids"].([]interface{})
+		for _, raw := range ids {
+			kiroID, _ := raw.(string)
+			id, ok := p.todoIDByKiroID[kiroID]
+			if !ok {
+				continue
+			}
+			ev.TaskDeltas = append(ev.TaskDeltas, tailer.TaskDelta{
+				Op:     tailer.TaskOpUpdate,
+				ID:     id,
+				Status: tailer.TaskStatusCompleted,
+			})
 		}
 	}
 }
