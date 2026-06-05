@@ -33,6 +33,20 @@ jobs:
         with:
           go-version: 'stable'
 
+      # Formatting gate (#629): plain gofmt over every Go tree so drift can't
+      # re-accumulate. Runs before the test steps so unformatted code fails
+      # fast and cheap. Prints the offending files in the failure message.
+      - name: gofmt check
+        run: |
+          unformatted=$(gofmt -l core/ tools/)
+          if [ -n "$unformatted" ]; then
+            echo "$unformatted"
+            # Workflow-command messages are single-line: collapse the file list
+            # so the annotation shows the full fix command, not just file one.
+            echo "::error::gofmt found unformatted files. Run: gofmt -w $(echo "$unformatted" | tr '\n' ' ')"
+            exit 1
+          fi
+
       # core carries the headless daemon smoke test + concurrency paths, so it
       # runs under -race (matches the documented local command in AGENTS.md).
       - name: Test core module

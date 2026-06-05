@@ -36,9 +36,9 @@ var statuslineNow = time.Now
 // statuslinePayload models the fields the handler reads from Claude Code's
 // statusline JSON. Anything outside `rate_limits` is currently ignored.
 type statuslinePayload struct {
-	SessionID      string                  `json:"session_id"`
-	TranscriptPath string                  `json:"transcript_path"`
-	RateLimits     *statuslineRateLimits   `json:"rate_limits,omitempty"`
+	SessionID      string                `json:"session_id"`
+	TranscriptPath string                `json:"transcript_path"`
+	RateLimits     *statuslineRateLimits `json:"rate_limits,omitempty"`
 }
 
 // statuslineRateLimits mirrors the on-the-wire shape Claude Code sends —

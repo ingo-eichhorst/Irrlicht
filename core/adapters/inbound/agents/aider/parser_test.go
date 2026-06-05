@@ -572,7 +572,6 @@ func TestParser_NewUserPromptAfterMultiCall_StaysWorking(t *testing.T) {
 	}
 }
 
-
 // --- Task-estimate marker (issue #558) ---
 
 func TestParser_TaskEstimate_FromAssistantProse(t *testing.T) {

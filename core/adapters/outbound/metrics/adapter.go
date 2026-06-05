@@ -367,4 +367,3 @@ func tailerRateLimitHistoryToDomain(src []tailer.RateLimitSnapshot) []session.Ra
 	}
 	return dst
 }
-

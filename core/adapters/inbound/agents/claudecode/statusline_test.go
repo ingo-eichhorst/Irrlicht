@@ -27,10 +27,10 @@ func (f *fakeRateLimitTarget) IngestRateLimit(path string, snap *session.RateLim
 
 type silentLogger struct{}
 
-func (silentLogger) LogInfo(string, string, string)                     {}
-func (silentLogger) LogError(string, string, string)                    {}
+func (silentLogger) LogInfo(string, string, string)                       {}
+func (silentLogger) LogError(string, string, string)                      {}
 func (silentLogger) LogProcessingTime(string, string, int64, int, string) {}
-func (silentLogger) Close() error                                       { return nil }
+func (silentLogger) Close() error                                         { return nil }
 
 func TestStatuslineHandler_IngestsRateLimits(t *testing.T) {
 	target := &fakeRateLimitTarget{}
@@ -202,7 +202,8 @@ func TestChainStatuslineCommand_WrapUsesBashEnvelope(t *testing.T) {
 // TestChainStatuslineCommand_RoundTripsSingleQuotedCommand pins the
 // escape contract. The wrap embeds the user command inside
 // `bash -c '…'`, so any single quote in the user command has to be
-// escaped (POSIX `'\''` idiom) for the wrapped form to parse, AND
+// escaped (the POSIX close-escape-reopen idiom: quote, backslash-quote,
+// quote) for the wrapped form to parse, AND
 // reversed when we unchain it back. Easy to break either side.
 func TestChainStatuslineCommand_RoundTripsSingleQuotedCommand(t *testing.T) {
 	originals := []string{

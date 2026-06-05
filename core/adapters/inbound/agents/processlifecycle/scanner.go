@@ -265,7 +265,7 @@ func (s *Scanner) poll() {
 				s.mu.Unlock()
 				s.broadcast(agent.Event{
 					Type:       agent.EventRemoved,
-										SessionID:  proc.sessionID,
+					SessionID:  proc.sessionID,
 					ProjectDir: projectDir,
 				})
 			}
@@ -282,7 +282,7 @@ func (s *Scanner) poll() {
 		sessionID := fmt.Sprintf("proc-%d", pid)
 		ev := agent.Event{
 			Type:       agent.EventNewSession,
-						SessionID:  sessionID,
+			SessionID:  sessionID,
 			ProjectDir: projectDir,
 			CWD:        cwd,
 		}
@@ -330,7 +330,7 @@ func (s *Scanner) poll() {
 				// First sight — announce the transcript.
 				emit = append(emit, agent.Event{
 					Type:           agent.EventNewSession,
-						SessionID:      proc.sessionID,
+					SessionID:      proc.sessionID,
 					ProjectDir:     proc.projectDir,
 					TranscriptPath: path,
 					Size:           size,
@@ -343,7 +343,7 @@ func (s *Scanner) poll() {
 				// File grew (or shrank, e.g. on rotation) — emit activity.
 				emit = append(emit, agent.Event{
 					Type:           agent.EventActivity,
-						SessionID:      proc.sessionID,
+					SessionID:      proc.sessionID,
 					ProjectDir:     proc.projectDir,
 					TranscriptPath: path,
 					Size:           size,
@@ -379,7 +379,7 @@ func (s *Scanner) poll() {
 	for _, proc := range exited {
 		s.broadcast(agent.Event{
 			Type:       agent.EventRemoved,
-						SessionID:  proc.sessionID,
+			SessionID:  proc.sessionID,
 			ProjectDir: proc.projectDir,
 		})
 	}

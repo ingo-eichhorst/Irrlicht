@@ -1027,9 +1027,9 @@ func TestParser_RateLimits_V3Schema(t *testing.T) {
 	ev := p.ParseLine(map[string]interface{}{
 		"type": "event_msg",
 		"payload": map[string]interface{}{
-			"type":        "token_count",
-			"limit_id":    "codex",
-			"limit_name":  nil,
+			"type":       "token_count",
+			"limit_id":   "codex",
+			"limit_name": nil,
 			"rate_limits": map[string]interface{}{
 				"limit_id":   "codex",
 				"limit_name": nil,
@@ -1043,9 +1043,9 @@ func TestParser_RateLimits_V3Schema(t *testing.T) {
 					"window_minutes": 10080.0,
 					"resets_at":      1778949174.0,
 				},
-				"credits":                  nil,
-				"plan_type":                "plus",
-				"rate_limit_reached_type":  nil,
+				"credits":                 nil,
+				"plan_type":               "plus",
+				"rate_limit_reached_type": nil,
 			},
 		},
 	})

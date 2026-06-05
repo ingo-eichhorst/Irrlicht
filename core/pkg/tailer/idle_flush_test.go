@@ -14,11 +14,11 @@ import (
 // pin the contract between TranscriptTailer.TailAndProcess and the
 // idleFlusher hook without going through aider's real parser.
 type idleFakeParser struct {
-	openOnLine     string                          // line content that flips turnOpen=true
+	openOnLine     string // line content that flips turnOpen=true
 	turnOpen       bool
-	idleCalls      []time.Duration                 // every IdleFlush(idleFor) the tailer makes
-	flushAtOrAbove time.Duration                   // synthesize turn_done once idleFor crosses this
-	flushedEvent   func() *ParsedEvent             // shape of the synthesized event (defaults to bare turn_done)
+	idleCalls      []time.Duration     // every IdleFlush(idleFor) the tailer makes
+	flushAtOrAbove time.Duration       // synthesize turn_done once idleFor crosses this
+	flushedEvent   func() *ParsedEvent // shape of the synthesized event (defaults to bare turn_done)
 }
 
 func (p *idleFakeParser) ParseLine(_ map[string]interface{}) *ParsedEvent {

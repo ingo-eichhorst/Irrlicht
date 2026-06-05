@@ -140,8 +140,8 @@ func ReplayTranscript(src string, opts Options) (*Result, error) {
 
 // replayer bundles the mutable replay state so the batch loop stays readable.
 type replayer struct {
-	tmp         *os.File
-	tailer      *tailer.TranscriptTailer
+	tmp          *os.File
+	tailer       *tailer.TranscriptTailer
 	result       *Result
 	state        string
 	consumed     int

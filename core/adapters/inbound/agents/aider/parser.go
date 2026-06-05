@@ -29,6 +29,7 @@ import (
 //   - An LLM-layer error blockquote (e.g. `> litellm.BadRequestError: …`)
 //     aborts the turn before any further tokens are reported and emits
 //     turn_done with the error surfaced as AssistantText.
+//
 // Both paths flip LastEventType so the state classifier returns the
 // session to ready; per-call usage is already reported via the
 // assistant_message events emitted at each `> Tokens:` line.

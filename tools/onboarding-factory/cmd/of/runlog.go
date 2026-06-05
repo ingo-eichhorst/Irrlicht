@@ -23,13 +23,13 @@ func newFlagSet(name string) *flag.FlagSet {
 // --runs` reads them back so the skill can ask "what happened last sweep"
 // without re-deriving. Kept deliberately flat (every object has an id).
 type RunRecord struct {
-	ID       string `json:"id"`        // unique run-step id
+	ID        string `json:"id"` // unique run-step id
 	StartedAt string `json:"started_at"`
-	Verb     string `json:"verb"`     // assess | record | ...
-	Agent    string `json:"agent,omitempty"`
-	Scenario string `json:"scenario,omitempty"`
-	Outcome  string `json:"outcome"`  // recorded | verify_failed | prereq_blocked | ...
-	Note     string `json:"note,omitempty"`
+	Verb      string `json:"verb"` // assess | record | ...
+	Agent     string `json:"agent,omitempty"`
+	Scenario  string `json:"scenario,omitempty"`
+	Outcome   string `json:"outcome"` // recorded | verify_failed | prereq_blocked | ...
+	Note      string `json:"note,omitempty"`
 }
 
 // runLogPath is the append-only factory run-log. Lives under _reports/ (already
