@@ -90,6 +90,74 @@ func (r *mockRepo) ListAll() ([]*session.SessionState, error) {
 	return out, nil
 }
 
+// pidOf reads a session's PID under r.mu. Background PID-discovery goroutines
+// write state.PID on the shared *SessionState pointer, so a bare Load().PID
+// read would race them (issue #606); this locked read is the race-free probe
+// for waitForPID.
+func (r *mockRepo) pidOf(sessionID string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if s, ok := r.states[sessionID]; ok {
+		return s.PID
+	}
+	return 0
+}
+
+// eventCountOf reads a session's EventCount under r.mu — the race-free probe
+// tests use to wait for an activity pass to complete (issue #606).
+func (r *mockRepo) eventCountOf(sessionID string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if s, ok := r.states[sessionID]; ok {
+		return s.EventCount
+	}
+	return 0
+}
+
+// waitForCondition polls fn until it returns true or the timeout elapses. The
+// generic poll-for-condition replacement for fixed sleeps in tests whose
+// completion signal isn't a saved State value (issue #606).
+func waitForCondition(fn func() bool, timeout time.Duration) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if fn() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// waitForPID polls until the session's PID is non-zero (PID discovery
+// completed), or the timeout elapses. Lets tests wait for the detached
+// discovery goroutine spawned by onNewSession/processActivity to finish its
+// write before inspecting state — a fixed sleep is too short under
+// parallel-load scheduling (issue #606).
+func waitForPID(repo *mockRepo, sessionID string, timeout time.Duration) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if repo.pidOf(sessionID) != 0 {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// waitForSessionDeleted polls until the session no longer exists in the repo,
+// or the timeout elapses. Used to wait out the same-PID cleanup that runs in a
+// background discovery goroutine after a PID is assigned (issue #606).
+func waitForSessionDeleted(repo *mockRepo, sessionID string, timeout time.Duration) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		repo.mu.Lock()
+		_, ok := repo.states[sessionID]
+		repo.mu.Unlock()
+		if !ok {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 // waitForSessionState polls the repo's Save snapshot until the session was
 // last saved with state want, or the timeout elapses. Lets tests wait for the
 // detector's Run loop to finish async event processing without a fixed sleep
@@ -151,7 +219,12 @@ type cwdGit struct {
 
 func (g *cwdGit) GetCWDFromTranscript(path string) string { return g.cwd }
 
+// mockMetrics records PruneEntry calls. Safe for concurrent use: PruneEntry
+// fires on the detector's Run goroutine while tests poll prunedSnapshot from
+// the test goroutine (issue #606 flaky-sibling fix replaced a fixed sleep with
+// a poll).
 type mockMetrics struct {
+	mu     sync.Mutex
 	pruned []string
 }
 
@@ -163,7 +236,21 @@ func (m *mockMetrics) ComputeMetricsTimeline(path, adapter string) ([]session.Me
 	return nil, nil
 }
 
-func (m *mockMetrics) PruneEntry(path string) { m.pruned = append(m.pruned, path) }
+func (m *mockMetrics) PruneEntry(path string) {
+	m.mu.Lock()
+	m.pruned = append(m.pruned, path)
+	m.mu.Unlock()
+}
+
+// prunedSnapshot returns a race-free copy of the PruneEntry call log so tests
+// can poll for the prune without racing the Run goroutine.
+func (m *mockMetrics) prunedSnapshot() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]string, len(m.pruned))
+	copy(out, m.pruned)
+	return out
+}
 
 func (m *mockMetrics) IngestRateLimit(path string, snap *session.RateLimitSnapshot) {}
 

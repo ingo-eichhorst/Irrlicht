@@ -61,7 +61,11 @@ func TestSessionDetector_Activity_NoSubstantiveActivity_HoldsState(t *testing.T)
 		TranscriptPath: "/home/.claude/projects/-Users-test/away1.jsonl",
 	}
 
-	time.Sleep(50 * time.Millisecond)
+	// Poll for the activity pass to land (EventCount bumped 5→6) instead of a
+	// fixed sleep — the session intentionally stays ready so waitForSessionState
+	// can't observe a transition; EventCount is the race-free completion signal
+	// (issue #606).
+	waitForCondition(func() bool { return repo.eventCountOf("away1") >= 6 }, time.Second)
 	cancel()
 	<-done
 
@@ -126,7 +130,18 @@ func TestSessionDetector_Activity_SubstantivePass_StillClassifies(t *testing.T) 
 		TranscriptPath: "/home/.claude/projects/-Users-test/real1.jsonl",
 	}
 
-	time.Sleep(50 * time.Millisecond)
+	// Poll the (mutex-safe) recorder for the transition instead of a fixed
+	// sleep — under parallel load the event may not be processed within a
+	// fixed window (issue #606).
+	recordedTransition := func() bool {
+		for _, ev := range rec.snapshot() {
+			if ev.SessionID == "real1" && ev.Kind == lifecycle.KindStateTransition {
+				return true
+			}
+		}
+		return false
+	}
+	waitForCondition(recordedTransition, time.Second)
 	cancel()
 	<-done
 
@@ -134,13 +149,7 @@ func TestSessionDetector_Activity_SubstantivePass_StillClassifies(t *testing.T) 
 	// proves the force-bounce / classifier path ran. The final state is
 	// not asserted: it depends on classifier rules that aren't the subject
 	// of this test.
-	sawTransition := false
-	for _, ev := range rec.snapshot() {
-		if ev.SessionID == "real1" && ev.Kind == lifecycle.KindStateTransition {
-			sawTransition = true
-		}
-	}
-	if !sawTransition {
+	if !recordedTransition() {
 		t.Errorf("expected at least one state-transition lifecycle event for real1, got none")
 	}
 }

@@ -157,22 +157,28 @@ func (d *SessionDetector) onNewSession(id agent.Identity, ev agent.Event) {
 		// processActivity fallback (debounce/refresh) created the session
 		// without an identity. The watcher's identity on the next real
 		// transcript event is the authoritative source.
-		changed := false
-		if existing.TranscriptPath == "" {
-			existing.TranscriptPath = ev.TranscriptPath
-			changed = true
-		}
-		if existing.Adapter == "" && id.Name != "" {
-			existing.Adapter = id.Name
-			changed = true
-		}
-		if changed {
-			existing.UpdatedAt = now
-			if err := d.repo.Save(existing); err != nil {
-				d.log.LogError("session-detector", ev.SessionID,
-					fmt.Sprintf("failed to update existing session: %v", err))
+		//
+		// Under the PIDManager's state lock: a discovery goroutine spawned by
+		// the earlier event may still be in flight, and its assignPIDLocked
+		// writes state.PID/UpdatedAt on this same pointer (issue #606).
+		d.pidMgr.WithSessionStateLock(func() {
+			changed := false
+			if existing.TranscriptPath == "" {
+				existing.TranscriptPath = ev.TranscriptPath
+				changed = true
 			}
-		}
+			if existing.Adapter == "" && id.Name != "" {
+				existing.Adapter = id.Name
+				changed = true
+			}
+			if changed {
+				existing.UpdatedAt = now
+				if err := d.repo.Save(existing); err != nil {
+					d.log.LogError("session-detector", ev.SessionID,
+						fmt.Sprintf("failed to update existing session: %v", err))
+				}
+			}
+		})
 	}
 
 	// PID discovery (async). Each adapter has its own strategy:
@@ -331,6 +337,21 @@ func (d *SessionDetector) processActivity(id agent.Identity, ev agent.Event) {
 		return
 	}
 
+	// Run the load-modify-save of this existing session under the PIDManager's
+	// state lock. processActivity spawns a PID-discovery goroutine below
+	// (state.PID == 0 branch); that goroutine's assignPIDLocked writes state.PID
+	// on the same *SessionState pointer this loop mutates. Sharing assignMu makes
+	// the two mutually exclusive (issue #606).
+	d.pidMgr.WithSessionStateLock(func() {
+		d.processActivityLocked(state, ev)
+	})
+}
+
+// processActivityLocked performs the content-based classification and
+// load-modify-save for an already-loaded existing session. It MUST be called
+// under PIDManager.WithSessionStateLock so the PID-discovery goroutine it spawns
+// can't write state.PID concurrently with this loop's writes (issue #606).
+func (d *SessionDetector) processActivityLocked(state *session.SessionState, ev agent.Event) {
 	// Apply any deferred PID from background discovery goroutines.
 	// This must happen before ClassifyState so that the PID and state
 	// transition are saved atomically, avoiding the race where

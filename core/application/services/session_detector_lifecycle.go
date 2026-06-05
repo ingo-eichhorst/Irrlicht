@@ -39,6 +39,20 @@ func (d *SessionDetector) onRemoved(ev agent.Event) {
 		return
 	}
 
+	// Run the load-modify-save under the PIDManager's state lock — a
+	// PID-discovery goroutine spawned for this session may still be in
+	// flight, and its assignPIDLocked writes state.PID/UpdatedAt on the same
+	// *SessionState pointer this path mutates (issue #606).
+	d.pidMgr.WithSessionStateLock(func() {
+		d.onRemovedLocked(state, ev)
+	})
+}
+
+// onRemovedLocked finishes removal handling for an already-loaded session. It
+// MUST be called under PIDManager.WithSessionStateLock so a still-running
+// PID-discovery goroutine can't write state.PID concurrently with this path's
+// writes (issue #606).
+func (d *SessionDetector) onRemovedLocked(state *session.SessionState, ev agent.Event) {
 	// Pre-sessions (no transcript) are deleted entirely — the user never
 	// sent a message, so there is no useful state to keep.
 	if state.TranscriptPath == "" {
