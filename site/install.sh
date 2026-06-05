@@ -320,6 +320,23 @@ step "Registering with LaunchServices"
 spctl -a -t exec /Applications/Irrlicht.app 2>/dev/null || true
 ok
 
+# Put the irrlicht-ls CLI on PATH (#608). Runs as the invoking user — no
+# sudo escalation: try /usr/local/bin, fall back to Homebrew's bin (user-
+# writable on Apple Silicon), otherwise print the one-liner. The app's
+# Settings panel offers the same install for drag-install users.
+step "Linking irrlicht-ls CLI"
+if [ -d /usr/local/bin ] && [ -w /usr/local/bin ]; then
+    ln -sf /Applications/Irrlicht.app/Contents/MacOS/irrlicht-ls /usr/local/bin/irrlicht-ls
+    ok
+elif [ -d /opt/homebrew/bin ] && [ -w /opt/homebrew/bin ]; then
+    ln -sf /Applications/Irrlicht.app/Contents/MacOS/irrlicht-ls /opt/homebrew/bin/irrlicht-ls
+    ok
+else
+    printf '%sskipped%s\n' "$YELLOW" "$RESET"
+    warn "No user-writable bin dir found for the irrlicht-ls CLI. Add it with:"
+    warn "  sudo ln -sf /Applications/Irrlicht.app/Contents/MacOS/irrlicht-ls /usr/local/bin/irrlicht-ls"
+fi
+
 step "Launching Irrlicht"
 open /Applications/Irrlicht.app
 ok

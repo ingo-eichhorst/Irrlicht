@@ -162,6 +162,10 @@ ready    api-server   e5f6g7h8 gpt-5 3% 400k codex  (1m ago)</code></pre>
 
       <p>Reads session JSON files from <code>~/Library/Application Support/Irrlicht/instances/</code> and builds the same hierarchical dashboard as the API. Works independently of the daemon.</p>
 
+      <h3>Installation</h3>
+
+      <p><code>irrlicht-ls</code> ships inside <code>Irrlicht.app</code> and lands on your PATH automatically: the PKG installer and the <code>curl … | sh</code> installer symlink it to <code>/usr/local/bin/irrlicht-ls</code>. If you installed by dragging the DMG, open the menu bar panel → Settings → <em>Install Command-Line Tool</em>. Building from source: <code>go build ./cmd/irrlicht-ls/</code>.</p>
+
       <!-- ── Building CLI Tools ── -->
       <h2>Building CLI Tools</h2>
 

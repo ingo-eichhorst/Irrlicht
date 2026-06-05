@@ -14,6 +14,7 @@
 # Usage:
 #   tools/build-dev.sh          — builds irrlichd
 #   tools/build-dev.sh focus    — also builds irrlicht-focus
+#   tools/build-dev.sh ls       — also builds irrlicht-ls
 #   tools/build-dev.sh all      — builds everything in core/cmd/
 
 set -euo pipefail
@@ -39,6 +40,10 @@ case "${1:-irrlichd}" in
     build_one "./cmd/irrlichd"       "irrlichd"
     build_one "./cmd/irrlicht-focus" "irrlicht-focus"
     ;;
+  ls)
+    build_one "./cmd/irrlichd"       "irrlichd"
+    build_one "./cmd/irrlicht-ls"    "irrlicht-ls"
+    ;;
   all)
     for d in cmd/*/; do
       pkg="./$d"
@@ -47,7 +52,7 @@ case "${1:-irrlichd}" in
     done
     ;;
   *)
-    echo "usage: build-dev.sh [irrlichd|focus|all]" >&2
+    echo "usage: build-dev.sh [irrlichd|focus|ls|all]" >&2
     exit 2
     ;;
 esac
