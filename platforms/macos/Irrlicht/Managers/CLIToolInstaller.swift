@@ -59,8 +59,27 @@ enum CLIToolInstaller {
         candidates.first(where: isWritableDir)
     }
 
+    /// Clears the way for the symlink at `link`: any existing symlink is
+    /// removed — including a DANGLING one, which `fileExists` can't see
+    /// (it traverses the link, so a stale link to a deleted bundle would
+    /// otherwise make createSymbolicLink fail with "file exists"). A regular
+    /// file is left alone and reported. Returns a user-facing error message,
+    /// or nil when the site is clear.
+    static func clearLinkSite(_ link: String) -> String? {
+        let fm = FileManager.default
+        // lstat semantics: succeeds for any symlink, valid or dangling.
+        if (try? fm.destinationOfSymbolicLink(atPath: link)) != nil {
+            try? fm.removeItem(atPath: link)
+            return nil
+        }
+        if fm.fileExists(atPath: link) {
+            return "\(link) exists and is not a symlink — refusing to replace it"
+        }
+        return nil
+    }
+
     /// Create (or refresh) the symlink in the first writable candidate.
-    /// Refuses to replace a regular file — only stale symlinks are replaced.
+    /// Refuses to replace a regular file — only symlinks are replaced.
     static func install(candidates: [String] = defaultCandidates) -> InstallResult {
         guard let source = bundledLs else {
             return .failed(message: "irrlicht-ls is not embedded in this build")
@@ -69,15 +88,11 @@ enum CLIToolInstaller {
             return .failed(message: "No writable bin directory found. Run: sudo ln -sf \"\(source.path)\" /usr/local/bin/irrlicht-ls")
         }
         let link = dir + "/irrlicht-ls"
-        let fm = FileManager.default
-        if fm.fileExists(atPath: link) {
-            guard (try? fm.destinationOfSymbolicLink(atPath: link)) != nil else {
-                return .failed(message: "\(link) exists and is not a symlink — refusing to replace it")
-            }
-            try? fm.removeItem(atPath: link)
+        if let message = clearLinkSite(link) {
+            return .failed(message: message)
         }
         do {
-            try fm.createSymbolicLink(atPath: link, withDestinationPath: source.path)
+            try FileManager.default.createSymbolicLink(atPath: link, withDestinationPath: source.path)
             return .installed(path: link)
         } catch {
             return .failed(message: "Could not create \(link): \(error.localizedDescription)")
