@@ -73,10 +73,14 @@ STAGING="$1"
 # drivers; kiro-cli assigns its own UUID per launch, so it is unused here.
 TIMEOUT_S="$3"
 # $4 (settings-path) carries the scenario's settings blob. kiro-cli reads no
-# --settings flag, but one knob is honored: `trust_all_tools` (default true).
-# When a cell sets it false, boot_session launches plain `kiro-cli chat` (no
+# --settings flag, but two knobs are honored: `trust_all_tools` (default true)
+# and `model` (default empty = kiro's auto routing). When a cell sets
+# trust_all_tools false, boot_session launches plain `kiro-cli chat` (no
 # --trust-all-tools) so a mutating tool call raises the write-approval picker —
 # the auto-classified-permission cell needs this to observe the permission gate.
+# When a cell sets model, boot_session appends `--model <m>` so the sidecar's
+# rts_model_state carries the pinned name from turn 1 — model-identification
+# (5.2) needs a non-default pin (#599).
 SETTINGS_PATH="$4"
 SCRIPT_JSON="$5"
 
@@ -86,6 +90,13 @@ SCRIPT_JSON="$5"
 TRUST_ALL=true
 if [[ -f "$SETTINGS_PATH" ]] && [[ "$(jq -r '.trust_all_tools // "true"' "$SETTINGS_PATH" 2>/dev/null)" == "false" ]]; then
   TRUST_ALL=false
+fi
+
+# MODEL pins `--model <m>` at launch when the cell's settings name one
+# (kiro-cli chat --list-models shows valid ids, e.g. claude-haiku-4.5).
+MODEL=""
+if [[ -f "$SETTINGS_PATH" ]]; then
+  MODEL="$(jq -r '.model // empty' "$SETTINGS_PATH" 2>/dev/null)"
 fi
 
 mkdir -p "$STAGING"
@@ -203,6 +214,7 @@ boot_session() {
   sleep 1
   local launch="kiro-cli chat"
   $TRUST_ALL && launch="$launch --trust-all-tools"
+  [[ -n "$MODEL" ]] && launch="$launch --model $MODEL"
   [[ -n "$resume_id" ]] && launch="$launch --resume-id $resume_id"
   # `|| { … exit … }` keeps a launch failure from aborting under set -e WITHOUT
   # an accurate exit-reason — the cleanup trap then records nonzero(2).

@@ -2,12 +2,12 @@
   "scenario_id": "model-identification",
   "metadata": {
     "agent_supports": "yes",
-    "daemon_capability": "incapable",
+    "daemon_capability": "full",
     "driver_capability": "ready",
     "agent_cli_version": "2.5.1",
     "daemon_version": "0.4.8+bbd0532.dirty",
-    "confidence": 0.85,
-    "notes": "agent=yes (kiro-cli --model / /model picker / --list-models pin a model) but daemon=incapable: the kirocli parser sets no ModelName/ContextWindow and the model lives only in the unread <uuid>.json sidecar → route frozen."
+    "confidence": 0.9,
+    "notes": "agent=yes (kiro-cli --model / /model picker / --list-models pin a model); daemon=full as of #599: the parser reads the <uuid>.json sidecar rts_model_state at turn_done (TranscriptPathAware) → ModelName + ContextWindow + derived context utilization; driver=ready (settings.model knob appends --model at launch)."
   },
   "details": {
     "assessment": {
@@ -16,50 +16,40 @@
       "agent": "kiro-cli",
       "assessed_at": "2026-06-05T00:00:00Z",
       "agent_supports": "yes",
-      "daemon_capability": "incapable",
+      "daemon_capability": "full",
       "driver_capability": "ready",
-      "confidence": 0.85,
-      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: incapable\ndriver_capability: ready\n\nRoute: **frozen** (agent=yes + daemon=incapable → irrlicht fundamentally cannot observe this cell today; no recording). The cell's recipe + driver are ready and the unblock path is a documented sidecar MetricsReader enhancement, NOT tonight.\n\n## Primitive\n\nModel metadata reporting: the dashboard must show the launch model (ModelName != 'unknown') with a populated ContextWindow. For kiro-cli the model name never reaches the transport the daemon tails, so the daemon cannot identify it — `observations.model` would be 'unknown'.\n\n## agent_supports — yes\n\nkiro-cli can pin a concrete model three ways, confirmed against the live 2.5.1 binary: the launch flag `kiro-cli chat --model <id>` (`--model <MODEL>` in `kiro-cli chat --help`), the in-REPL `/model` picker (FINDINGS.md §8 slash surface), and `kiro-cli --list-models` to enumerate the available ids. So a user CAN run a turn against a specific non-default model — the agent surface is there.\n\n## daemon_capability — incapable\n\nThe scenario's two user-observable signals are (1) `ModelName = <launch model>` (not 'unknown') and (2) `ContextWindow` = the model's published window. Neither resolves through the kiro-cli transport as it exists today:\n\n- **The transcript the daemon tails carries no model.** `Source` is `FilesUnderRoot{ ~/.kiro/sessions/cli, JSONLineParser }` (`core/adapters/inbound/agents/kirocli/agent.go:38`). The 2.5.1 JSONL event vocabulary is `Prompt` / `AssistantMessage` / `ToolResults` / `Clear` (FINDINGS.md §4) — NONE carries a model/usage/cost field. The parser (`core/adapters/inbound/agents/kirocli/parser.go`) accordingly never sets `ev.ModelName` (nor `ContextWindow` / cost / tokens) on any branch — a `grep ModelName core/adapters/inbound/agents/kirocli/` is empty. So `SessionMetrics.ModelName` stays 'unknown' for every kiro-cli session: the daemon mis-handles nothing (no trace to mis-handle) — the model signal simply never reaches the tailed Source.\n\n- **The model DOES exist, but only in a sidecar the daemon doesn't read for metrics.** The per-session `<uuid>.json` sidecar carries the model at `session_state.rts_model_state.model_info.model_id` and the window at `session_state.rts_model_state.model_info.context_window_tokens` (live smoke session `c423461a…json`: `model_id=\"auto\"`, `context_window_tokens=1000000`; a pinned run would carry the concrete id). The adapter reads this sidecar's TOP-LEVEL `cwd` for the working directory (`agent.go` permission Detail; `pid.go` cwd fallback) but has NO MetricsReader pulling `model_info` — v1 deliberately does not (parser.go L20-22: \"The JSONL carries no model/token/cost fields; those live in the <uuid>.json metadata sidecar, which this parser does not read\"; FINDINGS.md §4, Adapter decisions: \"No tokens/cost/model from JSONL in v1; sidecar MetricsReader is a documented future enhancement\").\n\nThis is `incapable`, not `bug`: a `bug` is a trace the daemon mis-handles — here the JSONL the daemon tails carries NO model trace at all, so there is nothing to fix in the parser's handling; the model lives in a SEPARATE artifact the v1 transport intentionally doesn't surface for metrics. It is `incapable`, not the driver pillar's `gap:*`: the driver can elicit the turn perfectly — no driver step would make the model appear in the tailed transcript. Calibration: aider (`> Model:` blockquote in `.aider.chat.history.md`, parsed by `modelRE`) and pi (`message.model` + `model_change.modelId` in the rollout) both record the model IN the transport the daemon tails → both `daemon=full`. kiro-cli has NO such in-transcript analogue (no `model_change` event, no model line) — the closest equivalent is the sidecar, which the v1 MetricsReader doesn't read.\n\n## driver_capability — ready\n\nThe recipe (templated from aider/pi model-identification) is a single `send` + `wait_turn` + trailing `sleep` against one live TUI launched `kiro-cli chat --model <id> --trust-all-tools`. The kiro-cli interactive driver (`replaydata/agents/kiro-cli/driver-interactive.sh`) genuinely elicits `send` / `slash` / `wait_turn` / `sleep` (its `DRIVE_ELICITS`), which is exactly the step set this recipe needs — no `keys` / `reset_session` / `restart` / `sigkill` primitive is required, so `driver=ready`. (The driver gap is irrelevant here anyway: even a perfectly-driven turn can't surface the model in the tailed JSONL — the limit is the transport, not the driver.) The recipe is kept on the cell so that the moment the unblock lands, `record` can drive it as-is.\n\n## Unblock path (documented enhancement, not tonight)\n\nAdd a sidecar MetricsReader to the kirocli adapter that reads `<uuid>.json` → `session_state.rts_model_state.model_info.model_id` (→ ModelName via NormalizeModelName) and `.context_window_tokens` (→ ContextWindow). That makes BOTH scenario signals resolvable from a local artifact (the sidecar is non-cloud, present per session), flipping `daemon: incapable → full` and re-routing this cell to `record`. Until then the cell is frozen.\n\n## Confidence\n\n0.85: the absent-model claim is grounded in the live 2.5.1 event vocabulary (FINDINGS.md §4) + an empty `grep ModelName` over the adapter + the parser's own L20-22 comment; the sidecar field path is confirmed in the live smoke session's `<uuid>.json` (`session_state.rts_model_state.model_info.model_id` / `.context_window_tokens`). The agent surface is confirmed against the live binary's `--model` / `--list-models`. Held below 0.9 because no live recording exists yet to settle the provisional read (correct here: the cell is frozen precisely because a recording would show ModelName='unknown', which is the verdict).",
+      "confidence": 0.9,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\nRoute: record_now — UNFROZEN by #599. The prior assessment (incapable/frozen) was correct for the v1 adapter: the tailed JSONL carries no model field and the sidecar went unread. The #599 sidecar metrics reader closes exactly that gap, so the two user-observable signals now resolve end to end.\n\n## agent_supports — yes (unchanged)\n\nkiro-cli pins a concrete model three ways, confirmed against the live binary: `kiro-cli chat --model <id>` (the recipe path), the in-REPL `/model` picker, and `--list-models` to enumerate ids (e.g. claude-haiku-4.5 at 0.40x credits — the recipe choice).\n\n## daemon_capability — full (as of #599; was incapable)\n\nThe tailer injects the transcript path via tailer.TranscriptPathAware at construction; on every text-only AssistantMessage (turn_done) the kirocli parser token-walks the <uuid>.json sidecar to session_state.rts_model_state and sets ModelName (the pinned id passes NormalizeModelName), ContextWindow (from context_window_tokens — no capacity-table lookup needed), and a derived Tokens.Total = context_usage_percentage/100 × window so ComputeContextUtilization reproduces kiro's own number. Live-verified on the 1-8 sibling cell (model-context-display): websocket metrics {model_name auto, context_window 200000, context_utilization 1.24%} on the default launch; this cell is the same pipeline with a PINNED id, so the sidecar's model_id carries the launch model from turn 1. Replay reproduces it because the fixture carries transcript.json (the sidecar) next to transcript.jsonl and the replay engine stages it (#599).\n\n## driver_capability — ready\n\nThe driver's settings.model knob (#599) appends `--model <m>` at launch, mirroring the trust_all_tools seam. One send + wait_turn records the cell.\n",
       "caveats": [
-        "The model + window DO exist locally — in the per-session `<uuid>.json` sidecar at `session_state.rts_model_state.model_info.{model_id,context_window_tokens}` — just one level deeper than the FINDINGS.md §4 note (`session_state.` prefix). The adapter already reads that sidecar's TOP-LEVEL `cwd`; the unblock is a narrow MetricsReader over the same file, so this is `incapable` for v1 but a known, scoped enhancement (not an architectural dead end like a cloud-only session).",
-        "`model_info.model_id` reads 'auto' when the user leaves kiro on its task-router default; a `--model <id>` launch (the scenario's non-default-model premise) pins the concrete id there, so a recording for this cell MUST launch with an explicit `--model` to make the assertion meaningful once the reader lands.",
-        "`input/output_token_count` in the sidecar are 0 / not populated (FINDINGS.md §4) — credits live at `metering_usage` — so the cost/tokens half of any widened observation vector is a separate (also-unread) concern from model identity; the unblock above addresses model + window only."
+        "The pinned id is kiro's OWN label (claude-haiku-4.5, dotted) — NormalizeModelName may pass it through rather than map to a canonical irrlicht id; the scenario asserts non-unknown identity, not capacity-table membership. ContextWindow comes from the sidecar, so no capacity dependency.",
+        "Sidecar token counts remain zero (credits-only metering): context utilization is derived from context_usage_percentage; token ACCOUNTING (5.1) stays frozen.",
+        "Replay needs transcript.json next to transcript.jsonl in the fixture (engine stages <base>.json — #599)."
       ],
       "sources": [
         {
           "kind": "file",
           "ref": "core/adapters/inbound/agents/kirocli/parser.go",
-          "note": "ParseLine sets no ev.ModelName/ContextWindow on any branch (Prompt/AssistantMessage/ToolResults/Clear); L20-22 comment: the JSONL carries no model/token/cost; those live in the <uuid>.json sidecar which this parser does not read — grounds daemon=incapable"
+          "note": "applySidecarMetrics on turn_done: ModelName/ContextWindow from rts_model_state + derived Tokens.Total; path injected via SetTranscriptPath (tailer.TranscriptPathAware, #599)."
         },
         {
           "kind": "file",
-          "ref": "core/adapters/inbound/agents/kirocli/agent.go",
-          "note": "Source = FilesUnderRoot{~/.kiro/sessions/cli, JSONLineParser}; the tailed transport is the JSONL only (no model field). Permission Detail notes the .json sidecar is read for the working directory only"
-        },
-        {
-          "kind": "file",
-          "ref": ".build/refresh/kiro-cli-smoke/FINDINGS.md",
-          "note": "§4: 2.5.1 JSONL vocabulary (Prompt/AssistantMessage/ToolResults/Clear) has no model/usage/cost; sidecar <uuid>.json has rts_model_state.model_info.model_id; Adapter decisions: 'No tokens/cost/model from JSONL in v1; sidecar MetricsReader is a documented future enhancement'. §8: /model + agent slash surface"
-        },
-        {
-          "kind": "file",
-          "ref": ".build/refresh/kiro-cli-smoke/c423461a-e49e-4d30-8101-6ee082d28483.json",
-          "note": "live 2.5.1 sidecar: session_state.rts_model_state.model_info.model_id='auto', .context_window_tokens=1000000 — proves the model+window exist locally (the unblock path's source) but at a path no MetricsReader reads in v1"
+          "ref": "core/adapters/inbound/agents/kirocli/sidecar_metrics.go",
+          "note": "readSidecarModelState token-walks <base>.json → session_state → rts_model_state, skipping conversation_metadata."
         },
         {
           "kind": "file",
           "ref": "replaydata/agents/kiro-cli/driver-interactive.sh",
-          "note": "DRIVE_ELICITS='send slash wait_turn sleep' — the interactive driver elicits exactly the recipe's step set → driver=ready"
+          "note": "settings.model knob appends --model <m> at launch (mirrors trust_all_tools seam, #599)."
         },
         {
-          "kind": "file",
-          "ref": "replaydata/agents/aider/scenarios/5-2_model-identification/metadata.json",
-          "note": "calibration: aider records the model IN the tailed transcript (> Model: blockquote, modelRE) → daemon=full; kiro-cli has no in-transcript model analogue"
+          "kind": "live",
+          "ref": "kiro-cli 2.6.0 e2e + recorded 1-8 cell (#599)",
+          "note": "Sibling cell model-context-display recorded 3/3 phases; golden summary.model_name = auto. Same pipeline, pinned id here."
         },
         {
-          "kind": "file",
-          "ref": "replaydata/agents/pi/scenarios/5-2_model-identification/metadata.json",
-          "note": "calibration: pi extracts the model from message.model + model_change.modelId in the rollout the daemon tails → daemon=full; kiro-cli emits no model_change event and no model field"
+          "kind": "cli",
+          "ref": "kiro-cli chat --list-models (2.6.0)",
+          "note": "Valid pinnable ids incl. claude-haiku-4.5 (0.40x credits, the recipe choice); kiro-cli chat --help shows --model <MODEL>."
         }
       ]
     },
@@ -73,34 +63,34 @@
         "Launch with an EXPLICIT --model <id> so model_info.model_id pins a concrete model (not 'auto') — required for the assertion to be meaningful once the reader exists."
       ],
       "setup": [
-        "The interactive driver launches `kiro-cli chat --model <id> --trust-all-tools` in a fresh per-run cwd under tmux and waits for the idle input line.",
-        "~/.kiro/sessions/cli/<uuid>.jsonl materializes after the first prompt (FilesUnderRoot); the driver resolves the newest .jsonl past its launch marker and keys the session on that UUID.",
-        "A single no-op turn: the prompt → working; the final text-only AssistantMessage → turn_done → ready (parser maps text-only AssistantMessage to turn_done).",
-        "ONCE the unblock lands: the sidecar MetricsReader stamps SessionMetrics.ModelName from session_state.rts_model_state.model_info.model_id and ContextWindow from .context_window_tokens; assert AFTER turn_end (model/window may read 0/'unknown' before the first turn settles).",
-        "After the turn + trailing sleep the driver tears the tmux session down once → a single process_exited."
+        "Driver launches `kiro-cli chat --trust-all-tools --model claude-haiku-4.5` (settings.model knob, #599) so the sidecar rts_model_state carries the pinned id from turn 1",
+        "Assertions on ModelName/ContextWindow are checked AFTER the first turn_done (the sidecar read fires on the text-only AssistantMessage)",
+        "Curation copies the <uuid>.json sidecar into the cell as transcript.json so replay reproduces the metrics"
       ],
       "script": [
         {
           "type": "send",
-          "text": "What is the capital of France? Answer in one word, no file edits."
+          "text": "What is 6 times 7? Answer with just the number."
         },
         {
           "type": "wait_turn"
         },
         {
           "type": "sleep",
-          "seconds": 10
+          "seconds": 4
         }
       ],
       "verify": [
-        "FROZEN: no recording until the sidecar MetricsReader unblock lands. The verify below is the DOCUMENTED TARGET for that future recording.",
-        "events.jsonl shows a session born ready within ~2s of launch and ONE ready→working→ready arc on it (the single no-op turn), no state_transition to waiting.",
-        "events.jsonl contains a pid_discovered bound to the session and exactly one process_exited at REPL teardown.",
-        "ONCE UNBLOCKED: the .replay.json.golden carries a non-empty summary.model_name equal to the normalized launch --model id (NOT 'unknown'), with a populated ContextWindow (1M for the auto/default; the pinned model's published window otherwise). Per issue #440 assert presence + non-'unknown', not a hardcoded string.",
-        "final session state is ready before teardown."
+        "after the first turn_done, metrics.model_name = claude-haiku-4.5 (the pinned launch model, not unknown, not auto)",
+        "metrics.context_window > 0 (from the sidecar context_window_tokens)",
+        "metrics.context_utilization_percentage > 0 and equal to the sidecar context_usage_percentage",
+        "final session state is ready; topology ready → working → ready",
+        "staged fixture contains transcript.json next to transcript.jsonl"
       ],
-      "notes": "FROZEN (agent=yes, daemon=incapable, driver=ready). The recipe + spec are the DOCUMENTED TARGET kept on the cell so that the moment the unblock lands — a kirocli sidecar MetricsReader reading <uuid>.json session_state.rts_model_state.model_info.{model_id,context_window_tokens} → SessionMetrics.{ModelName,ContextWindow} — `record` can drive this cell as-is and re-route it from frozen to record. TEMPLATED FROM aider/pi model-identification (same single send + wait_turn + trailing sleep) and adapted to kiro-cli's TUI transport. WHY frozen now: the kirocli parser sets no ModelName (the tailed JSONL has no model field; the model lives only in the unread sidecar), so a recording today would show ModelName='unknown' — exactly the assertion that must fail, hence no recording. WHY interactive (not headless): kiro-cli --no-interactive writes NO session file (FINDINGS.md §7), so headless is invisible to the daemon; the TUI is the only mode that persists a transcript. WHY --model explicit: model_info.model_id reads 'auto' on the task-router default; the scenario's non-default-model premise needs an explicit --model so a concrete id is pinned. Driver is ready (send/wait_turn/sleep all elicited by DRIVE_ELICITS) — the freeze is a transport limit, not a driver gap.",
-      "settings": {},
+      "notes": "Pinned-model variant of the 1-8 first-contact check: 1.8 asserts default-launch visibility (model auto), this cell asserts the LAUNCH PIN is identified. claude-haiku-4.5 chosen as the cheapest concrete pin (0.40x credits).",
+      "settings": {
+        "model": "claude-haiku-4.5"
+      },
       "timeout_seconds": 180
     }
   }

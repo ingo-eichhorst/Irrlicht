@@ -1,0 +1,87 @@
+{
+  "session_id": "468c8450-7153-4700-9ed0-1990a3311e27",
+  "cwd": "/Users/ingo/projects/irrlicht/.claude/worktrees/592-kiro-cli-review-followups/.build/refresh/kiro-cli/1-8_model-context-display-20260605T080900/cwd",
+  "created_at": "2026-06-05T08:09:05.931209Z",
+  "updated_at": "2026-06-05T08:09:09.953436Z",
+  "title": "What is 6 times 7? Answer with just the number.",
+  "session_created_reason": "subagent",
+  "session_state": {
+    "version": "v1",
+    "conversation_metadata": {
+      "user_turn_metadatas": [
+        {
+          "loop_id": {
+            "agent_id": {
+              "name": "kiro_default",
+              "parent_id": null,
+              "rand": null
+            },
+            "rand": 1923484850
+          },
+          "result": {
+            "Ok": {
+              "id": "55599403-f72e-41bf-a962-4db881b5a3f1",
+              "role": "assistant",
+              "content": [
+                {
+                  "kind": "text",
+                  "data": "42"
+                }
+              ],
+              "meta": {
+                "timestamp": 1780646949
+              }
+            }
+          },
+          "message_ids": [
+            "d7824a30-c553-41b0-91fd-e4c7231fdab8",
+            "a81c0cf2-1a0f-4975-9b67-472a510d7642"
+          ],
+          "total_request_count": 1,
+          "number_of_cycles": 0,
+          "builtin_tool_uses": 0,
+          "turn_duration": {
+            "secs": 3,
+            "nanos": 474693292
+          },
+          "end_reason": "UserTurnEnd",
+          "end_timestamp": "2026-06-05T08:09:09.952628Z",
+          "input_token_count": 0,
+          "output_token_count": 0,
+          "context_usage_percentage": 1.2198,
+          "metering_usage": [
+            {
+              "value": 0.03438490630182421,
+              "unit": "credit",
+              "unitPlural": "credits"
+            }
+          ]
+        }
+      ],
+      "user_turn_start_request": null,
+      "last_request": null
+    },
+    "rts_model_state": {
+      "conversation_id": "468c8450-7153-4700-9ed0-1990a3311e27",
+      "model_info": {
+        "model_id": "auto",
+        "context_window_tokens": 200000
+      },
+      "context_usage_percentage": 1.2198
+    },
+    "permissions": {
+      "filesystem": {
+        "allowed_read_paths": [
+          "/Users/ingo/projects/irrlicht/.claude/worktrees/592-kiro-cli-review-followups/.build/refresh/kiro-cli/1-8_model-context-display-20260605T080900/cwd"
+        ],
+        "allowed_write_paths": [],
+        "denied_read_paths": [],
+        "denied_write_paths": []
+      },
+      "trusted_tools": [],
+      "denied_tools": [],
+      "allowed_commands": []
+    },
+    "agent_name": "kiro_default"
+  }
+}
