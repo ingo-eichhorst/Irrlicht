@@ -330,6 +330,24 @@ func TestMergeMetrics_CumFields(t *testing.T) {
 	}
 }
 
+// MergeMetrics task-list semantics: nil = "no data yet" (carry the old list),
+// non-nil empty = "no tasks" (clear it). The tailer emits the empty slice
+// after a prune-to-empty — without the distinction the stale pre-prune list
+// was resurrected in the session record forever. See issue #615.
+func TestMergeMetrics_Tasks_EmptyClearsStaleNilCarries(t *testing.T) {
+	oldM := &SessionMetrics{Tasks: []Task{{ID: "5", Subject: "stale", Status: "pending"}}}
+
+	carried := MergeMetrics(&SessionMetrics{Tasks: nil}, oldM)
+	if len(carried.Tasks) != 1 || carried.Tasks[0].ID != "5" {
+		t.Errorf("nil Tasks must carry the old list, got %+v", carried.Tasks)
+	}
+
+	cleared := MergeMetrics(&SessionMetrics{Tasks: []Task{}}, oldM)
+	if cleared.Tasks == nil || len(cleared.Tasks) != 0 {
+		t.Errorf("empty Tasks must clear the old list, got %+v", cleared.Tasks)
+	}
+}
+
 func TestSessionState_LauncherJSONRoundTrip(t *testing.T) {
 	// With Launcher present.
 	in := &SessionState{

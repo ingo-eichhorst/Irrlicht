@@ -393,9 +393,16 @@ func (t *TranscriptTailer) computeMetrics() {
 	// (rate-limit fields are populated above the empty-MessageHistory
 	// early return so an idle session still surfaces its last-known
 	// snapshot — UI decorates staleness rather than dropping it.)
-	if len(t.tasks) > 0 {
+	switch {
+	case len(t.tasks) > 0:
 		t.metrics.Tasks = append([]Task(nil), t.tasks...)
-	} else {
+	case t.taskSeq > 0:
+		// Had tasks this session but the list emptied (snapshot prune). A
+		// non-nil empty slice tells MergeMetrics "no tasks" — nil would read
+		// as "no data yet" and resurrect the stale pre-prune list in the
+		// session record forever. See issue #615.
+		t.metrics.Tasks = []Task{}
+	default:
 		t.metrics.Tasks = nil
 	}
 

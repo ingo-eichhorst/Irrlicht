@@ -11,7 +11,11 @@ import (
 	"irrlicht/core/pkg/tailer"
 )
 
-const ledgerSchemaVersion = 2 // bumped to force re-scan for task support
+// Bumped to 3 for #615 (authoritative task IDs from TaskCreate results +
+// persisted TaskSeq): invalidating pre-fix ledgers forces a full re-scan that
+// rebuilds desynced task lists with correct IDs. Must match the version
+// stamped by tailer.GetLedgerState.
+const ledgerSchemaVersion = 3
 
 // LedgerSuffix is the filename suffix used for per-session ledger files.
 // Exposed so the daemon-startup orphan sweep can filter directory entries
