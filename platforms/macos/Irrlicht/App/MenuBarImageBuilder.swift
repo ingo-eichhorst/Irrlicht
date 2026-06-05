@@ -2,14 +2,42 @@ import AppKit
 
 @MainActor
 enum MenuBarImageBuilder {
+    /// Which icon family the status item shows. Pure decision, extracted so
+    /// the priority order is unit-testable without a SessionManager.
+    enum IconState: Equatable {
+        case attention // pending permission items — human must act
+        case dots      // session-state circles
+        case off       // no sessions, nothing pending
+    }
+
+    /// Pending consent outranks everything: while items are unanswered the
+    /// daemon isn't monitoring those agents, so the bar must say "act to
+    /// make me work again" — not show dots or the idle flame.
+    static func iconState(pendingConsentCount: Int, sessionCount: Int) -> IconState {
+        if pendingConsentCount > 0 { return .attention }
+        if sessionCount > 0 { return .dots }
+        return .off
+    }
+
     static func build(
         sessionManager: SessionManager,
         gasTownProvider: GasTownProvider
     ) -> NSImage {
-        if let combined = combinedImage(sessionManager: sessionManager, gasTownProvider: gasTownProvider) {
-            return combined
+        switch iconState(
+            pendingConsentCount: sessionManager.pendingWizardAgents.count,
+            sessionCount: sessionManager.sessions.count
+        ) {
+        case .attention:
+            // Full replacement — also suppresses the Gas Town badge so the
+            // "do something" signal stays unambiguous; it returns once all
+            // items are answered.
+            return OffFlameImage.attention
+        case .dots, .off:
+            if let combined = combinedImage(sessionManager: sessionManager, gasTownProvider: gasTownProvider) {
+                return combined
+            }
+            return OffFlameImage.menuBar
         }
-        return OffFlameImage.menuBar
     }
 
     private static func combinedImage(

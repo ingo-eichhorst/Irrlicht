@@ -4,9 +4,14 @@ import AppKit
 enum OffFlameImage {
     static let menuBar = build(pointSize: 18, config: .menuBar)
     static let overlaySlashed = build(pointSize: 24, config: .overlaySlashed)
+    static let attention = build(pointSize: 18, config: .attention)
 
-    private struct Config {
+    // Internal (not private) so tests can assert on the generated SVG —
+    // same text-assertion pattern as MenuBarStatusRendererTests.
+    struct Config {
         let bodyStops: String
+        // Extra SVG painted after the flame path (document order = z-order):
+        // the slashed overlay's strike-through, the attention badge, etc.
         let slash: String
         let accessibilityDescription: String?
 
@@ -34,11 +39,43 @@ enum OffFlameImage {
             // Surrounding Text already announces the empty state.
             accessibilityDescription: nil
         )
+
+        // "Action required" (#593 follow-up): pending permission items mean
+        // monitoring is paused until the human answers the wizard. Orange
+        // flame (waiting hue) + red exclamation badge — must read as "do
+        // something", clearly distinct from the gray no-sessions flame.
+        static let attention = Config(
+            bodyStops: """
+            <stop offset="0%" stop-color="#FF9500" stop-opacity="0.95"/>
+            <stop offset="100%" stop-color="#FF7A00" stop-opacity="0.95"/>
+            """,
+            // Red badge bottom-right with a white exclamation. White outline
+            // separates the badge from the orange flame at 18 pt.
+            slash: """
+            <circle cx="990" cy="990" r="240" fill="#FF3B30" stroke="#FFFFFF" stroke-width="40"/>
+            <line x1="990" y1="860" x2="990" y2="1040" stroke="#FFFFFF" stroke-width="72" stroke-linecap="round"/>
+            <circle cx="990" cy="1125" r="46" fill="#FFFFFF"/>
+            """,
+            accessibilityDescription: "Irrlicht — action required: permission pending"
+        )
     }
 
     private static func build(pointSize: CGFloat, config: Config) -> NSImage {
+        let svg = buildSVG(pointSize: pointSize, config: config)
+        guard let data = svg.data(using: .utf8),
+              let image = NSImage(data: data) else {
+            return NSImage()
+        }
+        image.isTemplate = false
+        image.size = NSSize(width: pointSize, height: pointSize)
+        image.accessibilityDescription = config.accessibilityDescription
+        return image
+    }
+
+    // Internal so tests can assert on the markup without rendering.
+    static func buildSVG(pointSize: CGFloat, config: Config) -> String {
         let size = Int(pointSize.rounded())
-        let svg = """
+        return """
         <svg xmlns="http://www.w3.org/2000/svg" width="\(size)" height="\(size)" viewBox="0 0 1254 1254">
         <defs>
         <linearGradient id="wisp-off-body" x1="50%" y1="100%" x2="50%" y2="0%">
@@ -49,13 +86,5 @@ enum OffFlameImage {
         \(config.slash)
         </svg>
         """
-        guard let data = svg.data(using: .utf8),
-              let image = NSImage(data: data) else {
-            return NSImage()
-        }
-        image.isTemplate = false
-        image.size = NSSize(width: pointSize, height: pointSize)
-        image.accessibilityDescription = config.accessibilityDescription
-        return image
     }
 }
