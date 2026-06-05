@@ -364,6 +364,13 @@ describe('taskEtaPresentation', () => {
     expect(taskEtaPresentation(m, 'working', now + 300).text).toBe('~7m–12m left')
   })
 
+  test('no marker timestamp at/above half keeps the bare point countdown', () => {
+    // Nothing to pin a high bound to (pre-#604 daemon) — old behavior.
+    const m = metricsFor({ est: { updated_at: 0 } })
+    expect(taskEtaPresentation(m, 'working', now).text).toBe('~12m left')
+    expect(taskEtaPresentation(m, 'working', now + 120).text).toBe('~10m left')
+  })
+
   test('range when completed fraction is below half — high pinned at the marker', () => {
     // high = 1.5 × (eta − updated_at) = 1.5 × 750s = 1125s → 19m
     const info = taskEtaPresentation(metricsFor({ est: { completed_rounds: 2 } }), 'working', now)
@@ -424,6 +431,14 @@ describe('taskEtaPresentation', () => {
   test('eta in the past clamps to <1m, never negative — one sign only', () => {
     const info = taskEtaPresentation(metricsFor({ metrics: { task_completion_eta: now - 5 } }), 'working', now)
     expect(info.text).toBe('<1m left')
+  })
+
+  test('long overdue: upper bound is the at-marker projection, not a stuck <1m (#616)', () => {
+    // Marker 10min ago projected 5min of work; the eta passed 5min ago.
+    // Worst case the full projected 5m still lies ahead — never a
+    // confident "<1m left" while the agent may be stuck.
+    const m = metricsFor({ est: { updated_at: now - 600 }, metrics: { task_completion_eta: now - 300 } })
+    expect(taskEtaPresentation(m, 'working', now).text).toBe('<5m left')
   })
 
   test('hour-scale remaining uses h+m resolution', () => {
