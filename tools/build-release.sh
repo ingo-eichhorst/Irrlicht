@@ -47,6 +47,7 @@ build_universal() {
 cd core
 build_universal "./cmd/irrlichd/"       "$DAEMON_NAME"
 build_universal "./cmd/irrlicht-focus/" "irrlicht-focus"
+build_universal "./cmd/irrlicht-ls/"    "irrlicht-ls"
 cd ..
 
 echo "  Testing daemon..."
@@ -143,7 +144,9 @@ cp "$BUILD_DIR/${DAEMON_NAME}-darwin-universal" "$APP_CONTENTS/MacOS/${DAEMON_NA
 chmod 755 "$APP_CONTENTS/MacOS/${DAEMON_NAME}"
 cp "$BUILD_DIR/irrlicht-focus-darwin-universal" "$APP_CONTENTS/MacOS/irrlicht-focus"
 chmod 755 "$APP_CONTENTS/MacOS/irrlicht-focus"
-echo "  Embedded daemon and irrlicht-focus in app bundle"
+cp "$BUILD_DIR/irrlicht-ls-darwin-universal" "$APP_CONTENTS/MacOS/irrlicht-ls"
+chmod 755 "$APP_CONTENTS/MacOS/irrlicht-ls"
+echo "  Embedded daemon, irrlicht-focus, and irrlicht-ls in app bundle"
 
 # Embed Sparkle.framework so the Sparkle auto-updater finds itself at runtime.
 # SwiftPM copies Sparkle.framework next to the executable in its build output;
@@ -272,6 +275,8 @@ if [ -n "${DEVELOPER_ID:-}" ]; then
     codesign --force --sign "$SIGN_IDENTITY" --options runtime --timestamp \
         "$APP_CONTENTS/MacOS/irrlicht-focus"
     codesign --force --sign "$SIGN_IDENTITY" --options runtime --timestamp \
+        "$APP_CONTENTS/MacOS/irrlicht-ls"
+    codesign --force --sign "$SIGN_IDENTITY" --options runtime --timestamp \
         --entitlements "$ENTITLEMENTS" "$APP_BUNDLE"
     codesign --verify --deep --strict "$APP_BUNDLE"
     # Value-aware XPath: a <false/> declaration on get-task-allow is harmless
@@ -289,6 +294,7 @@ else
     codesign --force --sign - "$APP_CONTENTS/Resources/Irrlicht_Irrlicht.bundle"
     codesign --force --sign - "$APP_CONTENTS/MacOS/${DAEMON_NAME}"
     codesign --force --sign - "$APP_CONTENTS/MacOS/irrlicht-focus"
+    codesign --force --sign - "$APP_CONTENTS/MacOS/irrlicht-ls"
     codesign --force --sign - "$APP_BUNDLE"
     codesign --verify --deep --strict "$APP_BUNDLE"
     echo "  Ad-hoc signed $APP_BUNDLE"
@@ -375,6 +381,11 @@ cp -R "$APP_BUNDLE" "$PKG_ROOT/Applications/${APP_NAME}.app"
 mkdir -p "$PKG_SCRIPTS"
 cat > "$PKG_SCRIPTS/postinstall" <<'SCRIPT'
 #!/bin/bash
+# Put the irrlicht-ls CLI on PATH (#608). Runs as root, so /usr/local/bin
+# is always writable; ln -sf keeps reinstalls/upgrades idempotent. Guarded
+# with || true — a failed symlink must never fail the install.
+mkdir -p /usr/local/bin 2>/dev/null || true
+ln -sf /Applications/Irrlicht.app/Contents/MacOS/irrlicht-ls /usr/local/bin/irrlicht-ls 2>/dev/null || true
 # The app manages its own daemon lifecycle — no LaunchAgent needed.
 # Just open the app so the user sees it in the menu bar immediately.
 CURRENT_USER=$(stat -f "%Su" /dev/console)

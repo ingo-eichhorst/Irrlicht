@@ -347,8 +347,10 @@ All tests must pass before proceeding.
 > tools/build-release.sh
 > ```
 >
-> It builds the universal daemon + `irrlicht-focus`, the Linux tarballs,
-> assembles + DevID-signs the bundle, notarizes + staples the DMG, builds the
+> It builds the universal daemon + `irrlicht-focus` + `irrlicht-ls` (embedded
+> in the bundle; the PKG postinstall symlinks `irrlicht-ls` into
+> `/usr/local/bin` — #608), the Linux tarballs, assembles + DevID-signs the
+> bundle, notarizes + staples the DMG, builds the
 > PKG, and writes `.build/checksums.sha256`. It does **NOT** do four things —
 > do them by hand afterward:
 > 1. **ZIP**: `ditto -c -k --sequesterRsrc --keepParent .build/Irrlicht.app .build/Irrlicht-$NEW_VERSION.zip`

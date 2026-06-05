@@ -75,7 +75,7 @@ Stages: `stable` production-ready · `beta` feature-complete, edge cases remain 
 | --------------------- | ------- | ------------------------- |
 | macOS (menu bar app)  | beta    | [Releases](https://github.com/ingo-eichhorst/Irrlicht/releases/latest) |
 | Web dashboard         | beta    | `http://127.0.0.1:7837`   |
-| CLI                   | alpha   | `irrlicht-ls` (`-w` for watch) |
+| CLI                   | alpha   | `irrlicht-ls` (`-w` for watch) — on PATH after install; DMG drag-installs: Settings → Install Command-Line Tool |
 | VS Code extension     | planned | tracked in [#350](https://github.com/ingo-eichhorst/Irrlicht/issues/350) |
 | Linux (daemon-only)   | alpha   | `curl -fsSL https://irrlicht.io/install.sh \| sh` |
 | Windows               | planned | —                         |

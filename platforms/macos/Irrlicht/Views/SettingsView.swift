@@ -338,6 +338,10 @@ struct SettingsView: View {
                         .controlSize(.small)
                     }
                     .onAppear { updateManager.refresh() }
+
+                    Divider()
+
+                    CLIToolSection()
                 }
                 .padding(.horizontal, 20)
                 .padding(.vertical, 16)
@@ -431,6 +435,60 @@ struct SettingsView: View {
                 }
             }
         }
+    }
+}
+
+/// Settings subsection for putting the bundle-embedded irrlicht-ls CLI on
+/// PATH (#608). Consent-first: the link is only created when the user clicks
+/// the button — installers handle the automatic path; this covers DMG
+/// drag-installs. Hidden in dev builds (binary not embedded).
+private struct CLIToolSection: View {
+    @State private var status: CLIToolInstaller.Status = .unavailable
+    @State private var errorMessage: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Command-Line Tool")
+                .font(.subheadline)
+                .fontWeight(.medium)
+
+            switch status {
+            case .unavailable:
+                Text("irrlicht-ls is not embedded in this build.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            case .installed(let path):
+                HStack(spacing: 4) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(.green)
+                        .font(.caption)
+                    Text("irrlicht-ls installed at \(path)")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            case .notInstalled:
+                Text("Make the irrlicht-ls session list available in your terminal.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                Button("Install Command-Line Tool") {
+                    switch CLIToolInstaller.install() {
+                    case .installed:
+                        errorMessage = nil
+                    case .failed(let message):
+                        errorMessage = message
+                    }
+                    status = CLIToolInstaller.status()
+                }
+                .controlSize(.small)
+                if let errorMessage {
+                    Text(errorMessage)
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                        .textSelection(.enabled)
+                }
+            }
+        }
+        .onAppear { status = CLIToolInstaller.status() }
     }
 }
 
