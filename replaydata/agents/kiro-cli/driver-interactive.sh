@@ -66,11 +66,24 @@ if [[ $# -ne 5 ]]; then
 fi
 
 STAGING="$1"
-# $2 (preferred-uuid) and $4 (settings-path) are accepted for ABI parity with
-# the other interactive drivers; kiro-cli assigns its own UUID per launch and
-# reads no --settings flag, so both are unused here.
+# $2 (preferred-uuid) is accepted for ABI parity with the other interactive
+# drivers; kiro-cli assigns its own UUID per launch, so it is unused here.
 TIMEOUT_S="$3"
+# $4 (settings-path) carries the scenario's settings blob. kiro-cli reads no
+# --settings flag, but one knob is honored: `trust_all_tools` (default true).
+# When a cell sets it false, boot_session launches plain `kiro-cli chat` (no
+# --trust-all-tools) so a mutating tool call raises the write-approval picker —
+# the auto-classified-permission cell needs this to observe the permission gate.
+SETTINGS_PATH="$4"
 SCRIPT_JSON="$5"
+
+# TRUST_ALL defaults to true (every other kiro cell relies on persisted
+# trust-all consent so no per-tool picker stalls the run); a cell opts out with
+# settings.trust_all_tools=false to make the approval picker appear.
+TRUST_ALL=true
+if [[ -f "$SETTINGS_PATH" ]] && [[ "$(jq -r '.trust_all_tools // "true"' "$SETTINGS_PATH" 2>/dev/null)" == "false" ]]; then
+  TRUST_ALL=false
+fi
 
 mkdir -p "$STAGING"
 DRIVER_LOG="$STAGING/driver.log"
@@ -185,7 +198,8 @@ boot_session() {
   # 1 AFTER touching it (alloc_slot already touched it) so a session file
   # written in the same second still sorts after the floor.
   sleep 1
-  local launch="kiro-cli chat --trust-all-tools"
+  local launch="kiro-cli chat"
+  $TRUST_ALL && launch="$launch --trust-all-tools"
   [[ -n "$resume_id" ]] && launch="$launch --resume-id $resume_id"
   # `|| { … exit … }` keeps a launch failure from aborting under set -e WITHOUT
   # an accurate exit-reason — the cleanup trap then records nonzero(2).
