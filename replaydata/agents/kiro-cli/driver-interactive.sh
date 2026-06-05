@@ -8,12 +8,14 @@
 #
 # Ported seams (this column's create-agent scaffold + the session-end record
 # port): send / slash / wait_turn / sleep / keys work; exit_clean / sigkill /
-# restart are ported from drive-codex-interactive.sh (kiro mints its OWN session
-# UUID per launch and is discovered via a MARKER, exactly like codex — so the
-# codex slot model and these three teardown primitives transplant cleanly). The
-# remaining multi-session / signal primitives (interrupt, reset_session, resume,
-# start_session, session) stay stubbed — `record` ports each when a recipe first
-# needs it.
+# restart / resume are ported from drive-codex-interactive.sh (kiro mints its OWN
+# session UUID per launch and is discovered via a MARKER, exactly like codex — so
+# the codex slot model and these teardown/resume primitives transplant cleanly).
+# resume relaunches `kiro-cli chat --trust-all-tools --resume-id <uuid>`, which
+# re-opens the SAME <uuid>.jsonl and appends under a NEW PID (one session, two
+# lifetimes — same as codex's `codex resume`). The remaining multi-session /
+# signal primitives (interrupt, reset_session, start_session, session) stay
+# stubbed — `record` ports each when a recipe first needs it.
 #
 # IMPORTANT — how a stubbed arm is caught: every standard arm is PRESENT here
 # (so recipe-lint's GRAMMAR check treats it as handled and will NOT report a
@@ -135,7 +137,7 @@ source "$_DRIVE_LIB/contracts.sh"
 # it is invisible to the daemon and MUST NOT be used for recording (FINDINGS.md
 # §7). slash commands reach the live TUI directly (a bare send "/cmd" is NOT
 # stored as literal text), so DRIVE_SLASH_REQUIRES_STEP_TYPE stays false.
-DRIVE_ELICITS="send slash wait_turn sleep keys restart sigkill exit_clean"
+DRIVE_ELICITS="send slash wait_turn sleep keys restart resume sigkill exit_clean"
 DRIVE_SLASH_REQUIRES_STEP_TYPE=false
 
 remaining_seconds() { local now; now=$(date +%s); (( now >= DEADLINE )) && echo 0 || echo $((DEADLINE - now)); }
@@ -167,6 +169,12 @@ trap cleanup EXIT
 # MARKER. Wait for the idle input line so keystrokes aren't swallowed during TUI
 # boot.
 boot_session() {
+  # Optional $1 = a resume-id. When set, the launch becomes
+  # `kiro-cli chat --trust-all-tools --resume-id <uuid>`, which re-opens the
+  # SAME ~/.kiro/sessions/cli/<uuid>.jsonl and APPENDS to it under a NEW PID
+  # (verified live) — that is the resume seam (step_resume). A bare boot
+  # (restart / first launch) passes nothing and kiro mints a fresh UUID.
+  local resume_id="${1:-}"
   local sess="$SESSION" cwd="${SES_CWD[$ACTIVE]}"
   local slot_stdout="$DRIVER_LOG.stdout.$ACTIVE"
   : > "$slot_stdout"
@@ -177,10 +185,12 @@ boot_session() {
   # 1 AFTER touching it (alloc_slot already touched it) so a session file
   # written in the same second still sorts after the floor.
   sleep 1
+  local launch="kiro-cli chat --trust-all-tools"
+  [[ -n "$resume_id" ]] && launch="$launch --resume-id $resume_id"
   # `|| { … exit … }` keeps a launch failure from aborting under set -e WITHOUT
   # an accurate exit-reason — the cleanup trap then records nonzero(2).
   tmux new-session -d -s "$sess" -x 200 -y 50 -c "$cwd" \
-    "kiro-cli chat --trust-all-tools" \
+    "$launch" \
     >>"$DRIVER_LOG.stdout" 2>>"$DRIVER_LOG.stderr" \
     || { echo "[driver] failed to launch kiro-cli under tmux" >&2; EXIT_REASON="nonzero(2)"; exit 1; }
   tmux pipe-pane -t "$sess" -o "cat >> '$slot_stdout'"
@@ -413,6 +423,52 @@ step_restart() {
   boot_session
 }
 
+# --- TEARDOWN SEAM D: resume -------------------------------------------------
+# Relaunch the SAME session id in the SAME cwd under a NEW process lifetime.
+# Mirrors step_resume in drive-codex-interactive.sh: kiro appends to the SAME
+# ~/.kiro/sessions/cli/<uuid>.jsonl across both lifetimes (verified live:
+# `kiro-cli chat --trust-all-tools --resume-id <uuid>` re-opens the same .jsonl,
+# new PID), so this is ONE session (one slot) with two process lifetimes —
+# TRANSCRIPT/UUID/MARKER stay unchanged and we do NOT allocate a new slot (that
+# would double-list the session and double-concat the transcript at curate
+# time). Only the tmux session name rotates.
+#
+# The active process is usually already gone here (an exit_clean preceded it,
+# and the recipe sleeps >10s so the daemon's deletedCooldown elapses before the
+# same UUID re-creates the row). If it is somehow still alive, end it cleanly
+# first so the resumed PID is the only kiro-cli holding this UUID's cwd.
+step_resume() {
+  resolve_transcript || true
+  local resume_uuid="$UUID"
+  local saved_transcript="$TRANSCRIPT"
+
+  if [[ "${SES_ALIVE[$ACTIVE]:-0}" == "1" ]]; then
+    tmux send-keys -t "$SESSION" -l -- "/quit"
+    sleep 0.3
+    tmux send-keys -t "$SESSION" Enter
+    sleep 2
+  fi
+  tmux kill-session -t "$SESSION" 2>/dev/null || true
+  sleep 1
+
+  # Rotate ONLY the tmux session name; keep the slot's cwd/uuid/transcript so
+  # the relaunch resumes the same id and resolve_transcript is not re-run
+  # (re-finding could race the new PID before it re-opens the .jsonl).
+  SESSION="kiro-clidrv-$$-$(date +%s)-r${ACTIVE}"
+  SES_SESSION[$ACTIVE]="$SESSION"
+  SES_ALIVE[$ACTIVE]=1
+
+  if [[ -n "$resume_uuid" ]]; then
+    echo "[driver] resume[s$ACTIVE]: relaunch kiro-cli --resume-id $resume_uuid (same .jsonl=$saved_transcript)" >&2
+    boot_session "$resume_uuid"
+  else
+    echo "[driver] resume[s$ACTIVE]: UUID unknown — cannot resume; aborting" >&2
+    EXIT_REASON="nonzero(3)"
+    SES_ALIVE[$ACTIVE]=0
+    return 3
+  fi
+}
+
 # --- Step dispatch: ALL standard arms present; stubs fail loudly -------------
 # Bring up the first session as slot 1. SCRIPT_JSON's restart steps allocate
 # further slots.
@@ -432,7 +488,7 @@ while IFS= read -r step; do
     keys)            send_keys "$(jq -r '.keys' <<<"$step")" ;;
     reset_session)   not_implemented reset_session || STEP_OK=false ;; # TODO(kiro-cli): in-REPL /clear|/new → new session id
     restart)         step_restart ;;
-    resume)          not_implemented resume || STEP_OK=false ;;        # TODO(kiro-cli): relaunch same id+cwd
+    resume)          step_resume || STEP_OK=false ;;
     sigkill)         step_sigkill ;;
     exit_clean)      step_exit_clean ;;
     start_session)   not_implemented start_session || STEP_OK=false ;; # TODO(kiro-cli): concurrent session, keep first alive
