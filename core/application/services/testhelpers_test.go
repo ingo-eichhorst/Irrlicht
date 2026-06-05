@@ -339,3 +339,50 @@ func newDetectorWithCWDDiscovery(
 		"test", 0, discovers, nil, nil,
 	)
 }
+
+// mockBroadcaster captures every Broadcast for assertions. Safe for
+// concurrent use — the detector broadcasts from multiple goroutines.
+type mockBroadcaster struct {
+	mu   sync.Mutex
+	msgs []outbound.PushMessage
+}
+
+func (b *mockBroadcaster) Broadcast(msg outbound.PushMessage) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	// Deep-enough copy: the detector keeps mutating the *SessionState it
+	// broadcasts, so snapshot the fields assertions need.
+	if msg.Session != nil {
+		s := *msg.Session
+		msg.Session = &s
+	}
+	b.msgs = append(b.msgs, msg)
+}
+
+func (b *mockBroadcaster) Subscribe() chan outbound.PushMessage     { return nil }
+func (b *mockBroadcaster) Unsubscribe(ch chan outbound.PushMessage) {}
+
+// messages returns a snapshot of everything broadcast so far.
+func (b *mockBroadcaster) messages() []outbound.PushMessage {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := make([]outbound.PushMessage, len(b.msgs))
+	copy(out, b.msgs)
+	return out
+}
+
+// newDetectorWithBroadcaster builds a SessionDetector whose pushes land in
+// the returned mockBroadcaster (#593 summary-clearing assertions).
+func newDetectorWithBroadcaster(
+	tw *mockAgentWatcher,
+	pw *mockProcessWatcher,
+	repo *mockRepo,
+) (*services.SessionDetector, *mockBroadcaster) {
+	b := &mockBroadcaster{}
+	det := services.NewSessionDetector(
+		[]inbound.Watcher{tw}, pw, repo,
+		&mockLogger{}, &mockGit{}, &mockMetrics{}, b,
+		"test", 0, nil, nil, nil,
+	)
+	return det, b
+}

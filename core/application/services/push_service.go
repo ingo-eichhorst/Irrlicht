@@ -2,6 +2,7 @@ package services
 
 import (
 	"sync"
+	"sync/atomic"
 
 	"irrlicht/core/ports/outbound"
 )
@@ -10,6 +11,7 @@ import (
 // It implements ports/outbound.PushBroadcaster.
 type pushService struct {
 	mu   sync.Mutex
+	seq  atomic.Uint64
 	subs []chan outbound.PushMessage
 }
 
@@ -53,7 +55,11 @@ func (p *pushService) Subscribers() int {
 }
 
 // Broadcast sends the message to all subscribers. Slow subscribers are skipped.
+// Each message is stamped with a monotonic Seq before fan-out, so a client
+// that was skipped sees a gap in the received sequence and can re-hydrate
+// instead of keeping phantom state (#593).
 func (p *pushService) Broadcast(msg outbound.PushMessage) {
+	msg.Seq = p.seq.Add(1)
 	p.mu.Lock()
 	subs := make([]chan outbound.PushMessage, len(p.subs))
 	copy(subs, p.subs)

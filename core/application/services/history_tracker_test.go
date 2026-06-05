@@ -196,6 +196,24 @@ func TestHistoryTracker_LoadCorruptFile(t *testing.T) {
 	}
 }
 
+func TestHistoryTracker_LoadDropsSubagentEntries(t *testing.T) {
+	dir := t.TempDir()
+	// Subagent histories are transient — restoring them can only leak (#593:
+	// 1,151 dead agent-* entries measured in a production history.json).
+	payload := `{"version":1,"sessions":{"agent-a013c0a83ecd892bd":{"1":["working"]},"fe48f71f":{"1":["working"]}}}`
+	if err := os.WriteFile(filepath.Join(dir, "history.json"), []byte(payload), 0600); err != nil {
+		t.Fatal(err)
+	}
+	ht := NewHistoryTrackerWithDir(dir)
+	ht.Load()
+	if _, ok := ht.Snapshot("agent-a013c0a83ecd892bd", 1); ok {
+		t.Error("agent-* entry should be dropped on Load")
+	}
+	if _, ok := ht.Snapshot("fe48f71f", 1); !ok {
+		t.Error("non-subagent entry should survive Load")
+	}
+}
+
 func TestHistoryTracker_LoadVersionMismatch(t *testing.T) {
 	dir := t.TempDir()
 	// Valid JSON, but schema version we don't support.

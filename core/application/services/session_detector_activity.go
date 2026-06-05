@@ -432,15 +432,33 @@ func (d *SessionDetector) processActivity(id agent.Identity, ev agent.Event) {
 		// in-process subagents). Since the parent's own turn is done,
 		// those subagents' work is definitionally complete: the parent's
 		// final assistant message already incorporated their results.
+		//
+		// The fast-forward also fires when the turn ends in waiting with a
+		// question/cue (#593) — IsAgentDone gates it, so permission-prompt
+		// waiting (open tool call) is excluded. Without this, a parent whose
+		// overnight run ends by asking a question leaves its finished
+		// children stuck in working until the liveness sweep. The waiting
+		// branch only fast-forwards: no hold (the parent legitimately waits
+		// on the user) and no cleanupChildren (background children may still
+		// be running; finishOrphanedChildren's quiet-window and open-tool
+		// guards leave those alone).
 		parentHeldWorking := false
-		if newState == session.StateReady && state.ParentSessionID == "" {
-			d.finishOrphanedChildren(state.SessionID)
-			if d.hasActiveChildren(state.SessionID) {
-				d.log.LogInfo("session-detector", ev.SessionID,
-					"holding parent working — active children still running")
-				newState = session.StateWorking
-				reason = ""
-				parentHeldWorking = true
+		if state.ParentSessionID == "" {
+			switch {
+			case newState == session.StateReady:
+				d.finishOrphanedChildren(state.SessionID)
+				if d.hasActiveChildren(state.SessionID) {
+					d.log.LogInfo("session-detector", ev.SessionID,
+						"holding parent working — active children still running")
+					newState = session.StateWorking
+					reason = ""
+					parentHeldWorking = true
+				}
+			case newState == session.StateWaiting && state.Metrics != nil && state.Metrics.IsAgentDone():
+				// Turn-done waiting (question/cue) — fast-forward only.
+				// Permission-prompt waiting never reaches here: its open
+				// tool call makes IsAgentDone return false.
+				d.finishOrphanedChildren(state.SessionID)
 			}
 		}
 
@@ -506,7 +524,22 @@ func (d *SessionDetector) processActivity(id agent.Identity, ev agent.Event) {
 
 	// When a parent session finishes, clean up all its child sessions.
 	if state.State == session.StateReady && state.ParentSessionID == "" {
+		prevSummary := state.Subagents
 		d.pidMgr.cleanupChildren(state.SessionID)
+		// The broadcast above carried a summary counting children that were
+		// just deleted. Refresh, persist, and re-push so the turn's final
+		// parent message has the cleared badge AND the repo copy is clean —
+		// hook-path transitions re-broadcast the persisted summary as-is
+		// (#593). Gated on the summary changing so the common no-children
+		// case adds no push traffic.
+		d.refreshSubagentSummary(state)
+		if !state.Subagents.Equal(prevSummary) {
+			if err := d.repo.Save(state); err != nil {
+				d.log.LogError("session-detector", ev.SessionID,
+					fmt.Sprintf("failed to persist cleared subagent summary: %v", err))
+			}
+			d.broadcast(outbound.PushTypeUpdated, state)
+		}
 	}
 
 	// When a child session changes state, re-evaluate the parent — it may
