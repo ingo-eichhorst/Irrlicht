@@ -6,6 +6,7 @@ package gastown
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os/exec"
 	"path/filepath"
 	"sort"
@@ -14,6 +15,7 @@ import (
 
 	"irrlicht/core/domain/orchestrator"
 	"irrlicht/core/domain/session"
+	"irrlicht/core/ports/outbound"
 )
 
 // sessionLister provides read access to active sessions for CWD matching.
@@ -34,6 +36,13 @@ type poller struct {
 	// the replay test raises it so a load-starved fake-gt subprocess can't
 	// falsely time out into the fallback path (#586).
 	fetchTimeout time.Duration
+	// logger records gt fetch timeouts so silent fallback to cached/empty
+	// state is observable in production. May be nil (e.g. tests).
+	logger outbound.Logger
+	// timeoutMu guards timingOut, which tracks per-fetch consecutive-timeout
+	// streaks so a wedged gt binary logs once per streak, not every tick (#625).
+	timeoutMu sync.Mutex
+	timingOut map[string]bool
 }
 
 // newPoller creates a poller that reads from the given collector and
@@ -44,6 +53,7 @@ func newPoller(collector *collector, gtBin string, sessions sessionLister) *poll
 		gtBin:        gtBin,
 		sessions:     sessions,
 		fetchTimeout: defaultFetchTimeout,
+		timingOut:    make(map[string]bool),
 	}
 }
 
@@ -344,6 +354,46 @@ func (p *poller) gtCommand(ctx context.Context, args ...string) *exec.Cmd {
 	return cmd
 }
 
+// noteFetchTimeout logs a gt fetch timeout exactly once per consecutive-timeout
+// streak so a wedged gt binary can't spam the log every tick (#625). fetch names
+// the timed-out call (e.g. "rig list") and fellBackTo describes the degraded
+// result it composed instead ("cached rigs" / "empty"). A non-timeout error
+// (bad JSON, gt missing) clears the streak via clearFetchTimeout so the next
+// genuine timeout logs again.
+func (p *poller) noteFetchTimeout(fetch, fellBackTo string) {
+	if p.logger == nil {
+		return
+	}
+	p.timeoutMu.Lock()
+	already := p.timingOut[fetch]
+	p.timingOut[fetch] = true
+	p.timeoutMu.Unlock()
+	if already {
+		return
+	}
+	p.logger.LogError("gastown-poller", "",
+		"gt "+fetch+" timed out after "+p.fetchTimeout.String()+
+			"; falling back to "+fellBackTo+" state (rig/polecat counts may be stale)")
+}
+
+// clearFetchTimeout resets a fetch's timeout streak after a non-timeout outcome
+// (success or a non-deadline error) so a later timeout is logged afresh.
+func (p *poller) clearFetchTimeout(fetch string) {
+	p.timeoutMu.Lock()
+	delete(p.timingOut, fetch)
+	p.timeoutMu.Unlock()
+}
+
+// recordFetch inspects a failed gt fetch: on a deadline timeout it logs the
+// degraded fallback (rate-limited per streak); otherwise it clears the streak.
+func (p *poller) recordFetch(ctx context.Context, fetch, fellBackTo string) {
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		p.noteFetchTimeout(fetch, fellBackTo)
+		return
+	}
+	p.clearFetchTimeout(fetch)
+}
+
 func (p *poller) fetchRigs(ctx context.Context) []rigState {
 	ctx, cancel := context.WithTimeout(ctx, p.fetchTimeout)
 	defer cancel()
@@ -351,8 +401,10 @@ func (p *poller) fetchRigs(ctx context.Context) []rigState {
 	out, err := p.gtCommand(ctx, "rig", "list", "--json").Output()
 	if err != nil {
 		// Fallback to collector's cached rigs from rigs.json.
+		p.recordFetch(ctx, "rig list", "cached rigs.json")
 		return p.collector.Rigs()
 	}
+	p.clearFetchTimeout("rig list")
 	var rigs []rigState
 	if err := json.Unmarshal(out, &rigs); err != nil {
 		return p.collector.Rigs()
@@ -366,8 +418,10 @@ func (p *poller) fetchPolecats(ctx context.Context) []polecatState {
 
 	out, err := p.gtCommand(ctx, "polecat", "list", "--all", "--json").Output()
 	if err != nil {
+		p.recordFetch(ctx, "polecat list", "empty")
 		return nil
 	}
+	p.clearFetchTimeout("polecat list")
 	var polecats []polecatState
 	if err := json.Unmarshal(out, &polecats); err != nil {
 		return nil
@@ -381,8 +435,10 @@ func (p *poller) fetchDogs(ctx context.Context) []dogState {
 
 	out, err := p.gtCommand(ctx, "dog", "list", "--json").Output()
 	if err != nil {
+		p.recordFetch(ctx, "dog list", "empty")
 		return nil
 	}
+	p.clearFetchTimeout("dog list")
 	var dogs []dogState
 	if err := json.Unmarshal(out, &dogs); err != nil {
 		return nil
@@ -396,8 +452,10 @@ func (p *poller) fetchBootStatus(ctx context.Context) *bootStatus {
 
 	out, err := p.gtCommand(ctx, "boot", "status", "--json").Output()
 	if err != nil {
+		p.recordFetch(ctx, "boot status", "empty")
 		return nil
 	}
+	p.clearFetchTimeout("boot status")
 	var boot bootStatus
 	if err := json.Unmarshal(out, &boot); err != nil {
 		return nil

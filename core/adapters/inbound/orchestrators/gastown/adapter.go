@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"irrlicht/core/domain/orchestrator"
+	"irrlicht/core/ports/outbound"
 )
 
 // Adapter implements inbound.OrchestratorWatcher for Gas Town.
@@ -19,6 +20,7 @@ type Adapter struct {
 	collector *collector
 	gtBin     string
 	sessions  sessionLister
+	logger    outbound.Logger
 
 	mu    sync.RWMutex
 	state *orchestrator.State
@@ -30,11 +32,13 @@ type Adapter struct {
 // NewAdapter creates a Gas Town OrchestratorWatcher adapter.
 // gtBin is the resolved path to the gt binary (may be empty).
 // sessions provides active session data for CWD matching (may be nil).
-func NewAdapter(gtBin string, sessions sessionLister) *Adapter {
+// logger records gt fetch timeouts so silent fallback is observable (may be nil).
+func NewAdapter(gtBin string, sessions sessionLister, logger outbound.Logger) *Adapter {
 	return &Adapter{
 		collector: New(),
 		gtBin:     gtBin,
 		sessions:  sessions,
+		logger:    logger,
 	}
 }
 
@@ -77,6 +81,7 @@ func (a *Adapter) Watch(ctx context.Context) error {
 
 	// Run poller loop.
 	poller := newPoller(a.collector, a.gtBin, a.sessions)
+	poller.logger = a.logger
 	return a.runPoller(ctx, poller)
 }
 
