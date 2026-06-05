@@ -177,6 +177,17 @@ func (d *SessionDetector) reevaluateParent(parentID string) {
 	// e.g. the liveness sweep removing a child of a waiting/ready parent
 	// (#593). Refresh, persist, and re-push, gated on the summary actually
 	// changing so routine child events add no push traffic.
+	//
+	// Gate coupling: when this runs from a child's processActivity pass,
+	// the child broadcast (session_detector_helpers.go) has already
+	// refreshed this parent's summary in place — the repo shares
+	// SessionState pointers — AND re-pushed the parent, so prevSummary
+	// compares fresh-vs-fresh and the gate skips the duplicate push. The
+	// skip path therefore depends on that child-broadcast parent refresh
+	// staying in place (locked by the NoRedundantParentBroadcast storm-
+	// guard test). With a deep-copy repo the gate would instead compare
+	// against the persisted summary and fire on staleness — correct in
+	// both worlds.
 	prevSummary := parent.Subagents
 	d.refreshSubagentSummary(parent)
 	if !parent.Subagents.Equal(prevSummary) {
