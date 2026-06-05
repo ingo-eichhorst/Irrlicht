@@ -1,0 +1,106 @@
+{
+  "scenario_id": "model-context-display",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "model-context-display",
+      "agent": "pi",
+      "assessed_at": "2026-06-05T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Primitive\n\nFirst-contact model + context visibility: after ONE trivial turn the dashboard must show WHICH model the pi session runs (metrics.model_name) and HOW FULL its context is (metrics.context_utilization_percentage / metrics.context_window). These are the two metrics a user checks first; this cell forces the pi column to confront them at first contact rather than deferring to section 5.\n\n## Why early placement (#599)\n\nkiro-cli was onboarded with BOTH model and context invisible (sidecar-only data the daemon could not see from the transcript), and the gap only surfaced when section 5 (token/model rows) was assessed — far too late. This cell is deliberately placed at 1.8 so every new adapter column gets a model/context visibility check at first contact. pi PASSES this check natively (transcript-borne model + usage), which is exactly why it is a good reference cell: it shows the green baseline the kiro gap was measured against.\n\n## agent_supports — yes\n\npi boots on a concrete model (recorded boot default: gpt-5.5) and writes both the model name and a per-turn usage object into its JSONL rollout on every assistant message. There is no way to run a turn without a model or without usage, so a single trivial turn (\"What is 6 times 7?\") exercises the whole scenario — model_name and token counts are present from turn 1.\n\n## daemon_capability — full\n\nThree daemon facts, all transcript-borne (no sidecar needed):\n\n1. model_name: the pi parser pulls message.model on every assistant event (parser.go L113-115) through tailer.NormalizeModelName into ev.ModelName, which applyModelMetadata writes to SessionMetrics.ModelName (tailer_metrics.go L105-111). model_change events also carry it at modelId (parser.go L40-42). So model_name is non-empty and not 'unknown' from the first turn_done.\n\n2. context_window + context_utilization_percentage: the pi parser extracts message.usage via tailer.ExtractUsage (parser.go L116-118), which sums input+output+cacheRead+cacheWrite (or honors a totalTokens field) into Tokens.Total. applyTokenSnapshot sets SessionMetrics.TotalTokens > 0. computeContextUtilization → ComputeContextUtilization (tailer_metrics.go L447-478) then needs a context window: with TotalTokens > 0 AND ModelName != '' it resolves the window via capacityMgr.GetModelCapacity(modelName).ContextWindow (the LiteLLM remote table), computes utilization = TotalTokens / window * 100, and clears the unknown flag. pi emits no [1m] suffix or ContextWindow override, so the window comes entirely from the capacity table keyed on the boot model.\n\nAll three acceptance metrics (model_name, context_window > 0, context_utilization_percentage > 0) are populated by a default basic pi turn — provided the boot model resolves in the capacity table (see caveat). Lifecycle topology ready→working→ready is the standard pi basic-turn arc.\n\n## driver_capability — ready\n\nStructurally identical to pi/basic-turn and pi/model-identification: one send + wait_turn + trailing sleep in the interactive tmux REPL (drive-pi-interactive.sh). Headless pi --print exits too fast and drifts (concern C6); the interactive driver keeps the rollout alive so the daemon sees one working→ready arc and a single process_exited at teardown. No new driver primitive is needed.\n\n## Observability caveat — where the assertion lives\n\nThe expected.jsonl phase DSL (validate Phase struct: phase / expected_state / kind / max_delay_ms / ...) operates on the events.jsonl lifecycle stream, which carries NO model_name / context fields — so the metric assertions are NOT phase-expressible. They are covered at metrics level: model_name in the .replay.json.golden summary plus the pi parser unit tests; context_window / context_utilization are tailer-level (ComputeContextUtilization unit-tested). expected.jsonl therefore asserts only the basic-turn lifecycle skeleton (born ready → working → ready, no waiting, one process_exited).\n\n## Conclusion\n\napplicable: yes. A thin first-contact cell — the basic-turn arc plus the (metrics-level) assertion that model_name, context_window, and a non-zero context_utilization_percentage were derived after the first turn. PENDING-RECORD: recording is a #599 follow-up sweep; this is the assessment only.",
+      "caveats": [
+        "context_utilization_percentage > 0 and context_window > 0 depend on capacityMgr.GetModelCapacity(boot_model).ContextWindow being non-zero. pi's boot model (gpt-5.5) is not in core/pkg/capacity/aliases.go, so the window is resolved by direct key match against the LiteLLM remote table (model_prices_and_context_window.json). If LiteLLM has not yet shipped a gpt-5.5 key and no alias maps it, GetModelCapacity returns a zero ContextWindow → context_window=0, utilization=0, ContextWindowUnknown=true, and the >0 assertions FAIL even though model_name is fine. The recording sweep MUST verify the boot model resolves to a non-zero window (and add an alias if not). This is the single risk dropping confidence to 0.85.",
+        "model_name is unconditional (parser pulls it from message.model from turn 1) — only the context-utilization half carries the capacity-table dependency above.",
+        "The concrete model_name is environment-dependent (pi's boot default; recorded as gpt-5.5). Per issue #440 the assertion is that a model_name is PRESENT (non-empty, not 'unknown'), not a hardcoded value — a routing alias counts when that is what the agent itself displays.",
+        "ContextWindow may briefly read 0 between session detection and the first assistant event; assert model/context only AFTER wait_turn, not at presession_created.",
+        "The model_name / context_window / context_utilization claims are not phase-expressible in the events.jsonl DSL; they are covered by parser + tailer (ComputeContextUtilization) unit tests and the replay golden, not by expected.jsonl phases."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/pi/parser.go L40-42 / L113-118",
+          "note": "model_change.modelId and assistant message.model → ev.ModelName via NormalizeModelName; message.usage → ev.Tokens via tailer.ExtractUsage (Tokens.Total)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer_metrics.go L105-115 / L119-132",
+          "note": "applyModelMetadata sets SessionMetrics.ModelName; applyTokenSnapshot sets SessionMetrics.TotalTokens (>0 from turn 1)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer_metrics.go L447-493",
+          "note": "ComputeContextUtilization: with TotalTokens>0 + ModelName!='' resolves window via capacityMgr.GetModelCapacity(modelName).ContextWindow (or override), computes utilization%, clears the unknown flag; returns unknown=true when the window is 0."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/capacity/capacity.go L98-115",
+          "note": "GetModelCapacity returns a zero ModelCapacity (ContextWindow=0) for any model absent from the LiteLLM cache — the dependency that gates the context-utilization half of this cell."
+        },
+        {
+          "kind": "issue",
+          "ref": "ingo-eichhorst/Irrlicht#599",
+          "note": "kiro-cli onboarded with model+context invisible (sidecar-only); this early cell forces every adapter to confront model/context visibility at first contact. pi is the green-baseline reference."
+        },
+        {
+          "kind": "issue",
+          "ref": "ingo-eichhorst/Irrlicht#440",
+          "note": "replay-summary model_name is environment-dependent — assert presence (non-empty, not 'unknown'), not a hardcoded string."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "pi CLI on PATH and authenticated (pi runs against its configured boot model out-of-band)",
+        "tmux available — the interactive driver runs pi in a tmux REPL so it can send one prompt to a long-lived session and tear it down cleanly (headless pi --print exits too fast and drifts, concern C6)",
+        "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+        "The daemon's capacity manager has a populated LiteLLM cache so GetModelCapacity resolves the boot model to a non-zero ContextWindow; without it context_window/utilization stay 0 (see assessment caveat)."
+      ],
+      "setup": [
+        "The interactive driver (drive-pi-interactive.sh) launches pi in a fresh per-run cwd inside a tmux session, waits for the REPL prompt, then sends the single trivial prompt",
+        "pi writes one JSONL rollout file per session under ~/.pi/agent/sessions/<cwd-slug>/ on launch (FilesUnderRoot, non-lazy); the driver resolves that file and extracts the UUID from line 1",
+        "No special model or context flag — pi boots on its configured model and writes that model + a usage object into each assistant message from turn 1; the scenario is about the daemon deriving model_name + context utilization from that, not about which model produced the tokens",
+        "The send bumps the expected-turn counter; wait_turn blocks until the rollout shows a completed assistant turn, so the trailing sleep never races a still-running turn",
+        "model_name / context_window / context_utilization are checked AFTER turn_end — ContextWindow may briefly read 0 between session detection and the first assistant event (per assessment caveat)",
+        "After wait_turn + trailing sleep the driver kills the tmux session once — pi exits and the daemon emits a single process_exited for the rollout session"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "What is 6 times 7? Reply with just the number."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        }
+      ],
+      "verify": [
+        "events.jsonl contains a transcript_new for the rollout session born ready within ~2s of REPL launch (a transient proc-<PID> pre-session may also appear; the turn and pid_discovered land on the UUID-keyed rollout session)",
+        "events.jsonl contains a pid_discovered event bound to the rollout session_id",
+        "events.jsonl shows one working→ready arc on the rollout session_id (the single trivial turn)",
+        "AFTER the first turn_done: metrics.model_name is non-empty and not 'unknown' (the pi parser pulled it from message.model; concrete value is env-dependent per #440)",
+        "AFTER the first turn: metrics.context_window > 0 (resolved via GetModelCapacity on the boot model — verify the boot model actually resolves in the capacity table; add an alias if not)",
+        "AFTER the first turn: metrics.context_utilization_percentage > 0 (TotalTokens / context_window * 100)",
+        "the rollout session's final live state is ready before the driver tears the REPL down",
+        "events.jsonl contains exactly one process_exited on the rollout session at REPL teardown",
+        "no state_transition to waiting appears for the rollout session at any point"
+      ],
+      "notes": "Thin first-contact cell: structurally identical to pi/basic-turn and pi/model-identification (one send + wait_turn + trailing sleep). The extra intent over basic-turn is asserting all THREE first-contact metrics after turn 1: model_name (message.model, parser.go L113), context_window (GetModelCapacity on the boot model), and context_utilization_percentage (TotalTokens/window). WHY interactive (not headless pi --print): concern C6 — headless single-shot exits too fast and drifts; drive-pi-interactive.sh keeps the rollout REPL alive via send+wait_turn and kills the tmux session once at the end. The metric assertions are NOT expressible in the events.jsonl phase DSL (no model/context fields), so expected.jsonl covers only the basic-turn lifecycle skeleton and the metric presence is asserted at the metrics tier (replay golden summary.model_name + parser/tailer unit tests). KEY RISK for the record sweep: context_window>0 hinges on the boot model resolving in the LiteLLM capacity table — if it returns 0, context_utilization stays 0 and the cell fails the >0 acceptance even though model_name passes; resolve by adding an alias. What differs between runs: concrete model_name (boot default, env-dependent per #440), token counts, rollout UUID/PID/timestamps. What must NOT differ: one working→ready arc on one rollout session, a non-empty model_name, a non-zero context_window + context_utilization_percentage, and a single process_exited at teardown. PENDING-RECORD: recording is the #599 follow-up sweep; record_blocked is NOT set (this is recordable, just not yet recorded).",
+      "settings": {},
+      "timeout_seconds": 180
+    }
+  }
+}

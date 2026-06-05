@@ -18,9 +18,18 @@ import (
 // carry toolUse blocks, and the FINAL assistant message of a turn is
 // text-only — so a text-only AssistantMessage maps to turn_done (verified
 // against live 2.5.1 sessions, .build/refresh/kiro-cli-smoke/FINDINGS.md).
-// The JSONL carries no model/token/cost fields; those live in the <uuid>.json
-// metadata sidecar, which this parser does not read.
-type Parser struct{}
+// The JSONL carries no model/token/cost fields; model + context utilization
+// live in the <uuid>.json metadata sidecar, which the parser reads once per
+// turn_done via the path injected through tailer.TranscriptPathAware (#599).
+type Parser struct {
+	// path is the transcript being parsed, injected by the tailer at
+	// construction. Empty when the runtime predates the injection (or in
+	// path-less tests) — sidecar enrichment is then skipped.
+	path string
+}
+
+// SetTranscriptPath implements tailer.TranscriptPathAware.
+func (p *Parser) SetTranscriptPath(path string) { p.path = path }
 
 // ParseLine parses a Kiro CLI JSONL line into a normalized ParsedEvent.
 func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
@@ -76,6 +85,7 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 		} else {
 			// Text-only assistant message = end of the user turn.
 			ev.EventType = "turn_done"
+			p.applySidecarMetrics(ev)
 		}
 		if runes := []rune(lastText); len(runes) > 200 {
 			lastText = string(runes[:200])
@@ -121,6 +131,34 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 	}
 
 	return ev
+}
+
+// applySidecarMetrics fills model and context-utilization metadata from the
+// <uuid>.json sidecar — the JSONL itself carries none (#599). Reading once
+// per turn_done bounds the cost at one sidecar scan per completed turn. If
+// kiro flushes the sidecar after the final AssistantMessage, the values lag
+// one turn and self-correct on the next.
+func (p *Parser) applySidecarMetrics(ev *tailer.ParsedEvent) {
+	if p.path == "" {
+		return
+	}
+	state := readSidecarModelState(p.path)
+	if state == nil || state.ModelInfo.ModelID == "" {
+		return
+	}
+	// "auto" (no pinned model) passes through NormalizeModelName unchanged —
+	// matching what kiro's own TUI footer shows.
+	ev.ModelName = tailer.NormalizeModelName(state.ModelInfo.ModelID)
+	if w := state.ModelInfo.ContextWindowTokens; w > 0 {
+		ev.ContextWindow = w
+		if pct := state.ContextUsagePercentage; pct > 0 {
+			// The sidecar reports context fill as a PERCENTAGE (raw
+			// input/output_token_count are zero in kiro 2.5/2.6). Derive the
+			// token total so ComputeContextUtilization (total/window)
+			// reproduces kiro's own number exactly.
+			ev.Tokens = &tailer.TokenSnapshot{Total: int64(pct / 100 * float64(w))}
+		}
+	}
 }
 
 // parseKiroTimestamp reads data.meta.timestamp (epoch seconds — present on

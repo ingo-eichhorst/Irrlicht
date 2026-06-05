@@ -173,6 +173,55 @@ func TestParser_AssistantTextTruncated(t *testing.T) {
 	}
 }
 
+// With the transcript path injected (tailer.TranscriptPathAware), turn_done
+// picks up model + context utilization from the <uuid>.json sidecar (#599).
+func TestParser_TurnDone_SidecarMetrics(t *testing.T) {
+	transcriptPath := writeSidecar(t, liveSidecar)
+	p := &Parser{}
+	p.SetTranscriptPath(transcriptPath)
+	ev := p.ParseLine(line(t, `{"version":"v1","kind":"AssistantMessage","data":{"content":[{"kind":"text","data":"done."}]}}`))
+	if ev.EventType != "turn_done" {
+		t.Fatalf("EventType = %q, want turn_done", ev.EventType)
+	}
+	if ev.ModelName != "auto" {
+		t.Errorf("ModelName = %q, want auto", ev.ModelName)
+	}
+	if ev.ContextWindow != 200000 {
+		t.Errorf("ContextWindow = %d, want 200000", ev.ContextWindow)
+	}
+	// 1.8640001% of 200000 — derived total so ComputeContextUtilization
+	// (total/window) reproduces the sidecar's own percentage.
+	if ev.Tokens == nil || ev.Tokens.Total != 3728 {
+		t.Errorf("Tokens = %+v, want Total 3728", ev.Tokens)
+	}
+}
+
+// Mid-turn AssistantMessages (toolUse present) must NOT pay the sidecar read.
+func TestParser_MidTurn_NoSidecarMetrics(t *testing.T) {
+	transcriptPath := writeSidecar(t, liveSidecar)
+	p := &Parser{}
+	p.SetTranscriptPath(transcriptPath)
+	ev := p.ParseLine(line(t, `{"version":"v1","kind":"AssistantMessage","data":{"content":[{"kind":"toolUse","data":{"toolUseId":"t1","name":"write","input":{}}}]}}`))
+	if ev.EventType != "assistant" {
+		t.Fatalf("EventType = %q, want assistant", ev.EventType)
+	}
+	if ev.ModelName != "" || ev.Tokens != nil {
+		t.Errorf("mid-turn event carries sidecar metrics: model=%q tokens=%+v", ev.ModelName, ev.Tokens)
+	}
+}
+
+// Without an injected path (path-less construction), behavior is unchanged.
+func TestParser_TurnDone_NoPathNoMetrics(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(line(t, `{"version":"v1","kind":"AssistantMessage","data":{"content":[{"kind":"text","data":"done."}]}}`))
+	if ev.EventType != "turn_done" {
+		t.Fatalf("EventType = %q, want turn_done", ev.EventType)
+	}
+	if ev.ModelName != "" || ev.ContextWindow != 0 || ev.Tokens != nil {
+		t.Errorf("path-less parser emitted metrics: model=%q window=%d tokens=%+v", ev.ModelName, ev.ContextWindow, ev.Tokens)
+	}
+}
+
 // TestParser_FullTurnSequence walks the exact event sequence captured live
 // (Prompt → AM(toolUse) → ToolResults → AM(toolUse) → ToolResults →
 // AM(text-only)) and asserts the state-relevant EventType progression.

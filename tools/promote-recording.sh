@@ -100,8 +100,10 @@ fi
 mkdir -p "$REC_DIR"
 
 # 2. Copy the staged recording into the new folder. transcript.md covers
-#    markdown-transcript adapters (aider); -f guard no-ops otherwise.
-for f in events.jsonl transcript.jsonl transcript.md; do
+#    markdown-transcript adapters (aider); transcript.json is the metadata
+#    sidecar of sidecar-reading adapters (kiro-cli, #599) which replay stages
+#    next to its scratch copy; -f guards no-op otherwise.
+for f in events.jsonl transcript.jsonl transcript.md transcript.json; do
   if [[ -f "$STAGED_DIR/$f" ]]; then
     cp "$STAGED_DIR/$f" "$REC_DIR/$f"
   fi

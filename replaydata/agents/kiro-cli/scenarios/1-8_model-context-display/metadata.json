@@ -1,0 +1,96 @@
+{
+  "scenario_id": "model-context-display",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "confidence": 0.9,
+    "notes": "agent_supports: yes\ndaemon_capability: full (as of #599 sidecar reader); driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "model-context-display",
+      "agent": "kiro-cli",
+      "assessed_at": "2026-06-05T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.9,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\nThis is the MOTIVATING cell for the scenario (#599): kiro-cli onboarded its whole column (#590) with model and context utilization invisible — both live only in the <uuid>.json metadata sidecar, never in the tailed JSONL — and nothing before section 5 forced the question, so the gap first surfaced as a user bug report (live session 0217167a-2112-48b1-a745-83232b028211 showing neither). The 1.8 row exists so every future column confronts model/context visibility at first contact.\n\n## agent_supports: yes\n\nkiro's own TUI footer renders exactly these two metrics live (`Kiro · auto · ◔ 1%` — model label + context-fill gauge), and the sidecar persists them per completed turn: `session_state.rts_model_state = {model_info: {model_id, context_window_tokens}, context_usage_percentage}` (live 2.6.0: model_id=\"auto\", context_window_tokens=200000, context_usage_percentage=1.86). \"auto\" is kiro's unpinned routing label — it is what the agent itself displays, which the scenario acceptance explicitly admits.\n\n## daemon_capability: full (as of #599; was incapable in the v1 adapter)\n\nThe #599 sidecar reader closes the gap end to end: the tailer injects the transcript path via tailer.TranscriptPathAware at construction; on every text-only AssistantMessage (turn_done) the parser token-walks the sidecar to session_state.rts_model_state — skipping the potentially-huge conversation_metadata — and sets ModelName (\"auto\" passes NormalizeModelName unchanged), ContextWindow (from context_window_tokens, so capacity-table lookup is never needed), and a derived Tokens.Total = pct/100 × window so ComputeContextUtilization (total/window) reproduces kiro's own percentage exactly (raw input/output_token_count are ZERO in the sidecar — credits, not tokens; token ACCOUNTING remains frozen at 5.1).\n\nLive-verified 2026-06-05 (kiro-cli 2.6.0, dev daemon 0.4.8+6d2b11a.dirty): websocket push for the probe session carried metrics {model_name: \"auto\", context_window: 200000, context_utilization_percentage: 1.24, pressure_level: \"safe\"} — and the percentage matched the CURRENT turn's sidecar value, i.e. kiro flushes the sidecar before/with the JSONL turn flush (no one-turn staleness observed).\n\n## driver_capability: ready\n\nOne trivial prompt + wait_turn — both long-ported primitives (DRIVE_ELICITS includes send and wait_turn). Default launch (`kiro-cli chat --trust-all-tools`), no model pinning (the DEFAULT-visibility check is the point; the pinned-model variant is 5.2).\n\n## Recording note\n\nReplay reproduction requires the metadata sidecar staged NEXT TO the fixture transcript: the replay engine copies <base>.json to <tmpdir>/transcript.json (engine.go, #599), so the recording curation must capture the live <uuid>.json alongside transcript.jsonl as transcript.json. Without it, replay runs sidecar-less and the model/context assertions fail.",
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/parser.go",
+          "note": "applySidecarMetrics: on turn_done sets ModelName/ContextWindow from rts_model_state and derives Tokens.Total = pct/100 × window so ComputeContextUtilization reproduces kiro's own percentage; path injected via SetTranscriptPath (tailer.TranscriptPathAware)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/sidecar_metrics.go",
+          "note": "readSidecarModelState: token-walks <base>.json → session_state → rts_model_state, decoding only that subobject and skipping the potentially-huge conversation_metadata (transcript.SkipJSONValue)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/parser.go",
+          "note": "TranscriptPathAware optional parser interface; NewTranscriptTailer injects the path at construction (both the live cache path and the replay engine construct through it)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/replayengine/engine.go",
+          "note": "newReplayer stages the source transcript's <base>.json sidecar as <tmpdir>/transcript.json so sidecar-reading parsers see the same fields during replay as live."
+        },
+        {
+          "kind": "live",
+          "ref": "kiro-cli 2.6.0 e2e probe 2026-06-05 (#599)",
+          "note": "Websocket push frame for probe session a43c466a: metrics {model_name: auto, context_window: 200000, context_utilization_percentage: 1.24, pressure_level: safe}; percentage matched the current turn's sidecar (no staleness)."
+        },
+        {
+          "kind": "live",
+          "ref": "~/.kiro/sessions/cli/0217167a-2112-48b1-a745-83232b028211.json",
+          "note": "The user-reported invisible session (#599): session_state.rts_model_state = {model_info: {model_id: auto, context_window_tokens: 200000}, context_usage_percentage: 1.86} — the data was on disk all along, unread by the v1 adapter."
+        }
+      ],
+      "caveats": [
+        "model_name is \"auto\" unless the user pins a model — that is kiro's own routing label (the TUI footer shows the same), and the scenario acceptance explicitly admits an agent-displayed routing alias. The pinned-model variant is 5.2.",
+        "Context utilization is DERIVED from the sidecar's context_usage_percentage (Tokens.Total = pct/100 × window): the sidecar's raw input/output_token_count are zero (credits-only metering), so token ACCOUNTING (5.1) remains frozen — this cell asserts display, not accounting.",
+        "capacity has no pricing for \"auto\" → cost stays 0 for unpinned sessions (not asserted by this scenario).",
+        "Replay needs the sidecar captured as transcript.json next to transcript.jsonl in the fixture (engine stages <base>.json); recordings made before #599 lack it and would replay sidecar-less."
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "kiro-cli on PATH and logged in (subscription login covers everything; no API key needed)",
+        "irrlichd is recording (isolated IRRLICHT_ONBOARD_HOME coexist mode, port 7838)",
+        "fresh cwd so the cwd-based PID match is unambiguous"
+      ],
+      "setup": [
+        "Driver launches `kiro-cli chat --trust-all-tools` in a fresh cwd (default launch — NO model pinning; default visibility is the point of this cell)",
+        "Assertions on model_name/context_window/context_utilization_percentage are checked AFTER the first turn_done (the sidecar read fires on the text-only AssistantMessage)",
+        "Curation must copy the live <uuid>.json sidecar into the cell as transcript.json next to transcript.jsonl so replay reproduces the metrics"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "What is 6 times 7? Answer with just the number."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        }
+      ],
+      "timeout_seconds": 120,
+      "settings": {},
+      "verify": [
+        "after the first turn_done, the session push carries metrics.model_name = \"auto\" (non-empty, not unknown)",
+        "metrics.context_window = 200000 (from the sidecar rts_model_state, no capacity lookup)",
+        "metrics.context_utilization_percentage > 0 and equal to the sidecar context_usage_percentage",
+        "final session state is ready; topology ready → working → ready",
+        "staged fixture contains transcript.json (the metadata sidecar) next to transcript.jsonl"
+      ]
+    }
+  }
+}

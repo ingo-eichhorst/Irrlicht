@@ -334,6 +334,14 @@ type ParserStateProvider interface {
 	SetParserLedger(ParserLedger)
 }
 
+// TranscriptPathAware is an optional interface for parsers that need to know
+// which transcript file they are parsing — e.g. to read a metadata sidecar
+// living next to it (Kiro CLI's <uuid>.json, issue #599). The tailer injects
+// the path once at construction; ParseLine itself stays path-free.
+type TranscriptPathAware interface {
+	SetTranscriptPath(path string)
+}
+
 // LedgerState is the durable portion of a tailer's accumulation state, written
 // to disk after every TailAndProcess pass so that daemon restarts don't reset
 // cumulative cost to zero for in-flight sessions.

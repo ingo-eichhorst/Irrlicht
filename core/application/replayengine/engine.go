@@ -21,6 +21,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"irrlicht/core/application/services"
@@ -118,7 +119,7 @@ func ReplayTranscript(src string, opts Options) (*Result, error) {
 		return nil, nil
 	}
 
-	r, cleanup, err := newReplayer(opts, events)
+	r, cleanup, err := newReplayer(src, opts, events)
 	if err != nil {
 		return nil, err
 	}
@@ -148,7 +149,7 @@ type replayer struct {
 	emitTimeline bool
 }
 
-func newReplayer(opts Options, events []rawEvent) (*replayer, func(), error) {
+func newReplayer(src string, opts Options, events []rawEvent) (*replayer, func(), error) {
 	tmpDir, err := os.MkdirTemp("", "irrlicht-replay-")
 	if err != nil {
 		return nil, nil, err
@@ -162,6 +163,18 @@ func newReplayer(opts Options, events []rawEvent) (*replayer, func(), error) {
 	cleanup := func() {
 		tmp.Close()
 		os.RemoveAll(tmpDir)
+	}
+
+	// Stage the transcript's metadata sidecar (<base>.json) next to the temp
+	// copy when one exists, so sidecar-reading parsers (Kiro CLI, #599) see
+	// the same fields during replay as they do live.
+	if strings.HasSuffix(src, ".jsonl") {
+		sidecarSrc := strings.TrimSuffix(src, ".jsonl") + ".json"
+		if body, err := os.ReadFile(sidecarSrc); err == nil {
+			// Best-effort: a failed write just means replay runs sidecar-less,
+			// exactly like a live session whose sidecar is missing.
+			_ = os.WriteFile(filepath.Join(tmpDir, "transcript.json"), body, 0o644)
+		}
 	}
 
 	t := tailer.NewTranscriptTailer(tmpPath, opts.Parser, opts.Adapter)

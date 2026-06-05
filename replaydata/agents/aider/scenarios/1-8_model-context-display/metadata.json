@@ -1,0 +1,111 @@
+{
+  "scenario_id": "model-context-display",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes\ndaemon_capability: full\ndriver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "model-context-display",
+      "agent": "aider",
+      "assessed_at": "2026-06-05T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Primitive\n\nFirst-contact model + context visibility: after ONE trivial turn the dashboard shows WHICH model the session runs (`metrics.model_name` non-empty and != 'unknown') and HOW FULL its context is (`metrics.context_utilization_percentage` > 0, `metrics.context_window` > 0), riding a plain basic-turn arc (ready -> working -> ready, final ready). This is the union of two primitives aider already carries individually — model-identification (5.2, daemon_capability: full) and the context-window half of the capacity pipeline — collapsed onto the FIRST turn. The capability key is `multi_model_orchestration` in `replaydata/agents/aider/capabilities.json` (true): aider's first-class model selection is the surface that puts the launch model into the transcript from turn one.\n\n## Why early placement (#599)\n\nThis cell was added early (section 1, id 1.8) deliberately. kiro-cli was onboarded with BOTH model and context invisible — kiro keeps that data in a sidecar the file-watching transport never reads — and the gap only surfaced down in section 5 (model-identification / token-accounting), after the column already looked healthy. Placing a model+context visibility check at first contact forces every NEW adapter column to confront these two metrics immediately, instead of discovering a sidecar-only / no-trace transport gap three sections later. aider is the CONTRAST case to kiro: it passes this early check cleanly because the model name lands in the watched markdown transcript and the context window resolves from the capacity manager.\n\n## Reasoning\n\n### agent_supports: yes\n\nAider is launched against a specific model — here the `model: gpt-5-nano` line in `~/.aider.conf.yml`, no `--model` flag needed (https://aider.chat/docs/llms.html). On the first assistant block of every session aider writes a `> Model: <name> with <edit format>` blockquote into `.aider.chat.history.md`, and after each model call a `> Tokens: <sent> sent, <received> received.` line. Both are confirmed across irrlicht's own gpt-5-nano recordings — e.g. `replaydata/agents/aider/scenarios/2-2_auto-executed-tool-call/recordings/.../transcript.md:6` (`> Model: gpt-5-nano with diff edit format`) and `:20` (`> Tokens: 2.5k sent, 16 received. Cost: $0.00013 …`). So both the model name and the per-turn token total are recorded in the watched transcript from the very first turn — the agent surfaces everything this cell asserts.\n\n### daemon_capability: full\n\nThe three spec signals all resolve through the aider transport (`FilesUnderCWD{.aider.chat.history.md, RawLineParser}`, `core/adapters/inbound/agents/aider/agent.go`) as it exists today:\n\n- **model_name (non-empty, != 'unknown').** The parser's `modelRE` (`parser.go:66`, `^>\\s*(?:Main\\s+)?[Mm]odel:\\s*(\\S+)`) matches `> Model: gpt-5-nano`, captures `gpt-5-nano`, runs it through `tailer.NormalizeModelName` (a passthrough for this name — no claude/date/alias rule applies, `parser.go:394`), sets `p.model`, and emits a Skip event carrying `ModelName` (`parser.go:109-111`). `applyModelMetadata` (`tailer_metrics.go:110`) stamps it onto `SessionMetrics.ModelName` from the first assistant block — never 'unknown' for a model aider names.\n- **context_window (> 0) and context_utilization_percentage (> 0).** Aider's markdown carries NO context-window field, so the parser never sets a `ContextWindow` override; the value is derived entirely from the capacity manager: `ComputeContextUtilization` falls through to `capacityMgr.GetModelCapacity(modelName).ContextWindow` (`tailer_metrics.go:458-459`). For `gpt-5-nano` the LiteLLM table carries a real entry (context window 272000 — confirmed in `model_prices_and_context_window.json`), so `ContextWindow` resolves to 272000 (> 0) and, because the `> Tokens:` line gives a non-zero TotalTokens, `utilizationPercentage = totalTokens / 272000 * 100` is strictly > 0 (`tailer_metrics.go:466`). All three acceptance metrics fall out for the recorded default model — hence `full` (not `bug`: nothing mis-handled; not `incapable`: every signal has a trace in the watched Source). The basic-turn topology (ready -> working -> ready, final ready) is the same single no-op arc 5.2 rides.\n\n### driver_capability: ready\n\nThe recipe needs only `send` + `wait_turn` + `sleep`, all implemented by the interactive aider driver (`scripts/drive-aider-interactive.sh`: cases `send|slash`, `wait_turn`, `sleep`). No gapped primitive (restart / reset_session / resume / keys / sigkill) is required, so this cell is recordable as-is — `ready`.\n\n## The capacity-table dependency (why 0.8, not 0.85)\n\nThe context_window / context_utilization assertions are contingent on the launch model resolving in the LiteLLM capacity table. The recorded default (`gpt-5-nano`, bare name) DOES — but the fallback is a HARD 'unknown', not a sentinel: when `GetModelCapacity` returns a zero ContextWindow, `ComputeContextUtilization` returns `0, 0, \"unknown\", true` (`tailer_metrics.go:462-463`) — i.e. `context_window = 0` and `ContextWindowUnknown = true`. There is NO 32k sentinel fallback in the current source. So for a launch model ABSENT from LiteLLM (e.g. the local/exotic `openai/gemma-*` slugs aider's older regression fixtures use, which also carry an `openai/` prefix that misses the table) the model_name acceptance still holds but BOTH context assertions FAIL (context_window = 0, utilization = 0). This cell's PASS is therefore specific to a LiteLLM-known launch model; the recipe pins `gpt-5-nano` (the `~/.aider.conf.yml` default) precisely so all three metrics are satisfied. Held at 0.8 because (a) the context half is capacity-table-contingent and (b) no end-to-end recording of this specific early cell exists yet — that is the #599 follow-up record sweep.\n\n## Routing\n\nyes / full / ready, assessed-not-recorded -> disposition `assessed-not-record` (PENDING-RECORD). NOT record_blocked (the axes say record-now and nothing orthogonal blocks it); recording is deferred to the #599 follow-up sweep, not blocked.",
+      "caveats": [
+        "context_window / context_utilization are capacity-table-contingent: aider's transcript carries no context-window field, so both come solely from capacityMgr.GetModelCapacity(modelName). For gpt-5-nano (the ~/.aider.conf.yml default, bare name) LiteLLM resolves a 272000 window and all three metrics pass. For a model ABSENT from LiteLLM, ComputeContextUtilization returns context_window=0 / utilization=0 / ContextWindowUnknown=true (tailer_metrics.go:462-463) — there is NO 32k sentinel — so the two context assertions would FAIL while model_name stays correct. Pin a LiteLLM-known launch model.",
+        "Older aider regression fixtures use openai/-prefixed local gemma slugs (e.g. `> Model: openai/google/gemma-4-26b-a4b`); NormalizeModelName does not strip the openai/ prefix, so those names miss the LiteLLM table and would fail the context half. The 2026-05-25 gpt-5-nano column writes the bare `> Model: gpt-5-nano` that resolves — this is why the recipe pins the conf default, not a gemma model.",
+        "End-of-turn is synthesized by IdleFlush (~1.5s quiet, clamped to the SessionDetector ~5s working-refresh poll), never marked in-band; the working->ready flip trails file quiet and context metrics may briefly read 0 between session detection and the first assistant block. Assert model_name / context_window / context_utilization only AFTER turn_done.",
+        "aider's `> Weak model:` line is intentionally NOT matched by modelRE (only Model:/Main model: drive ModelName) — correct here, since the trivial turn runs on the MAIN model aider writes as `> Model:` on the first assistant block.",
+        "The numeric metrics (context_window, context_utilization_percentage) are not directly expressible in the expected.jsonl phase DSL; the recording asserts the basic-turn lifecycle arc, with model_name carried at summary.model_name in the .replay.json.golden and the context values covered by the capacity-pipeline + parser unit tests (parser_test.go, tailer_metrics ComputeContextUtilization)."
+      ],
+      "sources": [
+        {
+          "kind": "url",
+          "ref": "https://aider.chat/docs/llms.html",
+          "note": "official model-selection docs: aider launches against a specific model via --model / config; the chosen model is the Main Model recorded as `> Model:` on the first assistant block"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/aider/parser.go",
+          "note": "modelRE (L66) matches `> Model: <name>` -> NormalizeModelName -> Skip event with ModelName (L109-111); tokensRE (L58) -> closeModelCall emits per-turn TokenSnapshot; parser never sets ContextWindow (no override) — context window is capacity-derived"
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/parser.go",
+          "note": "NormalizeModelName (L394) is a passthrough for `gpt-5-nano` (no claude/date/alias rule fires); does NOT strip an `openai/` prefix — so the bare conf-default name resolves in LiteLLM while older openai/gemma slugs do not"
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer_metrics.go",
+          "note": "ComputeContextUtilization (L447): when no override, context window = capacityMgr.GetModelCapacity(modelName).ContextWindow (L458-459); utilization = totalTokens/window*100 (L466). When window resolves to 0 it returns 0,0,unknown,true (L462-463) — a HARD unknown, NOT a 32k sentinel"
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/capacity/capacity.go",
+          "note": "GetModelCapacity (L101) applies modelAliases then looks up the LiteLLM table; returns a zero ContextWindow for unknown models. gpt-5-nano IS in the LiteLLM table (context window 272000), so this resolves > 0 for the conf default"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/aider/scenarios/2-2_auto-executed-tool-call/recordings/2026-05-25-17-59-35_irrlichd-0.4.7+fd1343c/transcript.md",
+          "note": "recorded gpt-5-nano column: L6 `> Model: gpt-5-nano with diff edit format` (bare name, resolves in LiteLLM) and L20 `> Tokens: 2.5k sent, 16 received. Cost: $…` — empirical proof both the model line and a non-zero token total land in the watched transcript on the first turn"
+        },
+        {
+          "kind": "file",
+          "ref": ".claude/skills/ir:onboard-agent/scripts/drive-aider-interactive.sh",
+          "note": "interactive driver implements send|slash / wait_turn / sleep — the only step types this recipe needs — grounds driver_capability: ready"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/aider/capabilities.json",
+          "note": "multi_model_orchestration: true (the capability key for first-contact model visibility); headless_mode: true"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "aider CLI on PATH and authenticated via ~/.aider.conf.yml (default model gpt-5-nano + openai-api-key). No --model flag — the conf default drives both the `> Model:` line and the capacity lookup. The launch model MUST be present in the LiteLLM capacity table so context_window resolves > 0; gpt-5-nano is (272000) — do NOT swap in a local/exotic model absent from LiteLLM or the two context assertions fail (assessment caveat 1).",
+        "tmux available — the interactive driver runs aider in a tmux REPL so it can send one prompt to a long-lived session and tear it down cleanly.",
+        "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record."
+      ],
+      "setup": [
+        "The interactive driver (drive-aider-interactive.sh) git-inits a fresh per-run cwd, launches aider against the ~/.aider.conf.yml default model (gpt-5-nano) inside a tmux session, and waits for the REPL prompt.",
+        ".aider.chat.history.md (FilesUnderCWD) materializes lazily once the first user input lands; before that the live REPL is observable as a transient proc-<PID> pre-session born ready (the process scanner). The daemon keys the WHOLE session by proc-<PID> — no separate transcript-UUID rollout session.",
+        "On the first assistant block aider writes `> Model: gpt-5-nano with <edit format>` and a `> Tokens: <sent> sent, <received> received.` close; the parser captures ModelName (Skip event) and a per-turn TokenSnapshot. applyModelMetadata stamps SessionMetrics.ModelName; the token total drives ComputeContextUtilization against the capacity manager.",
+        "context_window is NOT in the transcript — it is derived from capacityMgr.GetModelCapacity('gpt-5-nano').ContextWindow (272000); context_utilization = totalTokens / 272000 * 100 > 0. Assert all three metrics AFTER turn_done (they may briefly read 0 between session detection and the first assistant block).",
+        "After the turn + trailing sleep the driver kills the tmux session once — aider exits and the daemon emits a SINGLE process_exited for the proc-<PID> session."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "What is 6 times 7? Answer in one word, no file edits."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 12
+        }
+      ],
+      "verify": [
+        "events.jsonl shows a proc-<PID> session born ready within ~2s of launch (the lazy transcript has not materialized yet).",
+        "events.jsonl shows ONE ready->working->ready arc on that proc-<PID> session_id (the single trivial turn), with no state_transition to waiting; final state ready before teardown.",
+        "events.jsonl contains a pid_discovered bound to the proc-<PID> session and exactly one process_exited on it at REPL teardown.",
+        "the .replay.json.golden carries a non-empty summary.model_name == 'gpt-5-nano' (NOT 'unknown').",
+        "SessionMetrics after turn_done: ContextWindow == 272000 (> 0), ContextWindowUnknown == false, context_utilization_percentage > 0 (totalTokens / 272000 * 100).",
+        "transcript (.aider.chat.history.md) contains a `> Model: gpt-5-nano` blockquote on the first assistant block and >= 1 `> Tokens:` close."
+      ],
+      "notes": "Single trivial turn in ONE live aider REPL launched against the ~/.aider.conf.yml default model (gpt-5-nano, no --model flag): captures that the dashboard shows BOTH the model (model_name != 'unknown') and a non-zero context utilization at FIRST CONTACT. TEMPLATED FROM aider/5.2 model-identification (same single send + wait_turn + trailing sleep) and extended to also assert the context-window half. RECORDABILITY (no driver_gap): needs only send/wait_turn/sleep — the interactive driver implements all three. WHY gpt-5-nano specifically: it is the conf default AND present in the LiteLLM capacity table (272000 window), so context_window resolves > 0; a local/exotic model absent from LiteLLM (or an openai/-prefixed gemma slug NormalizeModelName won't strip) would pass model_name but FAIL both context assertions — there is NO 32k sentinel fallback, GetModelCapacity-miss returns context_window=0/unknown=true. WHY interactive (not headless `aider --message`): headless aider is single-shot and can exit before the daemon classifies the working->ready settle, truncating turn_done; the interactive driver keeps the REPL alive across the turn then kills the tmux session once -> a SINGLE clean process_exited. AIDER PACING: aider has no in-band turn-end marker — end-of-turn is synthesized by IdleFlush (~1.5s quiet) surfaced behind the SessionDetector ~5s working-refresh poll (~5s effective working->ready latency), and aider's >=12s multi-turn pacing applies; the trailing 12s sleep (>= the ~5s latency with headroom for gpt-5-nano's fast replies) lets the working->ready flip fire AND be observed before daemon shutdown. PROMPT: a pure conversational question (`What is 6 times 7? Answer in one word, no file edits.`) — gpt-5-nano writes `> Model: gpt-5-nano` on the first assistant block regardless of edits, and a non-edit prompt avoids the post-turn `Applied edit` write that re-triggers transcript_activity inside the idle dwell. METRIC ASSERTION IS OUT-OF-BAND: the events.jsonl phase DSL has no model/context fields, so expected.jsonl asserts the basic-turn lifecycle skeleton; model_name is asserted at summary.model_name in the .replay.json.golden and the context values via the capacity-pipeline + parser unit tests. EARLY-PLACEMENT INTENT (#599): this cell exists in section 1 to force every new adapter column to confront model + context visibility at first contact — aider is the CONTRAST to kiro-cli (which onboarded with both invisible because its data is sidecar-only; the gap only surfaced in section 5). RECORDING DEFERRED: PENDING-RECORD — the recording sweep is the #599 follow-up; NOT record_blocked (the axes say record-now and nothing orthogonal blocks it).",
+      "settings": {},
+      "timeout_seconds": 180
+    }
+  }
+}

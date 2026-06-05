@@ -49,16 +49,17 @@ func ExtractCWDFromSidecar(transcriptPath string) string {
 			cwd, _ := valTok.(string)
 			return cwd
 		}
-		if err := skipJSONValue(dec); err != nil {
+		if err := SkipJSONValue(dec); err != nil {
 			return ""
 		}
 	}
 	return ""
 }
 
-// skipJSONValue consumes one complete JSON value (scalar, object, or
-// array) from the decoder.
-func skipJSONValue(dec *json.Decoder) error {
+// SkipJSONValue consumes one complete JSON value (scalar, object, or
+// array) from the decoder. Exported for sidecar token-walkers that live in
+// adapter packages (e.g. kirocli's model-state reader, issue #599).
+func SkipJSONValue(dec *json.Decoder) error {
 	tok, err := dec.Token()
 	if err != nil {
 		return err
