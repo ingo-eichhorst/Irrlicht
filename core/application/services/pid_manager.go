@@ -82,13 +82,16 @@ type PIDManager struct {
 	pendingMu   sync.Mutex
 	pendingPIDs map[string]int
 
-	// assignMu serializes the PID-assignment critical sections that read and
-	// write the repo's shared *SessionState pointers — HandlePIDAssigned's
-	// load-modify-save + same-PID cleanup scan, and claimedPIDs' scan. Without
-	// it, two concurrent discoveries (two same-named agents starting together)
-	// race on state.PID: one writes its session's PID while the other reads it
-	// in a ListAll scan. Never held across detector callbacks (see
-	// HandlePIDAssigned) so it can't invert with the SessionDetector lock.
+	// assignMu serializes every critical section that reads or writes the repo's
+	// shared *SessionState pointers: HandlePIDAssigned's load-modify-save +
+	// same-PID cleanup scan, claimedPIDs' scan, AND the SessionDetector event
+	// loop's own load-modify-save in processActivity (via WithSessionStateLock).
+	// The PID-discovery goroutine spawned by processActivity runs concurrently
+	// with that same processActivity call; without a shared lock, assignPIDLocked
+	// writes state.PID while processActivity writes state.State on the same
+	// pointer (issue #606). Never held across detector callbacks (Watch/delete
+	// run after assignPIDLocked releases it) so it can't invert with any
+	// SessionDetector lock.
 	assignMu sync.Mutex
 
 	// recorder captures lifecycle events for offline replay (optional).
@@ -498,6 +501,19 @@ func (pm *PIDManager) ConsumePendingPID(sessionID string) (int, bool) {
 		delete(pm.pendingPIDs, sessionID)
 	}
 	return pid, ok
+}
+
+// WithSessionStateLock runs fn while holding assignMu, the lock that also
+// guards assignPIDLocked's write to the shared *SessionState. The SessionDetector
+// event loop wraps its own load-modify-save of session state in this so the
+// PID-discovery goroutine it spawns can't write state.PID concurrently with the
+// loop writing state.State on the same pointer (issue #606). fn must not call
+// back into any PIDManager method that takes assignMu (assignPIDLocked,
+// claimedPIDs) — those run only from the spawned goroutine, never inline.
+func (pm *PIDManager) WithSessionStateLock(fn func()) {
+	pm.assignMu.Lock()
+	defer pm.assignMu.Unlock()
+	fn()
 }
 
 // claimedPIDs returns the set of PIDs already assigned to sessions other than

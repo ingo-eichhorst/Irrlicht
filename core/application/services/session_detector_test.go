@@ -889,7 +889,10 @@ func TestSessionDetector_Removed_TransitionsToReady(t *testing.T) {
 		SessionID: "rm1",
 	}
 
-	time.Sleep(50 * time.Millisecond)
+	// Poll for the removal transition instead of a fixed sleep — under
+	// parallel-load scheduling the Run loop may not have processed the event
+	// within a fixed window (issue #606 flaky sibling).
+	waitForSessionState(repo, "rm1", session.StateReady, time.Second)
 	cancel()
 	<-done
 
@@ -926,12 +929,23 @@ func TestSessionDetector_Removed_PrunesMetricsLedger(t *testing.T) {
 
 	tw.ch <- agent.Event{Type: agent.EventRemoved, SessionID: "rm-prune"}
 
-	time.Sleep(50 * time.Millisecond)
+	// Poll for the prune instead of a fixed sleep — under parallel-load
+	// scheduling the Run loop may not have reached PruneMetrics within a fixed
+	// window (issue #606 flaky sibling). PruneEntry runs after the ready Save,
+	// so wait on the prune log directly.
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if len(mm.prunedSnapshot()) >= 1 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 	cancel()
 	<-done
 
-	if len(mm.pruned) != 1 || mm.pruned[0] != transcriptPath {
-		t.Errorf("PruneEntry calls: got %v, want [%q]", mm.pruned, transcriptPath)
+	pruned := mm.prunedSnapshot()
+	if len(pruned) != 1 || pruned[0] != transcriptPath {
+		t.Errorf("PruneEntry calls: got %v, want [%q]", pruned, transcriptPath)
 	}
 }
 
@@ -1644,8 +1658,11 @@ func TestSessionDetector_CWDFallback_DoesNotAssignDuplicatePID(t *testing.T) {
 		CWD:            cwd,
 	}
 
-	// Wait for first session's PID discovery retry goroutine to complete.
-	time.Sleep(200 * time.Millisecond)
+	// Wait for the first session's PID to be assigned before sending the
+	// second — sess-b's discovery must see sess-a's PID already claimed for
+	// the disambiguation under test. Poll instead of a fixed sleep so it's
+	// robust under parallel load (issue #606).
+	waitForPID(repo, "sess-a", time.Second)
 
 	tw.ch <- agent.Event{
 		Type:           agent.EventNewSession,
@@ -1655,8 +1672,10 @@ func TestSessionDetector_CWDFallback_DoesNotAssignDuplicatePID(t *testing.T) {
 		CWD:            cwd,
 	}
 
-	// Wait for second session's PID discovery.
-	time.Sleep(200 * time.Millisecond)
+	// Wait for the second session's PID before inspecting state — the
+	// discovery goroutine writes state.PID on the shared pointer, so reading
+	// it before the write completes both flakes and races (issue #606).
+	waitForPID(repo, "sess-b", time.Second)
 	cancel()
 	<-done
 
@@ -1741,7 +1760,14 @@ func TestSessionDetector_CWDFallback_CleansUpOldSessionOnClear(t *testing.T) {
 		TranscriptPath: "/home/.claude/projects/-Users-test/sess-b.jsonl",
 	}
 
-	time.Sleep(200 * time.Millisecond)
+	// Wait for sess-b's PID assignment before inspecting — the discovery
+	// goroutine writes state.PID on the shared pointer, so a fixed sleep both
+	// flakes and races it under parallel load (issue #606).
+	waitForPID(repo, "sess-b", time.Second)
+	// The same-PID cleanup deletes sess-a in the same discovery goroutine,
+	// right after the PID write — poll for that too so we don't read before
+	// the goroutine finishes.
+	waitForSessionDeleted(repo, "sess-a", time.Second)
 	cancel()
 	<-done
 
@@ -1853,10 +1879,13 @@ func TestSessionDetector_ClearWithStaleMetadata_DeletesOldSessionImmediately(t *
 		TranscriptPath: newTranscript,
 	}
 
-	// 300ms covers the immediate synchronous discovery attempt; retries at
-	// 500ms/1s/2s aren't needed — DiscoverPID must succeed on the first try
-	// once the mtime gate lets it past the stale metadata.
-	time.Sleep(300 * time.Millisecond)
+	// Poll for discovery to complete instead of a fixed sleep — the spawned
+	// discovery goroutine writes state.PID on the shared pointer, so reading
+	// it before the write finishes both flakes and races under parallel load
+	// (issue #606). sess-new's PID write happens first, then the same-PID
+	// cleanup deletes sess-old in the same goroutine.
+	waitForPID(repo, "sess-new", time.Second)
+	waitForSessionDeleted(repo, "sess-old", time.Second)
 	cancel()
 	<-done
 
@@ -2167,7 +2196,15 @@ func TestSessionDetector_OrphanedSubagentsFinishWhenParentTurnDone(t *testing.T)
 		TranscriptPath: parentPath,
 	}
 
-	time.Sleep(50 * time.Millisecond)
+	// Poll for the parent reaching ready instead of a fixed sleep — under
+	// parallel-load scheduling the event loop may not have finished the
+	// processActivity pass within a fixed window, which both flakes the
+	// assertion and races the in-place state mutation (issue #606). The
+	// children are fast-forwarded and saved within that same pass, before the
+	// parent's own ready Save, so this is a sufficient barrier.
+	waitForSessionState(repo, "parent-orphans", session.StateReady, time.Second)
+	cancel()
+	<-done
 
 	parent, _ := repo.Load("parent-orphans")
 	if parent == nil {
@@ -2186,9 +2223,6 @@ func TestSessionDetector_OrphanedSubagentsFinishWhenParentTurnDone(t *testing.T)
 			t.Errorf("child %q state: got %q, want ready", childID, child.State)
 		}
 	}
-
-	cancel()
-	<-done
 }
 
 // TestSessionDetector_BackgroundSubagentsNotFastForwarded captures the
