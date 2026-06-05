@@ -83,11 +83,40 @@ func TestParser_ToolResults_ClosesTool(t *testing.T) {
 	}
 }
 
+// The three ToolResults status shapes below are verbatim lines from a live
+// kiro-cli 2.6.0 probe (#592 finding 3), trimmed to the fields under test.
+// kiro's status field is the tool HARNESS verdict: {success, error} is the
+// complete vocabulary — there is no cancelled/denied status.
+
+// A shell command exiting non-zero is still status:"success" (the exit code
+// is payload data), so it must NOT raise IsError.
+func TestParser_ToolResults_FailedCommandIsNotError(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(line(t, `{"version":"v1","kind":"ToolResults","data":{"content":[{"kind":"toolResult","data":{"toolUseId":"tooluse_bn9siHin4aEo6wnCF1c9te","content":[{"kind":"json","data":{"exit_status":"exit status: 1","stdout":"","stderr":"cat: /nonexistent-file-probe-592: No such file or directory\n"}}],"status":"success"}}]}}`))
+	if ev.IsError {
+		t.Error("IsError = true for a non-zero-exit command recorded as status=success")
+	}
+}
+
+// Tool-input validation failure → status:"error".
 func TestParser_ToolResults_ErrorStatus(t *testing.T) {
 	p := &Parser{}
-	ev := p.ParseLine(line(t, `{"version":"v1","kind":"ToolResults","data":{"content":[{"kind":"toolResult","data":{"toolUseId":"tooluse_x","status":"error"}}]}}`))
+	ev := p.ParseLine(line(t, `{"version":"v1","kind":"ToolResults","data":{"content":[{"kind":"toolResult","data":{"toolUseId":"tooluse_egAL467aQyT8eei5xhtBMa","content":[{"kind":"text","data":"Failed to parse the tool use: The tool arguments failed validation: '/nonexistent-probe-592-direct.txt' does not exist"}],"status":"error"}}]}}`))
 	if !ev.IsError {
 		t.Error("expected IsError for status=error")
+	}
+}
+
+// A user-cancelled tool (Esc mid-flight) is ALSO status:"error" — kiro's own
+// classification; only data.results[id].result == "Cancelled" distinguishes it.
+func TestParser_ToolResults_CancelledIsError(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(line(t, `{"version":"v1","kind":"ToolResults","data":{"content":[{"kind":"toolResult","data":{"toolUseId":"tooluse_eL1H20njj3mlLOKK9Wml7w","content":[{"kind":"text","data":"Tool use was cancelled by the user"}],"status":"error"}}],"results":{"tooluse_eL1H20njj3mlLOKK9Wml7w":{"tool":null,"result":"Cancelled"}}}}`))
+	if !ev.IsError {
+		t.Error("expected IsError for a cancelled tool (kiro records it as status=error)")
+	}
+	if len(ev.ToolResultIDs) != 1 || ev.ToolResultIDs[0] != "tooluse_eL1H20njj3mlLOKK9Wml7w" {
+		t.Errorf("ToolResultIDs = %v, want the cancelled tool's id (cancellation must still close the tool)", ev.ToolResultIDs)
 	}
 }
 

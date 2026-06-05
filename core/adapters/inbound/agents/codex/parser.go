@@ -121,9 +121,6 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 		ev.CumulativeTokens = ev.Tokens
 	}
 
-	// Content character count.
-	ev.ContentChars = extractCodexContentChars(raw)
-
 	// Map event types to normalized forms.
 	switch eventType {
 	case "message":
@@ -282,17 +279,6 @@ func parseCodexFunctionCallOutput(raw map[string]interface{}, ev *tailer.ParsedE
 	if callID, ok := raw["call_id"].(string); ok && callID != "" {
 		ev.ToolResultIDs = []string{callID}
 	}
-}
-
-func extractCodexContentChars(raw map[string]interface{}) int64 {
-	if payload, ok := raw["payload"].(map[string]interface{}); ok {
-		return extractCodexContentChars(payload)
-	}
-	chars := tailer.ExtractContentChars(raw)
-	if message, ok := raw["message"].(string); ok {
-		chars += int64(len(message))
-	}
-	return chars
 }
 
 // extractCodexMetadata extracts model, context window, and token info from Codex events.
