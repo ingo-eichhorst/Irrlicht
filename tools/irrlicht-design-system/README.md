@@ -278,7 +278,8 @@ Copy these verbatim for any session-row UI.
 
 ### 6. The wisp / flame mark
 
-- `assets/favicon.svg` is the primary brand mark — a stylized flame silhouette in `#8B5CF6` with a `#c4b5fd` inner glow and a radial-gradient halo. Scale it up for logos.
+- `assets/favicon.svg` is the primary brand mark — the eyed flame: a stylized flame silhouette with two oval eye cutouts (the wisp-character look), in `#8B5CF6` with a radial-gradient halo. Scale it up for logos.
+- The eyes are cutout subpaths — every rendering of the mark needs `fill-rule="evenodd"` (or equivalent), otherwise they fill solid. The canonical shape lives at `assets/irrlicht_purple_dark_logo.svg` (repo root `assets/`); all variants derive from that path with their own fills.
 - The word IRRLICHT is paired with a small breathing purple dot (`.sparkle`) to the left in the nav.
 
 ---
