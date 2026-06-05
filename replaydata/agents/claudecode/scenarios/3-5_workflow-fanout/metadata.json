@@ -1,0 +1,103 @@
+{
+  "scenario_id": "workflow-fanout",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "2.1.165",
+    "daemon_version": "0.4.8+2a290f7",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes (Workflow tool, claude 2.1.165); daemon_capability: full (parent-link + journal-drop fix #565 on this branch); driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "workflow-fanout",
+      "agent": "claudecode",
+      "assessed_at": "2026-06-05T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\nroute: record (build prerequisite: daemon from branch fix/565-workflow-subagents)\n\n## Reasoning\n\n### agent (yes)\n\nClaude Code ships a first-class Workflow tool that fans out N parallel agents on explicit opt-in (\"run a workflow ...\"). The installed binary (claude 2.1.165 at ~/.local/bin/claude) carries the literal subagent definition `{agentType:\"workflow-subagent\",whenToUse:\"Internal subagent for workflow script orchestration.\",tools:[\"*\"],...}` plus the plugin-workflow loader (loadPluginWorkflows). Verified live on this machine: run wf_854deede-0ff in parent session ee963f7d fanned out three agents, each running a trivial task + sleep, completing in ~30s.\n\nOn-disk layout (verified live): agents write transcripts one level deeper than plain Task subagents — `<parent-session-dir>/subagents/workflows/<run-id>/agent-*.jsonl` — alongside `agent-*.meta.json` ({\"agentType\":\"workflow-subagent\"}) and a `journal.jsonl` replay journal; a persisted script lands at `<parent>/workflows/scripts/<name>-<run-id>.js`.\n\n### daemon (full)\n\nObservation is via the standard claudecode fswatcher path (FilesUnderRoot over ~/.claude/projects/, agent.go:46) — no new daemon capability. Two shape gaps the pre-fix detector had are closed on this branch (commit 76f9a576, PR #635):\n\n1. Parent linking. deriveParentSessionID previously only matched `.../subagents/<agent>.jsonl`, so workflow agents (one level deeper) surfaced as top-level sessions with ParentSessionID unset (parent children:0 throughout the run). The fix adds workflowRunRoot, matching `.../<parent>/subagents/workflows/<run-id>/agent-*.jsonl` and returning the parent session dir (helpers.go). Once ParentSessionID is bound, the existing child lifecycle applies unchanged: KindParentLinked emission (session_detector_activity.go), SubagentCount derived from live linked children, the liveness sweep, and badge re-evaluation.\n\n2. Journal drop. journal.jsonl is a `.jsonl` file, so the fswatcher emits EventNewSession for it (watcher.go:214 filters to .jsonl only); pre-fix it became a session named \"journal\" in project \"unknown\". The fix's isWorkflowBookkeepingFile (helpers.go) returns true for any non-`agent-*` .jsonl inside a run dir, and handleTranscriptEvent drops it before any lifecycle recording (session_detector_activity.go). The other bookkeeping files (`agent-*.meta.json`, the persisted `.js`) are never candidates — the fswatcher only tails `.jsonl`.\n\nMapped to the user-observable acceptance criteria:\n- 'Parent ready → working when workflow starts' — parent's outstanding Workflow tool_use blocks IsAgentDone (same mechanism as the Task tool in foreground-subagent).\n- 'Each child ParentSessionID = parent.session_id, a subagent not a top-level session' — workflowRunRoot derivation + KindParentLinked.\n- 'SubagentCount(parent) = N while N children alive' — derived from live linked children; tested by TestSessionDetector_WorkflowAgent_LinkedToParent.\n- 'No session named journal, no unknown-project session' — isWorkflowBookkeepingFile drop; tested by TestSessionDetector_WorkflowJournal_NotASession.\n- 'Children working → ready as they finish; SubagentCount decreases' — ordinary child lifecycle once linked.\n- 'Parent working → ready only after last child ends' — pending Workflow tool_use until the run reports back.\n- 'After sweep SubagentCount(parent) returns to 0' — the standard child liveness sweep.\n\n### driver (ready)\n\nThe recipe is a single opt-in prompt (\"run a workflow ...\") followed by wait_turn and a settle sleep. driver-interactive.sh implements send, wait_turn, and sleep, so no step is missing. The verified-live recipe runs the workflow as a background task with each agent doing a trivial task + `sleep 20` so the observer catches working states.\n\n## Provisionality\n\ndaemon=full is grounded in the fix's unit tests (path derivation + journal drop) and the verified live on-disk layout, but the live recording on this machine was captured against a PRE-FIX daemon (reference only, NOT replaydata) and therefore shows the bug. A meaningful recording REQUIRES a daemon built from this branch; confidence is 0.85 (not higher) until `record` produces a post-fix recording that promotes the lifecycle/sweep timing from provisional to settled.",
+      "caveats": [
+        "The live recording at ~/.local/share/irrlicht/recordings/2026-06-05T153734-186c4f.jsonl was captured against a PRE-FIX daemon and shows the bug (agents as top-level sessions, a 'journal' session in project 'unknown'). It is reference-only and must NOT be promoted into replaydata.",
+        "PID discovery resolves the single shared claude PID via CWD matching ('discovered pid ... for claude-code session', verified live); the workflow agents share the parent process, so they have no distinct PID — liveness is driven by transcript activity + the sweep, exactly like plain Task subagents.",
+        "The Workflow tool requires explicit opt-in wording in the prompt ('use a workflow' / 'run a workflow'); a generic 'do these 3 things in parallel' prompt elicits plain Task subagents (scenario 3-1), not the deeper workflows/<run-id> layout this cell asserts."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/application/services/helpers.go",
+          "note": "deriveParentSessionID + workflowRunRoot match .../<parent>/subagents/workflows/<run-id>/agent-*.jsonl and return the parent session dir; isWorkflowBookkeepingFile flags non-agent-* .jsonl in a run dir (journal.jsonl). Fix commit 76f9a576."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/session_detector_activity.go",
+          "note": "handleTranscriptEvent drops isWorkflowBookkeepingFile paths before any lifecycle recording; KindParentLinked is emitted once a child's ParentSessionID binds."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/session_detector_workflow_test.go",
+          "note": "TestSessionDetector_WorkflowAgent_LinkedToParent (agent-a1 links to parent-wf) and TestSessionDetector_WorkflowJournal_NotASession (journal.jsonl creates no session, records no lifecycle events)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/fswatcher/watcher.go",
+          "note": "watcher.go:214 — EventNewSession fires only for .jsonl files, so agent-*.meta.json and the persisted workflows/scripts/<name>.js are never candidate sessions; only journal.jsonl needs the explicit drop."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.local/bin/claude",
+          "note": "strings | grep workflow surfaces {agentType:\"workflow-subagent\",...} + loadPluginWorkflows in claude 2.1.165 — the Workflow tool shipped."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.claude/projects/-Users-ingo-projects-irrlicht/ee963f7d-a970-43d7-8970-2597ebdb7602/subagents/workflows/wf_854deede-0ff/",
+          "note": "Live run dir layout: agent-*.jsonl + agent-*.meta.json ({\"agentType\":\"workflow-subagent\"}) + journal.jsonl; persisted script under <parent>/workflows/scripts/. Verified 2026-06-05."
+        },
+        {
+          "kind": "url",
+          "ref": "https://github.com/ingo-eichhorst/Irrlicht/issues/565",
+          "note": "Issue #565 — pre-fix bug (workflow agents top-level + 'journal'/'unknown' phantom session); live repro run wf_854deede-0ff, session ee963f7d, 2026-06-05."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "claude CLI >= 2.1.x on PATH and authenticated; the Workflow tool must be available (verify: strings $(which claude) | grep workflow-subagent)",
+        "irrlichd RECORDING and BUILT FROM branch fix/565-workflow-subagents (commit 76f9a576 / PR #635) — a pre-fix daemon would capture the bug",
+        "claude session can run a workflow (Workflow tool exposed for the default model)"
+      ],
+      "setup": [
+        "Driver generates a fresh lowercased session UUID and a fresh cwd under <staging>/cwd/ (claude's trust dialog appears once and the driver auto-accepts)"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Run a workflow that fans out 3 parallel agents. Each agent should do one trivial task and then run `sleep 20` via Bash so the work takes about 20 seconds. Run the workflow as a background task and reply 'workflow started' once it is launched."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 35
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the parent UUID enter ready, then a ready→working transition driven by the user prompt",
+        "events.jsonl contains >= 1 parent_linked event whose child session lives under <parent>/subagents/workflows/<run-id>/agent-*.jsonl",
+        "while the workflow runs, SubagentCount(parent) reflects the live child count (peaks at ~3) and the children appear as subagents of the parent — never as top-level sessions",
+        "NO session is named 'journal' and NO session is attributed to an 'unknown' project (the run's journal.jsonl is dropped)",
+        "each workflow child transitions working → ready as it finishes; SubagentCount decreases as each ends",
+        "the parent transitions working → ready only after the last child ends",
+        "after the children are swept, SubagentCount(parent) returns to 0",
+        "final session state for the parent is ready"
+      ],
+      "settings": {},
+      "timeout_seconds": 240
+    }
+  }
+}
