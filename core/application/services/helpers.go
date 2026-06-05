@@ -95,14 +95,46 @@ func deriveParentSession(transcriptPath string) string {
 }
 
 // deriveParentSessionID extracts a parent session ID from a subagent transcript path.
-// Claude Code subagent transcripts live at .../<parent-session-id>/subagents/<agent-id>.jsonl.
-// Returns "" if the path doesn't match the subagent pattern.
+// Claude Code subagent transcripts live at .../<parent-session-id>/subagents/<agent-id>.jsonl;
+// Workflow-tool agents one level deeper, at
+// .../<parent-session-id>/subagents/workflows/<run-id>/agent-<id>.jsonl (issue #565).
+// Returns "" if the path doesn't match either pattern.
 func deriveParentSessionID(transcriptPath string) string {
-	dir := filepath.Dir(transcriptPath) // .../subagents
-	if filepath.Base(dir) != "subagents" {
+	dir := filepath.Dir(transcriptPath) // .../subagents or .../subagents/workflows/<run-id>
+	if filepath.Base(dir) == "subagents" {
+		return filepath.Base(filepath.Dir(dir)) // parent session ID
+	}
+	if wfRoot := workflowRunRoot(dir); wfRoot != "" {
+		return filepath.Base(wfRoot)
+	}
+	return ""
+}
+
+// workflowRunRoot returns the parent-session directory encoded in a Workflow
+// run directory path (.../<parent-session-id>/subagents/workflows/<run-id>),
+// or "" when dir doesn't match that layout.
+func workflowRunRoot(dir string) string {
+	workflows := filepath.Dir(dir) // .../subagents/workflows
+	if filepath.Base(workflows) != "workflows" {
 		return ""
 	}
-	return filepath.Base(filepath.Dir(dir)) // parent session ID
+	subagents := filepath.Dir(workflows) // .../<parent-session-id>/subagents
+	if filepath.Base(subagents) != "subagents" {
+		return ""
+	}
+	return filepath.Dir(subagents)
+}
+
+// isWorkflowBookkeepingFile reports whether path is a non-transcript .jsonl
+// inside a Workflow run directory (.../subagents/workflows/<run-id>/). The
+// Workflow tool writes a replay journal (journal.jsonl) next to its
+// agent-*.jsonl transcripts; only agent-* files are session transcripts —
+// anything else must never surface as a session (issue #565).
+func isWorkflowBookkeepingFile(path string) bool {
+	if strings.HasPrefix(filepath.Base(path), "agent-") {
+		return false
+	}
+	return workflowRunRoot(filepath.Dir(path)) != ""
 }
 
 // deriveParentSessionFromTranscript reads the first line of a Pi transcript

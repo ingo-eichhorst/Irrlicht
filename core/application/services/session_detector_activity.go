@@ -12,6 +12,13 @@ import (
 )
 
 func (d *SessionDetector) handleTranscriptEvent(id agent.Identity, ev agent.Event) {
+	// Workflow bookkeeping files (e.g. journal.jsonl) sit next to agent
+	// transcripts in the run directory but are not sessions — drop them
+	// before recording so they never surface in the UI (issue #565).
+	if isWorkflowBookkeepingFile(ev.TranscriptPath) {
+		return
+	}
+
 	// Record raw inbound event for lifecycle replay. Adapter identity is
 	// sourced from the inbound.Watcher's Identity() — see the per-watcher
 	// drain goroutine in Run() that wraps each event with its watcher's
