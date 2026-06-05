@@ -122,6 +122,13 @@ func runScenario(t *testing.T, scenarioDir string) {
 		t.Fatalf("collector did not detect scratch GT_ROOT %s", gtRoot)
 	}
 	p := newPoller(c, fakeGT, &fakeSessionLister{sessions: sessions})
+	// The fixtures are deterministic and the fake-gt shim returns instantly,
+	// so the only thing the per-fetch deadline guards against here is a real
+	// hang. Under full-suite -race load, spawning the bash shim and reading
+	// its output can blow past the production 5s budget, falsely tipping a
+	// healthy tick into the fallback path and corrupting the golden compare
+	// (#586). Poll-style generous cap: never hit in practice, still bounded.
+	p.fetchTimeout = 60 * time.Second
 
 	goldenDir := filepath.Join(scenarioDir, "golden")
 	if *updateGoldens {
@@ -133,7 +140,10 @@ func runScenario(t *testing.T, scenarioDir string) {
 	for tick := 1; tick <= cfg.PollTicks; tick++ {
 		writeTick(t, tickFile, tick)
 
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		// Generous outer cap matching the per-fetch budget above: under
+		// load the subprocess fan-out must not be guillotined mid-flight
+		// (#586). This bounds a genuine hang without racing the parallel sweep.
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		state := p.BuildOrchestratorState(ctx)
 		cancel()
 
