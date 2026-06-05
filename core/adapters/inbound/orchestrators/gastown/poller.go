@@ -21,21 +21,29 @@ type sessionLister interface {
 	ListAll() ([]*session.SessionState, error)
 }
 
+// defaultFetchTimeout bounds each gt CLI subprocess call in production.
+const defaultFetchTimeout = 5 * time.Second
+
 // poller queries the gt CLI for rig, polecat, dog, and boot state and maps
 // the results to the standardised orchestrator.State model.
 type poller struct {
 	collector *collector
 	gtBin     string
 	sessions  sessionLister
+	// fetchTimeout bounds each gt CLI call. Defaults to defaultFetchTimeout;
+	// the replay test raises it so a load-starved fake-gt subprocess can't
+	// falsely time out into the fallback path (#586).
+	fetchTimeout time.Duration
 }
 
 // newPoller creates a poller that reads from the given collector and
 // shells out to gtBin for rig/polecat state.
 func newPoller(collector *collector, gtBin string, sessions sessionLister) *poller {
 	return &poller{
-		collector: collector,
-		gtBin:     gtBin,
-		sessions:  sessions,
+		collector:    collector,
+		gtBin:        gtBin,
+		sessions:     sessions,
+		fetchTimeout: defaultFetchTimeout,
 	}
 }
 
@@ -337,7 +345,7 @@ func (p *poller) gtCommand(ctx context.Context, args ...string) *exec.Cmd {
 }
 
 func (p *poller) fetchRigs(ctx context.Context) []rigState {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, p.fetchTimeout)
 	defer cancel()
 
 	out, err := p.gtCommand(ctx, "rig", "list", "--json").Output()
@@ -353,7 +361,7 @@ func (p *poller) fetchRigs(ctx context.Context) []rigState {
 }
 
 func (p *poller) fetchPolecats(ctx context.Context) []polecatState {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, p.fetchTimeout)
 	defer cancel()
 
 	out, err := p.gtCommand(ctx, "polecat", "list", "--all", "--json").Output()
@@ -368,7 +376,7 @@ func (p *poller) fetchPolecats(ctx context.Context) []polecatState {
 }
 
 func (p *poller) fetchDogs(ctx context.Context) []dogState {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, p.fetchTimeout)
 	defer cancel()
 
 	out, err := p.gtCommand(ctx, "dog", "list", "--json").Output()
@@ -383,7 +391,7 @@ func (p *poller) fetchDogs(ctx context.Context) []dogState {
 }
 
 func (p *poller) fetchBootStatus(ctx context.Context) *bootStatus {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, p.fetchTimeout)
 	defer cancel()
 
 	out, err := p.gtCommand(ctx, "boot", "status", "--json").Output()
