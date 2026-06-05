@@ -408,16 +408,20 @@
     // taskEtaPresentation decides the task-completion ETA chip for a session
     // (issue #558, agent-authored estimate). Returns null when the chip must
     // be hidden: session not `working`, no estimate, no reported progress, or
-    // no projected eta. Otherwise { text, stale, title }: a point estimate
-    // ("~12m left") once half the rounds are done, a range ("~8m–12m left")
-    // below that, and stale=true when the last marker is older than 3min so
-    // the chip degrades instead of letting the ETA drift.
+    // no projected eta. Otherwise { text, stale, title }: a range whose HIGH
+    // bound is pinned at the last marker — 1.5× the projected remaining time
+    // below half the rounds ("~8m–12m left"), the bare projected remaining
+    // at/above half (#616) — and stale=true when the last marker is older
+    // than 3min so the chip degrades instead of letting the ETA drift.
     //
     // The eta is anchored at the marker (daemon-side), so the LOW bound
     // counts down in real time between marker updates while the HIGH bound
-    // — 1.5× the remaining time as projected AT the marker — stays pinned
-    // until the agent reports fresh progress: "~3m–5m left" becomes
-    // "~2m–5m left" a minute later, never the other way around.
+    // stays pinned until the agent reports fresh progress: "~3m–5m left"
+    // becomes "~2m–5m left" a minute later, never the other way around.
+    // At/above half the rounds low == high right at a marker, so the range
+    // collapses to a point ("~5m left") and widens as wall clock passes
+    // without fresh progress — never a bare countdown (#616). Mirrored in
+    // SessionListView.swift's taskEtaPresentation.
     function taskEtaPresentation(metrics, state, nowSec) {
       const est = metrics && metrics.task_estimate;
       const eta = metrics && metrics.task_completion_eta;
@@ -436,11 +440,15 @@
       if (!eta) return null;
       const remaining = Math.max(0, Math.floor(eta - nowSec));
       const frac = est.total_rounds > 0 ? est.completed_rounds / est.total_rounds : 0;
+      // 1.5× padding while the rate is barely measurable, bare projected
+      // remaining once it's trusted; no marker timestamp at/above half →
+      // nothing to pin to, keep the point estimate.
+      const factor = frac < 0.5 ? 1.5 : 1;
       let highSecs = null;
-      if (frac < 0.5) {
-        highSecs = est.updated_at > 0
-          ? Math.max(remaining, Math.floor((eta - est.updated_at) * 1.5))
-          : Math.floor(remaining * 1.5);
+      if (est.updated_at > 0) {
+        highSecs = Math.max(remaining, Math.floor((eta - est.updated_at) * factor));
+      } else if (frac < 0.5) {
+        highSecs = Math.floor(remaining * 1.5);
       }
       const text = fmtEtaText(remaining, highSecs);
       const ageSec = est.updated_at > 0 ? Math.max(0, Math.floor(nowSec - est.updated_at)) : 0;
