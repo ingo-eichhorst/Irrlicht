@@ -64,6 +64,9 @@ final class GroupViewSnapshotTests: XCTestCase {
             .frame(width: 350, height: height)
             .background(Color(NSColor.windowBackgroundColor))
         let hosting = NSHostingView(rootView: wrapped)
+        // Pin to dark aqua so snapshots don't depend on the current system
+        // appearance (Color(NSColor.windowBackgroundColor) adapts otherwise).
+        hosting.appearance = NSAppearance(named: .darkAqua)
         hosting.frame = CGRect(x: 0, y: 0, width: 350, height: height)
         hosting.layoutSubtreeIfNeeded()
         return hosting
