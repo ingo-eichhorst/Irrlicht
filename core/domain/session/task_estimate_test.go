@@ -100,6 +100,92 @@ func TestForecastTaskCompletion_AllRoundsDone(t *testing.T) {
 	}
 }
 
+func TestTaskEstimateFromTasks_NoCompletions(t *testing.T) {
+	if est, base := TaskEstimateFromTasks(nil); est != nil || base != nil {
+		t.Errorf("no tasks: got (%+v, %+v), want (nil, nil)", est, base)
+	}
+	pending := []Task{{ID: "1", Status: "pending"}, {ID: "2", Status: "in_progress"}}
+	if est, base := TaskEstimateFromTasks(pending); est != nil || base != nil {
+		t.Errorf("no completed tasks: got (%+v, %+v), want (nil, nil)", est, base)
+	}
+}
+
+func TestTaskEstimateFromTasks_DeltaRateThroughForecast(t *testing.T) {
+	// 4 tasks, 2 completed 90s apart → est anchors at the latest completion,
+	// base reconstructs the first → ForecastTaskCompletion's delta rate:
+	// perRound = 90s, remaining 2 → eta = latest + 180s.
+	t1 := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
+	t2 := t1.Add(90 * time.Second)
+	tasks := []Task{
+		{ID: "1", Status: "completed", CompletedAt: t1.Unix()},
+		{ID: "2", Status: "completed", CompletedAt: t2.Unix()},
+		{ID: "3", Status: "in_progress"},
+		{ID: "4", Status: "pending"},
+	}
+	est, base := TaskEstimateFromTasks(tasks)
+	if est == nil || est.TotalRounds != 4 || est.CompletedRounds != 2 || est.UpdatedAt != t2.Unix() {
+		t.Fatalf("est = %+v, want 2/4 anchored at latest completion", est)
+	}
+	if est.Source != "tasks" {
+		t.Errorf("est.Source = %q, want \"tasks\"", est.Source)
+	}
+	if base == nil || base.CompletedRounds != 1 || base.UpdatedAt != t1.Unix() {
+		t.Fatalf("base = %+v, want 1/4 at first completion", base)
+	}
+	eta := ForecastTaskCompletion(est, base, 9999 /* poisoned session elapsed */, t2.Add(10*time.Second))
+	want := t2.Add(180 * time.Second)
+	if eta == nil || !eta.Equal(want) {
+		t.Errorf("eta = %v, want %v (delta rate from completion stamps)", eta, want)
+	}
+}
+
+func TestTaskEstimateFromTasks_SingleCompletionFallsBack(t *testing.T) {
+	// One stamped completion: no delta to measure → nil base, and the
+	// forecast uses the marker-anchored session-elapsed rate.
+	t1 := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
+	tasks := []Task{
+		{ID: "1", Status: "completed", CompletedAt: t1.Unix()},
+		{ID: "2", Status: "pending"},
+	}
+	est, base := TaskEstimateFromTasks(tasks)
+	if est == nil || est.CompletedRounds != 1 || base != nil {
+		t.Fatalf("got (%+v, %+v), want (1/2 est, nil base)", est, base)
+	}
+	// 1 round in 60s elapsed → remaining 1 → eta = completion + 60s.
+	eta := ForecastTaskCompletion(est, base, 60, t1)
+	want := t1.Add(60 * time.Second)
+	if eta == nil || !eta.Equal(want) {
+		t.Errorf("eta = %v, want %v (elapsed fallback)", eta, want)
+	}
+}
+
+func TestTaskEstimateFromTasks_UnstampedCompletionsCountAsPreFirst(t *testing.T) {
+	// A completion restored from an older ledger has no stamp: it still
+	// counts toward progress, and the base treats it as done before the
+	// first stamp — rate spans only the stamped interval.
+	t1 := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
+	t2 := t1.Add(40 * time.Second)
+	tasks := []Task{
+		{ID: "1", Status: "completed"}, // unstamped
+		{ID: "2", Status: "completed", CompletedAt: t1.Unix()},
+		{ID: "3", Status: "completed", CompletedAt: t2.Unix()},
+		{ID: "4", Status: "pending"},
+	}
+	est, base := TaskEstimateFromTasks(tasks)
+	if est == nil || est.CompletedRounds != 3 || est.UpdatedAt != t2.Unix() {
+		t.Fatalf("est = %+v, want 3/4 anchored at latest stamp", est)
+	}
+	if base == nil || base.CompletedRounds != 2 || base.UpdatedAt != t1.Unix() {
+		t.Fatalf("base = %+v, want 2/4 at first stamp", base)
+	}
+	// perRound = (t2−t1)/(3−2) = 40s, remaining 1 → eta = t2 + 40s.
+	eta := ForecastTaskCompletion(est, base, 9999, t2)
+	want := t2.Add(40 * time.Second)
+	if eta == nil || !eta.Equal(want) {
+		t.Errorf("eta = %v, want %v", eta, want)
+	}
+}
+
 func TestMergeMetrics_TaskEstimateResetPropagates(t *testing.T) {
 	// No nil carry-over for the estimate: the tailer persists the last-seen
 	// marker itself, so a nil in fresh metrics is a real reset (a new user

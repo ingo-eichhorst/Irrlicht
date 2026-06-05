@@ -44,6 +44,11 @@ type Task struct {
 	Description string `json:"description,omitempty"`
 	ActiveForm  string `json:"active_form,omitempty"`
 	Status      string `json:"status"` // TaskStatusPending | TaskStatusInProgress | TaskStatusCompleted
+	// CompletedAt is the unix-seconds event time of the observed transition
+	// to TaskStatusCompleted (0 = unstamped, e.g. restored from a pre-#604
+	// ledger). Stamped on the edge only — re-asserted completions keep the
+	// original stamp. Feeds the tasks-derived ETA rate.
+	CompletedAt int64 `json:"completed_at,omitempty"`
 }
 
 // TaskDelta is emitted by the Claude Code parser for each TaskCreate or

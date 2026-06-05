@@ -131,6 +131,13 @@ type MetricsCollector interface {
 	// hasn't been created yet — the next ComputeMetrics will create one
 	// and the next statusline tick will populate it.
 	IngestRateLimit(transcriptPath string, snap *session.RateLimitSnapshot)
+	// IngestTaskEstimate attaches an out-of-band task-progress estimate to
+	// the session associated with transcriptPath (#604). Used by the Claude
+	// Code hook receiver for markers carried in PreToolUse tool inputs —
+	// they bypass the transcript writer, which drops mid-task text blocks
+	// on claude ≥2.1.162. Same no-op-without-tailer semantics as
+	// IngestRateLimit.
+	IngestTaskEstimate(transcriptPath string, est *session.TaskEstimate)
 }
 
 // PushBroadcaster fans out session state changes to subscribers (e.g. WebSocket clients).

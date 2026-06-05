@@ -45,6 +45,65 @@ func newTaskEstimateTestTailer(path string) *TranscriptTailer {
 	return tl
 }
 
+func TestTailer_IngestTaskEstimate_AnchorsLikeScannedMarker(t *testing.T) {
+	// Hook-delivered estimates (#604) run the same first/last bookkeeping
+	// as transcript-scanned markers: first ingest anchors the base, later
+	// ones advance the latest.
+	path := writeTranscriptLines(t, []map[string]interface{}{{"timestamp": ts(0)}})
+	tl := newTaskEstimateTestTailer(path)
+	tl.IngestTaskEstimate(&TaskEstimate{TotalRounds: 10, CompletedRounds: 3, ObservedAt: 1000})
+	tl.IngestTaskEstimate(&TaskEstimate{TotalRounds: 10, CompletedRounds: 5, ObservedAt: 1060})
+	m, err := tl.TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.TaskEstimate == nil || m.TaskEstimate.CompletedRounds != 5 {
+		t.Fatalf("TaskEstimate = %+v, want latest 5/10", m.TaskEstimate)
+	}
+	if m.TaskEstimateBase == nil || m.TaskEstimateBase.CompletedRounds != 3 || m.TaskEstimateBase.ObservedAt != 1000 {
+		t.Fatalf("TaskEstimateBase = %+v, want first ingest 3/10@1000", m.TaskEstimateBase)
+	}
+}
+
+func TestTailer_IngestTaskEstimate_StaleDeliveryIgnored(t *testing.T) {
+	// A late hook delivery older than the current latest must not regress
+	// the estimate or falsely re-anchor the base (its lower CompletedRounds
+	// would otherwise look like an agent-initiated new count).
+	path := writeTranscriptLines(t, []map[string]interface{}{{"timestamp": ts(0)}})
+	tl := newTaskEstimateTestTailer(path)
+	tl.IngestTaskEstimate(&TaskEstimate{TotalRounds: 10, CompletedRounds: 5, ObservedAt: 1060})
+	tl.IngestTaskEstimate(&TaskEstimate{TotalRounds: 10, CompletedRounds: 2, ObservedAt: 900})
+	m, err := tl.TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.TaskEstimate == nil || m.TaskEstimate.CompletedRounds != 5 || m.TaskEstimate.ObservedAt != 1060 {
+		t.Fatalf("TaskEstimate = %+v, want 5/10@1060 (stale ingest dropped)", m.TaskEstimate)
+	}
+	if m.TaskEstimateBase == nil || m.TaskEstimateBase.ObservedAt != 1060 {
+		t.Fatalf("TaskEstimateBase = %+v, want unchanged first=latest", m.TaskEstimateBase)
+	}
+}
+
+func TestTailer_IngestTaskEstimate_SurvivesLedgerRoundTrip(t *testing.T) {
+	path := writeTranscriptLines(t, []map[string]interface{}{{"timestamp": ts(0)}})
+	tl := newTaskEstimateTestTailer(path)
+	tl.IngestTaskEstimate(&TaskEstimate{TotalRounds: 8, CompletedRounds: 4, ObservedAt: 2000})
+	if _, err := tl.TailAndProcess(); err != nil {
+		t.Fatal(err)
+	}
+
+	restored := newTaskEstimateTestTailer(path)
+	restored.SetLedgerState(tl.GetLedgerState())
+	m, err := restored.TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.TaskEstimate == nil || m.TaskEstimate.CompletedRounds != 4 {
+		t.Fatalf("TaskEstimate = %+v, want ingested 4/8 after restart", m.TaskEstimate)
+	}
+}
+
 func TestTailer_TaskEstimate_SurfacedOnMetrics(t *testing.T) {
 	path := writeTranscriptLines(t, []map[string]interface{}{
 		{"timestamp": ts(0)},

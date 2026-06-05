@@ -117,6 +117,7 @@ struct TaskEstimateInfo: Codable, Hashable {
     let risk: String?
     let confidence: Double?
     let updatedAt: Date?    // when the marker was last observed (staleness degrade)
+    let source: String?     // "marker" | "tasks" — attribution for the tooltip (#604)
 
     enum CodingKeys: String, CodingKey {
         case totalRounds = "total_rounds"
@@ -124,14 +125,16 @@ struct TaskEstimateInfo: Codable, Hashable {
         case risk
         case confidence
         case updatedAt = "updated_at"
+        case source
     }
 
-    init(totalRounds: Int, completedRounds: Int, risk: String? = nil, confidence: Double? = nil, updatedAt: Date? = nil) {
+    init(totalRounds: Int, completedRounds: Int, risk: String? = nil, confidence: Double? = nil, updatedAt: Date? = nil, source: String? = nil) {
         self.totalRounds = totalRounds
         self.completedRounds = completedRounds
         self.risk = risk
         self.confidence = confidence
         self.updatedAt = updatedAt
+        self.source = source
     }
 
     init(from decoder: Decoder) throws {
@@ -145,6 +148,7 @@ struct TaskEstimateInfo: Codable, Hashable {
         } else {
             updatedAt = nil
         }
+        source = try c.decodeIfPresent(String.self, forKey: .source)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -154,6 +158,7 @@ struct TaskEstimateInfo: Codable, Hashable {
         try c.encodeIfPresent(risk, forKey: .risk)
         try c.encodeIfPresent(confidence, forKey: .confidence)
         try c.encodeIfPresent(updatedAt.map { $0.timeIntervalSince1970 }, forKey: .updatedAt)
+        try c.encodeIfPresent(source, forKey: .source)
     }
 }
 

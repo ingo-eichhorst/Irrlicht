@@ -38,6 +38,13 @@ const (
 // file patching, not for the model). Per-agent equivalents
 // (~/.codex/AGENTS.md, ~/.config/opencode/AGENTS.md, ~/.gemini/GEMINI.md)
 // are documented in the issue but not written in v1.
+//
+// v2 (#604/#602): asks for the first marker BEFORE any tool call (drives the
+// 0/N "estimating…" chip within seconds) and permits carrying the marker in
+// a Bash description — text directly before a tool call and tool inputs both
+// survive the claude ≥2.1.162 transcript text-drop that eats mid-task prose.
+// patchManagedBlock's content compare upgrades installed v1 blocks in place
+// on the next daemon start.
 const managedTaskEtaBlock = taskEtaBeginSentinel + `
 ## Task progress markers (managed by Irrlicht)
 
@@ -50,7 +57,10 @@ your response text, and update it as you make progress:
 ` + "```" + `
 
 ` + "`total_rounds`" + ` is your estimate of the task's phases; ` + "`completed_rounds`" + `
-is how many you've finished. Update every few steps.
+is how many you've finished. Emit the first marker in your first response,
+right before your first tool call. Update every few steps; you may also
+append the marker to the ` + "`description`" + ` of a Bash call you are
+already making (never to the command itself).
 ` + taskEtaEndSentinel
 
 // claudeMemoryPath returns the user-level Claude Code instruction file path.

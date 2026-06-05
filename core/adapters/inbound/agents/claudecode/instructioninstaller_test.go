@@ -112,6 +112,52 @@ func TestEnsureTaskEtaBlock_UpgradesStaleBlock(t *testing.T) {
 	}
 }
 
+func TestEnsureTaskEtaBlock_V1BlockUpgradesToV2(t *testing.T) {
+	// The exact v1 block (shipped with #558) must upgrade in place to the
+	// v2 contract (#604/#602): first marker before any tool call + the Bash
+	// description carrier.
+	home := withTempHome(t)
+	path := memoryPathFor(home)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	v1 := taskEtaBeginSentinel + `
+## Task progress markers (managed by Irrlicht)
+
+As you work on a multi-step task, periodically emit a hidden progress marker
+so tools can show a task-completion estimate. Emit it as an HTML comment in
+your response text, and update it as you make progress:
+
+` + "```" + `
+<!-- {"marker":"irrlicht-eta","total_rounds":N,"completed_rounds":M} -->
+` + "```" + `
+
+` + "`total_rounds`" + ` is your estimate of the task's phases; ` + "`completed_rounds`" + `
+is how many you've finished. Update every few steps.
+` + taskEtaEndSentinel
+	if err := os.WriteFile(path, []byte(v1+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	modified, err := EnsureTaskEtaBlockInstalled()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !modified {
+		t.Fatal("v1 block should upgrade to v2")
+	}
+	content := readFileString(t, path)
+	if !strings.Contains(content, "first marker in your first response") {
+		t.Error("v2 block must ask for the first marker before any tool call")
+	}
+	if !strings.Contains(content, "`description` of a Bash call") {
+		t.Error("v2 block must permit the Bash description carrier")
+	}
+	if !strings.Contains(content, "never to the command itself") {
+		t.Error("v2 block must forbid the command field (permission matching)")
+	}
+}
+
 func TestPatchManagedBlock_AppendAddsSingleBlankLine(t *testing.T) {
 	for _, existing := range []string{"content", "content\n", "content\n\n\n"} {
 		got, changed := patchManagedBlock(existing, managedTaskEtaBlock)

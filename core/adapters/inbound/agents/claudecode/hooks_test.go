@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
+
+	"irrlicht/core/domain/session"
 )
 
 // mockTarget records calls to HandlePermissionHook for assertions.
@@ -59,7 +61,7 @@ func TestSessionIDFromTranscriptPath(t *testing.T) {
 
 func TestHookHandler_PermissionRequest(t *testing.T) {
 	target := &mockTarget{}
-	handler := NewHookHandler(target, nil, mockLogger{})
+	handler := NewHookHandler(target, nil, nil, mockLogger{})
 
 	payload := hookPayload{
 		TranscriptPath: "/Users/u/.claude/projects/p/sess-123.jsonl",
@@ -90,7 +92,7 @@ func TestHookHandler_PermissionRequest(t *testing.T) {
 
 func TestHookHandler_PostToolUse(t *testing.T) {
 	target := &mockTarget{}
-	handler := NewHookHandler(target, nil, mockLogger{})
+	handler := NewHookHandler(target, nil, nil, mockLogger{})
 
 	payload := hookPayload{
 		TranscriptPath: "/Users/u/.claude/projects/p/sess-456.jsonl",
@@ -115,7 +117,7 @@ func TestHookHandler_PostToolUse(t *testing.T) {
 
 func TestHookHandler_PreToolUse(t *testing.T) {
 	target := &mockTarget{}
-	handler := NewHookHandler(target, nil, mockLogger{})
+	handler := NewHookHandler(target, nil, nil, mockLogger{})
 
 	payload := hookPayload{
 		TranscriptPath: "/Users/u/.claude/projects/p/sess-pre.jsonl",
@@ -150,7 +152,7 @@ func TestHookHandler_PreToolUse(t *testing.T) {
 // the sole filter.
 func TestHookHandler_PreToolUse_RejectsUnexpectedTool(t *testing.T) {
 	target := &mockTarget{}
-	handler := NewHookHandler(target, nil, mockLogger{})
+	handler := NewHookHandler(target, nil, nil, mockLogger{})
 
 	payload := hookPayload{
 		TranscriptPath: "/Users/u/.claude/projects/p/sess-x.jsonl",
@@ -174,7 +176,7 @@ func TestHookHandler_PreToolUse_RejectsUnexpectedTool(t *testing.T) {
 
 func TestHookHandler_PostToolUseFailure(t *testing.T) {
 	target := &mockTarget{}
-	handler := NewHookHandler(target, nil, mockLogger{})
+	handler := NewHookHandler(target, nil, nil, mockLogger{})
 
 	payload := hookPayload{
 		TranscriptPath: "/Users/u/.claude/projects/p/sess-789.jsonl",
@@ -199,7 +201,7 @@ func TestHookHandler_PostToolUseFailure(t *testing.T) {
 
 func TestHookHandler_UnrecognizedEvent(t *testing.T) {
 	target := &mockTarget{}
-	handler := NewHookHandler(target, nil, mockLogger{})
+	handler := NewHookHandler(target, nil, nil, mockLogger{})
 
 	payload := hookPayload{
 		TranscriptPath: "/Users/u/.claude/projects/p/sess.jsonl",
@@ -222,7 +224,7 @@ func TestHookHandler_UnrecognizedEvent(t *testing.T) {
 
 func TestHookHandler_MissingTranscriptPath(t *testing.T) {
 	target := &mockTarget{}
-	handler := NewHookHandler(target, nil, mockLogger{})
+	handler := NewHookHandler(target, nil, nil, mockLogger{})
 
 	payload := hookPayload{
 		HookEventName: "PermissionRequest",
@@ -241,7 +243,7 @@ func TestHookHandler_MissingTranscriptPath(t *testing.T) {
 
 func TestHookHandler_WrongMethod(t *testing.T) {
 	target := &mockTarget{}
-	handler := NewHookHandler(target, nil, mockLogger{})
+	handler := NewHookHandler(target, nil, nil, mockLogger{})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/hooks/claudecode", nil)
 	rec := httptest.NewRecorder()
@@ -254,7 +256,7 @@ func TestHookHandler_WrongMethod(t *testing.T) {
 
 func TestHookHandler_MalformedJSON(t *testing.T) {
 	target := &mockTarget{}
-	handler := NewHookHandler(target, nil, mockLogger{})
+	handler := NewHookHandler(target, nil, nil, mockLogger{})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/hooks/claudecode", bytes.NewReader([]byte("not json")))
 	rec := httptest.NewRecorder()
@@ -272,7 +274,7 @@ func (g fakeGate) Granted(_, _ string) bool { return bool(g) }
 
 func TestHookHandler_ConsentGateDropsWhenNotGranted(t *testing.T) {
 	target := &mockTarget{}
-	handler := NewHookHandler(target, fakeGate(false), mockLogger{})
+	handler := NewHookHandler(target, nil, fakeGate(false), mockLogger{})
 
 	payload := hookPayload{
 		TranscriptPath: "/Users/u/.claude/projects/p/sess-123.jsonl",
@@ -295,7 +297,7 @@ func TestHookHandler_ConsentGateDropsWhenNotGranted(t *testing.T) {
 
 func TestHookHandler_ConsentGatePassesWhenGranted(t *testing.T) {
 	target := &mockTarget{}
-	handler := NewHookHandler(target, fakeGate(true), mockLogger{})
+	handler := NewHookHandler(target, nil, fakeGate(true), mockLogger{})
 
 	payload := hookPayload{
 		TranscriptPath: "/Users/u/.claude/projects/p/sess-123.jsonl",
@@ -312,5 +314,117 @@ func TestHookHandler_ConsentGatePassesWhenGranted(t *testing.T) {
 	}
 	if calls := target.getCalls(); len(calls) != 1 {
 		t.Fatalf("calls = %d, want 1", len(calls))
+	}
+}
+
+// mockMarkerTarget records IngestTaskEstimate calls for assertions (#604).
+type mockMarkerTarget struct {
+	mu    sync.Mutex
+	calls []markerCall
+}
+
+type markerCall struct {
+	transcriptPath string
+	est            *session.TaskEstimate
+}
+
+func (m *mockMarkerTarget) IngestTaskEstimate(transcriptPath string, est *session.TaskEstimate) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.calls = append(m.calls, markerCall{transcriptPath, est})
+}
+
+func (m *mockMarkerTarget) getCalls() []markerCall {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]markerCall{}, m.calls...)
+}
+
+func postHook(t *testing.T, handler http.HandlerFunc, payload hookPayload) *httptest.ResponseRecorder {
+	t.Helper()
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/hooks/claudecode", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+	return rec
+}
+
+func TestHookHandler_PreToolUse_MarkerInBashDescription(t *testing.T) {
+	// The #604 carrier: a marker in a Bash description rides the PreToolUse
+	// payload to the daemon, bypassing the transcript writer. The escaped
+	// JSON-in-JSON shape is exactly what Claude Code sends.
+	target := &mockTarget{}
+	markers := &mockMarkerTarget{}
+	handler := NewHookHandler(target, markers, nil, mockLogger{})
+
+	rec := postHook(t, handler, hookPayload{
+		TranscriptPath: "/Users/u/.claude/projects/p/sess-eta.jsonl",
+		HookEventName:  "PreToolUse",
+		ToolName:       "Bash",
+		ToolInput:      json.RawMessage(`{"command":"go test ./...","description":"Run tests <!-- {\"marker\":\"irrlicht-eta\",\"total_rounds\":7,\"completed_rounds\":3} -->"}`),
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	calls := markers.getCalls()
+	if len(calls) != 1 {
+		t.Fatalf("got %d IngestTaskEstimate calls, want 1", len(calls))
+	}
+	if calls[0].transcriptPath != "/Users/u/.claude/projects/p/sess-eta.jsonl" {
+		t.Errorf("transcriptPath = %q", calls[0].transcriptPath)
+	}
+	if calls[0].est.TotalRounds != 7 || calls[0].est.CompletedRounds != 3 {
+		t.Errorf("est = %+v, want 3/7", calls[0].est)
+	}
+	if calls[0].est.UpdatedAt == 0 {
+		t.Error("est.UpdatedAt must be stamped at receipt")
+	}
+	// The permission dispatch stays gated to user-input tools: a Bash
+	// PreToolUse must NOT reach HandlePermissionHook.
+	if got := target.getCalls(); len(got) != 0 {
+		t.Errorf("HandlePermissionHook calls = %d, want 0 (two-path split)", len(got))
+	}
+}
+
+func TestHookHandler_PreToolUse_NoMarkerNoIngest(t *testing.T) {
+	markers := &mockMarkerTarget{}
+	handler := NewHookHandler(&mockTarget{}, markers, nil, mockLogger{})
+
+	postHook(t, handler, hookPayload{
+		TranscriptPath: "/Users/u/.claude/projects/p/sess-1.jsonl",
+		HookEventName:  "PreToolUse",
+		ToolName:       "Bash",
+		ToolInput:      json.RawMessage(`{"command":"ls","description":"List files"}`),
+	})
+	// A plain HTML comment without the marker key must not ingest either.
+	postHook(t, handler, hookPayload{
+		TranscriptPath: "/Users/u/.claude/projects/p/sess-1.jsonl",
+		HookEventName:  "PreToolUse",
+		ToolName:       "Write",
+		ToolInput:      json.RawMessage(`{"file_path":"/tmp/x.html","content":"<!-- a comment -->"}`),
+	})
+	if got := markers.getCalls(); len(got) != 0 {
+		t.Errorf("IngestTaskEstimate calls = %d, want 0", len(got))
+	}
+}
+
+func TestHookHandler_PreToolUse_UserInputToolStillDispatchesWithMarkerScan(t *testing.T) {
+	// AskUserQuestion keeps its permission dispatch; an embedded marker in
+	// its input is also picked up — the two paths are independent.
+	target := &mockTarget{}
+	markers := &mockMarkerTarget{}
+	handler := NewHookHandler(target, markers, nil, mockLogger{})
+
+	postHook(t, handler, hookPayload{
+		TranscriptPath: "/Users/u/.claude/projects/p/sess-q.jsonl",
+		HookEventName:  "PreToolUse",
+		ToolName:       "AskUserQuestion",
+		ToolInput:      json.RawMessage(`{"questions":[{"question":"Proceed? <!-- {\"marker\":\"irrlicht-eta\",\"total_rounds\":4,\"completed_rounds\":2} -->"}]}`),
+	})
+	if got := target.getCalls(); len(got) != 1 || got[0].hookEventName != "PreToolUse" {
+		t.Errorf("HandlePermissionHook calls = %+v, want one PreToolUse dispatch", got)
+	}
+	if got := markers.getCalls(); len(got) != 1 || got[0].est.CompletedRounds != 2 {
+		t.Errorf("IngestTaskEstimate calls = %+v, want one 2/4 ingest (nested input walk)", got)
 	}
 }

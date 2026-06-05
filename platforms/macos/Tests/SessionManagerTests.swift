@@ -62,6 +62,40 @@ final class SessionManagerTests: XCTestCase {
         XCTAssertEqual(session.lastEvent, "UserPromptSubmit")
     }
     
+    func testTaskEstimateSourceDecodes() throws {
+        // The estimate's source ("marker" | "tasks", #604) attributes the
+        // tooltip; absent source (pre-#604 daemon) decodes as nil.
+        let jsonData = """
+        {
+            "session_id": "sess_eta",
+            "state": "working",
+            "metrics": {
+                "task_estimate": {"total_rounds": 5, "completed_rounds": 2, "updated_at": 1769000000, "source": "tasks"}
+            }
+        }
+        """.data(using: .utf8)!
+
+        let session = try JSONDecoder().decode(SessionState.self, from: jsonData)
+        let est = try XCTUnwrap(session.metrics?.taskEstimate)
+        XCTAssertEqual(est.source, "tasks")
+        XCTAssertEqual(est.totalRounds, 5)
+        XCTAssertEqual(est.completedRounds, 2)
+
+        let noSource = """
+        {
+            "session_id": "sess_eta2",
+            "state": "working",
+            "metrics": {
+                "task_estimate": {"total_rounds": 5, "completed_rounds": 0}
+            }
+        }
+        """.data(using: .utf8)!
+        let session2 = try JSONDecoder().decode(SessionState.self, from: noSource)
+        let est2 = try XCTUnwrap(session2.metrics?.taskEstimate)
+        XCTAssertNil(est2.source)
+        XCTAssertEqual(est2.completedRounds, 0)
+    }
+
     func testInvalidJSONHandling() {
         let invalidJSON = """
         {
