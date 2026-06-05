@@ -11,6 +11,11 @@ import (
 	"irrlicht/core/domain/agent"
 )
 
+// fsEventTimeout bounds each event wait. Generous because kqueue/inotify
+// delivery on a loaded CI runner can take well over 2s (flaky timeout on
+// macos-latest); the wait only burns the full duration on failure.
+const fsEventTimeout = 10 * time.Second
+
 // TestFSWatcher_EmitsEventsForTranscriptCreateAndModify drives the
 // fswatcher adapter against a real temp directory using kqueue/inotify and
 // asserts the canonical event sequence (NewSession → Activity) for a
@@ -45,7 +50,7 @@ func TestFSWatcher_EmitsEventsForTranscriptCreateAndModify(t *testing.T) {
 		t.Fatalf("write transcript: %v", err)
 	}
 
-	ev := waitForFSEvent(t, ch, 2*time.Second)
+	ev := waitForFSEvent(t, ch, fsEventTimeout)
 	if ev.Type != agent.EventNewSession {
 		t.Errorf("create event type: got %q, want %q", ev.Type, agent.EventNewSession)
 	}
@@ -69,7 +74,7 @@ func TestFSWatcher_EmitsEventsForTranscriptCreateAndModify(t *testing.T) {
 		t.Fatalf("append write: %v", err)
 	}
 
-	ev = waitForFSEvent(t, ch, 2*time.Second)
+	ev = waitForFSEvent(t, ch, fsEventTimeout)
 	if ev.Type != agent.EventActivity {
 		t.Errorf("modify event type: got %q, want %q", ev.Type, agent.EventActivity)
 	}
