@@ -83,7 +83,7 @@ DRIVER_LOG="$STAGING/driver.log"
 # and MUST NOT be used for recording (FINDINGS.md §7). slash commands reach the
 # live TUI directly (a bare send "/cmd" is NOT stored as literal text), so
 # DRIVE_SLASH_REQUIRES_STEP_TYPE stays false.
-DRIVE_ELICITS="send slash wait_turn sleep"
+DRIVE_ELICITS="send slash wait_turn sleep keys"
 DRIVE_SLASH_REQUIRES_STEP_TYPE=false
 RUN_CWD="${IRRLICHT_ONBOARD_CWD:-$STAGING/cwd}"
 mkdir -p "$RUN_CWD"
@@ -253,6 +253,22 @@ send_slash() { # <text>
   echo "[driver] slash: ${1:0:60} (no turn expected, overlay dismissed)" >&2
 }
 
+# A raw tmux key sequence (NOT literal text): each space-separated token is one
+# tmux key event (`!`, `e`, `Space`, `Enter`, `Up`, `Escape`, …), so no `-l`
+# flag and NO implicit Enter is appended — the recipe spells out its own Enter.
+# Used to drive a `!command` shell escape (`! e c h o Space h e l l o Enter`):
+# kiro runs it as a LOCAL shell command with no LLM round-trip, so it appends no
+# text-only AssistantMessage and the transcript turn_count never increments.
+# Therefore keys does NOT bump EXPECTED_TURNS (a later wait_turn must not wait on
+# a turn the escape can never produce — same reasoning as send_slash). Mirrors
+# step_keys in drive-claudecode-interactive.sh.
+send_keys() { # <key-token-list>
+  # shellcheck disable=SC2086 — intentional word-splitting of the key list
+  tmux send-keys -t "$SESSION" $1
+  echo "[driver] keys: $1 (no turn expected)" >&2
+  sleep 0.3
+}
+
 # --- Step dispatch: ALL standard arms present; stubs fail loudly -------------
 launch_repl
 EXPECTED_TURNS=0
@@ -264,7 +280,7 @@ while IFS= read -r step; do
     wait_turn)       wait_turn || break ;;
     sleep)           sleep "$(jq -r '.seconds // 1' <<<"$step")" ;;
     interrupt)       not_implemented interrupt || break ;;       # TODO(kiro-cli): Escape/Ctrl-C the in-flight turn
-    keys)            not_implemented keys || break ;;            # TODO(kiro-cli): tmux send-keys raw sequence
+    keys)            send_keys "$(jq -r '.keys' <<<"$step")" ;;
     reset_session)   not_implemented reset_session || break ;;   # TODO(kiro-cli): in-REPL /clear|/new → new session id
     restart)         not_implemented restart || break ;;         # TODO(kiro-cli): end + fresh session (new id, new cwd)
     resume)          not_implemented resume || break ;;          # TODO(kiro-cli): relaunch same id+cwd
