@@ -2,6 +2,7 @@ package services
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -17,6 +18,14 @@ func (d *SessionDetector) handleTranscriptEvent(id agent.Identity, ev agent.Even
 	// before recording so they never surface in the UI (issue #565).
 	if isWorkflowBookkeepingFile(ev.TranscriptPath) {
 		return
+	}
+
+	// Workflow agents sit in a per-run directory, so the watcher reports the
+	// ephemeral run id (wf_…) as their project dir. Relabel with the stable
+	// layout name — mirroring the "subagents" label plain subagents carry —
+	// so logs and recordings group cleanly (issue #565).
+	if workflowRunRoot(filepath.Dir(ev.TranscriptPath)) != "" {
+		ev.ProjectDir = "subagents/workflows"
 	}
 
 	// Record raw inbound event for lifecycle replay. Adapter identity is

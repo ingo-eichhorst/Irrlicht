@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"irrlicht/core/domain/agent"
+	"irrlicht/core/domain/lifecycle"
 )
 
 // Workflow-tool fan-out (issue #565): agents write transcripts one level
@@ -21,6 +22,8 @@ func TestSessionDetector_WorkflowAgent_LinkedToParent(t *testing.T) {
 	pw := newMockProcessWatcher()
 	repo := newMockRepo()
 	det := newDetector(tw, pw, repo)
+	rec := &mockRecorder{}
+	det.SetRecorder(rec)
 
 	runDir := filepath.Join(t.TempDir(), "parent-wf", "subagents", "workflows", "wf_854deede-0ff")
 	if err := os.MkdirAll(runDir, 0755); err != nil {
@@ -56,6 +59,32 @@ func TestSessionDetector_WorkflowAgent_LinkedToParent(t *testing.T) {
 	}
 	if state.ParentSessionID != "parent-wf" {
 		t.Errorf("ParentSessionID = %q, want %q", state.ParentSessionID, "parent-wf")
+	}
+
+	// The lifecycle stream must carry the parent link, and the recorded
+	// transcript_new must use the stable layout label instead of the
+	// ephemeral wf_<run-id> directory name.
+	var linked, transcriptNew bool
+	for _, lev := range rec.snapshot() {
+		switch lev.Kind {
+		case lifecycle.KindParentLinked:
+			if lev.SessionID == "agent-a1" && lev.ParentSessionID == "parent-wf" {
+				linked = true
+			}
+		case lifecycle.KindTranscriptNew:
+			if lev.SessionID == "agent-a1" {
+				transcriptNew = true
+				if lev.ProjectDir != "subagents/workflows" {
+					t.Errorf("transcript_new ProjectDir = %q, want %q", lev.ProjectDir, "subagents/workflows")
+				}
+			}
+		}
+	}
+	if !linked {
+		t.Error("no parent_linked lifecycle event recorded for agent-a1 → parent-wf")
+	}
+	if !transcriptNew {
+		t.Error("no transcript_new lifecycle event recorded for agent-a1")
 	}
 }
 
