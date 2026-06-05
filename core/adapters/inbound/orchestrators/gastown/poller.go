@@ -36,8 +36,8 @@ type poller struct {
 	// the replay test raises it so a load-starved fake-gt subprocess can't
 	// falsely time out into the fallback path (#586).
 	fetchTimeout time.Duration
-	// logger records gt fetch timeouts (and recoveries) so silent fallback to
-	// cached/empty state is observable in production. May be nil (e.g. tests).
+	// logger records gt fetch timeouts so silent fallback to cached/empty
+	// state is observable in production. May be nil (e.g. tests).
 	logger outbound.Logger
 	// timeoutMu guards timingOut, which tracks per-fetch consecutive-timeout
 	// streaks so a wedged gt binary logs once per streak, not every tick (#625).
