@@ -233,13 +233,34 @@ send_text() { # <text>
   echo "[driver] send: ${1:0:60} (expecting turn $EXPECTED_TURNS)" >&2
 }
 
+# A synchronous (no-LLM) slash command — /help, /session-id — renders in the TUI
+# but appends NO text-only AssistantMessage to the .jsonl, so the transcript-based
+# turn_count never increments for it. Deliver the keystrokes exactly like a send,
+# but do NOT bump EXPECTED_TURNS (otherwise a later wait_turn waits for a turn that
+# can never materialize and times out). See synchronous-slash-command recipe.
+#
+# kiro-cli 2.5.x: some slashes (/help) open a MODAL overlay ("ESC to close") that
+# captures all subsequent input until dismissed — a following send would vanish
+# into the overlay's scroll handler. Send a trailing ESC to dismiss any overlay
+# so the next prompt reaches the REPL. ESC on a non-overlay slash (/session-id)
+# is a harmless no-op (verified live: the prompt stays usable).
+send_slash() { # <text>
+  tmux send-keys -t "$SESSION" -l -- "$1"
+  sleep 0.3
+  tmux send-keys -t "$SESSION" Enter
+  sleep 1.5
+  tmux send-keys -t "$SESSION" Escape
+  echo "[driver] slash: ${1:0:60} (no turn expected, overlay dismissed)" >&2
+}
+
 # --- Step dispatch: ALL standard arms present; stubs fail loudly -------------
 launch_repl
 EXPECTED_TURNS=0
 while IFS= read -r step; do
   type="$(jq -r '.type' <<<"$step")"
   case "$type" in
-    send|slash)      send_text "$(jq -r '.text' <<<"$step")" ;;
+    send)            send_text "$(jq -r '.text' <<<"$step")" ;;
+    slash)           send_slash "$(jq -r '.text' <<<"$step")" ;;
     wait_turn)       wait_turn || break ;;
     sleep)           sleep "$(jq -r '.seconds // 1' <<<"$step")" ;;
     interrupt)       not_implemented interrupt || break ;;       # TODO(kiro-cli): Escape/Ctrl-C the in-flight turn
