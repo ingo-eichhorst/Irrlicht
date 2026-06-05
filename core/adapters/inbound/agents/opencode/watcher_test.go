@@ -415,8 +415,12 @@ func TestScanSessions_GCsExpiredCursors(t *testing.T) {
 	ch := w.Subscribe()
 	defer w.Unsubscribe(ch)
 
-	// Tight maxAge so we don't have to backdate by days.
-	w.maxAge = 100 * time.Millisecond
+	// Generous maxAge so no realistic scheduler stall can push the fresh
+	// session across the boundary. The old version used maxAge=100ms and a
+	// 150ms sleep — under -race on a loaded CI runner, >100ms could elapse
+	// between stamping ses_recent fresh and scanSessions' row filter, aging
+	// the FRESH session out too (flaked on the Linux runner).
+	w.maxAge = time.Hour
 
 	// Two sessions with distinct CWDs, both fresh enough to appear in scan.
 	now := time.Now().UnixMilli()
@@ -432,13 +436,18 @@ func TestScanSessions_GCsExpiredCursors(t *testing.T) {
 	}
 	w.mu.Unlock()
 
-	// Bump only ses_recent's time_updated past the maxAge boundary; leave
-	// ses_will_age frozen at its original timestamp so it ages out.
-	time.Sleep(150 * time.Millisecond)
-	fresh := time.Now().UnixMilli()
-	if _, err := db.Exec(`UPDATE session SET time_updated = ? WHERE id = ?`, fresh, "ses_recent"); err != nil {
-		t.Fatalf("bump time_updated: %v", err)
+	// Age ses_will_age out deterministically — backdate instead of sleep:
+	// its DB row leaves the scan window (row filter + SQL cutoff), and its
+	// cursor's lastObserved (what gcExpiredCursors actually checks) predates
+	// the cutoff. ses_recent's row stays at `now`, comfortably within the
+	// hour-wide window.
+	past := time.Now().Add(-2 * time.Hour)
+	if _, err := db.Exec(`UPDATE session SET time_updated = ? WHERE id = ?`, past.UnixMilli(), "ses_will_age"); err != nil {
+		t.Fatalf("backdate time_updated: %v", err)
 	}
+	w.mu.Lock()
+	w.cursors["ses_will_age"].lastObserved = past
+	w.mu.Unlock()
 
 	w.scanSessions()
 
