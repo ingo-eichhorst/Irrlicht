@@ -3,11 +3,11 @@
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
-    "driver_capability": "gap:exit_clean",
+    "driver_capability": "full",
     "agent_cli_version": "2.5.1",
     "daemon_version": "0.4.8+17650ec.dirty",
-    "confidence": 0.85,
-    "notes": "agent_supports: yes; daemon_capability: full; driver_capability: gap:exit_clean+sigkill+restart — process exit deletes the session by design, but the kiro-cli driver stubs the teardown primitives the 3-variant recipe needs."
+    "confidence": 0.95,
+    "notes": "agent_supports: yes; daemon_capability: full; driver_capability: full (exit_clean/sigkill/restart ported, commit d0e68929). Recorded as TWO variants (clean /quit + idle SIGKILL); the planned mid-turn-SIGKILL variant was DROPPED — the live recording proved kiro writes its transcript atomically at turn-end, so a running turn is never observably working and a mid-turn kill leaves an empty transcript with no session row."
   },
   "details": {
     "assessment": {
@@ -17,14 +17,14 @@
       "assessed_at": "2026-06-05T00:00:00Z",
       "agent_supports": "yes",
       "daemon_capability": "full",
-      "driver_capability": "gap:exit_clean",
-      "confidence": 0.85,
-      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: gap:exit_clean (also gap:sigkill, gap:restart)\n\nThe session-end scenario has three variants — (1) clean exit, (2) SIGKILL while idle in `ready`, (3) SIGKILL mid-turn while `working`. kiro-cli 2.5.1 supports all three teardown paths as-shipped, the daemon observes the disappearance by design, and the only thing missing is driver tooling: the three teardown step types the recipe needs are stubbed in the kiro-cli interactive driver.\n\n## agent_supports: yes\n\nAll three teardowns are native, no special feature required:\n\n- **Variant 1 (clean exit).** `/quit` (alias `/exit`) ends the chat cleanly: kiro prints \"Session ended.\", removes the `<uuid>.lock` live-session marker, and prints \"Resume with: kiro-cli --resume-id <uuid>\" (FINDINGS.md §8). The `kiro-cli` parent process exits.\n- **Variants 2 & 3 (SIGKILL).** `kill -9` on the `kiro-cli` parent PID terminates the process tree regardless of turn state — this is OS process death, not a CLI feature. The process tree is `kiro-cli` (parent, comm=`kiro-cli`) → `kiro-cli-chat` → `bun tui.js` + `acp` (FINDINGS.md §1); killing the parent collapses the session.\n\n## daemon_capability: full\n\nThis is the load-bearing pillar and it is verified live, not just read off the parser.\n\n**Process-exit → session removed BY DESIGN.** The kiro-cli adapter matches on `ExactName{Name: \"kiro-cli\"}` and discovers the PID by cwd (`DiscoverPIDByCWD`, agent.go / pid.go). `pgrep -x kiro-cli` matches ONLY the parent and never collides with the always-running `kiro_cli_desktop` companion (FINDINGS.md §1). When the parent dies — clean `/quit` OR `kill -9` — the process scanner stops matching it, emits `process_exited`, and the standard ready-TTL removes the session row. This was verified LIVE: `/quit` removed the session from the dashboard.\n\n**The `ready → working → ready` arc per variant** is produced by the parser (parser.go, FINDINGS.md §5): a `Prompt` event → `user_message` drives `ready → working`; the FINAL text-only `AssistantMessage` of a turn → `turn_done` drives `working → ready`; mid-turn `AssistantMessage`s carry `toolUse` blocks and keep the session `working`. The transcript live-appends (FINDINGS.md §2), and the session shows `working` mid-turn, `ready` after the text-only assistant message — exactly the arc the scenario asserts.\n\n**Variant 3 (SIGKILL mid-turn).** The session is `working` when the kill fires; the process disappears with no turn-end event. The daemon's process-exit sweep emits `process_exited` and resolves the dangling `working` (the scenario's \"state does not stick in `working`\"). As with the claudecode cell, whether the sweep's working→ready transition lands inside the recording's tail window is timing-dependent — the live dashboard always settles correctly because the sweep keeps running; the spec accommodates this by anchoring v3_exit to v3_turn_start with a wide budget rather than requiring an explicit post-crash ready phase.\n\nEvery user-observable signal the scenario asserts (state arc, disappearance within readyTTL, no stick-in-working) is emitted by the adapter as it exists today → `full`, not `bug` or `incapable`.\n\n## driver_capability: gap:exit_clean (+ gap:sigkill, gap:restart)\n\nThe 3-variant recipe needs three teardown step types. The kiro-cli interactive driver elicits ONLY `send slash wait_turn sleep` (its `DRIVE_ELICITS` constant, driver-interactive.sh) — every teardown arm is present but stubbed as `not_implemented`:\n\n- **`exit_clean`** — variant 1's clean `/quit`. (A `/quit` IS a `slash` send mechanically, but the recording needs a teardown primitive that quits the TUI and resolves the staged transcript path BEFORE process exit; the dedicated `exit_clean` step — Ctrl-D/`/quit` + drain — is the right primitive, mirroring claudecode's recipe.)\n- **`sigkill`** — variants 2 & 3's `kill -9` of the active session PID.\n- **`restart`** — to start a FRESH session (new UUID, new cwd) between the three variants, so the recording shows three distinct session rows separated by grey gaps.\n\nThis is tooling work, not an observability limit: the cell keeps a real recipe + spec, and `record` ports `exit_clean` / `sigkill` / `restart` from drive-claudecode-interactive.sh before it drives. Naming the primary blocker as `gap:exit_clean` (the first teardown the recipe hits); `sigkill` and `restart` are listed in caveats so `record` ports all three.\n\n## Confidence\n\n0.85 — the daemon pillar is anchored in a LIVE observation (`/quit` removed the session) plus the committed adapter source, and the agent pillar is direct OS process behavior. The provisional edge is variant-3's sweep-to-ready timing within the recording tail (timing-dependent, same caveat as claudecode), which `record` will settle.",
+      "driver_capability": "full",
+      "confidence": 0.95,
+      "body": "## Verdict\\n\\nagent_supports: yes\\ndaemon_capability: full\\ndriver_capability: full (exit_clean / sigkill / restart ported from drive-codex-interactive.sh — commit d0e68929)\\n\\nThe session-end scenario is recorded as TWO variants on kiro-cli — (1) clean exit via /quit, (2) SIGKILL while idle in `ready`. A third variant (SIGKILL mid-turn while `working`) was in the original 3-variant plan but is NOT OBSERVABLE on kiro-cli and was dropped after the live recording proved why (see the recording-refutes note below). kiro-cli 2.5.1 supports both recorded teardowns as-shipped, the daemon observes the disappearance by design, and the driver now implements all three teardown step types.\\n\\n## agent_supports: yes\\n\\nBoth recorded teardowns are native:\\n\\n- **Variant 1 (clean exit).** `/quit` (alias `/exit`) ends the chat cleanly: kiro prints \"Session ended.\", removes the `<uuid>.lock` live-session marker, and the `kiro-cli` parent process exits. LIVE-verified in the recording: process_exited fires right after the session returns to ready.\\n- **Variant 2 (SIGKILL while idle).** `kill -9` on the `kiro-cli` parent PID (matched by cwd, mirroring DiscoverPIDByCWD) terminates the process while the session sits idle in `ready`; the daemon emits process_exited and no state ever advances to working afterward.\\n\\n## daemon_capability: full\\n\\n**Process-exit → session removed BY DESIGN.** The kiro-cli adapter matches on `ExactName{Name: \"kiro-cli\"}` and discovers the PID by cwd (`DiscoverPIDByCWD`). When the parent dies — clean `/quit` OR `kill -9` — the process scanner stops matching it, emits `process_exited`, and the row is removed. Both recorded variants show this live.\\n\\n**The `ready → working → ready` arc** is produced by the parser: a `Prompt` event drives `ready → working`; the FINAL text-only `AssistantMessage` of a turn drives `working → ready`. Verified in the recording for both variants.\\n\\n## RECORDING REFUTES THE 3rd VARIANT — kiro writes its transcript ATOMICALLY at turn-end\\n\\nThe original assessment planned a variant 3 (SIGKILL mid-turn while `working`), mirroring the claudecode session-end cell. The LIVE recording (events.jsonl 2026-06-05, commit below) proved this variant is UNOBSERVABLE on kiro-cli:\\n\\n- kiro-cli does NOT stream its transcript. It buffers the ENTIRE turn (the `Prompt` line AND the `AssistantMessage`) in memory and FLUSHES the `<uuid>.jsonl` only when the turn COMPLETES. A live probe of a 500-word essay turn showed the transcript file at 0 bytes for the full 12 s the turn ran — nothing is written until the turn finishes.\\n- The daemon keys `working` off a non-empty transcript write (`transcript_activity`). With an empty file mid-turn, the session NEVER enters `working` while the turn is in flight; `working` materializes only at the instant of the turn-end flush, immediately followed by `ready` (the text-only AssistantMessage).\\n- Therefore a SIGKILL during a running turn kills kiro BEFORE any transcript line is written: the `<uuid>.jsonl` stays 0 bytes, the daemon never registers a session row, and there is NO process_exited for it. In the 3-variant recording, variant 3 left an empty `bdbca90d….jsonl` and produced ZERO events — no birth, no working, no exit.\\n\\nConsequence: on a transcript-tailing daemon, kiro-cli cannot exhibit the \"stuck in working after a crash\" failure mode this scenario probes, because `working` exists only at the atomic turn-end flush, never durably mid-turn. The mid-turn-SIGKILL variant collapses into \"no session was ever observed,\" which is not a meaningful session-end assertion. The cell is corrected to the two variants that ARE observable.\\n\\n## driver_capability: full\\n\\nThe driver gap is closed: `exit_clean` (send /quit), `sigkill` (kill -9 the cwd-matched kiro-cli parent), and `restart` (fresh launch, new UUID, new cwd) are ported from drive-codex-interactive.sh and added to DRIVE_ELICITS. kiro mints its own UUID per launch and is discovered via a MARKER exactly like codex, so it adopts the shared _lib/drive slot model.\\n\\n## Confidence\\n\\n0.95 — every recorded phase is anchored in the LIVE events.jsonl; the dropped variant 3 is backed by a direct live probe of kiro's atomic-flush transcript behavior.",
       "caveats": [
-        "Driver gap is plural: variant 1 needs `exit_clean`, variants 2 & 3 need `sigkill`, and the inter-variant fresh sessions need `restart`. All three arms are present-but-stubbed (`not_implemented`) in drive-kiro-cli-interactive.sh; `record` must port all three from drive-claudecode-interactive.sh, not just `exit_clean`.",
-        "Variant 3 (SIGKILL mid-turn): the post-crash sweep-to-ready transition may not land inside the recording's tail window — the live dashboard settles via the sweep, but the recording can miss it. The spec accommodates this by anchoring v3_exit to v3_turn_start rather than requiring an explicit post-crash ready phase (same shape as the claudecode session-end cell).",
-        "kiro-cli's JSONL carries no model/token/cost fields (FINDINGS.md §4); those live in the <uuid>.json sidecar which the parser does not read in v1. So observations assert model 'unknown' and cost/tokens zero — orthogonal to this scenario, which asserts lifecycle only.",
-        "`restart` for kiro-cli does NOT need a fresh cwd per session the way claudecode does (claude caches per-directory trust dialogs); kiro-cli launches with `--trust-all-tools` (persisted consent), so the trust picker never stalls. A fresh cwd is still cleanest for an unambiguous cwd-based PID match across the three variants."
+        "kiro-cli writes its transcript ATOMICALLY at turn-end (not streamed): mid-turn the <uuid>.jsonl is 0 bytes, so a session is never observably `working` while a turn runs. A SIGKILL mid-turn kills kiro before any line is written → empty transcript, no session row, no process_exited. The 3rd (mid-turn-SIGKILL) variant from the original plan was dropped for this reason; only clean-exit and idle-SIGKILL are recordable. Proven by a live probe (500-word essay turn = 0 transcript bytes for 12 s) and by variant 3 of the first recording (empty bdbca90d.jsonl, zero events).",
+        "sigkill targets the kiro-cli parent matched by cwd (pgrep -x kiro-cli + lsof cwd filter), mirroring the daemon's DiscoverPIDByCWD. pgrep -x never matches the always-running kiro_cli_desktop companion, and the cwd filter scopes the kill to the recording session only.",
+        "kiro-cli's JSONL carries no model/token/cost fields (FINDINGS.md §4); those live in the <uuid>.json sidecar which the parser does not read in v1. So observations assert model `unknown` and cost/tokens zero — orthogonal to this scenario, which asserts lifecycle only.",
+        "restart for kiro-cli launches a fresh kiro-cli in a NEW cwd (new UUID); kiro launches with persisted --trust-all-tools consent so a fresh cwd never stalls on a trust picker. A fresh cwd gives each variant an unambiguous cwd-based PID match across the variants."
       ],
       "sources": [
         {
@@ -51,6 +51,11 @@
           "kind": "file",
           "ref": "replaydata/agents/claudecode/scenarios/1-2_session-end/metadata.json",
           "note": "Reference 3-variant recipe (exit_clean / restart / sigkill) and the variant-3 tail-window caveat this cell mirrors."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/kiro-cli/scenarios/1-2_session-end/recordings",
+          "note": "LIVE recording 2026-06-05: variants 1 (clean /quit) and 2 (idle SIGKILL) captured cleanly (2 UUID sessions, 2 process_exited, ready→working→ready arcs). The original variant 3 (mid-turn SIGKILL) produced an EMPTY transcript and ZERO events — proving kiro writes its transcript atomically at turn-end, so a running turn is never observably `working` and a mid-turn kill yields no session row. A live probe (500-word essay = 0 transcript bytes for 12 s) confirmed the atomic-flush behavior."
         }
       ]
     },
@@ -102,34 +107,15 @@
         },
         {
           "type": "sleep",
-          "seconds": 5
-        },
-        {
-          "type": "restart"
-        },
-        {
-          "type": "send",
-          "text": "Write a 200 word essay about the history of coffee."
-        },
-        {
-          "type": "sleep",
-          "seconds": 2
-        },
-        {
-          "type": "sigkill"
-        },
-        {
-          "type": "sleep",
-          "seconds": 8
+          "seconds": 6
         }
       ],
       "verify": [
-        "events.jsonl contains 3 distinct UUID session_ids (one per variant) plus their proc-<PID> pre-session rows",
-        "events.jsonl contains 3 process_exited events, one per UUID",
+        "events.jsonl contains 2 distinct UUID session_ids (one per variant)",
+        "events.jsonl contains 2 process_exited events, one per UUID",
         "variant 1: the first UUID session returns to ready right after its turn completes, immediately preceding its process_exited (proves 'State is ready at exit')",
         "variant 2: the second UUID session ends in ready (idle) when sigkill fires; no state_transition to working appears after process_exited",
-        "variant 3: the third UUID session is in working when sigkill fires; the sweep-promotes-to-ready transition may or may not appear before transcript_removed within the 8s tail — accept either shape",
-        "the viewer state band shows three colored arcs separated by grey gaps where no session is alive between variants"
+        "the viewer state band shows two colored arcs separated by a grey gap where no session is alive between variants"
       ],
       "settings": {},
       "timeout_seconds": 180
