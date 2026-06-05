@@ -65,7 +65,6 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 	ev.ModelName, ev.ContextWindow = extractClaudeCodeModel(raw)
 	ev.Tokens = extractClaudeCodeTokens(raw)
 	p.applyRequestIDContribution(raw, ev)
-	ev.ContentChars = tailer.ExtractContentChars(raw)
 
 	eventType = resolveAssistantStreaming(raw, eventType)
 

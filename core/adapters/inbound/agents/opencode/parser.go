@@ -214,7 +214,6 @@ func parseTextPart(raw map[string]interface{}, ev *tailer.ParsedEvent) *tailer.P
 		} else {
 			ev.AssistantText = text
 		}
-		ev.ContentChars = int64(len(text))
 	}
 	return ev
 }

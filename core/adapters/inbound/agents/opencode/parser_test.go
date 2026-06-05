@@ -200,9 +200,6 @@ func TestParser_TextPart_LongTruncated(t *testing.T) {
 	if !strings.HasPrefix(ev.AssistantText, "…") {
 		t.Errorf("AssistantText = %q, want leading …", ev.AssistantText)
 	}
-	if ev.ContentChars != 300 {
-		t.Errorf("ContentChars = %d, want 300", ev.ContentChars)
-	}
 }
 
 func TestParser_TextPart_UserMessage(t *testing.T) {

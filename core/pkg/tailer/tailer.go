@@ -224,10 +224,6 @@ type TranscriptTailer struct {
 	// parallel tool closures. See issue #117.
 	openToolCalls map[string]string
 
-	// contentChars accumulates character count from message content for
-	// token estimation when explicit token counts aren't available.
-	contentChars int64
-
 	// Token breakdown accumulators (latest snapshot, not cumulative).
 	// Used for context utilization — always reflects the most recent API turn.
 	inputTokens         int64
@@ -938,8 +934,6 @@ func (t *TranscriptTailer) processParsedEvent(parsed *ParsedEvent, sawUserBlocki
 		t.lastTaskEstimate = nil
 		t.firstTaskEstimate = nil
 	}
-
-	t.contentChars += parsed.ContentChars
 
 	t.addMessageEvent(MessageEvent{
 		Timestamp: parsed.Timestamp,

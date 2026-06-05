@@ -218,8 +218,6 @@ func (p *testParser) ParseLine(raw map[string]interface{}) *ParsedEvent {
 			ev.ContextWindow = int64(cw)
 		}
 	}
-	ev.ContentChars = ExtractContentChars(raw)
-
 	// Filter non-message events.
 	switch eventType {
 	case "user_message", "assistant_message", "tool_call", "tool_result",

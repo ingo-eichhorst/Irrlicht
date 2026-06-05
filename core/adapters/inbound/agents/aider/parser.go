@@ -102,7 +102,6 @@ func (p *Parser) ParseLineRaw(line string) *tailer.ParsedEvent {
 		return &tailer.ParsedEvent{
 			EventType:      "user_message",
 			AssistantText:  truncate(text),
-			ContentChars:   int64(len(text)),
 			ClearToolNames: true,
 		}
 	}
@@ -133,7 +132,7 @@ func (p *Parser) ParseLineRaw(line string) *tailer.ParsedEvent {
 	}
 
 	// Plain prose: assistant response. Buffer it for the next model-call
-	// flush. ContentChars updates run on flush, not per line.
+	// flush.
 	if p.turnOpen {
 		if p.assistantBuffer.Len() > 0 {
 			p.assistantBuffer.WriteString(" ")
@@ -169,7 +168,6 @@ func (p *Parser) closeModelCall(m []string) *tailer.ParsedEvent {
 	}
 
 	text := strings.TrimSpace(p.assistantBuffer.String())
-	contentChars := int64(len(text))
 	p.assistantBuffer.Reset()
 	// turnOpen intentionally stays true: another model call may follow.
 
@@ -183,7 +181,6 @@ func (p *Parser) closeModelCall(m []string) *tailer.ParsedEvent {
 		EventType:     "assistant_message",
 		ModelName:     p.model,
 		AssistantText: truncate(text),
-		ContentChars:  contentChars,
 		Contribution:  contribution,
 		TaskEstimate:  taskEstimate,
 		Tokens: &tailer.TokenSnapshot{
@@ -208,7 +205,6 @@ func (p *Parser) flushErrorTurn(line string) *tailer.ParsedEvent {
 		EventType:     "turn_done",
 		ModelName:     p.model,
 		AssistantText: truncate(errText),
-		ContentChars:  int64(len(errText)),
 	}
 }
 

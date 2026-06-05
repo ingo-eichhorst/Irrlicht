@@ -35,7 +35,7 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 	}
 
 	data, _ := raw["data"].(map[string]interface{})
-	content, _ := dataContent(data)
+	content := dataContent(data)
 
 	switch kind {
 	case "Prompt":
@@ -96,6 +96,14 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 			if id, _ := d["toolUseId"].(string); id != "" {
 				ev.ToolResultIDs = append(ev.ToolResultIDs, id)
 			}
+			// status is the tool HARNESS verdict, not the command's: a shell
+			// command exiting non-zero is still status:"success" (the exit
+			// code is payload data), while tool-input validation failures AND
+			// user-cancelled tools (Esc) are both status:"error" — kiro has
+			// no separate cancelled status (live-probed on 2.6.0, #592
+			// finding 3). A cancellation is distinguishable only via
+			// data.results[id].result == "Cancelled", should that ever
+			// matter.
 			if status, _ := d["status"].(string); status != "" && status != "success" {
 				ev.IsError = true
 			}
@@ -112,14 +120,19 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 		return ev
 	}
 
-	ev.ContentChars = tailer.ExtractContentChars(raw)
-
 	return ev
 }
 
 // parseKiroTimestamp reads data.meta.timestamp (epoch seconds — present on
 // Prompt events only), falling back to tailer.ParseTimestamp for any
 // top-level timestamp shape, which itself falls back to time.Now().
+//
+// The fallback means non-Prompt events are stamped with parse time: accurate
+// while tailing live, but on BACKFILL of a pre-existing transcript every
+// AssistantMessage/ToolResults event lands at scan time — a rescued session's
+// LastMessageAt reads as "just now" rather than its real last activity.
+// SessionStartAt stays correct (the first Prompt carries a real timestamp).
+// Nothing better is available in the JSONL (#592, finding 2).
 func parseKiroTimestamp(raw map[string]interface{}) time.Time {
 	if data, ok := raw["data"].(map[string]interface{}); ok {
 		if meta, ok := data["meta"].(map[string]interface{}); ok {
@@ -132,10 +145,10 @@ func parseKiroTimestamp(raw map[string]interface{}) time.Time {
 }
 
 // dataContent returns data.content as a slice, tolerating absent fields.
-func dataContent(data map[string]interface{}) ([]interface{}, bool) {
+func dataContent(data map[string]interface{}) []interface{} {
 	if data == nil {
-		return nil, false
+		return nil
 	}
-	content, ok := data["content"].([]interface{})
-	return content, ok
+	content, _ := data["content"].([]interface{})
+	return content
 }

@@ -144,9 +144,6 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 		return ev
 	}
 
-	// Content character count.
-	ev.ContentChars = tailer.ExtractContentChars(raw)
-
 	return ev
 }
 

@@ -189,9 +189,6 @@ func TestParser_EmptyTurn_NoCrash(t *testing.T) {
 	if asst.AssistantText != "" {
 		t.Errorf("expected empty assistant text, got %q", asst.AssistantText)
 	}
-	if asst.ContentChars != 0 {
-		t.Errorf("expected 0 ContentChars, got %d", asst.ContentChars)
-	}
 }
 
 func TestParser_BlockquoteNoise_Skipped(t *testing.T) {
@@ -314,9 +311,6 @@ func TestParser_LLMError_EndsTurn(t *testing.T) {
 	}
 	if !strings.Contains(done.AssistantText, "BadRequestError") {
 		t.Errorf("expected error text in AssistantText, got %q", done.AssistantText)
-	}
-	if done.ContentChars == 0 {
-		t.Errorf("expected non-zero ContentChars for error turn")
 	}
 }
 
