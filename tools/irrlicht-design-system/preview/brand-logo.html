@@ -40,20 +40,17 @@ const HUES = {
   purple: {
     linear: [['0%','#E9DDFF',1],['24%','#C9B2FF',1],['50%','#8B5CF6',1],['76%','#7C3AED',1],['100%','#6D28D9',1]],
     innerTop: [['0%','#FFFFFF',0.34],['33%','#F5F0FF',0.20],['67%','#D9C8FF',0.07],['100%','#FFFFFF',0]],
-    innerBottom: [['0%','#B691FF',0.28],['45%','#8B5CF6',0.14],['100%','#FFFFFF',0]],
-    baseGlow: [['0%','#8B5CF6',0.96],['42%','#7C3AED',0.60],['75%','#6D28D9',0.26],['100%','#5B21B6',0]]
+    innerBottom: [['0%','#B691FF',0.28],['45%','#8B5CF6',0.14],['100%','#FFFFFF',0]]
   },
   orange: {
     linear: [['0%','#FFF3B0',1],['24%','#FFD36B',1],['50%','#FFAA3A',1],['76%','#FF7C2E',1],['100%','#FF5A34',1]],
     innerTop: [['0%','#FFFFFF',0.36],['33%','#FFF6D5',0.22],['67%','#FFD88D',0.08],['100%','#FFFFFF',0]],
-    innerBottom: [['0%','#FFC18C',0.45],['45%','#FF9F69',0.22],['100%','#FFFFFF',0]],
-    baseGlow: [['0%','#FF8C2A',0.98],['42%','#FF6A2D',0.65],['75%','#FF4B36',0.28],['100%','#FF3A4A',0]]
+    innerBottom: [['0%','#FFC18C',0.45],['45%','#FF9F69',0.22],['100%','#FFFFFF',0]]
   },
   green: {
     linear: [['0%','#ECFFF4',1],['22%','#B4F5C8',1],['48%','#4ADE80',1],['76%','#22C55E',1],['100%','#16A34A',1]],
     innerTop: [['0%','#FFFFFF',0.35],['25%','#F3FFF7',0.22],['54%','#C8FFD9',0.08],['100%','#FFFFFF',0]],
-    innerBottom: [['0%','#92F6AE',0.35],['45%','#4ADE80',0.16],['100%','#FFFFFF',0]],
-    baseGlow: [['0%','#22C55E',0.98],['42%','#16A34A',0.62],['75%','#15803D',0.28],['100%','#166534',0]]
+    innerBottom: [['0%','#92F6AE',0.35],['45%','#4ADE80',0.16],['100%','#FFFFFF',0]]
   }
 };
 
@@ -65,7 +62,6 @@ function flameFull(uid, hue) {
     <linearGradient id="fg${uid}" x1="0.38" y1="0.08" x2="0.62" y2="0.95">${stops(h.linear)}</linearGradient>
     <radialGradient id="gt${uid}" cx="0.35" cy="0.18" r="0.85">${stops(h.innerTop)}</radialGradient>
     <radialGradient id="gb${uid}" cx="0.53" cy="0.92" r="0.42">${stops(h.innerBottom)}</radialGradient>
-    <radialGradient id="bg${uid}" cx="50%" cy="50%" r="50%">${stops(h.baseGlow)}</radialGradient>
     <filter id="og${uid}" x="-30%" y="-30%" width="160%" height="180%">
       <feGaussianBlur in="SourceGraphic" stdDeviation="14" result="b1"/>
       <feColorMatrix in="b1" type="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 0.55 0" result="g1"/>
@@ -75,7 +71,6 @@ function flameFull(uid, hue) {
     </filter>
     <mask id="m${uid}"><path fill="white" fill-rule="evenodd" d="${FLAME}"/></mask>
   </defs>
-  <ellipse cx="627" cy="1060" rx="155" ry="52" fill="url(#bg${uid})" opacity="0.9"/>
   <g filter="url(#og${uid})">
     <path fill="url(#fg${uid})" fill-rule="evenodd" d="${FLAME}"/>
     <g mask="url(#m${uid})">
