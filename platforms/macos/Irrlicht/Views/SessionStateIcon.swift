@@ -8,6 +8,12 @@ import SwiftUI
 /// - waiting: two-bar pause.
 /// - ready:   SF Symbol `checkmark.circle.fill` (unchanged from before).
 ///
+/// All three states occupy the same fixed `size × size` layout box
+/// (issue #596): the session row is a leading HStack, so a state whose
+/// icon measured wider — the ready SF Symbol's font-derived box is 14 pt
+/// at size 12 — shifted the agent number, title, and context bar of that
+/// row against its neighbours.
+///
 /// The opacity animation is suppressed when the user has enabled Reduce
 /// Motion; the dot remains at full opacity, fully visible.
 struct SessionStateIcon: View {
@@ -21,9 +27,14 @@ struct SessionStateIcon: View {
         case .waiting:
             WaitingIcon(size: size)
         case .ready:
+            // The font keeps the glyph's optical size (the working dot is
+            // tuned to match it); the explicit frame clamps the layout box
+            // to size × size — without it the symbol's font metrics make
+            // the box wider and push the rest of the row to the right.
             Image(systemName: "checkmark.circle.fill")
                 .font(.system(size: size))
                 .foregroundColor(IrrColors.ready)
+                .frame(width: size, height: size)
         }
     }
 }
