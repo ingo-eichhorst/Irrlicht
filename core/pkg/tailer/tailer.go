@@ -881,7 +881,13 @@ func (t *TranscriptTailer) processParsedEvent(parsed *ParsedEvent, sawUserBlocki
 				break
 			}
 			delete(t.pendingTaskCreates, d.ToolUseID)
-			for i := range t.tasks {
+			// Scan in reverse: when the provisional counter lags Claude's
+			// numbering by less than a parallel-create batch, an already
+			// assigned authoritative ID can collide with a later task's
+			// provisional one. The authoritative holder was necessarily
+			// created earlier (smaller provisional, earlier result), so the
+			// last match is always the still-provisional task.
+			for i := len(t.tasks) - 1; i >= 0; i-- {
 				if t.tasks[i].ID == provisional {
 					t.tasks[i].ID = d.ID
 					break

@@ -1803,6 +1803,60 @@ func TestTailer_TaskCreateResult_AlignsIDsMidSession(t *testing.T) {
 	}
 }
 
+// TestTailer_ParallelTaskCreates_NoIDCollision pins the assign-loop scan
+// direction: with parallel TaskCreates (one assistant message, several
+// tool_use blocks) and a provisional counter lagging Claude's numbering by
+// less than the batch size, an already-assigned authoritative ID collides
+// with a later create's provisional one. A forward scan re-assigned the
+// earlier (authoritative) task, silently swapping subject↔ID pairs; the
+// reverse scan always finds the still-provisional task, which is created
+// later than any authoritative holder of the same ID. See issue #615.
+func TestTailer_ParallelTaskCreates_NoIDCollision(t *testing.T) {
+	// Transcript opens mid-session: Claude's numbering continues at 3 while
+	// the tailer's counter starts at 0. Three creates land in ONE assistant
+	// message before any result — provisionals 1/2/3 vs authoritative 3/4/5,
+	// so authoritative "3" collides with the third create's provisional "3".
+	parallelCreates := map[string]interface{}{
+		"type":      "assistant",
+		"timestamp": "2026-04-05T22:00:00Z",
+		"message": map[string]interface{}{
+			"role":        "assistant",
+			"stop_reason": "tool_use",
+			"content": []interface{}{
+				map[string]interface{}{"type": "tool_use", "id": "tu_1", "name": "TaskCreate",
+					"input": map[string]interface{}{"subject": "Alpha", "activeForm": "Alphaing"}},
+				map[string]interface{}{"type": "tool_use", "id": "tu_2", "name": "TaskCreate",
+					"input": map[string]interface{}{"subject": "Beta", "activeForm": "Betaing"}},
+				map[string]interface{}{"type": "tool_use", "id": "tu_3", "name": "TaskCreate",
+					"input": map[string]interface{}{"subject": "Gamma", "activeForm": "Gammaing"}},
+			},
+		},
+	}
+	m, err := newCCTailer(writeTranscript(t, []map[string]interface{}{
+		parallelCreates,
+		makeTaskCreateResultEvent("tu_1", "3"),
+		makeTaskCreateResultEvent("tu_2", "4"),
+		makeTaskCreateResultEvent("tu_3", "5"),
+	})).TailAndProcess()
+	if err != nil {
+		t.Fatalf("TailAndProcess: %v", err)
+	}
+	if len(m.Tasks) != 3 {
+		t.Fatalf("Tasks len = %d, want 3; tasks=%+v", len(m.Tasks), m.Tasks)
+	}
+	want := []struct{ id, subject string }{
+		{"3", "Alpha"},
+		{"4", "Beta"},
+		{"5", "Gamma"},
+	}
+	for i, w := range want {
+		if m.Tasks[i].ID != w.id || m.Tasks[i].Subject != w.subject {
+			t.Errorf("task[%d] = id=%s subject=%q, want id=%s subject=%q",
+				i, m.Tasks[i].ID, m.Tasks[i].Subject, w.id, w.subject)
+		}
+	}
+}
+
 // TestTailer_TaskSeq_SurvivesLedgerRestart pins the counter-fallback half of
 // #615: even for transcripts whose results carry no toolUseResult.task.id,
 // the provisional counter must survive a daemon restart. Restoring it as
