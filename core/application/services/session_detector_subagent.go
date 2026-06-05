@@ -20,6 +20,7 @@ func (d *SessionDetector) refreshSubagentSummary(state *session.SessionState) {
 		children = nil
 	}
 	state.Subagents = session.ComputeSubagentSummary(state, children)
+	session.ApplySubagentTaskEstimate(state, children, time.Now())
 }
 
 // finishOrphanedChildren walks the child sessions of parentID and promotes

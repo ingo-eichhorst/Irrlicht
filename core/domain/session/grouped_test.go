@@ -182,6 +182,40 @@ func TestBuildDashboard_OrphanChildren(t *testing.T) {
 	}
 }
 
+func TestBuildDashboard_ParentEstimateFromChildren(t *testing.T) {
+	// The REST-hydration path (#622): a parent without its own estimate
+	// inherits the subagent aggregate, so the dashboard shows the same chip
+	// the push path produces.
+	eta := int64(1769000900)
+	sessions := []*SessionState{
+		{SessionID: "parent", State: StateWorking, ProjectName: "proj", Metrics: &SessionMetrics{}},
+		{SessionID: "child1", State: StateWorking, ParentSessionID: "parent",
+			Metrics: &SessionMetrics{
+				TaskEstimate:      &TaskEstimate{TotalRounds: 6, CompletedRounds: 2, UpdatedAt: 1769000000, Source: "marker"},
+				TaskCompletionEta: &eta,
+			}},
+		{SessionID: "child2", State: StateReady, ParentSessionID: "parent",
+			Metrics: &SessionMetrics{
+				TaskEstimate: &TaskEstimate{TotalRounds: 4, CompletedRounds: 4, UpdatedAt: 1769000100, Source: "marker"},
+			}},
+	}
+
+	groups := BuildDashboard(sessions, nil)
+
+	parent := groups[0].Agents[0]
+	est := parent.Metrics.TaskEstimate
+	if est == nil || est.Source != SubagentEstimateSource {
+		t.Fatalf("parent estimate = %+v, want subagents-sourced", est)
+	}
+	// Only the WORKING child contributes — the finished one left the wave.
+	if est.TotalRounds != 6 || est.CompletedRounds != 2 {
+		t.Errorf("rounds = %d/%d, want 2/6", est.CompletedRounds, est.TotalRounds)
+	}
+	if parent.Metrics.TaskCompletionEta == nil || *parent.Metrics.TaskCompletionEta != eta {
+		t.Errorf("eta = %v, want child eta %d", parent.Metrics.TaskCompletionEta, eta)
+	}
+}
+
 func TestBuildDashboard_SubagentsUnification(t *testing.T) {
 	sessions := []*SessionState{
 		{
