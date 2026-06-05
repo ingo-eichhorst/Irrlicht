@@ -172,6 +172,20 @@ func (d *SessionDetector) reevaluateParent(parentID string) {
 	if err != nil || parent == nil {
 		return
 	}
+	// A child just changed state or was deleted: the parent's persisted
+	// badge may be stale even when the parent itself won't transition —
+	// e.g. the liveness sweep removing a child of a waiting/ready parent
+	// (#593). Refresh, persist, and re-push, gated on the summary actually
+	// changing so routine child events add no push traffic.
+	prevSummary := parent.Subagents
+	d.refreshSubagentSummary(parent)
+	if !parent.Subagents.Equal(prevSummary) {
+		if err := d.repo.Save(parent); err != nil {
+			d.log.LogError("session-detector", parentID,
+				fmt.Sprintf("failed to persist refreshed subagent summary: %v", err))
+		}
+		d.broadcast(outbound.PushTypeUpdated, parent)
+	}
 	// Only re-evaluate parents that are being held in working.
 	if parent.State != session.StateWorking {
 		return
@@ -214,8 +228,19 @@ func (d *SessionDetector) reevaluateParent(parentID string) {
 	}
 	d.broadcast(outbound.PushTypeUpdated, parent)
 
-	// If the parent transitioned to ready, clean up its children.
+	// If the parent transitioned to ready, clean up its children — then
+	// refresh, persist, and re-push the now-cleared summary so the final
+	// parent message doesn't count children deleted a moment ago (#593).
 	if parent.State == session.StateReady {
+		prev := parent.Subagents
 		d.pidMgr.cleanupChildren(parentID)
+		d.refreshSubagentSummary(parent)
+		if !parent.Subagents.Equal(prev) {
+			if err := d.repo.Save(parent); err != nil {
+				d.log.LogError("session-detector", parentID,
+					fmt.Sprintf("failed to persist cleared subagent summary: %v", err))
+			}
+			d.broadcast(outbound.PushTypeUpdated, parent)
+		}
 	}
 }

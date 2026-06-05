@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -515,6 +516,13 @@ func (h *HistoryTracker) Load() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for sid, granMap := range hf.Sessions {
+		// Subagent histories are transient — their sessions are deleted when
+		// the parent finishes, so a restored entry can only be a leak. Also
+		// one-time-heals files bloated by the pre-#593 eviction gap (deletion
+		// paths in PIDManager never evicted history).
+		if strings.HasPrefix(sid, "agent-") {
+			continue
+		}
 		sb := newSessionBuffers()
 		for gStr, states := range granMap {
 			g, err := strconv.Atoi(gStr)

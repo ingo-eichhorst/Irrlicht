@@ -333,18 +333,39 @@ func (pm *PIDManager) isStartupZombie(state *session.SessionState, liveLookup fu
 	return isStaleTranscript(state.TranscriptPath)
 }
 
+// deleteSession removes one session through a single choke point: caller-side
+// tracking is evicted via onSessionDeleted (history rings, projectSessions —
+// the leak in #593), the removal is logged and recorded for offline replay
+// (same transcript_removed convention as the same-PID cleanup, issue #169),
+// and the deletion is broadcast so clients drop the row. Every PIDManager
+// session removal must route through here so no path leaks history again.
+func (pm *PIDManager) deleteSession(s *session.SessionState, reason string) {
+	pm.record(lifecycle.Event{
+		Kind:           lifecycle.KindTranscriptRemoved,
+		SessionID:      s.SessionID,
+		Adapter:        s.Adapter,
+		TranscriptPath: s.TranscriptPath,
+		Reason:         reason,
+	})
+	if pm.onSessionDeleted != nil {
+		pm.onSessionDeleted(s.SessionID)
+	}
+	_ = pm.repo.Delete(s.SessionID)
+	pm.log.LogInfo("session-cleanup", s.SessionID,
+		fmt.Sprintf("deleted (%s, state=%s)", reason, s.State))
+	pm.broadcast(outbound.PushTypeDeleted, s)
+}
+
 // deleteWithChildren removes a session and all its child sessions (subagents).
 func (pm *PIDManager) deleteWithChildren(state *session.SessionState) {
 	if states, err := pm.repo.ListAll(); err == nil {
 		for _, s := range states {
 			if s.ParentSessionID == state.SessionID {
-				_ = pm.repo.Delete(s.SessionID)
-				pm.broadcast(outbound.PushTypeDeleted, s)
+				pm.deleteSession(s, "parent deleted")
 			}
 		}
 	}
-	_ = pm.repo.Delete(state.SessionID)
-	pm.broadcast(outbound.PushTypeDeleted, state)
+	pm.deleteSession(state, "session deleted")
 }
 
 // cleanupChildren removes all child sessions of the given parent.
@@ -355,8 +376,7 @@ func (pm *PIDManager) cleanupChildren(parentID string) {
 	}
 	for _, s := range states {
 		if s.ParentSessionID == parentID && !strings.Contains(s.TranscriptPath, "?session=") {
-			_ = pm.repo.Delete(s.SessionID)
-			pm.broadcast(outbound.PushTypeDeleted, s)
+			pm.deleteSession(s, "parent finished — child cleanup")
 		}
 	}
 }
@@ -660,8 +680,11 @@ func (pm *PIDManager) CheckPIDLiveness() bool {
 				if !strings.Contains(state.TranscriptPath, "?session=") &&
 					(state.State == session.StateReady || isStaleTranscript(state.TranscriptPath)) {
 					parentID := state.ParentSessionID
-					_ = pm.repo.Delete(state.SessionID)
-					pm.broadcast(outbound.PushTypeDeleted, state)
+					reason := "child ready — liveness sweep"
+					if state.State != session.StateReady {
+						reason = "child transcript stale — liveness sweep"
+					}
+					pm.deleteSession(state, reason)
 					// Re-evaluate the parent: it may have been held in
 					// `working` only because of this child. Without this
 					// nudge the parent stays stuck until its own next

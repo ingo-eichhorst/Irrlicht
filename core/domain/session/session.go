@@ -565,6 +565,16 @@ type subagentSummary struct {
 	Ready   int `json:"ready"`
 }
 
+// Equal reports whether two summaries carry the same counts. Nil receivers
+// and arguments are handled — two nils are equal. Used to skip redundant
+// parent re-broadcasts when a child event didn't change the badge (#593).
+func (s *subagentSummary) Equal(o *subagentSummary) bool {
+	if s == nil || o == nil {
+		return s == o
+	}
+	return *s == *o
+}
+
 // Launcher identifies the terminal emulator or IDE that spawned the session's
 // agent process. Captured once from the process env when the PID is first
 // known (see processlifecycle.ReadLauncherEnv). Fields are best-effort —

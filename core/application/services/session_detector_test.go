@@ -15,6 +15,7 @@ import (
 	"irrlicht/core/domain/lifecycle"
 	"irrlicht/core/domain/session"
 	"irrlicht/core/ports/inbound"
+	"irrlicht/core/ports/outbound"
 )
 
 // --- tests -------------------------------------------------------------------
@@ -2638,5 +2639,672 @@ func TestSessionDetector_SeedFromDisk_ConsentGated(t *testing.T) {
 	}
 	if read["/tmp/pending-session.jsonl"] {
 		t.Error("un-consented adapter's transcript was read at seed — consent gate bypassed")
+	}
+}
+
+// TestSessionDetector_OrphanedChildrenFinish_WhenParentEndsWaitingWithQuestion
+// is the core #593 reproduction: a parent whose turn ends by asking a
+// question lands in waiting, not ready — before the fix the child
+// fast-forward only ran on the ready path, so finished children stayed
+// stuck in working until the liveness sweep.
+func TestSessionDetector_OrphanedChildrenFinish_WhenParentEndsWaitingWithQuestion(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	det := newDetector(tw, pw, repo)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	time.Sleep(20 * time.Millisecond)
+
+	now := time.Now().Unix()
+	tmpDir := t.TempDir()
+
+	parentPath := filepath.Join(tmpDir, "parent-asks.jsonl")
+	if err := os.WriteFile(parentPath, []byte(""), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	repo.Save(&session.SessionState{
+		SessionID:      "parent-asks",
+		State:          session.StateWorking,
+		TranscriptPath: parentPath,
+		FirstSeen:      now,
+		UpdatedAt:      now,
+		EventCount:     10,
+		Metrics: &session.SessionMetrics{
+			LastEventType:     "assistant",
+			HasOpenToolCall:   false,
+			LastAssistantText: "All stages recorded. Should I open the PR now?",
+		},
+	})
+
+	// Orphaned child: stale transcript (60s > SubagentQuietWindow), no open
+	// tools — its work is done, only the stop_reason:null quirk keeps it
+	// classified as working.
+	staleMtime := time.Now().Add(-60 * time.Second)
+	childPath := filepath.Join(tmpDir, "child-of-asker.jsonl")
+	if err := os.WriteFile(childPath, []byte(""), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(childPath, staleMtime, staleMtime); err != nil {
+		t.Fatal(err)
+	}
+	repo.Save(&session.SessionState{
+		SessionID:       "child-of-asker",
+		State:           session.StateWorking,
+		ParentSessionID: "parent-asks",
+		TranscriptPath:  childPath,
+		FirstSeen:       now,
+		UpdatedAt:       now,
+		EventCount:      5,
+		Metrics: &session.SessionMetrics{
+			LastEventType:   "assistant_streaming",
+			HasOpenToolCall: false,
+		},
+	})
+
+	tw.ch <- agent.Event{
+		Type:           agent.EventActivity,
+		SessionID:      "parent-asks",
+		ProjectDir:     "-Users-test",
+		TranscriptPath: parentPath,
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	parent, _ := repo.Load("parent-asks")
+	if parent == nil {
+		t.Fatal("parent session should still exist")
+	}
+	if parent.State != session.StateWaiting {
+		t.Errorf("parent state: got %q, want waiting — question/cue turn end", parent.State)
+	}
+
+	// No cleanup runs on the waiting path, so the child must still exist —
+	// fast-forwarded to ready (the sweep deletes it later).
+	child, _ := repo.Load("child-of-asker")
+	if child == nil {
+		t.Fatal("child should not be deleted on the waiting path")
+	}
+	if child.State != session.StateReady {
+		t.Errorf("child state: got %q, want ready — orphan fast-forward must fire on turn-done waiting", child.State)
+	}
+
+	cancel()
+	<-done
+}
+
+// TestSessionDetector_PermissionWaitingDoesNotFastForwardChildren locks the
+// #593 gating constraint: waiting caused by an open user-blocking tool
+// (permission prompt, AskUserQuestion) means the parent's turn is NOT done —
+// children must be left alone.
+func TestSessionDetector_PermissionWaitingDoesNotFastForwardChildren(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	det := newDetector(tw, pw, repo)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	time.Sleep(20 * time.Millisecond)
+
+	now := time.Now().Unix()
+	tmpDir := t.TempDir()
+
+	parentPath := filepath.Join(tmpDir, "parent-perm.jsonl")
+	if err := os.WriteFile(parentPath, []byte(""), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	repo.Save(&session.SessionState{
+		SessionID:      "parent-perm",
+		State:          session.StateWorking,
+		TranscriptPath: parentPath,
+		FirstSeen:      now,
+		UpdatedAt:      now,
+		EventCount:     10,
+		Metrics: &session.SessionMetrics{
+			LastEventType:     "tool_use",
+			HasOpenToolCall:   true,
+			LastOpenToolNames: []string{"AskUserQuestion"},
+		},
+	})
+
+	staleMtime := time.Now().Add(-60 * time.Second)
+	childPath := filepath.Join(tmpDir, "child-of-perm.jsonl")
+	if err := os.WriteFile(childPath, []byte(""), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(childPath, staleMtime, staleMtime); err != nil {
+		t.Fatal(err)
+	}
+	repo.Save(&session.SessionState{
+		SessionID:       "child-of-perm",
+		State:           session.StateWorking,
+		ParentSessionID: "parent-perm",
+		TranscriptPath:  childPath,
+		FirstSeen:       now,
+		UpdatedAt:       now,
+		EventCount:      5,
+		Metrics: &session.SessionMetrics{
+			LastEventType:   "assistant_streaming",
+			HasOpenToolCall: false,
+		},
+	})
+
+	tw.ch <- agent.Event{
+		Type:           agent.EventActivity,
+		SessionID:      "parent-perm",
+		ProjectDir:     "-Users-test",
+		TranscriptPath: parentPath,
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	parent, _ := repo.Load("parent-perm")
+	if parent == nil {
+		t.Fatal("parent session should still exist")
+	}
+	if parent.State != session.StateWaiting {
+		t.Errorf("parent state: got %q, want waiting — user-blocking tool open", parent.State)
+	}
+
+	child, _ := repo.Load("child-of-perm")
+	if child == nil {
+		t.Fatal("child should not be deleted")
+	}
+	if child.State != session.StateWorking {
+		t.Errorf("child state: got %q, want working — open-tool waiting must not fast-forward children", child.State)
+	}
+
+	cancel()
+	<-done
+}
+
+// TestSessionDetector_WaitingParent_DoesNotCleanupBackgroundChildren: a
+// background child still writing its transcript (within SubagentQuietWindow)
+// survives the parent's turn-done-waiting transition untouched (#593).
+func TestSessionDetector_WaitingParent_DoesNotCleanupBackgroundChildren(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	det := newDetector(tw, pw, repo)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	time.Sleep(20 * time.Millisecond)
+
+	now := time.Now().Unix()
+	tmpDir := t.TempDir()
+
+	parentPath := filepath.Join(tmpDir, "parent-asks-bg.jsonl")
+	if err := os.WriteFile(parentPath, []byte(""), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	repo.Save(&session.SessionState{
+		SessionID:      "parent-asks-bg",
+		State:          session.StateWorking,
+		TranscriptPath: parentPath,
+		FirstSeen:      now,
+		UpdatedAt:      now,
+		EventCount:     10,
+		Metrics: &session.SessionMetrics{
+			LastEventType:     "assistant",
+			HasOpenToolCall:   false,
+			LastAssistantText: "Kicked off the background review. Want a summary when it lands?",
+		},
+	})
+
+	// Background child: transcript freshly written (within the 30s quiet
+	// window) — must be left alone even though it has no open tool call.
+	childPath := filepath.Join(tmpDir, "child-bg.jsonl")
+	if err := os.WriteFile(childPath, []byte(""), 0644); err != nil {
+		t.Fatal(err)
+	}
+	repo.Save(&session.SessionState{
+		SessionID:       "child-bg",
+		State:           session.StateWorking,
+		ParentSessionID: "parent-asks-bg",
+		TranscriptPath:  childPath,
+		FirstSeen:       now,
+		UpdatedAt:       now,
+		EventCount:      5,
+		Metrics: &session.SessionMetrics{
+			LastEventType:   "assistant_streaming",
+			HasOpenToolCall: false,
+		},
+	})
+
+	tw.ch <- agent.Event{
+		Type:           agent.EventActivity,
+		SessionID:      "parent-asks-bg",
+		ProjectDir:     "-Users-test",
+		TranscriptPath: parentPath,
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	parent, _ := repo.Load("parent-asks-bg")
+	if parent == nil {
+		t.Fatal("parent session should still exist")
+	}
+	if parent.State != session.StateWaiting {
+		t.Errorf("parent state: got %q, want waiting", parent.State)
+	}
+
+	child, _ := repo.Load("child-bg")
+	if child == nil {
+		t.Fatal("background child should not be deleted")
+	}
+	if child.State != session.StateWorking {
+		t.Errorf("background child state: got %q, want working — quiet-window guard", child.State)
+	}
+
+	cancel()
+	<-done
+}
+
+// TestSessionDetector_ParentBadgeCleared_AfterReadyCleanup locks the #593
+// ordering fix: the turn's FINAL parent push must carry the post-cleanup
+// (empty) subagent summary, and the repo copy must be cleared too — the
+// pre-fix order was refresh → broadcast → cleanupChildren, so the last
+// message of the turn counted children deleted a moment later and the
+// stale summary stayed persisted for hook-path re-broadcasts.
+func TestSessionDetector_ParentBadgeCleared_AfterReadyCleanup(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	det, bc := newDetectorWithBroadcaster(tw, pw, repo)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	time.Sleep(20 * time.Millisecond)
+
+	now := time.Now().Unix()
+	tmpDir := t.TempDir()
+
+	parentPath := filepath.Join(tmpDir, "parent-clears.jsonl")
+	if err := os.WriteFile(parentPath, []byte(""), 0644); err != nil {
+		t.Fatal(err)
+	}
+	repo.Save(&session.SessionState{
+		SessionID:      "parent-clears",
+		State:          session.StateWorking,
+		TranscriptPath: parentPath,
+		FirstSeen:      now,
+		UpdatedAt:      now,
+		EventCount:     10,
+		Metrics: &session.SessionMetrics{
+			LastEventType:     "assistant",
+			HasOpenToolCall:   false,
+			LastAssistantText: "All waves complete.",
+		},
+	})
+
+	staleMtime := time.Now().Add(-60 * time.Second)
+	childPath := filepath.Join(tmpDir, "child-cleared.jsonl")
+	if err := os.WriteFile(childPath, []byte(""), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(childPath, staleMtime, staleMtime); err != nil {
+		t.Fatal(err)
+	}
+	repo.Save(&session.SessionState{
+		SessionID:       "child-cleared",
+		State:           session.StateWorking,
+		ParentSessionID: "parent-clears",
+		TranscriptPath:  childPath,
+		FirstSeen:       now,
+		UpdatedAt:       now,
+		EventCount:      5,
+		Metrics: &session.SessionMetrics{
+			LastEventType:   "assistant_streaming",
+			HasOpenToolCall: false,
+		},
+	})
+
+	tw.ch <- agent.Event{
+		Type:           agent.EventActivity,
+		SessionID:      "parent-clears",
+		ProjectDir:     "-Users-test",
+		TranscriptPath: parentPath,
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Quiesce the detector before reading shared state.
+	cancel()
+	<-done
+
+	parent, _ := repo.Load("parent-clears")
+	if parent == nil {
+		t.Fatal("parent session should still exist")
+	}
+	if parent.State != session.StateReady {
+		t.Fatalf("parent state: got %q, want ready", parent.State)
+	}
+	if parent.Subagents != nil {
+		t.Errorf("persisted parent summary: got %+v, want nil after cleanup", parent.Subagents)
+	}
+	if child, _ := repo.Load("child-cleared"); child != nil {
+		t.Errorf("child should be deleted by parent-ready cleanup, still in state %q", child.State)
+	}
+
+	// The LAST broadcast for the parent must carry the cleared summary.
+	var last *outbound.PushMessage
+	for _, m := range bc.messages() {
+		if m.Type == outbound.PushTypeUpdated && m.Session != nil && m.Session.SessionID == "parent-clears" {
+			mm := m
+			last = &mm
+		}
+	}
+	if last == nil {
+		t.Fatal("no session_updated broadcast for parent")
+	}
+	if last.Session.Subagents != nil {
+		t.Errorf("final parent push summary: got %+v, want nil", last.Session.Subagents)
+	}
+}
+
+// TestSessionDetector_ParentBadgeCleared_WhenChildSweptWhileParentWaiting
+// locks the #593 sweep-case fix: when the liveness sweep deletes a stuck
+// child of a parent that is NOT held in working (it's waiting on the user),
+// the parent's persisted summary must still be refreshed and re-pushed.
+// Pre-fix, reevaluateParent early-returned before touching the summary, so
+// a waiting parent kept its stale badge until its own next transcript event.
+func TestSessionDetector_ParentBadgeCleared_WhenChildSweptWhileParentWaiting(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	// The child-sweep path in PIDManager is gated on readyTTL > 0; wire a
+	// capturing broadcaster to assert the corrective parent push.
+	bc := &mockBroadcaster{}
+	det := services.NewSessionDetector(
+		[]inbound.Watcher{tw}, pw, repo,
+		&mockLogger{}, &mockGit{}, &mockMetrics{}, bc,
+		"test", 1*time.Second, nil, nil, nil,
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	time.Sleep(20 * time.Millisecond)
+
+	now := time.Now().Unix()
+	tmpDir := t.TempDir()
+
+	parentPath := filepath.Join(tmpDir, "parent-waiting.jsonl")
+	if err := os.WriteFile(parentPath, []byte(""), 0644); err != nil {
+		t.Fatal(err)
+	}
+	parent := &session.SessionState{
+		SessionID:      "parent-waiting",
+		State:          session.StateWaiting,
+		TranscriptPath: parentPath,
+		FirstSeen:      now,
+		UpdatedAt:      now,
+		EventCount:     10,
+		Metrics: &session.SessionMetrics{
+			LastEventType:     "assistant",
+			HasOpenToolCall:   false,
+			LastAssistantText: "Should I continue?",
+		},
+	}
+
+	// Stuck child: transcript went stale 5+ minutes ago, so the sweep
+	// deletes it on its next pass.
+	staleTime := time.Now().Add(-5 * time.Minute)
+	childPath := filepath.Join(tmpDir, "stuck-child.jsonl")
+	if err := os.WriteFile(childPath, []byte(""), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(childPath, staleTime, staleTime); err != nil {
+		t.Fatal(err)
+	}
+	child := &session.SessionState{
+		SessionID:       "stuck-child",
+		State:           session.StateWorking,
+		ParentSessionID: "parent-waiting",
+		TranscriptPath:  childPath,
+		FirstSeen:       now,
+		UpdatedAt:       now,
+		EventCount:      3,
+		Metrics: &session.SessionMetrics{
+			LastEventType: "tool_use",
+		},
+	}
+
+	// The parent's persisted badge counts the stuck child.
+	parent.Subagents = session.ComputeSubagentSummary(parent, []*session.SessionState{child})
+	repo.Save(parent)
+	repo.Save(child)
+
+	// Trigger the sweep directly instead of waiting the real ticker.
+	det.RunPIDLivenessSweepForTest()
+	time.Sleep(30 * time.Millisecond)
+
+	// Quiesce the detector before reading shared state.
+	cancel()
+	<-done
+
+	got, _ := repo.Load("parent-waiting")
+	if got == nil {
+		t.Fatal("parent session should still exist")
+	}
+	if got.State != session.StateWaiting {
+		t.Errorf("parent state: got %q, want waiting (no transition)", got.State)
+	}
+	if got.Subagents != nil {
+		t.Errorf("persisted parent summary: got %+v, want nil after child swept", got.Subagents)
+	}
+	if c, _ := repo.Load("stuck-child"); c != nil {
+		t.Errorf("child should have been swept, still in state %q", c.State)
+	}
+
+	// The corrective parent push must carry the cleared summary.
+	var last *outbound.PushMessage
+	for _, m := range bc.messages() {
+		if m.Type == outbound.PushTypeUpdated && m.Session != nil && m.Session.SessionID == "parent-waiting" {
+			mm := m
+			last = &mm
+		}
+	}
+	if last == nil {
+		t.Fatal("no corrective session_updated broadcast for the waiting parent")
+	}
+	if last.Session.Subagents != nil {
+		t.Errorf("corrective parent push summary: got %+v, want nil", last.Session.Subagents)
+	}
+}
+
+// TestSessionDetector_NoRedundantParentBroadcast_OnUnchangedSummary is the
+// #593 storm guard: a child event that doesn't change the parent's badge
+// must not add a second parent push on top of the existing child-broadcast
+// parent refresh (session_detector_helpers.go).
+func TestSessionDetector_NoRedundantParentBroadcast_OnUnchangedSummary(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	det, bc := newDetectorWithBroadcaster(tw, pw, repo)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	time.Sleep(20 * time.Millisecond)
+
+	now := time.Now().Unix()
+	tmpDir := t.TempDir()
+
+	parentPath := filepath.Join(tmpDir, "parent-stable.jsonl")
+	if err := os.WriteFile(parentPath, []byte(""), 0644); err != nil {
+		t.Fatal(err)
+	}
+	parent := &session.SessionState{
+		SessionID:      "parent-stable",
+		State:          session.StateWaiting,
+		TranscriptPath: parentPath,
+		FirstSeen:      now,
+		UpdatedAt:      now,
+		EventCount:     10,
+		Metrics: &session.SessionMetrics{
+			LastEventType:     "assistant",
+			HasOpenToolCall:   false,
+			LastAssistantText: "Should I continue?",
+		},
+	}
+
+	childPath := filepath.Join(tmpDir, "busy-child.jsonl")
+	if err := os.WriteFile(childPath, []byte(""), 0644); err != nil {
+		t.Fatal(err)
+	}
+	child := &session.SessionState{
+		SessionID:       "busy-child",
+		State:           session.StateWorking,
+		ParentSessionID: "parent-stable",
+		TranscriptPath:  childPath,
+		FirstSeen:       now,
+		UpdatedAt:       now,
+		EventCount:      5,
+		Metrics: &session.SessionMetrics{
+			LastEventType:   "tool_use",
+			HasOpenToolCall: true,
+		},
+	}
+
+	// Persisted badge already matches reality: one working child.
+	parent.Subagents = session.ComputeSubagentSummary(parent, []*session.SessionState{child})
+	repo.Save(parent)
+	repo.Save(child)
+
+	tw.ch <- agent.Event{
+		Type:           agent.EventActivity,
+		SessionID:      "busy-child",
+		ProjectDir:     "-Users-test",
+		TranscriptPath: childPath,
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	cancel()
+	<-done
+
+	parentPushes := 0
+	for _, m := range bc.messages() {
+		if m.Type == outbound.PushTypeUpdated && m.Session != nil && m.Session.SessionID == "parent-stable" {
+			parentPushes++
+		}
+	}
+	if parentPushes != 1 {
+		t.Errorf("parent pushes after one no-change child event: got %d, want 1 (child-broadcast refresh only)", parentPushes)
+	}
+}
+
+// TestSessionDetector_ChildDeletionIsRecorded: child cleanup must leave a
+// lifecycle trace (#593) — pre-fix, cleanupChildren and the liveness sweep
+// deleted silently, so recordings showed children that "leaked" forever.
+func TestSessionDetector_ChildDeletionIsRecorded(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	det := newDetector(tw, pw, repo)
+	rec := &mockRecorder{}
+	det.SetRecorder(rec)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	time.Sleep(20 * time.Millisecond)
+
+	now := time.Now().Unix()
+	tmpDir := t.TempDir()
+
+	parentPath := filepath.Join(tmpDir, "parent-records.jsonl")
+	if err := os.WriteFile(parentPath, []byte(""), 0644); err != nil {
+		t.Fatal(err)
+	}
+	repo.Save(&session.SessionState{
+		SessionID:      "parent-records",
+		State:          session.StateWorking,
+		TranscriptPath: parentPath,
+		FirstSeen:      now,
+		UpdatedAt:      now,
+		EventCount:     10,
+		Metrics: &session.SessionMetrics{
+			LastEventType:     "assistant",
+			HasOpenToolCall:   false,
+			LastAssistantText: "All waves complete.",
+		},
+	})
+
+	staleMtime := time.Now().Add(-60 * time.Second)
+	childPath := filepath.Join(tmpDir, "child-recorded.jsonl")
+	if err := os.WriteFile(childPath, []byte(""), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(childPath, staleMtime, staleMtime); err != nil {
+		t.Fatal(err)
+	}
+	repo.Save(&session.SessionState{
+		SessionID:       "child-recorded",
+		State:           session.StateWorking,
+		ParentSessionID: "parent-records",
+		TranscriptPath:  childPath,
+		FirstSeen:       now,
+		UpdatedAt:       now,
+		EventCount:      5,
+		Metrics: &session.SessionMetrics{
+			LastEventType:   "assistant_streaming",
+			HasOpenToolCall: false,
+		},
+	})
+
+	// Parent finishes its turn → ready → cleanupChildren deletes the child.
+	tw.ch <- agent.Event{
+		Type:           agent.EventActivity,
+		SessionID:      "parent-records",
+		ProjectDir:     "-Users-test",
+		TranscriptPath: parentPath,
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	cancel()
+	<-done
+
+	if child, _ := repo.Load("child-recorded"); child != nil {
+		t.Fatalf("child should be deleted, still in state %q", child.State)
+	}
+
+	found := false
+	for _, ev := range rec.snapshot() {
+		if ev.Kind == lifecycle.KindTranscriptRemoved && ev.SessionID == "child-recorded" {
+			found = true
+			if ev.Reason == "" {
+				t.Error("recorded child deletion should carry a reason")
+			}
+		}
+	}
+	if !found {
+		t.Error("no transcript_removed lifecycle event recorded for the cleaned-up child")
 	}
 }

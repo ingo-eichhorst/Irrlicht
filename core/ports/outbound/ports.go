@@ -16,6 +16,13 @@ type PushMessage struct {
 	Type    string                `json:"type"`
 	Session *session.SessionState `json:"session,omitempty"`
 
+	// Seq is a daemon-global monotonic sequence number stamped by
+	// pushService.Broadcast before fan-out — every subscriber sees the same
+	// Seq for a given message, so a gap in received Seq tells a client it
+	// missed a drop (slow-subscriber skip) and should re-hydrate (#593).
+	// 0 = unstamped: connect-time hub snapshots, or an older daemon.
+	Seq uint64 `json:"seq,omitempty"`
+
 	// History-message fields. SessionID identifies the target row for
 	// snapshot/upgrade messages; tick messages use the per-session entries
 	// in Buckets instead. History maps granularity ("1"/"10"/"60") → 20-char

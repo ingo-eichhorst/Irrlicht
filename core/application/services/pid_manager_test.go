@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"syscall"
 	"testing"
 	"time"
@@ -621,5 +622,96 @@ func TestTryDiscoverPID_ProcSession_BypassesDiscoverFn(t *testing.T) {
 
 	if repo.states["neighbor-uuid"] == nil {
 		t.Fatal("neighbor-uuid was evicted by same-PID cleanup — issue #345 regression")
+	}
+}
+
+// newPIDManagerForTestWithDeleteSpy builds a PIDManager whose onSessionDeleted
+// callback records every evicted session ID — the seam main.go wires to the
+// detector's history/projectSessions eviction helper. Locks the #593 deletion
+// funnel: every PIDManager removal must fire it, or history rings leak.
+func newPIDManagerForTestWithDeleteSpy(repo *mockRepo, deleted *[]string) *services.PIDManager {
+	return services.NewPIDManager(
+		nil,
+		repo,
+		&mockLogger{},
+		nil,
+		10*time.Minute,
+		nil,
+		nil,
+		nil,
+		func(sid string) { *deleted = append(*deleted, sid) },
+	)
+}
+
+// TestCheckPIDLiveness_ChildSweep_EvictsHistory: before #593 the liveness
+// sweep deleted finished children straight from the repo, bypassing
+// onSessionDeleted — their history rings leaked into history.json forever.
+func TestCheckPIDLiveness_ChildSweep_EvictsHistory(t *testing.T) {
+	tmp := t.TempDir()
+	parentTranscript := filepath.Join(tmp, "parent.jsonl")
+	writeTranscript(t, parentTranscript, time.Now())
+	childTranscript := filepath.Join(tmp, "agent-abc.jsonl")
+	writeTranscript(t, childTranscript, time.Now())
+
+	repo := newMockRepo()
+	repo.states["parent"] = &session.SessionState{
+		SessionID:      "parent",
+		Adapter:        "claude-code",
+		State:          session.StateWorking,
+		TranscriptPath: parentTranscript,
+		UpdatedAt:      time.Now().Unix(),
+	}
+	repo.states["agent-abc"] = &session.SessionState{
+		SessionID:       "agent-abc",
+		Adapter:         "claude-code",
+		State:           session.StateReady,
+		ParentSessionID: "parent",
+		TranscriptPath:  childTranscript,
+		UpdatedAt:       time.Now().Unix(),
+	}
+
+	var deleted []string
+	newPIDManagerForTestWithDeleteSpy(repo, &deleted).CheckPIDLiveness()
+
+	if repo.states["agent-abc"] != nil {
+		t.Fatal("ready child should be swept")
+	}
+	if !slices.Contains(deleted, "agent-abc") {
+		t.Errorf("onSessionDeleted not fired for swept child; got %v", deleted)
+	}
+	if repo.states["parent"] == nil {
+		t.Fatal("parent must survive the child sweep")
+	}
+}
+
+// TestHandleProcessExit_EvictsChildrenViaFunnel: deleteWithChildren must route
+// both the children and the session itself through the deletion funnel so
+// caller-side tracking (history rings) is evicted for every removal (#593).
+func TestHandleProcessExit_EvictsChildrenViaFunnel(t *testing.T) {
+	repo := newMockRepo()
+	repo.states["parent"] = &session.SessionState{
+		SessionID: "parent",
+		Adapter:   "claude-code",
+		State:     session.StateReady,
+		PID:       4242,
+	}
+	repo.states["agent-kid"] = &session.SessionState{
+		SessionID:       "agent-kid",
+		Adapter:         "claude-code",
+		State:           session.StateWorking,
+		ParentSessionID: "parent",
+	}
+
+	var deleted []string
+	newPIDManagerForTestWithDeleteSpy(repo, &deleted).HandleProcessExit(4242, "parent")
+
+	if len(repo.states) != 0 {
+		t.Fatalf("parent and child should both be gone, repo has %d sessions", len(repo.states))
+	}
+	if !slices.Contains(deleted, "agent-kid") {
+		t.Errorf("onSessionDeleted not fired for child; got %v", deleted)
+	}
+	if !slices.Contains(deleted, "parent") {
+		t.Errorf("onSessionDeleted not fired for parent; got %v", deleted)
 	}
 }
