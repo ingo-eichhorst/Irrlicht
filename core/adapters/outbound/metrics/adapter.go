@@ -126,45 +126,11 @@ func (a *Adapter) ComputeMetrics(transcriptPath, adapter string) (*session.Sessi
 	if err != nil || m == nil {
 		return nil, nil //nolint:nilerr — absent transcript is not an error
 	}
-	result := &session.SessionMetrics{
-		ElapsedSeconds:                    m.ElapsedSeconds,
-		TotalTokens:                       m.TotalTokens,
-		ModelName:                         m.ModelName,
-		ContextWindow:                     m.ContextWindow,
-		ContextUtilization:                m.ContextUtilization,
-		PressureLevel:                     m.PressureLevel,
-		ContextWindowUnknown:              m.ContextWindowUnknown,
-		HasOpenToolCall:                   m.HasOpenToolCall,
-		OpenToolCallCount:                 m.OpenToolCallCount,
-		OpenSubagents:                     a.countOpenSubagents(adapter, m),
-		BackgroundProcessCount:            m.BackgroundProcessCount,
-		BackgroundProcessOutputs:          m.BackgroundProcessOutputs,
-		LastEventType:                     m.LastEventType,
-		LastOpenToolNames:                 m.LastOpenToolNames,
-		LastWasUserInterrupt:              m.LastWasUserInterrupt,
-		LastWasToolDenial:                 m.LastWasToolDenial,
-		EstimatedCostUSD:                  m.EstimatedCostUSD,
-		CumInputTokens:                    m.CumInputTokens,
-		CumOutputTokens:                   m.CumOutputTokens,
-		CumCacheReadTokens:                m.CumCacheReadTokens,
-		CumCacheCreationTokens:            m.CumCacheCreationTokens,
-		LastCWD:                           m.LastCWD,
-		LastAssistantText:                 m.LastAssistantText,
-		PermissionMode:                    m.PermissionMode,
-		SawUserBlockingToolClosedThisPass: m.SawUserBlockingToolClosedThisPass,
-		NoSubstantiveActivity:             m.NoSubstantiveActivity,
-	}
-	if len(m.SubagentCompletions) > 0 {
-		result.SubagentCompletions = make([]session.SubagentCompletion, len(m.SubagentCompletions))
-		for i, c := range m.SubagentCompletions {
-			result.SubagentCompletions[i] = session.SubagentCompletion{
-				AgentID:   c.AgentID,
-				ToolUseID: c.ToolUseID,
-				Status:    c.Status,
-			}
-		}
-	}
-	result.Tasks = tailerTasksToDomain(m.Tasks)
+	// Plain field copies live in replayengine.TailerToDomain — the single
+	// tailer→domain conversion shared with the replay paths. Everything
+	// below is a live-only enrichment.
+	result := replayengine.TailerToDomain(m)
+	result.OpenSubagents = a.countOpenSubagents(adapter, m)
 	if m.RateLimit != nil {
 		result.RateLimit = tailerRateLimitToDomain(m.RateLimit)
 		history := tailerRateLimitHistoryToDomain(m.RateLimitHistory)
@@ -195,12 +161,6 @@ func (a *Adapter) ComputeMetrics(transcriptPath, adapter string) (*session.Sessi
 	}
 	if result.PressureLevel == "" {
 		result.PressureLevel = "unknown"
-	}
-	// Trim the rendered snippet to just the question sentence when one is
-	// present, so the macOS overlay shows "What would you like?" instead of
-	// the full surrounding paragraph (issue #236).
-	if snippet := session.ExtractQuestionSnippet(result.LastAssistantText); snippet != "" {
-		result.LastAssistantText = snippet
 	}
 	return result, nil
 }
@@ -401,21 +361,3 @@ func tailerRateLimitHistoryToDomain(src []tailer.RateLimitSnapshot) []session.Ra
 	return dst
 }
 
-// tailerTasksToDomain converts a tailer task slice to the domain mirror type.
-func tailerTasksToDomain(src []tailer.Task) []session.Task {
-	if len(src) == 0 {
-		return nil
-	}
-	dst := make([]session.Task, len(src))
-	for i, t := range src {
-		dst[i] = session.Task{
-			ID:          t.ID,
-			Subject:     t.Subject,
-			Description: t.Description,
-			ActiveForm:  t.ActiveForm,
-			Status:      t.Status,
-			CompletedAt: t.CompletedAt,
-		}
-	}
-	return dst
-}
