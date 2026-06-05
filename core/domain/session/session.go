@@ -626,19 +626,19 @@ type SessionState struct {
 	State     string `json:"state"`
 	// Adapter identifies the source agent (e.g. "claude-code", "codex").
 	// Empty means Claude Code (for backwards compatibility).
-	Adapter         string          `json:"adapter,omitempty"`
-	Model           string          `json:"model,omitempty"`
-	CWD             string          `json:"cwd,omitempty"`
-	TranscriptPath  string          `json:"transcript_path,omitempty"`
-	GitBranch       string          `json:"git_branch,omitempty"`
-	ProjectName     string          `json:"project_name,omitempty"`
-	FirstSeen       int64           `json:"first_seen"`
-	UpdatedAt       int64           `json:"updated_at"`
-	Confidence      string          `json:"confidence"`
-	EventCount      int             `json:"event_count"`
-	LastEvent       string          `json:"last_event"`
-	LastMatcher     string          `json:"last_matcher,omitempty"`
-	Metrics         *SessionMetrics `json:"metrics,omitempty"`
+	Adapter        string          `json:"adapter,omitempty"`
+	Model          string          `json:"model,omitempty"`
+	CWD            string          `json:"cwd,omitempty"`
+	TranscriptPath string          `json:"transcript_path,omitempty"`
+	GitBranch      string          `json:"git_branch,omitempty"`
+	ProjectName    string          `json:"project_name,omitempty"`
+	FirstSeen      int64           `json:"first_seen"`
+	UpdatedAt      int64           `json:"updated_at"`
+	Confidence     string          `json:"confidence"`
+	EventCount     int             `json:"event_count"`
+	LastEvent      string          `json:"last_event"`
+	LastMatcher    string          `json:"last_matcher,omitempty"`
+	Metrics        *SessionMetrics `json:"metrics,omitempty"`
 
 	// PID of the Claude Code process that owns this session (set on SessionStart).
 	PID int `json:"pid,omitempty"`
