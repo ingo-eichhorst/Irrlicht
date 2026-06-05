@@ -7,7 +7,7 @@
     "agent_cli_version": "2.5.1",
     "daemon_version": "0.4.8+9598e19.dirty",
     "confidence": 0.8,
-    "notes": "agent_supports: partial — kiro-cli has no auto-classifier; it prompts for EVERY write/shell by default (read auto-runs). daemon_capability: bug — kiro's lowercase 'write' tool is not in the daemon's permission-gated edit-tool allowlist (isPermissionGatedEditTool, session.go:268), so a pending write-approval prompt classifies as working, never waiting (filed as a GitHub bug; recorded known_failing). driver_capability: ready — keys is ported (e13d3ebe) and boot_session now honors settings.trust_all_tools=false (b663885e) so the picker appears; no gap remains."
+    "notes": "agent_supports: partial — kiro-cli has no auto-classifier; it prompts for EVERY write/shell by default (read auto-runs). daemon_capability: bug — kiro's lowercase 'write' tool is not in the daemon's permission-gated edit-tool allowlist (isPermissionGatedEditTool, session.go:268), so a pending write-approval prompt classifies as working, never waiting (filed as a GitHub bug; recorded known_failing). driver_capability: ready — keys is ported (e13d3ebe) and boot_session now honors settings.trust_all_tools=false (b663885e) so the picker appears; no gap remains. Tracked as ingo-eichhorst/Irrlicht#588."
   },
   "details": {
     "assessment": {
