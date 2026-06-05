@@ -326,12 +326,25 @@ step_wait_turn() {
     EXIT_REASON="readiness_timeout"
     return 1
   }
+  # The Workflow tool fires an in-turn "Run a dynamic workflow?" permission
+  # dialog mid-turn (after claude emits the Workflow tool_use). Auto mode
+  # doesn't cover it, so an unanswered dialog stalls the REPL until timeout.
+  # Option 1 ("Yes, run it") is pre-selected, so a bare Enter accepts it.
+  # Poll the active slot's pane capture and accept once.
+  local slot_stdout="$DRIVER_LOG.stdout.$ACTIVE"
+  local workflow_dialog_done=0
   local now=0
   while [[ $(date +%s) -lt $DEADLINE ]]; do
     now=$(turn_count)
     if [[ $now -ge $EXPECTED_TURNS ]]; then
       echo "[driver] wait_turn[s$ACTIVE]: count=$now (expected ≥ $EXPECTED_TURNS)" >&2
       return 0
+    fi
+    if [[ $workflow_dialog_done -eq 0 ]] && [[ -f "$slot_stdout" ]] && \
+       grep -aq 'Run a dynamic workflow?' "$slot_stdout" 2>/dev/null; then
+      tmux send-keys -t "$CURRENT_TMUX" Enter
+      echo "[driver] accepted dynamic-workflow permission dialog" >&2
+      workflow_dialog_done=1
     fi
     sleep 1
   done
