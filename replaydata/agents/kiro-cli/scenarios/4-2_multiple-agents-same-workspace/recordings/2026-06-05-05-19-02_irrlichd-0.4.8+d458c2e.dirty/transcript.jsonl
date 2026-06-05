@@ -1,0 +1,2 @@
+{"version":"v1","kind":"Prompt","data":{"message_id":"e5f5d14a-3eca-4172-b0b0-9010c8277250","content":[{"kind":"text","data":"Reply with exactly the word: bravo"}],"meta":{"timestamp":1780629545}}}
+{"version":"v1","kind":"AssistantMessage","data":{"message_id":"1246314b-ebcf-4507-af06-1e6d404ec15a","content":[{"kind":"text","data":"bravo"}]}}
