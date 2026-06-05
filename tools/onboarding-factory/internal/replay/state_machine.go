@@ -44,9 +44,9 @@ type StateMachine struct {
 	// value. Decoupled from `cursor` (which is event-based) so the
 	// scrubber advances smoothly between events instead of freezing.
 	// Updated by tickPlayhead(); guarded by mu.
-	playheadMs       float64
-	lastTickWall     time.Time
-	playheadRunning  bool
+	playheadMs      float64
+	lastTickWall    time.Time
+	playheadRunning bool
 	// playheadAtomicMs mirrors playheadMs for LOCK-FREE reads. The metrics
 	// enricher reads the playhead from inside Broadcast, which the machine
 	// calls while holding mu — so it can't take mu (LivePlayheadMs would

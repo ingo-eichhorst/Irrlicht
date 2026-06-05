@@ -76,10 +76,10 @@ type Config struct {
 type Matrix struct {
 	repoRoot   string
 	catalog    []catalogEntry
-	agents     []string                              // sorted onboarded adapters (shard _meta.min_versions keys)
-	shards     map[string]shard.Shard                // coverage_id (shard.Name) → shard (scenario-global spec only)
+	agents     []string                                // sorted onboarded adapters (shard _meta.min_versions keys)
+	shards     map[string]shard.Shard                  // coverage_id (shard.Name) → shard (scenario-global spec only)
 	agentCells map[string]map[string]*shard.ShardAgent // agent → coverage_id → cell (from metadata.json)
-	cells      map[string]map[string]CellState       // agent → coverage_id → cell
+	cells      map[string]map[string]CellState         // agent → coverage_id → cell
 }
 
 type catalogEntry struct {

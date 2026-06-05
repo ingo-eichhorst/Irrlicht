@@ -22,13 +22,13 @@ type ScenarioListEntry struct {
 
 // ScenarioDetail is the payload for /api/scenarios/{agent}/{subtree}/{id}.
 type ScenarioDetail struct {
-	Agent          string                   `json:"agent"`
-	Subtree        string                   `json:"subtree"`
-	ID             string                   `json:"id"`
-	Meta           json.RawMessage          `json:"meta,omitempty"`            // recording-meta.json or null
-	Degraded       bool                     `json:"degraded"`                  // true when there is no events.jsonl sidecar — the timeline is synthesized from the transcript via the shared classifier engine, not daemon-recorded
-	Expected       *validate.ExpectedReport `json:"expected,omitempty"`        // expected.jsonl validated against events.jsonl (if file present)
-	Transitions    []json.RawMessage        `json:"transitions"`               // state_transition rows from events.jsonl
+	Agent           string                   `json:"agent"`
+	Subtree         string                   `json:"subtree"`
+	ID              string                   `json:"id"`
+	Meta            json.RawMessage          `json:"meta,omitempty"`             // recording-meta.json or null
+	Degraded        bool                     `json:"degraded"`                   // true when there is no events.jsonl sidecar — the timeline is synthesized from the transcript via the shared classifier engine, not daemon-recorded
+	Expected        *validate.ExpectedReport `json:"expected,omitempty"`         // expected.jsonl validated against events.jsonl (if file present)
+	Transitions     []json.RawMessage        `json:"transitions"`                // state_transition rows from events.jsonl
 	Tools           []ToolCall               `json:"tools,omitempty"`            // tool_use blocks extracted from the newest recording's transcript.jsonl
 	LatestManifest  *RecordingArchive        `json:"latest_manifest,omitempty"`  // manifest of the newest recording, mirroring archive manifest fields so the viewer renders a uniform metadata panel
 	LatestRecording string                   `json:"latest_recording,omitempty"` // name (under recordings/) of the newest recording these fields describe; "" when none captured

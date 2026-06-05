@@ -284,4 +284,3 @@ func TestReadLauncherEnv_Subprocess_JetBrainsImpliesTermProgram(t *testing.T) {
 		t.Errorf("TermProgram: expected implicit 'jetbrains', got %q", l.TermProgram)
 	}
 }
-

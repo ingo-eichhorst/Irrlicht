@@ -218,4 +218,3 @@ func stateChanged(prev, curr *orchestrator.State) bool {
 	}
 	return string(prevB) != string(currB)
 }
-

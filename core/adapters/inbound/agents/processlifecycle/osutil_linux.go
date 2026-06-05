@@ -43,6 +43,6 @@ func resolveHostFromAncestry(pid int) (term string, host int) { return "", 0 }
 // Stubs for the kitty "no readable env" enrichment helpers. Linux can read
 // /proc/<pid>/environ for any process the user owns, so the back-fill path
 // these support isn't needed here.
-func kittyAncestryPID(pid int) int                        { return 0 }
-func kittyListenOnFor(kittyPID int) string                { return "" }
+func kittyAncestryPID(pid int) int                             { return 0 }
+func kittyListenOnFor(kittyPID int) string                     { return "" }
 func kittyWindowIDForPID(socket string, sessionPID int) string { return "" }

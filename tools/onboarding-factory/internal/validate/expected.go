@@ -133,9 +133,9 @@ type ExpectedResult struct {
 	// phase's anchor, e.g. idle_window matching ready at first_turn_end).
 	// With omitempty here the frontend reads `undefined` and renders
 	// "+undefined ms" in the delta column.
-	DeltaMs int64 `json:"delta_ms"`
-	Reason    string    `json:"reason,omitempty"`   // pass/fail explanation
-	Notes     []string  `json:"notes,omitempty"`    // invariant-check trace
+	DeltaMs int64    `json:"delta_ms"`
+	Reason  string   `json:"reason,omitempty"` // pass/fail explanation
+	Notes   []string `json:"notes,omitempty"`  // invariant-check trace
 }
 
 // ExpectedReport is the full validation result — meta + the original

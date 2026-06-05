@@ -24,8 +24,10 @@ func (b *fakeBroadcaster) Broadcast(m outbound.PushMessage) {
 	defer b.mu.Unlock()
 	b.msg = append(b.msg, m)
 }
-func (b *fakeBroadcaster) Subscribe() chan outbound.PushMessage           { return make(chan outbound.PushMessage) }
-func (b *fakeBroadcaster) Unsubscribe(ch chan outbound.PushMessage)       {}
+func (b *fakeBroadcaster) Subscribe() chan outbound.PushMessage {
+	return make(chan outbound.PushMessage)
+}
+func (b *fakeBroadcaster) Unsubscribe(ch chan outbound.PushMessage) {}
 func (b *fakeBroadcaster) messages() []outbound.PushMessage {
 	b.mu.Lock()
 	defer b.mu.Unlock()

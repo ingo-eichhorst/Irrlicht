@@ -11,7 +11,7 @@ type Source interface {
 // directory under $HOME. The runtime fswatches Dir and emits
 // new/activity/removed events.
 type FilesUnderRoot struct {
-	Dir    string     // path relative to $HOME, e.g. ".claude/projects"
+	Dir    string // path relative to $HOME, e.g. ".claude/projects"
 	Parser FileParser
 
 	// DirByOS optionally overrides Dir on specific platforms, keyed by
