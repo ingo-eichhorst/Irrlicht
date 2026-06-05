@@ -78,17 +78,35 @@ final class SessionRowSnapshotTests: XCTestCase {
     }
 
     private func host(_ session: SessionState, height: CGFloat = 48) -> NSView {
-        let view = SessionRowView(session: session, agentNumber: 1)
+        host(SessionRowView(session: session, agentNumber: 1), height: height)
+    }
+
+    private func host(_ view: some View, height: CGFloat = 48) -> NSView {
+        let wrapped = view
             .environmentObject(sessionManager)
             .frame(width: 350, height: height)
             .background(Color(NSColor.windowBackgroundColor))
-        let hosting = NSHostingView(rootView: view)
+        let hosting = NSHostingView(rootView: wrapped)
         // Pin to dark aqua so snapshots don't depend on the current system
         // appearance (Color(NSColor.windowBackgroundColor) adapts otherwise).
         hosting.appearance = NSAppearance(named: .darkAqua)
         hosting.frame = CGRect(x: 0, y: 0, width: 350, height: height)
         hosting.layoutSubtreeIfNeeded()
         return hosting
+    }
+
+    /// Issue #596 — one row per state, stacked: the leading state icons (and
+    /// everything after them) must start at the same x in every row. The
+    /// ready SF Symbol used to measure 14×14 against the others' framed
+    /// 12×12, shifting ready rows 2 pt right of their neighbours.
+    func testStateIconAlignment_AcrossStates() {
+        let rows = VStack(spacing: 0) {
+            SessionRowView(session: makeSession(state: .working, metrics: makeMetrics()), agentNumber: 1)
+            SessionRowView(session: makeSession(state: .waiting, metrics: makeMetrics()), agentNumber: 2)
+            SessionRowView(session: makeSession(state: .ready, metrics: makeMetrics()), agentNumber: 3)
+        }
+        let view = host(rows, height: 144)
+        assertSnapshot(of: view, as: .image)
     }
 
     func testWaitingState_ShowsQuestionBlock() {

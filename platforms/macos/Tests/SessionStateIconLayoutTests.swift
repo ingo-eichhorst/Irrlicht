@@ -9,18 +9,22 @@ import SwiftUI
 @MainActor
 final class SessionStateIconLayoutTests: XCTestCase {
     func testAllStatesShareTheSameLayoutBox() {
-        let size: CGFloat = 12
-        for state in SessionState.State.allCases {
-            let hosting = NSHostingView(rootView: SessionStateIcon(state: state, size: size))
-            let fitting = hosting.fittingSize
-            XCTAssertEqual(
-                fitting.width, size, accuracy: 0.001,
-                "\(state.rawValue) icon layout width must be exactly \(size)"
-            )
-            XCTAssertEqual(
-                fitting.height, size, accuracy: 0.001,
-                "\(state.rawValue) icon layout height must be exactly \(size)"
-            )
+        // 12 is the size every production call site uses; 16 guards against
+        // regressions that only show up at other sizes (font-metric scaling
+        // is not linear in the glyph's point size).
+        for size: CGFloat in [12, 16] {
+            for state in SessionState.State.allCases {
+                let hosting = NSHostingView(rootView: SessionStateIcon(state: state, size: size))
+                let fitting = hosting.fittingSize
+                XCTAssertEqual(
+                    fitting.width, size, accuracy: 0.001,
+                    "\(state.rawValue) icon layout width must be exactly \(size)"
+                )
+                XCTAssertEqual(
+                    fitting.height, size, accuracy: 0.001,
+                    "\(state.rawValue) icon layout height must be exactly \(size)"
+                )
+            }
         }
     }
 }
