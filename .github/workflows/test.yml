@@ -40,8 +40,10 @@ jobs:
         run: |
           unformatted=$(gofmt -l core/ tools/)
           if [ -n "$unformatted" ]; then
-            echo "::error::gofmt found unformatted files. Run: gofmt -w $unformatted"
             echo "$unformatted"
+            # Workflow-command messages are single-line: collapse the file list
+            # so the annotation shows the full fix command, not just file one.
+            echo "::error::gofmt found unformatted files. Run: gofmt -w $(echo "$unformatted" | tr '\n' ' ')"
             exit 1
           fi
 
