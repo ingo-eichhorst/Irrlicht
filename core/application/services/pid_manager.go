@@ -226,6 +226,12 @@ func (pm *PIDManager) HandleProcessExit(pid int, sessionID string) {
 // though the process is fine. Detecting recycled PIDs reliably needs an
 // adapter-specific process-name cross-check, which is out of scope here.
 //
+// Thread-safety (issue #628): this reads shared *SessionState fields without
+// assignMu, but it is a startup-only synchronous pass — main.go calls it
+// before SessionDetector.Run, so the event loop hasn't started and no
+// PID-discovery goroutine (spawned only by onNewSession/processActivity) can
+// exist yet to write state.PID concurrently.
+//
 // Returns the number of sessions deleted.
 func (pm *PIDManager) CleanupZombies() int {
 	states, err := pm.repo.ListAll()
@@ -663,18 +669,62 @@ func (pm *PIDManager) SweepDeadPIDs(ctx context.Context) {
 	}
 }
 
-// CheckPIDLiveness checks all sessions for dead PIDs and stale state.
-// Returns true if any dead PID was found and cleaned up.
-func (pm *PIDManager) CheckPIDLiveness() bool {
+// livenessSnapshot freezes the volatile *SessionState fields CheckPIDLiveness
+// bases its decisions on (PID/State/UpdatedAt, plus the immutable identity
+// fields it branches on). The values are read once under assignMu so the sweep
+// never reads state.PID/UpdatedAt mid-write by a discovery goroutine's
+// assignPIDLocked (issue #628). The state pointer is retained only for the
+// delete callbacks, which run after assignMu is released.
+type livenessSnapshot struct {
+	state           *session.SessionState
+	pid             int
+	sessionState    string
+	updatedAt       int64
+	parentSessionID string
+	transcriptPath  string
+}
+
+// snapshotLivenessStates reads every session's liveness-relevant fields under
+// assignMu — the same lock assignPIDLocked takes — so the sweep's reads of
+// state.PID/UpdatedAt don't race a concurrent discovery write. The lock is held
+// only for the field copies; no callback or syscall runs inside it.
+func (pm *PIDManager) snapshotLivenessStates() []livenessSnapshot {
+	pm.assignMu.Lock()
+	defer pm.assignMu.Unlock()
 	states, err := pm.repo.ListAll()
 	if err != nil {
-		return false
+		return nil
 	}
-	foundDead := false
+	snaps := make([]livenessSnapshot, 0, len(states))
 	for _, state := range states {
-		if state.PID > 0 {
-			if err := syscall.Kill(state.PID, 0); err == syscall.ESRCH {
-				pm.HandleProcessExit(state.PID, state.SessionID)
+		snaps = append(snaps, livenessSnapshot{
+			state:           state,
+			pid:             state.PID,
+			sessionState:    state.State,
+			updatedAt:       state.UpdatedAt,
+			parentSessionID: state.ParentSessionID,
+			transcriptPath:  state.TranscriptPath,
+		})
+	}
+	return snaps
+}
+
+// CheckPIDLiveness checks all sessions for dead PIDs and stale state.
+// Returns true if any dead PID was found and cleaned up.
+//
+// Runs off the event loop (the SweepDeadPIDs goroutine), so its reads of the
+// shared *SessionState fields would otherwise race a concurrent discovery
+// goroutine's assignPIDLocked write of state.PID/UpdatedAt (issue #628). The
+// fields are snapshotted under assignMu first (snapshotLivenessStates); the
+// sweep then acts on the immutable snapshot, never holding assignMu across a
+// delete callback (the invariant documented on assignMu).
+func (pm *PIDManager) CheckPIDLiveness() bool {
+	snaps := pm.snapshotLivenessStates()
+	foundDead := false
+	for _, snap := range snaps {
+		if snap.pid > 0 {
+			if err := syscall.Kill(snap.pid, 0); err == syscall.ESRCH {
+				pm.HandleProcessExit(snap.pid, snap.state.SessionID)
 				foundDead = true
 			}
 		}
@@ -686,21 +736,21 @@ func (pm *PIDManager) CheckPIDLiveness() bool {
 	//   failed and no kqueue/sweep cleanup path can fire)
 	// - Child sessions: ready or stale transcript (finished/zombie subagents)
 	if pm.readyTTL > 0 {
-		for _, state := range states {
+		for _, snap := range snaps {
 			// Child sessions: clean up immediately when ready, or when stale
 			// (transcript stopped updating — zombie from a previous run).
 			// Exception: DB-backed adapters (TranscriptPath contains "?session=")
 			// manage their own session lifetime via maxAge; their subagents are
 			// persistent historical records, not transient process-bound children.
-			if state.ParentSessionID != "" {
-				if !strings.Contains(state.TranscriptPath, "?session=") &&
-					(state.State == session.StateReady || isStaleTranscript(state.TranscriptPath)) {
-					parentID := state.ParentSessionID
+			if snap.parentSessionID != "" {
+				if !strings.Contains(snap.transcriptPath, "?session=") &&
+					(snap.sessionState == session.StateReady || isStaleTranscript(snap.transcriptPath)) {
+					parentID := snap.parentSessionID
 					reason := "child ready — liveness sweep"
-					if state.State != session.StateReady {
+					if snap.sessionState != session.StateReady {
 						reason = "child transcript stale — liveness sweep"
 					}
-					pm.deleteSession(state, reason)
+					pm.deleteSession(snap.state, reason)
 					// Re-evaluate the parent: it may have been held in
 					// `working` only because of this child. Without this
 					// nudge the parent stays stuck until its own next
@@ -721,37 +771,55 @@ func (pm *PIDManager) CheckPIDLiveness() bool {
 			// claude processes share a cwd and the metadata lookup is
 			// retrying). Deleting under those conditions causes the flap
 			// loop in issue #109.
-			if state.PID == 0 && state.State == session.StateReady &&
-				time.Since(time.Unix(state.UpdatedAt, 0)) > 30*time.Second &&
-				isStaleTranscript(state.TranscriptPath) {
-				pm.log.LogInfo("session-detector", state.SessionID,
+			if snap.pid == 0 && snap.sessionState == session.StateReady &&
+				time.Since(time.Unix(snap.updatedAt, 0)) > 30*time.Second &&
+				isStaleTranscript(snap.transcriptPath) {
+				pm.log.LogInfo("session-detector", snap.state.SessionID,
 					"ready session with no PID and stale transcript for >30s, deleting")
-				pm.deleteWithChildren(state)
+				pm.deleteWithChildren(snap.state)
 				continue
 			}
 
-			if !state.IsStale(pm.readyTTL) {
+			if !isStaleUpdatedAt(snap.updatedAt, pm.readyTTL) {
 				continue
 			}
 			// Don't delete sessions whose process is still alive.
-			if state.PID > 0 {
-				if err := syscall.Kill(state.PID, 0); err == nil {
+			if snap.pid > 0 {
+				if err := syscall.Kill(snap.pid, 0); err == nil {
 					continue
 				}
 			}
-			if state.State == session.StateReady || state.PID == 0 {
-				pm.log.LogInfo("session-detector", state.SessionID,
+			if snap.sessionState == session.StateReady || snap.pid == 0 {
+				pm.log.LogInfo("session-detector", snap.state.SessionID,
 					fmt.Sprintf("%s session (pid=%d) idle for >%v, deleting",
-						state.State, state.PID, pm.readyTTL))
-				pm.deleteWithChildren(state)
+						snap.sessionState, snap.pid, pm.readyTTL))
+				pm.deleteWithChildren(snap.state)
 			}
 		}
 	}
 	return foundDead
 }
 
+// isStaleUpdatedAt mirrors SessionState.IsStale on a snapshotted UpdatedAt so
+// the staleness test reads the frozen value rather than the live pointer's
+// (issue #628).
+func isStaleUpdatedAt(updatedAt int64, maxAge time.Duration) bool {
+	if maxAge <= 0 {
+		return false
+	}
+	return time.Since(time.Unix(updatedAt, 0)) > maxAge
+}
+
 // SeedPIDs cleans up dead sessions and registers alive PIDs with ProcessWatcher
 // during startup. Called from SessionDetector.seedFromDisk.
+//
+// Thread-safety (issue #628): SeedPIDs and its helpers (handleAlivePIDState,
+// backfillLauncher, dedupeByPID, sweepSupersededPreSessions) read and write
+// shared *SessionState fields without assignMu. This is safe because
+// seedFromDisk runs synchronously inside SessionDetector.Run BEFORE the event
+// loop's select begins and BEFORE the SweepDeadPIDs goroutine is spawned — so
+// no PID-discovery goroutine (spawned only by onNewSession/processActivity from
+// inside that loop) can be in flight to write state.PID concurrently.
 func (pm *PIDManager) SeedPIDs(states []*session.SessionState) {
 	newestByPID := pm.seedAlivePIDs(states)
 	pm.dedupeByPID(states, newestByPID)
