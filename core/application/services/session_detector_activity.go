@@ -157,22 +157,28 @@ func (d *SessionDetector) onNewSession(id agent.Identity, ev agent.Event) {
 		// processActivity fallback (debounce/refresh) created the session
 		// without an identity. The watcher's identity on the next real
 		// transcript event is the authoritative source.
-		changed := false
-		if existing.TranscriptPath == "" {
-			existing.TranscriptPath = ev.TranscriptPath
-			changed = true
-		}
-		if existing.Adapter == "" && id.Name != "" {
-			existing.Adapter = id.Name
-			changed = true
-		}
-		if changed {
-			existing.UpdatedAt = now
-			if err := d.repo.Save(existing); err != nil {
-				d.log.LogError("session-detector", ev.SessionID,
-					fmt.Sprintf("failed to update existing session: %v", err))
+		//
+		// Under the PIDManager's state lock: a discovery goroutine spawned by
+		// the earlier event may still be in flight, and its assignPIDLocked
+		// writes state.PID/UpdatedAt on this same pointer (issue #606).
+		d.pidMgr.WithSessionStateLock(func() {
+			changed := false
+			if existing.TranscriptPath == "" {
+				existing.TranscriptPath = ev.TranscriptPath
+				changed = true
 			}
-		}
+			if existing.Adapter == "" && id.Name != "" {
+				existing.Adapter = id.Name
+				changed = true
+			}
+			if changed {
+				existing.UpdatedAt = now
+				if err := d.repo.Save(existing); err != nil {
+					d.log.LogError("session-detector", ev.SessionID,
+						fmt.Sprintf("failed to update existing session: %v", err))
+				}
+			}
+		})
 	}
 
 	// PID discovery (async). Each adapter has its own strategy:
