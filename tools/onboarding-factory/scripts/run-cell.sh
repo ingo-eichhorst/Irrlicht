@@ -105,7 +105,7 @@ fi
 PARTNER_ADAPTER="$(jq -r '.partner_adapter // empty' <<<"$CELL_JSON")"
 if [[ -n "$PARTNER_ADAPTER" ]]; then
   echo "cell is cross-adapter (partner_adapter=$PARTNER_ADAPTER): scenario=$SCENARIO adapter=$ADAPTER" >&2
-  echo "record it with: scripts/run-cell-multi.sh $SCENARIO" >&2
+  echo "record it with: scripts/run-cell-multi.sh $COVERAGE_ID $ADAPTER" >&2
   exit 2
 fi
 

@@ -32,13 +32,17 @@
 #
 # Usage:
 #   IRRLICHT_ONBOARD_HOME=/tmp/irrlicht-onboard-dev \
-#     run-cell-multi.sh <scenario-name>
+#     run-cell-multi.sh [--dry-run] <scenario-name> <primary-adapter>
+#
+# The adapter PAIR is the primary plus the `partner_adapter` its cell's recipe
+# names — e.g. `run-cell-multi.sh multiple-agents-same-workspace kiro-cli` runs
+# kiro-cli + claudecode. --dry-run resolves + prints the plan, then exits 0.
 #
 # Outputs under ./.build/refresh/_multi/<scenario>-<UTC-ts>/:
 #   recordings/                     — the single isolated daemon recording
 #   cwd/                            — the shared workspace both agents run in
 #   <adapter>/                      — per-adapter driver staging
-#   replaydata/agents/<adapter>/scenarios/<scenario>/{transcript,events}.jsonl
+#   replaydata/agents/<adapter>/scenarios/<folder>/{transcript,events}.jsonl
 #   reports/<adapter>.staged.json
 #   daemon.log, run-manifest.json
 
@@ -59,8 +63,19 @@ source "$SCRIPT_DIR/lib/reconcile.sh"
 # shellcheck source=lib/recipe-lint.sh
 source "$SCRIPT_DIR/lib/recipe-lint.sh"
 
-[[ $# -eq 1 ]] || { echo "usage: run-cell-multi.sh <scenario-name>" >&2; exit 2; }
-SCENARIO="$1"
+DRY_RUN=0
+positional=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dry-run) DRY_RUN=1; shift ;;
+    -h|--help) echo "usage: run-cell-multi.sh [--dry-run] <scenario-name> <primary-adapter>" >&2; exit 0 ;;
+    -*) echo "unknown flag: $1" >&2; exit 2 ;;
+    *)  positional+=("$1"); shift ;;
+  esac
+done
+[[ "${#positional[@]}" -eq 2 ]] || { echo "usage: run-cell-multi.sh [--dry-run] <scenario-name> <primary-adapter>" >&2; exit 2; }
+SCENARIO="${positional[0]}"
+PRIMARY="${positional[1]}"
 
 # --- Coexist isolation is mandatory -------------------------------------
 ONBOARD_HOME="${IRRLICHT_ONBOARD_HOME:-}"
@@ -75,26 +90,26 @@ export IRRLICHT_ONBOARD_BIND_ADDR="$ONBOARD_BIND"
 export IRRLICHT_ONBOARD_MULTI=1
 
 # --- Resolve the cross-adapter cell -------------------------------------
-# The cross-adapter cell is one scenario shard (its `cross_adapter` list) plus
-# a per-adapter recipe in each adapter's metadata.json (.details.recipe), read
-# through shard-lib's shard_recipe().
-SHARD="$REPO_ROOT/replaydata/scenarios/$SCENARIO.json"
-SCEN_JSON="$(jq -e . "$SHARD" 2>/dev/null)" \
-  || { echo "scenario not found: $SCENARIO (no shard at $SHARD)" >&2; exit 1; }
-# (bash 3.2 — no mapfile; read into the array by hand.)
-ADAPTERS=()
-while IFS= read -r _a; do
-  [[ -n "$_a" ]] && ADAPTERS+=("$_a")
-done < <(jq -r '.cross_adapter[]?' <<<"$SCEN_JSON")
-if [[ "${#ADAPTERS[@]}" -lt 2 ]]; then
-  echo "scenario $SCENARIO has no cross_adapter[] list (need >= 2 adapters)" >&2
-  exit 1
-fi
-echo "cross-adapter cell: $SCENARIO  adapters=[${ADAPTERS[*]}]"
+# Post-consolidation (#511): there is no `cross_adapter[]` list. The cell lives
+# at the PRIMARY agent's metadata.json (.details.recipe), whose `partner_adapter`
+# names the second agent. SCENARIO may be the coverage_id or a variant
+# recording-folder name; both resolve to the same coverage_id (the recipe key)
+# via shard_coverage_for_dir. The adapter pair is (primary, partner), read
+# through shard-lib so the recipe-hash form has one owner.
+COVERAGE_ID="$(shard_coverage_for_dir "$SCENARIO" "$PRIMARY")"
+PRIMARY_RECIPE="$(shard_recipe "$COVERAGE_ID" "$PRIMARY")"
+[[ -n "$PRIMARY_RECIPE" ]] \
+  || { echo "scenario not found: no $PRIMARY cell for $SCENARIO in the catalog" >&2; exit 1; }
+PARTNER="$(jq -r '.partner_adapter // empty' <<<"$PRIMARY_RECIPE")"
+[[ -n "$PARTNER" ]] \
+  || { echo "$PRIMARY/$COVERAGE_ID has no partner_adapter — not a cross-adapter cell" >&2; exit 1; }
+ADAPTERS=("$PRIMARY" "$PARTNER")
+echo "cross-adapter cell: $COVERAGE_ID  adapters=[${ADAPTERS[*]}]"
 
-# Each adapter must be applicable + carry a script (recipe from its metadata.json).
+# Each adapter must be applicable + carry a script (recipe from its metadata.json,
+# read under COVERAGE_ID — the recipe key, not the on-disk folder name).
 for a in "${ADAPTERS[@]}"; do
-  recipe="$(shard_recipe "$SCENARIO" "$a")"
+  recipe="$(shard_recipe "$COVERAGE_ID" "$a")"
   [[ -n "$recipe" ]] || { echo "adapter $a has no recipe for $SCENARIO" >&2; exit 1; }
   applic="$(jq -r 'if .applicable==true then "true" else "false" end' <<<"$recipe")"
   [[ "$applic" == "true" ]] || { echo "adapter $a is not applicable:true for $SCENARIO" >&2; exit 1; }
@@ -102,7 +117,7 @@ for a in "${ADAPTERS[@]}"; do
   [[ "$has_script" == "yes" ]] || { echo "adapter $a has no script for $SCENARIO" >&2; exit 1; }
   # Driver-gap backstop (#476): refuse a step type this adapter's driver lacks
   # before launching any daemon/CLI, mirroring run-cell.sh's exit 3.
-  if gaps="$(recipe_lint_gaps "$REPO_ROOT/replaydata/agents/$a/driver-interactive.sh" "$SCENARIO" "$a")"; then :; else
+  if gaps="$(recipe_lint_gaps "$REPO_ROOT/replaydata/agents/$a/driver-interactive.sh" "$COVERAGE_ID" "$a")"; then :; else
     echo "driver_gap: $a/$SCENARIO needs step type(s) driver-interactive.sh doesn't implement:" >&2
     printf '  - gap:%s\n' $gaps >&2
     exit 3
@@ -110,12 +125,24 @@ for a in "${ADAPTERS[@]}"; do
   # Semantic backstop (#496 RC3): mirror run-cell.sh — a step the driver accepts
   # but doesn't elicit (or a slash command in send-text on a slash-requires
   # adapter) would record a no-op on the cross-adapter path too.
-  if sem="$(recipe_semantic_gaps "$REPO_ROOT/replaydata/agents/$a/driver-interactive.sh" "$SCENARIO" "$a")"; then :; else
+  if sem="$(recipe_semantic_gaps "$REPO_ROOT/replaydata/agents/$a/driver-interactive.sh" "$COVERAGE_ID" "$a")"; then :; else
     echo "semantic_gap: $a/$SCENARIO uses step(s) the driver accepts but doesn't elicit (per its DRIVE_ELICITS):" >&2
     while IFS= read -r p; do [[ -n "$p" ]] && printf '  - %s\n' "$p" >&2; done <<< "$sem"
     exit 4
   fi
 done
+
+# --dry-run: resolution + recipe validation is done — print the plan and stop
+# before any precheck, daemon, or live driver. (The on-disk recording folder is
+# per-adapter via shard_folder, equal to COVERAGE_ID for all but variant cells.)
+if [[ "$DRY_RUN" -eq 1 ]]; then
+  echo "dry-run plan:"
+  echo "  scenario (coverage_id): $COVERAGE_ID"
+  for a in "${ADAPTERS[@]}"; do
+    echo "  adapter: $a  folder: $(shard_folder "$COVERAGE_ID" "$a")  driver: $REPO_ROOT/replaydata/agents/$a/driver-interactive.sh"
+  done
+  exit 0
+fi
 
 # --- Precheck each adapter (builds bins, checks port, CLI versions) ------
 for a in "${ADAPTERS[@]}"; do
@@ -213,7 +240,7 @@ declare -a DRV_PIDS=() DRV_ADAPTERS=()
 for a in "${ADAPTERS[@]}"; do
   sub="$STAGING/$a"
   mkdir -p "$sub"
-  recipe="$(shard_recipe "$SCENARIO" "$a")"
+  recipe="$(shard_recipe "$COVERAGE_ID" "$a")"
   jq '.settings // {}' <<<"$recipe" > "$sub/settings.json"
   script_json="$(jq -c '.script' <<<"$recipe")"
   timeout_s="$(jq -r '.timeout_seconds // 240' <<<"$recipe")"
@@ -330,22 +357,25 @@ for idx in "${!ADAPTERS[@]}"; do
   if [[ "$(printf '%s\n' "${OWN_TRANSCRIPTS[$idx]}" | grep -c .)" -gt 1 ]]; then
     own_t="${OWN_TRANSCRIPTS[$idx]}"
   fi
+  # Stage under the cell's on-disk recording FOLDER (per-adapter; equals
+  # COVERAGE_ID for all but variant-folder cells), mirroring run-cell.sh.
+  folder="$(shard_folder "$COVERAGE_ID" "$a")"
   echo "curating $a (primary=${PRIMARY_SID[$idx]}, workspace extras: $extra)"
   IRRLICHT_EXTRA_SESSION_IDS="$extra" \
   IRRLICHT_EXTRA_TRANSCRIPTS="$own_t" \
     "$REPO_ROOT/tools/curate-lifecycle-fixture.sh" \
       -d "$STAGING/replaydata/agents" \
-      "$RECORDING" "${PRIMARY_SID[$idx]}" "${PRIMARY_TRANSCRIPT[$idx]}" "$a" "$SCENARIO"
+      "$RECORDING" "${PRIMARY_SID[$idx]}" "${PRIMARY_TRANSCRIPT[$idx]}" "$a" "$folder"
 
   ext="$(meta_transcript_ext "$a")"
-  staged_t="$STAGING/replaydata/agents/$a/scenarios/$SCENARIO/transcript.$ext"
+  staged_t="$STAGING/replaydata/agents/$a/scenarios/$folder/transcript.$ext"
   (cd "$REPO_ROOT" && "$REPLAY_BIN" --quiet --out "$STAGING/reports/$a.staged.json" "$staged_t") || true
   [[ -s "$STAGING/reports/$a.staged.json" ]] || { echo "replay failed for $a ($staged_t)" >&2; write_error_manifest "replay_failed" "$(jq -nc --arg a "$a" '{failed_adapter:$a}')"; exit 1; }
 done
 
 # --- Manifest -----------------------------------------------------------
 jq -n \
-  --arg scenario "$SCENARIO" \
+  --arg scenario "$COVERAGE_ID" \
   --argjson adapters "$(printf '%s\n' "${ADAPTERS[@]}" | jq -R . | jq -s .)" \
   --argjson sids "$(printf '%s\n' "${ALL_SIDS[@]}" | jq -R . | jq -s .)" \
   --arg staging "$STAGING" \
@@ -363,5 +393,5 @@ jq -n \
 echo "manifest: $MANIFEST"
 echo "staged fixtures:"
 for a in "${ADAPTERS[@]}"; do
-  echo "  $STAGING/replaydata/agents/$a/scenarios/$SCENARIO/"
+  echo "  $STAGING/replaydata/agents/$a/scenarios/$(shard_folder "$COVERAGE_ID" "$a")/"
 done
