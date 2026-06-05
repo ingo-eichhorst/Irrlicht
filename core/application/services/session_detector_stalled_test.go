@@ -41,6 +41,17 @@ func TestMarkStalledEditTool(t *testing.T) {
 		}
 	})
 
+	// kiro-cli's pending write-approval picker holds an open lowercase `write`
+	// tool; it must flag stalled just like claudecode's PascalCase Write (#588).
+	t.Run("lowercase write (kiro) open past window is flagged", func(t *testing.T) {
+		d := &SessionDetector{editToolOpenSince: map[string]int64{"s": 1000}}
+		m := &session.SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"write"}}
+		d.markStalledEditTool("s", m, 1000+threshold)
+		if !m.OpenToolStalled {
+			t.Fatalf("lowercase write open for %ds must be flagged stalled", threshold)
+		}
+	})
+
 	t.Run("edit tool just under window is not flagged", func(t *testing.T) {
 		d := &SessionDetector{editToolOpenSince: map[string]int64{"s": 1000}}
 		m := editOpen()
