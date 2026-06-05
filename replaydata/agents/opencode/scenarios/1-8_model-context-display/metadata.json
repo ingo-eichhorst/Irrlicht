@@ -1,0 +1,120 @@
+{
+  "scenario_id": "model-context-display",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.14.50",
+    "daemon_version": "0.4.8+6d2b11a",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "model-context-display",
+      "agent": "opencode",
+      "assessed_at": "2026-06-05T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Primitive\n\nFirst-contact model + context visibility: after ONE trivial turn the dashboard must show WHICH model the opencode session runs (metrics.model_name) and HOW FULL its context is (metrics.context_utilization_percentage / metrics.context_window). These are the two metrics a user checks first; this cell forces the opencode column to confront them at first contact rather than deferring to section 5.\n\n## Why early placement (#599)\n\nkiro-cli was onboarded with BOTH model and context invisible (sidecar-only data the daemon could not see), and the gap only surfaced when section 5 (token/model rows) was assessed — far too late. This cell is deliberately placed at 1.8 so every new adapter column gets a model/context visibility check at first contact instead of discovering the gap late. opencode passes the model half natively and the context half mechanically (see the load-bearing capacity caveat below).\n\n## agent_supports — yes\n\nopencode boots on a concrete configured model and records it on every assistant message. opencode is the lone ProcessOwnedStore adapter: session state lives in its SQLite store (~/.local/share/opencode/opencode.db, session/message/part tables), not in tailed JSONL. The model is written under message.data.model = {providerID, modelID} and per-step usage (input/output/cache + a `total`) is written on each step-finish part. There is no way to run a turn without a model or without token usage, so a single trivial turn (\"What is 6 times 7?\") exercises the whole scenario — model and tokens are present from turn 1. (sibling cell 5-2_model-identification replays green on this exact arc.)\n\n## daemon_capability — full\n\nThe daemon's mechanism observes all three metrics correctly; the model half is unconditional, the context half is correct whenever the model has a capacity entry. Both halves flow through ComputeMetrics over the SQLite store (opencode bypasses the shared tailer):\n\n1. model_name: querySessionMetrics reads message.data.model.modelID per message (with a top-level message.data.modelID fallback), and on every non-empty value sets metrics.ModelName = tailer.NormalizeModelName(modelID) — latest-non-empty-wins (metrics.go ~L117-131). So model_name is non-empty and not 'unknown' from the first turn_done. PROVEN: the 5-2 recording's transcript carries _model=gemma-4-e2b-it-uncensored and 5-2 replays green.\n\n2. context_window + context_utilization_percentage: the step-finish parser extracts tokens.total into ev.Tokens.Total (parser.go ~L119-138) and ComputeMetrics sets metrics.TotalTokens = ev.Tokens.Total (PROVEN: the 5-2 recording's step-finish carries tokens.total=21041). ComputeMetrics then calls tailer.ComputeContextUtilization(metrics.ModelName, metrics.TotalTokens, cm, 0) (metrics.go ~L296-297) — note the contextWindowOverride is hardcoded 0, so the ONLY route to a non-zero context_window is capacityMgr.GetModelCapacity(modelName).ContextWindow. With TotalTokens>0 AND ModelName!='' AND the model present in the capacity (LiteLLM) table, it returns context_window = the published window, utilization = TotalTokens/window*100 > 0, and clears the unknown flag (tailer_metrics.go L447-478). opencode emits NO [1m] suffix and NO ContextWindow override (unlike claudecode), so the window comes entirely from the capacity-table lookup keyed on the boot model.\n\nThe daemon is not the blocker — the same code path produces context_window>0/utilization>0 for any capacity-known model (claudecode 1-8 green baseline). Keeping daemon=full per the assess rule \"caveats over downgrades\": the mechanism meets the spec; the one gappy detail (the local recording model has no capacity entry) is documented in caveats, exactly as the sibling pi/codex 1-8 cells did for their out-of-table boot models. Lifecycle topology ready→working→ready is the standard opencode basic-turn arc (the headless `opencode run` blocks until the turn finishes; wait_turn is a no-op).\n\n## LOAD-BEARING CAVEAT — context half is zero with the current default model\n\nThis worktree's opencode default is a local LM Studio model whose modelID normalizes to 'gemma-4-e2b-it-uncensored' (set in ~/.config/opencode/opencode.json). That model is NOT in core/pkg/capacity (verified: no gemma/e2b/qwen3/lmstudio entry; no alias), and opencode has NO 32k sentinel / [1m] override fallback in its path (override is hardcoded 0). So with the current default model GetModelCapacity returns ContextWindow=0 → ComputeContextUtilization returns (0, 0, \"unknown\", true): context_window=0, context_utilization_percentage=0, context_window_unknown=true. The model half of acceptance passes (model_name = the normalized local model name, non-empty, not 'unknown'); the context half (context_window>0, utilization>0) is UNSATISFIABLE with the default local model. To record a green cell the recording must run on a model that resolves in the capacity table (e.g. a remote ionos/<model> with IONOS_API_TOKEN, threaded via the send step's `model` field as in 5-3) OR a capacity alias must be added for the local model. This is environment-specific (issue #440), not a daemon defect — hence daemon=full + this caveat, not daemon=bug.\n\n## driver_capability — ready\n\nStructurally identical to opencode/basic-turn, 1-1_session-start, and 5-2_model-identification: one send + wait_turn + trailing sleep. The opencode interactive driver's headless path (run_send) launches a blocking `opencode run --format default [--session <id>] -- \"<text>\"` per send and chains --session; the run already blocks until the turn finishes, so wait_turn is a no-op and there is no in-process REPL to tear down (no teardown/process_exited phase, same as the opencode basic-turn / model-identification siblings). One trivial plain-text turn is well within send|wait_turn|sleep — no new driver primitive needed. (To force the context half green at record time the send step's optional `model` field — added in driver commit bbf82830, exercised by 5-3 — threads `opencode run -m <provider/model>` to a capacity-known model; that is a recording-config choice, not a driver gap.)\n\n## Observability caveat — where the assertion lives\n\nThe expected.jsonl phase DSL operates on the events.jsonl lifecycle stream, which carries NO model_name / context fields — so the three metric assertions are NOT phase-expressible. They are covered at the metrics tier: model_name in the .replay.json.golden summary plus the opencode metrics unit tests (metrics_test.go), and context_window / context_utilization at the tailer level (ComputeContextUtilization unit tests). NOTE the replay golden summary block does NOT currently surface context_window or context_utilization_percentage keys (verified on the 5-2 golden — only cum_input/output_tokens appear), so the context half's >0 proof is the LIVE metrics surface at record time, not the golden. expected.jsonl therefore asserts only the basic-turn lifecycle skeleton (born ready → working → ready on one ses_… session, no waiting, final ready).\n\n## Conclusion\n\napplicable: yes. A thin first-contact cell — the opencode basic-turn arc plus the (metrics-level) assertion that model_name was derived after turn 1, and that context_window/context_utilization were derived too WHEN the recording model resolves in the capacity table. PENDING-RECORD: recording is the #599 follow-up sweep; record_blocked is NOT set (this is recordable — pick a capacity-known model for the context half).",
+      "caveats": [
+        "LOAD-BEARING: with this worktree's default opencode model (local LM Studio gemma-4-e2b-it-uncensored, NOT in core/pkg/capacity and no alias), GetModelCapacity returns ContextWindow=0, so ComputeContextUtilization returns context_window=0 / context_utilization_percentage=0 / context_window_unknown=true. The model half of acceptance passes; the context half (>0) is unsatisfiable with the default local model. Record on a capacity-known model (e.g. ionos/<model> via the send `model` field) or add a capacity alias.",
+        "opencode has NO [1m]-suffix heuristic and NO ContextWindow override — ComputeContextUtilization is called with contextWindowOverride=0 (metrics.go ~L297), so the capacity table is the ONLY source of context_window. Unlike claudecode there is no 32k sentinel fallback in opencode's path.",
+        "opencode is the lone ProcessOwnedStore adapter: model_name + tokens come from ComputeMetrics reading the SQLite store (~/.local/share/opencode/opencode.db), not from the shared JSONL tailer. The metrics path is opencode-specific (metrics.go), so the model/context derivation is unit-tested there, not via the tailer.",
+        "The concrete model_name string is environment-dependent (the configured default in ~/.config/opencode/opencode.json — here the local LM Studio gemma model). Per issue #440 the acceptance is that a model_name is PRESENT (non-empty, not 'unknown'), not a hardcoded value.",
+        "ContextWindow/ContextUtilization may briefly read 0 between session detection and the first step-finish; assert all three metrics only AFTER the first turn_done (the trailing sleep outlasts the working→ready settle).",
+        "The model_name / context_window / context_utilization claims are not phase-expressible in the events.jsonl DSL; they are covered by the opencode metrics unit tests + (model_name) the .replay.json.golden summary. The golden does NOT carry context_window / context_utilization keys, so the context-half >0 proof is the live metrics surface at record time."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/opencode/metrics.go",
+          "note": "querySessionMetrics reads message.data.model.modelID (top-level modelID fallback) → NormalizeModelName → metrics.ModelName (latest-non-empty-wins); step-finish tokens.total → ev.Tokens.Total → metrics.TotalTokens; then ComputeContextUtilization(ModelName, TotalTokens, cm, 0) — override hardcoded 0."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/opencode/agent.go",
+          "note": "Source variant ProcessOwnedStore (SQLite at ~/.local/share/opencode/opencode.db) with ExactName{Name:\"opencode\"} matcher; the daemon reads session/model/token state from the store, never tailing JSONL — confirms the model+context come from the store, not a transcript trace."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/opencode/parser.go L119-138",
+          "note": "parseStepFinish extracts tokens.input/output/cache and tokens.total into ev.Tokens (TokenSnapshot); ev.Tokens.Total is what ComputeMetrics promotes to metrics.TotalTokens for the context-utilization calc."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer_metrics.go L447-478",
+          "note": "ComputeContextUtilization: with totalTokens>0 + modelName!='' resolves window via capacityMgr.GetModelCapacity(modelName).ContextWindow; if that window is <=0 returns (0, 0, \"unknown\", true) — the path opencode's local model takes."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/capacity/capacity.go L98-115",
+          "note": "GetModelCapacity returns a zero-value ModelCapacity (ContextWindow=0) for any model absent from the LiteLLM cache; verified no gemma/e2b/qwen3/lmstudio entry or alias — the local default model resolves to ContextWindow=0."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/opencode/scenarios/5-2_model-identification/recordings/2026-05-25-23-33-10_irrlichd-0.4.7+92e5631/transcript.jsonl",
+          "note": "Sibling green recording: text part carries _model=gemma-4-e2b-it-uncensored and step-finish carries tokens.total=21041 — proves the daemon gets a non-empty model and TotalTokens>0 from a single trivial opencode turn (the model half of this cell)."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.config/opencode/opencode.json",
+          "note": "default model lmstudio/gemma-4-e2b-it-uncensored (local LM Studio, http://127.0.0.1:1234); driver passes NO --model by default so this is the boot model whose name is reported — and which has no capacity entry."
+        },
+        {
+          "kind": "issue",
+          "ref": "ingo-eichhorst/Irrlicht#599",
+          "note": "kiro-cli onboarded with model+context invisible (sidecar-only); this early 1.8 cell forces every adapter column to confront model/context visibility at first contact rather than discovering the gap in section 5."
+        },
+        {
+          "kind": "issue",
+          "ref": "ingo-eichhorst/Irrlicht#440",
+          "note": "replay-summary model_name is environment-dependent — assert presence (non-empty, not 'unknown'), not a hardcoded string; the recording model may be substituted (any reachable model)."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "opencode CLI on PATH and authenticated against its configured default model — verified opencode 1.14.50 (run one message in the opencode TUI to confirm; the worktree default is a local LM Studio model so no remote key is needed for the model half).",
+        "irrlichd is recording with the opencode SQLite watcher enabled — either run-cell.sh in isolated mode, or --attach against a daemon started with --record.",
+        "For the CONTEXT half (context_window>0, context_utilization>0): the recording model MUST resolve in the daemon's capacity (LiteLLM) table. The local default model (gemma-4-e2b-it-uncensored) does NOT — record on a capacity-known model via the send `model` field (e.g. ionos/<model> with IONOS_API_TOKEN exported, as in 5-3), or add a capacity alias for the local model. Without this, model_name passes but context_window/utilization stay 0 (see assessment LOAD-BEARING caveat)."
+      ],
+      "setup": [
+        "The interactive driver (drive-opencode-interactive.sh) creates a fresh per-run cwd under <staging>/cwd/ and launches a blocking `opencode run --format default -- \"<prompt>\"` for the single send; the run blocks until the assistant turn finishes, so wait_turn is a no-op and there is no in-process REPL to tear down (no teardown/process_exited phase — same as the opencode basic-turn / model-identification siblings).",
+        "opencode session state lives in its SQLite store (~/.local/share/opencode/opencode.db), not per-cwd transcript files; the daemon's ProcessOwnedStore source polls the session table and observes the UUID-keyed ses_… session for this cwd. opencode does not expose CLI-assignable session IDs; the driver discovers the ses_… from SQLite after the run returns.",
+        "No special model flag for the model half — opencode boots on its configured default and writes model = {providerID, modelID} + a per-step usage (with tokens.total) into the store from turn 1; the scenario is about the daemon deriving model_name + context utilization from that. For the context half, thread a capacity-known model via the send `model` field (driver commit bbf82830 → `opencode run -m <provider/model>`).",
+        "The send is a no-tool single turn (asks opencode to reply with just a number), so the working span carries no auto-executed tool call and the session never enters waiting (no permission gate).",
+        "model_name / context_window / context_utilization are checked AFTER turn_done — context_window/utilization may briefly read 0 between session detection and the first step-finish (per assessment caveat); the local default model is small and slow (~30-45s/turn), so the trailing sleep and generous timeout absorb a slow turn and outlast the working→ready settle."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "What is 6 times 7? Reply with just the number."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 20
+        }
+      ],
+      "verify": [
+        "events.jsonl contains a transcript_new (or session_created) for the ses_… session born ready within ~2s of agent launch (a transient proc-<PID> presession may also appear; the turn arc and pid_discovered land on the ses_… session).",
+        "events.jsonl contains a pid_discovered event bound to the ses_… session_id.",
+        "events.jsonl shows one ready→working→ready cycle on the ses_… session_id (the single trivial turn); no state_transition to waiting (no tool call, no permission gate).",
+        "AFTER the first turn_done: metrics.model_name is non-empty and not 'unknown' (the metrics path pulled it from message.data.model.modelID; concrete value is env-dependent per #440).",
+        "AFTER the first turn: metrics.context_window > 0 (resolved via GetModelCapacity on the recording model — VERIFY the recording model actually resolves in the capacity table; the local default does NOT, so use a capacity-known model or add an alias).",
+        "AFTER the first turn: metrics.context_utilization_percentage > 0 (TotalTokens / context_window * 100).",
+        "the ses_… session's final live state is ready."
+      ],
+      "settings": {},
+      "timeout_seconds": 180,
+      "notes": "Thin first-contact cell: structurally identical to opencode/basic-turn, 1-1_session-start and 5-2_model-identification (one send + wait_turn + trailing sleep). The extra intent over basic-turn is asserting all THREE first-contact metrics after turn 1: model_name (message.data.model.modelID via the SQLite metrics path), context_window (GetModelCapacity on the recording model), and context_utilization_percentage (TotalTokens/window). WHY a blocking `opencode run` (not a long-lived REPL with teardown, unlike pi/codex): opencode's driver launches a fresh blocking `opencode run` per send and chains --session; the run already blocks until the turn completes, so wait_turn is a no-op and there is no teardown/process_exited phase (the opencode basic-turn and model-identification siblings omit it for the same reason). KEY RISK for the record sweep: context_window>0 hinges on the recording model resolving in the capacity table. The worktree default (local LM Studio gemma-4-e2b-it-uncensored) is NOT in the table and opencode has no [1m]/override fallback, so it yields context_window=0 / context_utilization=0 — model_name passes but the context half FAILS the >0 acceptance. Resolve by recording on a capacity-known model (thread it via the send `model` field — `opencode run -m <provider/model>`, e.g. ionos/<model> with IONOS_API_TOKEN) OR adding a capacity alias for the local model. The metric assertions are NOT expressible in the events.jsonl phase DSL (no model/context fields), so expected.jsonl covers only the basic-turn lifecycle skeleton and the metric presence is asserted at the metrics tier (replay golden summary.model_name for the model half + opencode parser/tailer unit tests; the golden carries NO context_window/utilization keys, so the context half is proven on the live metrics surface at record time). What differs between runs: concrete model_name (configured default, env-dependent per #440), token counts, ses_… UUID/PID/timestamps, the assistant wording. What must NOT differ: one ready→working→ready arc on one ses_… session, a non-empty model_name, and — when recorded on a capacity-known model — a non-zero context_window + context_utilization_percentage; final state ready. PENDING-RECORD: recording is the #599 follow-up sweep; record_blocked is NOT set (this is recordable — pick a capacity-known model for the context half). Post-turn sleep is 20s: opencode settles working→ready only after the headless run exits and the daemon notices; 6s closed the recording before the settle landed (first record attempt, #599)."
+    }
+  }
+}

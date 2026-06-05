@@ -323,6 +323,9 @@ const rateLimitHistoryCap = 5
 // The parser handles format-specific line parsing; adapter is used for model
 // config fallback.
 func NewTranscriptTailer(path string, parser TranscriptParser, adapter string) *TranscriptTailer {
+	if pa, ok := parser.(TranscriptPathAware); ok {
+		pa.SetTranscriptPath(path)
+	}
 	return &TranscriptTailer{
 		path:                path,
 		lastOffset:          0,

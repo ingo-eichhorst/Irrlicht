@@ -1,0 +1,93 @@
+{
+  "scenario_id": "model-context-display",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "confidence": 0.9,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "model-context-display",
+      "agent": "claudecode",
+      "assessed_at": "2026-06-05T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.9,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Why this cell exists\n\nThis is the early first-contact visibility check added by #599. When kiro-cli was onboarded, its model name and context utilization were invisible on the dashboard, but the gap only surfaced deep in section 5 (model-identification, 5.2) — far too late for a first-contact triage. This scenario (1.8) pulls the same visibility assertion forward to the very first trivial turn with a DEFAULT-launched agent, so any new column that can't surface model + context is caught immediately rather than passing the early rows and failing late. It is the agent-agnostic, default-launch sibling of 5.2 (which deliberately launches a NON-default model via --model).\n\n## Reasoning\n\nClaude Code records the active model on every assistant event under `message.model` (and on some system/metadata events under `model` / `request.model` / `metadata.model`). On a basic turn with the DEFAULT model, the first assistant event still carries `message.model`, so the parser captures the name with no `--model` flag needed. `extractClaudeCodeModel` (parser.go) walks raw.model / raw.request.model / raw.metadata.model / raw.message.model and runs the result through `tailer.NormalizeModelName`, producing a stable, non-empty string (e.g. `claude-sonnet-4-5`). Acceptance bullet `metrics.model_name != \"unknown\"` is therefore satisfied from the first assistant event onward.\n\nContext utilization needs three inputs, all present on a single default-model turn:\n1. ModelName — from extractClaudeCodeModel (above), non-empty after the first assistant event.\n2. TotalTokens — extractClaudeCodeTokens pulls a usage block (raw.usage / raw.message.usage / raw.response.usage) via findUsageMap + tailer.ExtractUsage; every assistant turn reports usage, so TotalTokens > 0 after wait_turn.\n3. ContextWindow — extractClaudeCodeModel sets it from raw.context_management.context_window when present (the most accurate source) or the [1m] suffix heuristic; otherwise ComputeContextUtilization falls back to the capacity manager's per-model window (capacityMgr.GetModelCapacity(modelName).ContextWindow). For a known default model the alias/capacity table always supplies a positive window.\n\n`ComputeContextUtilization` (tailer_metrics.go) early-returns (0, 0, unknown) only while TotalTokens==0 OR ModelName==\"\"; once the first turn completes both are populated, so it returns ContextWindow > 0 and utilization = totalTokens/contextWindow*100 > 0 (non-zero because any turn consumes tokens). Acceptance bullets `context_window > 0` and `context_utilization_percentage > 0` both land after the first turn_done.\n\nThe state arc is the plain basic-turn arc: ready → working → ready, anchored to the same process-scan / transcript machinery exercised by 1.1 (session-start) and 5.2.\n\n## What irrlicht does NOT see (and why that's OK)\n\nBefore the first assistant event, ModelName is \"\" and ContextWindow may read 0 — a zero-turn session carries no model/context assertion. The acceptance bullets are explicitly anchored to the first turn_done, after wait_turn, so this transient is out of scope. The recipe must complete at least one turn.",
+      "caveats": [
+        "ContextWindow may briefly read 0 between session detection and the first assistant event (the same transient noted in 5.2). All acceptance assertions are checked only AFTER the first turn_done / wait_turn, not at presession_created — so the transient never violates the contract.",
+        "If the LiteLLM/capacity alias table lags behind a newly released default model name, ContextWindow falls back to the 32k sentinel with ContextWindowUnknown=true; ModelName is still correct and context_window is still > 0, so the acceptance bullets still pass — utilization is just computed against the sentinel window.",
+        "model_name is the agent's own normalized label; per the acceptance criteria a routing alias (e.g. \"auto\") counts when that is what the agent itself displays. Claude Code reports a concrete model id on the default turn, so this is not exercised here."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/claudecode/parser.go L590-632",
+          "note": "extractClaudeCodeModel walks raw.model / raw.request.model / raw.metadata.model / raw.message.model, normalizes via NormalizeModelName, and sets ContextWindow from raw.context_management.context_window (or the [1m] suffix). No --model flag needed: message.model is present on the first default-model assistant event."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/claudecode/parser.go L634-661",
+          "note": "findUsageMap + extractClaudeCodeTokens pull the usage block (raw.usage / message.usage / response.usage) so TotalTokens > 0 after the first turn — the numerator for context utilization."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer_metrics.go L445-493",
+          "note": "ComputeContextUtilization: early-returns (0,0,unknown) only while TotalTokens==0 or ModelName==\"\"; once both are populated returns ContextWindow (override else capacityMgr.GetModelCapacity) and utilization = totalTokens/contextWindow*100 > 0. computeContextUtilization writes ContextWindow + ContextUtilization onto SessionMetrics."
+        },
+        {
+          "kind": "spec",
+          "ref": "replaydata/agents/scenarios.json scenario 1.8 model-context-display",
+          "note": "Acceptance: metrics.model_name non-empty and != unknown after first turn_done; context_utilization_percentage > 0; context_window > 0; topology ready->working->ready; final ready."
+        },
+        {
+          "kind": "spec",
+          "ref": "replaydata/agents/claudecode/scenarios/5-2_model-identification/metadata.json",
+          "note": "The recorded+full sibling cell (non-default --model launch). Same parser/metrics path; strongest evidence that claudecode surfaces model + context. This 1.8 cell is the default-launch, first-contact variant."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "claude CLI on PATH and authenticated (subscription or API key)",
+        "irrlichd is recording (--attach against a daemon with --record, or run-cell.sh isolated mode)",
+        "no other claudecode session uses the recipe's UUID",
+        "launch with the DEFAULT model — NO --model flag (this scenario asserts default-launch visibility, unlike 5.2)"
+      ],
+      "setup": [
+        "Generate a fresh lowercased session UUID (run-cell.sh does this via uuidgen | tr '[:upper:]' '[:lower:]')",
+        "Create an empty cwd under <staging>/cwd/ (claude prompts for trust on first encounter — the driver auto-accepts)",
+        "Launch claude with NO --model flag so the default model's name flows through message.model from turn 1",
+        "Assertions on model_name / context_window / context_utilization_percentage are checked AFTER turn_end — ContextWindow may briefly read 0 before the first assistant event (per assessment caveat 1)"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "What is 6 times 7?"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        }
+      ],
+      "verify": [
+        "events.jsonl shows one ready->working->ready cycle on the UUID",
+        "SessionMetrics.ModelName after turn_end is non-empty and != 'unknown' (the normalized default model, e.g. 'claude-sonnet-4-5')",
+        "SessionMetrics.ContextWindow after turn_end is > 0 (context_management.context_window when present, else the capacity table's per-model window)",
+        "SessionMetrics.ContextUtilization (context_utilization_percentage) after turn_end is > 0",
+        "transcript.jsonl contains 1 user line and >= 1 assistant line",
+        "final session state is ready"
+      ],
+      "settings": {},
+      "timeout_seconds": 120
+    }
+  }
+}

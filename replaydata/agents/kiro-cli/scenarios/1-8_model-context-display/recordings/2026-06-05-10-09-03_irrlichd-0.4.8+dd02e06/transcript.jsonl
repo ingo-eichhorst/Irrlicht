@@ -1,0 +1,2 @@
+{"version":"v1","kind":"Prompt","data":{"message_id":"d7824a30-c553-41b0-91fd-e4c7231fdab8","content":[{"kind":"text","data":"What is 6 times 7? Answer with just the number."}],"meta":{"timestamp":1780646946}}}
+{"version":"v1","kind":"AssistantMessage","data":{"message_id":"a81c0cf2-1a0f-4975-9b67-472a510d7642","content":[{"kind":"text","data":"42"}]}}

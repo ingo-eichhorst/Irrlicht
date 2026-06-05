@@ -167,6 +167,16 @@ else
   cp "$TRANSCRIPT" "$OUT_TRANSCRIPT"
 fi
 
+# Metadata sidecar: some agents (kiro-cli) keep model/context metrics in a
+# <base>.json sidecar next to the <base>.jsonl transcript, which the parser
+# reads at turn_done and the replay engine stages next to its scratch copy
+# (#599). Capture it as transcript.json so replay reproduces the metrics.
+SIDECAR_SRC="${TRANSCRIPT%.jsonl}.json"
+if [[ "$TRANSCRIPT" == *.jsonl && -f "$SIDECAR_SRC" ]]; then
+  cp "$SIDECAR_SRC" "$SCENARIO_DIR/transcript.json"
+  echo "wrote $SCENARIO_DIR/transcript.json (metadata sidecar)"
+fi
+
 # Copy all subagent transcripts, if any. The real-world layout is
 # <project-dir>/<parent-id>/subagents/<agent-id>.jsonl (Claude Code's
 # subagent convention) — we mirror that flat in the fixture sibling dir.

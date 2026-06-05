@@ -1,0 +1,105 @@
+{
+  "scenario_id": "model-context-display",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "model-context-display",
+      "agent": "codex",
+      "assessed_at": "2026-06-05T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Primitive\n\nFirst-contact model + context visibility: after ONE trivial default-model turn, the live dashboard `metrics` surface carries the session's model label, its context window, and a non-zero context-utilization percentage. This is the early-placement (id 1.8) visibility gate added by #599 — kiro-cli was onboarded with model AND context invisible (sidecar-only data) and the gap only surfaced way down in section 5 (model-identification / token-accounting). Placing this cell at first contact forces every new adapter column to confront model/context visibility on turn 1.\n\n## agent_supports — yes\n\ncodex boots on a concrete default model (the TUI footer reads e.g. `model: gpt-5.5 high   /model to change`) and there is no way to run a turn without a model. A single trivial turn (`What is 6 times 7?` / `Reply with exactly the word: ok`) is enough: the model name is present from turn 1, and the API turn returns a real prompt-token count, so context utilization is non-zero after the first turn_done. No `--model` flag is needed — default launch exercises the whole scenario.\n\n## irrlicht_observes — yes (all three metrics on a DEFAULT-model basic turn)\n\nVerified against a real codex basic-turn transcript (2-1_basic-turn recording, 2026-05-31):\n\n- model_name: the rollout writes the active model on each turn's `turn_context` event at `payload.model` (`gpt-5.5` in the sample). `extractCodexMetadata` (parser.go:300-303) reads `payload.model` and sets `ev.ModelName = NormalizeModelName(model)`. turn_context is Skip=true (parser.go:176-178), but the tailer's Skip branch still calls `applyMetadata` → `applyModelMetadata` (tailer_metrics.go:105-115), so `metrics.ModelName` is populated. Non-empty, not 'unknown'. (This was the #361 regression — model dropped on token_count events — since fixed; model is sourced from turn_context.payload.model.)\n\n- context_window: the `token_count` event carries `payload.info.model_context_window` (258400 in the sample) and `task_started` carries `payload.model_context_window` (also 258400). `extractCodexMetadata` reads both (parser.go:322-329) into `ev.ContextWindow`; `applyModelMetadata` sets `contextWindowOverride` (tailer_metrics.go:112-114). `computeContextUtilization` (tailer_metrics.go:480-493) then sets `metrics.ContextWindow` to that override > 0. So context_window is populated from the agent's own number, independent of the capacity-map fallback.\n\n- context_utilization_percentage: the `token_count` event's `payload.info.last_token_usage` carries `total_tokens` (28326 in the sample). `extractCodexMetadata` extracts it via `ExtractUsage` (parser.go:315-318), which sets `snap.Total = total_tokens` (parser.go:526-527). `applyTokenSnapshot` sets `metrics.TotalTokens` (tailer_metrics.go:123-125). `ComputeContextUtilization` (tailer_metrics.go:447-478) then returns `totalTokens / effectiveContextWindow * 100` ≈ 28326/258400 ≈ 10.96% > 0. Non-zero after the first turn.\n\nState topology is the codex basic-turn arc: pre-session born ready → rollout reconcile (born ready) → working (the single assistant turn) → ready; final state ready, process_exited at REPL teardown. Matches the scenario's ready→working→ready requirement.\n\n## Observability note — where the assertion lives\n\nThe acceptance is on the LIVE `metrics.*` websocket surface (model_name / context_window / context_utilization_percentage), which the daemon fully populates as traced above. NOTE the replay-golden `summary` block is a DIFFERENT, narrower surface: it carries model_name + cum_input/output_tokens + estimated_cost_usd but does NOT include context_window or context_utilization_percentage keys at all (confirmed across every codex golden). So the model/context-utilization proof for this cell is the live metrics surface verified at record time, not the .replay.json.golden summary — the golden only attests model_name + token accumulation. The expected.jsonl phase DSL (validate/expected.go Phase struct) operates on the lifecycle events.jsonl stream, which has no model/context fields, so expected.jsonl asserts only the basic-turn lifecycle skeleton; the three metric assertions are record-time observations.\n\n## Conclusion\n\napplicable: yes. Thin first-contact cell, structurally identical to codex/basic-turn (one send + wait_turn + trailing sleep). All three metrics (model_name, context_window > 0, context_utilization_percentage > 0) are populated by the daemon on a single default-model turn. daemon_capability: full; driver_capability: ready (the existing codex interactive driver covers it unchanged).",
+      "caveats": [
+        "In this codex version the model name lives on per-turn turn_context events (Skip=true in the parser); model observability relies on the tailer applying ModelName from Skip'd events — correct today (post-#361), but a refactor that drops metadata on skipped events would silently regress it.",
+        "The concrete model_name string is environment-dependent (the account's boot default — gpt-5.5 in this worktree); per issue #440 the acceptance is that a model_name is PRESENT (non-empty, not 'unknown'), not a hardcoded value — including the case where the agent itself shows a routing alias.",
+        "context_window and context_utilization_percentage are zero between session birth and the first token_count/task_started event; assert all three metrics only AFTER the first turn_done. context_utilization_percentage is computed from last_token_usage.total_tokens / model_context_window, so it is non-zero as soon as the first turn's prompt tokens land (≈11% in the sample basic turn).",
+        "The metric proof for this cell is the live metrics surface at record time — the .replay.json.golden summary block does NOT carry context_window or context_utilization_percentage keys, so do not rely on the golden to attest context utilization; it attests model_name + token accumulation only."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/codex/parser.go",
+          "note": "extractCodexMetadata: payload.model (L300-303) → ModelName; payload.info.model_context_window + payload.model_context_window (L322-329) → ContextWindow; payload.info.last_token_usage via ExtractUsage (L315-318) → Tokens; turn_context Skip=true (L176-178)"
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/parser.go",
+          "note": "ExtractUsage sets snap.Total = total_tokens (L524-527) — feeds metrics.TotalTokens for context utilization"
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer_metrics.go",
+          "note": "applyModelMetadata sets metrics.ModelName + contextWindowOverride even for Skip'd events (L105-115); applyTokenSnapshot sets metrics.TotalTokens (L119-132); computeContextUtilization/ComputeContextUtilization derive context_window + percentage (L447-493)"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/codex/scenarios/2-1_basic-turn/recordings/2026-05-31-12-31-32_irrlichd-0.4.8+58b3ae5.dirty/transcript.jsonl",
+          "note": "real codex basic turn: turn_context.payload.model=gpt-5.5; token_count payload.info.model_context_window=258400, last_token_usage.total_tokens=28326 → util ≈ 10.96% — all three metrics present on one default-model turn"
+        },
+        {
+          "kind": "issue",
+          "ref": "ingo-eichhorst/Irrlicht#599",
+          "note": "early first-contact model/context visibility cell — kiro-cli onboarded with model+context invisible (sidecar-only); gap only surfaced in section 5; this cell forces visibility at turn 1 for every new column"
+        },
+        {
+          "kind": "issue",
+          "ref": "ingo-eichhorst/Irrlicht#361",
+          "note": "codex dropped model name on token_count events — since fixed; model now sourced from turn_context.payload.model"
+        },
+        {
+          "kind": "issue",
+          "ref": "ingo-eichhorst/Irrlicht#440",
+          "note": "model_name is environment-dependent — assert presence (non-empty, not 'unknown'), not a hardcoded string"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "codex CLI on PATH and authenticated (~/.codex/config.toml or OPENAI_API_KEY)",
+        "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+        "Default launch — NO --model flag. codex boots on its account default and writes that model + model_context_window into turn_context/token_count/task_started from turn 1. Per issue #440 the assertion is that a model_name is PRESENT (non-empty, not 'unknown'), not a specific value."
+      ],
+      "setup": [
+        "The interactive driver launches `codex --no-alt-screen` in a fresh per-run cwd under <staging>/cwd/, accepts the trust dialog, and waits for the TUI banner + MCP boot before sending the prompt",
+        "No special model flag — codex boots on its default model; the scenario is about the daemon extracting model + context, not about which model produced the tokens",
+        "The single send bumps the expected-turn counter; wait_turn blocks until a new task_complete line appears in the rollout, so the trailing sleep never races a still-running turn",
+        "All three metrics are checked AFTER turn_done — context_window and context_utilization_percentage are zero between session birth and the first token_count/task_started event"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "What is 6 times 7? Reply with exactly the number."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        }
+      ],
+      "verify": [
+        "events.jsonl contains a presession_created (proc-<PID>) event in ready within 1000 ms of agent launch, then a transcript_new for the rollout session (distinct session_id, born ready) and a pid_discovered bound to that session_id",
+        "events.jsonl shows one working→ready arc on the rollout session_id (the single assistant turn); the interactive REPL returns to ready",
+        "after the first turn_done, the live metrics surface carries metrics.model_name non-empty and != 'unknown' (env-dependent value per #440; gpt-5.5 in this worktree)",
+        "after the first turn_done, metrics.context_window > 0 (codex's own model_context_window, ~258400 for gpt-5.5)",
+        "after the first turn_done, metrics.context_utilization_percentage > 0 (last_token_usage.total_tokens / model_context_window; ~11% for a one-line turn)",
+        "topology is ready → working → ready; the rollout session's final live state is ready before REPL teardown",
+        "events.jsonl contains a process_exited on the rollout session at REPL teardown; no state_transition to waiting at any point"
+      ],
+      "notes": "Thin first-contact cell (#599), structurally identical to codex/basic-turn (one send + wait_turn + trailing sleep). The only intent over basic-turn is that the daemon surfaced model_name, context_window, and a non-zero context_utilization_percentage on the live metrics surface after turn 1. All three are populated by a single DEFAULT-model turn: model on turn_context.payload.model, context_window on token_count payload.info.model_context_window (and task_started payload.model_context_window), utilization from last_token_usage.total_tokens / model_context_window. IMPORTANT: the metric proof is the LIVE metrics surface at record time — the .replay.json.golden summary block does NOT carry context_window or context_utilization_percentage keys, so the golden attests model_name + token accumulation only; capture the three metrics from the websocket metrics surface, not the golden. What differs between runs: the concrete model_name (account boot default, env-dependent per #440), token counts/cost, rollout UUID/PID/timestamps, the exact utilization percentage. What must NOT differ: one working→ready arc on one rollout session, a non-empty model_name, context_window > 0, context_utilization_percentage > 0, ready→working→ready topology, and process_exited at teardown.",
+      "settings": {},
+      "timeout_seconds": 180
+    }
+  }
+}

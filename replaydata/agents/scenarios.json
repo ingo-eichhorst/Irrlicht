@@ -67,6 +67,13 @@
       "process": "1. User triggers a cloud/remote agent run (Cursor Cloud, Codex Cloud, Devin, etc.).\n2. Daemon connects to the remote feed.\n3. Session appears in the dashboard with PID = 0 or absent.\n4. State transitions mirror the remote agent's progress.\n5. Session disappears when the remote run completes, errors, or is dismissed."
     },
     {
+      "id": "1.8",
+      "name": "model-context-display",
+      "description": "After one trivial turn the dashboard shows WHICH model the session runs and HOW FULL its context is — the two metrics a user checks first. Early placement is deliberate (#599): kiro-cli onboarded with both invisible (sidecar-only data) and the gap only surfaced in section 5; this cell forces every new adapter column to confront model/context visibility at first contact.",
+      "acceptance_criteria": "Dashboard shows the session's model and context utilization after one trivial turn.\n- `metrics.model_name` is non-empty and not `unknown` after the first `turn_done` (the agent's own label — a routing alias like `auto` counts when that is what the agent itself displays).\n- `metrics.context_utilization_percentage` is > 0 after the first turn.\n- `metrics.context_window` is populated (> 0).\n- State topology: `ready → working → ready`\n- Final state: `ready`",
+      "process": "1. User launches the agent in a fresh directory.\n2. User sends one trivial prompt (e.g. \"What is 6 times 7?\") and the turn completes.\n3. Dashboard session row shows the model chip and a non-zero context-utilization value."
+    },
+    {
       "id": "2.1",
       "name": "basic-turn",
       "description": "Smallest possible round-trip. Verifies session detection and a clean ready→working→ready cycle.",
