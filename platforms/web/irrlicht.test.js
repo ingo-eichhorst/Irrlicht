@@ -349,12 +349,19 @@ describe('taskEtaPresentation', () => {
     ...((over && over.metrics) || {}),
   })
 
-  test('point estimate once half the rounds are done', () => {
-    const info = taskEtaPresentation(metricsFor(), 'working', now)
+  test('point estimate at the marker once half the rounds are done', () => {
+    const info = taskEtaPresentation(metricsFor({ est: { updated_at: now } }), 'working', now)
     expect(info).not.toBeNull()
     expect(info.text).toBe('~12m left')
     expect(info.stale).toBe(false)
     expect(info.title).toContain('6/10 rounds')
+  })
+
+  test('point estimate widens into a range between markers — high pinned, no bare countdown (#616)', () => {
+    const m = metricsFor({ est: { updated_at: now } })
+    expect(taskEtaPresentation(m, 'working', now).text).toBe('~12m left')
+    expect(taskEtaPresentation(m, 'working', now + 120).text).toBe('~10m–12m left')
+    expect(taskEtaPresentation(m, 'working', now + 300).text).toBe('~7m–12m left')
   })
 
   test('range when completed fraction is below half — high pinned at the marker', () => {
@@ -420,7 +427,7 @@ describe('taskEtaPresentation', () => {
   })
 
   test('hour-scale remaining uses h+m resolution', () => {
-    const info = taskEtaPresentation(metricsFor({ metrics: { task_completion_eta: now + 5400 } }), 'working', now)
+    const info = taskEtaPresentation(metricsFor({ est: { updated_at: now }, metrics: { task_completion_eta: now + 5400 } }), 'working', now)
     expect(info.text).toBe('~1h30m left')
   })
 })

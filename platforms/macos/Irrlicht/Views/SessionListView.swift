@@ -1459,8 +1459,10 @@ struct SessionRowView: View {
     /// Decides the task-completion ETA chip (issue #558) — mirrors the web's
     /// taskEtaPresentation. Nil hides the chip: session not working or no
     /// estimate. Zero completed rounds renders a progress-only "estimating…"
-    /// chip (#602); with progress, a point estimate once half the rounds are
-    /// done, a range below that, and stale dimming when the last marker is
+    /// chip (#602); with progress, a range whose high bound stays pinned at
+    /// the last marker — 1.5× padded below half the rounds, bare at/above
+    /// half so it collapses to a point right at a marker and widens instead
+    /// of counting down (#616) — and stale dimming when the last marker is
     /// older than 3 minutes.
     private func taskEtaPresentation(now: Date = Date()) -> TaskEtaPresentation? {
         guard session.state == .working,
@@ -1484,16 +1486,19 @@ struct SessionRowView: View {
         let remaining = max(0, eta.timeIntervalSince(now))
         let frac = est.totalRounds > 0 ? Double(est.completedRounds) / Double(est.totalRounds) : 0
         // The eta is anchored at the marker (daemon-side): the LOW bound
-        // counts down between marker updates while the HIGH bound — 1.5×
-        // the remaining time as projected AT the marker — stays pinned
-        // until the agent reports fresh progress.
+        // counts down between marker updates while the HIGH bound stays
+        // pinned at the marker until the agent reports fresh progress —
+        // 1.5× the projected remaining time while the rate is barely
+        // measurable (below half the rounds), the bare projected remaining
+        // once it's trusted, so the point estimate widens instead of
+        // counting down naked (#616). No marker timestamp at/above half →
+        // nothing to pin to, keep the point estimate.
+        let factor = frac < 0.5 ? 1.5 : 1.0
         var highSecs: TimeInterval? = nil
-        if frac < 0.5 {
-            if let updated = est.updatedAt {
-                highSecs = max(remaining, eta.timeIntervalSince(updated) * 1.5)
-            } else {
-                highSecs = remaining * 1.5
-            }
+        if let updated = est.updatedAt {
+            highSecs = max(remaining, eta.timeIntervalSince(updated) * factor)
+        } else if frac < 0.5 {
+            highSecs = remaining * 1.5
         }
         let text = etaText(remaining: remaining, highSecs: highSecs)
         var stale = false
