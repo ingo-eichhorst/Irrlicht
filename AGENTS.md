@@ -36,6 +36,11 @@ Before marking a ticket done, run the full suite — every layer must pass:
   under `t.TempDir()`, so it never touches the production daemon).
 - Factory: `go test ./tools/onboarding-factory/... -race -count=1`.
 - Replay: `tools/replay-fixtures.sh`
+- Replay goldens (when a recording or replay-output change is in play):
+  regenerate with `UPDATE_REPLAY_GOLDENS=1 go test
+  ./tools/onboarding-factory/cmd/replay/... -count=1` (the `-count=1`
+  matters — without it the cached test result skips the write). Commit only
+  the goldens of the adapter you touched.
 - replaydata integrity: `go run ./tools/onboarding-factory/cmd/of validate`
   (schema + referential integrity over the catalog + cells — a CI gate). When a
   `web/` or recording-rig change is in play, also `bash
