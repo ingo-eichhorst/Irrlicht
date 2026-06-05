@@ -399,9 +399,10 @@ describe('taskEtaPresentation', () => {
     expect(taskEtaPresentation(metricsFor(), 'ready', now)).toBeNull()
   })
 
-  test('suppressed without estimate, or with progress but no eta', () => {
+  test('suppressed without estimate', () => {
     expect(taskEtaPresentation({}, 'working', now)).toBeNull()
-    expect(taskEtaPresentation(metricsFor({ metrics: { task_completion_eta: undefined } }), 'working', now)).toBeNull()
+    // Progress but no eta is no longer suppressed — it renders a
+    // rounds-only chip (#626), covered below.
   })
 
   test('zero completed rounds renders a progress-only chip (#602)', () => {
@@ -420,6 +421,16 @@ describe('taskEtaPresentation', () => {
     expect(taskEtaPresentation(zero({ updated_at: now - 200 }), 'working', now).stale).toBe(true)
     expect(taskEtaPresentation(zero({ total_rounds: 0 }), 'working', now)).toBeNull()
     expect(taskEtaPresentation(zero(), 'ready', now)).toBeNull()
+  })
+
+  test('progress without a projection renders a rounds-only chip (#626)', () => {
+    const m = metricsFor({ est: { source: 'subagents' }, metrics: { task_completion_eta: null } })
+    const info = taskEtaPresentation(m, 'working', now)
+    expect(info).not.toBeNull()
+    expect(info.text).toBe('6/10')
+    expect(info.stale).toBe(false)
+    expect(info.title).toContain('from subagents')
+    expect(info.title).toContain('6/10 rounds')
   })
 
   test('tooltip attributes the estimate source (#604)', () => {

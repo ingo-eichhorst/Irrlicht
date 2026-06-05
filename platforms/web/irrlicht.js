@@ -438,7 +438,19 @@
         if (est.updated_at > 0) zeroTitle += ', updated ' + fmtDuration(age) + ' ago';
         return { text: 'estimating…', stale: est.updated_at > 0 && age > 180, title: zeroTitle };
       }
-      if (!eta) return null;
+      // Progress without a projection (e.g. a subagent aggregate whose
+      // children carry no etas yet, #626): show a rounds-only chip rather
+      // than hiding one that was visible moments ago.
+      if (!eta) {
+        const age = est.updated_at > 0 ? Math.max(0, Math.floor(nowSec - est.updated_at)) : 0;
+        let roundsTitle = 'Task ETA — ' + sourceLabel + ' ' + est.completed_rounds + '/' + est.total_rounds + ' rounds';
+        if (est.updated_at > 0) roundsTitle += ', updated ' + fmtDuration(age) + ' ago';
+        return {
+          text: est.completed_rounds + '/' + est.total_rounds,
+          stale: est.updated_at > 0 && age > 180,
+          title: roundsTitle,
+        };
+      }
       const remaining = Math.max(0, Math.floor(eta - nowSec));
       const frac = est.total_rounds > 0 ? est.completed_rounds / est.total_rounds : 0;
       // 1.5× padding while the rate is barely measurable, bare projected

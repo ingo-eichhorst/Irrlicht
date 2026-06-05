@@ -28,6 +28,14 @@ type TaskEstimate struct {
 	Source string `json:"source,omitempty"`
 }
 
+// MarkerEstimateSource and TasksEstimateSource tag where an estimate came
+// from: the agent's own in-band marker or the task-list derivation.
+// SubagentEstimateSource (subagent_estimate.go) completes the set.
+const (
+	MarkerEstimateSource = "marker"
+	TasksEstimateSource  = "tasks"
+)
+
 // TaskEstimateGraceAge is how long the preferred (more holistic) estimate
 // source dominates before a strictly fresher alternative may take over
 // (#622). Mirrors the chips' stale-dimming threshold (180s) in the macOS
@@ -39,7 +47,9 @@ const TaskEstimateGraceAge = 180 * time.Second
 // available. preferred is the more holistic signal (the agent's own marker
 // over the task-list derivation; the parent's own estimate over a subagent
 // aggregate) and wins while fresher than TaskEstimateGraceAge; past that, a
-// strictly newer challenger takes over. Either side may be nil.
+// strictly newer challenger takes over. Either side may be nil. An
+// unstamped preferred (UpdatedAt 0) counts as stale immediately and yields
+// to any stamped challenger.
 func FresherTaskEstimate(preferred, challenger *TaskEstimate, now time.Time) *TaskEstimate {
 	if preferred == nil {
 		return challenger
@@ -92,7 +102,7 @@ func TaskEstimateFromTasks(tasks []Task) (est, base *TaskEstimate) {
 		TotalRounds:     len(tasks),
 		CompletedRounds: completed,
 		UpdatedAt:       latest,
-		Source:          "tasks",
+		Source:          TasksEstimateSource,
 	}
 	if stamped >= 2 {
 		// At the first stamp, every unstamped completion plus that task
@@ -101,7 +111,7 @@ func TaskEstimateFromTasks(tasks []Task) (est, base *TaskEstimate) {
 			TotalRounds:     len(tasks),
 			CompletedRounds: completed - stamped + 1,
 			UpdatedAt:       first,
-			Source:          "tasks",
+			Source:          TasksEstimateSource,
 		}
 	}
 	return est, base

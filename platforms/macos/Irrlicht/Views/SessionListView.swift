@@ -1483,7 +1483,20 @@ struct SessionRowView: View {
             }
             return TaskEtaPresentation(text: "estimating…", stale: stale, title: title)
         }
-        guard let eta = metrics.taskCompletionEta else { return nil }
+        guard let eta = metrics.taskCompletionEta else {
+            // Progress without a projection (e.g. a subagent aggregate whose
+            // children carry no etas yet, #626): show a rounds-only chip
+            // rather than hiding one that was visible moments ago.
+            var stale = false
+            var title = "Task ETA — \(sourceLabel) \(est.completedRounds)/\(est.totalRounds) rounds"
+            if let updated = est.updatedAt {
+                let age = max(0, now.timeIntervalSince(updated))
+                stale = age > 180
+                title += ", updated \(Int(age))s ago"
+            }
+            return TaskEtaPresentation(
+                text: "\(est.completedRounds)/\(est.totalRounds)", stale: stale, title: title)
+        }
         let remaining = max(0, eta.timeIntervalSince(now))
         let frac = est.totalRounds > 0 ? Double(est.completedRounds) / Double(est.totalRounds) : 0
         // The eta is anchored at the marker (daemon-side): the LOW bound

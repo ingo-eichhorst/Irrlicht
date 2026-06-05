@@ -148,7 +148,7 @@ func (a *Adapter) ComputeMetrics(transcriptPath, adapter string) (*session.Sessi
 	markerEst := tailerTaskEstimateToDomain(m.TaskEstimate)
 	var markerBase *session.TaskEstimate
 	if markerEst != nil {
-		markerEst.Source = "marker"
+		markerEst.Source = session.MarkerEstimateSource
 		markerBase = tailerTaskEstimateToDomain(m.TaskEstimateBase)
 	}
 	tasksEst, tasksBase := session.TaskEstimateFromTasks(result.Tasks)
