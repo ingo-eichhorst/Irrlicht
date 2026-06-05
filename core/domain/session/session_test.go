@@ -194,6 +194,12 @@ func TestHasOpenEditPermissionTool(t *testing.T) {
 		{"open Write", &SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"Write"}}, true},
 		{"open MultiEdit", &SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"MultiEdit"}}, true},
 		{"open NotebookEdit", &SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"NotebookEdit"}}, true},
+		// Lowercase variants emitted by kiro-cli and pi must gate too (#588) —
+		// the same fast in-process edit tools, just a different casing.
+		{"open lowercase write (kiro)", &SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"write"}}, true},
+		{"open lowercase edit (pi)", &SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"edit"}}, true},
+		{"open lowercase multiedit", &SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"multiedit"}}, true},
+		{"open lowercase notebookedit", &SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"notebookedit"}}, true},
 		// Tools that can legitimately run long must NOT qualify — duration
 		// can't distinguish "blocked on prompt" from "executing" for them.
 		{"open Bash", &SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"Bash"}}, false},

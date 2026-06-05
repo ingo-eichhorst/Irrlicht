@@ -269,9 +269,17 @@ func (m *SessionMetrics) HasOpenEditPermissionTool() bool {
 
 // isPermissionGatedEditTool reports whether name is a fast, in-process
 // file-edit tool that prompts for permission by default.
+//
+// The match is case-insensitive because adapters name the same tool
+// differently: claudecode emits PascalCase (Edit/Write/MultiEdit/
+// NotebookEdit) while kiro-cli and pi emit lowercase (write/edit). All
+// are fast in-process file edits, so an open one that lingers is the same
+// "blocked on a permission prompt" signal regardless of casing (#588). No
+// adapter names a long-running tool (bash/read/web_search/MCP) with one of
+// these spellings, so case-folding introduces no false positives.
 func isPermissionGatedEditTool(name string) bool {
-	switch name {
-	case "Edit", "Write", "MultiEdit", "NotebookEdit":
+	switch strings.ToLower(name) {
+	case "edit", "write", "multiedit", "notebookedit":
 		return true
 	default:
 		return false
