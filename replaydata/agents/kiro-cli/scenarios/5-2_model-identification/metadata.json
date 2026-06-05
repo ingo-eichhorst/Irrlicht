@@ -4,8 +4,9 @@
     "agent_supports": "yes",
     "daemon_capability": "full",
     "driver_capability": "ready",
-    "agent_cli_version": "2.5.1",
-    "daemon_version": "0.4.8+bbd0532.dirty",
+    "pass_rate": "3/3 phases passed",
+    "agent_cli_version": "2.6.0",
+    "daemon_version": "0.4.8+a99cad7",
     "confidence": 0.9,
     "notes": "agent=yes (kiro-cli --model / /model picker / --list-models pin a model); daemon=full as of #599: the parser reads the <uuid>.json sidecar rts_model_state at turn_done (TranscriptPathAware) → ModelName + ContextWindow + derived context utilization; driver=ready (settings.model knob appends --model at launch)."
   },

@@ -4,6 +4,9 @@
     "agent_supports": "yes",
     "daemon_capability": "full",
     "driver_capability": "ready",
+    "pass_rate": "3/3 phases passed",
+    "agent_cli_version": "2.6.0",
+    "daemon_version": "0.4.8+dd02e06",
     "confidence": 0.9,
     "notes": "agent_supports: yes\ndaemon_capability: full (as of #599 sidecar reader); driver_capability: ready"
   },
