@@ -28,6 +28,32 @@ type TaskEstimate struct {
 	Source string `json:"source,omitempty"`
 }
 
+// TaskEstimateGraceAge is how long the preferred (more holistic) estimate
+// source dominates before a strictly fresher alternative may take over
+// (#622). Mirrors the chips' stale-dimming threshold (180s) in the macOS
+// and web UIs: once the chip would dim as stale anyway, a live signal
+// beats a dimmed one.
+const TaskEstimateGraceAge = 180 * time.Second
+
+// FresherTaskEstimate picks the estimate to display when two sources are
+// available. preferred is the more holistic signal (the agent's own marker
+// over the task-list derivation; the parent's own estimate over a subagent
+// aggregate) and wins while fresher than TaskEstimateGraceAge; past that, a
+// strictly newer challenger takes over. Either side may be nil.
+func FresherTaskEstimate(preferred, challenger *TaskEstimate, now time.Time) *TaskEstimate {
+	if preferred == nil {
+		return challenger
+	}
+	if challenger == nil {
+		return preferred
+	}
+	stale := now.Unix()-preferred.UpdatedAt > int64(TaskEstimateGraceAge/time.Second)
+	if stale && challenger.UpdatedAt > preferred.UpdatedAt {
+		return challenger
+	}
+	return preferred
+}
+
 // TaskEstimateFromTasks derives a fallback estimate from the session's task
 // list (#604): claude ≥2.1.162 drops assistant text blocks followed by
 // interleaved thinking from the transcript, so in-band markers rarely

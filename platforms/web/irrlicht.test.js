@@ -426,6 +426,8 @@ describe('taskEtaPresentation', () => {
     expect(taskEtaPresentation(metricsFor(), 'working', now).title).toContain('agent-reported')
     const tasks = metricsFor({ est: { source: 'tasks' } })
     expect(taskEtaPresentation(tasks, 'working', now).title).toContain('from task list')
+    const subagents = metricsFor({ est: { source: 'subagents' } })
+    expect(taskEtaPresentation(subagents, 'working', now).title).toContain('from subagents')
   })
 
   test('eta in the past clamps to <1m, never negative — one sign only', () => {

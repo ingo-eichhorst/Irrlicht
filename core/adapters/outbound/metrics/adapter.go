@@ -141,14 +141,21 @@ func (a *Adapter) ComputeMetrics(transcriptPath, adapter string) (*session.Sessi
 	}
 	// A fresh in-band marker is the agent's own holistic estimate and wins;
 	// when none survives (claude ≥2.1.162 drops mid-task text blocks, #604)
-	// the estimate is derived from the task list's completion stamps.
-	var estBase *session.TaskEstimate
-	if m.TaskEstimate != nil {
-		result.TaskEstimate = tailerTaskEstimateToDomain(m.TaskEstimate)
-		result.TaskEstimate.Source = "marker"
-		estBase = tailerTaskEstimateToDomain(m.TaskEstimateBase)
-	} else {
-		result.TaskEstimate, estBase = session.TaskEstimateFromTasks(result.Tasks)
+	// — or the surviving one has gone stale while the task list kept moving
+	// (#622) — the estimate derives from the task list's completion stamps.
+	// FresherTaskEstimate holds the grace rule; the forecast base must
+	// follow whichever source was chosen.
+	markerEst := tailerTaskEstimateToDomain(m.TaskEstimate)
+	var markerBase *session.TaskEstimate
+	if markerEst != nil {
+		markerEst.Source = "marker"
+		markerBase = tailerTaskEstimateToDomain(m.TaskEstimateBase)
+	}
+	tasksEst, tasksBase := session.TaskEstimateFromTasks(result.Tasks)
+	result.TaskEstimate = session.FresherTaskEstimate(markerEst, tasksEst, time.Now())
+	estBase := markerBase
+	if result.TaskEstimate == tasksEst && tasksEst != nil {
+		estBase = tasksBase
 	}
 	if result.TaskEstimate != nil {
 		if eta := session.ForecastTaskCompletion(result.TaskEstimate, estBase, m.ElapsedSeconds, time.Now()); eta != nil {

@@ -426,7 +426,8 @@
       const est = metrics && metrics.task_estimate;
       const eta = metrics && metrics.task_completion_eta;
       if (state !== 'working' || !est) return null;
-      const sourceLabel = est.source === 'tasks' ? 'from task list' : 'agent-reported';
+      const sourceLabel = est.source === 'tasks' ? 'from task list'
+        : est.source === 'subagents' ? 'from subagents' : 'agent-reported';
       // No completed rounds yet: no measurable rate, but the agent HAS
       // committed to a plan — show a progress-only chip so the user gets
       // feedback within seconds of the first marker (issue #604/#602).

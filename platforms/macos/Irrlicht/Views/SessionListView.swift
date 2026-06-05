@@ -1468,7 +1468,8 @@ struct SessionRowView: View {
         guard session.state == .working,
               let metrics = session.metrics,
               let est = metrics.taskEstimate else { return nil }
-        let sourceLabel = est.source == "tasks" ? "from task list" : "agent-reported"
+        let sourceLabel = est.source == "tasks" ? "from task list"
+            : est.source == "subagents" ? "from subagents" : "agent-reported"
         guard est.completedRounds > 0 else {
             // No measurable rate yet, but the agent committed to a plan —
             // immediate feedback beats waiting for the first round (#602).

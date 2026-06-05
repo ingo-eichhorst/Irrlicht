@@ -2,6 +2,7 @@ package session
 
 import (
 	"path/filepath"
+	"time"
 
 	"irrlicht/core/domain/orchestrator"
 )
@@ -195,13 +196,16 @@ func buildAgent(s *SessionState, workerMap map[string]*workerInfo, parentChildre
 
 // unifySubagents recomputes the Subagents summary for an agent by merging
 // the adapter-reported in-process count (metrics.OpenSubagents) with the
-// file-based children attached to the agent tree.
+// file-based children attached to the agent tree. It also refreshes the
+// parent's subagent-derived task estimate (#622) so the REST-hydration
+// path shows the same chip as the push path (refreshSubagentSummary).
 func unifySubagents(a *Agent) {
 	children := make([]*SessionState, 0, len(a.Children))
 	for _, c := range a.Children {
 		children = append(children, c.SessionState)
 	}
 	a.Subagents = ComputeSubagentSummary(a.SessionState, children)
+	ApplySubagentTaskEstimate(a.SessionState, children, time.Now())
 }
 
 // ComputeSubagentSummary returns the unified subagent summary for a parent

@@ -100,6 +100,30 @@ func TestForecastTaskCompletion_AllRoundsDone(t *testing.T) {
 	}
 }
 
+func TestFresherTaskEstimate(t *testing.T) {
+	now := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
+	fresh := &TaskEstimate{Source: "marker", UpdatedAt: now.Add(-60 * time.Second).Unix()}
+	newest := &TaskEstimate{Source: "tasks", UpdatedAt: now.Add(-10 * time.Second).Unix()}
+	stale := &TaskEstimate{Source: "marker", UpdatedAt: now.Add(-10 * time.Minute).Unix()}
+	newerThanStale := &TaskEstimate{Source: "tasks", UpdatedAt: now.Add(-5 * time.Minute).Unix()}
+	olderThanStale := &TaskEstimate{Source: "tasks", UpdatedAt: now.Add(-20 * time.Minute).Unix()}
+
+	for name, tc := range map[string]struct {
+		preferred, challenger, want *TaskEstimate
+	}{
+		"nil preferred yields challenger":      {nil, newest, newest},
+		"nil challenger yields preferred":      {stale, nil, stale},
+		"fresh preferred holds off newer":      {fresh, newest, fresh},
+		"stale preferred loses to newer":       {stale, newerThanStale, newerThanStale},
+		"stale preferred wins over even older": {stale, olderThanStale, stale},
+		"both nil":                             {nil, nil, nil},
+	} {
+		if got := FresherTaskEstimate(tc.preferred, tc.challenger, now); got != tc.want {
+			t.Errorf("%s: got %+v, want %+v", name, got, tc.want)
+		}
+	}
+}
+
 func TestTaskEstimateFromTasks_NoCompletions(t *testing.T) {
 	if est, base := TaskEstimateFromTasks(nil); est != nil || base != nil {
 		t.Errorf("no tasks: got (%+v, %+v), want (nil, nil)", est, base)
