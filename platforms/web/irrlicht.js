@@ -1658,6 +1658,15 @@
       }
     }
 
+    // seqGap reports whether a stamped push seq skipped ahead of the last one
+    // received — the daemon (or relay) dropped frames for this client (#600).
+    // 0/absent means unstamped (connect snapshots, relay replays, older
+    // daemons) and never gaps; a backward jump is a daemon restart, not a
+    // gap. Pure; exported for tests.
+    function seqGap(last, seq) {
+      return seq > 0 && last > 0 && seq > last + 1;
+    }
+
     // aggregateConnState reduces per-source states into the single header dot:
     // connected wins (we're watching at least one source), then connecting,
     // then reconnecting, else disconnected. Pure; exported for tests.
@@ -1738,7 +1747,7 @@
       }
       for (const d of desired) {
         if (!sources.has(d.id)) {
-          const src = Object.assign({ state: 'connecting', ws: null, reconnectDelay: 1000, closing: false, daemons: new Map() }, d);
+          const src = Object.assign({ state: 'connecting', ws: null, reconnectDelay: 1000, closing: false, daemons: new Map(), seqCursors: new Map() }, d);
           sources.set(d.id, src);
           connectSource(src);
         }
@@ -1771,6 +1780,7 @@
       ws.onclose = function(ev) {
         if (src.closing) return;
         src.daemons.clear();
+        src.seqCursors.clear();
         // 4401 = auth failed/revoked: retrying with the same token just loops, so
         // stop reconnecting (until settings change) instead of a tight loop.
         if (ev && ev.code === 4401) { src.state = 'unauthorized'; updateWsStatus(); return; }
@@ -1797,6 +1807,25 @@
       if (ids.length) render();
     }
 
+    // trackPushSeq advances one daemon's seq cursor and, on a gap, triggers an
+    // immediate rehydrate instead of waiting for the 30s cadence (#600). The
+    // cursor is keyed per daemon: a relay socket interleaves multiple daemons'
+    // independent counters, so a per-socket cursor would gap on every switch.
+    // Gap-triggered rehydrates are leading-edge throttled: the first gap heals
+    // immediately, refires from a sustained drop burst ride the same fetch
+    // (macOS gets the same coalescing from its debounced scheduleRehydration).
+    let lastSeqGapRehydrate = 0;
+    function trackPushSeq(src, key, seq) {
+      if (!seq) return; // unstamped: connect snapshots, relay replays, older daemons
+      const last = src.seqCursors.get(key) || 0;
+      src.seqCursors.set(key, seq);
+      if (!seqGap(last, seq)) return;
+      const now = Date.now();
+      if (now - lastSeqGapRehydrate < 1000) return;
+      lastSeqGapRehydrate = now;
+      rehydratePoll();
+    }
+
     function handleSourceFrame(src, msg) {
       if (!msg) return;
       switch (relayFrameKind(msg)) {
@@ -1813,6 +1842,7 @@
           if (msg.daemon_id) {
             if (msg.status === 'disconnected') {
               src.daemons.delete(msg.daemon_id);
+              src.seqCursors.delete(msg.daemon_id);
               purgeDaemonSessions(msg.daemon_id);   // #540: relay no longer deletes them for us
             } else {
               src.daemons.set(msg.daemon_id, { label: msg.daemon_label || msg.daemon_id, status: msg.status || 'connected' });
@@ -1821,9 +1851,13 @@
           updateWsStatus();
           return;
         case 'push':
-          if (msg.msg) dispatchRawFrame(normalizeSourcedFrame(msg.source, msg.msg));
+          if (msg.msg) {
+            trackPushSeq(src, msg.source || '', msg.msg.seq);
+            dispatchRawFrame(normalizeSourcedFrame(msg.source, msg.msg));
+          }
           return;
         default:
+          trackPushSeq(src, '', msg.seq);
           dispatchRawFrame(msg);
       }
     }
@@ -2802,7 +2836,7 @@ export {
   formatCost, formatUsageCost, pressureClass, historyPriorityForState,
   taskEtaPresentation,
   lastNotifiedPressure,
-  relayFrameKind, aggregateConnState, relayWsUrl,
+  relayFrameKind, aggregateConnState, relayWsUrl, seqGap,
   compoundSessionId, displaySessionId,
   sessionOrigin, sourceIdOf, localBareIds, isShadowedRemote,
   daemonSessionIds, structureSignature,
