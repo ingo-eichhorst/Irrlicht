@@ -1811,11 +1811,19 @@
     // immediate rehydrate instead of waiting for the 30s cadence (#600). The
     // cursor is keyed per daemon: a relay socket interleaves multiple daemons'
     // independent counters, so a per-socket cursor would gap on every switch.
+    // Gap-triggered rehydrates are leading-edge throttled: the first gap heals
+    // immediately, refires from a sustained drop burst ride the same fetch
+    // (macOS gets the same coalescing from its debounced scheduleRehydration).
+    let lastSeqGapRehydrate = 0;
     function trackPushSeq(src, key, seq) {
       if (!seq) return; // unstamped: connect snapshots, relay replays, older daemons
       const last = src.seqCursors.get(key) || 0;
       src.seqCursors.set(key, seq);
-      if (seqGap(last, seq)) rehydratePoll();
+      if (!seqGap(last, seq)) return;
+      const now = Date.now();
+      if (now - lastSeqGapRehydrate < 1000) return;
+      lastSeqGapRehydrate = now;
+      rehydratePoll();
     }
 
     function handleSourceFrame(src, msg) {
