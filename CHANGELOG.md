@@ -12,13 +12,85 @@ beyond), see the [Roadmap](https://irrlicht.io/docs/roadmap.html).
 
 ## [Unreleased]
 
-### Added — CLI
-- `irrlicht-ls` dashboard parity (#554): hierarchical subagent display with
-  indented children and `[N agents: Ww/Rr]` badges, project group headers,
-  context-utilization percent color-coded by pressure level, cost and adapter
-  columns, waiting-question and `N/M completed` task-progress detail lines,
-  `--format json` (grouped `/api/v1/sessions` shape), and `--id`/`--state`/
-  `--project`/`--adapter` filters. Still file-only — no daemon required.
+## [0.5.0] — 2026-06-06
+
+### Consent-first permissions, agent-authored task ETAs, and Kiro CLI joins the watch list.
+
+### Highlights
+
+#### Nothing is read or modified until you grant it
+
+![Permission wizard listing Claude Code and Codex with per-permission toggles, what each permission touches, and an Apply button](assets/releases/v0.5.0/permission-wizard.png)
+
+Every read and modification irrlicht performs — transcript tailing, hook installs, statusline wraps, database polling — is now a declared per-agent permission behind explicit consent. When irrlicht detects a coding agent it hasn't asked about, a wizard appears on whichever surface you're looking at (macOS app or web dashboard), shows exactly what each permission touches, and exercises nothing until you hit Apply. Revoking actively undoes: hooks uninstall, watchers stop.
+
+**Why it matters:** you can see — and veto — every way irrlicht touches your system, per agent, before it happens.
+
+**Heads-up on upgrade:** existing installs see the wizard once after updating, and monitoring is paused until you answer it. Notifications are now opt-in by default too.
+
+(#570, #571, #579, #583)
+
+#### Know when your agent will be done
+
+![Dashboard session list where a working session shows a ~9m-left task ETA chip beside its cost, with task progress 3/5 underneath](assets/releases/v0.5.0/task-eta.png)
+
+Working sessions now carry a task-completion ETA chip — "~9m left" — in the web dashboard and the macOS menu bar. The agent authors its own progress estimate and emits it as a hidden in-band marker; irrlicht parses it read-only, projects a completion time from the measured pace, and degrades honestly: a range while the rate is barely measurable, dimming when the last report goes stale, and a tasks-derived fallback when no marker arrives at all.
+
+**Why it matters:** "is it nearly done or should I grab lunch?" is now answered at a glance, for every working session, without asking the agent.
+
+(#558, #567, #605, #621, #626)
+
+#### Kiro CLI joins the watch list
+
+![A Kiro CLI session row showing a live context bar, task progress 1/2, and the model name](assets/releases/v0.5.0/kiro-cli.png)
+
+Irrlicht now watches AWS Kiro CLI sessions: live working/waiting/ready state, project + branch resolution, PID binding, task progress synthesized from Kiro's todo lists, and model + context-window metrics read from Kiro's session sidecar.
+
+**Why it matters:** if Kiro is one of your agents, it now shows up beside Claude Code, Codex, and the rest — same row anatomy, same states, no special casing.
+
+(#280, #590, #603, #613)
+
+### Also in this release
+
+**Added**
+- **`irrlicht-ls` reaches dashboard parity and ships in the default install** (#554, #580, #609) — hierarchical subagent display, project group headers, color-coded context utilization, cost and adapter columns, task-progress detail lines, `--format json`, and `--id`/`--state`/`--project`/`--adapter` filters; the PKG now symlinks it into `/usr/local/bin`.
+- **Menu-bar attention icon for pending permission items** (#607) — the macOS icon signals when an agent is waiting on a permission decision.
+- **Gas Town: unified rig/role/cost display in the session list** (#559, #560).
+
+**Fixed**
+- **Gas Town polling no longer spikes CPU** (#557, #575) — event-driven polling replaces the hot loop.
+- **Stale subagent badges** (#601, #600, #637) — waiting-path cleanup, observable deletions, and push Seq-gap detection with immediate re-hydration keep parent badges truthful.
+- **Sessions survive daemon restarts mid-run** (#576, #584) — stale transcripts owned by a live process are rescued at backfill instead of being dropped.
+- **Web: rows of a single collapsed group render** (#564, #566).
+- **macOS login item re-registers on every launch** (#562, #563) — a self-heal for installs where the login item silently vanished.
+- **macOS: premium voices whose names carry a quality suffix match again** (#569).
+- **First launch after install no longer races Gatekeeper** (#553) — the installer pre-warms assessment so the app is ready before the daemon wait expires.
+- **Ready-state icon stays inside its layout box** (#596, #598).
+- **Workflow-tool subagents link to their parent session** (#565, #635) — and workflow run journals are no longer mistaken for transcripts.
+- **Kiro: permission-gated edit-tool prompts classify case-insensitively** (#588, #612).
+- **Claude Code: task IDs are taken from TaskCreate results** (#620) — and pruned task lists clear instead of lingering.
+
+**Changed**
+- **The eyed-flame mark lands everywhere** (#587, #594) — app icon, menu bar, favicon, landing page, and docs all swap to the new mark; shape-only, the state-color system is unchanged.
+- **Notifications are opt-in by default** (#579) — part of the consent-first rollout; kitty click-to-focus asks before using remote control.
+
+**Docs**
+- **macOS setup guide on the site** (#574).
+
+### Technical appendix
+
+- **Consent-first permission architecture (#570, #571, #579, #583).** New `core/domain/permission` package: `State`/`Kind`/`Set` with absent-key-means-pending as the upgrade path. Adapters declare `Permissions` on `agent.Agent` with Apply/Remove effect closures — claude-code: transcripts/hooks/statusline/instructions; codex + pi: transcripts; aider: history; opencode: database; gastown: state; launcher: env; kitty: remote-control. `PermissionService` exercises grants, undoes revokes (hook uninstall, watcher stop), persists `permissions.json`, arbitrates wizard answers across surfaces (first answer wins; a dataless `permissions_updated` push dismisses the other surface), and runs an always-on detection poller (pgrep / GT_ROOT stat probe, no session reads) only while something is pending in ask mode. `SessionDetector` + `OrchestratorMonitor` gained `AddWatcher` seams so monitoring starts/stops dynamically at grant/revoke; the startup seed and stale-working refresh honor per-adapter consent for persisted sessions. `GET /api/v1/permissions` + `POST /api/v1/permissions/answer`; hook and statusline receivers drop payloads (200) while ungranted. `IRRLICHT_PERMISSION_MODE=grant-all` auto-grants for demo/record/test daemons, strictly in-memory, never persisted. `--uninstall-hooks` also records hooks=denied so a restart cannot silently reinstall. The task-eta CLAUDE.md managed block became the `instructions` permission (#577, #583); notifications flipped to opt-in and kitty remote-control got its own consent (#579). The auto wizard locks its agent set at presentation — a mid-decision detection flip or a newly detected agent never disturbs an open wizard; only answers dismiss it.
+- **Task-completion ETA pipeline (#558, #567).** The agent emits `<!-- {"marker":"irrlicht-eta","total_rounds":N,"completed_rounds":M} -->` in-band; the claudecode adapter scans full text blocks tolerantly (accepts key drift, rejects absurd values, latest valid wins, never errors — `AssistantText` is tail-truncated to 200 runes so the scan runs pre-truncation). `TaskEstimate` mirrors through tailer → domain (`SessionMetrics.TaskEstimate` + `TaskCompletionEta`, nil carry-over in `MergeMetrics`) → metrics adapter. `ForecastTaskCompletion` is the single swappable projection seam: measured rate `elapsed/completed` anchored at session start. Web chip: hidden unless working with reported progress, range below half completion, stale dimming past 3 min, minute resolution (`taskEtaPresentation`, mirrored in `SessionListView.swift`).
+- **ETA hardening (#605, #621, #626, #619, #638, #620).** #605 makes the chip drop-proof: a tasks-derived estimate falls back when no marker arrives, a PostToolUse-hook carrier survives text-block drops, and a 0/N "estimating…" chip appears within seconds of the first marker. #621 widens the point ETA into a pinned-high range between markers — the low bound counts down in real time, the high bound stays pinned until fresh progress, so the ETA never silently drifts upward. #626 adds subagent-aware aggregation and freshness-based source precedence (marker > tasks > subagents with 180 s grace). #619 (v3) makes the per-phase marker mandatory via the Bash-description carrier; #638 (v4) moves the first marker onto that carrier too, after server-side text-block drops were observed eating pre-tool-call prose. #620 takes task IDs from authoritative TaskCreate results and clears pruned task lists.
+- **Kiro CLI adapter (#280, #590, #603, #613, #612).** `FilesUnderRoot`/`JSONLineParser` adapter watching `~/.kiro/sessions/cli/<uuid>.jsonl` (verified against kiro-cli 2.5.1). Versioned envelope events Prompt / AssistantMessage / ToolResults / Clear; no explicit end-of-turn marker — a text-only AssistantMessage maps to turn_done, one carrying toolUse keeps the turn open. The transcript carries no cwd: `pid.go` and `GetCWDFromTranscript` fall back to the `<uuid>.json` metadata sidecar via `transcript.ExtractCWDFromSidecar` (token-walk; the conversation state blob is never fully parsed). CWD-based PID discovery via `pgrep -x kiro-cli` — the chat parent owns the session cwd and the transcript isn't kept open between writes. #603 adds the sidecar `MetricsReader`: model + context window surface live (per-turn credits parsed but not yet priced). #613 synthesizes `TaskCreate`/`TaskUpdate` deltas from Kiro's `todo_list` create/complete events. #612 fixes permission-gated edit-tool classification to match case-insensitively (#588). Onboarded as a matrix column with an interactive tmux driver (headless `--no-interactive` persists no session file).
+- **Session-detection internals (#576/#584, #572/#573, #606/#618, #628/#634, #592/#595, #565/#635).** Backfill rescues stale transcripts owned by a live process instead of dropping the session (#584). `BuildAgentGroups` no longer mutates its input sessions (#573). PID assignment is synchronized with the detector loop (#618) and the pidmanager's sweep paths were brought under `assignMu` with the safe paths documented (#634). The dead `ContentChars` pipeline is gone and kiro tool-status semantics are pinned by test (#595). Workflow-tool subagents link to their parent via the run journal's parent field, and run journals themselves are excluded from transcript discovery (#635).
+- **Web client (#566, #637, #601).** A single collapsed group renders its rows (#566). Clients detect gaps in the push Seq counter and re-hydrate immediately instead of waiting for the next poll (#637, closing the 64-slot drop window from #601's diagnosis). Stale subagent state fixes: waiting-path cleanup, summary ordering, observable deletions, history leak (#601).
+- **Gas Town (#575, #560, #633).** Polling is event-driven, eliminating the CPU spike of the 1 s hot loop (#575). Rig/role/cost render as one unified block in the session list (#560). `gt` fetch timeouts are logged instead of silently falling back (#633).
+- **macOS app (#607, #598, #569, #563, #585, #610).** Menu-bar attention icon when permission items are pending (#607); ready-state icon clamped to its size × size layout box (#598); premium-voice matching tolerates quality suffixes in voice names (#569); login-item registration reconciles on every launch (#563); `swift test` passes clean on main (#585); GroupView snapshots pinned to dark aqua (#610).
+- **CLI + install (#580, #609, #553).** `irrlicht-ls` gains the dashboard's full feature set — hierarchy with `[N agents: Ww/Rr]` badges, group headers, context-pressure coloring, cost/adapter columns, waiting-question and `N/M completed` detail lines, `--format json` in the grouped `/api/v1/sessions` shape, and id/state/project/adapter filters — still file-only, no daemon required (#580). It ships in the app bundle and the PKG postinstall symlinks it into `/usr/local/bin` (#609, #608). The curl installer pre-warms Gatekeeper assessment so first launch beats the daemon wait (#553).
+- **Brand (#594).** The eyed-flame mark replaces the previous flame as a shape-only swap across app icon, menu bar, favicon, landing page, docs, and the design system; state colors and gradients carry over unchanged (#587).
+- **Tooling / CI / tests.** gofmt sweep with a CI gofmt gate (#629, #632) and a follow-up format + golden-regen-doc pass (#623). Test de-flakes: FSWatcher event timeout widened for loaded CI runners (#630), ParentBadgeCleared polls for condition (#624, #631), gastown replay settle window widened under `-race` (#611), deterministic cursor-GC aging in the opencode watcher test (#614), child-ready polling instead of fixed sleeps (#578, #582). Onboarding-factory (internal fixture tooling, no runtime impact): on-disk recordings became the single source of truth (#556), coverage-matrix viewer paginates agent columns (#591), kiro-cli `auto-classified-permission` re-recorded at 5/5 with full daemon coverage (#627), claudecode `workflow-fanout` recorded at 7/7 phases (#636). Release-skill docs record `build-release.sh` as the authoritative build path + canary port hazard (#552).
+- **Model aliases.** codeburn `BUILTIN_ALIASES` sync ran at release time: no new entries (the lone upstream addition, `gpt-4.1` → `gpt-4.1`, is a self-alias irrlicht intentionally omits); all eight `LOCAL_OVERRIDE` entries unchanged upstream.
 
 ## [0.4.8] — 2026-05-30
 
@@ -864,7 +936,8 @@ Four distinct bugs caused long-running Claude Code sessions to bounce between
 - First bundled macOS installer `Irrlicht-0.2.0-mac-installer.pkg` containing
   the daemon, menu bar app, and auto-start LaunchAgent.
 
-[Unreleased]: https://github.com/ingo-eichhorst/Irrlicht/compare/v0.4.8...HEAD
+[Unreleased]: https://github.com/ingo-eichhorst/Irrlicht/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.5.0
 [0.4.8]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.4.8
 [0.4.7]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.4.7
 [0.4.6]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.4.6

@@ -100,6 +100,7 @@
             <li><a href="https://github.com/inflectionAI/pi-cli">Pi</a></li>
             <li><a href="https://aider.chat">Aider</a></li>
             <li><a href="https://opencode.ai">OpenCode</a></li>
+            <li><a href="https://kiro.dev">Kiro CLI</a></li>
           </ul>
         </li>
       </ul>
@@ -291,9 +292,14 @@ cd Irrlicht
         The daemon listens on <code>127.0.0.1:7837</code> by default. This port is not exposed to the network. See the <a href="configuration.html">Configuration</a> page to change the bind address or port.
       </div>
 
+      <div class="callout callout-info">
+        <strong>Consent first</strong>
+        Irrlicht monitors nothing out of the box. On first launch it detects which coding agents are running and shows a permission wizard &mdash; on the macOS app or the web dashboard, whichever you're looking at &mdash; listing every read and modification it wants to make, per agent. Nothing is read or installed until you hit Apply, and revoking a permission later actively undoes it (hooks uninstall, watchers stop).
+      </div>
+
       <div class="callout callout-tip">
-        <strong>Restart Claude Code after first launch</strong>
-        On first launch, Irrlicht registers a <code>statusLine.command</code> entry in <code>~/.claude/settings.json</code>. Any Claude Code session already running at that point won't pick it up &mdash; close and reopen it once to activate the integration.
+        <strong>Restart Claude Code after granting the statusline permission</strong>
+        When you grant Claude Code's statusline permission, Irrlicht registers a <code>statusLine.command</code> entry in <code>~/.claude/settings.json</code>. Any Claude Code session already running at that point won't pick it up &mdash; close and reopen it once to activate the integration.
       </div>
 
       <!-- ── Uninstalling ── -->

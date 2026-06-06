@@ -499,8 +499,8 @@
           <div class="release minor">
             <div class="release-head">
               <span class="release-version">v0.7</span>
-              <span class="release-date">~mid-Jul 2026</span>
-              <span class="release-pill pill-later">later</span>
+              <span class="release-date">~Aug 2026</span>
+              <span class="release-pill pill-next">next</span>
             </div>
             <div class="release-theme">Relay v0 completes + productivity metrics</div>
             <ul class="milestones">
@@ -520,16 +520,14 @@
           <div class="release minor">
             <div class="release-head">
               <span class="release-version">v0.6</span>
-              <span class="release-date">~mid-Jun 2026</span>
-              <span class="release-pill pill-next">next</span>
+              <span class="release-date">~early Jul 2026</span>
+              <span class="release-pill pill-in-flight">in flight</span>
             </div>
-            <div class="release-theme">Developer ID + cross-IDE reach + history</div>
+            <div class="release-theme">Cross-IDE reach + history + orchestrators</div>
             <ul class="milestones">
-              <li>Developer ID notarization <span class="ref">&middot; <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/233" target="_blank" rel="noopener">#233</a></span> <span class="desc">&mdash; unblocks Homebrew cask and APNs prereq for iOS.</span></li>
               <li>VS Code panel hosting the dashboard <span class="ref">&middot; <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/350" target="_blank" rel="noopener">#350</a></span> <span class="desc">&mdash; thin extension webview; Cursor / Windsurf inherit it for free.</span></li>
               <li>History tab <span class="ref">&middot; <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/369" target="_blank" rel="noopener">#369</a></span> <span class="desc">&mdash; cost/token analytics with project/branch/provider/model attribution.</span></li>
-              <li>Cost-anomaly indicator <span class="ref">&middot; <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/372" target="_blank" rel="noopener">#372</a></span> <span class="desc">&mdash; flag sessions running materially above the project's peer average.</span></li>
-              <li>Automated adapter onboarding pipeline <span class="ref">&middot; <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/268" target="_blank" rel="noopener">#268</a></span> <span class="desc">&mdash; new adapters land with fixtures and scenario matrix populated end-to-end.</span></li>
+              <li>Claude Code Agent View as an orchestrator <span class="ref">&middot; <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/312" target="_blank" rel="noopener">#312</a></span> <span class="desc">&mdash; new orchestrator alongside Gas Town and the inline-subagent path; carried over from the v0.5 cycle.</span></li>
             </ul>
             <figure class="release-figure">
               <picture>
@@ -539,41 +537,42 @@
             </figure>
           </div>
 
-          <!-- v0.5 — in flight -->
-          <div class="release minor">
-            <div class="release-head">
-              <span class="release-version">v0.5</span>
-              <span class="release-date">~end May 2026</span>
-              <span class="release-pill pill-in-flight">in flight</span>
-            </div>
-            <div class="release-theme">macOS hardening + relay v0 + Kiro.dev</div>
-            <ul class="milestones">
-              <li>Relay server v0 &mdash; first version <span class="ref">&middot; <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/188" target="_blank" rel="noopener">#188</a> &middot; <a href="https://github.com/ingo-eichhorst/Irrlicht/wiki/Relay-Server" target="_blank" rel="noopener">Relay wiki</a></span> <span class="desc">&mdash; wire protocol + daemon forwarder + standalone relay binary (wiki phases 0&ndash;3). One-binary hub-mode replaces the half-built <code>IRRLICHT_BIND_ADDR</code> + <code>IRRLICHT_MDNS</code> network-exposure pair with a single explicit knob. Foundation that iOS, watchOS, and the hosted relay all depend on.</span></li>
-              <li>Kiro.dev adapter <span class="ref">&middot; <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/280" target="_blank" rel="noopener">#280</a></span> <span class="desc">&mdash; sixth coding-agent backend alongside Claude Code, Codex, Pi, Aider, and OpenCode.</span></li>
-              <li>Sparkle auto-update for the macOS app + daemon <span class="ref">&middot; <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/129" target="_blank" rel="noopener">#129</a></span> <span class="desc">&mdash; app updates itself in place.</span></li>
-              <li>Claude Code Agent View as an orchestrator <span class="ref">&middot; <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/312" target="_blank" rel="noopener">#312</a></span> <span class="desc">&mdash; new orchestrator alongside Gas Town and the inline-subagent path.</span></li>
-              <li>Focus state restoration groundwork <span class="ref">&middot; <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/357" target="_blank" rel="noopener">#357</a></span> <span class="desc">&mdash; DND-aware notifications return once Developer ID lands.</span></li>
-              <li>OpenCode adapter maturity <span class="desc">&mdash; tail latency and task surfacing reach parity with the other adapters.</span></li>
-            </ul>
-            <figure class="release-figure">
-              <picture>
-                <source srcset="../assets/roadmap/v0.5/relay-topology.webp" type="image/webp">
-                <img src="../assets/roadmap/v0.5/relay-topology.png" alt="Concept: three machines (laptop, desk, VM) each running irrlichd, all pushing to one hub-mode irrlichd; the macOS app sees the aggregated session list" loading="lazy">
-              </picture>
-            </figure>
-          </div>
-
         </div>
 
         <!-- ════════════════════════════════════════════════════════════
              "YOU ARE HERE" — today
              ════════════════════════════════════════════════════════════ -->
-        <div class="timeline-now"><span>2026-05-30 &middot; today</span></div>
+        <div class="timeline-now"><span>2026-06-06 &middot; today</span></div>
 
         <!-- ════════════════════════════════════════════════════════════
              PAST
              ════════════════════════════════════════════════════════════ -->
         <div class="timeline-section past">
+
+          <!-- v0.5.0 -->
+          <div class="release minor">
+            <div class="release-head">
+              <span class="release-version">v0.5.0</span>
+              <span class="release-date">2026-06-06</span>
+              <span class="release-pill pill-shipped">shipped</span>
+            </div>
+            <div class="release-theme">Consent-first permissions, agent-authored task ETAs, and Kiro CLI joins the watch list</div>
+            <ul class="milestones">
+              <li>Consent-first permission wizard <span class="ref">&middot; <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/570" target="_blank" rel="noopener">#570</a></span> <span class="desc">&mdash; every read and modification irrlicht performs is a declared per-agent permission behind explicit consent; nothing is exercised until granted, and revoking actively undoes (hooks uninstall, watchers stop).</span>
+                <figure>
+                  <picture>
+                    <source srcset="../assets/releases/v0.5.0/permission-wizard.webp" type="image/webp">
+                    <img src="../assets/releases/v0.5.0/permission-wizard.png" alt="Permission wizard listing Claude Code and Codex with per-permission toggles, what each permission touches, and an Apply button" loading="lazy">
+                  </picture>
+                </figure>
+              </li>
+              <li>Task-completion ETA chip <span class="ref">&middot; <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/558" target="_blank" rel="noopener">#558</a></span> <span class="desc">&mdash; the agent self-reports progress via a hidden in-band marker; web + macOS show a &ldquo;~9m left&rdquo; chip that degrades honestly when reports go stale.</span></li>
+              <li>Kiro CLI adapter <span class="ref">&middot; <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/280" target="_blank" rel="noopener">#280</a></span> <span class="desc">&mdash; seventh coding-agent backend: live state, PID binding, todo-list task progress, and model + context metrics from Kiro&rsquo;s session sidecar.</span></li>
+              <li><code>irrlicht-ls</code> dashboard parity, in the default install <span class="ref">&middot; <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/554" target="_blank" rel="noopener">#554</a></span> <span class="desc">&mdash; hierarchy, cost/context/adapter columns, filters, <code>--format json</code>; PKG symlinks it into <code>/usr/local/bin</code>.</span></li>
+            </ul>
+            <p class="release-note">Eyed-flame mark lands everywhere <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/594" target="_blank" rel="noopener">#594</a>; menu-bar attention icon for pending permissions <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/607" target="_blank" rel="noopener">#607</a>; Gas Town event-driven polling kills a CPU spike <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/575" target="_blank" rel="noopener">#575</a> + unified rig/role/cost display <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/560" target="_blank" rel="noopener">#560</a>; stale subagent badges fixed via Seq-gap re-hydration <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/601" target="_blank" rel="noopener">#601</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/637" target="_blank" rel="noopener">#637</a>; macOS login item self-heals on every launch <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/563" target="_blank" rel="noopener">#563</a>.</p>
+            <div class="also-shipped"><a href="https://github.com/ingo-eichhorst/Irrlicht/issues/552" target="_blank" rel="noopener">#552</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/553" target="_blank" rel="noopener">#553</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/556" target="_blank" rel="noopener">#556</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/557" target="_blank" rel="noopener">#557</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/559" target="_blank" rel="noopener">#559</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/561" target="_blank" rel="noopener">#561</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/562" target="_blank" rel="noopener">#562</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/564" target="_blank" rel="noopener">#564</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/565" target="_blank" rel="noopener">#565</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/566" target="_blank" rel="noopener">#566</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/567" target="_blank" rel="noopener">#567</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/568" target="_blank" rel="noopener">#568</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/569" target="_blank" rel="noopener">#569</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/571" target="_blank" rel="noopener">#571</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/572" target="_blank" rel="noopener">#572</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/573" target="_blank" rel="noopener">#573</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/574" target="_blank" rel="noopener">#574</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/576" target="_blank" rel="noopener">#576</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/577" target="_blank" rel="noopener">#577</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/578" target="_blank" rel="noopener">#578</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/579" target="_blank" rel="noopener">#579</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/580" target="_blank" rel="noopener">#580</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/581" target="_blank" rel="noopener">#581</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/582" target="_blank" rel="noopener">#582</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/583" target="_blank" rel="noopener">#583</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/584" target="_blank" rel="noopener">#584</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/585" target="_blank" rel="noopener">#585</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/586" target="_blank" rel="noopener">#586</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/587" target="_blank" rel="noopener">#587</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/588" target="_blank" rel="noopener">#588</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/589" target="_blank" rel="noopener">#589</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/590" target="_blank" rel="noopener">#590</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/591" target="_blank" rel="noopener">#591</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/592" target="_blank" rel="noopener">#592</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/593" target="_blank" rel="noopener">#593</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/595" target="_blank" rel="noopener">#595</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/596" target="_blank" rel="noopener">#596</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/597" target="_blank" rel="noopener">#597</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/598" target="_blank" rel="noopener">#598</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/599" target="_blank" rel="noopener">#599</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/600" target="_blank" rel="noopener">#600</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/602" target="_blank" rel="noopener">#602</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/603" target="_blank" rel="noopener">#603</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/604" target="_blank" rel="noopener">#604</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/605" target="_blank" rel="noopener">#605</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/606" target="_blank" rel="noopener">#606</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/608" target="_blank" rel="noopener">#608</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/609" target="_blank" rel="noopener">#609</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/610" target="_blank" rel="noopener">#610</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/611" target="_blank" rel="noopener">#611</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/612" target="_blank" rel="noopener">#612</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/613" target="_blank" rel="noopener">#613</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/614" target="_blank" rel="noopener">#614</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/615" target="_blank" rel="noopener">#615</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/616" target="_blank" rel="noopener">#616</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/617" target="_blank" rel="noopener">#617</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/618" target="_blank" rel="noopener">#618</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/619" target="_blank" rel="noopener">#619</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/620" target="_blank" rel="noopener">#620</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/621" target="_blank" rel="noopener">#621</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/622" target="_blank" rel="noopener">#622</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/623" target="_blank" rel="noopener">#623</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/624" target="_blank" rel="noopener">#624</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/625" target="_blank" rel="noopener">#625</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/626" target="_blank" rel="noopener">#626</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/627" target="_blank" rel="noopener">#627</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/628" target="_blank" rel="noopener">#628</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/630" target="_blank" rel="noopener">#630</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/631" target="_blank" rel="noopener">#631</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/632" target="_blank" rel="noopener">#632</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/633" target="_blank" rel="noopener">#633</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/634" target="_blank" rel="noopener">#634</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/635" target="_blank" rel="noopener">#635</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/636" target="_blank" rel="noopener">#636</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/638" target="_blank" rel="noopener">#638</a></div>
+          </div>
 
           <!-- v0.4 cycle: each patch carries its actual shipped milestones -->
           <div class="release patch">

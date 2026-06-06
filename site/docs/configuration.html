@@ -160,6 +160,12 @@
             <td><code>~/.codex</code></td>
             <td>Relocate the Codex adapter's transcript root (the daemon appends <code>/sessions</code>)</td>
           </tr>
+          <tr>
+            <td><code>IRRLICHT_PERMISSION_MODE</code></td>
+            <td><code>ask</code> | <code>grant-all</code></td>
+            <td><code>ask</code></td>
+            <td>Consent behavior. <code>ask</code> (production default) keeps every per-agent permission pending until answered via the wizard &mdash; nothing is read or modified before a grant. <code>grant-all</code> auto-grants everything in-memory for demo / recording / test daemons; it is never persisted</td>
+          </tr>
         </tbody>
       </table>
 
@@ -224,6 +230,7 @@ launchctl setenv IRRLICHT_DEBUG 1
 
       <ul>
         <li><strong>Session instances:</strong> <code>~/Library/Application Support/Irrlicht/instances/</code></li>
+        <li><strong>Permissions:</strong> <code>~/Library/Application Support/Irrlicht/permissions.json</code> &mdash; the per-agent consent answers behind the permission wizard. A missing file (or a missing key) means pending: the wizard re-asks and nothing is monitored until granted</li>
         <li><strong>Logs:</strong> <code>~/Library/Application Support/Irrlicht/logs/</code></li>
         <li><strong>Unix socket:</strong> <code>~/.local/share/irrlicht/irrlichd.sock</code></li>
       </ul>
@@ -242,6 +249,7 @@ launchctl setenv IRRLICHT_DEBUG 1
         <li><strong>Pi:</strong> <code>~/.pi/agent/sessions/--&lt;cwd-dashed&gt;--/&lt;session-id&gt;.jsonl</code></li>
         <li><strong>Aider:</strong> <code>&lt;cwd&gt;/.aider.chat.history.md</code> (markdown, per-CWD)</li>
         <li><strong>OpenCode:</strong> <code>~/.local/share/opencode/storage/opencode.db</code> (single SQLite WAL, watched via <code>opencode.db-wal</code>)</li>
+        <li><strong>Kiro CLI:</strong> <code>~/.kiro/sessions/cli/&lt;uuid&gt;.jsonl</code> (plus a <code>&lt;uuid&gt;.json</code> metadata sidecar for cwd, model, and context metrics)</li>
       </ul>
 
       <!-- ── App Settings ── -->
@@ -260,6 +268,7 @@ launchctl setenv IRRLICHT_DEBUG 1
       <h3>Notifications</h3>
 
       <ul>
+        <li>Notifications are <strong>opt-in by default</strong> &mdash; no banners or sounds play until you enable an event in Preferences (part of the consent-first rollout in v0.5.0)</li>
         <li>Three events &mdash; <code>ready</code>, <code>waiting</code>, and context pressure (80% / 95%) &mdash; each has its own enable toggle and sound picker in Preferences</li>
         <li>Built-in sounds: Ping, Chime, Funk, Whoosh, Sosumi; defaults Ready=Funk, Waiting=Ping, Context=Sosumi</li>
         <li><strong>None</strong> &mdash; the banner still appears but plays no sound</li>
