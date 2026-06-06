@@ -60,12 +60,16 @@ Out of scope:
 
 ## Threat model, briefly
 
-Irrlicht is local-first. The daemon reads transcript files the user already
-has on disk and exposes state on `127.0.0.1:7837` by default. It does not
-transmit transcript contents off the machine. Security-relevant areas
-include: any path traversal or TOCTOU around transcript watching, the
-loopback HTTP/WS surface, file-permission handling on the state directory,
-and the daemon-spawning logic in the macOS app.
+Irrlicht is local-first and consent-first. The daemon reads and modifies
+nothing until the user grants each per-agent permission through the
+permission wizard (v0.5.0+); revoking a permission actively undoes it
+(hooks uninstall, watchers stop). Once granted, the daemon reads transcript
+files the user already has on disk and exposes state on `127.0.0.1:7837`
+by default. It does not transmit transcript contents off the machine.
+Security-relevant areas include: any path traversal or TOCTOU around
+transcript watching, the loopback HTTP/WS surface, file-permission handling
+on the state directory (including `permissions.json`), and the
+daemon-spawning logic in the macOS app.
 
 ### Network exposure (opt-in)
 

@@ -88,6 +88,13 @@
       <h1>macOS Setup</h1>
       <p class="page-subtitle">A few system settings to make Irrlicht work at its best &mdash; especially when you spend most of your time in full-screen apps.</p>
 
+      <!-- ── Permission wizard ── -->
+      <h2>The Permission Wizard (First Run)</h2>
+
+      <p>Irrlicht is consent-first: it monitors nothing until you say so. On first launch &mdash; and again after an upgrade adds new permissions &mdash; it detects which coding agents are running and shows a permission wizard listing every read and modification it wants to make, per agent: transcript tailing, hook installs, statusline wraps, database polling. Nothing is read or installed until you hit Apply.</p>
+
+      <p>The wizard appears on whichever surface you're looking at &mdash; the macOS popover or the web dashboard &mdash; and the first answer wins. You can revisit every decision later under <strong>Settings &rarr; Permissions &rarr; Review</strong>; toggling a permission off actively undoes it (hooks uninstall, watchers stop). While permissions are unanswered, monitoring for that agent is paused &mdash; if Irrlicht looks idle right after an upgrade, answer the wizard.</p>
+
       <!-- ── Status line in full screen ── -->
       <h2>Status Line in Full Screen</h2>
 

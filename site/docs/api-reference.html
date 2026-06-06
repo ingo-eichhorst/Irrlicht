@@ -212,6 +212,12 @@
   }
 ]</code></pre>
 
+      <h3>GET /api/v1/permissions</h3>
+      <p>Returns the consent-first permission snapshot: the permission mode (<code>ask</code> or <code>grant-all</code>), and for every agent its detection status plus each declared permission with its state (<code>pending</code> / <code>granted</code> / <code>denied</code>), title, what it touches, and the feature it unlocks. The macOS app and web dashboard drive the permission wizard from this endpoint.</p>
+
+      <h3>POST /api/v1/permissions/answer</h3>
+      <p>Submits wizard answers: <code>{"answers": [{"agent": "claude-code", "permission": "hooks", "grant": true}]}</code>. Grants are exercised immediately (hook install, watcher start); revokes actively undo (hook uninstall, watcher stop). Returns the updated snapshot. First answer wins when both surfaces have the wizard open &mdash; the daemon broadcasts <code>permissions_updated</code> so the other surface dismisses.</p>
+
       <h3>GET /</h3>
 
       <p>Serves the web dashboard UI from disk &mdash; <code>resolveUIDir</code> in <code>core/cmd/irrlichd/main.go</code> walks up from the executable to find <code>platforms/web/index.html</code>, with the production .app bundle layout and the curl <code>--daemon-only</code> install path as fallbacks.</p>
@@ -240,7 +246,7 @@
           <tr>
             <td><code>adapter</code></td>
             <td>string</td>
-            <td>One of <code>claude-code</code>, <code>codex</code>, <code>pi</code>, <code>aider</code>, <code>opencode</code>, or empty (legacy / unknown)</td>
+            <td>One of <code>claude-code</code>, <code>codex</code>, <code>pi</code>, <code>aider</code>, <code>opencode</code>, <code>kiro-cli</code>, or empty (legacy / unknown)</td>
           </tr>
           <tr>
             <td><code>cwd</code></td>
@@ -406,6 +412,16 @@
             <td><code>estimated_cost_usd</code></td>
             <td>float64</td>
             <td>Estimated session cost in USD</td>
+          </tr>
+          <tr>
+            <td><code>task_estimate</code></td>
+            <td>object</td>
+            <td>The agent's self-reported task progress (<code>total_rounds</code>, <code>completed_rounds</code>, <code>updated_at</code>, <code>source</code>), parsed from its in-band progress marker or derived from the task list / subagents</td>
+          </tr>
+          <tr>
+            <td><code>task_completion_eta</code></td>
+            <td>int64</td>
+            <td>Projected unix-seconds completion time for the current task, derived from the measured progress rate; absent when no progress has been reported</td>
           </tr>
         </tbody>
       </table>

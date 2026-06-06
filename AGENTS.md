@@ -26,6 +26,7 @@ Use `./.build` for build artifacts.
 - Three session states only: `working`, `waiting`, `ready` — no cancelled state
 - Errors are logged via `Logger` interface, not propagated with `fmt.Errorf`
 - Child sessions (subagents and background agents) use `ParentSessionID` for parent-child linking
+- Adapters declare `Permissions` on `agent.Agent` (with Apply/Remove effect closures); every read or modification an adapter performs must be consent-gated behind one of its declared permissions — nothing is exercised while pending or denied
 
 ## Testing
 
