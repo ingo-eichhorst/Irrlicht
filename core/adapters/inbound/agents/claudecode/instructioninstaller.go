@@ -61,7 +61,7 @@ const (
 // mitigate), and PRE-tool-call prose is exactly the vulnerable shape. v3's
 // "first marker in your first response, right before your first tool call"
 // rode the one path known to be lossy. v4 moves the first marker onto the
-// Bash ` + "`description`" + ` carrier too — tool inputs reach the daemon via the
+// Bash `description` carrier too — tool inputs reach the daemon via the
 // PreToolUse hook (#604) regardless of text-block fate. End-of-turn text
 // survives upstream, so the no-Bash fallback stays response text.
 const managedTaskEtaBlock = taskEtaBeginSentinel + `
