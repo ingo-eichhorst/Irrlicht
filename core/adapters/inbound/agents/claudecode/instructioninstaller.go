@@ -54,23 +54,33 @@ const (
 // required carrier when no response text is coming. No extra reinforcement
 // clause beyond that: the 2026-05-31 emission experiment found the lightest
 // phrasing binds best, so v3 adds obligation, not length.
+//
+// v4 (anthropics/claude-code#65620 feedback): upstream diagnosis revised —
+// the text-drop is server-side (the model composes prose in thinking and
+// never emits the text block; onset ~2026-06-04, version pinning does not
+// mitigate), and PRE-tool-call prose is exactly the vulnerable shape. v3's
+// "first marker in your first response, right before your first tool call"
+// rode the one path known to be lossy. v4 moves the first marker onto the
+// Bash ` + "`description`" + ` carrier too — tool inputs reach the daemon via the
+// PreToolUse hook (#604) regardless of text-block fate. End-of-turn text
+// survives upstream, so the no-Bash fallback stays response text.
 const managedTaskEtaBlock = taskEtaBeginSentinel + `
 ## Task progress markers (managed by Irrlicht)
 
 As you work on a multi-step task, periodically emit a hidden progress marker
-so tools can show a task-completion estimate. Emit it as an HTML comment in
-your response text, and update it as you make progress:
+so tools can show a task-completion estimate. Emit it as an HTML comment,
+and update it as you make progress:
 
 ` + "```" + `
 <!-- {"marker":"irrlicht-eta","total_rounds":N,"completed_rounds":M} -->
 ` + "```" + `
 
 ` + "`total_rounds`" + ` is your estimate of the task's phases; ` + "`completed_rounds`" + `
-is how many you've finished. Emit the first marker in your first response,
-right before your first tool call. After each phase you complete, emit
-the updated marker: append it to the ` + "`description`" + ` of the next Bash call
-you make (never to the command itself), or include it in your response
-text when no Bash call is coming.
+is how many you've finished. Emit the first marker by appending it to the
+` + "`description`" + ` of your first Bash call (never to the command itself).
+After each phase you complete, emit the updated marker the same way:
+appended to the ` + "`description`" + ` of the next Bash call you make, or in your
+response text when no Bash call is coming.
 ` + taskEtaEndSentinel
 
 // claudeMemoryPath returns the user-level Claude Code instruction file path.

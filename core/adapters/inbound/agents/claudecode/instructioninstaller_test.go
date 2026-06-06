@@ -113,13 +113,14 @@ func TestEnsureTaskEtaBlock_UpgradesStaleBlock(t *testing.T) {
 }
 
 // assertCurrentEtaContract checks the phrases every shipped-block upgrade
-// must land on: first marker before any tool call (#604/#602), the Bash
-// description carrier as the mandatory per-phase update channel (#617), and
-// the command-field prohibition (permission matching).
+// must land on: first marker on the Bash description carrier
+// (anthropics/claude-code#65620 — pre-tool-call prose is lossy upstream),
+// the Bash description carrier as the mandatory per-phase update channel
+// (#617), and the command-field prohibition (permission matching).
 func assertCurrentEtaContract(t *testing.T, content string) {
 	t.Helper()
-	if !strings.Contains(content, "first marker in your first response") {
-		t.Error("block must ask for the first marker before any tool call")
+	if !strings.Contains(content, "`description` of your first Bash call") {
+		t.Error("block must put the first marker on the Bash description carrier")
 	}
 	if !strings.Contains(content, "After each phase you complete") {
 		t.Error("block must make the per-phase update mandatory")
@@ -210,6 +211,53 @@ already making (never to the command itself).
 	content := readFileString(t, path)
 	if strings.Contains(content, "you may also") {
 		t.Error("v2's permissive carrier phrasing survived the upgrade")
+	}
+	assertCurrentEtaContract(t, content)
+}
+
+func TestEnsureTaskEtaBlock_V3BlockUpgradesToV4(t *testing.T) {
+	// The exact v3 block (shipped with #617) must upgrade in place to the v4
+	// contract (anthropics/claude-code#65620): the first marker moves from
+	// pre-tool-call response text — the shape upstream loses since
+	// ~2026-06-04 — onto the Bash description carrier, which reaches the
+	// daemon via the PreToolUse hook regardless of text-block fate.
+	home := withTempHome(t)
+	path := memoryPathFor(home)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	v3 := taskEtaBeginSentinel + `
+## Task progress markers (managed by Irrlicht)
+
+As you work on a multi-step task, periodically emit a hidden progress marker
+so tools can show a task-completion estimate. Emit it as an HTML comment in
+your response text, and update it as you make progress:
+
+` + "```" + `
+<!-- {"marker":"irrlicht-eta","total_rounds":N,"completed_rounds":M} -->
+` + "```" + `
+
+` + "`total_rounds`" + ` is your estimate of the task's phases; ` + "`completed_rounds`" + `
+is how many you've finished. Emit the first marker in your first response,
+right before your first tool call. After each phase you complete, emit
+the updated marker: append it to the ` + "`description`" + ` of the next Bash call
+you make (never to the command itself), or include it in your response
+text when no Bash call is coming.
+` + taskEtaEndSentinel
+	if err := os.WriteFile(path, []byte(v3+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	modified, err := EnsureTaskEtaBlockInstalled()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !modified {
+		t.Fatal("v3 block should upgrade to v4")
+	}
+	content := readFileString(t, path)
+	if strings.Contains(content, "first marker in your first response") {
+		t.Error("v3's pre-tool-call first-marker phrasing survived the upgrade")
 	}
 	assertCurrentEtaContract(t, content)
 }
