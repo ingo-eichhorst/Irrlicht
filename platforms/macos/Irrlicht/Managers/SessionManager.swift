@@ -285,6 +285,7 @@ class SessionManager: ObservableObject {
         webSocketTask = task
         task.resume()
 
+        lastPushSeq = 0 // fresh stream, fresh seq cursor (#600)
         reconnectDelay = 1.0
         connectionState = .connected
         print("🔌 WebSocket connected to irrlichd")
@@ -1007,6 +1008,9 @@ class SessionManager: ObservableObject {
     private struct WsEnvelope: Decodable {
         let type: String
         let session: SessionState?
+        // Daemon-global monotonic push counter (#593). Optional so connect
+        // snapshots and older daemons (no seq) still decode.
+        let seq: UInt64?
 
         // History-message fields (snapshot/tick/upgrade).
         let sessionID: String?
@@ -1023,6 +1027,7 @@ class SessionManager: ObservableObject {
         enum CodingKeys: String, CodingKey {
             case type
             case session
+            case seq
             case sessionID         = "session_id"
             case history
             case granularitySec    = "granularity_sec"
@@ -1033,10 +1038,25 @@ class SessionManager: ObservableObject {
         }
     }
 
+    /// Last stamped push `seq` received on the stream. 0 = fresh cursor
+    /// (reset on every (re)connect). See #600.
+    private var lastPushSeq: UInt64 = 0
+
     private func handleWsMessage(_ text: String) {
         guard let data = text.data(using: .utf8) else { return }
         do {
             let envelope = try JSONDecoder().decode(WsEnvelope.self, from: data)
+            // A gap in the daemon-global push seq means the daemon skipped this
+            // client (slow-subscriber drop) — re-hydrate now instead of waiting
+            // for the next structural event (#600). seq 0/absent = unstamped
+            // (connect snapshots, older daemons); a backward jump is a daemon
+            // restart — adopt the cursor without rehydrating.
+            if let seq = envelope.seq, seq > 0 {
+                if lastPushSeq > 0 && seq > lastPushSeq + 1 {
+                    scheduleRehydration()
+                }
+                lastPushSeq = seq
+            }
             switch envelope.type {
             case "session_created":
                 if let session = envelope.session {

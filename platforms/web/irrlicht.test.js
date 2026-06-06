@@ -13,6 +13,7 @@ import {
   historyPriorityForState,
   lastNotifiedPressure,
   relayFrameKind,
+  seqGap,
   aggregateConnState,
   relayWsUrl,
   compoundSessionId,
@@ -175,6 +176,31 @@ describe('relayFrameKind', () => {
     expect(relayFrameKind({ type: 'history_tick' })).toBe('raw')
     expect(relayFrameKind(null)).toBe('raw')
     expect(relayFrameKind({})).toBe('raw')
+  })
+})
+
+describe('seqGap', () => {
+  test('gaps when a stamped seq skips ahead of the cursor', () => {
+    expect(seqGap(5, 7)).toBe(true)
+    expect(seqGap(1, 100)).toBe(true)
+  })
+
+  test('contiguous delivery never gaps', () => {
+    expect(seqGap(5, 6)).toBe(false)
+    expect(seqGap(5, 5)).toBe(false) // duplicate
+  })
+
+  test('first stamped message after a fresh cursor never gaps', () => {
+    expect(seqGap(0, 42)).toBe(false)
+  })
+
+  test('backward jump (daemon restart) is not a gap', () => {
+    expect(seqGap(100, 3)).toBe(false)
+  })
+
+  test('unstamped frames (older daemons, snapshots) never gap', () => {
+    expect(seqGap(5, 0)).toBe(false)
+    expect(seqGap(5, undefined)).toBe(false)
   })
 })
 
