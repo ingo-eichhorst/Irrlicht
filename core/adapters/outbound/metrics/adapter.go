@@ -256,6 +256,32 @@ func (a *Adapter) IngestTaskEstimate(transcriptPath string, est *session.TaskEst
 	lt.mu.Unlock()
 }
 
+// PurgeDeadBackgroundProcs implements ports/outbound.MetricsCollector. The
+// session detector calls it when its lsof liveness probe finds no live writer
+// on any of the probed output files: those processes died without a
+// transcript-observable termination, so the tailer's open set (and the ledger
+// persisting it) would otherwise resurrect them as phantom open processes on
+// every restart. Only entries matching the probed outputs are dropped — a
+// process spawned after the probe's snapshot must survive. The ledger is
+// saved immediately so the purge survives a restart that happens before the
+// next TailAndProcess pass. No-op when no tailer exists for the path.
+// See issue #649.
+func (a *Adapter) PurgeDeadBackgroundProcs(transcriptPath string, outputs []string) {
+	if transcriptPath == "" || len(outputs) == 0 {
+		return
+	}
+	a.mu.Lock()
+	lt, ok := a.tailers[transcriptPath]
+	a.mu.Unlock()
+	if !ok {
+		return
+	}
+	lt.mu.Lock()
+	lt.t.PurgeBackgroundProcs(outputs)
+	saveLedger(lt.lp, lt.t.GetLedgerState())
+	lt.mu.Unlock()
+}
+
 // domainRateLimitToTailer is the inbound counterpart to tailerRateLimitToDomain
 // — used by IngestRateLimit when the HTTP layer hands us a domain-typed
 // snapshot that has to land inside the tailer's mirror type.

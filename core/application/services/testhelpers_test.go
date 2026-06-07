@@ -226,6 +226,7 @@ func (g *cwdGit) GetCWDFromTranscript(path string) string { return g.cwd }
 type mockMetrics struct {
 	mu     sync.Mutex
 	pruned []string
+	purged []string
 }
 
 func (m *mockMetrics) ComputeMetrics(path, adapter string) (*session.SessionMetrics, error) {
@@ -256,11 +257,30 @@ func (m *mockMetrics) IngestRateLimit(path string, snap *session.RateLimitSnapsh
 
 func (m *mockMetrics) IngestTaskEstimate(path string, est *session.TaskEstimate) {}
 
+func (m *mockMetrics) PurgeDeadBackgroundProcs(path string, _ []string) {
+	m.mu.Lock()
+	m.purged = append(m.purged, path)
+	m.mu.Unlock()
+}
+
+// purgedSnapshot returns a race-free copy of the PurgeDeadBackgroundProcs call
+// log so tests can poll for the purge without racing the probe goroutine.
+func (m *mockMetrics) purgedSnapshot() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]string, len(m.purged))
+	copy(out, m.purged)
+	return out
+}
+
 // funcMetrics is a metrics collector whose ComputeMetrics behaviour can be
 // configured per test. Used to simulate a tailer that returns refreshed
 // metrics for already-persisted sessions during seedFromDisk.
 type funcMetrics struct {
 	fn func(path, adapter string) (*session.SessionMetrics, error)
+
+	purgeMu sync.Mutex
+	purged  []string
 }
 
 func (m *funcMetrics) ComputeMetrics(path, adapter string) (*session.SessionMetrics, error) {
@@ -279,6 +299,22 @@ func (m *funcMetrics) PruneEntry(path string) {}
 func (m *funcMetrics) IngestRateLimit(path string, snap *session.RateLimitSnapshot) {}
 
 func (m *funcMetrics) IngestTaskEstimate(path string, est *session.TaskEstimate) {}
+
+func (m *funcMetrics) PurgeDeadBackgroundProcs(path string, _ []string) {
+	m.purgeMu.Lock()
+	m.purged = append(m.purged, path)
+	m.purgeMu.Unlock()
+}
+
+// purgedSnapshot returns a race-free copy of the purge call log so tests can
+// poll for the dead-verdict cleanup without racing the probe goroutine.
+func (m *funcMetrics) purgedSnapshot() []string {
+	m.purgeMu.Lock()
+	defer m.purgeMu.Unlock()
+	out := make([]string, len(m.purged))
+	copy(out, m.purged)
+	return out
+}
 
 // --- AgentWatcher mock -------------------------------------------------------
 

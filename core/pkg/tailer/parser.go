@@ -355,6 +355,16 @@ type TranscriptPathAware interface {
 	SetTranscriptPath(path string)
 }
 
+// LedgerSchemaVersion is the current ledger schema. A persisted ledger with a
+// different version is discarded on load, forcing a full transcript re-scan
+// under the current parser. Bump it whenever a LedgerState change (or a parser
+// fix) makes previously persisted state misleading.
+//
+// History: 3 — #615 (authoritative task IDs + TaskSeq);
+// 4 — #649 (LastEventType persisted; the bump also heals sessions stranded
+// in `working` by pre-#642 parsers, since the re-scan reclassifies them).
+const LedgerSchemaVersion = 4
+
 // LedgerState is the durable portion of a tailer's accumulation state, written
 // to disk after every TailAndProcess pass so that daemon restarts don't reset
 // cumulative cost to zero for in-flight sessions.
@@ -397,6 +407,13 @@ type LedgerState struct {
 	// model — codex token_count) still routes to the right pricing bucket
 	// after a daemon restart, before the next model-bearing event arrives.
 	ModelName string `json:"model_name,omitempty"`
+	// LastEventType persists the most recent substantive event type so a
+	// daemon restart that resumes at LastOffset (zero new lines) can still
+	// answer IsAgentDone. Without it, a session persisted as `working` whose
+	// transcript never grows again is stranded: the recomputed metrics carry
+	// an empty LastEventType, IsAgentDone can never fire, and no future
+	// activity arrives to re-classify. See issue #649.
+	LastEventType string `json:"last_event_type,omitempty"`
 }
 
 // --- Shared helpers used by multiple parsers ---
