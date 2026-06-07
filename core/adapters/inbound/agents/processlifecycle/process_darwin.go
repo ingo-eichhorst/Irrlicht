@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"irrlicht/core/ports/outbound"
 )
 
@@ -55,6 +57,18 @@ func (darwinObserver) FindByCmdline(pattern string) ([]int, error) {
 		out = append(out, p)
 	}
 	return out, nil
+}
+
+// ArgvOf returns the argument vector of pid via KERN_PROCARGS2 sysctl
+// (the same raw buffer readProcessEnv parses for env). Per the port
+// contract an unreadable argv — hardened-runtime processes strip it — is a
+// nil slice, not an error.
+func (darwinObserver) ArgvOf(pid int) ([]string, error) {
+	buf, err := unix.SysctlRaw("kern.procargs2", pid)
+	if err != nil {
+		return nil, nil
+	}
+	return parseProcargs2Argv(buf), nil
 }
 
 // CWDOf returns the working directory of pid via `lsof -d cwd`.

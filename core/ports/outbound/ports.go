@@ -227,6 +227,11 @@ type ProcessObserver interface {
 	// FindByCmdline returns the PIDs whose full command line matches the
 	// given pattern. Returns nil, nil when none match.
 	FindByCmdline(pattern string) ([]int, error)
+	// ArgvOf returns the argument vector of pid (argv[0] is the executable
+	// as invoked). Returns nil, nil when the argv is unreadable (e.g. a
+	// hardened-runtime process that strips it) — an empty argv is not an
+	// error, the same way EnvOf treats an unreadable env.
+	ArgvOf(pid int) ([]string, error)
 	// CWDOf returns the working directory of pid.
 	CWDOf(pid int) (string, error)
 	// WriterOf returns the PID that currently has path open for writing, or

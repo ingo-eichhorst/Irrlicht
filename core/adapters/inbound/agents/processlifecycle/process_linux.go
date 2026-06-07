@@ -101,6 +101,21 @@ func (linuxObserver) FindByCmdline(pattern string) ([]int, error) {
 	return out, nil
 }
 
+// ArgvOf returns the argument vector of pid from /proc/<pid>/cmdline (a
+// NUL-separated argv). Per the port contract an unreadable argv (process
+// exited, root-owned) is a nil slice, not an error.
+func (linuxObserver) ArgvOf(pid int) ([]string, error) {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
+	if err != nil {
+		return nil, nil
+	}
+	fields := strings.Split(strings.TrimRight(string(data), "\x00"), "\x00")
+	if len(fields) == 1 && fields[0] == "" {
+		return nil, nil
+	}
+	return fields, nil
+}
+
 // CWDOf returns the working directory of pid via the /proc/<pid>/cwd symlink.
 func (linuxObserver) CWDOf(pid int) (string, error) {
 	cwd, err := os.Readlink(fmt.Sprintf("/proc/%d/cwd", pid))

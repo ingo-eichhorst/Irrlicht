@@ -42,6 +42,7 @@ func Agent() agent.Agent {
 		Process: agent.Process{
 			Match:         agent.ExactName{Name: ProcessName},
 			PIDForSession: DiscoverPID,
+			ExcludeArgv:   IsInfraArgv,
 		},
 		Source: agent.FilesUnderRoot{
 			Dir: transcriptsDir(),
@@ -55,11 +56,15 @@ func Agent() agent.Agent {
 				Kind:            permission.KindObserve,
 				Title:           "Read session transcripts",
 				FeatureUnlocked: "Session list, timeline, cost & token metrics",
-				Touches:         "Reads session transcripts under ~/.claude/projects/",
+				Touches: "Reads session transcripts under ~/.claude/projects/ and " +
+					"basic info (working directory, command line) of running claude processes",
 				Detail: "Tails *.jsonl transcript files under ~/.claude/projects/ " +
-					"to derive session state, cost, and token metrics. Read-only — " +
-					"no transcript file is ever modified. Toggling off stops all " +
-					"reading immediately.",
+					"to derive session state, cost, and token metrics. Also scans " +
+					"for running claude processes and reads their working directory " +
+					"and command line — to show a session before its first message " +
+					"and to skip Claude Code's background daemon processes. " +
+					"Read-only — no transcript file is ever modified. Toggling off " +
+					"stops all reading immediately.",
 			},
 			{
 				Key:             PermissionKeyHooks,

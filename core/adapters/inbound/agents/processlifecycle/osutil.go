@@ -177,17 +177,9 @@ func ReadLauncherEnv(pid int) *session.Launcher {
 // non-cgo / non-TCC path to read another process's env.
 func parseProcargs2(buf []byte) map[string]string {
 	out := map[string]string{}
-	if len(buf) < 4 {
+	argc, p, ok := procargs2ArgvOffset(buf)
+	if !ok {
 		return out
-	}
-	argc := int(binary.LittleEndian.Uint32(buf[:4]))
-	p := 4
-	// Skip exec path (NUL-terminated) and any alignment NULs before argv[0].
-	for p < len(buf) && buf[p] != 0 {
-		p++
-	}
-	for p < len(buf) && buf[p] == 0 {
-		p++
 	}
 	// Skip argv entries.
 	for i := 0; i < argc && p < len(buf); i++ {
@@ -220,4 +212,56 @@ func parseProcargs2(buf []byte) map[string]string {
 		}
 	}
 	return out
+}
+
+// procargs2ArgvOffset reads the int32 argc header of a KERN_PROCARGS2 buffer
+// and skips the NUL-terminated exec path plus alignment padding, returning
+// argc and the byte offset of argv[0]. ok is false when the buffer is too
+// short to contain the header. Shared by parseProcargs2 (env) and
+// parseProcargs2Argv (argv) so the two parsers of the same layout cannot
+// drift.
+func procargs2ArgvOffset(buf []byte) (argc, offset int, ok bool) {
+	if len(buf) < 4 {
+		return 0, 0, false
+	}
+	argc = int(binary.LittleEndian.Uint32(buf[:4]))
+	p := 4
+	// Skip exec path (NUL-terminated) and any alignment NULs before argv[0].
+	for p < len(buf) && buf[p] != 0 {
+		p++
+	}
+	for p < len(buf) && buf[p] == 0 {
+		p++
+	}
+	return argc, p, true
+}
+
+// parseProcargs2Argv extracts the argv portion of a KERN_PROCARGS2 sysctl
+// buffer (same layout as parseProcargs2 documents above). Returns nil when
+// the buffer holds no argv at all — hardened-runtime processes strip it, so
+// callers must treat a nil argv as "unknown", not "no args". A buffer
+// truncated mid-argv (argc promises more strings than the buffer holds, e.g.
+// args+env exceeding ARG_MAX) yields the partial argv that is present —
+// fail-open: an exclusion predicate then sees an incomplete command line and
+// treats the process as a session, the pre-filter status quo.
+func parseProcargs2Argv(buf []byte) []string {
+	argc, p, ok := procargs2ArgvOffset(buf)
+	if !ok {
+		return nil
+	}
+	argv := make([]string, 0, argc)
+	for i := 0; i < argc && p < len(buf); i++ {
+		start := p
+		for p < len(buf) && buf[p] != 0 {
+			p++
+		}
+		argv = append(argv, string(buf[start:p]))
+		if p < len(buf) {
+			p++ // skip NUL
+		}
+	}
+	if len(argv) == 0 {
+		return nil
+	}
+	return argv
 }

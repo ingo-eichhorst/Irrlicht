@@ -48,9 +48,24 @@ type Scanner struct {
 	// Callers typically delegate to HasRealSessionForPID.
 	sessionChecker func(projectDir string, pid int) bool
 
+	// argvFilter is an optional per-adapter predicate that excludes a matched
+	// PID by inspecting its argv. Set via WithArgvFilter from the adapter's
+	// Process.ExcludeArgv declaration. When it returns true the scanner mints
+	// no pre-session for that PID — the binary matched but it's infrastructure
+	// (e.g. a background daemon/wrapper running the same binary), not a
+	// session. Keeping the predicate here (not in poll's matcher) keeps the
+	// scanner generic; the format-specific argv shapes live in the adapter.
+	argvFilter func(argv []string) bool
+
 	mu      sync.Mutex
 	tracked map[int]trackedProc // pid → pre-session
-	subs    []chan agent.Event
+
+	// argvVerdicts caches the per-PID argvFilter verdict — argv is immutable
+	// for a process's lifetime, so each PID pays at most one ArgvOf read.
+	// poll prunes entries whose PID no longer matches, so a recycled PID
+	// cannot inherit a stale verdict. See argvExcluded.
+	argvVerdicts map[int]bool
+	subs         []chan agent.Event
 
 	// Adaptive backoff: back off to backoffInterval when PID set is stable.
 	lastPIDCount int
@@ -70,10 +85,11 @@ func NewScanner(processName, adapter string, interval time.Duration) *Scanner {
 		interval = defaultInterval
 	}
 	return &Scanner{
-		processName: processName,
-		adapter:     adapter,
-		interval:    interval,
-		tracked:     make(map[int]trackedProc),
+		processName:  processName,
+		adapter:      adapter,
+		interval:     interval,
+		tracked:      make(map[int]trackedProc),
+		argvVerdicts: make(map[int]bool),
 	}
 }
 
@@ -116,6 +132,15 @@ func (s *Scanner) WithTranscriptFilename(name string) *Scanner {
 // new pre-sessions for freshly-opened processes.
 func (s *Scanner) WithSessionChecker(fn func(projectDir string, pid int) bool) *Scanner {
 	s.sessionChecker = fn
+	return s
+}
+
+// WithArgvFilter sets a per-adapter predicate that excludes a matched PID by
+// its argv (the adapter's Process.ExcludeArgv). When fn reports true the
+// scanner skips the PID entirely — no pre-session is minted and it is never
+// tracked. Returns the scanner for chaining.
+func (s *Scanner) WithArgvFilter(fn func(argv []string) bool) *Scanner {
+	s.argvFilter = fn
 	return s
 }
 
@@ -235,6 +260,16 @@ func (s *Scanner) poll() {
 
 	// --- handle newly-seen PIDs ---
 	for _, pid := range pids {
+		// Per-adapter argv exclusion: a matched binary that is the agent's
+		// background infrastructure (daemon/wrapper) rather than a session.
+		// Drop it from the live set too so it isn't treated as a tracked PID
+		// that "exited" on the next poll. A nil argv (unreadable) is passed
+		// through; the predicate must default to not-excluding in that case.
+		if s.argvFilter != nil && s.argvExcluded(pid) {
+			delete(live, pid)
+			continue
+		}
+
 		s.mu.Lock()
 		_, alreadyTracked := s.tracked[pid]
 		s.mu.Unlock()
@@ -383,6 +418,70 @@ func (s *Scanner) poll() {
 			ProjectDir: proc.projectDir,
 		})
 	}
+
+	// Prune argv-verdict cache entries whose PID no longer matches (process
+	// exited). Compare against the full matched set, not live — excluded
+	// PIDs were dropped from live but are still running and must keep their
+	// cached verdict.
+	s.mu.Lock()
+	if len(s.argvVerdicts) > 0 {
+		matched := make(map[int]bool, len(pids))
+		for _, pid := range pids {
+			matched[pid] = true
+		}
+		for pid := range s.argvVerdicts {
+			if !matched[pid] {
+				delete(s.argvVerdicts, pid)
+			}
+		}
+	}
+	s.mu.Unlock()
+}
+
+// argvExcluded reports whether pid's argv marks it as agent infrastructure
+// per s.argvFilter. Verdicts are cached — argv is immutable for a process's
+// lifetime — so each PID pays at most one ArgvOf read. A nil argv
+// (unreadable, possibly transiently) is never cached: the predicate sees nil
+// (and must not exclude on it) and the read is retried on the next poll.
+//
+// The first excluded verdict also retires any pre-session already minted for
+// this PID — by an earlier poll that couldn't read argv, or persisted by a
+// daemon predating the argv filter (issue #644) — with a single
+// EventRemoved. The detector deletes pre-sessions on removal and treats a
+// removal for an unknown session as a no-op, so the emission is safe when no
+// pre-session exists. When no subscriber is attached yet (startup race with
+// SessionDetector.Run), the excluded verdict is left uncached so the next
+// poll retries the emission instead of silently dropping it.
+func (s *Scanner) argvExcluded(pid int) bool {
+	s.mu.Lock()
+	excluded, cached := s.argvVerdicts[pid]
+	s.mu.Unlock()
+	if cached {
+		return excluded
+	}
+
+	argv, _ := osProc.ArgvOf(pid)
+	excluded = s.argvFilter(argv)
+
+	s.mu.Lock()
+	proc := s.tracked[pid]
+	if excluded {
+		delete(s.tracked, pid)
+	}
+	hasSubs := len(s.subs) > 0
+	if argv != nil && (!excluded || hasSubs) {
+		s.argvVerdicts[pid] = excluded
+	}
+	s.mu.Unlock()
+
+	if excluded && hasSubs {
+		s.broadcast(agent.Event{
+			Type:       agent.EventRemoved,
+			SessionID:  fmt.Sprintf("proc-%d", pid),
+			ProjectDir: proc.projectDir,
+		})
+	}
+	return excluded
 }
 
 // hasActiveSession returns true iff the injected sessionChecker reports a

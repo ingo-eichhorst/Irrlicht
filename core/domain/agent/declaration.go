@@ -52,4 +52,14 @@ type Identity struct {
 type Process struct {
 	Match         ProcessMatcher
 	PIDForSession PIDDiscoverFunc
+
+	// ExcludeArgv, when non-nil, lets an adapter reject a matched process by
+	// inspecting its argv. The process scanner consults it after a PID
+	// matches Match: returning true means "this is the agent's binary but not
+	// a session" (e.g. a background daemon / wrapper that runs the same
+	// binary) and no pre-session is minted. The format-specific argv shapes
+	// live in the adapter package; the scanner stays generic. A nil argv
+	// (unreadable, e.g. hardened-runtime) is passed through, so an adapter's
+	// predicate must default to *not* excluding when it can't tell.
+	ExcludeArgv func(argv []string) bool
 }
