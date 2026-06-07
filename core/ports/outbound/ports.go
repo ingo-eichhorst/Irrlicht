@@ -138,6 +138,12 @@ type MetricsCollector interface {
 	// on claude ≥2.1.162. Same no-op-without-tailer semantics as
 	// IngestRateLimit.
 	IngestTaskEstimate(transcriptPath string, est *session.TaskEstimate)
+	// PurgeDeadBackgroundProcs drops the session's tracked background
+	// processes after the detector's liveness probe verdicts them dead —
+	// they died without a transcript-observable termination, and the ledger
+	// would otherwise resurrect them on every restart (#649). Same
+	// no-op-without-tailer semantics as IngestRateLimit.
+	PurgeDeadBackgroundProcs(transcriptPath string)
 }
 
 // PushBroadcaster fans out session state changes to subscribers (e.g. WebSocket clients).

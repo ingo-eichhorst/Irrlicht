@@ -639,6 +639,14 @@ func (d *SessionDetector) applyBackgroundLiveness(state *session.SessionState) {
 	transcriptPath := state.TranscriptPath
 	go func() {
 		live := d.bgLiveProbe(outputs)
+		// Dead verdict: drop the processes from the tailer's open set and
+		// the ledger. They died without a transcript-observable termination
+		// (e.g. the process exited with its parent shell), so the ledger
+		// entry would otherwise resurrect them as phantom open processes on
+		// every daemon restart, re-running this probe forever. See issue #649.
+		if !live && d.metrics != nil {
+			d.metrics.PurgeDeadBackgroundProcs(transcriptPath)
+		}
 		d.bgMu.Lock()
 		prev, had := d.bgLive[sid]
 		d.bgLive[sid] = live

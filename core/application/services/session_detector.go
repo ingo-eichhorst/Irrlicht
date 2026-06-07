@@ -92,6 +92,7 @@ type SessionDetector struct {
 	pidMgr         *PIDManager
 	costTracker    outbound.CostTracker    // optional; nil = disabled
 	historyTracker outbound.HistoryTracker // optional; nil = disabled
+	metrics        outbound.MetricsCollector
 
 	// projectSessions tracks sessionID → projectDir for pre-session cleanup.
 	mu              sync.Mutex
@@ -198,6 +199,7 @@ func NewSessionDetector(
 		broadcaster:       broadcaster,
 		version:           version,
 		enricher:          newMetadataEnricher(git, metrics),
+		metrics:           metrics,
 		projectSessions:   make(map[string]string),
 		deletedSessions:   make(map[string]int64),
 		debounce:          make(map[string]*debounceEntry),

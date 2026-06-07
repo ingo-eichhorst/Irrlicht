@@ -366,10 +366,11 @@ func (t *TranscriptTailer) DisableModelConfigFallback() {
 // can be persisted to disk and rehydrated after a daemon restart.
 func (t *TranscriptTailer) GetLedgerState() LedgerState {
 	s := LedgerState{
-		SchemaVersion:      3,
+		SchemaVersion:      LedgerSchemaVersion,
 		LastOffset:         t.lastOffset,
 		CumProviderCostUSD: t.cumProviderCostUSD,
 		ModelName:          t.metrics.ModelName,
+		LastEventType:      t.metrics.LastEventType,
 	}
 	if len(t.cumByModel) > 0 {
 		// Direct assignment is safe: the caller JSON-marshals immediately
@@ -429,6 +430,12 @@ func (t *TranscriptTailer) SetLedgerState(s LedgerState) {
 	t.cumProviderCostUSD = s.CumProviderCostUSD
 	if s.ModelName != "" {
 		t.metrics.ModelName = s.ModelName
+	}
+	// Restore the classification anchor: a resume-at-EOF pass processes no
+	// events, and IsAgentDone needs the pre-restart event type to recognise
+	// a finished turn (issue #649).
+	if s.LastEventType != "" {
+		t.metrics.LastEventType = s.LastEventType
 	}
 	if s.ParserState != nil {
 		if pp, ok := t.parser.(ParserStateProvider); ok {
@@ -1053,4 +1060,15 @@ func (t *TranscriptTailer) applyTaskEstimate(est *TaskEstimate) {
 // holds the per-tailer lock, mirroring IngestRateLimit.
 func (t *TranscriptTailer) IngestTaskEstimate(est *TaskEstimate) {
 	t.applyTaskEstimate(est)
+}
+
+// PurgeBackgroundProcs drops every tracked background process. Called when
+// the detector's liveness probe verdicts them dead (no live writer on any
+// output file): the transcript never recorded a termination — the process
+// died with its parent shell — so without this the entries persist in the
+// ledger and resurrect as phantom open processes on every daemon restart.
+// Caller (the metrics adapter) holds the per-tailer lock, mirroring
+// IngestRateLimit. See issue #649.
+func (t *TranscriptTailer) PurgeBackgroundProcs() {
+	t.openBackgroundProcs = make(map[string]string)
 }
