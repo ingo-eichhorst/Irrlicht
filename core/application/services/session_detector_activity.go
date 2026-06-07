@@ -359,7 +359,7 @@ func (d *SessionDetector) processActivity(id agent.Identity, ev agent.Event) {
 	// on the same *SessionState pointer this loop mutates. Sharing assignMu makes
 	// the two mutually exclusive (issue #606).
 	d.pidMgr.WithSessionStateLock(func() {
-		d.processActivityLocked(state, ev)
+		d.processActivityLocked(id, state, ev)
 	})
 }
 
@@ -367,7 +367,25 @@ func (d *SessionDetector) processActivity(id agent.Identity, ev agent.Event) {
 // load-modify-save for an already-loaded existing session. It MUST be called
 // under PIDManager.WithSessionStateLock so the PID-discovery goroutine it spawns
 // can't write state.PID concurrently with this loop's writes (issue #606).
-func (d *SessionDetector) processActivityLocked(state *session.SessionState, ev agent.Event) {
+//
+// id is the watcher's identity on the first event of a debounce window and
+// empty on the coalesced/refresh paths — see processActivity.
+func (d *SessionDetector) processActivityLocked(id agent.Identity, state *session.SessionState, ev agent.Event) {
+	// Backfill an empty Adapter from the watcher's identity. A session created
+	// via the no-identity fallback (debounce-coalesced / synthetic refresh
+	// during the startup race, see processActivity → onNewSession) starts with
+	// Adapter="" and never sees another transcript-NEW event while it stays
+	// continuously active, so onNewSession's existing-session backfill never
+	// fires. Doing it here unblocks PID discovery (TryDiscoverPID keys off the
+	// adapter) and the ghost sweep on the very next identity-carrying activity
+	// event (issue #643). Runs under WithSessionStateLock with the other
+	// existing-session writes (issue #606).
+	if state.Adapter == "" && id.Name != "" {
+		state.Adapter = id.Name
+		d.log.LogInfo("session-detector", ev.SessionID,
+			fmt.Sprintf("backfilled empty adapter=%s on activity", id.Name))
+	}
+
 	// Apply any deferred PID from background discovery goroutines.
 	// This must happen before ClassifyState so that the PID and state
 	// transition are saved atomically, avoiding the race where
