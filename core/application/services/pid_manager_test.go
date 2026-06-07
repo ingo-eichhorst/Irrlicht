@@ -715,3 +715,154 @@ func TestHandleProcessExit_EvictsChildrenViaFunnel(t *testing.T) {
 		t.Errorf("onSessionDeleted not fired for parent; got %v", deleted)
 	}
 }
+
+// TestCheckPIDLiveness_GhostPreSession_PIDBoundToSibling reproduces issue #645:
+// a real session is PID-bound to a sibling process (a cc-daemon --resume copy),
+// so the scanner's PID-strict live check never marks the original TUI's proc-*
+// pre-session superseded. The seed-time sweep ran once before the ghost was
+// minted, so it's permanent. The periodic sweep must retire it — and it must
+// stay gone on the next sweep (a flapping ghost is a failed fix).
+func TestCheckPIDLiveness_GhostPreSession_PIDBoundToSibling(t *testing.T) {
+	tmp := t.TempDir()
+	transcript := filepath.Join(tmp, "real.jsonl")
+	writeTranscript(t, transcript, time.Now())
+
+	ghostPID := os.Getpid()    // the original TUI — alive
+	siblingPID := os.Getppid() // the --resume copy that won the binding — alive, distinct
+	if siblingPID == ghostPID || siblingPID <= 0 {
+		t.Skip("need a distinct alive parent PID for the sibling-binding scenario")
+	}
+
+	repo := newMockRepo()
+	// Real session, PID-bound to the sibling (not the ghost's PID).
+	repo.states["bb9f6ebf"] = &session.SessionState{
+		SessionID:      "bb9f6ebf",
+		Adapter:        "claude-code",
+		State:          session.StateReady,
+		PID:            siblingPID,
+		CWD:            tmp,
+		TranscriptPath: transcript,
+		UpdatedAt:      time.Now().Unix(),
+	}
+	// Ghost pre-session for the original TUI: same adapter+CWD, distinct alive
+	// PID, minted well past the grace window.
+	repo.states["proc-ghost"] = &session.SessionState{
+		SessionID: "proc-ghost",
+		Adapter:   "claude-code",
+		State:     session.StateReady,
+		PID:       ghostPID,
+		CWD:       tmp,
+		FirstSeen: time.Now().Add(-5 * time.Minute).Unix(),
+		UpdatedAt: time.Now().Unix(),
+	}
+
+	var deleted []string
+	pm := newPIDManagerForTestWithDeleteSpy(repo, &deleted)
+	pm.CheckPIDLiveness()
+
+	if repo.states["proc-ghost"] != nil {
+		t.Fatal("ghost pre-session should be swept (real session PID-bound to a sibling)")
+	}
+	if repo.states["bb9f6ebf"] == nil {
+		t.Fatal("real session must survive the sweep")
+	}
+	if !slices.Contains(deleted, "proc-ghost") {
+		t.Errorf("onSessionDeleted not fired for ghost; got %v", deleted)
+	}
+
+	// Stays gone: a second sweep must not see it (it's deleted from the repo)
+	// and must not error. This guards against a delete→re-mint→delete flap.
+	pm.CheckPIDLiveness()
+	if repo.states["proc-ghost"] != nil {
+		t.Fatal("ghost re-appeared after a second sweep — flapping")
+	}
+}
+
+// TestCheckPIDLiveness_FreshPreSession_NotSwept is the issue #113 guard: a
+// freshly-opened process in a dir that already has an active session must keep
+// its pre-session (two claude instances in one cwd). The PID-strict scanner
+// check protects this at poll time; the periodic CWD-fallback sweep must not
+// undo it — within the grace window it leaves the young pre-session alone even
+// though the adapter+CWD match (and a distinct alive PID) are present.
+func TestCheckPIDLiveness_FreshPreSession_NotSwept(t *testing.T) {
+	tmp := t.TempDir()
+	transcript := filepath.Join(tmp, "real.jsonl")
+	writeTranscript(t, transcript, time.Now())
+
+	existingPID := os.Getppid()
+	freshPID := os.Getpid()
+	if existingPID == freshPID || existingPID <= 0 {
+		t.Skip("need a distinct alive parent PID for the two-instances scenario")
+	}
+
+	repo := newMockRepo()
+	repo.states["existing"] = &session.SessionState{
+		SessionID:      "existing",
+		Adapter:        "claude-code",
+		State:          session.StateReady,
+		PID:            existingPID,
+		CWD:            tmp,
+		TranscriptPath: transcript,
+		UpdatedAt:      time.Now().Unix(),
+	}
+	// A second claude just opened in the same dir; its pre-session was minted
+	// moments ago. Its own transcript + PID binding haven't landed yet.
+	repo.states["proc-fresh"] = &session.SessionState{
+		SessionID: "proc-fresh",
+		Adapter:   "claude-code",
+		State:     session.StateReady,
+		PID:       freshPID,
+		CWD:       tmp,
+		FirstSeen: time.Now().Unix(), // within the grace window
+		UpdatedAt: time.Now().Unix(),
+	}
+
+	newPIDManagerForTest(repo).CheckPIDLiveness()
+
+	if repo.states["proc-fresh"] == nil {
+		t.Fatal("fresh pre-session swept within grace window — #113 regression")
+	}
+	if repo.states["existing"] == nil {
+		t.Fatal("existing session must survive")
+	}
+}
+
+// TestCheckPIDLiveness_PIDMatchPreSession_SweptImmediately: when the proc-*
+// pre-session and a real session share the SAME PID, that's ordinary
+// supersession (PID discovery completed). It's always safe and needs no grace
+// — sweep it on the first periodic pass even if it's brand new.
+func TestCheckPIDLiveness_PIDMatchPreSession_SweptImmediately(t *testing.T) {
+	tmp := t.TempDir()
+	transcript := filepath.Join(tmp, "real.jsonl")
+	writeTranscript(t, transcript, time.Now())
+
+	pid := os.Getpid()
+	repo := newMockRepo()
+	repo.states["real"] = &session.SessionState{
+		SessionID:      "real",
+		Adapter:        "claude-code",
+		State:          session.StateReady,
+		PID:            pid,
+		CWD:            tmp,
+		TranscriptPath: transcript,
+		UpdatedAt:      time.Now().Unix(),
+	}
+	repo.states["proc-same"] = &session.SessionState{
+		SessionID: "proc-same",
+		Adapter:   "claude-code",
+		State:     session.StateReady,
+		PID:       pid, // same PID as the real session
+		CWD:       tmp,
+		FirstSeen: time.Now().Unix(), // brand new — but PID match is grace-exempt
+		UpdatedAt: time.Now().Unix(),
+	}
+
+	newPIDManagerForTest(repo).CheckPIDLiveness()
+
+	if repo.states["proc-same"] != nil {
+		t.Fatal("PID-matched pre-session should be swept immediately (no grace)")
+	}
+	if repo.states["real"] == nil {
+		t.Fatal("real session must survive")
+	}
+}

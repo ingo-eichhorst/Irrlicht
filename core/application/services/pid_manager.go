@@ -719,6 +719,10 @@ func (pm *PIDManager) snapshotLivenessStates() []livenessSnapshot {
 // sweep then acts on the immutable snapshot, never holding assignMu across a
 // delete callback (the invariant documented on assignMu).
 func (pm *PIDManager) CheckPIDLiveness() bool {
+	// Retire proc-* ghosts whose real session was PID-bound to a sibling
+	// process — the seed-time sweep can't reach them (issue #645).
+	pm.sweepSupersededPreSessionsPeriodic()
+
 	snaps := pm.snapshotLivenessStates()
 	foundDead := false
 	for _, snap := range snaps {
@@ -963,9 +967,34 @@ func isDedupDeleteCandidate(state *session.SessionState, pid int, newest *sessio
 	return state.ParentSessionID == "" && !strings.HasPrefix(state.SessionID, "proc-")
 }
 
+// preSessionSweepGrace is how long a proc-* pre-session must exist before the
+// periodic sweep is allowed to retire it via the adapter+CWD fallback. The
+// PID-strict scanner check (HasRealSessionForPID, issue #113) deliberately
+// keeps a freshly-opened process's pre-session alive even when an active
+// session already exists in the same cwd (two claude instances in one dir).
+// The periodic CWD fallback would kill such a legitimate pre-session on sight,
+// so it waits out this grace window — long enough for normal transcript
+// creation + PID binding to complete — before treating an unbound proc-* as a
+// permanent ghost. The PID-match path needs no grace and is exempt.
+const preSessionSweepGrace = 90 * time.Second
+
+// presessionMatch reports the kind of real session that supersedes a proc-*
+// pre-session. The two paths carry different safety properties, so the periodic
+// sweep gates them differently (PID = always safe; CWD = grace-period guarded).
+type presessionMatch int
+
+const (
+	matchNone presessionMatch = iota
+	matchPID                  // a real session is PID-bound to the same process
+	matchCWD                  // same adapter + cwd, but a different (or no) PID
+)
+
 // sweepSupersededPreSessions deletes proc-* pre-sessions once a matching
 // real session exists. Match is by PID (preferred) or by adapter + CWD for
-// adapters like Codex whose PID discovery may not have completed yet.
+// adapters like Codex whose PID discovery may not have completed yet. This is
+// the seed-time variant: it runs once during startup before the event loop and
+// the SweepDeadPIDs goroutine begin, so it needs no grace period or locking.
+// The periodic equivalent is sweepSupersededPreSessionsPeriodic.
 func (pm *PIDManager) sweepSupersededPreSessions(states []*session.SessionState) {
 	for _, proc := range states {
 		if !strings.HasPrefix(proc.SessionID, "proc-") {
@@ -974,7 +1003,7 @@ func (pm *PIDManager) sweepSupersededPreSessions(states []*session.SessionState)
 		if s, _ := pm.repo.Load(proc.SessionID); s == nil {
 			continue
 		}
-		if candidate := findSupersedingSession(proc, states); candidate != nil {
+		if candidate, _ := findSupersedingSession(proc, states); candidate != nil {
 			pm.log.LogInfo("session-detector-seed", proc.SessionID,
 				fmt.Sprintf("pre-session superseded by %s — deleting", candidate.SessionID))
 			if pm.onSessionDeleted != nil {
@@ -986,21 +1015,103 @@ func (pm *PIDManager) sweepSupersededPreSessions(states []*session.SessionState)
 	}
 }
 
+// sweepSupersededPreSessionsPeriodic retires proc-* pre-sessions whose real
+// session was PID-bound to a sibling process (issue #645). The seed-time sweep
+// only runs once at startup, before the scanner's first poll mints the ghost;
+// and the scanner's own live check (HasRealSessionForPID) is PID-strict, so a
+// proc-A pre-session whose session bound to a distinct PID B is never retired.
+//
+// It reuses findSupersedingSession (the single matching policy) and gates the
+// adapter+CWD fallback behind two #113 guards: the pre-session must be older
+// than preSessionSweepGrace, and the superseding session's PID must be alive
+// and distinct from the proc-* PID (the ghost signature — a real session
+// running under a sibling process). The PID-match path is always safe and
+// retires with no grace, mirroring the seed-time behaviour.
+//
+// Runs off the event loop (CheckPIDLiveness, on the SweepDeadPIDs ticker). It
+// snapshots the session list and the proc-* identity fields under assignMu so
+// its reads never race a concurrent discovery goroutine's assignPIDLocked
+// write of state.PID (issue #628); the snapshot is then acted on without the
+// lock held across delete callbacks. Deletion routes through onSessionDeleted
+// (which records the proc-* id in deletedSessions) so the scanner — whose own
+// PID-strict check would never mark this ghost superseded — cannot re-mint it.
+func (pm *PIDManager) sweepSupersededPreSessionsPeriodic() {
+	pm.assignMu.Lock()
+	states, err := pm.repo.ListAll()
+	if err != nil {
+		pm.assignMu.Unlock()
+		return
+	}
+	type victim struct {
+		state     *session.SessionState
+		candidate string
+	}
+	var victims []victim
+	now := time.Now()
+	for _, proc := range states {
+		if !strings.HasPrefix(proc.SessionID, "proc-") {
+			continue
+		}
+		candidate, kind := findSupersedingSession(proc, states)
+		if kind == matchNone {
+			continue
+		}
+		if kind == matchCWD {
+			// #113 guard: a freshly-opened process in a dir that already has an
+			// active session must keep its pre-session. Only retire after the
+			// grace window AND when the superseding session is bound to a live,
+			// distinct PID (the ghost signature, not a not-yet-bound sibling).
+			if now.Sub(time.Unix(proc.FirstSeen, 0)) < preSessionSweepGrace {
+				continue
+			}
+			if candidate.PID <= 0 || candidate.PID == proc.PID {
+				continue
+			}
+			if syscall.Kill(candidate.PID, 0) == syscall.ESRCH {
+				continue
+			}
+		}
+		victims = append(victims, victim{state: proc, candidate: candidate.SessionID})
+	}
+	pm.assignMu.Unlock()
+
+	for _, v := range victims {
+		if s, _ := pm.repo.Load(v.state.SessionID); s == nil {
+			continue
+		}
+		pm.log.LogInfo("session-detector", v.state.SessionID,
+			fmt.Sprintf("pre-session superseded by %s (PID-bound to a sibling) — deleting", v.candidate))
+		if pm.onSessionDeleted != nil {
+			pm.onSessionDeleted(v.state.SessionID)
+		}
+		_ = pm.repo.Delete(v.state.SessionID)
+		pm.broadcast(outbound.PushTypeDeleted, v.state)
+	}
+}
+
 // findSupersedingSession returns the first real (non-proc) session that
-// matches proc by PID or adapter+CWD, or nil when no candidate matches.
-func findSupersedingSession(proc *session.SessionState, states []*session.SessionState) *session.SessionState {
+// supersedes proc, plus the kind of match. PID match takes precedence over the
+// adapter+CWD fallback (the fallback covers adapters like Codex whose PID
+// discovery may not have completed yet). Returns (nil, matchNone) when nothing
+// matches. This is the canonical superseding-match policy — both the seed-time
+// and periodic sweeps delegate here so the predicate can't drift.
+func findSupersedingSession(proc *session.SessionState, states []*session.SessionState) (*session.SessionState, presessionMatch) {
+	var cwdMatch *session.SessionState
 	for _, candidate := range states {
 		if strings.HasPrefix(candidate.SessionID, "proc-") || candidate.TranscriptPath == "" {
 			continue
 		}
 		if proc.PID > 0 && proc.PID == candidate.PID {
-			return candidate
+			return candidate, matchPID
 		}
-		if proc.CWD != "" && proc.Adapter == candidate.Adapter && proc.CWD == candidate.CWD {
-			return candidate
+		if cwdMatch == nil && proc.CWD != "" && proc.Adapter == candidate.Adapter && proc.CWD == candidate.CWD {
+			cwdMatch = candidate
 		}
 	}
-	return nil
+	if cwdMatch != nil {
+		return cwdMatch, matchCWD
+	}
+	return nil, matchNone
 }
 
 // broadcast sends a push notification if a broadcaster is configured.
