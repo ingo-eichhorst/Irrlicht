@@ -1062,13 +1062,26 @@ func (t *TranscriptTailer) IngestTaskEstimate(est *TaskEstimate) {
 	t.applyTaskEstimate(est)
 }
 
-// PurgeBackgroundProcs drops every tracked background process. Called when
-// the detector's liveness probe verdicts them dead (no live writer on any
-// output file): the transcript never recorded a termination — the process
-// died with its parent shell — so without this the entries persist in the
-// ledger and resurrect as phantom open processes on every daemon restart.
-// Caller (the metrics adapter) holds the per-tailer lock, mirroring
-// IngestRateLimit. See issue #649.
-func (t *TranscriptTailer) PurgeBackgroundProcs() {
-	t.openBackgroundProcs = make(map[string]string)
+// PurgeBackgroundProcs drops the tracked background processes whose output
+// path is in outputs. Called when the detector's liveness probe verdicts them
+// dead (no live writer on any probed output file): the transcript never
+// recorded a termination — the process died with its parent shell — so
+// without this the entries persist in the ledger and resurrect as phantom
+// open processes on every daemon restart. Scoped to the probed outputs, not
+// purge-all: the probe runs async, and a process spawned after the snapshot
+// was taken must survive (its own probe will judge it). Caller (the metrics
+// adapter) holds the per-tailer lock, mirroring IngestRateLimit. See #649.
+func (t *TranscriptTailer) PurgeBackgroundProcs(outputs []string) {
+	if len(outputs) == 0 {
+		return
+	}
+	dead := make(map[string]bool, len(outputs))
+	for _, o := range outputs {
+		dead[o] = true
+	}
+	for id, path := range t.openBackgroundProcs {
+		if dead[path] {
+			delete(t.openBackgroundProcs, id)
+		}
+	}
 }

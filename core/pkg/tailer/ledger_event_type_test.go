@@ -47,8 +47,10 @@ func TestLedger_PersistsLastEventType(t *testing.T) {
 }
 
 // TestTailer_PurgeBackgroundProcs verifies the dead-verdict cleanup path
-// (issue #649): purging drops the open set and the next ledger snapshot no
-// longer persists the entries, so they cannot resurrect on a later restart.
+// (issue #649): purging drops the probed entries from the open set and the
+// next ledger snapshot no longer persists them, so they cannot resurrect on
+// a later restart — while an entry the probe never saw (a process spawned
+// after the probe's snapshot) survives untouched.
 func TestTailer_PurgeBackgroundProcs(t *testing.T) {
 	path := writeTranscriptLines(t, []map[string]interface{}{
 		{"type": "user", "timestamp": ts(0)},
@@ -56,26 +58,33 @@ func TestTailer_PurgeBackgroundProcs(t *testing.T) {
 
 	tl := newTestTailer(path)
 	tl.SetLedgerState(LedgerState{
-		SchemaVersion:   LedgerSchemaVersion,
-		BackgroundProcs: map[string]string{"bbw7rzpa0": "/tmp/x/tasks/bbw7rzpa0.output"},
+		SchemaVersion: LedgerSchemaVersion,
+		BackgroundProcs: map[string]string{
+			"bbw7rzpa0": "/tmp/x/tasks/bbw7rzpa0.output", // probed, dead
+			"bnewspawn": "/tmp/x/tasks/bnewspawn.output", // spawned after the snapshot
+		},
 	})
 	if _, err := tl.TailAndProcess(); err != nil {
 		t.Fatal(err)
 	}
-	if got := tl.GetLedgerState().BackgroundProcs; len(got) != 1 {
-		t.Fatalf("precondition: BackgroundProcs = %v, want the rehydrated entry", got)
+	if got := tl.GetLedgerState().BackgroundProcs; len(got) != 2 {
+		t.Fatalf("precondition: BackgroundProcs = %v, want both rehydrated entries", got)
 	}
 
-	tl.PurgeBackgroundProcs()
+	tl.PurgeBackgroundProcs([]string{"/tmp/x/tasks/bbw7rzpa0.output"})
 
-	if got := tl.GetLedgerState().BackgroundProcs; len(got) != 0 {
-		t.Errorf("BackgroundProcs after purge = %v, want empty", got)
+	got := tl.GetLedgerState().BackgroundProcs
+	if _, dead := got["bbw7rzpa0"]; dead {
+		t.Errorf("probed-dead entry survived the purge: %v", got)
+	}
+	if _, alive := got["bnewspawn"]; !alive {
+		t.Errorf("unprobed entry was purged: %v (a process spawned after the probe snapshot must survive)", got)
 	}
 	m, err := tl.TailAndProcess()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m.BackgroundProcessCount != 0 {
-		t.Errorf("BackgroundProcessCount after purge = %d, want 0", m.BackgroundProcessCount)
+	if m.BackgroundProcessCount != 1 {
+		t.Errorf("BackgroundProcessCount after scoped purge = %d, want 1", m.BackgroundProcessCount)
 	}
 }

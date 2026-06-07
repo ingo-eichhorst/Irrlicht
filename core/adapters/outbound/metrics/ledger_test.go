@@ -72,7 +72,7 @@ func TestPurgeDeadBackgroundProcs_ClearsTailerAndLedger(t *testing.T) {
 	lp := ledgerPath(transcript)
 	a.tailers[transcript] = &lockedTailer{t: tl, lp: lp}
 
-	a.PurgeDeadBackgroundProcs(transcript)
+	a.PurgeDeadBackgroundProcs(transcript, []string{"/tmp/x/tasks/bbw7rzpa0.output"})
 
 	if got := tl.GetLedgerState().BackgroundProcs; len(got) != 0 {
 		t.Errorf("tailer BackgroundProcs after purge = %v, want empty", got)
@@ -88,6 +88,8 @@ func TestPurgeDeadBackgroundProcs_ClearsTailerAndLedger(t *testing.T) {
 
 func TestPurgeDeadBackgroundProcs_NoTailerNoop(t *testing.T) {
 	a := New(Registry{})
-	a.PurgeDeadBackgroundProcs("/never/seen.jsonl") // must not panic
-	a.PurgeDeadBackgroundProcs("")                  // must not panic
+	outputs := []string{"/tmp/x/tasks/x.output"}
+	a.PurgeDeadBackgroundProcs("/never/seen.jsonl", outputs) // must not panic
+	a.PurgeDeadBackgroundProcs("", outputs)                  // must not panic
+	a.PurgeDeadBackgroundProcs("/never/seen.jsonl", nil)     // must not panic
 }
