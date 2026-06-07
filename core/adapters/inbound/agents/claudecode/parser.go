@@ -197,11 +197,20 @@ func handleSystemEvent(raw map[string]interface{}, ev *tailer.ParsedEvent) {
 }
 
 // handleUserEvent handles the user event variants that should short-circuit
-// the parser (isMeta, task-notification, local-command wrappers). Returns
-// true when caller should return ev immediately. Interrupts are recorded on
-// ev but do NOT short-circuit.
+// the parser (isMeta, compact summary, task-notification, local-command
+// wrappers). Returns true when caller should return ev immediately.
+// Interrupts are recorded on ev but do NOT short-circuit.
 func handleUserEvent(raw map[string]interface{}, ev *tailer.ParsedEvent) bool {
 	if isMeta, ok := raw["isMeta"].(bool); ok && isMeta {
+		ev.Skip = true
+		return true
+	}
+	// The synthetic continuation summary written when the conversation is
+	// compacted ("This session is being continued from a previous
+	// conversation…") is not a real user turn. A manual /compact writes it
+	// with no assistant event or turn_done following, so letting it through
+	// flipped ready → working with nothing to transition back (issue #641).
+	if isCompact, ok := raw["isCompactSummary"].(bool); ok && isCompact {
 		ev.Skip = true
 		return true
 	}

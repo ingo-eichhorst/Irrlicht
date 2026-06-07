@@ -174,6 +174,28 @@ func TestParser_IsMeta_Skip(t *testing.T) {
 	}
 }
 
+func TestParser_CompactSummary_Skip(t *testing.T) {
+	// The synthetic continuation summary written after a compaction
+	// (issue #641). It carries plain string content with no command
+	// prefix, so without the isCompactSummary check it parses as a real
+	// user turn and flips a ready session to working with no follow-up
+	// event to transition it back.
+	p := &Parser{}
+	ev := p.ParseLine(map[string]interface{}{
+		"type":                      "user",
+		"isCompactSummary":          true,
+		"isVisibleInTranscriptOnly": true,
+		"timestamp":                 "2026-06-07T11:46:42.961Z",
+		"message": map[string]interface{}{
+			"role":    "user",
+			"content": "This session is being continued from a previous conversation that ran out of context.",
+		},
+	})
+	if ev == nil || !ev.Skip {
+		t.Error("expected isCompactSummary user event to be skipped")
+	}
+}
+
 func TestParser_LocalCommand_Skip(t *testing.T) {
 	p := &Parser{}
 	ev := p.ParseLine(map[string]interface{}{
