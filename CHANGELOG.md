@@ -12,6 +12,92 @@ beyond), see the [Roadmap](https://irrlicht.io/docs/roadmap.html).
 
 ## [Unreleased]
 
+## [0.5.1] — 2026-06-07
+
+### Ghost sessions and stuck states fixed: /compact strandings, Claude Code 2.1.168's background daemon, and restart amnesia.
+
+No new features this time — five fixes that together remove every known way a
+session row could lie to you: sessions stuck "working" after `/compact`,
+permanent ghost `proc-…` rows minted by Claude Code 2.1.168's new
+background-daemon processes, a "?" agent icon from a startup race, and idle
+sessions resurrected as "working" by a daemon restart.
+
+### Fixed
+
+- Running `/compact` in an idle session no longer strands it in "working" —
+  the synthetic compact-summary transcript event is no longer mistaken for a
+  real user turn. (#641, #642)
+- Claude Code 2.1.168's background-daemon infrastructure (`claude daemon run`,
+  `--bg-pty-host` PTY hosts, `--bg-spare` spares) no longer mints permanent
+  ghost `proc-…` rows, and ghosts persisted by earlier versions are retired
+  automatically on the first scan after upgrading. (#644, #648)
+- Ghost pre-session rows whose real session is bound to a sibling process
+  (e.g. a second `claude --resume` of the same session) are now swept
+  continuously, not only at daemon startup — with a 90-second grace period so
+  a freshly opened second agent in the same directory still gets its row.
+  (#645, #646)
+- Sessions created during a daemon-startup race no longer show "?" instead of
+  the agent icon: the adapter identity is backfilled on the next activity
+  event, which also unblocks PID discovery and ghost cleanup for that
+  session. (#643, #647)
+- A daemon restart can no longer resurrect an idle session as permanently
+  "working": the last event type is persisted in the metrics ledger
+  (schema v4), and older ledgers get a one-time full re-scan that also heals
+  sessions stranded by the pre-fix parser. Dead background processes are
+  likewise purged from the ledger instead of resurrecting on every restart.
+  (#649, #650)
+
+### Docs
+
+- Corrected the documented `permissions.json` location: it lives in the
+  daemon data dir, not Application Support. (#640)
+
+### Technical appendix
+
+- claudecode parser: `handleUserEvent` now skips user events carrying
+  `isCompactSummary` / `isVisibleInTranscriptOnly`
+  (`core/adapters/inbound/agents/claudecode/parser.go`), so a manual
+  `/compact` — which never starts a turn — can't trip classifier rule 4 into
+  `working`. Regression-covered by `compaction_test.go` against the recorded
+  #641 transcript shape. (#642)
+- processlifecycle: new `ProcessObserver.ArgvOf(pid)` port primitive —
+  `KERN_PROCARGS2` parse on darwin (sharing the preamble decoder with the env
+  reader via `procargs2ArgvOffset`), `/proc/<pid>/cmdline` on linux, stub
+  elsewhere — and a per-adapter `agent.Process.ExcludeArgv` predicate
+  consulted by the scanner. claudecode declares `IsInfraArgv`: positional
+  matches on `daemon run` / `--bg-pty-host` / `--bg-spare` argv elements
+  (never substring scans, so prompts merely mentioning those tokens stay
+  matched; a nil argv is never excluded — no exclusion on absence of
+  evidence). Verdicts are cached per PID (argv is immutable for a process's
+  lifetime), nil reads are retried next poll, and the first excluded verdict
+  emits a one-shot retirement removal that deletes pre-sessions persisted by
+  pre-filter daemons. (#644, #648)
+- detector: `sweepSupersededPreSessions` now also runs on the
+  `CheckPIDLiveness` tick instead of seed-only. `findSupersedingSession`
+  stays the single matching predicate, extended to return the match kind:
+  PID matches retire immediately; the CWD fallback only retires pre-sessions
+  older than 90s whose superseding session has a live, distinct PID —
+  guarding the #113 two-agents-one-cwd regression. Deletions route through
+  `deletedSessions` so the scanner can't flap-remint. (#645, #646)
+- detector: `processActivityLocked` backfills `state.Adapter` from the
+  watcher identity under `WithSessionStateLock` (#606 discipline), healing
+  sessions created through the no-identity debounce/refresh fallback; since
+  the PID-discovery retry passes `state.Adapter`, discovery and pre-session
+  cleanup unblock on the same pass. (#643, #647)
+- tailer: `LastEventType` is persisted in `LedgerState` and restored in
+  `SetLedgerState`; `LedgerSchemaVersion` bumped to 4 with the load side
+  aliasing the canonical const so write and validate can't drift.
+  Older-schema ledgers are discarded on load → one-time full re-scan under
+  the current parser, which heals sessions already persisted as `working`
+  over silent transcripts. The background-process liveness probe's dead
+  verdict now calls `PurgeDeadBackgroundProcs`, dropping phantom
+  `background_procs` ledger entries that previously resurrected as
+  `background_process_count=1` on every restart. (#649, #650)
+- claudecode permissions: the transcripts (observe) permission's user-facing
+  `Touches`/`Detail` text now discloses the process scanning it has always
+  gated — reading the working directory and command line of running `claude`
+  processes. (#648)
+
 ## [0.5.0] — 2026-06-06
 
 ### Consent-first permissions, agent-authored task ETAs, and Kiro CLI joins the watch list.
@@ -936,7 +1022,8 @@ Four distinct bugs caused long-running Claude Code sessions to bounce between
 - First bundled macOS installer `Irrlicht-0.2.0-mac-installer.pkg` containing
   the daemon, menu bar app, and auto-start LaunchAgent.
 
-[Unreleased]: https://github.com/ingo-eichhorst/Irrlicht/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/ingo-eichhorst/Irrlicht/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.5.1
 [0.5.0]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.5.0
 [0.4.8]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.4.8
 [0.4.7]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.4.7
