@@ -350,7 +350,8 @@ All tests must pass before proceeding.
 > It builds the universal daemon + `irrlicht-focus` + `irrlicht-ls` (embedded
 > in the bundle; the PKG postinstall symlinks `irrlicht-ls` into
 > `/usr/local/bin` — #608), the Linux tarballs, assembles + DevID-signs the
-> bundle, notarizes + staples the DMG, builds the
+> bundle, DevID-signs the DMG file itself (since #652; see the DMG-signature
+> note in step 7 below), notarizes + staples the DMG, builds the
 > PKG, and writes `.build/checksums.sha256`. It does **NOT** do four things —
 > do them by hand afterward:
 > 1. **ZIP**: `ditto -c -k --sequesterRsrc --keepParent .build/Irrlicht.app .build/Irrlicht-$NEW_VERSION.zip`
@@ -662,6 +663,21 @@ PKG, and ZIP land in `/tmp/` as before — only the *assembly* path moves.
    xcrun stapler validate /tmp/Irrlicht-${NEW_VERSION}.dmg
    spctl -a -t open --context context:primary-signature -v /tmp/Irrlicht-${NEW_VERSION}.dmg
    ```
+
+   **DMG-signature ordering + history (learned during v0.5.1).** The `spctl
+   -a -t open --context context:primary-signature` line above checks the
+   signature of the DMG *file itself*, not the app inside it. v0.4.5–v0.5.1
+   shipped DMGs whose file was never codesigned, so on those releases this
+   check reports `rejected / source=no usable signature` even though the
+   release is perfectly healthy — `stapler validate` plus `spctl -a -vv` on
+   the *app bundle* ("Notarized Developer ID") are the authoritative checks
+   there. Since #652, `tools/build-release.sh` codesigns the DMG right after
+   `hdiutil create` and **before** `notarytool submit`, so from v0.5.2 on the
+   spctl line must pass — treat a failure as a real defect again. Two rules
+   the ordering encodes: (a) sign the DMG *before* notarization so the ticket
+   covers the signed bytes; (b) **never** re-sign a DMG after stapling —
+   signing mutates the file and invalidates the stapled ticket, which is also
+   why the already-shipped v0.5.1 DMG was left unsigned rather than patched.
 
    Sign the DMG with Sparkle's EdDSA key and append a new entry to
    `site/appcast.xml` so existing installs receive the update prompt.
