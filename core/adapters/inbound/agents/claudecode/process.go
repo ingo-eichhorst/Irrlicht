@@ -21,6 +21,12 @@ package claudecode
 //
 // A nil/empty argv (unreadable, e.g. a hardened-runtime process) is treated as
 // a session — we never exclude on the absence of evidence.
+//
+// NOTE: this is a denylist of the infra flags shipped in 2.1.168. If a later
+// Claude Code release adds a new background flag, its processes mint ghost
+// pre-sessions again (the #644 symptom) until that flag is added here — when
+// ghosts reappear after an upstream release, check for new `--bg-*` flags or
+// daemon subcommands first.
 func IsInfraArgv(argv []string) bool {
 	if len(argv) < 2 {
 		return false
