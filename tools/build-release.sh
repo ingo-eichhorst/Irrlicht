@@ -319,6 +319,20 @@ hdiutil create -volname "Irrlicht $VERSION" \
 rm -rf "$DMG_STAGING"
 echo "  Created $BUILD_DIR/$DMG_NAME"
 
+# ── 4a. Sign the DMG file itself ──────────────────────────────────────
+# The app inside is already Developer ID-signed, but an unsigned DMG fails
+# `spctl -a -t open --context context:primary-signature` (v0.4.5–v0.5.0
+# shipped unsigned DMGs; harmless for Gatekeeper, but the release-skill
+# verification flags it). Must happen BEFORE notarization so the ticket
+# covers the signed bytes — signing after stapling would invalidate it.
+if [ -n "${DEVELOPER_ID:-}" ]; then
+    echo "  Signing DMG with Developer ID..."
+    codesign --force --sign "Developer ID Application: ${DEVELOPER_ID}" \
+        --timestamp "$BUILD_DIR/$DMG_NAME"
+    codesign --verify "$BUILD_DIR/$DMG_NAME"
+    echo "  Signed $DMG_NAME"
+fi
+
 # ── 4b. Notarize and staple DMG ────────────────────────────────────────
 if [ -n "${NOTARYTOOL_KEYCHAIN_PROFILE:-}" ]; then
     echo ""
