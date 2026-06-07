@@ -542,12 +542,22 @@
         <!-- ════════════════════════════════════════════════════════════
              "YOU ARE HERE" — today
              ════════════════════════════════════════════════════════════ -->
-        <div class="timeline-now"><span>2026-06-06 &middot; today</span></div>
+        <div class="timeline-now"><span>2026-06-07 &middot; today</span></div>
 
         <!-- ════════════════════════════════════════════════════════════
              PAST
              ════════════════════════════════════════════════════════════ -->
         <div class="timeline-section past">
+
+          <!-- v0.5.1 -->
+          <div class="release patch">
+            <div class="release-head">
+              <span class="release-version">v0.5.1</span>
+              <span class="release-date">2026-06-07</span>
+            </div>
+            <p class="release-note">Session rows stop lying: <code>/compact</code> no longer strands sessions in &ldquo;working&rdquo; <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/642" target="_blank" rel="noopener">#642</a>; Claude Code 2.1.168&rsquo;s background-daemon processes no longer mint permanent ghost rows (and old ghosts are retired on upgrade) <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/648" target="_blank" rel="noopener">#648</a>; sibling-bound ghost pre-sessions are swept continuously <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/646" target="_blank" rel="noopener">#646</a>; the startup-race &ldquo;?&rdquo; agent icon heals itself <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/647" target="_blank" rel="noopener">#647</a>; daemon restarts can no longer resurrect idle sessions as &ldquo;working&rdquo; (ledger schema v4) <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/650" target="_blank" rel="noopener">#650</a>.</p>
+            <div class="also-shipped"><a href="https://github.com/ingo-eichhorst/Irrlicht/issues/640" target="_blank" rel="noopener">#640</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/641" target="_blank" rel="noopener">#641</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/643" target="_blank" rel="noopener">#643</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/644" target="_blank" rel="noopener">#644</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/645" target="_blank" rel="noopener">#645</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/649" target="_blank" rel="noopener">#649</a></div>
+          </div>
 
           <!-- v0.5.0 -->
           <div class="release minor">
