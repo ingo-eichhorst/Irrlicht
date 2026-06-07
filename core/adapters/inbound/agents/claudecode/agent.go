@@ -42,6 +42,7 @@ func Agent() agent.Agent {
 		Process: agent.Process{
 			Match:         agent.ExactName{Name: ProcessName},
 			PIDForSession: DiscoverPID,
+			ExcludeArgv:   IsInfraArgv,
 		},
 		Source: agent.FilesUnderRoot{
 			Dir: transcriptsDir(),

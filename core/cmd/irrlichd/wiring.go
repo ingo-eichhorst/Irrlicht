@@ -55,6 +55,9 @@ func buildAgentWatchers(
 	if m, ok := a.Process.Match.(agent.CommandPattern); ok {
 		scanner.WithCommandLineMatch(m.Regex.String())
 	}
+	if a.Process.ExcludeArgv != nil {
+		scanner.WithArgvFilter(a.Process.ExcludeArgv)
+	}
 	if s, ok := a.Source.(agent.FilesUnderCWD); ok {
 		scanner.WithTranscriptFilename(s.Filename)
 	}

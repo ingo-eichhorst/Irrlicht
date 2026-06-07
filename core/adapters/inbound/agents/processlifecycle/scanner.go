@@ -48,6 +48,15 @@ type Scanner struct {
 	// Callers typically delegate to HasRealSessionForPID.
 	sessionChecker func(projectDir string, pid int) bool
 
+	// argvFilter is an optional per-adapter predicate that excludes a matched
+	// PID by inspecting its argv. Set via WithArgvFilter from the adapter's
+	// Process.ExcludeArgv declaration. When it returns true the scanner mints
+	// no pre-session for that PID — the binary matched but it's infrastructure
+	// (e.g. a background daemon/wrapper running the same binary), not a
+	// session. Keeping the predicate here (not in poll's matcher) keeps the
+	// scanner generic; the format-specific argv shapes live in the adapter.
+	argvFilter func(argv []string) bool
+
 	mu      sync.Mutex
 	tracked map[int]trackedProc // pid → pre-session
 	subs    []chan agent.Event
@@ -116,6 +125,15 @@ func (s *Scanner) WithTranscriptFilename(name string) *Scanner {
 // new pre-sessions for freshly-opened processes.
 func (s *Scanner) WithSessionChecker(fn func(projectDir string, pid int) bool) *Scanner {
 	s.sessionChecker = fn
+	return s
+}
+
+// WithArgvFilter sets a per-adapter predicate that excludes a matched PID by
+// its argv (the adapter's Process.ExcludeArgv). When fn reports true the
+// scanner skips the PID entirely — no pre-session is minted and it is never
+// tracked. Returns the scanner for chaining.
+func (s *Scanner) WithArgvFilter(fn func(argv []string) bool) *Scanner {
+	s.argvFilter = fn
 	return s
 }
 
@@ -235,6 +253,18 @@ func (s *Scanner) poll() {
 
 	// --- handle newly-seen PIDs ---
 	for _, pid := range pids {
+		// Per-adapter argv exclusion: a matched binary that is the agent's
+		// background infrastructure (daemon/wrapper) rather than a session.
+		// Drop it from the live set too so it isn't treated as a tracked PID
+		// that "exited" on the next poll. A nil argv (unreadable) is passed
+		// through; the predicate must default to not-excluding in that case.
+		if s.argvFilter != nil {
+			if argv, _ := osProc.ArgvOf(pid); s.argvFilter(argv) {
+				delete(live, pid)
+				continue
+			}
+		}
+
 		s.mu.Lock()
 		_, alreadyTracked := s.tracked[pid]
 		s.mu.Unlock()

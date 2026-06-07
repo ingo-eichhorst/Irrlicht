@@ -221,3 +221,37 @@ func parseProcargs2(buf []byte) map[string]string {
 	}
 	return out
 }
+
+// parseProcargs2Argv extracts the argv portion of a KERN_PROCARGS2 sysctl
+// buffer (same layout as parseProcargs2 documents above). Returns nil for an
+// empty or truncated buffer — hardened-runtime processes strip argv, so
+// callers must treat a nil argv as "unknown", not "no args".
+func parseProcargs2Argv(buf []byte) []string {
+	if len(buf) < 4 {
+		return nil
+	}
+	argc := int(binary.LittleEndian.Uint32(buf[:4]))
+	p := 4
+	// Skip exec path (NUL-terminated) and any alignment NULs before argv[0].
+	for p < len(buf) && buf[p] != 0 {
+		p++
+	}
+	for p < len(buf) && buf[p] == 0 {
+		p++
+	}
+	argv := make([]string, 0, argc)
+	for i := 0; i < argc && p < len(buf); i++ {
+		start := p
+		for p < len(buf) && buf[p] != 0 {
+			p++
+		}
+		argv = append(argv, string(buf[start:p]))
+		if p < len(buf) {
+			p++ // skip NUL
+		}
+	}
+	if len(argv) == 0 {
+		return nil
+	}
+	return argv
+}

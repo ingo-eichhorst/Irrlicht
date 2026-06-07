@@ -110,6 +110,60 @@ func TestParseProcargs2(t *testing.T) {
 	}
 }
 
+func TestParseProcargs2Argv(t *testing.T) {
+	// Same KERN_PROCARGS2 layout as TestParseProcargs2:
+	//   argc (int32 LE) | exec_path\0 | argv...\0 | envp...\0
+	makeBuf := func(argc int32, execPath string, argv []string, envp []string) []byte {
+		var b []byte
+		b = append(b, byte(argc), byte(argc>>8), byte(argc>>16), byte(argc>>24))
+		b = append(b, []byte(execPath)...)
+		b = append(b, 0)
+		for _, a := range argv {
+			b = append(b, []byte(a)...)
+			b = append(b, 0)
+		}
+		for _, e := range envp {
+			b = append(b, []byte(e)...)
+			b = append(b, 0)
+		}
+		return b
+	}
+
+	tests := []struct {
+		name string
+		buf  []byte
+		want []string
+	}{
+		{name: "empty buffer", buf: nil, want: nil},
+		{
+			name: "argv extracted, env ignored",
+			buf: makeBuf(3, "/usr/local/bin/claude",
+				[]string{"claude", "--resume", "abc-123"},
+				[]string{"HOME=/Users/alice", "PATH=/usr/bin"}),
+			want: []string{"claude", "--resume", "abc-123"},
+		},
+		{
+			name: "cc-daemon argv with no env",
+			buf: makeBuf(3, "/Applications/ClaudeCode.app/Contents/MacOS/claude",
+				[]string{"claude", "daemon", "run"}, nil),
+			want: []string{"claude", "daemon", "run"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := parseProcargs2Argv(tc.buf)
+			if len(got) != len(tc.want) {
+				t.Fatalf("parseProcargs2Argv: want %v, got %v", tc.want, got)
+			}
+			for i := range tc.want {
+				if got[i] != tc.want[i] {
+					t.Errorf("argv[%d]: want %q, got %q", i, tc.want[i], got[i])
+				}
+			}
+		})
+	}
+}
+
 func TestReadLauncherEnv_InvalidPID(t *testing.T) {
 	if l := ReadLauncherEnv(0); l != nil {
 		t.Errorf("pid 0: want nil, got %+v", l)

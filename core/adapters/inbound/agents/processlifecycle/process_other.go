@@ -20,6 +20,7 @@ func newObserver() outbound.ProcessObserver { return stubObserver{} }
 
 func (stubObserver) FindByName(string) ([]int, error)    { return nil, nil }
 func (stubObserver) FindByCmdline(string) ([]int, error) { return nil, nil }
+func (stubObserver) ArgvOf(int) ([]string, error)        { return nil, nil }
 
 func (stubObserver) CWDOf(pid int) (string, error) {
 	return "", fmt.Errorf("process observation unsupported on %s", runtime.GOOS)
