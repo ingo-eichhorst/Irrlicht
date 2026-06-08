@@ -194,13 +194,15 @@ if [ -z "$VERSION" ]; then
     printf 'v%s\n' "$VERSION"
 fi
 
-# ─── Remove any existing install ───────────────────────────────────────────
-
-step "Removing any existing install"
-uninstall_previous
-ok
-
 # ─── Work dir ──────────────────────────────────────────────────────────────
+#
+# Note: the existing install is NOT removed here. We download and verify the
+# new artifact into TMPDIR first, and only remove the old install immediately
+# before extracting the verified bytes (full-install path below). This keeps
+# the working install intact when a download fails — a transient GitHub CDN
+# 504 used to leave the user with nothing because removal happened up front.
+# The --daemon-only path never removes /Applications/Irrlicht.app at all (it
+# installs irrlichd under ~/.local and overwrites in place).
 
 TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT INT TERM
@@ -302,6 +304,12 @@ ok
 
 step "Verifying checksum"
 sha256_verify "$TMPDIR" "$ASSET" || fail "Checksum mismatch — aborting"
+ok
+
+# Only now that we hold verified bytes do we remove the previous install —
+# a failed download above can never leave the user without a working app.
+step "Removing any existing install"
+uninstall_previous
 ok
 
 step "Installing to /Applications"
