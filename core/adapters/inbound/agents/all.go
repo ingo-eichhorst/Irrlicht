@@ -4,6 +4,7 @@ import (
 	"irrlicht/core/adapters/inbound/agents/aider"
 	"irrlicht/core/adapters/inbound/agents/claudecode"
 	"irrlicht/core/adapters/inbound/agents/codex"
+	"irrlicht/core/adapters/inbound/agents/geminicli"
 	"irrlicht/core/adapters/inbound/agents/kirocli"
 	"irrlicht/core/adapters/inbound/agents/opencode"
 	"irrlicht/core/adapters/inbound/agents/pi"
@@ -23,5 +24,6 @@ func All() []agent.Agent {
 		aider.Agent(),
 		opencode.Agent(),
 		kirocli.Agent(),
+		geminicli.Agent(),
 	}
 }

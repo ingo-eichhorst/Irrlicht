@@ -56,6 +56,18 @@ func (e *metadataEnricher) EnrichNewSession(state *session.SessionState, ev agen
 	// before this enricher runs.
 	if m, _ := e.metrics.ComputeMetrics(ev.TranscriptPath, state.Adapter); m != nil {
 		state.Metrics = m
+		// Some adapters (Gemini CLI) record the cwd only in the transcript
+		// body — not in a field GetCWDFromTranscript can read, the encoded
+		// path, or a sidecar — so the parser is the only source and surfaces
+		// it as metrics.LastCWD. Use it here (mirroring RefreshOnActivity) so
+		// PID discovery has a cwd at creation instead of never binding on a
+		// short session that produces no further activity. Only fills a gap;
+		// an already-resolved cwd above wins.
+		if state.CWD == "" && m.LastCWD != "" {
+			state.CWD = m.LastCWD
+			state.GitBranch = e.git.GetBranch(m.LastCWD)
+			state.ProjectName = e.git.GetProjectName(m.LastCWD)
+		}
 	}
 }
 
