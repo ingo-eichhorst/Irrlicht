@@ -359,14 +359,23 @@ All tests must pass before proceeding.
 > 3. **Sparkle-sign the DMG** + add the `site/appcast.xml` `<item>` (Step 6 step 7's Sparkle block).
 > 4. **Smoke-test** the bundle (Step 6 step 8) — but see the port hazard below.
 >
-> **STALE: the `focus-status` entitlement.** v0.4.7 STRIPPED
-> `com.apple.developer.focus-status` (AMFI POSIX 153 killed launches; the
-> entitlements file `platforms/macos/Irrlicht/Resources/Irrlicht.entitlements`
-> is now an empty `<dict/>`). The `FOCUS_TRUE`/"focus-status entitlement present"
-> assertions in this step, the Info.plist template, and Step 9's canary are
-> therefore WRONG — they will fail a correct release. Ignore them until
-> focus-status is re-enabled with a provisioning profile (#357). The
-> get-task-allow guard is still correct and load-bearing.
+> **The `focus-status` entitlement is gone (don't re-add a FOCUS_TRUE check).**
+> v0.4.7 STRIPPED `com.apple.developer.focus-status` (AMFI POSIX 153 killed
+> launches; the entitlements file
+> `platforms/macos/Irrlicht/Resources/Irrlicht.entitlements` is now an empty
+> `<dict/>`). The FOCUS_TRUE assertions were removed from the codesign step
+> and the Step 9 canary; the Info.plist template still lists
+> `NSFocusStatusUsageDescription` (harmless without the entitlement). Re-add a
+> FOCUS_TRUE check in both places only once the entitlement is restored with a
+> provisioning profile (#357). The get-task-allow guard is the load-bearing one.
+>
+> **Artifact paths: `.build/`, not `/tmp/`.** `build-release.sh` (the default)
+> writes the bundle, DMG, PKG, tarballs, and `checksums.sha256` under
+> `.build/`. The post-script hand-steps, Step 6.5 (cask sha), Step 8 (`gh
+> release create`), and Step 9 (canary download) all read from `.build/`. The
+> per-command build sub-sections further down still show `/tmp/` paths — they
+> are a drifted manual fallback only; if you actually run them, relocate their
+> outputs to `.build/` (or just use the script).
 >
 > **Port hazard for the smoke test + Step 9 canary.** The maintainer often runs
 > a dev `core/bin/irrlichd --record` on port 7837. Launching the app on the
@@ -637,15 +646,14 @@ PKG, and ZIP land in `/tmp/` as before — only the *assembly* path moves.
    # macOS 13+ emits binary plist by default; plutil normalizes to XML so a
    # `<false/>` declaration doesn't false-match against a key-only grep.
    ENTS_XML=$(codesign -d --entitlements - "$APP_STAGING" 2>/dev/null | plutil -convert xml1 -o - - 2>/dev/null)
-   FOCUS_TRUE=$(echo "$ENTS_XML" | xmllint --xpath \
-     "boolean(/plist/dict/key[text()='com.apple.developer.focus-status']/following-sibling::*[1][self::true])" \
-     - 2>/dev/null)
+   # NOTE: the focus-status assertion was removed — v0.4.7 stripped
+   # com.apple.developer.focus-status (entitlements file is an empty <dict/>
+   # until #357 restores it with a provisioning profile). Re-add a FOCUS_TRUE
+   # check here only once that entitlement is back. The get-task-allow guard
+   # below is the load-bearing one.
    GTA_TRUE=$(echo "$ENTS_XML" | xmllint --xpath \
      "boolean(/plist/dict/key[text()='com.apple.security.get-task-allow']/following-sibling::*[1][self::true])" \
      - 2>/dev/null)
-   [ "$FOCUS_TRUE" = "true" ] \
-     && echo "OK: focus-status entitlement present" \
-     || { echo "FAIL: focus-status entitlement missing or false"; exit 1; }
    # get-task-allow is debug-only; Apple's notarization service rejects any
    # binary with the entitlement set to true (#407). Fail the release here,
    # before the DMG is submitted to notarytool. Match on value, not key — an
@@ -657,11 +665,16 @@ PKG, and ZIP land in `/tmp/` as before — only the *assembly* path moves.
 
    Notarize and staple the DMG after packaging (step 9):
    ```bash
-   xcrun notarytool submit /tmp/Irrlicht-${NEW_VERSION}.dmg \
+   xcrun notarytool submit .build/Irrlicht-${NEW_VERSION}.dmg \
        --keychain-profile irrlicht-notarytool --wait
-   xcrun stapler staple /tmp/Irrlicht-${NEW_VERSION}.dmg
-   xcrun stapler validate /tmp/Irrlicht-${NEW_VERSION}.dmg
-   spctl -a -t open --context context:primary-signature -v /tmp/Irrlicht-${NEW_VERSION}.dmg
+   xcrun stapler staple .build/Irrlicht-${NEW_VERSION}.dmg
+   xcrun stapler validate .build/Irrlicht-${NEW_VERSION}.dmg
+   # Since #652 build-release.sh codesigns the DMG, so this primary-signature
+   # check passes from v0.5.2 on. On v0.4.5–v0.5.1 DMGs (unsigned file) it
+   # reports "rejected / no usable signature" — that's expected there; the
+   # authoritative checks for those are `stapler validate` (above) + `spctl
+   # -a -vv .build/Irrlicht.app` ("Notarized Developer ID").
+   spctl -a -t open --context context:primary-signature -v .build/Irrlicht-${NEW_VERSION}.dmg
    ```
 
    **DMG-signature ordering + history (learned during v0.5.1).** The `spctl
@@ -687,7 +700,7 @@ PKG, and ZIP land in `/tmp/` as before — only the *assembly* path moves.
    SIGN_UPDATE="platforms/macos/.build/artifacts/sparkle/Sparkle/bin/sign_update"
    # sign_update emits a single line like:
    #   sparkle:edSignature="…" length="…"
-   SIGN_OUTPUT=$("$SIGN_UPDATE" /tmp/Irrlicht-${NEW_VERSION}.dmg)
+   SIGN_OUTPUT=$("$SIGN_UPDATE" .build/Irrlicht-${NEW_VERSION}.dmg)
    ED_SIGNATURE=$(echo "$SIGN_OUTPUT" | sed -n 's/.*edSignature="\([^"]*\)".*/\1/p')
    DMG_LENGTH=$(echo "$SIGN_OUTPUT" | sed -n 's/.*length="\([^"]*\)".*/\1/p')
    RFC822_DATE=$(LC_ALL=C date -u +'%a, %d %b %Y %H:%M:%S +0000')
@@ -732,13 +745,27 @@ PKG, and ZIP land in `/tmp/` as before — only the *assembly* path moves.
    first use post-install).
 
    ```bash
+   # ⚠️ This resets ALL TCC grants for io.irrlicht.app — and your PRODUCTION
+   # install shares that bundle id, so after the release you'll be re-prompted
+   # for Notifications / Apple Events / Accessibility on the prod app. The
+   # grants live in Apple's TCC db, not irrlicht state; there is no scoped
+   # per-bundle-path reset. Acceptable cost; just don't be surprised.
    tccutil reset All io.irrlicht.app 2>/dev/null || true
 
+   # build-release.sh (the default) outputs the bundle at .build/Irrlicht.app.
+   # If you hand-assembled instead, set APP="$APP_STAGING". Launch on an
+   # ISOLATED port + IRRLICHT_HOME so killStaleDaemons() can't pkill a dev
+   # `irrlichd --record` on the default 7837 (see the port-hazard banner at
+   # the top of Step 6).
+   APP=".build/Irrlicht.app"
+   SMOKE_PORT=7839
+   SMOKE_HOME=/tmp/smoke-home; rm -rf "$SMOKE_HOME"; mkdir -p "$SMOKE_HOME"
    SMOKE_START=$(date +%s)
-   "$APP_STAGING/Contents/MacOS/Irrlicht" > /tmp/app.log 2>&1 & APP_PID=$!
-   sleep 2
-   if ! pgrep -f "$APP_STAGING/Contents/MacOS/Irrlicht" >/dev/null; then
-     echo "FAIL: app exited within 2s — RELEASE IS BROKEN, DO NOT SHIP"
+   IRRLICHT_DAEMON_PORT=$SMOKE_PORT IRRLICHT_HOME="$SMOKE_HOME" \
+     "$APP/Contents/MacOS/Irrlicht" > /tmp/app.log 2>&1 & APP_PID=$!
+   sleep 3
+   if ! pgrep -f "$APP/Contents/MacOS/Irrlicht" >/dev/null; then
+     echo "FAIL: app exited within 3s — RELEASE IS BROKEN, DO NOT SHIP"
      tail -20 /tmp/app.log
      # Tail the most recent crash report for the TCC `details` field — the
      # only place a privacy-violation reason actually shows up.
@@ -753,29 +780,29 @@ PKG, and ZIP land in `/tmp/` as before — only the *assembly* path moves.
      fi
      exit 1
    fi
-   pgrep -f "$APP_STAGING/Contents/MacOS/irrlichd" >/dev/null || { echo "FAIL: daemon not spawned"; }
+   pgrep -f "$APP/Contents/MacOS/irrlichd" >/dev/null || { echo "FAIL: daemon not spawned"; }
 
    # Dashboard reachability — catches missing Resources/web/index.html
    # (v0.4.4 shipping defect). The grep on `<title>` is a stable marker in
    # platforms/web/index.html and distinguishes the real dashboard from
    # the 503 plain-text "Dashboard UI not found" body.
    DASH_OK=0
-   for i in 1 2 3 4 5; do
-     if curl -fsS http://127.0.0.1:7837/ 2>/dev/null | grep -q '<title>'; then
+   for i in 1 2 3 4 5 6 7 8; do
+     if curl -fsS "http://127.0.0.1:$SMOKE_PORT/" 2>/dev/null | grep -q '<title>'; then
        DASH_OK=1; break
      fi
      sleep 1
    done
    if [ "$DASH_OK" -ne 1 ]; then
-     echo "FAIL: dashboard not served at 127.0.0.1:7837 — Resources/web/index.html missing? RELEASE IS BROKEN, DO NOT SHIP"
-     curl -sS -o /dev/null -w "HTTP %{http_code}\n" http://127.0.0.1:7837/
-     curl -sS http://127.0.0.1:7837/ | head -3
-     pkill -f "$APP_STAGING" 2>/dev/null
+     echo "FAIL: dashboard not served on $SMOKE_PORT — Resources/web/index.html missing? DO NOT SHIP"
+     curl -sS -o /dev/null -w "HTTP %{http_code}\n" "http://127.0.0.1:$SMOKE_PORT/"
+     curl -sS "http://127.0.0.1:$SMOKE_PORT/" | head -3
+     pkill -f "$APP/Contents/MacOS/Irrlicht" 2>/dev/null
      exit 1
    fi
-   echo "OK dashboard served at 127.0.0.1:7837/"
+   echo "OK dashboard served on $SMOKE_PORT"
 
-   pkill -f "$APP_STAGING" 2>/dev/null; sleep 0.3
+   pkill -f "$APP/Contents/MacOS/Irrlicht" 2>/dev/null; sleep 0.3
    ```
 
    **If the smoke test fails, debugging checklist** (in order — each
@@ -822,7 +849,9 @@ Used by `https://irrlicht.io/install.sh`. Must be created with `ditto` so
 macOS metadata (including the code signature) is preserved.
 
 ```bash
-ditto -c -k --sequesterRsrc --keepParent "$APP_STAGING" /tmp/Irrlicht-$NEW_VERSION.zip
+# build-release.sh (the default) outputs the bundle at .build/Irrlicht.app.
+# If you hand-assembled instead, substitute "$APP_STAGING" for .build/Irrlicht.app.
+ditto -c -k --sequesterRsrc --keepParent .build/Irrlicht.app .build/Irrlicht-$NEW_VERSION.zip
 ```
 
 ### Checksums
@@ -832,8 +861,9 @@ verifies it on the curl `--daemon-only` path. Omitting it ships a
 release where the standalone daemon installer fails the integrity check.
 
 ```bash
-cd /tmp && shasum -a 256 \
-  irrlichd-darwin-universal \
+# build-release.sh writes all artifacts under .build/ (NOT /tmp/). Regenerate
+# the checksum file there so it covers the zip too.
+cd .build && shasum -a 256 \
   irrlichd-darwin-universal.tar.gz \
   irrlichd-linux-amd64.tar.gz \
   irrlichd-linux-arm64.tar.gz \
@@ -841,6 +871,7 @@ cd /tmp && shasum -a 256 \
   Irrlicht-$NEW_VERSION-mac-installer.pkg \
   Irrlicht-$NEW_VERSION.zip \
   > checksums.sha256
+cd /Users/ingo/projects/irrlicht
 ```
 
 ## Step 6.5: Update Homebrew Cask (in-repo only)
@@ -856,7 +887,7 @@ commits there unconditionally, so don't run it here. Patch the in-repo
 file directly instead:
 
 ```bash
-DMG_SHA=$(shasum -a 256 "/tmp/Irrlicht-$NEW_VERSION.dmg" | awk '{print $1}')
+DMG_SHA=$(shasum -a 256 ".build/Irrlicht-$NEW_VERSION.dmg" | awk '{print $1}')
 CASK=/Users/ingo/projects/irrlicht/tools/homebrew-tap/Casks/irrlicht.rb
 sed -i '' -E "s/^  version \".*\"/  version \"$NEW_VERSION\"/" "$CASK"
 sed -i '' -E "s/^  sha256 \".*\"/  sha256 \"$DMG_SHA\"/" "$CASK"
@@ -1001,13 +1032,13 @@ better in a file than inline-escaped.
 
 ```bash
 gh release create v$NEW_VERSION \
-  /tmp/irrlichd-darwin-universal.tar.gz \
-  /tmp/irrlichd-linux-amd64.tar.gz \
-  /tmp/irrlichd-linux-arm64.tar.gz \
-  /tmp/Irrlicht-$NEW_VERSION.dmg \
-  /tmp/Irrlicht-$NEW_VERSION-mac-installer.pkg \
-  /tmp/Irrlicht-$NEW_VERSION.zip \
-  /tmp/checksums.sha256 \
+  .build/irrlichd-darwin-universal.tar.gz \
+  .build/irrlichd-linux-amd64.tar.gz \
+  .build/irrlichd-linux-arm64.tar.gz \
+  .build/Irrlicht-$NEW_VERSION.dmg \
+  .build/Irrlicht-$NEW_VERSION-mac-installer.pkg \
+  .build/Irrlicht-$NEW_VERSION.zip \
+  .build/checksums.sha256 \
   --title "v$NEW_VERSION" \
   --notes-file /tmp/release-notes-v$NEW_VERSION.md
 ```
@@ -1094,76 +1125,74 @@ without `--push`; the verification will report a mismatch you can ignore.
    the failure was misdiagnosed as environment-specific. The canary
    below would have caught it before the release page was visible.
 
-   > **⚠️ Two corrections (see the banner at the top of Step 6).**
-   > (a) **Don't run the literal `curl … | sh` canary while a dev
-   > `irrlichd --record` daemon is on 7837** — the installer's `open`
-   > launches the app on the DEFAULT port, and `killStaleDaemons()` will
-   > `pkill irrlichd` and take the recording daemon down. Instead: download
-   > the live ZIP, `ditto`-install to /Applications, verify version +
-   > `spctl -a -vv` (Notarized Developer ID) + get-task-allow-not-true
-   > statically, then launch-test with `IRRLICHT_DAEMON_PORT=7839
-   > IRRLICHT_HOME=/tmp/… /Applications/Irrlicht.app/Contents/MacOS/Irrlicht`
-   > so killStaleDaemons skips the pkill. (b) **The `FOCUS_TRUE` /
-   > "missing focus-status entitlement" check below is STALE** (stripped in
-   > v0.4.7) — skip it; keep only the get-task-allow guard.
-   >
-   > **Recovery gotcha:** a leftover `/tmp/Irrlicht-canary-backup.app` makes
-   > the `mv` below fail silently, and a subsequent `cp -R` then merges the
-   > new app *into* the old bundle and corrupts /Applications/Irrlicht.app
-   > (`spctl` → "unsealed contents present in the bundle root"). Fix by
-   > `rm -rf /Applications/Irrlicht.app` then `ditto <clean-extract>/Irrlicht.app
-   > /Applications/Irrlicht.app`.
+   > **Why not the literal `curl … | sh`:** the installer's `open` launches the
+   > app on the DEFAULT port, and on a build machine running a dev `irrlichd
+   > --record` on 7837 that triggers `killStaleDaemons()` → `pkill irrlichd`,
+   > taking the recording daemon down. The block below instead exercises the
+   > SHIPPED bytes directly — download the live ZIP, verify against the
+   > published checksums, `ditto`-install to /Applications, launch-test on an
+   > isolated port. (It does NOT test `install.sh` itself; Step 9.5 below
+   > diffs the served script against `main` for that.) Bonus: the canary
+   > leaves the freshly-released build installed as your new production app, so
+   > no separate restore is needed — relaunch it with `open`, or use
+   > ir:test-mac's restore-prod.sh.
 
    ```bash
-   # Backup current install (probably from the just-finished release if
-   # you're on the build machine).
-   pkill -f '/Applications/Irrlicht.app' 2>/dev/null; sleep 0.5
+   # Stop + back up the current install (probably the just-finished release if
+   # you're on the build machine). rm the backup first so a leftover from a
+   # prior run can't make `mv` no-op and later corrupt the bundle.
+   pkill -f '/Applications/Irrlicht.app/Contents/MacOS/Irrlicht' 2>/dev/null; sleep 0.5
+   rm -rf /tmp/Irrlicht-canary-backup.app
    mv /Applications/Irrlicht.app /tmp/Irrlicht-canary-backup.app 2>/dev/null
 
-   # Run the live curl installer against the just-published release.
-   # The installer discovers the latest version via the GitHub API.
-   curl -fsSL https://irrlicht.io/install.sh | sh
-   CANARY_RC=$?
-   if [ "$CANARY_RC" -ne 0 ]; then
-     echo "FAIL: curl installer exited $CANARY_RC — release is broken"
-     # Restore: mv /tmp/Irrlicht-canary-backup.app /Applications/Irrlicht.app
-     exit 1
-   fi
+   # Download the SHIPPED zip + checksums and verify before installing.
+   rm -rf /tmp/canary && mkdir /tmp/canary && cd /tmp/canary
+   BASE="https://github.com/ingo-eichhorst/Irrlicht/releases/download/v${NEW_VERSION}"
+   curl -fsSL -o "Irrlicht-${NEW_VERSION}.zip" "$BASE/Irrlicht-${NEW_VERSION}.zip" \
+     || { echo "FAIL: could not download shipped zip (transient CDN 504? retry)"; cd - >/dev/null; exit 1; }
+   curl -fsSL -o shipped.sha256 "$BASE/checksums.sha256"
+   ACTUAL=$(shasum -a 256 "Irrlicht-${NEW_VERSION}.zip" | awk '{print $1}')
+   EXPECTED=$(awk -v f="Irrlicht-${NEW_VERSION}.zip" '$2==f{print $1}' shipped.sha256)
+   [ "$ACTUAL" = "$EXPECTED" ] || { echo "FAIL: shipped zip sha mismatch"; cd - >/dev/null; exit 1; }
 
-   # The installer reports "Launching... ✓" even on apps that AMFI/TCC
-   # immediately kill. pgrep is the only ground truth.
-   sleep 3
-   if ! pgrep -fl '/Applications/Irrlicht.app/Contents/MacOS/Irrlicht' >/dev/null; then
-     echo "FAIL: app not running 3s after curl install — release is broken"
-     LATEST_CRASH=$(ls -t ~/Library/Logs/DiagnosticReports/Irrlicht*.ips 2>/dev/null | head -1)
-     if [ -n "$LATEST_CRASH" ]; then
-       echo "=== latest crash details ==="
-       grep -o '"details":\[[^]]*\]' "$LATEST_CRASH" | head -1
-     fi
-     exit 1
-   fi
+   # Clean-install (rm then ditto — never cp -R into an existing bundle, which
+   # merges and corrupts it → spctl "unsealed contents present").
+   ditto -x -k "Irrlicht-${NEW_VERSION}.zip" extracted
+   rm -rf /Applications/Irrlicht.app
+   ditto extracted/Irrlicht.app /Applications/Irrlicht.app
+   cd /Users/ingo/projects/irrlicht
 
-   # Confirm the version matches what we just shipped (catches stale
-   # GitHub-API cache where /releases/latest hasn't updated yet — wait
-   # and re-run if so, don't pretend the release succeeded).
+   # Gatekeeper assessment of the real shipping artifact.
+   spctl -a -vv /Applications/Irrlicht.app 2>&1 | grep -q "accepted" \
+     || { echo "FAIL: spctl rejected the shipped app"; exit 1; }
+
    INSTALLED=$(defaults read /Applications/Irrlicht.app/Contents/Info CFBundleShortVersionString)
    [ "$INSTALLED" = "$NEW_VERSION" ] || { echo "FAIL: canary installed v$INSTALLED, expected v$NEW_VERSION"; exit 1; }
 
-   # Confirm focus-status=true and get-task-allow != true on the actual
-   # shipping artifact (matches the build-time guards in step 7). Value-aware
-   # XPath rather than key-grep so an explicit <false/> on get-task-allow
-   # doesn't false-fail the canary (#407).
+   # get-task-allow must not be true (notarization should have rejected it).
+   # The focus-status assertion was removed (stripped in v0.4.7; restore with
+   # #357). Value-aware XPath so an explicit <false/> doesn't false-fail (#407).
    CANARY_XML=$(codesign -d --entitlements - /Applications/Irrlicht.app 2>/dev/null | plutil -convert xml1 -o - - 2>/dev/null)
-   FOCUS_TRUE=$(echo "$CANARY_XML" | xmllint --xpath \
-     "boolean(/plist/dict/key[text()='com.apple.developer.focus-status']/following-sibling::*[1][self::true])" \
-     - 2>/dev/null)
    GTA_TRUE=$(echo "$CANARY_XML" | xmllint --xpath \
      "boolean(/plist/dict/key[text()='com.apple.security.get-task-allow']/following-sibling::*[1][self::true])" \
      - 2>/dev/null)
-   [ "$FOCUS_TRUE" = "true" ] || { echo "FAIL: shipping binary missing focus-status entitlement"; exit 1; }
    [ "$GTA_TRUE" = "true" ] && { echo "FAIL: shipping binary has get-task-allow=true — notarization should have rejected this"; exit 1; }
 
-   echo "OK canary install: v$INSTALLED, focus-status=true, get-task-allow not true, running"
+   # Launch-test on an isolated port so killStaleDaemons can't pkill a 7837 dev daemon.
+   rm -rf /tmp/canary-home && mkdir -p /tmp/canary-home
+   IRRLICHT_DAEMON_PORT=7839 IRRLICHT_HOME=/tmp/canary-home \
+     /Applications/Irrlicht.app/Contents/MacOS/Irrlicht > /tmp/canary-launch.log 2>&1 &
+   sleep 4
+   if ! pgrep -fl '/Applications/Irrlicht.app/Contents/MacOS/Irrlicht' >/dev/null; then
+     echo "FAIL: app not running 4s after install — release is broken"
+     LATEST_CRASH=$(ls -t ~/Library/Logs/DiagnosticReports/Irrlicht*.ips 2>/dev/null | head -1)
+     [ -n "$LATEST_CRASH" ] && grep -o '"details":\[[^]]*\]' "$LATEST_CRASH" | head -1
+     exit 1
+   fi
+   curl -fsS --max-time 3 http://127.0.0.1:7839/ | grep -q '<title>' && echo "OK canary dashboard on 7839"
+   pkill -f '/Applications/Irrlicht.app/Contents/MacOS/Irrlicht' 2>/dev/null; sleep 0.5
+   lsof -ti tcp:7839 | xargs kill 2>/dev/null
+   echo "OK canary: v$INSTALLED installed, spctl accepted, get-task-allow not true, runs"
    ```
 5. **Installer-script staleness check.** `irrlicht.io/install.sh` is
    served by GitHub Pages and lags `main` by a few minutes after a merge:
