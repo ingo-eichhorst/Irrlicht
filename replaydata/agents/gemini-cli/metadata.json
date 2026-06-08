@@ -1,0 +1,12 @@
+{
+  "id": "gemini-cli",
+  "name": "Gemini CLI",
+  "provider": "google",
+  "prerequisites": [
+    "Gemini CLI >=0.45.2 installed and on PATH as `gemini` (Node binary, e.g. ~/.nvm/.../bin/gemini)",
+    "Authenticated via Google OAuth (settings.json security.auth.selectedType=oauth-personal); set up out-of-band, no API key",
+    "DEADLINE: Gemini CLI stops serving Google One / unpaid tiers on 2026-06-18 — after that, recordings on those tiers fail auth; migrate to Antigravity CLI or a paid tier",
+    "First run in a fresh cwd shows a trust-folder prompt; the driver auto-accepts it (or pre-trust the dir)",
+    "Use `gemini -y` (yolo, auto-approves tools) for interactive driving; `gemini -p \"<prompt>\"` for headless smoke"
+  ]
+}
