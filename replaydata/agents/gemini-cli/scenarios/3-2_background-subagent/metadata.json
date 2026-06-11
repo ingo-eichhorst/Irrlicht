@@ -1,0 +1,68 @@
+{
+  "scenario_id": "background-subagent",
+  "metadata": {
+    "agent_supports": "no",
+    "daemon_capability": "n/a",
+    "driver_capability": "n/a",
+    "agent_cli_version": "0.46.0",
+    "daemon_version": "0.5.1+a50ffdd.dirty",
+    "confidence": 0.82,
+    "notes": "agent_supports: no — gemini-cli 0.46.0 subagents are synchronous, awaited tool calls (await executor.run; docs: 'Once the subagent completes its task, it reports back to the main agent'); there is NO fire-and-forget/run_in_background variant, so the scenario's defining observable (parent end_turn BEFORE child drain, session held working by hasActiveChildren) cannot be elicited."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "background-subagent",
+      "agent": "gemini-cli",
+      "assessed_at": "2026-06-11T00:00:00Z",
+      "agent_supports": "no",
+      "daemon_capability": "n/a",
+      "driver_capability": "n/a",
+      "confidence": 0.82,
+      "body": "## Verdict\n\nagent_supports: no\ndaemon_capability: n/a; driver_capability: n/a\n→ route: **frozen** (gemini-cli has subagents, but no fire-and-forget BACKGROUND variant — so the scenario's distinguishing observable cannot occur)\n\n## The scenario's user-observable signal (3.2, the unified rule)\n\n`background-subagent` is the FIRE-AND-FORGET variant of subagent dispatch: the parent dispatches a detached child, FINISHES ITS OWN REPLY (parent assistant turn reaches `end_turn`) WITHOUT waiting, yet the SESSION stays `working` while the detached child is alive (held by `reevaluateParent` / `hasActiveChildren`); `SubagentCount(parent)` INCLUDES the live child; the session goes `working → ready` ONLY after the last background child drains. The ONLY thing that distinguishes 3.2 from `foreground-subagent` (3.1) is the TIMING: here the parent `end_turn` lands BEFORE the child drain. That timing IS the scenario — remove it and you have 3.1, not 3.2.\n\n## agent_supports: no (gemini-cli has subagents, but they are SYNCHRONOUS/BLOCKING — there is no background/detached dispatch)\n\ngemini-cli 0.46.0 DOES ship subagents (experimental, `agents.enableAgents` default true; built-ins `codebase_investigator`, `cli_help`, `generalist`; `@<name>` forcing syntax). But every subagent is invoked as an AWAITED tool call — the parent's turn BLOCKS until the child completes and consumes the child's result as the tool result. The bundle is unambiguous:\n\n- The agent tool's invocation does `const output = await executor.run(this.params, signal);` — the parent awaits the child run, then returns `output.result` as the tool result (chunk-6ZHP2EJW.js). There is NO non-awaited / `void executor.run` / detached path.\n- `docs/core/subagents.md`: “Subagents are exposed to the main agent as a tool of the same name. When the main agent calls the tool, it delegates the task to the subagent. Once the subagent completes its task, it reports back to the main agent with its findings.” — a blocking request/response, the FOREGROUND shape.\n- There is NO `run_in_background` parameter, no `fireAndForget`, no `runDetached`, no `background:true` anywhere in the bundle (all 0 hits). The 54 `isBackground` hits are the bundled `lru-cache` library's `isBackgroundFetch` prefetch — unrelated to subagents.\n\nSo gemini-cli cannot perform the fire-and-forget behavior 3.2 asserts: the parent CANNOT reach `end_turn` while a child is still alive, because the child is awaited inside the parent's tool call. The parent `end_turn` always lands AFTER the child drains — which is `foreground-subagent` (3.1), not background-subagent. This is an honest `agent=no` for THIS scenario (the BACKGROUND variant specifically), not a daemon or driver limit.\n\n## Why this differs from the codex/kiro 3.2 cells (agent=yes, daemon=incapable)\n\ncodex (0.135.0 `spawn_agent`/`wait_agent`) and kiro DO ship a fire-and-forget default (codex `wait_agent` is the explicit, discouraged blocking exception) — the agent genuinely performs the background behavior, but the parent→child edge never reaches the watched Source (codex: `state_5.sqlite thread_spawn_edges`, never the rollout JSONL). Their block is `daemon=incapable`. gemini's block is one level earlier: the AGENT has no background variant at all, so we never reach the daemon question. Hence `agent=no` → `daemon=n/a`, not `daemon=incapable`.\n\n## daemon / driver: n/a under the agent=no freeze (recorded for completeness)\n\nNot the blocker, but: gemini-cli's subagent transcripts ARE written on disk in a claudecode-style nested layout — `~/.gemini/tmp/<project>/chats/<parentSessionId>/<child>.jsonl` (the bundle constructs `subagentDir = path.join(chatsDir, parentSessionId)`; cleanup via `deleteSubagentSessionDirAndArtifactsAsync`). So if gemini ever added a BACKGROUND variant, the parent→child link WOULD reach the watched root (unlike codex). BUT the current gemini-cli adapter parser (`core/adapters/inbound/agents/geminicli/parser.go`) has ZERO parent-linking logic (no `ParentSessionID`, no child/subagent discovery) — it only emits per-message model/token/turn events — so even the FOREGROUND subagent (3.1) is presently unlinked. Both pillars are moot here under the agent=no freeze; they are the open questions for the 3.1 cell, not 3.2.\n\n## Routing\n\nagent=no → daemon=n/a, driver=n/a → **frozen** (the agent lacks the feature). No recording; no spec phases beyond the meta. Re-assess if gemini-cli adds a fire-and-forget/run_in_background subagent dispatch — at which point the transcript already lands under `chats/<parentSessionId>/`, so the re-assessment would hinge on teaching the gemini-cli parser to read that nested layout as a `ParentSessionID`-linked child (a `daemon` question), not on the agent.",
+      "caveats": [
+        "agent=no is anchored to the bundle + official docs of gemini-cli 0.46.0: subagents are invoked via `await executor.run(...)` (parent blocks on the child) and `docs/core/subagents.md` states the subagent 'reports back to the main agent' on completion — the foreground request/response shape. No `run_in_background`/`fireAndForget`/`detached` dispatch exists in the bundle (0 hits each). confidence 0.82: the blocking model is explicit in both code-strings and docs, held below 0.9 because the read is from the minified bundle + docs, not a live spawn, and gemini's subagent surface is experimental and moving fast.",
+        "gemini-cli 0.46.0 DOES have (foreground) subagents — this `no` is scoped to the BACKGROUND/fire-and-forget variant 3.2 asserts. The foreground-subagent cell (3.1) is a separate, open assessment (agent=yes there); it would hinge on the daemon/driver pillars, since the gemini parser does not yet link children.",
+        "Subagent transcripts DO land under the watched root as `~/.gemini/tmp/<project>/chats/<parentSessionId>/<child>.jsonl` (claudecode-style nesting). So a future background variant would NOT be `daemon=incapable` like codex — the link is on-disk and adapter-readable; it would only need a parser that projects the nested path as `ParentSessionID`. Cross-ref the codex 3.2 cell for the contrasting incapable case.",
+        "The 54 `isBackground` bundle hits are the vendored `lru-cache` `isBackgroundFetch` prefetch internal, NOT a subagent background mode — ruled out explicitly so a future audit does not re-litigate it as a missed background feature."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@google/gemini-cli/bundle/docs/core/subagents.md",
+          "note": "Official gemini-cli 0.46.0 subagents doc: 'Subagents are exposed to the main agent as a tool of the same name. When the main agent calls the tool, it delegates the task to the subagent. Once the subagent completes its task, it reports back to the main agent with its findings.' This is a BLOCKING request/response (foreground) — there is no fire-and-forget/background dispatch described. Built-ins: codebase_investigator, cli_help, generalist; @<name> forcing syntax; agents.enableAgents default true."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@google/gemini-cli/bundle/chunk-6ZHP2EJW.js",
+          "note": "Bundle scan (gemini-cli 0.46.0). The agent tool invocation does `const output = await executor.run(this.params, signal)` then returns output.result as the tool result — the parent turn BLOCKS on the child (foreground shape). `LocalAgentExecutor` carries `parentSessionId`/`parentCallId`. NO `run_in_background` / `fireAndForget` / `runDetached` / `void executor.run` / `background:true` anywhere (each 0 hits). The 54 `isBackground` hits are the vendored lru-cache `isBackgroundFetch` prefetch, unrelated. Subagent transcripts are written to `subagentDir = path.join(chatsDir, parentSessionId)` i.e. ~/.gemini/tmp/<project>/chats/<parentSessionId>/ (cleanup: deleteSubagentSessionDirAndArtifactsAsync)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/parser.go",
+          "note": "The gemini-cli adapter line parser has NO parent-linking logic — no ParentSessionID assignment, no subagent/child discovery. It only emits per-message model/token/turn events from a single chats/*.jsonl transcript. (Moot under the agent=no freeze; recorded because it is the load-bearing daemon question IF gemini ever adds a background variant — the nested chats/<parentSessionId>/ layout is on-disk, so it would be a daemon/parser task, not incapable.)"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/agent.go",
+          "note": "Source: FilesUnderRoot{Dir: ~/.gemini/tmp} with JSONLineParser. The watched root is the tmp dir; subagent transcripts at chats/<parentSessionId>/<child>.jsonl fall UNDER it (claudecode-style), so a future background variant's parent→child link is reachable by the fswatcher — contrast codex, whose spawn edge lives only in state_5.sqlite (daemon=incapable)."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/codex/scenarios/3-2_background-subagent/metadata.json",
+          "note": "Contrast cell: codex 0.135.0 ships a genuine fire-and-forget spawn (spawn_agent default, wait_agent the discouraged blocking exception) → agent=yes, blocked at daemon=incapable (link only in state_5.sqlite). gemini-cli has NO background variant at all → agent=no, blocked one level earlier. Same route (frozen), different owner."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "frozen_reason": "agent_supports=no: gemini-cli 0.46.0 subagents are synchronous, awaited tool calls (await executor.run; docs: the subagent 'reports back to the main agent' on completion). There is no fire-and-forget / run_in_background / detached dispatch in the bundle (each 0 hits), so the parent cannot reach end_turn while a child is still alive — the scenario's distinguishing observable (parent end_turn BEFORE child drain, session held working by hasActiveChildren) cannot be elicited; that timing collapses to foreground-subagent (3.1). Unblock: re-assess if gemini-cli adds a background/fire-and-forget subagent dispatch — at which point the transcript already lands under chats/<parentSessionId>/, so the re-assessment becomes a daemon/parser question (teach the gemini-cli parser to link the nested child as ParentSessionID), not an agent one.",
+      "preconditions": [],
+      "setup": [],
+      "script": [],
+      "verify": [],
+      "settings": {},
+      "timeout_seconds": 0
+    }
+  }
+}
