@@ -1,0 +1,97 @@
+{
+  "scenario_id": "oversized-transcript-line",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.46.0",
+    "daemon_version": "0.5.1+02e2144",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes; daemon_capability: full; driver_capability: ready — a ~30 KB single-line reply parses through the SHARED #270-hardened tailer; arc completes via the text-only turn_done heuristic."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "oversized-transcript-line",
+      "agent": "gemini-cli",
+      "assessed_at": "2026-06-11T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Reasoning\n\nThe scenario asserts only the visible state arc `ready → working → ready` with no parser stall causing a stuck `working`; the absence of a stall is INFERRED from the arc completing. Each half maps to behaviour the gemini-cli adapter produces today.\n\n### agent_supports: yes\n\nFrom the agent's side there is nothing to 'support' — Gemini CLI persists whatever the model emits into one transcript JSONL line terminated by `\\n`. A prompt for a single ≥5000-word newline-free sentence yields one assistant `gemini` message whose `content` string is ~30 KB. That is moderate: well under the tailer's 64 MB cap and even under bufio.Scanner's old ~2 MB limit, so this cell is a sanity-check of the parser path rather than a true cap-stress (matching the scenario's own framing and the claudecode/aider/kiro-cli/pi siblings). The CLI is installed at v0.46.0; no special mode is needed.\n\n### daemon_capability: full\n\nSource = `FilesUnderRoot{Dir: ~/.gemini/tmp/<project>/chats, Parser: JSONLineParser{Parser}}` (`core/adapters/inbound/agents/geminicli/agent.go`). The decisive point is that `JSONLineParser` runs over the SHARED `core/pkg/tailer`, which was hardened for exactly this case (issue #270): `tailer.go` uses `bufio.NewReaderSize(file, 64*1024)` + a custom `readLineCapped` instead of `bufio.Scanner` (whose ~2 MB hard cap would wedge), with `maxTranscriptLineSize = 64 MB`; lines above the cap are logged ('skipping oversized line at offset N') and the offset is advanced past them so the next line still parses, and `errPartialAtEOF` re-reads a partially-written giant line once more bytes arrive. This protection is transport-level and adapter-agnostic, so the gemini path inherits it identically to claudecode. `core/pkg/tailer/large_line_test.go` pins the regression.\n\nWalking the arc against `parser.go`: the opening text prompt → `parseUser` emits `user_message` (sets `ClearToolNames`) → `ready → working`. Gemini emits no explicit end-of-turn marker, so `parseAssistant` infers it — a final `gemini` message carrying non-empty `content` and opening NO tool calls is reclassified `EventType = \"turn_done\"` (parser.go ~L209) → `working → ready`. The oversized content lives in that single `content` string; `tailTruncate(content, 200)` is a bounded tail-trim, and `applyTokens`/`ScanTaskEstimate` are bounded scans — none of them stall on a large string. So for a tool-free oversized turn the topology is exactly `ready → working → ready`, final state `ready`, zero tool calls. A 30 KB line parses normally (no 'skipping oversized line' warning expected); were the tailer ever to wedge on the line, working→ready would never fire and the phase contract would time out. daemon=full.\n\n### driver_capability: ready\n\nThe interactive driver (`replaydata/agents/gemini-cli/driver-interactive.sh`, `DRIVE_ELICITS=\"send slash wait_turn sleep\"`) launches `gemini -y` under tmux. The recipe needs only `send` (the long-sentence prompt) + `wait_turn` (block on the inferred turn_done) + a trailing `sleep` so the daemon observes the working→ready settle before teardown. Every step type is implemented — no stubbed primitive (keys/reset_session/restart/sigkill/interrupt/resume/exit_clean) is exercised. INTERACTIVE deliberately: a one-shot headless `gemini -p` exits at turn completion before the daemon can observe the terminal ready edge (same shape as the sibling cells).\n\n## What irrlicht does NOT see (narrow)\n\nThe spec asserts only the state arc, not line content — content of a hypothetical >64 MB line would be dropped (logged, offset advanced) but a 30 KB line is far below that, so it parses in full. The 'no parser stall' property is provisional on the live recording (emission can't be proven from docs alone); record promotes it from provisional to settled.",
+      "caveats": [
+        "Provisional on emission: daemon=full for the no-stall arc is grounded in the SHARED #270 tailer hardening + the gemini parser read, but whether a real gemini CLI actually emits the ~5000-word reply as ONE newline-free JSONL line (vs. multiple streamed rewrites under one id) is emission-dependent — record settles it. A streamed-rewrite shape would still arc ready→working→ready via the dedup in applyTokens; the spec asserts only the arc, so either shape passes.",
+        "Gemini has no explicit end-of-turn marker; turn_done is INFERRED from a final text-only 'gemini' message with no open tool calls (parser.go ~L209) — correct for this tool-free oversized turn, but the settle is heuristic rather than an in-band signal.",
+        "A 5000-word line (~30 KB) is well under the 64 MB cap and the old 2 MB Scanner limit, so this cell sanity-checks the parser path rather than truly stressing the cap. A follow-up cell could hand-craft a synthetic >2 MB (or >64 MB) line into the live transcript file for deeper cap-stress coverage.",
+        "observations.model ('gemini-3-flash-preview') is the live-verified default boot model from adapter onboarding and is PROVISIONAL — the binary bumped to 0.46.0 and the default could shift; a different live default is a string update, not a daemon bug."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer.go",
+          "note": "SHARED tailer used by every JSONLineParser adapter (incl. gemini-cli): bufio.NewReaderSize + readLineCapped + maxTranscriptLineSize=64MB; oversized lines logged ('skipping oversized line at offset N') and skipped past, not stalled; errPartialAtEOF re-reads a partial giant line (#270)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/large_line_test.go",
+          "note": "Regression test for #270 — a JSONL line above bufio.Scanner's old ~2 MB cap does not block the tailer and subsequent lines still parse. The gemini path inherits this transport-level protection unchanged."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/parser.go",
+          "note": "parseUser → user_message (ready→working); parseAssistant infers turn_done from a final text-only 'gemini' message with no open tool calls (~L209, working→ready); tailTruncate/applyTokens/ScanTaskEstimate are bounded operations over the large content string — none stall."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/agent.go",
+          "note": "Source = FilesUnderRoot{~/.gemini/tmp/<project>/chats, JSONLineParser} — confirms the gemini transport runs over the shared #270-hardened tailer."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/gemini-cli/driver-interactive.sh",
+          "note": "DRIVE_ELICITS=\"send slash wait_turn sleep\"; gemini -y under tmux — every step the oversized recipe needs (send + wait_turn + sleep) is implemented; driver=ready."
+        },
+        {
+          "kind": "issue",
+          "ref": "ingo-eichhorst/Irrlicht#270",
+          "note": "Oversized JSONL line wedge fixed by switching the shared tailer from bufio.Scanner to bufio.Reader + readLineCapped — adapter-agnostic, so gemini-cli is covered."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "Gemini CLI >=0.45.2 on PATH and authenticated (Google OAuth oauth-personal, no API key; mind the June-18 free-tier deadline)",
+        "irrlichd is recording (--attach against a daemon with --record, or isolated mode)",
+        "first-run trust-folder prompt auto-accepted by the driver"
+      ],
+      "setup": [
+        "Driver launches gemini -y under tmux in a fresh cwd under <staging>/cwd/; session keyed on the transcript header sessionId; launcher PID bound by cwd harvested from the bootstrap <session_context>"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Write a single very long sentence on one line. Make it at least 5000 words. Do not use newlines except at the end."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the session entering ready after launch",
+        "events.jsonl shows exactly one ready→working transition (the long-sentence prompt)",
+        "events.jsonl shows exactly one working→ready transition at turn end — completion of this arc IS the parser-resilience proof; if the tailer wedged on the long line this transition would never fire",
+        "irrlichd logs do NOT contain a 'skipping oversized line' warning for the session's transcript (a 5000-word line is ~30 KB, well under the 64 MB cap)",
+        "final session state is ready; tool calls = 0",
+        "transcript .jsonl contains the user prompt line and at least one 'gemini' assistant message whose content is one long string with no embedded newlines"
+      ],
+      "settings": {},
+      "timeout_seconds": 300
+    }
+  }
+}
