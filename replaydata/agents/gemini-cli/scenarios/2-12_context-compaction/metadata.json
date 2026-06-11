@@ -1,0 +1,112 @@
+{
+  "scenario_id": "context-compaction",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.46.0",
+    "daemon_version": "0.5.1+ec2d6e2",
+    "confidence": 0.7,
+    "notes": "agent_supports: yes (/compress + auto-compression); daemon_capability: full; driver_capability: ready — compression is in-place (setHistory + updateMessagesFromHistory re-syncs the SAME JSONL, no new-file boundary), so the visible arc rides the normal user_message→turn_done path."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "context-compaction",
+      "agent": "gemini-cli",
+      "assessed_at": "2026-06-11T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.7,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Reasoning\n\nThe scenario asserts only the visible state arc around context compaction: `ready → working → ready` at the compaction boundary, no flicker to `waiting` mid-compaction, then a second normal turn (`ready → working → ready`) to prove the session continues. Each half maps to an event the gemini-cli adapter produces today.\n\n### agent_supports: yes\n\nGemini CLI ships context compaction in two forms, confirmed in the installed v0.46.0 bundle (`@google/gemini-cli/bundle`, the JS equivalent of `strings`):\n\n1. **User-initiated** — a `/compress` slash command, described in the bundle as `\"Compresses the context by replacing it with a summary\"` (slash-command def `name: \"compress\"`). NOTE: gemini's command is `/compress`, NOT Claude's `/compact` — the recipe uses `/compress`.\n2. **Automatic** — `tryCompressChat(prompt_id, force, abortSignal)` fires against a `compressionThreshold` / `COMPRESSION_TOKEN_THRESHOLD`; the bundle help reads `\"core automatically compresses the conversation history before sending\"`. Either trigger drives the same state arc; only the trigger differs (the simpler recipe is `/compress`-driven).\n\nThe agent runs the summarization as a real LLM round-trip, so it genuinely transitions working during compaction. agent_supports = yes.\n\n### daemon_capability: full\n\nSource = `FilesUnderRoot{Dir: ~/.gemini/tmp/<project>/chats, Parser: JSONLineParser{Parser}}` (`core/adapters/inbound/agents/geminicli/agent.go`). Walking the user-observable signals against `parser.go` as it stands:\n\n1. **`ready → working` at compaction start, `working` throughout, `working → ready` when done.** Crucially, gemini compaction is IN-PLACE: it rewrites the in-memory chat via `getChat().setHistory(newHistory)`, then `chatRecordingService.updateMessagesFromHistory(history)` re-syncs the SAME persisted session JSONL. It does NOT open a new transcript file at the boundary — the opposite of newer Claude Code (2.1.x+), so the new-file/session-stitching risk that dominates the claudecode/2.12 caveats does NOT apply here. The summarizer's LLM call is itself recorded as a `gemini` assistant message; while it streams (empty/in-place placeholder, or a tool/no-final-text shape) `IsAgentDone()` stays false and the session holds `working`; when the summary lands as a final text-only `gemini` message with no open tool calls, `parseAssistant` reclassifies it `turn_done` (parser.go ~L209) and the session settles to `ready`. The `/compress` invocation arrives as a `user`-role text message → `parseUser` emits `user_message` (ready→working). That yields the asserted `ready → working → ready` for the compaction half.\n2. **No flicker to `waiting` mid-compaction.** The parser never emits a waiting/permission signal for compression; `waiting` only arises from explicit approval prompts, which `gemini -y` (yolo) suppresses. Rule-4 default holds `working` until the inferred `turn_done`.\n3. **The compaction event itself is opaque (correct, not a gap).** Gemini records compaction as a UI item `type: \"compression\"` (MessageType.COMPRESSION) with `originalTokenCount`/`newTokenCount`. The parser's `parseMessage` dispatches only `type:\"user\"` and `type:\"gemini\"`; everything else — including `\"compression\"` — falls to `default: return false` (skip, commented `// system / info / compression / unknown`). So irrlicht treats compaction as an opaque working-episode, exactly as the claudecode cell does (irrlicht's `CompactionState` domain field is dead code with no production writer). The spec only asserts the state arc, so this is full, not a gap.\n4. **Post-compaction normal turn** rides the standard `user_message` → final text-only `turn_done` path → `ready → working → ready`.\n\nBoth spec-required arcs are emitted by the parser today, so the daemon is `full`. The cwd-only-in-body wrinkle (cwd encoded inside the bootstrap `<session_context>`, harvested onto every event) affects PID binding, not the lifecycle arc.\n\n### driver_capability: ready\n\nThe interactive driver (`replaydata/agents/gemini-cli/driver-interactive.sh`) launches `gemini -y` under tmux and genuinely elicits `send slash wait_turn sleep` (its `DRIVE_ELICITS` constant). The recipe needs exactly those four: `send` (turn-1 prompt + turn-2 prompt), `slash` (`/compress` — an inline-argument-less slash command, identical keystrokes to `send`, so a `slash` step, NOT a `keys` gap), `wait_turn` (block on the inferred text-only `turn_done`), and `sleep` (let the daemon observe each settle + give the in-place compaction time). No stubbed primitive (interrupt/keys/reset_session/restart/resume/sigkill/exit_clean/start_session/session) is exercised. driver = ready. An INTERACTIVE recipe is used deliberately: a headless `gemini -p` run exits at turn completion before the daemon can observe the terminal ready edge, and headless mode cannot deliver an in-REPL `/compress` anyway.\n\n## Why confidence 0.7, not higher\n\nThe verdict is grounded in the bundle scan (feature shipped), the parser read (arc emitted), and the real testdata transcript (`$set` + `user`/`gemini` shapes confirmed). But two properties are emission-dependent and a recording is the only thing that can promote them from provisional to settled: (a) that the summarizer's compaction call actually lands as a settle-able final text-only `gemini` message (vs. a shape that leaves the turn open), and (b) that `updateMessagesFromHistory`'s post-compaction `$set` rewrite is a no-op to the parser (the `$set` branch only harvests cwd and never opens/closes a turn — confirmed by reading `harvestSet`, but unconfirmed against a live compaction `$set`). These keep daemon=full but cap confidence in the honest multi-source band.",
+      "caveats": [
+        "Gemini's command is `/compress` (NOT Claude's `/compact`); the bundle describes it as 'Compresses the context by replacing it with a summary'. Auto-compression (tryCompressChat / compressionThreshold) drives the same arc.",
+        "Provisional on emission: daemon=full is grounded in the parser read + bundle scan, but whether the compaction summarizer call lands as a settle-able final text-only 'gemini' message (turn_done) is emission-dependent — record promotes it from provisional to settled.",
+        "Compaction is IN-PLACE for gemini (setHistory + updateMessagesFromHistory re-sync the SAME JSONL via a $set rewrite) — NO new transcript file at the boundary, unlike newer Claude Code. The session-stitching / new-file risk that dominates the claudecode/2.12 caveats does not apply here; the post-compaction $set is a parser no-op (harvestSet only reads cwd).",
+        "The compaction event itself is opaque: gemini records it as a UI item type 'compression' (MessageType.COMPRESSION), which the parser's default branch skips. irrlicht cannot distinguish compaction from a normal long working-turn — same as the claudecode cell; the spec only asserts the visible state arc.",
+        "cwd lives only in the transcript body (<session_context>), not the path/process; PID binding relies on the parser's cwd harvest + EnrichNewSession LastCWD fallback. Session identity, not the lifecycle arc."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@google/gemini-cli/bundle",
+          "note": "v0.46.0 bundle scan (JS equivalent of `strings`): slash-command def name:\"compress\" with description 'Compresses the context by replacing it with a summary'; auto-compression via tryCompressChat(prompt_id,force,abortSignal) + compressionThreshold / COMPRESSION_TOKEN_THRESHOLD + 'core automatically compresses the conversation history before sending'. Compaction rewrites in-memory history (getChat().setHistory(newHistory)) then chatRecordingService.updateMessagesFromHistory(history) re-syncs the same JSONL; recorded as a UI item type:\"compression\" (MessageType.COMPRESSION) with originalTokenCount/newTokenCount."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/parser.go",
+          "note": "parseUser → user_message (ready→working) for the /compress text message; parseAssistant infers turn_done from a final text-only 'gemini' message with no open tool calls (~L209, working→ready); parseMessage default branch skips type 'compression'/system/unknown (// system / info / compression / unknown, ~L107); harvestSet on a $set envelope only harvests cwd (post-compaction history rewrite is a parser no-op)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/agent.go",
+          "note": "Source = FilesUnderRoot{~/.gemini/tmp/<project>/chats, JSONLineParser}; CommandPattern bin/gemini + isHeapBumpWorker ExcludeArgv; DiscoverPID binds the launcher by cwd — same in-place transcript the daemon tails across compaction."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/gemini-cli/driver-interactive.sh",
+          "note": "DRIVE_ELICITS=\"send slash wait_turn sleep\"; gemini -y under tmux; wait_turn mirrors the parser's text-only/no-tool turn_done inference. The recipe needs only send/slash(/compress)/wait_turn/sleep — every step is genuinely elicited, no stubbed primitive."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/testdata/real-toolcall-session.jsonl",
+          "note": "Real gemini transcript: line 1 header (no type/$set), $set envelopes carrying messages (bootstrap) + lastUpdated heartbeats, bare user (content array) / gemini (content string, streamed in-place under one id) messages — grounds how the post-compaction history rewrite ($set) and the summarizer 'gemini' message appear on disk."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "gemini CLI >=0.45.2 on PATH and authenticated via Google OAuth (oauth-personal, no API key)",
+        "irrlichd is recording (dev daemon with --record, isolated IRRLICHT_ONBOARD_HOME + alt port)",
+        "gemini version supports /compress (v0.46.0 verified)"
+      ],
+      "setup": [
+        "Driver launches `gemini -y` under tmux in a fresh cwd; gemini mints its own sessionId (harvested from the transcript header); first-run trust-folder prompt auto-accepted"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "slash",
+          "text": "/compress"
+        },
+        {
+          "type": "sleep",
+          "seconds": 12
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: still-here"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the session entering ready after launch",
+        "events.jsonl shows ready→working→ready for the first turn",
+        "after /compress runs, the session settles back to ready (no stuck working, no waiting)",
+        "events.jsonl shows ready→working→ready for the post-compaction turn",
+        "final session state is ready",
+        "transcript.jsonl is the SAME file across the boundary (in-place compaction, no new session-*.jsonl)"
+      ],
+      "settings": {},
+      "timeout_seconds": 240
+    }
+  }
+}
