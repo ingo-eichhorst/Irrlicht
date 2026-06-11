@@ -1,0 +1,64 @@
+{
+  "scenario_id": "session-start",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "pass_rate": "2/2 phases passed",
+    "agent_cli_version": "0.46.0",
+    "daemon_version": "0.5.1+6fcc851.dirty",
+    "confidence": 0.9,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "session-start",
+      "agent": "gemini-cli",
+      "assessed_at": "2026-06-11T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.9,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nThe scenario's two Expected bullets are (1) the session appears in `ready` within ~1s and (2) the PID is bound. Both are observable for the gemini-cli adapter, with one adapter-specific nuance: Gemini does NOT write its per-session transcript at launch — it creates `~/.gemini/tmp/<project>/chats/session-<ts>-<id>.jsonl` only after the first user message lands. So the daemon's process scanner discovers the `gemini` PID at the first tick (a proc-<PID> pre-session row), and the transcript-keyed session is born + settles to `ready` once the first turn completes. Gemini has no explicit turn_done marker, so the parser settles to `ready` on a `gemini` message that carries non-empty text and opens no tool calls (heuristic). The node process tree has two pids; the heap-bump worker is excluded so the bound PID is the real CLI.",
+      "caveats": [
+        "Gemini mints its own sessionId and cannot accept a pre-assigned UUID; the driver harvests it from the transcript header on line 1.",
+        "Transcript appears only after the first user message, so session_birth/ready anchor to the first turn rather than to bare agent launch; PID discovery anchors to launch."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/agent.go",
+          "note": "Identity.Name=gemini, FilesUnderRoot under ~/.gemini/tmp/<project>/chats/, 2-proc node matcher excludes the heap-bump worker."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "gemini CLI on PATH (0.46.0) and GEMINI_API_KEY exported (driver forces api-key auth via a workspace .gemini/settings.json)",
+        "irrlichd is recording — run-cell.sh in isolated mode, or --attach against a daemon started with --record"
+      ],
+      "setup": [
+        "Create an empty cwd under <staging>/cwd/"
+      ],
+      "prompt": "Reply with exactly the word: ok",
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        }
+      ],
+      "verify": [
+        "events.jsonl contains a pid_discovered event for the gemini process within ~1000 ms of agent launch",
+        "events.jsonl contains a transcript_new + state_transition to ready once the first turn completes",
+        "final session state is ready"
+      ],
+      "settings": {},
+      "timeout_seconds": 90
+    }
+  }
+}

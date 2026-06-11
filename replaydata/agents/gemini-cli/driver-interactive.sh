@@ -137,11 +137,29 @@ trap cleanup EXIT
 launch_repl() {
   command -v tmux >/dev/null 2>&1 || { echo "[driver] tmux required" >&2; EXIT_REASON="nonzero(2)"; exit 1; }
   command -v "$GEMINI_BIN" >/dev/null 2>&1 || { echo "[driver] $GEMINI_BIN not on PATH" >&2; EXIT_REASON="nonzero(2)"; exit 1; }
+  # Force API-key auth in this cwd: a workspace .gemini/settings.json overrides
+  # the user's global auth type, so recordings draw on the GEMINI_API_KEY quota
+  # pool (separate from OAuth, and unaffected by the 2026-06-18 unpaid-tier
+  # shutdown) and NEVER silently fall back to the user's OAuth login. With
+  # selectedType=gemini-api-key, gemini hard-errors when no key is present — so
+  # fail fast here with a clearer message. Model defaults to flash (cheap).
+  if [[ -z "${GEMINI_API_KEY:-}" ]]; then
+    echo "[driver] GEMINI_API_KEY not set — export it (e.g. 'set -a; . .build/.env; set +a') before recording" >&2
+    EXIT_REASON="nonzero(2)"; exit 1
+  fi
+  mkdir -p "$RUN_CWD/.gemini"
+  printf '{ "security": { "auth": { "selectedType": "gemini-api-key" } } }\n' > "$RUN_CWD/.gemini/settings.json"
   SESSION="geminidrv-$$-$(date +%s)"   # tmux session names cannot contain '.'
   tmux kill-session -t "$SESSION" 2>/dev/null || true
   # `|| { … exit … }` keeps a launch failure from aborting under set -e WITHOUT
   # an accurate exit-reason — the cleanup trap then records nonzero(2).
-  tmux new-session -d -s "$SESSION" -x 200 -y 50 -c "$RUN_CWD" "$GEMINI_BIN" -y \
+  # Inject the API key + trust into the NEW session's env with `-e`. A
+  # pre-existing tmux server hands new sessions ITS stale environment, not the
+  # driver's — so a bare `export GEMINI_API_KEY` does not reach gemini and
+  # interactive api-key auth would block on a "paste your API key" prompt.
+  tmux new-session -d -s "$SESSION" -x 200 -y 50 -c "$RUN_CWD" \
+    -e "GEMINI_API_KEY=$GEMINI_API_KEY" -e "GEMINI_CLI_TRUST_WORKSPACE=true" \
+    "$GEMINI_BIN" -y \
     >>"$DRIVER_LOG.stdout" 2>>"$DRIVER_LOG.stderr" \
     || { echo "[driver] failed to launch gemini under tmux" >&2; EXIT_REASON="nonzero(2)"; exit 1; }
   tmux pipe-pane -t "$SESSION" -o "cat >> '$DRIVER_LOG.stdout'" 2>/dev/null || true
@@ -167,11 +185,17 @@ launch_repl() {
 # header's sessionId. Caches the path once resolved.
 resolve_transcript() {
   [[ -n "$TRANSCRIPT" ]] && return 0
-  local chats="$GEMINI_CHATS_ROOT/$PROJECT/chats"
   for _ in $(seq 1 60); do
     local candidate
-    candidate="$(find "$chats" -maxdepth 1 -type f -name 'session-*.jsonl' \
-                   -newer "$MARKER" 2>/dev/null | sort | tail -n1)"
+    # Gemini maps cwd → ~/.gemini/tmp/<basename>/chats, but DEDUPES with a -N
+    # suffix when the basename collides with another path it has seen (every
+    # recording's staging cwd is named "cwd", so all but the first land in
+    # cwd-1, cwd-2, …). Search all <project>* dirs and take the newest session
+    # file created after launch ($MARKER), by mtime (-exec ls -t is BSD-safe;
+    # macOS find has no -printf). $MARKER scopes it to this run.
+    candidate="$(find "$GEMINI_CHATS_ROOT"/"$PROJECT"*/chats -maxdepth 1 -type f \
+                   -name 'session-*.jsonl' -newer "$MARKER" \
+                   -exec ls -t {} + 2>/dev/null | head -n1)"
     if [[ -n "$candidate" && -s "$candidate" ]]; then
       SESSION_UUID="$(head -n1 "$candidate" | jq -r '.sessionId // empty' 2>/dev/null || true)"
       if [[ -n "$SESSION_UUID" ]]; then
@@ -203,7 +227,7 @@ turn_count() {
 # deadline lapses. Resolves the transcript on the first call.
 wait_turn() {
   resolve_transcript || {
-    echo "[driver] wait_turn: gemini never created a transcript under $GEMINI_CHATS_ROOT/$PROJECT/chats" >&2
+    echo "[driver] wait_turn: gemini never created a transcript under $GEMINI_CHATS_ROOT/$PROJECT*/chats" >&2
     EXIT_REASON="nonzero(3)"; return 1
   }
   while (( $(remaining_seconds) > 0 )); do

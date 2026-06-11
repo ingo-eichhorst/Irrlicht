@@ -46,6 +46,7 @@ import (
 	"irrlicht/core/adapters/inbound/agents/aider"
 	"irrlicht/core/adapters/inbound/agents/claudecode"
 	"irrlicht/core/adapters/inbound/agents/codex"
+	"irrlicht/core/adapters/inbound/agents/geminicli"
 	"irrlicht/core/adapters/inbound/agents/kirocli"
 	"irrlicht/core/adapters/inbound/agents/opencode"
 	"irrlicht/core/adapters/inbound/agents/pi"
@@ -63,6 +64,7 @@ var allAgents = []agent.Agent{
 	aider.Agent(),
 	opencode.Agent(),
 	kirocli.Agent(),
+	geminicli.Agent(),
 }
 
 // parserFactories is the per-adapter parser map consumed by parserFor()
@@ -114,8 +116,11 @@ func detectAdapter(path string) (string, error) {
 	case strings.Contains(abs, "/.kiro/sessions/cli/"),
 		strings.Contains(abs, "/replaydata/agents/kiro-cli/"):
 		return kirocli.AdapterName, nil
+	case strings.Contains(abs, "/.gemini/tmp/"),
+		strings.Contains(abs, "/replaydata/agents/gemini-cli/"):
+		return geminicli.AdapterName, nil
 	}
-	return "", fmt.Errorf("cannot infer adapter from path %q — pass --adapter claude-code|codex|pi|aider|opencode|kiro-cli", abs)
+	return "", fmt.Errorf("cannot infer adapter from path %q — pass --adapter claude-code|codex|pi|aider|opencode|kiro-cli|gemini-cli", abs)
 }
 
 // cliOptions bundles the parsed CLI flags and positional argument so the
