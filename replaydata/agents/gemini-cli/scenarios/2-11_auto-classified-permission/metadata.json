@@ -1,0 +1,62 @@
+{
+  "scenario_id": "auto-classified-permission",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "incapable",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.46.0",
+    "daemon_version": "0.5.1+e63d727.dirty",
+    "confidence": 0.82,
+    "notes": "agent_supports: yes (content-aware PolicyEngine allow/deny/ask_user) — daemon_capability: incapable (awaiting-approval never persisted to transcript, no hook) → frozen"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "auto-classified-permission",
+      "agent": "gemini-cli",
+      "assessed_at": "2026-06-11T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "incapable",
+      "driver_capability": "ready",
+      "confidence": 0.82,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: incapable\ndriver_capability: ready\n\nRoute: frozen. The agent genuinely ships a content-aware permission classifier, but the signal that DEFINES this scenario — the risky-path `working → waiting` divergence — produces zero trace in the only transport the daemon tails for Gemini CLI.\n\n## What the scenario requires\n\nThe acceptance criteria assert TWO divergent arcs from the SAME session: a safe (auto-approved) tool call must run `ready → working → ready` and never enter `waiting`, while a risky tool call must show `working → waiting` and, after the user approves, `waiting → working → ready`. The defining, load-bearing signal is the classifier's selective risky-path divergence — not the safe arc alone (that is indistinguishable from `auto-executed-tool-call`).\n\n## Why agent_supports is yes (not partial like aider)\n\nGemini CLI 0.46.0 ships a genuine content-aware, per-call approval engine — materially different from aider's blanket `IO.confirm_ask`. `BaseDeclarativeTool.shouldConfirmExecute` consults a PolicyEngine via `getMessageBusDecision`, which returns `allow` / `deny` / `ask_user` PER tool call based on the tool and its arguments (the classifier). Read-only tools (`read_file`, internal docs) hard-return `false` from `shouldConfirmExecute` — auto-approved, never gated. The shell tool runs content-aware safety checks (`stripShellWrapper` → `getCommandRoots` → `getProactiveToolSuggestions(rootCommand)` against `NETWORK_RELIANT_TOOLS` + the sandbox `modeConfig`) and a per-command-root session allowlist (`ToolConfirmationOutcome.ProceedAlways` / `ProceedAlwaysAndSave`). So within a single session Gemini auto-approves safe calls while raising `ask_user` for risky ones — exactly the safe-vs-risky split the scenario locks down. The four `ApprovalMode`s (DEFAULT/AUTO_EDIT/YOLO/PLAN) are the blanket overlays; the per-call classifier underneath is what makes this `yes`.\n\n## Why daemon_capability is incapable\n\nThe Gemini CLI adapter is a transcript-only Source — `agent.FilesUnderRoot{Dir: ~/.gemini/tmp/<project>/chats/}` tailing `*.jsonl` (agent.go:46). There is NO hook mechanism: the only daemon path to `waiting` for a permission prompt is `metrics.PermissionPending` (state_classifier.go rule 0), and that flag is set EXCLUSIVELY by the Claude Code PermissionRequest hook receiver (session_detector_activity.go:468, fed by the `d.permissionPending` map). Gemini fires no such hook, so the flag is never set. The two transcript-side fallbacks also can't fire: `NeedsUserAttention()` is limited to `AskUserQuestion`/`ExitPlanMode`/`question` (session.go:248), and the `OpenToolStalled` fallback (#488) is limited to in-process edit tools `edit/write/multiedit/notebookedit` (session.go:280) — a gated benign shell call matches neither.\n\nDecisively, Gemini never persists the awaiting-approval state to disk. The chat JSONL the daemon tails is written via `chat.recordCompletedToolCalls(model, completedCalls)` — only AFTER `this._scheduler.schedule()` resolves the call (i.e. after the user approves/denies). `awaiting_approval` is a live `CoreToolCallStatus` in the in-memory scheduler/UI, never flushed to the chat history file. The recorded testdata transcript confirms this: a toolCall first appears on disk already at terminal `status:success` (real-toolcall-session.jsonl line 6), with no intermediate awaiting/executing line, and the parser closes it immediately on `status:success` (parser.go:192). So during the entire risky-path approval window the daemon sees NOTHING, and after approval it sees only a resolved call — there is no transcript event from which `working → waiting` could ever be derived.\n\nThe safe-path topology (`ready → working → ready`, no `waiting`) IS observable, but only because the daemon is blind to Gemini permission prompts entirely — it is identical to `auto-executed-tool-call` and carries none of the classifier-divergence signal that defines THIS scenario. So the daemon is `incapable`, not `full`: no recording could verify the spec-defining risky arc.\n\n## Why driver_capability is ready\n\nThe driver is not the blocker. `driver-interactive.sh` implements send/slash/wait_turn/sleep/keys — the full set a safe-or-risky permission recipe would need (Gemini even exposes `--approval-mode` and `-y`). No gapped primitive is on the recipe path, so the blocker is correctly isolated to architecture (no transport trace), not tooling → route `frozen`, not `driver-gap`.\n\n## What would change this\n\nIf Gemini CLI began persisting the awaiting-approval scheduler state to the chat JSONL (a non-terminal toolCall status line written at schedule-time), the parser could map a lingering open call to a held tool_use and the daemon could derive `working → waiting` — flipping `daemon_capability` toward `full` (pending a parser change). Alternatively, a Gemini permission-hook transport (analogous to Claude Code's) would feed `PermissionPending` directly. Neither exists today.",
+      "caveats": [
+        "Provisional on the EMISSION axis: the verdict that Gemini never writes the awaiting-approval state to the chat JSONL rests on the bundle's recordCompletedToolCalls path + the one recorded testdata transcript (no awaiting/executing line ever observed on disk). A live recording driving a genuinely-gated shell command (DEFAULT mode, no allowlist) is the only thing that could promote this from provisional to settled — hence confidence 0.82, not higher.",
+        "The safe-path topology (ready→working→ready) IS observable, but it is indistinguishable from auto-executed-tool-call; the classifier's risky-path divergence is the spec-defining signal and it leaves no transcript trace.",
+        "AUTH DEADLINE: Gemini CLI stops serving Google One / unpaid tiers on 2026-06-18; any future re-assessment recording must use a paid tier or migrate off gemini-cli."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/agent.go",
+          "note": "Source is FilesUnderRoot (transcript-only) tailing ~/.gemini/tmp/<project>/chats/*.jsonl; the adapter declares NO hook/permission transport — the only inbound channel is the chat JSONL."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/parser.go",
+          "note": "Line 192: a toolCall is closed (ToolResultIDs emitted) the moment its status is success/error/cancelled. There is no parser path that produces a pending/awaiting/waiting signal from any Gemini transcript line."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go",
+          "note": "Rule 0 (PermissionPending → waiting) is the only permission-prompt path to waiting; PermissionPending is hook-only and Gemini fires no hook. NeedsUserAttention and OpenToolStalled (the transcript fallbacks) don't cover a gated benign shell call."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/session_detector_activity.go",
+          "note": "Line 468: PermissionPending is set solely from the d.permissionPending map, populated only by the Claude Code PermissionRequest hook receiver. No parser-side path reaches it, so Gemini's transcript can never set it."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/testdata/real-toolcall-session.jsonl",
+          "note": "Recorded transcript: a toolCall first appears on disk already at terminal status:success (line 6); no intermediate awaiting_approval/executing line is ever persisted — the awaiting state is live-only, never flushed to the chat history file."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@google/gemini-cli/bundle/chunk-G33JEOEV.js",
+          "note": "Gemini 0.46.0 bundle: ApprovalMode={DEFAULT,AUTO_EDIT,YOLO,PLAN}; shouldConfirmExecute → getMessageBusDecision returns allow/deny/ask_user per call (the content-aware classifier); read_file/internal-docs shouldConfirmExecute return false; shell uses getCommandRoots+getProactiveToolSuggestions+sandbox modeConfig; CoreToolCallStatus.AwaitingApproval exists only in the live scheduler; chat persistence is via recordCompletedToolCalls (post-resolution only)."
+        }
+      ]
+    }
+  }
+}
