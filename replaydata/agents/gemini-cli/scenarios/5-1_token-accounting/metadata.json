@@ -1,0 +1,116 @@
+{
+  "scenario_id": "token-accounting",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.46.0",
+    "daemon_version": "0.5.1+b9b61cb",
+    "confidence": 0.75,
+    "notes": "agent_supports: yes; daemon_capability: full; driver_capability: ready — three back-to-back no-op turns; gemini's per-message tokens block feeds a deduped PerTurnContribution per turn and the shared applyContribution accumulates TotalTokens/CumCacheReadTokens monotonically."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "token-accounting",
+      "agent": "gemini-cli",
+      "assessed_at": "2026-06-11T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.75,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Reasoning\n\nThe scenario stresses the multi-turn token ACCUMULATOR (not single-turn extraction — that is covered by basic-turn). It asserts: (1) `TotalTokens > 0` after turn 1; (2) `TotalTokens` non-decreasing after turn 2 (and turn 3); (3) for a fully-cached turn, `CacheReadTokens > 0` with fresh input = 0. Each maps to behaviour the gemini-cli adapter produces today, on the SAME shared cost-accumulation path the claudecode/codex token-accounting cells ride.\n\n### agent_supports: yes\n\nGemini CLI runs an unbounded sequence of conversational round-trips in one session; three back-to-back no-op prompts ('Reply with exactly the word: ok') are well within the smallest turn shape. Each assistant ('gemini') message persists a per-message `tokens` block — `input` / `output` / `cached` / `total` — in the session transcript (`~/.gemini/tmp/<project>/chats/session-*.jsonl`). Live-verified at the 2-1 basic-turn onboarding (2026-06-09): a real session reported non-zero cost + tokens and returned to ready on turn completion. CLI at v0.46.0 on PATH.\n\n### daemon_capability: full\n\nFor each user-observable signal, the event that proves it and the parser code that emits it:\n\n1. **`TotalTokens > 0` after turn 1; non-decreasing after turns 2/3** — `applyTokens` (parser.go L217-267) reads the per-message `tokens` block and emits a `PerTurnContribution{Usage: UsageBreakdown{Input: input-cached, Output: output, CacheRead: cached}}`, deduped by assistant-message `id` (each completed turn has a distinct id, so each turn contributes exactly once). The SHARED accumulator `applyContribution` (tailer_metrics.go L158-177) sums every contribution into `cumByModel[model]` (`Input += / Output += / CacheRead += `), which rolls up into `SessionMetrics.TotalTokens` / `CumInputTokens` / `CumCacheReadTokens` (L266-268). Accumulation is add-only across turns, so TotalTokens is non-decreasing turn-over-turn; `MergeMetrics` (session.go L677+) additionally clamps a transient zero pass to the prior total (L736-737). This is the identical roll-up the claudecode/codex token-accounting cells assert against, exercised by `cost_test.go`.\n2. **Fully-cached turn: `CacheReadTokens > 0`, fresh input = 0** — gemini's `input` field is cache-INCLUSIVE, so the parser bills `Input = max(0, input - cached)` and `CacheRead = cached` (same convention as the Codex mapping). When a turn is fully a cache hit, the provider returns `cached == input`, so net billed `Input == 0` and `CacheRead == cached > 0` — which is exactly the spec's 'fresh input tokens = 0; CacheReadTokens > 0'. The cached portion lands in `CumCacheReadTokens` via the same accumulator.\n\nBoth spec-required observables are emitted by the parser today on the shared cost path, so the daemon is `full`. As with all token-accounting cells, the `TotalTokens`/`CacheRead` invariants are not expressible in the phase DSL (no metric-form invariant); the spec phases assert the three-turn state arc and the observations vector (`tokens_nonzero`/`cost_nonzero`) asserts the metric is live; the per-turn extraction + cache mapping is covered by the gemini-cli parser unit tests (`parser_test.go`).\n\n### driver_capability: ready\n\nThe recipe needs only `send` (each prompt) + `wait_turn` (block until the inferred text-only turn_done) + `sleep` (let the daemon observe each settle). All three step types are implemented in `driver-interactive.sh` (`DRIVE_ELICITS=\"send slash wait_turn sleep\"`; full step inventory includes send/wait_turn/sleep). No stubbed primitive is exercised. INTERACTIVE is deliberate: a headless `gemini -p` run exits at turn completion, before the daemon can observe the terminal ready edge — the recipe must keep the process alive across all three turns.\n\n## What irrlicht does NOT see (narrow)\n\nThe `TotalTokens > 0` / non-decreasing / `CacheRead > 0` invariants have no phase-DSL field; they're asserted via the observations vector + parser unit tests, not by `expected-validate`. This is the phase-DSL limitation shared across all token-accounting cells, not a gemini transport gap.",
+      "caveats": [
+        "Cache-hit subscenario is provider- AND emission-dependent. Whether gemini's backend returns `cached > 0` (and whether `input` is fully cache-inclusive so net Input lands at 0) for two near-identical sends within the cache TTL is server-side and not confirmable from docs/source; the parser maps it correctly IF the backend caches. A one-shot recording can't guarantee CacheRead > 0. record promotes this from provisional to settled; if the live default doesn't cache, that is a provider behaviour, not a daemon bug, and the cache-read sub-assertion may need to relax to monotonic-accumulation only.",
+        "Provisional on emission generally: daemon=full is grounded in the parser read + the shared applyContribution accumulator + cost_test.go, but per-turn `tokens`-block emission across THREE turns wasn't live-verified for gemini specifically (basic-turn verified one turn). record settles multi-turn accumulation.",
+        "observations.model ('gemini-3-flash-preview') is the basic-turn live-verified default boot model and is PROVISIONAL; the gemini binary moves fast (0.45.2→0.46.0 since live-verify). A different live default is a string update, not a daemon bug. Token accumulation is model-agnostic.",
+        "Cost (USD) is downstream of UsageBreakdown via the pricing/aliases table; a missing alias entry shows $0 cost while tokens still accumulate — an alias-table concern, not token accounting."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/parser.go L217-267",
+          "note": "applyTokens reads per-message tokens block (input/output/cached/total); emits TokenSnapshot + deduped-by-id PerTurnContribution with Input=max(0,input-cached), CacheRead=cached (cache-inclusive input convention, mirrors Codex)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer_metrics.go L158-177, L266-268",
+          "note": "Shared applyContribution sums each PerTurnContribution.Usage into cumByModel (Input+=/Output+=/CacheRead+=); rolls up to SessionMetrics.TotalTokens/CumInputTokens/CumCacheReadTokens. Add-only across turns → monotonic accumulation."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/session.go L35, L677-761",
+          "note": "SessionMetrics.TotalTokens + CumCacheReadTokens; MergeMetrics clamps a transient zero pass to the prior total (L736-737) so totals never regress."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/gemini-cli/driver-interactive.sh",
+          "note": "DRIVE_ELICITS=\"send slash wait_turn sleep\"; gemini -y under tmux; send + wait_turn + sleep are all implemented — every step the three-turn recipe needs."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/5-1_token-accounting/metadata.json",
+          "note": "Reference cell for the same scenario; identical shared-accumulator argument (PerTurnContribution → cumByModel → TotalTokens monotonic; cache-hit = CacheRead>0 with fresh input net of cached)."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "gemini CLI >=0.45.2 on PATH and authenticated (Google OAuth oauth-personal, no API key; June-18 free-tier deadline)",
+        "irrlichd is recording (dev irrlichd --record; isolated IRRLICHT_ONBOARD_HOME + alt port to coexist with prod)",
+        "first-run trust-folder prompt auto-accepted by the driver"
+      ],
+      "setup": [
+        "Driver launches gemini -y under tmux in a fresh cwd under <staging>/cwd/",
+        "No special model or context flags — default model is fine; the assertion is multi-turn token accumulation, not which model produced the tokens"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        }
+      ],
+      "verify": [
+        "events.jsonl shows three ready→working→ready cycles on the same session (one per turn)",
+        "events.jsonl carries a PerTurnContribution / UsageBreakdown for each of the three turns; input+output > 0 on every turn",
+        "SessionMetrics.TotalTokens after turn 1 > 0",
+        "SessionMetrics.TotalTokens after turn 2 ≥ after turn 1 (monotonic)",
+        "SessionMetrics.TotalTokens after turn 3 ≥ after turn 2 (monotonic across 3 turns)",
+        "if turns 2/3 hit the prompt cache: CumCacheReadTokens > 0 and that turn's net billed Input = 0 (provider-dependent — relax to monotonic-only if no cache hit)",
+        "final session state is ready"
+      ],
+      "settings": {},
+      "timeout_seconds": 180
+    }
+  }
+}
