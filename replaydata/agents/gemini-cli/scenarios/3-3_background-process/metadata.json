@@ -1,0 +1,85 @@
+{
+  "scenario_id": "background-process",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "bug",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.46.0",
+    "daemon_version": "0.5.1+a50ffdd.dirty",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes (run_shell_command is_background); daemon_capability: bug (geminicli parser has NO background-process tracking — settles to ready at end_turn while the detached process is still alive); driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "background-process",
+      "agent": "gemini-cli",
+      "assessed_at": "2026-06-11T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "bug",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: bug; driver_capability: ready\n\nRoute: record-known-failing. The agent genuinely runs background processes; the geminicli adapter does not observe them today, so a recording will fail the spec until the parser is taught the Gemini background-spawn shape. We record it as known_failing (spec asserts the CORRECT arc) and file an issue — the trace exists, so this is product work in the adapter, not an architectural incapability.\n\n## agent_supports: yes\n\nGemini CLI v0.46.0's `run_shell_command` / ShellTool ships a structured `is_background` parameter (binary strings: `[SHELL_PARAM_IS_BACKGROUND]`, `description: \"Set to true if this command should be run in the background (e.g. for long-running servers or watchers). The command will be started, allowed to run for a brief moment to check for immediate errors, and then moved to the background.\"`). A backgrounded launch returns immediately with `returnDisplay: \"Background process started with PID ${pid}.\"` and the tool result surfaces `Background PIDs: …` and `Process Group PGID: …` (the command is wrapped via `wrapCommandForBackgroundPIDs` writing PIDs to a temp file; setsid/disown/nohup process-group handling is present). There is also a separate \"List Background Processes\" tool (`description: \"The process ID (PID) of the background process to inspect.\"`) — the polling analog to Claude's BashOutput. So the agent performs the full scenario behavior: spawn-and-return, then poll-to-exit.\n\n## daemon_capability: bug (NOT incapable, NOT full)\n\nThe geminicli adapter (core/adapters/inbound/agents/geminicli/parser.go) has ZERO background-process tracking — grep for background/run_in_background/async across the package returns nothing. `parseAssistant` settles the session to `turn_done` (→ ready) the instant a `gemini` assistant message carries final text and opens no further tool calls (parser.go:209). The entire BackgroundProcessCount + HasLiveBackgroundProcess working-hold machinery (core/application/services/background_probe.go, core/domain/session) is wired EXCLUSIVELY from the claudecode parser's structured `toolUseResult.backgroundTaskId` field and the `tasks/<id>.output` lsof probe — both Claude-Code-specific shapes the probe docstring names explicitly (\"the daemon's authoritative liveness check for Claude Code Bash background processes\").\n\nGemini reports its background spawn DIFFERENTLY: as prose (\"Background process started with PID N\") inside the assistant message and `Background PIDs:` in the tool result text, writing stdout/stderr to a temp PID file — not a `backgroundTaskId` field and not a `tasks/<id>.output` path. The daemon therefore (1) never increments a count, (2) never gates IsAgentDone, and (3) settles the session to ready at the turn's end while the detached process is still alive — exactly the regression the scenario's \"WHERE to look if it breaks\" describes. This is `bug` not `incapable` because the trace DOES exist in the transcript the daemon already tails (the run_shell_command tool call with is_background + the Background-PID message); the parser merely ignores it. The fix is the Gemini parallel of #450/#445: recognize the Gemini background-spawn shape, surface BackgroundProcessCount, and probe the reported PID's liveness.\n\n## driver_capability: ready\n\nThe recipe needs only send / wait_turn / sleep, all in the gemini-cli driver's DRIVE_ELICITS (\"send slash wait_turn sleep\"). No driver gap. wait_turn classifies turn-done the same way the parser does (a bare `gemini` message with non-empty text and no tool calls), so it brackets the single prompt that spawns-and-polls.\n\n## Confidence 0.8\n\nThe agent surface is confirmed from the live v0.46.0 bundle strings (high). The daemon verdict is confirmed by reading the adapter source (parser has no background tracking; the working-hold is Claude-only). The 0.8 (not higher) reflects that the EXACT on-disk transcript shape Gemini writes for a backgrounded run — whether the is_background tool call and the Background-PID line survive into the JSONL the daemon tails, and how the model sequences the list-background poll — is only confirmed live by `record`. The verdict that the daemon mis-handles it holds regardless of that detail (there is no code path that could observe it), so record will confirm known_failing, not flip the pillar.",
+      "caveats": [
+        "agent_supports=yes is confirmed against the live gemini v0.46.0 bundle: [SHELL_PARAM_IS_BACKGROUND] / is_background parameter on run_shell_command, 'Background process started with PID' result, 'Background PIDs:' + 'Process Group PGID:' in the tool result, and a 'List Background Processes' inspection tool.",
+        "daemon_capability=bug: the geminicli parser has no background-process tracking; BackgroundProcessCount + the working-hold are wired only from the claudecode backgroundTaskId/tasks-output shape. A recording will show the session flip working→ready at the turn's end (when the assistant message finalizes), NOT held working while the detached process is alive — so it fails bg_alive_working and the dwell assertion. File an issue and record known_failing.",
+        "Recording variance / provisional emission: the precise JSONL shape Gemini writes for an is_background run (does the spawn tool call + Background-PID line persist; how the model sequences the list-background poll) is confirmed only by the live recording. The bug verdict does not depend on it — no adapter code path observes a Gemini background process under any shape.",
+        "Auth/deadline: recording needs Google OAuth set up out-of-band; Gemini CLI stops serving Google One / unpaid tiers on 2026-06-18, after which recordings on those tiers fail auth."
+      ],
+      "sources": [
+        {
+          "kind": "command",
+          "ref": "strings /Users/ingo/.nvm/.../@google/gemini-cli/bundle/chunk-*.js | grep -iE 'is_background|Background PID|SHELL_PARAM_IS_BACKGROUND|List Background Processes'",
+          "note": "Confirms agent_supports=yes on the live gemini v0.46.0 bundle: run_shell_command/ShellTool ships is_background ('Set to true if this command should be run in the background … then moved to the background.'), returns 'Background process started with PID ${pid}.', surfaces 'Background PIDs:' + 'Process Group PGID:', and provides a 'List Background Processes' PID-inspection tool. is_background appears 168x (camelCase) + 30x (snake) across chunks."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/parser.go",
+          "note": "daemon_capability=bug evidence: NO background-process tracking in the geminicli parser (grep background|run_in_background|async = NONE). parseAssistant (line ~209) settles to turn_done/ready as soon as a `gemini` message has final text and no open tool calls — so the session would flip to ready at the turn's end while a Gemini is_background process is still alive."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/background_probe.go",
+          "note": "The working-hold liveness probe is documented as 'the daemon's authoritative liveness check for Claude Code Bash background processes (run_in_background)', driven by tasks/<bash_id>.output paths — a Claude-specific shape Gemini does not produce. Confirms no Gemini code path increments BackgroundProcessCount or gates IsAgentDone."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/claudecode/parser.go",
+          "note": "Reference for what WOULD be needed: BackgroundProcessCount/HasLiveBackgroundProcess are populated only from the structured toolUseResult.backgroundTaskId (line ~538) plus BashOutput/KillShell/<task-notification> closes — none of which exist in Gemini's transcript. The Gemini fix is the parallel of #450/#445 in the geminicli adapter."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "gemini CLI on PATH and authenticated via Google OAuth (v0.46.x ships the run_shell_command is_background parameter and the List Background Processes tool)",
+        "irrlichd is recording (isolated dev daemon with --record). NOTE: this cell is known_failing — the current geminicli adapter cannot observe a Gemini background process, so the recording is expected to fail the bg_alive_working / dwell phases until the parser learns the Gemini background-spawn shape (the #450/#445 parallel).",
+        "Gemini drives under `gemini -y` (yolo) so the run_shell_command tool auto-approves; the driver auto-accepts the first-run trust-folder prompt"
+      ],
+      "setup": [
+        "Driver launches gemini in a fresh trusted cwd under <staging>/cwd; no seed files — the background process is a self-contained sleep && echo."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Do exactly this and nothing else. (1) Use the run_shell_command tool to run the command `sleep 8 && echo BG_DONE`, and set its is_background parameter to true so it launches in the background and the tool returns immediately. (2) Then repeatedly use the list background processes tool to check whether that background process is still running, waiting about 2 seconds between checks, until it is no longer running. (3) Only after the background process has finished, reply with exactly the word: done. Do not run any other commands."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        }
+      ],
+      "verify": [
+        "transcript.jsonl contains a run_shell_command tool call whose input carries is_background:true, and a result reporting a Background PID (the spawn-and-return)",
+        "transcript.jsonl contains one or more list-background-processes tool calls (the poll-to-exit)",
+        "KNOWN FAILING: events.jsonl is EXPECTED to show the session settle working→ready at the turn's normal end (when the final `gemini` assistant message finalizes), NOT held working while the detached process is alive — so bg_alive_working and the dwell assertion fail. This is the geminicli adapter gap; clear known_failing once the parser surfaces BackgroundProcessCount + a liveness gate for Gemini background processes.",
+        "primary session is born ready and binds a PID within ~2s of launch"
+      ],
+      "settings": {},
+      "timeout_seconds": 240
+    }
+  }
+}
