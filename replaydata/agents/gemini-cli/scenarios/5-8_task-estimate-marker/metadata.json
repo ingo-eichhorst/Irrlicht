@@ -1,0 +1,155 @@
+{
+  "scenario_id": "task-estimate-marker",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.46.0",
+    "daemon_version": "0.5.1+031710f",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes (gemini loads global ~/.gemini/GEMINI.md + project-tree GEMINI.md, concatenated verbatim; processImports strips NEITHER HTML comments NOR code-block content, so the fenced marker example reaches the model intact — emission is model-discretion, provisional) / daemon_capability: full (geminicli parser wires tailer.ScanTaskEstimate over the FULL untruncated assistant text in the assistant-only path, feeding the shared tailer->metrics->domain forecast) / driver_capability: ready (send+wait_turn+sleep). Prereq: seed the marker rule into ~/.gemini/GEMINI.md (out-of-band; HOME is not isolated in the driver) — NOT a driver-step gap."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "task-estimate-marker",
+      "agent": "gemini-cli",
+      "assessed_at": "2026-06-11T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes (provisional on emission) / daemon_capability: full / driver_capability: ready\n\n## Reasoning\n\n### agent_supports: yes (confidence 0.8)\n\nThe behavior is the model following a persistent instruction-file rule, not a `gemini --help` flag — so the bar is \"does gemini load the rule and re-emit the marker in its transcript-visible prose.\" gemini-cli (0.46.0) loads a **hierarchical** context system: it concatenates `GEMINI.md` files and sends them to the model with every prompt. Loading order (confirmed in the docs and the bundle's `getAllGeminiMdFilenames` / `loadServerHierarchicalMemory` symbols): **global `~/.gemini/GEMINI.md` (loaded for EVERY project)**, then project-root `./GEMINI.md`, then CWD-subtree `GEMINI.md`. The default context filename is `GEMINI.md` (`contextFileName`, overridable). So a rule placed in the global file is in scope for a session launched in any cwd — including the rig's fresh per-run scratch cwd.\n\nThe **HTML-comment-survival** question (the load-bearing prereq that bit claudecode) resolves in gemini's favour. The memory loader (`packages/core/src/utils/memoryDiscovery.ts`) reads each file and runs only `processImports` (`memoryImportProcessor.ts`) over it before concatenating. `processImports` resolves `@path` import statements and uses `findCodeRegions` (a backtick-delimited region scan, `/(`+)([\\s\\S]*?)\\1/g`) SOLELY to skip `@import` substitution inside code blocks — it does NOT strip HTML comments, does NOT remove or render code-block content, and the only \"Sanitize\" in the loader guards import PATHS for traversal, never the file text. The content (HTML comments and fenced blocks alike) is passed to the model verbatim. So both a fenced AND a bare `<!-- {…} -->` marker example survive injection — unlike claudecode, which strips bare HTML comments from CLAUDE.md (the recipe still fences for safety + cross-agent parity).\n\nWhat is NOT verified is **emission**: the 2026-05-31 marker experiment was claudecode/sonnet only. Whether gemini's model (e.g. gemini-3-flash-preview) reliably re-emits the marker turn-over-turn with climbing `completed_rounds` is a model-behaviour question only a live recording can settle. Hence yes-but-provisional, confidence 0.8 (emission is soft/model-discretion, as it was for claudecode where opus skipped on a short task).\n\n### daemon_capability: full (confidence 0.85)\n\nEvery user-observable signal the scenario asserts has a correct producing path today:\n\n- **Marker -> estimate on metrics.** The geminicli parser feeds the scan in the assistant-ONLY path: `parseAssistant` (parser.go:162-169) reads the full `content` string and calls `tailer.ScanTaskEstimate(content, ev.Timestamp)` on the UNTRUNCATED text (line 167) — `ev.AssistantText` is tail-truncated to 200 runes on the adjacent line, but the scan deliberately gets the full block, dodging the truncation trap that would lose a leading marker. Only `gemini` (assistant) messages reach this path, so a user-pasted marker can't feed the ETA. The shared `tailer.ScanTaskEstimate` (taskestimate_scan.go) is the same tolerant parser claudecode/codex use: accepts marker-key drift (`irrlicht[-_]e(stimate|ta)`), `completed_rounds`/`done_rounds`/`round`, clamps 1<=total<=100 and 0<=completed<=total, rejects absurd markers wholesale, latest-valid-wins. Result rides `ev.TaskEstimate`.\n- **Downstream plumbing is fully shared / agent-agnostic.** `ev.TaskEstimate` -> tailer persistence -> `SessionMetrics.TaskEstimate {total_rounds, completed_rounds, updated_at}`; the metrics adapter (adapter.go:146-163) projects `TaskCompletionEta` via `session.ForecastTaskCompletion` at the measured rate (elapsed/completed), nil until >=1 round. None of this is per-adapter — once the geminicli parser populates `m.TaskEstimate`, the estimate + forecast surface exactly as for claudecode. updated_at = the observed event time (advances per fresher marker); completed_rounds climbs from the model's own walk (the parser invents no regressions); the carry-across-empty-passes keeps the chip from flickering.\n- **Suppressed-by-state.** Same as claudecode: the daemon keeps the fields on metrics; the CLIENT presentation gate (web `taskEtaPresentation` returns null unless state==='working'; macOS SessionListView mirrors it) makes them visible only while working and absent at ready.\n\nNo signal lacks a producing path; each is handled correctly -> `daemon=full`. (Provisional only in that emission is model-discretion: the parse/forecast/suppression mechanisms are certain from code; whether gemini's model emits is what `record` settles.)\n\n### driver_capability: ready (confidence 0.85)\n\nThe recipe elicits the behavior with `send` / `wait_turn` / `sleep` only — all present in gemini-cli `driver-interactive.sh` (recipe-lint step set: exit_clean, interrupt, keys, reset_session, restart, resume, send, session, sigkill, slash, sleep, start_session, wait_turn). No missing step type.\n\nCrucially, gemini-cli does NOT share codex/opencode/pi's `gap:seed_instruction`. Those agents only auto-inject a project/CWD-tree instruction file (no global one), and their drivers launch in a fresh per-run scratch cwd with no seed step — so the rule can't reach the model without a new driver primitive. gemini-cli is different on TWO counts: (1) it auto-loads a **global `~/.gemini/GEMINI.md`** for every project, and (2) the driver does NOT isolate HOME — it watches and launches against the real `$HOME/.gemini` (`GEMINI_HOME=${GEMINI_DIR:-$HOME/.gemini}`, drive launches gemini in `$RUN_CWD` but HOME is untouched). So a human-seeded `~/.gemini/GEMINI.md` is in scope for the fresh per-run cwd with NO driver change. The rule seed is therefore an out-of-band ENVIRONMENT prereq (exactly like claudecode's `~/.claude/CLAUDE.md` managed block), NOT a driver step-type gap -> `driver=ready`.\n\n## Provisional emission caveat\n\nThe parser-side `daemon=full` is code-grade for the PARSE+forecast path (wiring + shared plumbing verified, adapter builds). It is PROVISIONAL only on emission, which is model-discretion: a live `record` run must confirm gemini emits >=2 markers with climbing `completed_rounds` AND that the fields drop at ready. There is also no geminicli unit test covering `ScanTaskEstimate` (claudecode/codex have one) — the wiring is exercised end-to-end only by `record`. Confidence 0.8.",
+      "caveats": [
+        "agent=yes is PROVISIONAL on emission: gemini's model marker emission is unverified (the 2026-05-31 experiment was claudecode/sonnet only). record must confirm gemini re-emits the marker across turns with climbing completed_rounds before this is settled.",
+        "CRITICAL recording prereq (human, out-of-band): the marker rule must live in ~/.gemini/GEMINI.md (the global context file gemini loads for every project; the driver does NOT isolate HOME, so it is in scope for the fresh per-run cwd). The example should sit in a fenced code block for cross-agent parity — gemini does NOT strip HTML comments (processImports leaves them verbatim; only @import inside backticks is skipped), so even a bare comment would survive, but fence anyway.",
+        "No geminicli unit test covers tailer.ScanTaskEstimate (claudecode/codex each have one). The scan wiring (parser.go:167) is verified by build + code read; only record exercises it end-to-end.",
+        "ELAPSED skew (shared v1 decision): ForecastTaskCompletion measures elapsed since SESSION START, so a session that ran a while before its first marker skews early ETAs long; burn-down monotonicity (later ETA <= earlier) still holds.",
+        "Suppression-by-state is a CLIENT presentation gate (web taskEtaPresentation / macOS SessionListView), not a daemon drop — the daemon keeps the fields on metrics across passes. The working-window values are what the verify engine asserts; ready-suppression is a client-observed fact.",
+        "observations.model pinned to gemini-3-flash-preview (the live-verified default from the gemini onboarding); record corrects on drift."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/parser.go",
+          "note": "parseAssistant (lines 162-169): reads the full content string and calls tailer.ScanTaskEstimate(content, ev.Timestamp) on the UNTRUNCATED text (line 167), setting ev.TaskEstimate; ev.AssistantText is tail-truncated to 200 runes separately. Only 'gemini' (assistant) messages reach this path (parseMessage dispatch), so a user-pasted marker can't feed the ETA."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/taskestimate_scan.go",
+          "note": "Shared ScanTaskEstimate (same parser claudecode/codex use): tolerant — marker-key drift irrlicht[-_]e(stimate|ta), completed_rounds/done_rounds/round, clamps 1<=total<=100 and 0<=completed<=total, rejects absurd markers wholesale, latest-valid-wins; must be fed the full block (AssistantText 200-rune truncation would lose markers)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/outbound/metrics/adapter.go",
+          "note": "Lines 146-163: shared/agent-agnostic — tailerTaskEstimateToDomain(m.TaskEstimate) -> result.TaskEstimate, then session.ForecastTaskCompletion projects TaskCompletionEta at the measured rate. Once geminicli's parser populates m.TaskEstimate, the estimate+forecast surface identically to claudecode."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/task_estimate.go",
+          "note": "TaskEstimate {total_rounds, completed_rounds, updated_at}; ForecastTaskCompletion = now + (total-completed) x (elapsed/completed), measured rate, nil until >=1 round; documented elapsed-since-session-start skew."
+        },
+        {
+          "kind": "url",
+          "ref": "https://geminicli.com/docs/cli/gemini-md.md",
+          "note": "Hierarchical context system: concatenates GEMINI.md files and sends them to the model with every prompt. Loading order = global ~/.gemini/GEMINI.md (every project) -> project-root ./GEMINI.md -> subdir GEMINI.md. Default context filename GEMINI.md (contextFileName, overridable); @file.md imports; /memory show|reload."
+        },
+        {
+          "kind": "file",
+          "ref": "https://github.com/google-gemini/gemini-cli/blob/main/packages/core/src/utils/memoryImportProcessor.ts",
+          "note": "processImports resolves @path imports; findCodeRegions (regex /(`+)([\\s\\S]*?)\\1/g) is used ONLY to skip @import substitution inside code blocks. It does NOT strip HTML comments and does NOT remove/render code-block content. The only 'Sanitize' guards import PATHS (traversal), not file text — so a fenced or bare <!-- marker --> survives injection verbatim (unlike claudecode's CLAUDE.md stripping)."
+        },
+        {
+          "kind": "file",
+          "ref": "https://github.com/google-gemini/gemini-cli/blob/main/packages/core/src/utils/memoryDiscovery.ts",
+          "note": "loader reads each GEMINI.md, calls processImports, concatenates — no comment stripping/sanitization of content anywhere (line 226 processImports; line 161 'Sanitize' is path-traversal guard only)."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/gemini-cli/driver-interactive.sh",
+          "note": "recipe-lint step set: send, wait_turn, sleep present (plus exit_clean/interrupt/keys/reset_session/restart/resume/session/sigkill/slash/start_session) — recipe needs only send/wait_turn/sleep -> driver=ready. HOME is NOT isolated (GEMINI_HOME=${GEMINI_DIR:-$HOME/.gemini}; gemini launched in $RUN_CWD with real HOME), so a human-seeded global ~/.gemini/GEMINI.md is in scope for the fresh per-run cwd with NO driver change — the seed is an out-of-band prereq, not a seed_instruction gap (the codex/opencode/pi gap is because those have no global instruction file)."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "gemini CLI on PATH and authenticated (Google OAuth oauth-personal); v0.46.0 validated; default model = gemini-3-flash-preview",
+        "irrlichd is recording (run-cell.sh isolated mode, or --attach against a daemon started with --record)",
+        "PREREQ (human, out-of-band): the task-eta emission rule must be present in ~/.gemini/GEMINI.md (the global context file gemini loads for every project; the driver does NOT isolate HOME, so it reaches the fresh per-run cwd). The marker example should be INSIDE a fenced code block for cross-agent parity — gemini does NOT strip HTML comments, so a bare comment would also survive, but fence anyway."
+      ],
+      "setup": [
+        "Driver launches gemini -y in a fresh per-run cwd under <staging>/cwd/ (or IRRLICHT_ONBOARD_CWD) via tmux; accepts the trust-folder prompt on first run in a new dir",
+        "Use the default model (gemini-3-flash-preview); emission is model-discretion, so pin a >=5-phase task to give the model a reason to re-emit",
+        "The first send asks for a >=5-phase task and instructs the agent to emit the marker each turn, starting at completed_rounds=0 and advancing as each phase completes"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Do a 5-phase writing task and report progress each turn using the task-progress marker. Plan exactly 5 phases (total_rounds:5). On THIS turn emit the marker at 0/5, then start phase 1: write a one-paragraph outline. End your turn after phase 1 with the marker updated to 1/5."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 12
+        },
+        {
+          "type": "send",
+          "text": "Continue: do phase 2 (draft the introduction), update the marker to 2/5, and stop. Do not ask a question or offer to continue — end your turn immediately after the marker."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 12
+        },
+        {
+          "type": "send",
+          "text": "Continue: do phase 3 (draft the body), update the marker to 3/5, and stop. Do not ask a question or offer to continue — end your turn immediately after the marker."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 12
+        },
+        {
+          "type": "send",
+          "text": "Continue: do phase 4 (draft the conclusion), update the marker to 4/5, and stop. Do not ask a question or offer to continue — end your turn immediately after the marker."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 12
+        },
+        {
+          "type": "send",
+          "text": "Finish: do phase 5 (final polish), update the marker to 5/5, and reply with exactly the word: done"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 30
+        }
+      ],
+      "verify": [
+        "transcript assistant text carries the irrlicht-eta marker on >=2 turns with completed_rounds climbing (e.g. 1/5 -> ... -> 5/5); SessionMetrics.TaskEstimate.total_rounds=5 and completed_rounds matches the latest emitted marker",
+        "TaskEstimate.updated_at advances each time a fresher marker is observed (not pinned to a stale snapshot)",
+        "completed_rounds is non-decreasing across turns and reaches total_rounds (5) by the final working turn",
+        "TaskCompletionEta is present once >=1 round is reported, and the projection after a later marker <= the projection after an earlier one (burns down)",
+        "While working the session metrics carry task_estimate + task_completion_eta; the client (web/macOS) shows the ETA chip only while working and hides it at ready (suppressed-by-state)",
+        "State topology ready -> working -> ready across the turns; final state ready (the >=30s trailing sleep captures the post-turn settle)"
+      ],
+      "settings": {},
+      "timeout_seconds": 480
+    }
+  }
+}
