@@ -1,0 +1,115 @@
+{
+  "scenario_id": "subagent-orphan-cleanup",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "bug",
+    "driver_capability": "gap:sigkill",
+    "agent_cli_version": "0.46.0",
+    "daemon_version": "0.5.1+d98b8ce.dirty",
+    "confidence": 0.8,
+    "notes": "agent=yes (foreground subagents on by default; @generalist forcing); daemon=bug (child transcript lands under chats/<parentId>/ but no deriveParentSession rule reads the gemini layout, so the child surfaces UNLINKED); driver=gap:sigkill (stub). Route: driver-gap (port sigkill, record known_failing)."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "subagent-orphan-cleanup",
+      "agent": "gemini-cli",
+      "assessed_at": "2026-06-11T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "bug",
+      "driver_capability": "gap:sigkill",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: bug (the parent→child link is on-disk in a watched-root path the tailer already reads, but no `deriveParentSession` rule recognizes the gemini layout, so the orphaned child surfaces UNLINKED)\ndriver_capability: gap:sigkill (the interactive driver advertises the `sigkill` step but routes it to `not_implemented`)\n→ route: **driver-gap** — `record` ports `sigkill` from the claudecode driver, then records `known_failing` against the daemon link bug.\n\n## The scenario's user-observable signal\n\n3.4 asserts the issue-#321 restart-sweep invariant: a parent launches a FOREGROUND subagent; once the child transcript materializes and is `parent_linked`, the parent's process group is SIGKILLed, orphaning the in-flight child; the daemon's pid_manager sweep then emits `process_exited` for both parent and child with NO spurious `state_transition` to `working` for the orphaned child. The acceptance criteria require ≥ 1 child session LINKED to a parent and ≥ 1 subagent transcript. The link is the load-bearing observable the daemon cannot satisfy today.\n\n## Agent pillar (yes, confidence 0.9 on its own)\n\ngemini-cli 0.46.0 ships first-class subagents, ENABLED by default (`experimental.enableAgents` defaults true). Evidence from the installed bundle + bundled docs:\n\n- `docs/core/subagents.md`: built-in `codebase_investigator`, `cli_help`, and `generalist` agents; `@<name>` forcing syntax (`@generalist <task>`) bypasses the main agent's routing and goes straight to the subagent. \"Each subagent runs in its own isolated context loop.\"\n- The bundle (`chunk-6ZHP2EJW.js`) carries the `subagent` kind, a `parentSessionId` context field, and `deleteSubagentSessionDirAndArtifactsAsync(parentSessionId, chatsDir, tempDir)`.\n\n3.4 is the FOREGROUND variant, so gemini's subagents being SYNCHRONOUS/awaited (`await executor.run(...)` — the basis for the gemini 3.2 `agent=no`) is NOT a blocker here: the orphan is produced by SIGKILLing the parent while the synchronous child is still in flight, not by a fire-and-forget dispatch. The agent genuinely performs the precondition (a child subagent run that writes a distinct transcript under the watched root while it executes).\n\n## Daemon pillar (bug, NOT incapable)\n\nA subagent's own conversation IS persisted as a separate session file under the SAME root the gemini-cli adapter tails. The bundle constructs the child's directory as `subagentDir = path.join(chatsDir, safeParentSessionId)` and writes `session-<childId>.jsonl` inside it — i.e. `~/.gemini/tmp/<project>/chats/<parentSessionId>/session-<childId>.jsonl`, a claudecode-style nested layout. The adapter's Source is `FilesUnderRoot{~/.gemini/tmp}` and the fswatcher recurses into subdirectories (the recursive-walk was added precisely so a nested `subagents/`-style dir gets a watch), so the child file IS discovered and tailed and DOES surface as a distinct session (SessionID = `TrimSuffix(Base(path), \".jsonl\")`).\n\nBut the child surfaces UNLINKED, because none of the daemon's three (and only) parent-linking mechanisms in `deriveParentSession` (`core/application/services/helpers.go`) recognize the gemini layout:\n\n1. `deriveParentSessionID(path)` matches only `.../subagents/<child>.jsonl` (or `.../subagents/workflows/<run>/agent-*.jsonl`). The gemini child's parent dir is named `<parentSessionId>` (a UUID), not the literal `subagents` → no match.\n2. `deriveParentSessionFromTranscript(path)` matches only a pi header `{\"type\":\"session\",\"parentSession\":\"...\"}`. A gemini session header is `{sessionId, projectHash, startTime, lastUpdated, kind}` — no `type` field and no `parentSession`; the child differs from a main session ONLY by `kind:\"subagent\"`, with NO parent reference in the header → no match.\n3. A parser that sets `ev.ParentSessionID`. The gemini-cli parser (`core/adapters/inbound/agents/geminicli/parser.go`) never sets it — it only emits per-message model/token/turn events.\n\nThe parent→child link is therefore present on disk (encoded in the directory path of a file the daemon already reads) but mis-handled. This is a `bug`, NOT `incapable`: the trace exists and is adapter-readable; the fix is to teach the daemon to read the nested gemini layout (extend `deriveParentSessionID` to recognize a `chats/<parentId>/session-<childId>.jsonl` path, or have the gemini parser project the path component as `ev.ParentSessionID`). Contrast codex 3.x, which is `daemon=incapable` because its parent→child edge lives ONLY in `state_5.sqlite` (`thread_spawn_edges`) and never reaches the watched JSONL root at all.\n\nUnder the link bug, 3.4's two link-dependent acceptance criteria (“≥ 1 child linked to a parent”, `parent_linked`) fail today, so the cell records `known_failing`. The issue-#321 restart-sweep / no-working-transition invariant itself is daemon-internal and agent-agnostic (already covered by the claudecode cell); the gemini-specific blocker is strictly the parent-child link.\n\n## Driver pillar (gap:sigkill)\n\nThe recipe needs `send` (force `@generalist`), `sleep`, and `sigkill` (kill the parent's process group to orphan the in-flight child). The gemini-cli interactive driver implements `send`/`slash`/`wait_turn`/`sleep` for real, but its `sigkill` arm routes to `not_implemented sigkill` (exit 3) — a loud stub (`replaydata/agents/gemini-cli/driver-interactive.sh:240`). This is a tooling gap, not an observability limit: `record` ports `step_sigkill` from the claudecode driver (`replaydata/agents/claudecode/driver-interactive.sh`, `kill -9` on the session's process group) before it drives.\n\n## Routing\n\nagent=yes, daemon=bug, driver=gap:sigkill → the routing table's `yes/partial | full/bug | gap:* → driver-gap` row. The cell keeps a full recipe + spec; `record` ports `sigkill`, drives, and records `known_failing` against the link bug. File the daemon link issue at record time.",
+      "caveats": [
+        "Provisional emission (confidence 0.8): no gemini subagent has been run + recorded on this machine, so the EXACT on-disk shape of a child during a live foreground run — that the child session-<id>.jsonl is flushed under chats/<parentId>/ WHILE the parent is alive (so it is parent_linked-able before SIGKILL lands) — is inferred from the bundle (subagentDir = path.join(chatsDir, parentSessionId); session-<childId>.jsonl; deleteSubagentSessionDirAndArtifactsAsync) + the gemini header dump ({sessionId,projectHash,startTime,lastUpdated,kind}), not from an observed child run. A live record settles whether the child transcript materializes early enough to be linked (and whether the cleanup-on-exit deletes the child dir before the sweep can reap it).",
+        "daemon=bug unblock path: extend deriveParentSessionID (core/application/services/helpers.go) to recognize chats/<parentId>/session-<childId>.jsonl, OR have the gemini-cli parser set ev.ParentSessionID from the path's parent-dir component. Either flips daemon -> full. This is cheap precisely because the link is on-disk (unlike codex, whose link lives only in state_5.sqlite).",
+        "driver=gap:sigkill: the driver lists `sigkill` in its dispatch but it is a not_implemented stub (driver-interactive.sh:240). record ports step_sigkill (kill -9 on the parent's process group) from the claudecode driver. The sigkill MUST target the process GROUP, not just the launcher PID, so the heap-bump Node worker child is reaped too and the subagent is left orphaned rather than cleanly exited.",
+        "The restart-sweep / no-working-transition invariant (issue #321) is agent-agnostic and already covered by the claudecode 3.4 cell; the gemini-specific blocker is the parent-child link, not the sweep."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@google/gemini-cli/bundle/docs/core/subagents.md",
+          "note": "gemini-cli 0.46.0 official subagents doc: built-in codebase_investigator/cli_help/generalist (enabled by default via experimental.enableAgents), @<name> forcing syntax, 'Each subagent runs in its own isolated context loop.' Establishes agent=yes for the foreground variant."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@google/gemini-cli/bundle/chunk-6ZHP2EJW.js",
+          "note": "Bundle scan (gemini-cli 0.46.0): subagentDir = path26.join(chatsDir, safeParentSessionId); writes session-${safeSessionId}.jsonl inside it; session header object is {sessionId,projectHash,startTime,lastUpdated,kind:this.kind,directories} (kind 'subagent' for a child) with NO parentSessionId field on disk; deleteSubagentSessionDirAndArtifactsAsync(parentSessionId,chatsDir,tempDir). The parent link is encoded ONLY in the directory path."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/helpers.go",
+          "note": "deriveParentSession is the ONLY parent-linking path: deriveParentSessionID (line 102) matches only .../subagents/<child>.jsonl; deriveParentSessionFromTranscript (line 143) requires header type=='session' + parentSession. The gemini child path chats/<parentId>/session-<childId>.jsonl and headerless-of-type/parentSession layout match NEITHER -> child surfaces unlinked (daemon=bug)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/parser.go",
+          "note": "The gemini-cli line parser never sets ev.ParentSessionID and has no child/subagent discovery; it only emits per-message model/token/turn events. So even with the fswatcher discovering the nested child file, no parent link is produced today."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/agent.go",
+          "note": "Source: FilesUnderRoot{Dir: ~/.gemini/tmp} with a recursing fswatcher (watcher.go adds watches for nested subdirs). The subagent transcript at chats/<parentId>/session-<childId>.jsonl falls UNDER the watched root and IS tailed -> the trace reaches the daemon (so the link gap is bug, not incapable)."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/gemini-cli/driver-interactive.sh",
+          "note": "Line 240: sigkill) not_implemented sigkill || break -- the sigkill step is a loud stub (exit 3). send/slash/wait_turn/sleep are implemented for real. -> driver=gap:sigkill; record ports step_sigkill from the claudecode driver."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/gemini-cli/scenarios/3-2_background-subagent/metadata.json",
+          "note": "Sibling assessment (agent=no for the BACKGROUND variant) that explicitly defers 3.4/3.1 to this analysis and corroborates the daemon facts: 'a future variant would NOT be daemon=incapable like codex -- the link is on-disk and adapter-readable; it would only need a parser that projects the nested path as ParentSessionID.'"
+        },
+        {
+          "kind": "issue",
+          "ref": "ingo-eichhorst/Irrlicht#321",
+          "note": "Zombie-on-restart fix establishing the no-working-transition-during-cleanup invariant; agent-agnostic, already covered by the claudecode 3.4 cell -- not the gemini blocker."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "gemini CLI on PATH and authenticated (OAuth 'Sign in with Google' or API key)",
+        "irrlichd is recording (--attach against a daemon with --record, or isolated mode)",
+        "the sigkill driver step kills the ENTIRE gemini process group (launcher + heap-bump Node worker), not just the launcher PID, so the subagent is left orphaned rather than reaped by a clean exit",
+        "subagents enabled (default: experimental.enableAgents true) so @generalist can be forced",
+        "DRIVER GAP: the gemini-cli interactive driver's sigkill arm is a not_implemented stub; record ports step_sigkill (process-group kill -9) from the claudecode driver before driving"
+      ],
+      "setup": [
+        "Driver launches the gemini REPL in a fresh cwd under <staging>/cwd/",
+        "A README.md is seeded so the forced subagent has something to read while the parent is alive -- the subagent must still be in flight when SIGKILL lands"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "@generalist Read README.md three times in a row, then wait 30 seconds before reporting back. Do not return until you have waited the full 30 seconds."
+        },
+        {
+          "type": "sleep",
+          "seconds": 12
+        },
+        {
+          "type": "sigkill"
+        },
+        {
+          "type": "sleep",
+          "seconds": 20
+        }
+      ],
+      "verify": [
+        "events.jsonl contains a parent_linked event for the child session pointing at the parent session -- the child subagent transcript under chats/<parentId>/ was discovered and linked before SIGKILL (THIS FAILS today: daemon=bug, no gemini parent-link rule -> known_failing)",
+        "events.jsonl contains exactly one process_exited event for the parent session",
+        "events.jsonl contains exactly one process_exited event for the child session",
+        "no state_transition to working fires for the child session after the parent's process_exited (issue #321 regression invariant)",
+        "no state_transition to waiting fires for the child session after the parent's process_exited",
+        "after readyTTL, both rows are removed via transcript_removed",
+        "transcript bundle contains the parent's user/assistant lines plus the child subagent transcript captured from chats/<parentId>/session-<childId>.jsonl"
+      ],
+      "settings": {},
+      "timeout_seconds": 180
+    }
+  }
+}
