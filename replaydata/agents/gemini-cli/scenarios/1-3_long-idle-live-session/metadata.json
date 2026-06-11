@@ -1,0 +1,105 @@
+{
+  "scenario_id": "long-idle-live-session",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.46.0",
+    "daemon_version": "0.5.1+6fcc851.dirty",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "long-idle-live-session",
+      "agent": "gemini-cli",
+      "assessed_at": "2026-06-11T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nThe scenario asserts three user-observable signals: (1) the session does NOT disappear past `readyTTL`, (2) state remains `ready` while idle, and (3) the next user prompt resumes `ready → working → ready` normally. All three are within Gemini CLI + irrlicht's transport.\n\n**agent=yes.** Gemini CLI is a long-lived interactive Node REPL (`node .../bin/gemini`). Once launched it sits in its prompt until the user exits — there is no built-in idle self-exit. A multi-turn session driven with two prompts separated by a sleep is the agent's normal operation, so the agent trivially supports sitting idle then resuming.\n\n**daemon=full.** The adapter ties session lifetime to PID liveness, not to a session-level timer: `Process.Match` uses `commandPattern = bin/gemini` (pgrep -f) and `DiscoverPID` binds the launcher by cwd+cmdline (pid.go). The Source is `FilesUnderRoot{Dir: ~/.gemini/tmp}` tailing the per-session `*.jsonl`. The classifier's `readyTTL` only sweeps `ready` sessions whose backing PID is gone; while the gemini launcher process is alive the row stays `ready` indefinitely — exactly the PID-liveness path this scenario exercises (the same architecture as the claudecode reference cell, which is `daemon=full`/0.9). The turn arc is well covered: a user-role message opens the turn (working); the parser settles back to `ready` via the inferred `turn_done` — an assistant `gemini` message that carries final text and opens zero tool calls (parser.go ~205-210). Because this scenario's prompts are single-word replies with `Tool calls: ≤ 0`, the turn_done heuristic fires cleanly with no tool-call ambiguity. Cost/token/model observations are emitted (`applyTokens` → Tokens snapshot + deduped Contribution; `ModelName` from the message `model` field), so the widened observation vector (cost_nonzero, tokens_nonzero, agent) is satisfied.\n\n**driver=ready.** The interactive driver (`replaydata/agents/gemini-cli/driver-interactive.sh`) implements `send`, `slash`, `wait_turn`, and `sleep` as real arms. The recipe needs only `send` / `wait_turn` / `sleep`, all live. The stubbed arms (keys, reset_session, restart, sigkill, start_session, …) are not on this recipe's path, so they impose no gap here.",
+      "caveats": [
+        "Gemini emits no explicit end-of-turn marker; the daemon infers turn_done heuristically (assistant message with final text and no open tool calls). This cell's no-tool-call prompts make that inference unambiguous, but the ready-settle is provisional on emission until a live recording confirms it — record promotes it from provisional to settled.",
+        "observations.model is intentionally omitted: no prior gemini-cli recording exists to fix the exact normalized model string, and an exact-match model assert would otherwise be a guess. cost_nonzero/tokens_nonzero still run. record should add the observed model.",
+        "Recording uses IRRLICHT_READY_SESSION_TTL=15s so a ~15-20s idle window cleanly exceeds the TTL; the spec asserts duration_at_least (a floor), so production multi-hour idles are by definition still passing.",
+        "Gemini CLI stops serving Google One / unpaid tiers on 2026-06-18; after that, recordings on those tiers fail auth (driver metadata prerequisite)."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/agent.go",
+          "note": "Process.Match = CommandPattern{bin/gemini} + FilesUnderRoot source — session lifetime is tied to PID liveness, not a session timer (the basis for surviving readyTTL)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/pid.go",
+          "note": "DiscoverPID binds the launcher by cwd+cmdline; the live launcher process keeps the ready row from being swept."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/parser.go",
+          "note": "Inferred turn_done (assistant final text, zero tool calls → settle to ready) at ~L205-210; applyTokens emits Tokens + Contribution; ModelName from the message model field."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/gemini-cli/driver-interactive.sh",
+          "note": "send/slash/wait_turn/sleep are real arms (dispatch ~L233-234); the recipe uses only these — multi-session/kill arms are stubbed but off this path."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/1-3_long-idle-live-session/metadata.json",
+          "note": "Reference cell for this scenario (daemon=full/0.9) — same PID-liveness-survives-readyTTL mechanism; recipe templated from its send+wait+20s sleep+send+wait+5s shape."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "gemini CLI on PATH and authenticated via Google OAuth (oauth-personal); set up out-of-band, no API key",
+        "irrlichd running with IRRLICHT_READY_SESSION_TTL=15s (default 30 min would force a 32+ min recording)",
+        "irrlichd in --record mode with grant-all permission mode (transcripts permission)",
+        "fresh cwd: first run shows a trust-folder prompt the driver auto-accepts (gemini -y)"
+      ],
+      "setup": [
+        "Driver launches the gemini REPL in a fresh cwd; the daemon binds the launcher PID via cwd+cmdline.",
+        "The first post-turn sleep (20s) is calibrated to ~1.33x a 15s readyTTL — long enough to prove 'past TTL' without burning a full minute."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 20
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: alive"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the gemini session entering ready after turn 1 completes",
+        "no transcript_removed fires for the session during the 20s idle window (not swept while the gemini process is alive)",
+        "no state_transition to working or waiting fires during the 20s idle window (state stays ready while idle)",
+        "after the second send, events.jsonl shows ready → working → ready for the same session (the long-idle session resumes normally)",
+        "final session state is ready",
+        "cost and tokens are nonzero; agent is gemini-cli"
+      ],
+      "settings": {},
+      "timeout_seconds": 120
+    }
+  }
+}
