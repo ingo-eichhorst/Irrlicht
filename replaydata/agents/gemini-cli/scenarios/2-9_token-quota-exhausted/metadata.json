@@ -1,0 +1,113 @@
+{
+  "scenario_id": "token-quota-exhausted",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "gap:429-mock",
+    "agent_cli_version": "0.46.0",
+    "daemon_version": "0.5.1+ec2d6e2",
+    "confidence": 0.75,
+    "notes": "agent_supports: yes; daemon_capability: full; driver_capability: gap:429-mock — gemini honors GOOGLE_GEMINI_BASE_URL + GEMINI_API_KEY (mock-redirectable like claude --bare), and on a persistent 429 retries then settles to ready; the only missing primitive is a Gemini-compatible 429 mock + bespoke recorder (only anthropic/openai mocks exist)."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "token-quota-exhausted",
+      "agent": "gemini-cli",
+      "assessed_at": "2026-06-11T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "gap:429-mock",
+      "confidence": 0.75,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: gap:429-mock\n\n## Reasoning\n\nThe scenario asserts a pure lifecycle arc: a turn that hits the token/cost budget ends and the session lands in `ready` (`working → ready`, no stuck `working`), and subsequent prompts stay `ready` until the budget resets. No quota *metric* is asserted — the acceptance_criteria are state-only.\n\n### agent_supports: yes\n\nGemini CLI hits a quota / rate limit naturally when the Gemini API returns HTTP 429 (RESOURCE_EXHAUSTED). The bundled client treats `error.status === 429` as a distinct, retryable condition (`error.status === 429 || error.status === 499 || error.status >= 500 && error.status < 600` in chunk-*.js), backs off, and on a *persistent* 429 calls `onPersistent429(authType, …)` to fall back to a different model. Either way the turn resolves and the input prompt returns — the agent performs the quota-exhausted behavior end-to-end, the same shape claudecode does.\n\n### daemon_capability: full\n\nSource = `FilesUnderRoot{Dir: ~/.gemini/tmp/<project>/chats, Parser: JSONLineParser{Parser}}` (`core/adapters/inbound/agents/geminicli/agent.go`). Walking the user-observable arc against `parser.go`:\n\n1. **`ready → working`** — `parseUser` emits a `user_message` (sets `ClearToolNames`) for the opening text prompt, driving `ready → working` (parser.go ~L155).\n2. **`working → ready` after the budget hit** — Gemini emits no explicit end-of-turn marker, so `parseAssistant` infers it: an assistant `gemini` message carrying non-empty `content` and no open tool calls is reclassified `EventType = \"turn_done\"` (parser.go ~L209), the authoritative settle to `ready`. When the persistent-429 fallback ultimately produces a final assistant message, that text-only message yields `turn_done → ready`. When the retry loop instead aborts without a final message (or the process exits), the daemon still settles: the 429 retries read as continuous `working` (each retry flushes the transcript), then the session returns to `ready` via the post-exit / idle sweep — the SAME honest shape recorded for claudecode, whose spec anchors the terminal phase on `process_exited` for exactly this reason. No `waiting` state is ever entered (no permission gate).\n\nThe arc the scenario asserts is the only signal in play, and the parser produces it. So `daemon=full`.\n\n### Why NOT daemon=bug / incapable\n\nGemini's parser has NO rate-limit / quota metric field (no analog of codex's `RateLimitSnapshot.ReachedType` from `extractCodexRateLimits`). But the scenario does not assert a quota metric — only the lifecycle arc — so the absence of a quota-snapshot field is a caveat, not a downgrade. There is no spec-required observable the daemon mis-handles (no `bug`), and a local trace clearly exists (a tailed *.jsonl, not a cloud-only session — no `incapable`).\n\n### driver_capability: gap:429-mock\n\nThis is the cap-hit sibling of the claudecode cell, and gemini-cli is BETTER positioned than codex was for it:\n\n- **Endpoint override exists.** gemini reads `process.env[\"GOOGLE_GEMINI_BASE_URL\"]` to point the Gemini-API client at an arbitrary host, and `GEMINI_API_KEY` / `GOOGLE_API_KEY` select API-key auth over OAuth — the direct analog of claude's `ANTHROPIC_BASE_URL` + `--bare`. So a local stub CAN be wired in deterministically: `GEMINI_API_KEY=mock GOOGLE_GEMINI_BASE_URL=http://127.0.0.1:<port> gemini` would 429 the second request on demand, with no real quota burned. (This is the very thing codex LACKED — codex had no `--bare`/base-url override, which is why its blocker compounded.)\n- **Driver step types are all present.** `recipe-lint`'s `driver_step_types_from_file` on `replaydata/agents/gemini-cli/driver-interactive.sh` reports `send slash wait_turn sleep keys interrupt reset_session restart resume sigkill exit_clean start_session session` — the two-prompt recipe needs only `send`/`wait_turn`/`sleep` (+ an optional `keys` Escape to abort the retry loop, which is implemented). No missing step *type*.\n- **The actual gap is the missing primitive.** There is NO Gemini-compatible 429 mock — `tools/onboarding-factory/recording/` ships only `mock-anthropic-429`, `mock-openai-429`, `mock-anthropic-5xx`, none of which speaks the `:generateContent` / SSE shape gemini expects. And the bespoke recorder `record-token-quota-exhausted.sh` is hard-wired to `claude --bare` + `ANTHROPIC_BASE_URL`; there is no gemini equivalent. Building `mock-gemini-429` (200 + a valid `generateContent` reply on request 1, 429 on request 2) plus a gemini recorder that launches `gemini` under tmux with `GOOGLE_GEMINI_BASE_URL` is a self-contained tooling task. Until it lands the cell cannot be recorded → `driver=gap:429-mock`.\n\nThis is a TOOLING gap, not an observability limit: the recipe + spec stand, and `record` ports the missing mock+recorder before it drives.\n\n## What irrlicht does NOT see (and why that's OK)\n\nThe specific HTTP status (429 vs 5xx vs network error) is invisible — the parser treats every abnormal turn end as 'turn ended → ready'. The scenario only requires the state to land cleanly in `ready`, which is observable regardless of failure code. And there is no quota-window metric the way codex has — irrelevant here, since the acceptance_criteria are state-only.",
+      "caveats": [
+        "No Gemini-compatible 429 mock exists yet (only mock-anthropic-429 / mock-openai-429 / mock-anthropic-5xx), and no gemini equivalent of record-token-quota-exhausted.sh (which is hard-wired to claude --bare + ANTHROPIC_BASE_URL). record must port a mock-gemini-429 (200 generateContent on req 1, 429 on req 2) + a gemini recorder using GOOGLE_GEMINI_BASE_URL before driving — that is the gap:429-mock.",
+        "Gemini's parser carries NO rate-limit / quota metric (no analog of codex RateLimitSnapshot.ReachedType). The cell is satisfied by the lifecycle arc only, which is what the scenario asserts; quota exhaustion is observed as a state arc, not a first-class metric or lifecycle state.",
+        "Provisional on emission: daemon=full is grounded in the parser read + the claudecode precedent, not a live gemini 429 recording. The exact terminal shape (does the persistent-429 fallback emit a final text-only message → turn_done, or does the retry loop abort and rely on the post-exit/idle sweep?) is emission-dependent; record promotes it from provisional to settled and may anchor the terminal phase on process_exited (as claudecode's spec does).",
+        "irrlicht does not discriminate 429 from 5xx / network errors; the spec is satisfied by 'state lands in ready', observable regardless of failure code.",
+        "DEADLINE: Gemini CLI stops serving Google One / unpaid tiers on 2026-06-18 — recording must use API-key auth (GEMINI_API_KEY) pointed at the local mock, which sidesteps the tier deadline entirely (no real Google endpoint is hit)."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/.../@google/gemini-cli/bundle/chunk-*.js (grep)",
+          "note": "process.env[\"GOOGLE_GEMINI_BASE_URL\"] read to point the Gemini-API client at an arbitrary host; GEMINI_API_KEY / GOOGLE_API_KEY select API-key auth; client treats error.status === 429 as retryable and calls onPersistent429(authType, …) to fall back on a persistent 429 — the quota-exhausted code path."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/parser.go",
+          "note": "parseUser → user_message (ready→working, ~L155); parseAssistant infers turn_done from a final text-only message with no open tool calls (~L209, working→ready). NO rate-limit/quota metric field (unlike codex extractCodexRateLimits)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/agent.go",
+          "note": "Source = FilesUnderRoot{~/.gemini/tmp/<project>/chats, JSONLineParser}; a local tailed trace exists (not cloud-only) → daemon is not incapable."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/gemini-cli/driver-interactive.sh (recipe-lint driver_step_types_from_file)",
+          "note": "Step types present: send slash wait_turn sleep keys interrupt reset_session restart resume sigkill exit_clean start_session session — the two-prompt recipe needs only send/wait_turn/sleep (+ optional keys Escape). No missing step TYPE; the gap is the missing mock primitive."
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/recording/ (mock-anthropic-429, mock-openai-429, mock-anthropic-5xx) + record-token-quota-exhausted.sh",
+          "note": "No mock-gemini-429 and no gemini recorder; the existing recorder is hard-wired to claude --bare + ANTHROPIC_BASE_URL. This missing primitive IS the gap:429-mock."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/2-9_token-quota-exhausted/expected.jsonl",
+          "note": "Precedent two-prompt arc: prompt 1 = clean ready→working→ready baseline; prompt 2 = ready→working then 429 retry loop ending in process_exited without sticking. The gemini cell mirrors this shape."
+        },
+        {
+          "kind": "spec",
+          "ref": ".specs/agent-scenarios.md → token-quota-exhausted (2.9)",
+          "note": "acceptance_criteria are state-only: working→ready; state reaches ready (not stuck); subsequent prompts stay ready until budget resets; final state ready; ≥1 turn."
+        }
+      ]
+    },
+    "recipe": {
+      "preconditions": [
+        "gemini CLI on PATH (v0.46.0)",
+        "go on PATH (to build mock-gemini-429)",
+        "irrlichd running with --record",
+        "a free localhost port for the mock (analog of MOCK_PORT)",
+        "GAP: mock-gemini-429 + a gemini token-quota recorder must be ported by record before driving (driver=gap:429-mock)"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: again"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        },
+        {
+          "type": "keys",
+          "keys": "Escape"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        }
+      ],
+      "verify": [
+        "events.jsonl shows session_birth → prompt1 ready→working→ready arc (mock returns 200 + generateContent reply) → prompt2 ready→working arc (mock returns 429)",
+        "prompt2 ends in process_exited (or a post-sweep working→ready) without sticking in working",
+        "no state_transition to waiting (no permission gates expected)",
+        "final state of the session is ready"
+      ]
+    }
+  }
+}

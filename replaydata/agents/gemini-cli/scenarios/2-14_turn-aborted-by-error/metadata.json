@@ -1,0 +1,83 @@
+{
+  "scenario_id": "turn-aborted-by-error",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "bug",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.46.0",
+    "daemon_version": "0.5.1+6fcc851",
+    "confidence": 0.7,
+    "notes": "agent_supports: yes\ndaemon_capability: bug (type:\"error\" recording line skipped by parser → no turn_done → sticks in working); driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "turn-aborted-by-error",
+      "agent": "gemini-cli",
+      "assessed_at": "2026-06-11T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "bug",
+      "driver_capability": "ready",
+      "confidence": 0.7,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: bug; driver_capability: ready\n\nRoute: record-known-failing (record the working→ready arc the spec asserts, file an issue, mark the spec known_failing).\n\n## Scenario\n\nturn-aborted-by-error: the model call fails mid-turn (provider 5xx / timeout / network). No normal turn-end signal is emitted. User-observable signal: state reaches `ready` within one sweep interval after the failure and does NOT stick in `working`.\n\n## agent_supports: yes\n\ngemini-cli surfaces a mid-turn API failure as an error notice in the conversation pane (`✕ [API Error: …]`) and returns control to the prompt; only the in-flight turn aborts, the process stays alive. Since PR #13300 (merged 2025-11-19, commit e1c711f) the ChatRecordingService PERSISTS these interactive-only error/warning notices to the session recording file — `useHistoryManager.ts` calls `chatRecordingService.recordMessage({ type: 'error', content: itemData.text })`. So in the assessed version (0.46.0 > 0.45.0 stable, both post-#13300) an aborted turn leaves a durable trace on disk: a MessageRecord line with `type:\"error\"` in `~/.gemini/tmp/<project>/chats/session-*.jsonl`. (The one known hard hang — issue #8161, an API error arriving WHILE a tool-confirmation menu is open — is a narrow v0.4.0 concurrency edge, closed as not-planned, not the general mid-turn path; it does not block agent=yes.)\n\n## daemon_capability: bug\n\nThe trace exists but the gemini-cli parser mis-handles it, so the session sticks in `working` indefinitely:\n\n- `parser.go` `parseMessage` dispatches strictly on the message `type`: `\"user\"` → parseUser, `\"gemini\"` → parseAssistant, **default → `return false` → `ev.Skip = true`** (parser.go:100-109, 63-65). The new error recording uses `type:\"error\"` (chatRecordingTypes.ts `ConversationRecordExtra` union: `'user' | 'info' | 'error' | 'warning'` | `'gemini'`{…}). `\"error\"`, `\"info\"`, and `\"warning\"` ALL fall through to default and are silently skipped.\n- gemini emits no explicit end-of-turn marker; `turn_done` is INFERRED only from a final text-only `\"gemini\"` assistant message with no open tool calls (parser.go:208-212). A turn that aborts by error never produces that message — the last emitted event is the user_message (`working`).\n- `IsAgentDone()` (session.go:535-570) fires only on `LastEventType == \"turn_done\"` (gemini's primary path) or the claudecode-only `\"assistant\"/\"assistant_output\"` fallback (gemini's event name is `assistant_message`, not in the allow-list). Neither fires.\n- There is NO inactivity-driven `working → ready` sweep in the classifier — every rule in state_classifier.go is event-triggered, and the only inactivity safety net (the stale-tool timer) was DELETED in PR #106 as a flicker source. So nothing rescues the stuck session until the next terminal `\"gemini\"` message lands.\n\nThe fix is local and small (map `type:\"error\"` — and likely the abort/cancel `\"info\"` notice — to a terminal/turn_done signal in the gemini parser), so this is a `bug` (signal present, daemon mis-handles), NOT `incapable` (no architecture limit; a trace is on disk). This is the gemini analogue of the opencode `message.data.error` fix (opencode/turn-aborted-by-error: prior `incapable` → `full` once the watcher consumed the message-level error as terminal).\n\n## driver_capability: ready\n\nThe recipe needs only `send` + `wait_turn` + `sleep` (+ a mid-turn failure inducer that is an environment concern, not a driver step type). The gemini-cli interactive driver elicits `send slash wait_turn sleep` (DRIVE_ELICITS) — every primitive the recipe uses is present. No gap.\n\n## known_failing\n\nThis cell is recorded `known_failing`: the spec asserts the CORRECT contract (working→ready, no stick) and the live recording is expected to show the session STUCK in `working` until the parser fix lands. Do not weaken the spec to match the bug.",
+      "caveats": [
+        "PROVISIONAL on emission: I confirmed from the gemini-cli source that an aborted turn is RECORDED as a type:\"error\" MessageRecord (PR #13300), and from the irrlicht parser that type:\"error\" is skipped — but I have NOT live-recorded a gemini error turn. record must confirm (a) that the version under test actually emits the type:\"error\" line to the chats JSONL on a real API failure, and (b) that the session indeed sticks in working. confidence 0.7 reflects that the daemon=bug conclusion is doc+code-derived, not yet empirical.",
+        "Exact-version mapping of PR #13300 → 0.46.0 is inferred (merged 2025-11-19; v0.45.0 is the latest stable, v0.46.0 is the next preview/stable line — both post-merge). If a record run uses a pre-#13300 build, the error is NOT recorded at all (no type:\"error\" line) — then the cell would be daemon=incapable (Bucket B: pure silent abort), not bug. Pin the recorded agent_cli_version and re-confirm.",
+        "Inducing a deterministic mid-turn API failure for gemini-cli is harder than for claudecode: GOOGLE_GEMINI_BASE_URL exists but is honored only on the API-key (genai) path; gemini-cli's default oauth-personal auth routes through the Code Assist endpoint and IGNORES the base-URL override (issue #15430). A reliable mock recording likely needs API-key auth (GEMINI_API_KEY) pointing GOOGLE_GEMINI_BASE_URL at a failing endpoint, or a transparent proxy that 5xx's mid-stream. This is a record prerequisite, not a pillar downgrade.",
+        "Distinguishing 'turn aborted by error' (type:\"error\") from 'user pressed ESC / cancel' (type:\"info\" 'Request cancelled.') will matter when the parser fix lands — both currently skip; a fix should map both to a terminal signal but must not conflict with the user-esc-interrupt scenario's contract."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/parser.go",
+          "note": "parseMessage (lines 100-109) dispatches on type: user/gemini handled, default returns false → Skip (lines 63-65). turn_done is inferred ONLY from a final text-only 'gemini' message (lines 208-212). A type:\"error\" recording line is silently skipped, so no terminal signal is ever emitted for an aborted turn."
+        },
+        {
+          "kind": "url",
+          "ref": "https://github.com/google-gemini/gemini-cli/pull/13300",
+          "note": "feat(sessions): record interactive-only errors and warnings to chat recording JSON files — merged 2025-11-19 (commit e1c711f). useHistoryManager.ts records API errors via chatRecordingService.recordMessage({ type: 'error', content }). This is what puts a durable trace on disk (makes the cell a bug, not incapable)."
+        },
+        {
+          "kind": "url",
+          "ref": "https://github.com/google-gemini/gemini-cli/blob/main/packages/core/src/services/chatRecordingTypes.ts",
+          "note": "ConversationRecordExtra union: { type: 'user' | 'info' | 'error' | 'warning' } | { type: 'gemini'; toolCalls?; thoughts?; tokens?; model? }. Error messages carry type:'error' + base fields only — distinct from the 'gemini' assistant type the parser's turn_done heuristic keys on."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go",
+          "note": "All classification rules are event-triggered (IsAgentDone at line 61); there is NO inactivity-driven working→ready sweep, so a session with no fresh terminal event has no recovery path."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/session.go",
+          "note": "IsAgentDone (lines 535-570) fires on LastEventType==\"turn_done\" or the claudecode-only \"assistant\"/\"assistant_output\" fallback. gemini's event name is assistant_message and is NOT in the fallback allow-list, so a skipped error line leaves the last event as user_message → stays working."
+        },
+        {
+          "kind": "url",
+          "ref": "https://github.com/google-gemini/gemini-cli/issues/8161",
+          "note": "The one documented hard hang is a v0.4.0 concurrency edge (API error arriving while a tool-confirmation menu is open), closed as not-planned — NOT the general mid-turn error path, which returns control to the prompt. Supports agent=yes."
+        },
+        {
+          "kind": "url",
+          "ref": "https://github.com/google-gemini/gemini-cli/issues/15430",
+          "note": "CLI ignores GOOGLE_GEMINI_BASE_URL under Cloud/OAuth auth — grounds the record prerequisite: a deterministic mock failure likely needs API-key auth, not the default oauth-personal path."
+        }
+      ]
+    },
+    "recipe": {
+      "script": [
+        {
+          "type": "send",
+          "text": "Write a haiku about the ocean."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 12
+        }
+      ]
+    }
+  }
+}
