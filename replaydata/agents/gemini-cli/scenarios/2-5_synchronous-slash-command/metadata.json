@@ -1,0 +1,100 @@
+{
+  "scenario_id": "synchronous-slash-command",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.46.0",
+    "daemon_version": "0.5.1+6fcc851",
+    "confidence": 0.82,
+    "notes": "agent_supports: yes; daemon_capability: full; driver_capability: ready — /stats and /help are local-only display commands that never reach the transcript, so no user_message fires and state stays ready."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "synchronous-slash-command",
+      "agent": "gemini-cli",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.82,
+      "body": "## Verdict\n\nagent_supports: yes; daemon_capability: full; driver_capability: ready\n\n## Reasoning\n\n**agent (yes).** Gemini CLI ships a family of built-in slash commands that are handled entirely in the Ink TUI and never round-trip to the model: `/help` (or `/?`) — \"Display help information about Gemini CLI, including available commands and their usage\"; `/stats` — \"Display detailed statistics for the current Gemini CLI session\"; `/about` — \"Show version info\". The bundled CLI marks these `BUILT_IN` command kind (522 occurrences across the chunk-*.js bundle at @google/gemini-cli 0.46.0). They render their output locally; none submits a prompt. This is the direct analogue of claudecode's `/cost` + `/help` pairing (Gemini has no `/cost`, so `/stats` is the equivalent session-info command).\n\n**daemon (full).** The Gemini transport is FilesUnderRoot — one append-only JSONL per session under ~/.gemini/tmp/<project>/chats/session-*.jsonl. The parser only emits state-driving events from transcript messages of type `user` (a real text prompt → `user_message` → working) or `gemini` (assistant message; final text-only with no open tool calls → inferred `turn_done` → ready). A synchronous slash command is consumed by the TUI and is NOT persisted to the JSONL transcript as a `user` message, so the parser never sees a line that could open a turn — no `user_message`, no `→ working`. The session sits in `ready` before, during, and after the slash window. This satisfies both acceptance bullets (state stays ready; no `→ working` for the slash command itself).\n\nNote the structural difference from claudecode: claudecode logs a `<local-command>` wrapper into its transcript and relies on `isLocalCommandContent` to filter it. Gemini needs no such filter because it never persists the slash invocation at all — there is nothing to drop. The same correct observable (no transition) is reached by a different mechanism.\n\n**driver (ready).** The gemini-cli interactive driver lists `slash` in DRIVE_ELICITS (driver-interactive.sh:87) and dispatches `send|slash` to `send_text` (types text + Enter). The recipe issues `/stats` and `/help` as `slash` steps inside a window held open by `sleep`, and never `wait_turn`s on a slash step. (send_text increments EXPECTED_TURNS even for a slash; that is harmless here because the only `wait_turn` is on the warm-up turn that precedes the slashes — no trailing wait_turn can be tripped by the inflated counter.) No stubbed primitive (`keys`, `reset_session`, …) is required.\n\n## Provisional note\n\ndaemon=full is grounded in reading the parser plus the documented locality of the commands; the claim that Gemini writes NOTHING to the transcript for a slash invocation is an emission property a doc read can't fully confirm. Confidence held at 0.82; record promotes it from provisional to settled by confirming the transcript carries exactly one user line (the warm-up) across the /stats + /help window.",
+      "caveats": [
+        "Restrict the recipe to genuinely local commands. /chat save|resume, /memory add and /compress (context compaction) DO call the model or mutate session identity and would invalidate the no-LLM premise. /stats, /help, /about are safe.",
+        "/clear resets the conversation; avoid it (it belongs to session-reset, not this scenario).",
+        "daemon=full rests on Gemini never persisting a slash invocation as a transcript `user` message — an emission property record must confirm (provisional; confidence 0.82)."
+      ],
+      "sources": [
+        {
+          "kind": "url",
+          "ref": "https://github.com/google-gemini/gemini-cli/blob/main/docs/reference/commands.md",
+          "note": "/help (or /?): 'Display help information about Gemini CLI, including available commands and their usage'; /stats: 'Display detailed statistics for the current Gemini CLI session'; /about: 'Show version info' — all local display commands, no model call."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/parser.go",
+          "note": "parseMessage (100-109) only dispatches type=user / type=gemini; parseUser (113-158) opens a turn (user_message → working) only on a real text prompt. A slash command, never persisted as a `user` line, produces no event — so no → working."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/gemini-cli/driver-interactive.sh",
+          "note": "DRIVE_ELICITS includes `slash` (line 87); send|slash → send_text (line 232). Driver implements every step the recipe needs; no stubbed primitive required."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/testdata/real-toolcall-session.jsonl",
+          "note": "Confirms transcript shape: only user text prompts and `gemini` messages appear as lines; model is gemini-3-flash-preview."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "gemini CLI on PATH and authenticated (OAuth or API key)",
+        "irrlichd is recording (dev daemon with --record, or isolated mode)",
+        "The slash commands chosen (/stats, /help) must remain local-only display commands in the running gemini version"
+      ],
+      "setup": [
+        "Driver launches `gemini -y` under tmux in a fresh cwd; Gemini mints its own sessionId (harvested from the transcript header)",
+        "Avoid /clear (session reset), /chat save|resume, /memory add, /compress (real model calls or identity changes — different scenarios)"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: warm"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        },
+        {
+          "type": "slash",
+          "text": "/stats"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "slash",
+          "text": "/help"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the session entering ready at birth and a single ready→working→ready cycle driven by the warm-up turn ONLY",
+        "events.jsonl contains NO state_transition to working or waiting during the /stats + /help window",
+        "transcript.jsonl contains exactly 1 user text line (the warm-up) — neither /stats nor /help appears as a user turn",
+        "final session state is ready"
+      ],
+      "settings": {},
+      "timeout_seconds": 120
+    }
+  }
+}
