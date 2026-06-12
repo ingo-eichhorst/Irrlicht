@@ -3,7 +3,7 @@
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "bug",
-    "driver_capability": "gap:interrupt",
+    "driver_capability": "ready",
     "agent_cli_version": "0.46.0",
     "daemon_version": "0.5.1+6fcc851",
     "confidence": 0.75,
@@ -17,7 +17,7 @@
       "assessed_at": "2026-06-11T00:00:00Z",
       "agent_supports": "yes",
       "daemon_capability": "bug",
-      "driver_capability": "gap:interrupt",
+      "driver_capability": "ready",
       "confidence": 0.75,
       "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: bug; driver_capability: gap:interrupt\n\nRoute: driver-gap (record ports the `interrupt` step, then drives; because daemon=bug the recording is expected to leave the session STUCK in working, so it lands known_failing).\n\n## Scenario\n\nuser-esc-interrupt: the user cancels a long in-flight turn with ESC. User-observable signal (acceptance_criteria + process): ready → working → ready; state does NOT stick in working post-interrupt; a follow-up prompt drives a clean ready → working → ready recovery arc proving the parser reset.\n\n## agent_supports: yes\n\nGemini CLI binds ESC to cancel the in-flight turn. The cancel path runs through the interactive UI's `handleUserCancelledEvent` (bundle interactiveCli-OYDA765S.js): on the abort signal the stream yields `GeminiEventType.UserCancelled` (`processGeminiStreamEvents` returns status 1), the handler flushes any pending history item (a partial `gemini` message, or a `tool_group` whose validating/scheduled/awaiting_approval/executing tools are rewritten to status `cancelled`), then appends `addItem({ type: \"info\", text: \"User cancelled the request.\" })`, calls `setIsResponding(false)`, and returns control to the prompt. Only the in-flight turn aborts; the process stays alive. So ESC cancellation is a real, shipped feature (v0.46.0).\n\n## daemon_capability: bug\n\nA durable trace of the cancel exists on disk but the gemini-cli parser mis-handles it, so the session sticks in `working` indefinitely — the same failure mode as turn-aborted-by-error:\n\n- What lands on disk: the `useHistoryManager.addItem` chat-recording switch records ONLY `compression`/`info`/`warning`/`error` items to the session file via `chatRecordingService.recordMessage`, and explicitly BREAKS (no-op) for `user`/`gemini`/`gemini_content` (bundle chunk-SCXTH56Q.js, `switch (itemData.type)` under `if (!isResuming && chatRecordingService)`). So the cancel writes exactly one MessageRecord — `{type:\"info\",content:\"User cancelled the request.\"}` — to ~/.gemini/tmp/<project>/chats/session-*.jsonl.\n- No terminal `gemini` message is written for the cancelled turn: on UserCancelled `processGeminiStreamEvents` returns 1 → the caller early-`return`s BEFORE the normal post-stream `recordMessage({type:\"gemini\", content: responseText})` flush (interactiveCli-OYDA765S.js). The pending partial `gemini` item flushed via `addItem` during cancel is NOT recorded (the switch breaks for `gemini`). So the last persisted observable event for the turn remains the user prompt (`user_message`, state=working).\n- The parser drops the cancel notice: `parser.go` `parseMessage` dispatches strictly on type — `user`→parseUser, `gemini`→parseAssistant, **default → return false → ev.Skip** (parser.go:100-109, 63-65). `type:\"info\"` (and `error`/`warning`) all fall through to default and are silently skipped.\n- `turn_done` is inferred ONLY from a final text-only `gemini` message with no open tool calls (parser.go:208-212); a cancelled turn never produces that message. `IsAgentDone()` fires only on LastEventType `turn_done` (gemini's path) or the claudecode-only `assistant`/`assistant_output` fallback (session.go) — neither fires. There is NO inactivity-driven working→ready sweep (the stale-tool timer was deleted in PR #106). So nothing settles the session.\n- The claudecode ESC mechanism does NOT apply here: the gemini parser never sets `ev.IsUserInterrupt`, so classifier rule 3 (LastWasUserInterrupt + LastEventType=user + !HasOpenToolCall → ready, state_classifier.go:80-95) cannot fire for gemini-cli.\n\nThe fix is local and small (map the cancel `type:\"info\"` notice — or treat info/error/warning notices generally — to a terminal/turn_done signal in the gemini parser, the same shape as the opencode `message.data.error` fix and the gemini turn-aborted-by-error fix). Signal present, daemon mis-handles → `bug`, NOT `incapable` (no architecture limit; the trace is on disk).\n\nNote on the tool-cancel sub-case: if ESC lands while a tool is open, the flushed `tool_group` marks tools `cancelled`; gemini also persists a finished toolCall with a terminal status, and the parser's `case \"error\",\"cancelled\"` (parser.go:197-202) closes the call (ToolResultIDs) and sets IsError. That balances HasOpenToolCall but still does not emit turn_done, so the session still sticks in working — the bug is the same. This cell exercises the pure-text-stream ESC flavour (no tool open), matching the canonical claudecode spec.\n\n## driver_capability: gap:interrupt\n\nThe recipe needs an `interrupt` step (send ESC to the in-flight turn). The gemini-cli interactive driver implements only `send`/`slash`/`wait_turn`/`sleep`; the `interrupt` case is a loud `not_implemented` stub (`not_implemented interrupt || break` with `# TODO(gemini-cli): Escape/Ctrl-C the in-flight turn`, driver-interactive.sh:235; the helper exits 3). The recipe-lint helper lists `interrupt` as an arm only because the case label exists — the body is a stub, so the step type is NOT actually implemented → `gap:interrupt`. This is tooling work (port the step, e.g. `tmux send-keys -t \"$SESSION\" Escape`), not an observability limit. Same gap opencode and kiro-cli carry for this scenario.\n\n## known_failing\n\nThis cell records `known_failing`: the spec asserts the CORRECT contract (ready→working→ready, no stick) while the live recording — once the interrupt step is ported — is expected to leave the session STUCK in working until the parser fix lands. Do not weaken the spec to match the bug.",
       "caveats": [
@@ -63,7 +63,7 @@
       "preconditions": [
         "gemini CLI on PATH and authenticated (oauth-personal or API key)",
         "gemini version where ESC cancels the in-flight turn (confirmed v0.46.0)",
-        "the interactive driver's `interrupt` step is ported (currently a not_implemented stub — record must port a tmux send-keys Escape arm before driving)",
+        "the ESC interrupt is delivered via the keys step (tmux send-keys Escape) — the keys primitive is ported in the gemini-cli driver",
         "irrlichd is recording (run-cell.sh isolated, or --attach against a daemon started with --record)"
       ],
       "setup": [
@@ -80,7 +80,8 @@
           "seconds": 8
         },
         {
-          "type": "interrupt"
+          "type": "keys",
+          "keys": "Escape"
         },
         {
           "type": "sleep",
