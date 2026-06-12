@@ -42,6 +42,7 @@ func TailerToDomain(m *tailer.SessionMetrics) *session.SessionMetrics {
 		PermissionMode:                    m.PermissionMode,
 		SawUserBlockingToolClosedThisPass: m.SawUserBlockingToolClosedThisPass,
 		NoSubstantiveActivity:             m.NoSubstantiveActivity,
+		SawManualCompactBoundary:          m.SawManualCompactBoundary,
 	}
 	if len(m.SubagentCompletions) > 0 {
 		result.SubagentCompletions = make([]session.SubagentCompletion, len(m.SubagentCompletions))

@@ -31,6 +31,7 @@ func (d *SessionDetector) onRemoved(ev agent.Event) {
 	// keep the entry forever, and a recycled session ID would inherit it.
 	d.permMu.Lock()
 	delete(d.permissionPending, ev.SessionID)
+	delete(d.compactPending, ev.SessionID)
 	delete(d.editToolOpenSince, ev.SessionID)
 	d.permMu.Unlock()
 
@@ -122,15 +123,23 @@ func (d *SessionDetector) HandlePermissionHook(sessionID, transcriptPath, hookEv
 	}
 	d.permMu.Unlock()
 
+	// processActivity overlays PermissionPending onto the metrics before
+	// calling ClassifyState.
+	d.dispatchHookActivity(sessionID, transcriptPath, hookEventName)
+}
+
+// dispatchHookActivity records a hook-received lifecycle event and injects a
+// synthetic activity event so the event loop re-classifies the session now —
+// without waiting on a transcript flush. Shared by the permission and
+// compaction hook handlers, whose only differences are which pending map they
+// set (done by the caller) and the hook name.
+func (d *SessionDetector) dispatchHookActivity(sessionID, transcriptPath, hookName string) {
 	d.record(lifecycle.Event{
 		Kind:      lifecycle.KindHookReceived,
 		SessionID: sessionID,
-		HookName:  hookEventName,
+		HookName:  hookName,
 	})
 
-	// Inject synthetic activity event so the event loop re-evaluates the
-	// session. processActivity will overlay PermissionPending onto the
-	// metrics before calling ClassifyState.
 	select {
 	case d.debouncedEvents <- agent.Event{
 		Type:           agent.EventActivity,
@@ -139,8 +148,34 @@ func (d *SessionDetector) HandlePermissionHook(sessionID, transcriptPath, hookEv
 	}:
 	default:
 		d.log.LogError("hook-receiver", sessionID,
-			"debouncedEvents channel full, permission event dropped")
+			fmt.Sprintf("debouncedEvents channel full, %s hook event dropped", hookName))
 	}
+}
+
+// HandleCompactHook processes a Claude Code PreCompact hook for a manual
+// /compact. The compaction window writes nothing to the transcript, so without
+// an out-of-band push the session stays frozen in its pre-compact state instead
+// of showing working (issue #657). Marking compactPending makes processActivity
+// overlay CompactInProgress so ClassifyState holds the session in working until
+// the compact_boundary lands (which #656 turns into turn_done → ready).
+//
+// Only manual compaction is handled: auto-compaction fires mid-turn while the
+// session is already working, so a forced working blip would be spurious. The
+// HTTP handler already gates on trigger=="manual"; this re-checks defensively.
+//
+// Safe to call from any goroutine (e.g. HTTP handler).
+func (d *SessionDetector) HandleCompactHook(sessionID, transcriptPath, trigger string) {
+	if trigger != "manual" {
+		return
+	}
+
+	d.permMu.Lock()
+	d.compactPending[sessionID] = true
+	d.permMu.Unlock()
+
+	// Flip the session to working immediately — there is no transcript flush
+	// coming during the compaction window to trigger a natural re-evaluation.
+	d.dispatchHookActivity(sessionID, transcriptPath, "PreCompact")
 }
 
 // seedFromDisk populates the projectSessions map from existing sessions,

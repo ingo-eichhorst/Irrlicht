@@ -38,20 +38,35 @@ const hookMatcher = "Bash|Write|Edit|MultiEdit|NotebookEdit|WebFetch|mcp__.*|Ask
 // Bash/Write/… would set permissionPending on every tool call. (Issue #307.)
 const hookMatcherPreToolUse = "AskUserQuestion|ExitPlanMode"
 
+// hookMatcherPreCompact is the matcher for the PreCompact event. Unlike the
+// other events (whose matcher is a tool-name regex), Claude Code's PreCompact
+// matcher matches the compaction *trigger* — "manual" or "auto". We install
+// "manual" so the hook fires only for a user-invoked /compact, gating at the
+// source: auto-compaction fires mid-turn while the session is already working,
+// so forcing working there would be a spurious blip (#657).
+const hookMatcherPreCompact = "manual"
+
 // installedHookEvents are the Claude Code hook events we install handlers for.
 var installedHookEvents = []string{
 	HookPermissionRequest,
 	HookPreToolUse,
 	HookPostToolUse,
 	HookPostToolUseFailure,
+	HookPreCompact,
 }
 
-// matcherForEvent returns the tool matcher we install for the given event.
+// matcherForEvent returns the matcher we install for the given event. For most
+// events this is a tool-name regex; for PreCompact it is the compaction trigger
+// ("manual").
 func matcherForEvent(event string) string {
-	if event == HookPreToolUse {
+	switch event {
+	case HookPreToolUse:
 		return hookMatcherPreToolUse
+	case HookPreCompact:
+		return hookMatcherPreCompact
+	default:
+		return hookMatcher
 	}
-	return hookMatcher
 }
 
 // HookDeliveryAvailable reports whether the tool the installed hook command

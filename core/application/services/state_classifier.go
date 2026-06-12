@@ -36,6 +36,19 @@ func ClassifyState(currentState string, metrics *session.SessionMetrics) (string
 		return currentState, ""
 	}
 
+	// 0b. Manual /compact in progress (PreCompact hook) → working, regardless
+	// of the stale pre-compact turn_done that IsAgentDone() would otherwise read
+	// as ready. Compaction writes nothing to the transcript for tens of seconds
+	// to minutes; this overlay holds the session busy for that window (#657).
+	// The detector clears it the pass the manual compact_boundary lands, which
+	// then routes to ready via rule 2 (#656).
+	if metrics.CompactInProgress {
+		if currentState != session.StateWorking {
+			return session.StateWorking, "manual /compact in progress → working"
+		}
+		return currentState, ""
+	}
+
 	// 1. User-blocking tool open → waiting.
 	if metrics.NeedsUserAttention() {
 		if currentState != session.StateWaiting {

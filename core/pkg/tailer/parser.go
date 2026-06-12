@@ -122,6 +122,14 @@ type ParsedEvent struct {
 	// with no matches, a failing build, etc.). See issue #102 Bug B.
 	IsUserInterrupt bool
 
+	// IsManualCompactBoundary is true only for a compact_boundary system event
+	// whose compactMetadata.trigger == "manual" — a user-invoked /compact. The
+	// parser also sets EventType="turn_done" for it (the context was replaced,
+	// the prior turn is definitively over). The tailer surfaces it as the
+	// per-pass SessionMetrics.SawManualCompactBoundary so the detector can clear
+	// the PreCompact force-working hold (#657). Auto-compaction never sets this.
+	IsManualCompactBoundary bool
+
 	// IsToolDenial is true when the user denied a permission prompt for a
 	// tool call ("[Request interrupted by user for tool use]" text marker).
 	// This is a *different* signal from IsUserInterrupt: a tool denial does

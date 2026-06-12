@@ -468,6 +468,20 @@ func (d *SessionDetector) processActivityLocked(id agent.Identity, state *sessio
 				state.Metrics.PermissionPending = true
 			}
 		}
+		// Overlay the PreCompact force-working hold (#657). The compact_boundary
+		// that ends a manual /compact lands as SawManualCompactBoundary — clear
+		// the hold the same pass so ClassifyState can release working → ready
+		// (#656) instead of holding. Otherwise, while the hook recorded a
+		// pending compaction, force CompactInProgress so the session shows
+		// working through the silent compaction window. The map persists the
+		// hold across the no-op re-evaluations between the hook and the boundary.
+		if state.Metrics != nil {
+			if state.Metrics.SawManualCompactBoundary {
+				delete(d.compactPending, ev.SessionID)
+			} else if d.compactPending[ev.SessionID] {
+				state.Metrics.CompactInProgress = true
+			}
+		}
 		d.permMu.Unlock()
 
 		// Overlay the transcript-based stalled-edit-tool fallback (#488).

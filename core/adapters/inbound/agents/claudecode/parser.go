@@ -179,8 +179,8 @@ func handleAttachmentEvent(raw map[string]interface{}, ev *tailer.ParsedEvent) {
 	ev.TaskSnapshot = &snap
 }
 
-// handleSystemEvent maps turn_duration / stop_hook_summary subtypes to
-// turn_done; everything else is skipped.
+// handleSystemEvent maps turn_duration / stop_hook_summary and the manual
+// compact_boundary subtypes to turn_done; everything else is skipped.
 //
 // The skip branch covers purely informational subtypes that Claude Code
 // writes after a turn has already ended — most notably `away_summary`,
@@ -188,10 +188,28 @@ func handleAttachmentEvent(raw map[string]interface{}, ev *tailer.ParsedEvent) {
 // promoted to turn_done: they describe what happened, they aren't a turn
 // completion themselves. The tailer's per-pass NoSubstantiveActivity flag
 // then lets the detector ignore the resulting mtime touch (issue #329).
+//
+// A manual /compact is the exception: its compact_boundary replaces the
+// context and definitively ends the prior turn — even one stranded mid
+// tool-use with no turn_done of its own. Promoting it to turn_done sweeps any
+// lingering open tool call so the session releases working → ready (#656), and
+// flags IsManualCompactBoundary so the detector can clear its force-working
+// hold (#657). Auto-compaction fires mid-turn and continues, so it stays
+// skipped — promoting it would emit a spurious ready-blip.
 func handleSystemEvent(raw map[string]interface{}, ev *tailer.ParsedEvent) {
-	if subtype, _ := raw["subtype"].(string); subtype == "turn_duration" || subtype == "stop_hook_summary" {
+	subtype, _ := raw["subtype"].(string)
+	if subtype == "turn_duration" || subtype == "stop_hook_summary" {
 		ev.EventType = "turn_done"
 		return
+	}
+	if subtype == "compact_boundary" {
+		if meta, ok := raw["compactMetadata"].(map[string]interface{}); ok {
+			if trigger, _ := meta["trigger"].(string); trigger == "manual" {
+				ev.EventType = "turn_done"
+				ev.IsManualCompactBoundary = true
+				return
+			}
+		}
 	}
 	ev.Skip = true
 }

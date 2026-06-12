@@ -55,6 +55,40 @@ func TestClassifyState(t *testing.T) {
 			wantState:  session.StateWaiting,
 			wantReason: true,
 		},
+		// Rule 0b: CompactInProgress (manual /compact) → working, holding the
+		// session busy through the silent compaction window (#657).
+		{
+			name:    "ready → working (compact in progress)",
+			current: session.StateReady,
+			metrics: &session.SessionMetrics{
+				CompactInProgress: true,
+				// The pre-compact turn_done that would otherwise read as ready.
+				LastEventType: "turn_done",
+			},
+			wantState:  session.StateWorking,
+			wantReason: true,
+		},
+		{
+			name:    "working stays working (compact in progress, already working)",
+			current: session.StateWorking,
+			metrics: &session.SessionMetrics{
+				CompactInProgress: true,
+				LastEventType:     "turn_done",
+			},
+			wantState: session.StateWorking,
+		},
+		{
+			// Once the boundary lands the detector clears CompactInProgress, so
+			// the same turn_done metrics route to ready via rule 2 (#656).
+			name:    "working → ready (compact cleared, turn_done)",
+			current: session.StateWorking,
+			metrics: &session.SessionMetrics{
+				CompactInProgress: false,
+				LastEventType:     "turn_done",
+			},
+			wantState:  session.StateReady,
+			wantReason: true,
+		},
 		{
 			// Regression guard: Bash open without permission pending must NOT
 			// trigger waiting — only the hook signal does.

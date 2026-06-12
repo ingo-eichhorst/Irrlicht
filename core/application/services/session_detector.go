@@ -132,6 +132,14 @@ type SessionDetector struct {
 	permMu            sync.Mutex
 	permissionPending map[string]bool // sessionID → true
 
+	// compactPending tracks sessions in a manual /compact, set by
+	// HandleCompactHook (PreCompact hook) and cleared when the
+	// compact_boundary lands (SawManualCompactBoundary). While set,
+	// processActivity overlays CompactInProgress so ClassifyState holds the
+	// session in working through the silent compaction window (#657). Guarded
+	// by permMu — same goroutine-crossing story as permissionPending.
+	compactPending map[string]bool // sessionID → true
+
 	// editToolOpenSince tracks, per session, the Unix time a permission-gated
 	// file-edit tool first appeared open. Guarded by permMu. Drives the
 	// OpenToolStalled transcript fallback (#488): an edit tool open past
@@ -206,6 +214,7 @@ func NewSessionDetector(
 		debouncedEvents:   make(chan agent.Event, 64),
 		deletedCooldown:   10 * time.Second,
 		permissionPending: make(map[string]bool),
+		compactPending:    make(map[string]bool),
 		editToolOpenSince: make(map[string]int64),
 		bgLiveProbe:       anyLiveOutputWriter,
 		bgLive:            make(map[string]bool),

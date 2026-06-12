@@ -152,6 +152,14 @@ type SessionMetrics struct {
 	// (issue #329).
 	NoSubstantiveActivity bool `json:"-"`
 
+	// SawManualCompactBoundary is true when this pass parsed a manual
+	// compact_boundary (user-invoked /compact) — the burst-written marker
+	// Claude Code flushes when compaction finishes. Per-pass transient; the
+	// detector uses it to clear the PreCompact force-working hold so the
+	// session releases working → ready (#657, paired with #656). Auto-compaction
+	// never sets it.
+	SawManualCompactBoundary bool `json:"-"`
+
 	// Tasks is the current task list for this session, accumulated from
 	// TaskCreate / TaskUpdate tool_use events in the Claude Code transcript.
 	// Nil for sessions that have not called TaskCreate.
@@ -497,6 +505,7 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 	// re-classify against stale metrics. See issue #329.
 	linesParsedThisPass := 0
 	substantiveThisPass := false
+	sawManualCompactThisPass := false
 
 	// Per-pass signals must be cleared so the detector only drains events
 	// discovered in this scan (see issue #134).
@@ -628,6 +637,9 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 		}
 		linesParsedThisPass++
 		substantiveThisPass = true
+		if parsed.IsManualCompactBoundary {
+			sawManualCompactThisPass = true
+		}
 		t.processParsedEvent(parsed, &sawUserBlockingClosedThisPass)
 	}
 
@@ -650,6 +662,7 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 	t.computeMetrics()
 	t.metrics.SawUserBlockingToolClosedThisPass = sawUserBlockingClosedThisPass
 	t.metrics.NoSubstantiveActivity = linesParsedThisPass > 0 && !substantiveThisPass
+	t.metrics.SawManualCompactBoundary = sawManualCompactThisPass
 
 	// Model config fallback. Skipped on the replay path (see
 	// disableModelConfigFallback) so fixture output stays hermetic.

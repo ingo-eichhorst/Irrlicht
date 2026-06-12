@@ -289,6 +289,64 @@ func TestEnsureHooksInstalled_InstallsPreToolUseAndExpandedMatcher(t *testing.T)
 	if m, _ := postGroup["matcher"].(string); m != hookMatcher {
 		t.Errorf("PostToolUse matcher = %q, want %q", m, hookMatcher)
 	}
+
+	// PreCompact: one group whose matcher is the compaction trigger "manual"
+	// (not a tool-name regex), so the hook fires only for a user /compact (#657).
+	preCompact, ok := hooksMap[HookPreCompact].([]interface{})
+	if !ok || len(preCompact) != 1 {
+		t.Fatalf("expected 1 PreCompact group, got %d", len(preCompact))
+	}
+	preCompactGroup := preCompact[0].(map[string]interface{})
+	if m, _ := preCompactGroup["matcher"].(string); m != hookMatcherPreCompact {
+		t.Errorf("PreCompact matcher = %q, want %q", m, hookMatcherPreCompact)
+	}
+}
+
+// TestEnsureHooksInstalled_AddsPreCompactToExistingInstall verifies the
+// idempotent installer adds the newly-listed PreCompact event to a settings.json
+// that already carries the original four events, without duplicating them — the
+// upgrade path for existing installs (#657).
+func TestEnsureHooksInstalled_AddsPreCompactToExistingInstall(t *testing.T) {
+	home := withTempHome(t)
+
+	// Seed settings.json with the original four managed hooks (no PreCompact).
+	existing := map[string]interface{}{"hooks": map[string]interface{}{}}
+	hooks := existing["hooks"].(map[string]interface{})
+	for _, ev := range []string{HookPermissionRequest, HookPreToolUse, HookPostToolUse, HookPostToolUseFailure} {
+		hooks[ev] = []interface{}{makeHookGroup(matcherForEvent(ev), installedHookCommand)}
+	}
+	path := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := json.Marshal(existing)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	modified, err := EnsureHooksInstalled()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !modified {
+		t.Fatalf("expected modified=true (PreCompact was missing)")
+	}
+
+	settings := readJSON(t, filepath.Join(home, ".claude", "settings.json"))
+	hooksMap := settings["hooks"].(map[string]interface{})
+	preCompact, ok := hooksMap[HookPreCompact].([]interface{})
+	if !ok || len(preCompact) != 1 {
+		t.Fatalf("expected exactly 1 PreCompact group after upgrade, got %d", len(preCompact))
+	}
+
+	// Re-running must be a no-op now that all five events are present.
+	modified, err = EnsureHooksInstalled()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if modified {
+		t.Errorf("expected modified=false on second run (already installed)")
+	}
 }
 
 // TestEnsureHooksInstalled_MigratesLegacyMatchers simulates a pre-#307
