@@ -71,11 +71,8 @@
           "text": "Write a haiku about the ocean."
         },
         {
-          "type": "wait_turn"
-        },
-        {
           "type": "sleep",
-          "seconds": 12
+          "seconds": 15
         }
       ]
     }
