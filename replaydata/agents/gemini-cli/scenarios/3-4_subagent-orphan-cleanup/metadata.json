@@ -89,7 +89,7 @@
         },
         {
           "type": "sleep",
-          "seconds": 12
+          "seconds": 22
         },
         {
           "type": "sigkill"
