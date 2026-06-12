@@ -12,6 +12,21 @@ beyond), see the [Roadmap](https://irrlicht.io/docs/roadmap.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- A manual `/compact` now shows the full lifecycle: the session goes **working**
+  for the whole compaction window and returns to **ready** when it finishes.
+  Previously the compaction window (which writes nothing to the transcript)
+  stayed frozen at the pre-compact state, and a `/compact` invoked mid tool-use
+  was stranded in "working" forever. The fix adds a Claude Code `PreCompact`
+  hook (forces working during) and treats the manual `compact_boundary` as a
+  turn boundary (releases to ready after). (#656, #657; follow-up to #641)
+  - **Existing installs** pick up the "working during compaction" half on the
+    next daemon restart — `EnsureHooksInstalled` adds the new `PreCompact` entry
+    to `~/.claude/settings.json` automatically.
+  - An interrupted compaction that never finishes is bounded by a timeout, so a
+    cancelled `/compact` can't strand the session in "working" either.
+
 ## [0.5.1] — 2026-06-07
 
 ### Ghost sessions and stuck states fixed: /compact strandings, Claude Code 2.1.168's background daemon, and restart amnesia.

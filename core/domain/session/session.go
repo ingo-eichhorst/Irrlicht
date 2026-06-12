@@ -163,6 +163,22 @@ type SessionMetrics struct {
 	// serialized state.
 	NoSubstantiveActivity bool `json:"-"`
 
+	// SawManualCompactBoundary reflects the last tailer pass: true when it
+	// parsed a manual compact_boundary (user /compact), the marker Claude Code
+	// burst-writes when compaction finishes. The detector uses it to clear the
+	// PreCompact force-working hold so the session releases working → ready
+	// (#657, paired with #656). Per-pass: MergeMetrics copies it from newM with
+	// no fallback, and json:"-" keeps it out of serialized state.
+	SawManualCompactBoundary bool `json:"-"`
+
+	// CompactInProgress is an overlay flag set by the detector (NOT the parser)
+	// while a manual /compact is running: the PreCompact hook recorded a pending
+	// compaction and no compact_boundary has landed yet. ClassifyState forces
+	// working while it is set, holding the session busy through the silent
+	// compaction window where the transcript receives no writes (#657). Cleared
+	// the pass SawManualCompactBoundary fires. Transient, never persisted.
+	CompactInProgress bool `json:"-"`
+
 	// SubagentCompletions surfaces parent-side "subagent done" signals
 	// from the most recent transcript scan (origin.kind="task-notification"
 	// lines parsed by the Claude Code adapter). Per-pass and transient —
@@ -714,6 +730,7 @@ func MergeMetrics(newM, oldM *SessionMetrics) *SessionMetrics {
 		CumCacheCreationTokens:   newM.CumCacheCreationTokens,
 		Tasks:                    newM.Tasks,
 		NoSubstantiveActivity:    newM.NoSubstantiveActivity,
+		SawManualCompactBoundary: newM.SawManualCompactBoundary,
 		RateLimit:                newM.RateLimit,
 		RateLimitForecastEta:     newM.RateLimitForecastEta,
 		TaskEstimate:             newM.TaskEstimate,

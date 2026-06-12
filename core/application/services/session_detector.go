@@ -40,6 +40,16 @@ const activityDebounceWindow = 2 * time.Second
 // transcript on this interval catches the missed events.
 const staleWorkingRefreshInterval = 5 * time.Second
 
+// compactHoldTimeout bounds the PreCompact force-working hold (#657). Normally
+// the hold clears when the manual compact_boundary lands, but an interrupted or
+// failed /compact may never write one — without a ceiling the session would be
+// re-held working on every refreshStaleSessions tick and stranded forever (the
+// very failure #656 fixed). A real manual compaction runs at most a few minutes
+// (the #656 live evidence was ~161s), so this timeout sits comfortably beyond
+// any genuine window: after it elapses an orphaned hold is dropped and the
+// session re-classifies normally.
+const compactHoldTimeout = 5 * time.Minute
+
 // SubagentQuietWindow is how long a subagent's transcript must have been
 // silent before finishOrphanedChildren will promote it to ready.
 //
@@ -132,6 +142,16 @@ type SessionDetector struct {
 	permMu            sync.Mutex
 	permissionPending map[string]bool // sessionID → true
 
+	// compactPending tracks sessions in a manual /compact: sessionID → the Unix
+	// time the PreCompact hook fired. Set by HandleCompactHook; cleared when the
+	// compact_boundary lands (SawManualCompactBoundary) or compactHoldTimeout
+	// elapses (the safety net for an interrupted compaction that never writes a
+	// boundary). While set, processActivity overlays CompactInProgress so
+	// ClassifyState holds the session in working through the silent compaction
+	// window (#657). Guarded by permMu — same goroutine-crossing story as
+	// permissionPending.
+	compactPending map[string]int64 // sessionID → unix seconds (hook fire time)
+
 	// editToolOpenSince tracks, per session, the Unix time a permission-gated
 	// file-edit tool first appeared open. Guarded by permMu. Drives the
 	// OpenToolStalled transcript fallback (#488): an edit tool open past
@@ -206,6 +226,7 @@ func NewSessionDetector(
 		debouncedEvents:   make(chan agent.Event, 64),
 		deletedCooldown:   10 * time.Second,
 		permissionPending: make(map[string]bool),
+		compactPending:    make(map[string]int64),
 		editToolOpenSince: make(map[string]int64),
 		bgLiveProbe:       anyLiveOutputWriter,
 		bgLive:            make(map[string]bool),

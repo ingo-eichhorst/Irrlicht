@@ -20,13 +20,19 @@ import (
 )
 
 // Hook event names. Claude Code fires these; the daemon recognizes only
-// these four and ignores everything else.
+// these five and ignores everything else.
 const (
 	HookPermissionRequest  = "PermissionRequest"
 	HookPreToolUse         = "PreToolUse"
 	HookPostToolUse        = "PostToolUse"
 	HookPostToolUseFailure = "PostToolUseFailure"
+	HookPreCompact         = "PreCompact"
 )
+
+// compactTriggerManual is the PreCompact trigger value for a user-invoked
+// /compact (as opposed to "auto"). Only manual compaction forces working — an
+// auto-compaction fires mid-turn while the session is already working (#657).
+const compactTriggerManual = "manual"
 
 // Tool names that suspend the agent waiting for user input. PreToolUse hooks
 // must match one of these — anything else is rejected by the handler, even
@@ -48,12 +54,19 @@ type hookPayload struct {
 	PermissionMode string          `json:"permission_mode,omitempty"`
 	IsInterrupt    bool            `json:"is_interrupt,omitempty"`
 	ToolInput      json.RawMessage `json:"tool_input,omitempty"`
+	// Trigger is "manual" or "auto" on PreCompact events (the compaction
+	// cause). Empty on other hook events.
+	Trigger string `json:"trigger,omitempty"`
 }
 
 // HookTarget is the interface the handler calls into. Satisfied by
 // *services.SessionDetector without importing the services package.
 type HookTarget interface {
 	HandlePermissionHook(sessionID, transcriptPath, hookEventName string)
+	// HandleCompactHook forces a session to working for the duration of a
+	// manual /compact, whose compaction window writes nothing to the transcript
+	// (#657). trigger is the PreCompact cause ("manual" / "auto").
+	HandleCompactHook(sessionID, transcriptPath, trigger string)
 }
 
 // MarkerTarget is the narrow interface for hook-carried task-estimate
@@ -177,6 +190,23 @@ func NewHookHandler(target HookTarget, markers MarkerTarget, gate ConsentGate, l
 		switch payload.HookEventName {
 		case HookPermissionRequest, HookPostToolUse, HookPostToolUseFailure:
 			dispatch()
+		case HookPreCompact:
+			// A manual /compact replaces the context; the compaction window
+			// (tens of seconds to minutes) writes nothing to the transcript, so
+			// without this hook the session stays frozen in its pre-compact
+			// state instead of showing working (#657). Force working now; the
+			// compact_boundary then releases it back to ready (#656). The
+			// installer matches "manual"; the trigger check here is
+			// defense-in-depth so an auto-compaction (already working, fires
+			// mid-turn) never gets a spurious working blip.
+			if payload.Trigger == compactTriggerManual {
+				log.LogInfo("hook-receiver", sessionID,
+					fmt.Sprintf("received %s (trigger=%s)", payload.HookEventName, payload.Trigger))
+				target.HandleCompactHook(sessionID, payload.TranscriptPath, payload.Trigger)
+			} else {
+				log.LogInfo("hook-receiver", sessionID,
+					fmt.Sprintf("ignored %s (trigger=%q, not manual)", payload.HookEventName, payload.Trigger))
+			}
 		case HookPreToolUse:
 			// Marker scan first, for ALL tools (#604): the rules block lets
 			// the agent carry its progress marker in a tool input (e.g. the

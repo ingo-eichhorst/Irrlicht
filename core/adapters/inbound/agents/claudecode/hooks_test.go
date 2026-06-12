@@ -11,14 +11,20 @@ import (
 	"irrlicht/core/domain/session"
 )
 
-// mockTarget records calls to HandlePermissionHook for assertions.
+// mockTarget records calls to HandlePermissionHook and HandleCompactHook for
+// assertions.
 type mockTarget struct {
-	mu    sync.Mutex
-	calls []hookCall
+	mu           sync.Mutex
+	calls        []hookCall
+	compactCalls []compactCall
 }
 
 type hookCall struct {
 	sessionID, transcriptPath, hookEventName string
+}
+
+type compactCall struct {
+	sessionID, transcriptPath, trigger string
 }
 
 func (m *mockTarget) HandlePermissionHook(sessionID, transcriptPath, hookEventName string) {
@@ -27,10 +33,22 @@ func (m *mockTarget) HandlePermissionHook(sessionID, transcriptPath, hookEventNa
 	m.calls = append(m.calls, hookCall{sessionID, transcriptPath, hookEventName})
 }
 
+func (m *mockTarget) HandleCompactHook(sessionID, transcriptPath, trigger string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.compactCalls = append(m.compactCalls, compactCall{sessionID, transcriptPath, trigger})
+}
+
 func (m *mockTarget) getCalls() []hookCall {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return append([]hookCall{}, m.calls...)
+}
+
+func (m *mockTarget) getCompactCalls() []compactCall {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]compactCall{}, m.compactCalls...)
 }
 
 // mockLogger satisfies outbound.Logger.
@@ -171,6 +189,68 @@ func TestHookHandler_PreToolUse_RejectsUnexpectedTool(t *testing.T) {
 	}
 	if len(target.getCalls()) != 0 {
 		t.Errorf("PreToolUse for Bash should not dispatch; got %d calls", len(target.getCalls()))
+	}
+}
+
+// TestHookHandler_PreCompactManual verifies a manual /compact PreCompact hook
+// routes to HandleCompactHook so the detector can force working for the
+// compaction window (#657).
+func TestHookHandler_PreCompactManual(t *testing.T) {
+	target := &mockTarget{}
+	handler := NewHookHandler(target, nil, nil, mockLogger{})
+
+	payload := hookPayload{
+		TranscriptPath: "/Users/u/.claude/projects/p/sess-comp.jsonl",
+		HookEventName:  "PreCompact",
+		Trigger:        "manual",
+	}
+	body, _ := json.Marshal(payload)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/hooks/claudecode", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if len(target.getCalls()) != 0 {
+		t.Errorf("PreCompact must not reach HandlePermissionHook; got %+v", target.getCalls())
+	}
+	compact := target.getCompactCalls()
+	if len(compact) != 1 {
+		t.Fatalf("got %d HandleCompactHook calls, want 1", len(compact))
+	}
+	if compact[0].sessionID != "sess-comp" {
+		t.Errorf("sessionID = %q, want %q", compact[0].sessionID, "sess-comp")
+	}
+	if compact[0].trigger != "manual" {
+		t.Errorf("trigger = %q, want %q", compact[0].trigger, "manual")
+	}
+}
+
+// TestHookHandler_PreCompactAuto verifies an auto-compaction PreCompact hook is
+// accepted but ignored — the session is already working mid-turn, so forcing it
+// would be a spurious blip (#657).
+func TestHookHandler_PreCompactAuto(t *testing.T) {
+	target := &mockTarget{}
+	handler := NewHookHandler(target, nil, nil, mockLogger{})
+
+	payload := hookPayload{
+		TranscriptPath: "/Users/u/.claude/projects/p/sess-auto.jsonl",
+		HookEventName:  "PreCompact",
+		Trigger:        "auto",
+	}
+	body, _ := json.Marshal(payload)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/hooks/claudecode", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (accept but ignore)", rec.Code, http.StatusOK)
+	}
+	if got := target.getCompactCalls(); len(got) != 0 {
+		t.Errorf("auto PreCompact should not dispatch; got %+v", got)
 	}
 }
 

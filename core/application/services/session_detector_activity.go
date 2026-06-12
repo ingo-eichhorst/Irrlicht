@@ -470,6 +470,9 @@ func (d *SessionDetector) processActivityLocked(id agent.Identity, state *sessio
 		}
 		d.permMu.Unlock()
 
+		// Overlay the PreCompact force-working hold (#657).
+		d.applyCompactHold(ev.SessionID, state.Metrics, time.Now().Unix())
+
 		// Overlay the transcript-based stalled-edit-tool fallback (#488).
 		d.markStalledEditTool(ev.SessionID, state.Metrics, time.Now().Unix())
 
@@ -700,6 +703,39 @@ func (d *SessionDetector) applyBackgroundLiveness(state *session.SessionState) {
 // lets a held prompt flip without any new transcript write. The flag is
 // redundant once PermissionPending fired (the classifier prefers the hook),
 // so it is skipped then. now is injected for testability.
+// applyCompactHold maintains the PreCompact force-working hold (#657) for one
+// session. While a manual /compact is in flight the transcript receives no
+// writes, so this overlays CompactInProgress to keep the session in working
+// (ClassifyState rule 0b) through that silent window.
+//
+// The hold clears on the first of:
+//   - the manual compact_boundary landing (SawManualCompactBoundary): the
+//     normal path — compaction finished, release working → ready (#656);
+//   - compactHoldTimeout elapsing since the PreCompact hook fired: the safety
+//     net for a /compact that was interrupted or errored with no boundary ever
+//     written. Without it an orphaned hold would be re-armed on every
+//     refreshStaleSessions tick and strand the session in working forever — the
+//     very failure #656 fixed.
+//
+// now is injected for testability. Mirrors markStalledEditTool's shape.
+func (d *SessionDetector) applyCompactHold(sessionID string, m *session.SessionMetrics, now int64) {
+	if m == nil {
+		return
+	}
+	d.permMu.Lock()
+	defer d.permMu.Unlock()
+
+	since, ok := d.compactPending[sessionID]
+	if !ok {
+		return
+	}
+	if m.SawManualCompactBoundary || now-since >= int64(compactHoldTimeout.Seconds()) {
+		delete(d.compactPending, sessionID)
+		return
+	}
+	m.CompactInProgress = true
+}
+
 func (d *SessionDetector) markStalledEditTool(sessionID string, m *session.SessionMetrics, now int64) {
 	d.permMu.Lock()
 	defer d.permMu.Unlock()
