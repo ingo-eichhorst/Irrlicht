@@ -115,7 +115,7 @@ source "$_DRIVE_LIB/contracts.sh"
 # has a working seam below; a primitive whose arm is still a `not_implemented`
 # stub must NOT appear here, so recipe-lint flags a recipe needing it as a
 # semantic_gap (exit 4) before recording.
-DRIVE_ELICITS="send slash wait_turn sleep restart sigkill exit_clean start_session session"
+DRIVE_ELICITS="send slash wait_turn sleep restart resume sigkill exit_clean start_session session"
 DRIVE_SLASH_REQUIRES_STEP_TYPE=false
 
 # --- API-key auth (shared by every launch) -----------------------------------
@@ -183,7 +183,23 @@ boot_session() {
     done
     TRUSTED_CWDS+=("$cwd")
   fi
-  sleep 2   # grace for the input prompt to settle before the first send
+
+  # Wait for the input prompt to actually be ready before the first send. On a
+  # plain boot the footer's "Type your message" appears within ~1-2 s; on a
+  # `--resume` relaunch gemini first replays history under a "Resuming
+  # session..." spinner, and keystrokes typed during that phase have their text
+  # (and Enter) silently swallowed — the send is lost and wait_turn then times
+  # out. Poll the LIVE pane until the input box is up AND the resume spinner is
+  # gone (or fall through after the cap so a banner-text mismatch can't deadlock).
+  local waited=0
+  while (( waited < 60 )); do
+    local pane; pane="$(tmux capture-pane -t "$sess" -p -S -20 2>/dev/null || true)"
+    if grep -q 'Type your message' <<<"$pane" && ! grep -q 'Resuming session' <<<"$pane"; then
+      break
+    fi
+    sleep 0.5; waited=$((waited + 1))
+  done
+  sleep 1   # extra grace for the input prompt to settle before the first send
 }
 
 # transcript_claimed reports whether an absolute chats path is already bound to
