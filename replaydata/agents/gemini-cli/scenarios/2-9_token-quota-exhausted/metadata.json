@@ -91,7 +91,7 @@
         },
         {
           "type": "sleep",
-          "seconds": 5
+          "seconds": 6
         },
         {
           "type": "keys",
@@ -99,7 +99,14 @@
         },
         {
           "type": "sleep",
-          "seconds": 8
+          "seconds": 2
+        },
+        {
+          "type": "exit_clean"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
         }
       ],
       "verify": [
