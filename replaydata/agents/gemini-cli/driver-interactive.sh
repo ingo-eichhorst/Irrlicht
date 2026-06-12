@@ -161,8 +161,18 @@ boot_session() {
   mkdir -p "$cwd"
   write_auth_settings "$cwd"
   tmux kill-session -t "$sess" 2>/dev/null || true
+  # Failure-injection cells (token-quota-exhausted, turn-aborted-by-error) point
+  # gemini at a local mock that 429s / errors mid-turn. GOOGLE_GEMINI_BASE_URL IS
+  # honored on the api-key path, so forward it (and an optional GEMINI_MODEL
+  # override) into the NEW tmux session's env when set — a pre-existing tmux
+  # server otherwise hands the new session its OWN stale env, not the driver's.
+  # Injected only when present so normal recordings hit the real endpoint.
+  local extra_env=()
+  [[ -n "${GOOGLE_GEMINI_BASE_URL:-}" ]] && extra_env+=(-e "GOOGLE_GEMINI_BASE_URL=$GOOGLE_GEMINI_BASE_URL")
+  [[ -n "${GEMINI_MODEL:-}" ]] && extra_env+=(-e "GEMINI_MODEL=$GEMINI_MODEL")
   tmux new-session -d -s "$sess" -x 200 -y 50 -c "$cwd" \
     -e "GEMINI_API_KEY=$GEMINI_API_KEY" -e "GEMINI_CLI_TRUST_WORKSPACE=true" \
+    ${extra_env[@]+"${extra_env[@]}"} \
     "$@" \
     >>"$slot_stdout" 2>>"$DRIVER_LOG.stderr" \
     || { echo "[driver] failed to launch gemini under tmux" >&2; EXIT_REASON="nonzero(2)"; exit 1; }
