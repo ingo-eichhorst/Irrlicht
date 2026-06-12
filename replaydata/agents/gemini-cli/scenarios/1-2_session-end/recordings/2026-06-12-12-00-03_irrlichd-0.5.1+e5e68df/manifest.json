@@ -1,0 +1,8 @@
+{
+  "promoted_at": "2026-06-12T10:05:34Z",
+  "daemon_version": "0.5.1+e5e68df",
+  "agent_cli_version": "unknown",
+  "recipe_hash": "80fd8d3ea20089de5f972b93cf5584d9a324bf6b7388d97f11edc5ff3fe185fe",
+  "expected_pass_rate": "9/9 phases passed",
+  "recording_started_at": "2026-06-12T12:00:03.668156+02:00"
+}
