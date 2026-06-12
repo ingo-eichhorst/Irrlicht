@@ -62,14 +62,14 @@
       "script": [
         {
           "type": "send",
-          "text": "Do exactly this and nothing else. (1) Use the run_shell_command tool to run the command `sleep 8 && echo BG_DONE`, and set its is_background parameter to true so it launches in the background and the tool returns immediately. (2) Then repeatedly use the list background processes tool to check whether that background process is still running, waiting about 2 seconds between checks, until it is no longer running. (3) Only after the background process has finished, reply with exactly the word: done. Do not run any other commands."
+          "text": "Do exactly this and nothing else, in a single turn. Use the run_shell_command tool to run the command `sleep 25 && echo BG_DONE`, and set its is_background parameter to true so it launches in the background and the tool returns immediately with a background PID. As soon as that tool returns the background PID, reply with exactly the word: done. Do NOT poll, do NOT check whether it finished, do NOT run any other commands — the background process must still be running when you reply."
         },
         {
           "type": "wait_turn"
         },
         {
           "type": "sleep",
-          "seconds": 6
+          "seconds": 10
         }
       ],
       "verify": [
@@ -79,7 +79,7 @@
         "primary session is born ready and binds a PID within ~2s of launch"
       ],
       "settings": {},
-      "timeout_seconds": 240
+      "timeout_seconds": 120
     }
   }
 }
