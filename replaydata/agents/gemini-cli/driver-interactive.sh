@@ -115,7 +115,7 @@ source "$_DRIVE_LIB/contracts.sh"
 # has a working seam below; a primitive whose arm is still a `not_implemented`
 # stub must NOT appear here, so recipe-lint flags a recipe needing it as a
 # semantic_gap (exit 4) before recording.
-DRIVE_ELICITS="send slash wait_turn sleep restart resume sigkill exit_clean start_session session"
+DRIVE_ELICITS="send slash wait_turn sleep restart resume reset_session sigkill exit_clean start_session session"
 DRIVE_SLASH_REQUIRES_STEP_TYPE=false
 
 # --- API-key auth (shared by every launch) -----------------------------------

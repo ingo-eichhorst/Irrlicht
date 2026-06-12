@@ -7,7 +7,7 @@
     "agent_cli_version": "0.46.0",
     "daemon_version": "0.5.1+e4c1170",
     "confidence": 0.8,
-    "notes": "agent=yes (/clear mints randomUUID → new transcript file); daemon=full (same-PID cleanup #169 emits transcript_removed); driver=gap:reset_session (stubbed arm)"
+    "notes": "agent=yes (/clear mints new session id + new chats jsonl); daemon=full CONFIRMED (#169 same-PID cleanup emits transcript_removed for the old session — ~12s post-birth, not 2s); driver=ported (reset_session). Observed model gemini-3.5-flash (API-key tier)."
   },
   "details": {
     "assessment": {
@@ -23,7 +23,8 @@
       "caveats": [
         "Emission of the OLD file after /clear is not confirmable from code: if the same process keeps writing {\"$set\":{\"lastUpdated\"}} heartbeats to the rotated-out file, the parser skips them (no state transition) and the same-PID #169 cleanup still deletes the old session when the new one binds the PID — so the spec's old_session_ended is independent of it. Live recording settles this.",
         "/new is documented as an exact altName of /clear (same action, same UUID rotation) — the recipe covers /clear only; /new would re-record identically.",
-        "The new post-/clear session binds the launcher PID via cwd harvested from the new file's <session_context>; this is the same EnrichNewSession m.LastCWD fallback the initial column onboarding live-verified, so binding on a fresh same-cwd session is expected to hold."
+        "The new post-/clear session binds the launcher PID via cwd harvested from the new file's <session_context>; this is the same EnrichNewSession m.LastCWD fallback the initial column onboarding live-verified, so binding on a fresh same-cwd session is expected to hold.",
+        "BACKFLOW (recorded 2026-06-12): daemon=full CONFIRMED — /clear mints a new session-<ts>-<id8>.jsonl (new session_id) on the SAME launcher PID, and the #169 same-PID cleanup emits transcript_removed for the OLD session. TIMING: the cleanup fires ~12s after the new session appears (when the new session re-binds the PID via HandlePIDAssigned after its own activity), NOT within 2s as the assessment assumed — old_session_ended max_delay_ms widened to 20s. Observed model is gemini-3.5-flash (API-key tier), not gemini-3-flash-preview — observations corrected."
       ],
       "sources": [
         {
