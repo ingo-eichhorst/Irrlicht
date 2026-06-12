@@ -24,6 +24,8 @@ beyond), see the [Roadmap](https://irrlicht.io/docs/roadmap.html).
   - **Existing installs** pick up the "working during compaction" half on the
     next daemon restart — `EnsureHooksInstalled` adds the new `PreCompact` entry
     to `~/.claude/settings.json` automatically.
+  - An interrupted compaction that never finishes is bounded by a timeout, so a
+    cancelled `/compact` can't strand the session in "working" either.
 
 ## [0.5.1] — 2026-06-07
 

@@ -170,7 +170,7 @@ func (d *SessionDetector) HandleCompactHook(sessionID, transcriptPath, trigger s
 	}
 
 	d.permMu.Lock()
-	d.compactPending[sessionID] = true
+	d.compactPending[sessionID] = time.Now().Unix()
 	d.permMu.Unlock()
 
 	// Flip the session to working immediately — there is no transcript flush
