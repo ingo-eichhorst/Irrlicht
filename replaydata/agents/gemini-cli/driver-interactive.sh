@@ -92,6 +92,7 @@ SES_EXPECTED=()
 SES_MARKER=()
 SES_CWD=()
 SES_ALIVE=()
+SES_PANE_PID=()   # pane_pid per slot; teardown SIGKILLs its whole tree (see kill_tree)
 N_SLOTS=0
 ACTIVE=0
 
@@ -177,7 +178,13 @@ boot_session() {
     >>"$slot_stdout" 2>>"$DRIVER_LOG.stderr" \
     || { echo "[driver] failed to launch gemini under tmux" >&2; EXIT_REASON="nonzero(2)"; exit 1; }
   tmux pipe-pane -t "$sess" -o "cat >> '$slot_stdout'" 2>/dev/null || true
-  echo "[driver] tmux started: $sess (slot=$ACTIVE, cwd=$cwd, argv: $*)" >&2
+  # Capture the pane's root pid so teardown can SIGKILL the whole tree. gemini -y
+  # spawns a `node --max-old-space-size` worker in its own process group that
+  # `tmux kill-session` does NOT reap — it survives as a launchd orphan. Walking
+  # the tree from this pid (before the wrapper dies and the worker reparents)
+  # kills the worker too. (#geminicli-repl-leak)
+  SES_PANE_PID[$ACTIVE]="$(tmux list-panes -t "$sess" -F '#{pane_pid}' 2>/dev/null | head -1)"
+  echo "[driver] tmux started: $sess (slot=$ACTIVE, cwd=$cwd, argv: $*, pane_pid=${SES_PANE_PID[$ACTIVE]})" >&2
 
   if cwd_already_trusted; then
     echo "[driver] trust: cwd already trusted this run — skipping prompt" >&2
@@ -479,9 +486,22 @@ step_start_session() {
 # Always honor the staging contract: write driver.exit-reason on ANY exit
 # (including a `set -e` abort mid-launch) and tear tmux down for any slot that
 # was started.
+# SIGKILL a pid and all its descendants, leaves first. tmux kill-session SIGHUPs
+# the pane but gemini's detached `node --max-old-space` worker survives that and
+# is reparented to launchd — so we must reap the tree explicitly.
+kill_tree() {
+  local pid="$1" child
+  [[ -n "$pid" ]] || return 0
+  for child in $(pgrep -P "$pid" 2>/dev/null); do
+    kill_tree "$child"
+  done
+  kill -KILL "$pid" 2>/dev/null || true
+}
+
 cleanup() {
   local i
   for (( i = 1; i <= N_SLOTS; i++ )); do
+    kill_tree "${SES_PANE_PID[$i]:-}"
     tmux kill-session -t "${SES_SESSION[$i]}" 2>/dev/null || true
   done
   echo "$EXIT_REASON" > "$STAGING/driver.exit-reason"
@@ -547,9 +567,11 @@ done
 
 sleep 0.5
 
-# Tear down every still-alive session.
+# Tear down every still-alive session (kill the process tree, not just the tmux
+# session — see kill_tree).
 for (( i = 1; i <= N_SLOTS; i++ )); do
   if [[ "${SES_ALIVE[$i]}" == "1" ]]; then
+    kill_tree "${SES_PANE_PID[$i]:-}"
     tmux kill-session -t "${SES_SESSION[$i]}" 2>/dev/null || true
   fi
 done
