@@ -1,0 +1,12 @@
+{"sessionId":"4e8f7d00-a64c-453b-bec3-f73bc652304f","projectHash":"66cffe42ba64942f3e6b48bf51c718667eaae03f4cfcbd2223743f43d785775e","startTime":"2026-06-13T12:51:43.705Z","lastUpdated":"2026-06-13T12:51:43.705Z","kind":"main"}
+{"$set":{"messages":[{"id":"d04923d38bb0f6017037e74183378ef4","timestamp":"2026-06-13T12:51:43.706Z","type":"user","content":[{"text":"<session_context>\nThis is the Gemini CLI. We are setting up the context for our chat.\nToday's date is Saturday, June 13, 2026 (formatted according to the user's locale).\nMy operating system is: darwin\nThe project's temporary directory is: /Users/ingo/.gemini/tmp/cwd-64\n- **Workspace Directories:**\n  - /Users/ingo/projects/irrlicht/.claude/worktrees/660-gemini-shell-escape/.build/refresh/gemini-cli/2-15_shell-escape-command-20260613T125140/cwd\n- **Directory Structure:**\n\nShowing up to 200 items (files + folders).\n\n/Users/ingo/projects/irrlicht/.claude/worktrees/660-gemini-shell-escape/.build/refresh/gemini-cli/2-15_shell-escape-command-20260613T125140/cwd/\n└───.gemini/\n    └───settings.json\n\n\n</session_context>"}]}],"lastUpdated":"2026-06-13T12:51:43.706Z"}}
+{"id":"8b3c59c7-34da-41f5-9431-309b58fe8ada","timestamp":"2026-06-13T12:51:57.174Z","type":"user","content":[{"text":"Reply with exactly the word: ready"}]}
+{"$set":{"lastUpdated":"2026-06-13T12:51:57.174Z"}}
+{"id":"b1052df9-3c4b-4b88-90d8-49969f077e50","timestamp":"2026-06-13T12:51:58.712Z","type":"gemini","content":"ready","thoughts":[],"tokens":{"input":11490,"output":1,"cached":0,"thoughts":27,"tool":0,"total":11518},"model":"gemini-3.5-flash"}
+{"$set":{"lastUpdated":"2026-06-13T12:51:58.713Z"}}
+{"id":"c710dd0c-4dad-4689-a3f9-762097a6a235","timestamp":"2026-06-13T12:52:01.866Z","type":"user","content":[{"text":"I ran the following shell command:\n```sh\necho hello\n```\n\nThis produced the following result:\n```\nhello\n```"}]}
+{"$set":{"lastUpdated":"2026-06-13T12:52:01.867Z"}}
+{"id":"c87926f3-afab-49c8-a938-e055154c6766","timestamp":"2026-06-13T12:52:10.345Z","type":"user","content":[{"text":"Reply with exactly the word: alive"}]}
+{"$set":{"lastUpdated":"2026-06-13T12:52:10.345Z"}}
+{"id":"f1bea909-f5ee-496e-8ab5-24ff569a037b","timestamp":"2026-06-13T12:52:11.997Z","type":"gemini","content":"alive","thoughts":[],"tokens":{"input":11529,"output":1,"cached":0,"thoughts":26,"tool":0,"total":11556},"model":"gemini-3.5-flash"}
+{"$set":{"lastUpdated":"2026-06-13T12:52:11.998Z"}}

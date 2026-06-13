@@ -69,8 +69,23 @@
       ],
       "script": [
         {
+          "type": "send",
+          "text": "Reply with exactly the word: ready"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
           "type": "keys",
-          "keys": "! e c h o Space h e l l o Enter"
+          "keys": "!"
+        },
+        {
+          "type": "sleep",
+          "seconds": 2
+        },
+        {
+          "type": "send",
+          "text": "echo hello"
         },
         {
           "type": "sleep",

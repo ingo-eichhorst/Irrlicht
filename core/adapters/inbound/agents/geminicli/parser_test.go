@@ -82,6 +82,24 @@ func TestParseLine_UserFunctionResponseIsToolResult(t *testing.T) {
 	}
 }
 
+func TestParseLine_SkipsShellEscape(t *testing.T) {
+	p := &Parser{}
+	// A `!cmd` shell-escape is persisted as a plain user text message opening
+	// with this preamble (gemini-cli's useExecutionLifecycle.ts), with NO
+	// following `gemini` turn. It must be skipped — classified as a real prompt
+	// it would open a turn that never settles, sticking the session in working.
+	// (The live form fences the command/result in ```sh blocks; only the
+	// preamble prefix is load-bearing.)
+	line := decode(t, `{"id":"u3","type":"user","content":[{"text":"I ran the following shell command:\necho hello_shell_escape\n\nThis produced the following result:\nhello_shell_escape"}]}`)
+	ev := p.ParseLine(line)
+	if !ev.Skip {
+		t.Fatalf("shell-escape preamble: want Skip, got EventType=%q", ev.EventType)
+	}
+	if ev.ClearToolNames {
+		t.Error("skipped shell-escape must NOT ClearToolNames")
+	}
+}
+
 func TestParseLine_AssistantPlaceholderStaysWorking(t *testing.T) {
 	p := &Parser{}
 	// Empty streaming placeholder, no tool calls: an assistant_message, NOT a

@@ -83,6 +83,10 @@ TRANSCRIPT=""
 UUID=""
 EXPECTED_TURNS=0
 MARKER=""
+# Tracks whether Gemini's `!` shell mode is currently active (toggled by a `!`
+# keys step, cleared by Escape). A command sent while shell mode is on runs in a
+# local shell with no LLM round-trip, so step_send must not bill it a turn.
+SHELL_MODE=0
 
 # Per-slot state (1-based; index 0 unused). Each slot is one session lifetime.
 SES_SESSION=()
@@ -289,10 +293,13 @@ step_send() { # <text>
   # A slash command (e.g. /rewind, /clear) is a LOCAL REPL action — it opens a
   # picker or rotates state but produces NO `gemini` message, so it must NOT bump
   # the turn counter (turn_count only counts gemini messages). Counting it would
-  # make the next real wait_turn over-wait by one and time out. Regular prompts
-  # bump as usual.
+  # make the next real wait_turn over-wait by one and time out. A shell-escape
+  # command typed while shell mode is active is the same — it runs in a local
+  # shell with no LLM round-trip and emits no `gemini` turn. Regular prompts bump.
   if [[ "$1" == /* ]]; then
     echo "[driver] send[s$ACTIVE]: ${1:0:60} (slash command — no turn)" >&2
+  elif [[ "$SHELL_MODE" == 1 ]]; then
+    echo "[driver] send[s$ACTIVE]: ${1:0:60} (shell-escape command — no turn)" >&2
   else
     EXPECTED_TURNS=$((EXPECTED_TURNS + 1))
     echo "[driver] send[s$ACTIVE]: ${1:0:60} (expecting turn $EXPECTED_TURNS)" >&2
@@ -325,6 +332,14 @@ step_keys() { # <keys>
   # shellcheck disable=SC2086 — intentional word-splitting of the key list
   tmux send-keys -t "$SESSION" $1
   echo "[driver] keys[s$ACTIVE]: $1" >&2
+  # Gemini's `!` toggles shell mode ("esc to disable"). Track it so a following
+  # `send` of the shell command is billed no turn (see step_send). The command
+  # itself MUST go through `send` (literal `-l` typing), not a word-split `keys`
+  # burst — Gemini's Ink shell input mangles burst keystrokes and drops the Enter.
+  case "$1" in
+    "!")      SHELL_MODE=1 ;;
+    "Escape") SHELL_MODE=0 ;;
+  esac
   sleep 0.3
 }
 
