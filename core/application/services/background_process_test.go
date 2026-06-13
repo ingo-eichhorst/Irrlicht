@@ -312,3 +312,115 @@ func TestSessionDetector_BackgroundPID_DeadVerdictPurgesLedger(t *testing.T) {
 	<-done
 	t.Fatal("dead PID verdict did not trigger PurgeDeadBackgroundPIDs within deadline")
 }
+
+// A session can carry BOTH an output-file background process (Claude-Code
+// shape) AND a PID background process (Gemini shape) at once. The probe holds
+// the session `working` while EITHER is alive (`live = outputProbe || pidProbe`)
+// and purges dead outputs and dead PIDs INDEPENDENTLY — a still-live one of
+// either kind must survive the other's purge. See issue #661.
+func TestSessionDetector_BackgroundMixed_IndependentLivenessAndPurge(t *testing.T) {
+	const (
+		outPath = "/tmp/x/tasks/bmix.output"
+		pid     = "33701"
+	)
+
+	// runMixed boots a working session carrying both kinds, sets each probe to
+	// the requested liveness, drives one activity pass, and returns once the
+	// probe has settled (a →ready transition observed, or the grace window
+	// elapsed with the session still held working).
+	runMixed := func(t *testing.T, outAlive, pidAlive bool) (rec *mockRecorder, metrics *funcMetrics, path string) {
+		t.Helper()
+		sid := "bgmix"
+		path = "/home/.gemini/projects/-Users-test/bgmix.jsonl"
+		metrics = &funcMetrics{fn: func(_, _ string) (*session.SessionMetrics, error) {
+			return &session.SessionMetrics{
+				LastEventType:            "turn_done",
+				BackgroundProcessCount:   2,
+				BackgroundProcessOutputs: []string{outPath},
+				BackgroundProcessPIDs:    []string{pid},
+			}, nil
+		}}
+
+		tw := newMockAgentWatcher()
+		pw := newMockProcessWatcher()
+		repo := newMockRepo()
+		repo.states[sid] = &session.SessionState{
+			SessionID:      sid,
+			State:          session.StateWorking,
+			TranscriptPath: path,
+			FirstSeen:      time.Now().Unix(),
+			UpdatedAt:      time.Now().Unix(),
+		}
+
+		det := newDetectorWithMetrics(tw, pw, repo, metrics)
+		rec = &mockRecorder{}
+		det.SetRecorder(rec)
+		det.SetBackgroundProbeForTest(func([]string) bool { return outAlive })
+		det.SetBackgroundPIDProbeForTest(func([]string) bool { return pidAlive })
+
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		go func() { done <- det.Run(ctx) }()
+		t.Cleanup(func() { cancel(); <-done })
+
+		tw.ch <- agent.Event{
+			Type:           agent.EventActivity,
+			SessionID:      sid,
+			ProjectDir:     "-Users-test",
+			TranscriptPath: path,
+			Terminal:       true, // bypass debounce so the probe fires promptly
+		}
+		// Wait for the probe to run: a purge call is logged on every dead
+		// verdict (at least one kind is dead in each sub-case below).
+		waitForCondition(func() bool { return len(metrics.purgedSnapshot()) > 0 }, 2*time.Second)
+		time.Sleep(150 * time.Millisecond) // let any self-trigger re-classify settle
+		return rec, metrics, path
+	}
+
+	t.Run("output alive, PID dead -> held working, only PID purged", func(t *testing.T) {
+		rec, metrics, path := runMixed(t, true, false)
+		if n := readyTransitions(rec, "bgmix"); n != 0 {
+			t.Fatalf("session flipped to ready %d time(s) while the output process is alive", n)
+		}
+		if _, called := metrics.purgedProcsFor(path); called {
+			t.Error("the live output process must not be purged")
+		}
+		got, called := metrics.purgedPIDsFor(path)
+		if !called {
+			t.Fatal("the dead PID must be purged")
+		}
+		if len(got) != 1 || got[0] != pid {
+			t.Errorf("purged PIDs = %v, want [%s]", got, pid)
+		}
+	})
+
+	t.Run("output dead, PID alive -> held working, only output purged", func(t *testing.T) {
+		rec, metrics, path := runMixed(t, false, true)
+		if n := readyTransitions(rec, "bgmix"); n != 0 {
+			t.Fatalf("session flipped to ready %d time(s) while the PID process is alive", n)
+		}
+		if _, called := metrics.purgedPIDsFor(path); called {
+			t.Error("the live PID must not be purged")
+		}
+		got, called := metrics.purgedProcsFor(path)
+		if !called {
+			t.Fatal("the dead output process must be purged")
+		}
+		if len(got) != 1 || got[0] != outPath {
+			t.Errorf("purged outputs = %v, want [%s]", got, outPath)
+		}
+	})
+
+	t.Run("both dead -> settles ready, both purged", func(t *testing.T) {
+		rec, metrics, path := runMixed(t, false, false)
+		waitForReadyTransition(t, rec, "bgmix")
+		gotProcs, procsCalled := metrics.purgedProcsFor(path)
+		gotPIDs, pidsCalled := metrics.purgedPIDsFor(path)
+		if !procsCalled || len(gotProcs) != 1 || gotProcs[0] != outPath {
+			t.Errorf("dead output purge = %v (called=%v), want [%s]", gotProcs, procsCalled, outPath)
+		}
+		if !pidsCalled || len(gotPIDs) != 1 || gotPIDs[0] != pid {
+			t.Errorf("dead PID purge = %v (called=%v), want [%s]", gotPIDs, pidsCalled, pid)
+		}
+	})
+}

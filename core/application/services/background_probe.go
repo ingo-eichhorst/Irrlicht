@@ -67,19 +67,29 @@ func anyLiveOutputWriter(outputPaths []string) bool {
 // inspect. Modeled as a field so tests can inject a fake. See issue #661.
 type backgroundPIDProbe func(pids []string) bool
 
+// pidLivenessSignal is the seam for the kill(pid, 0) existence check, factored
+// out so tests can drive anyLivePID's EPERM-alive branch without a foreign-user
+// process. Defaults to syscall.Kill. Mirrors the backgroundPIDProbe field seam.
+var pidLivenessSignal = syscall.Kill
+
 // anyLivePID reports whether any of the given PIDs is a currently live process.
 // `kill(pid, 0)` performs the kernel's existence-and-permission check without
 // delivering a signal: a nil error (or EPERM — the process exists but is owned
 // by another user) means alive; ESRCH means gone. A non-numeric or non-positive
 // entry is skipped. An empty list is "nothing live", the safe degradation that
 // never pins a session `working` forever.
+//
+// Bounded PID-reuse window: between probes a reported PID could be recycled to
+// an unrelated live process and read as alive, holding the session `working`
+// until the next 5s re-probe reconciles it — the same staleness class as the
+// lsof-on-output-file path above (a reused .output path), and self-correcting.
 func anyLivePID(pids []string) bool {
 	for _, s := range pids {
 		pid, err := strconv.Atoi(s)
 		if err != nil || pid <= 0 {
 			continue
 		}
-		switch err := syscall.Kill(pid, 0); err {
+		switch err := pidLivenessSignal(pid, 0); err {
 		case nil, syscall.EPERM:
 			return true
 		}

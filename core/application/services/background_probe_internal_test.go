@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -61,5 +62,40 @@ func TestAnyLiveOutputWriter_EmptyAndMissing(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "does-not-exist.output")
 	if anyLiveOutputWriter([]string{missing}) {
 		t.Error("a non-existent output file should report no live writer")
+	}
+}
+
+// anyLivePID must treat an EPERM result as ALIVE: kill(pid, 0) returns EPERM
+// when the PID names a real process owned by another user (e.g. a root-owned
+// background command), and the process existing is what holds the session
+// `working` — reading EPERM as dead would wrongly flip it to ready. Driven
+// through the pidLivenessSignal seam so the branch is exercised without an
+// actual foreign-user process. See issue #661.
+func TestAnyLivePID_EPERMIsAlive(t *testing.T) {
+	orig := pidLivenessSignal
+	t.Cleanup(func() { pidLivenessSignal = orig })
+
+	pidLivenessSignal = func(pid int, sig syscall.Signal) error { return syscall.EPERM }
+	if !anyLivePID([]string{"4242"}) {
+		t.Error("EPERM (process exists, owned by another user) should report alive")
+	}
+
+	pidLivenessSignal = func(pid int, sig syscall.Signal) error { return syscall.ESRCH }
+	if anyLivePID([]string{"4242"}) {
+		t.Error("ESRCH (no such process) should report dead")
+	}
+
+	pidLivenessSignal = func(pid int, sig syscall.Signal) error { return nil }
+	if !anyLivePID([]string{"4242"}) {
+		t.Error("nil error (process exists, signalable) should report alive")
+	}
+}
+
+func TestAnyLivePID_EmptyAndInvalid(t *testing.T) {
+	if anyLivePID(nil) {
+		t.Error("nil pids should report nothing live")
+	}
+	if anyLivePID([]string{"", "0", "-1", "notapid"}) {
+		t.Error("empty / non-positive / non-numeric pids should report nothing live")
 	}
 }
