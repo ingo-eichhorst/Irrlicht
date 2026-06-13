@@ -14,22 +14,27 @@ import (
 // script.
 //
 // A session has two matching processes — the launcher and its heap-bumped
-// Node worker (see isHeapBumpWorker) — but ExcludeArgv drops the worker before
-// the candidates reach here, leaving one launcher per session. When two
-// sessions share a cwd both launchers match, so we honor the caller's claimed-
-// aware disambiguate (PIDManager.TryDiscoverPID: prefer the highest unclaimed
-// PID) to give each session its own launcher (#664). With no disambiguate
-// (nil caller) we fall back to lowestPID — the launcher ancestor.
+// Node worker (see isHeapBumpWorker) — both sharing the cwd. Unlike the
+// Scanner, this raw pgrep-style match applies no argv filter, so we pass
+// isHeapBumpWorker as the excludeArgv predicate to drop the worker before
+// disambiguation; otherwise the disambiguator's "highest unclaimed PID" would
+// select the higher-PID worker (the process treated as a ghost everywhere
+// else) instead of the launcher the pre-session path binds (#664). With the
+// worker gone, when two sessions share a cwd both launchers match, so we honor
+// the caller's claimed-aware disambiguate (PIDManager.TryDiscoverPID: prefer
+// the highest unclaimed PID) to give each session its own launcher. With no
+// disambiguate (nil caller) we fall back to lowestPID — the launcher ancestor.
 func DiscoverPID(cwd, transcriptPath string, disambiguate func([]int) int) (int, error) {
 	if disambiguate == nil {
 		disambiguate = lowestPID
 	}
-	return discoverByCWDAndCmdLine(commandPattern.String(), cwd, disambiguate)
+	return discoverByCWDAndCmdLine(commandPattern.String(), cwd, disambiguate, isHeapBumpWorker)
 }
 
-// discoverByCWDAndCmdLine is the OS-level CWD+cmdline match. It's a package
-// variable so tests can stub it in place of the real pgrep call.
-var discoverByCWDAndCmdLine = processlifecycle.DiscoverPIDByCWDAndCmdLine
+// discoverByCWDAndCmdLine is the OS-level CWD+cmdline match with the heap-bump
+// worker excluded by argv. It's a package variable so tests can stub it in
+// place of the real pgrep call.
+var discoverByCWDAndCmdLine = processlifecycle.DiscoverPIDByCWDAndCmdLineExcludingArgv
 
 // lowestPID picks the smallest PID — the launcher ancestor, spawned before
 // its heap-bump worker child.
