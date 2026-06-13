@@ -90,6 +90,41 @@ func TestDeriveParentSessionGeminiNested(t *testing.T) {
 	}
 }
 
+// Tag collision (issue #663 review): two top-level sibling parent transcripts
+// share the same 8-hex UUID tag (session-<ts1>-<tag>.jsonl and
+// session-<ts2>-<tag>.jsonl). The nested child's dir UUID resolves to that
+// ambiguous tag, so the rule cannot tell which sibling is the real parent and
+// must return "" rather than guess — no mislink.
+func TestDeriveParentSessionGeminiNestedTagCollision(t *testing.T) {
+	const (
+		tag        = "ee437ac7"
+		parentUUID = "ee437ac7-9888-4d95-8a1a-9c93c07abf67"
+		childUUID  = "1af72c9f-38bd-450a-87f9-750790f9cd82"
+	)
+	chats := filepath.Join(t.TempDir(), ".gemini", "tmp", "proj", "chats")
+	nested := filepath.Join(chats, parentUUID)
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Two sibling parent transcripts whose stems collide on the 8-hex tag.
+	for _, stem := range []string{
+		"session-2026-06-12T12-38-" + tag,
+		"session-2026-06-12T13-00-" + tag,
+	} {
+		if err := os.WriteFile(filepath.Join(chats, stem+".jsonl"), []byte("{}\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	childPath := filepath.Join(nested, childUUID+".jsonl")
+	if err := os.WriteFile(childPath, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := deriveParentSession(childPath); got != "" {
+		t.Errorf("deriveParentSession(%q) = %q, want %q (ambiguous tag must not mislink)", childPath, got, "")
+	}
+}
+
 // geminiUUIDTag guards against treating a non-UUID directory under chats/ as a
 // gemini parent (e.g. a Claude "subagents" layout sharing the path shape).
 func TestGeminiUUIDTag(t *testing.T) {
