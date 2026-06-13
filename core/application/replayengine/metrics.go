@@ -54,6 +54,17 @@ func TailerToDomain(m *tailer.SessionMetrics) *session.SessionMetrics {
 			}
 		}
 	}
+	if len(m.AppliedTaskDeltas) > 0 {
+		result.AppliedTaskDeltas = make([]session.AppliedTaskDelta, len(m.AppliedTaskDeltas))
+		for i, d := range m.AppliedTaskDeltas {
+			result.AppliedTaskDeltas[i] = session.AppliedTaskDelta{
+				Op:      d.Op,
+				ID:      d.ID,
+				Subject: d.Subject,
+				Status:  d.Status,
+			}
+		}
+	}
 	if len(m.Tasks) > 0 {
 		result.Tasks = make([]session.Task, len(m.Tasks))
 		for i, t := range m.Tasks {

@@ -33,6 +33,17 @@ type MessageEvent struct {
 	Content   string    `json:"content,omitempty"`
 }
 
+// AppliedTaskDelta records a task-list delta the tailer actually folded into
+// its task list during a pass (a create or a status update). Surfaced per-pass
+// on SessionMetrics so the daemon can record a task_delta lifecycle event;
+// never persisted.
+type AppliedTaskDelta struct {
+	Op      string // create | update
+	ID      string // task id (provisional at create, authoritative once assigned)
+	Subject string
+	Status  string
+}
+
 // SessionMetrics holds computed performance metrics
 type SessionMetrics struct {
 	MessagesPerMinute   float64        `json:"messages_per_minute"`
@@ -93,6 +104,13 @@ type SessionMetrics struct {
 	// the start of every pass so the detector drains fresh events only.
 	// See issue #134.
 	SubagentCompletions []SubagentCompletion `json:"-"`
+
+	// AppliedTaskDeltas surfaces the task-list deltas the tailer folded into the
+	// session's task list during the most recent pass — one per applied
+	// create/update. Cleared at the start of every pass (same per-pass contract
+	// as SubagentCompletions) so the detector records each task_delta lifecycle
+	// event exactly once. Not serialized.
+	AppliedTaskDeltas []AppliedTaskDelta `json:"-"`
 
 	// LastEventType is the event type of the most recent message event in
 	// the transcript (e.g. "assistant", "user", "tool_use", "tool_result").
@@ -510,6 +528,7 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 	// Per-pass signals must be cleared so the detector only drains events
 	// discovered in this scan (see issue #134).
 	t.metrics.SubagentCompletions = nil
+	t.metrics.AppliedTaskDeltas = nil
 
 	startPos := int64(0)
 	switch {
@@ -895,6 +914,9 @@ func (t *TranscriptTailer) processParsedEvent(parsed *ParsedEvent, sawUserBlocki
 			if d.ToolUseID != "" {
 				t.pendingTaskCreates[d.ToolUseID] = provisional
 			}
+			t.metrics.AppliedTaskDeltas = append(t.metrics.AppliedTaskDeltas, AppliedTaskDelta{
+				Op: "create", ID: provisional, Subject: d.Subject, Status: TaskStatusPending,
+			})
 		case TaskOpAssignID:
 			provisional, ok := t.pendingTaskCreates[d.ToolUseID]
 			if !ok || d.ID == "" {
@@ -927,6 +949,9 @@ func (t *TranscriptTailer) processParsedEvent(parsed *ParsedEvent, sawUserBlocki
 							t.tasks[i].CompletedAt = eventUnix(parsed)
 						}
 						t.tasks[i].Status = d.Status
+						t.metrics.AppliedTaskDeltas = append(t.metrics.AppliedTaskDeltas, AppliedTaskDelta{
+							Op: "update", ID: t.tasks[i].ID, Subject: t.tasks[i].Subject, Status: d.Status,
+						})
 					}
 					break
 				}

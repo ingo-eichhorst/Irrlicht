@@ -430,6 +430,25 @@ func (d *SessionDetector) processActivityLocked(id agent.Identity, state *sessio
 		d.applySubagentCompletions(state.SessionID, state.Metrics.SubagentCompletions)
 	}
 
+	// Record the task-list deltas folded in this pass — one task_delta
+	// lifecycle event each — so task tracking is an assertable observable in
+	// onboarding recordings (#662). Per-pass and transient (MergeMetrics copies
+	// AppliedTaskDeltas with no old-value fallback), so each delta is recorded
+	// exactly once. Recording-only: does not feed ClassifyState.
+	if state.Metrics != nil {
+		for _, td := range state.Metrics.AppliedTaskDeltas {
+			d.record(lifecycle.Event{
+				Kind:        lifecycle.KindTaskDelta,
+				SessionID:   ev.SessionID,
+				Adapter:     id.Name,
+				TaskOp:      td.Op,
+				TaskID:      td.ID,
+				TaskSubject: td.Subject,
+				TaskStatus:  td.Status,
+			})
+		}
+	}
+
 	// Short-circuit when this pass consumed transcript content but produced
 	// no state-relevant change — e.g. Claude Code's post-turn
 	// `system/away_summary` recap, which the parser marks Skip=true. The
