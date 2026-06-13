@@ -287,6 +287,95 @@ func TestParseLine_WriteTodosEmitsTaskDeltas(t *testing.T) {
 	}
 }
 
+// TestParseLine_WriteTodosPendingOnCreateSkipsUpdate ports opencode's
+// PendingOnCreateSkipsUpdate: a freshly-created item whose first sighting is
+// already in_progress must emit BOTH a Create (the tailer starts created tasks
+// at pending) AND an Update to reach in_progress — never a bare Create that
+// would leave the status wrong.
+func TestParseLine_WriteTodosPendingOnCreateSkipsUpdate(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(decode(t, `{"id":"g1","type":"gemini","content":"","model":"gemini-2.5-pro","toolCalls":[
+		{"id":"wt_1","name":"write_todos","status":"success","args":{"todos":[
+			{"status":"in_progress","description":"already in progress"}
+		]}}
+	]}`))
+	if len(ev.TaskDeltas) != 2 {
+		t.Fatalf("want 2 deltas (create + update), got %d (%+v)", len(ev.TaskDeltas), ev.TaskDeltas)
+	}
+	if d := ev.TaskDeltas[0]; d.Op != "create" || d.Subject != "already in progress" {
+		t.Errorf("deltas[0] = %+v, want create subject='already in progress'", d)
+	}
+	if d := ev.TaskDeltas[1]; d.Op != "update" || d.ID != "1" || d.Status != "in_progress" {
+		t.Errorf("deltas[1] = %+v, want update id=1 status=in_progress", d)
+	}
+}
+
+// TestParseLine_WriteTodosSnapshotPrunesDeletedTodos ports opencode's
+// SnapshotPrunesDeletedTodos: write_todos is a full-list replace, so a todo
+// missing from a later snapshot has been removed. The emitted TaskSnapshot
+// must carry only the surviving entries so the tailer can prune the stale one.
+func TestParseLine_WriteTodosSnapshotPrunesDeletedTodos(t *testing.T) {
+	p := &Parser{}
+	p.ParseLine(decode(t, `{"id":"g1","type":"gemini","content":"","model":"gemini-2.5-pro","toolCalls":[
+		{"id":"wt_1","name":"write_todos","status":"success","args":{"todos":[
+			{"status":"pending","description":"Task A"},
+			{"status":"pending","description":"Task B"},
+			{"status":"pending","description":"Task C"}
+		]}}
+	]}`))
+	ev := p.ParseLine(decode(t, `{"id":"g2","type":"gemini","content":"","model":"gemini-2.5-pro","toolCalls":[
+		{"id":"wt_2","name":"write_todos","status":"success","args":{"todos":[
+			{"status":"pending","description":"Task A"},
+			{"status":"pending","description":"Task B"}
+		]}}
+	]}`))
+	if ev.TaskSnapshot == nil {
+		t.Fatal("expected TaskSnapshot to be set")
+	}
+	if got, want := len(*ev.TaskSnapshot), 2; got != want {
+		t.Fatalf("snapshot len = %d, want %d", got, want)
+	}
+	ids := map[string]bool{}
+	for _, e := range *ev.TaskSnapshot {
+		ids[e.ID] = true
+	}
+	if !ids["1"] || !ids["2"] {
+		t.Errorf("snapshot IDs = %v, want {1, 2}", ids)
+	}
+	if ids["3"] {
+		t.Errorf("snapshot still contains pruned id=3: %v", ids)
+	}
+}
+
+// TestParseLine_WriteTodosSnapshotCarriesStatusReversion ports opencode's
+// SnapshotCarriesStatusReversion: a todo flipping in_progress → pending in a
+// later snapshot emits no Update delta (the Update path suppresses pending
+// writes), so the reversion must surface only via TaskSnapshot — without it
+// the tailer would freeze the stale in_progress.
+func TestParseLine_WriteTodosSnapshotCarriesStatusReversion(t *testing.T) {
+	p := &Parser{}
+	p.ParseLine(decode(t, `{"id":"g1","type":"gemini","content":"","model":"gemini-2.5-pro","toolCalls":[
+		{"id":"wt_1","name":"write_todos","status":"success","args":{"todos":[
+			{"status":"in_progress","description":"Task A"}
+		]}}
+	]}`))
+	ev := p.ParseLine(decode(t, `{"id":"g2","type":"gemini","content":"","model":"gemini-2.5-pro","toolCalls":[
+		{"id":"wt_2","name":"write_todos","status":"success","args":{"todos":[
+			{"status":"pending","description":"Task A"}
+		]}}
+	]}`))
+	// No Update delta because the new status is pending.
+	if len(ev.TaskDeltas) != 0 {
+		t.Errorf("TaskDeltas len = %d, want 0 (reversion via snapshot only)", len(ev.TaskDeltas))
+	}
+	if ev.TaskSnapshot == nil || len(*ev.TaskSnapshot) != 1 {
+		t.Fatalf("TaskSnapshot = %v, want one entry", ev.TaskSnapshot)
+	}
+	if got := (*ev.TaskSnapshot)[0]; got.ID != "1" || got.Status != "pending" {
+		t.Errorf("snapshot entry = %+v, want {ID:1 Status:pending}", got)
+	}
+}
+
 // TestParse_RealSession replays the real captured transcript end-to-end and
 // asserts the session-level signals: exactly one user turn, exactly one
 // settle-to-ready, the workspace cwd, tool open/close, and deduped billing.
