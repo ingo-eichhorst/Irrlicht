@@ -1,0 +1,91 @@
+{
+  "scenario_id": "turn-end-terminal-text",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.46.0",
+    "daemon_version": "0.5.1+badafab",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes; daemon_capability: full; driver_capability: ready — Gemini has no explicit terminal stop_reason; the parser INFERS turn_done from a final text-only 'gemini' message with no open tool calls (parser.go:209), which fires IsAgentDone primary path + classifier rule 2b → working→ready."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "turn-end-terminal-text",
+      "agent": "gemini-cli",
+      "assessed_at": "2026-06-11T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Reasoning\n\nThis is the smallest tool-less round-trip, pinning the **end signal** specifically: a final assistant text message with no tool_use closes the turn and drives working→ready. It overlaps intentionally with `basic-turn`; the difference in intent is that this cell asserts the end-of-turn *mechanism*, regardless of which adapter-specific marker carries it.\n\n### agent_supports: yes\n\nGemini CLI v0.46.0 runs a single conversational round-trip out of the box — one user prompt, one assistant reply, zero tool use. No special mode is needed; the canonical tool-less prompt ('Reply with exactly: hello world') is the smallest turn the agent can run. Live-verified on 2026-06-09 during adapter onboarding (real session reported model `gemini-3-flash-preview`, non-zero cost + tokens, returned to ready on turn completion); CLI installed at v0.46.0 (`gemini --version`).\n\n### daemon_capability: full\n\nUnlike Claude Code (an explicit terminal stop_reason allow-list) or Codex (a `task_complete` marker), **Gemini emits NO explicit end-of-turn marker**. The adapter INFERS the turn's end from message shape: `parseAssistant` (parser.go:209-211) reclassifies a 'gemini' assistant message whose `content` is non-empty AND whose `toolCalls` is empty to `EventType = \"turn_done\"`. That sets `LastEventType=\"turn_done\"`, which makes `IsAgentDone()` return true via the **primary** path (session.go:553), and classifier **rule 2b** (state_classifier.go:70-72) transitions working→ready with reason 'agent finished turn → ready'. The opening user text prompt emits `user_message` + `ClearToolNames` (parser.go:155-157) → ready→working. There are no tool calls in this scenario, so the `HasOpenToolCall` guard in `IsAgentDone` never blocks the settle. Topology is exactly `ready → working → ready`, final state `ready`, zero tool calls — matching the scenario's `Tool calls: ≤ 0`.\n\nThe two negative cases that would WRONGLY settle are both held off and unit-tested: an empty streaming placeholder (`content==\"\"`) stays `assistant_message` (parser_test.go:85-86, :99-104 for the tool-calling case), and a tool-calling message stays `assistant_message` — only the final text-only message becomes `turn_done` (parser_test.go:118-119). This is the precise positive case the turn-end-terminal-text scenario asserts, with its negatives pinned.\n\n### driver_capability: ready\n\nThe interactive driver (`replaydata/agents/gemini-cli/driver-interactive.sh`) launches `gemini -y` under tmux and genuinely elicits `send slash wait_turn sleep` (its `DRIVE_ELICITS` constant). The recipe needs only `send` (the tool-less prompt) + `wait_turn` (block until the inferred turn_done) + a trailing `sleep` to let the daemon observe the working→ready settle before teardown. `wait_turn` mirrors the parser's classification exactly — it counts a 'gemini' message with non-empty content and no tool calls as the completed turn. Every step type the recipe touches is implemented; no stubbed primitive (interrupt/keys/reset_session/restart/resume/sigkill/exit_clean/start_session/session) is exercised, so the driver is `ready`. An INTERACTIVE recipe is used deliberately: a one-shot headless `gemini -p` run exits at turn completion, before the daemon can observe the terminal working→ready edge — the same shape that keeps the claudecode/codex/aider cells for this scenario interactive.",
+      "caveats": [
+        "Overlaps heavily with `basic-turn` (same ready→working→ready arc, same recipe shape). The two cells differ in intent: basic-turn asserts the overall happy-path lifecycle + TotalTokens>0; turn-end-terminal-text specifically asserts that the terminal-text end signal closes the turn. The recipe is a deliberately tool-less prompt to keep the cell focused on the end signal.",
+        "Provisional on emission: daemon=full for the end signal is grounded in the parser read + unit tests + the 2026-06-09 live-verify, but the no-explicit-turn_done inference and the default boot model string are emission-dependent. record promotes the observations.model assertion from provisional to settled; if the live default differs, update the model string (not a daemon bug).",
+        "Gemini has NO explicit end-of-turn marker; turn_done is INFERRED from a final text-only 'gemini' message with no open tool calls (parser.go:209). Correct and unit-tested for the tool-free turn, but the settle is heuristic (message shape) rather than an in-band terminal-reason marker like Claude's end_turn. A future Gemini transcript shape that interleaves a final empty placeholder after the text could delay the settle until the next non-empty line.",
+        "cwd lives only in the transcript body (<session_context>), not the path/process; PID binding relies on the parser's cwd harvest + EnrichNewSession LastCWD fallback. Session identity, not the lifecycle/end-signal arc."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/parser.go",
+          "note": "parseAssistant (L209-211): a 'gemini' message with non-empty content and len(toolCalls)==0 → EventType=\"turn_done\" (Gemini has no explicit end-of-turn marker; the settle is inferred from message shape). parseUser (L155-157): text prompt → user_message + ClearToolNames (ready→working)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/session.go",
+          "note": "IsAgentDone (L535-567): primary path returns true on LastEventType==\"turn_done\" (L553); HasOpenToolCall guard (L542) never blocks here since there are zero tool calls. Codex is excluded from the assistant/assistant_output fallback, so Gemini's turn_done is the authoritative settle."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go",
+          "note": "Rule 2b (L70-72): when IsAgentDone() is true, working/waiting → ready with reason 'agent finished turn → ready'."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/parser_test.go",
+          "note": "Positive case pinned (L118-119): final text-only message → turn_done. Negatives pinned: empty streaming placeholder stays assistant_message (L85-86), tool-calling message stays assistant_message (L99-104). turn_done still carries AssistantText (L122)."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/gemini-cli/driver-interactive.sh",
+          "note": "DRIVE_ELICITS=\"send slash wait_turn sleep\"; gemini -y under tmux; wait_turn mirrors the parser's text-only/no-tool turn_done inference — every step the turn-end recipe needs (send+wait_turn+sleep) is implemented."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "gemini CLI on PATH (>=0.45.2) and authenticated via Google OAuth (oauth-personal, no API key); June-18 free-tier deadline",
+        "irrlichd is recording — run-cell.sh in isolated mode, or --attach against a daemon started with --record",
+        "first-run trust-folder prompt is auto-accepted by the driver"
+      ],
+      "setup": [
+        "Create an empty cwd under <staging>/cwd/ (Gemini mints its own sessionId; the daemon binds the launcher PID by cwd harvested from the bootstrap <session_context>)"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly: hello world"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        }
+      ],
+      "verify": [
+        "events.jsonl contains a pid_discovered for the launcher bound by cwd within ~2000 ms",
+        "events.jsonl contains exactly one state_transition to working and exactly one state_transition to ready for the session",
+        "events.jsonl contains NO tool_use events for the session",
+        "the final 'gemini' transcript message carries non-empty content and no toolCalls (the inferred turn_done)",
+        "final session state is ready; state never entered waiting"
+      ],
+      "settings": {},
+      "timeout_seconds": 60
+    }
+  }
+}

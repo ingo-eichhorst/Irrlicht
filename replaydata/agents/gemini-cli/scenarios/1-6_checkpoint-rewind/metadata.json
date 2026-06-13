@@ -1,0 +1,163 @@
+{
+  "scenario_id": "checkpoint-rewind",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "gap:keys",
+    "agent_cli_version": "0.46.0",
+    "daemon_version": "0.5.1+e4c1170.dirty",
+    "confidence": 0.9,
+    "notes": "agent=yes (/rewind in-place, same session_id); daemon=full CONFIRMED (rewind appends $rewindTo + a $set messages rewrite, both parser-skipped; ZERO transcript_removed, no fork); driver=ported (keys, two-stage Up/Enter/Enter picker). Observed model gemini-3.5-flash (API-key tier)."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "checkpoint-rewind",
+      "agent": "gemini-cli",
+      "assessed_at": "2026-06-11T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "gap:keys",
+      "confidence": 0.9,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: gap:keys\n\nGemini CLI 0.46.0 is the IN-PLACE rewind variant of this scenario (like claudecode), not the fork variant (codex). It rewinds on the SAME session_id and reverts BOTH conversation and file state — so this is `yes`, not the `partial` codex/kiro carry.\n\n## What the scenario asks\n\nThe scenario's user-observable signal: session row in `ready` after the rewind; the SAME `session_id` if rewound in place (or a linked new one if the adapter forks); subsequent turns drive a clean `ready → working → ready` from the rewound point. Gemini rewinds in place, so the observable is: same session_id stays `ready` across the rewind, then a clean post-rewind arc — identical shape to claudecode.\n\n## agent_supports: yes\n\nGemini CLI ships TWO in-place rewind affordances, both confirmed in the installed 0.46.0 bundle:\n\n- **`/rewind`** — built-in command (chunk-T55FPMGN.js:61288), description \"Jump back to a specific message and restart the conversation\". Always available (no checkpointing flag). It opens a `RewindViewer` custom dialog; on selection it calls `rewindConversation` → `recordingService.rewindTo(messageId)` (line 61259) and `client.setHistory(...)`, and its outcomes (`rewind_only` / `rewind_and_revert` / `revert_only`, lines 61349-61376) can ALSO revert file changes via `revertFileChanges`. So `/rewind` covers conversation AND file revert, in place.\n- **`/restore`** — built-in command (chunk-T55FPMGN.js:79876), gated on `getCheckpointingEnabled()` (off by default; enabled via `general.checkpointing.enabled`; the legacy `--checkpointing` flag was removed). `restoreAction` reads a tool-call checkpoint JSON from `~/.gemini/tmp/<project>/checkpoints/*.json` and `performRestore(toolCallData, gitService)` resets BOTH conversation history (`loadHistory`/`setHistory`) and file history (shadow git). Description: \"Restore a tool call. This will reset the conversation and file history to the state it was in when the tool call was suggested\".\n\nThis is strictly stronger than codex (conversation-only fork, `partial`) — gemini reverts files too and stays on the same session — so `agent=yes`.\n\n## daemon_capability: full\n\nThe gemini-cli Source is `FilesUnderRoot{Dir: ~/.gemini/tmp}` watching `<project>/chats/*.jsonl` (agent.go:46, adapter.go:25). The decisive question is what `/rewind` writes to that watched chats file.\n\n`ChatRecordingService.rewindTo(messageId)` (chunk-G33JEOEV.js:282517) slices the in-memory cached messages, then `this.appendRecord({ $rewindTo: messageId })`. `appendRecord` uses `fs.appendFileSync` (line 282291) — the chats jsonl is APPEND-ONLY and is NEVER truncated or rewritten in place. The rewind is recorded as a single appended `{\"$rewindTo\":\"<id>\"}` marker line; on the read side `loadConversationRecord` (line 282012) interprets that marker to slice the rebuilt history. So the on-disk file the daemon tails only ever GROWS, and self-describes the rewind.\n\nThe daemon tails this file from a persisted offset and feeds new lines to the parser. The parser's `ParseLine` switch (parser.go:55) dispatches on `$set` (harvest) / `type` (message) / `default` (Skip). A `{\"$rewindTo\":...}` line has neither `$set` nor `type`, so it hits `default: ev.Skip = true` (parser.go:63-64) — the daemon harmlessly IGNORES the rewind marker. The session keeps the SAME session_id (the chats file header sessionId is unchanged) and stays in `ready` (a `$rewindTo` marker is not a turn). The next user prompt appends a normal `user` line → `working`, and the final text-only `gemini` message infers `turn_done` → `ready`. The full user-observable arc (same session_id stays ready across the rewind, then a clean ready→working→ready) is emitted by the daemon as it exists today — same observability shape as claudecode's in-place rewind. No trace mishandled, no missing trace → `full`.\n\nCaveat (not a downgrade): like claudecode, context-utilization % may overstate after a rewind because the parser bills all appended-transcript tokens while gemini only re-feeds the post-rewind subset into its next prompt; cumulative cost stays accurate. The spec does not assert utilization %, so `full` stands.\n\n## driver_capability: gap:keys\n\n`/rewind` is the recipe's rewind step, and it opens an interactive `RewindViewer` picker that requires arrow-key + Enter navigation to select a prior message — there is NO inline-argument form (`/rewind <id>` is not accepted; the messageId comes only from the dialog selection). The recipe therefore needs `keys: Down` + `keys: Enter` (the claudecode reference recipe uses exactly these). The gemini-cli interactive driver STUBS the `keys` step: `keys) not_implemented keys || break  # TODO(gemini-cli): tmux send-keys raw sequence` (driver-interactive.sh:236). A missing step type the recipe needs is `driver=gap:keys` — tooling work, not an observability limit. `record` ports the `keys` arm (a trivial `tmux send-keys -t \"$SESSION\" <key>` wrapper) from the reference driver before it drives.\n\n(Ruled out a false gap: `/restore <name>` DOES take an inline arg and would be a plain `slash` step, but `/restore` requires checkpointing enabled out-of-band and reverts a tool-call checkpoint rather than a conversation point — `/rewind` is the cleaner, always-available rewind for this scenario, and it is the one that needs `keys`.)\n\n## Primitive / capability key\n\nCanonical primitive: `checkpoint_rewind` (the legacy per-adapter capabilities.json was deleted in the #511 shard migration, so there is no key file to confirm against).",
+      "caveats": [
+        "context-utilization % may slightly overstate after a /rewind: the parser bills all appended-transcript tokens while gemini only re-feeds the post-rewind subset into its next prompt; cumulative cost stays accurate. The spec does not assert utilization %, so this is a caveat, not a daemon=bug.",
+        "daemon=full is PROVISIONAL on emission: it is derived from reading the parser + the append-only ChatRecordingService.rewindTo path, not from a live recording. The load-bearing claim — that /rewind appends a single {\"$rewindTo\":...} line (which the parser skips) and keeps the same session_id without truncating the watched chats file — should be promoted from provisional to settled by record. Confidence held at 0.85 for that reason.",
+        "/restore (full conversation+file checkpoint restore) is gated on general.checkpointing.enabled (off by default; legacy --checkpointing flag removed). The recipe uses /rewind instead, which is always available and needs no out-of-band config.",
+        "BACKFLOW (recorded 2026-06-12): daemon=full CONFIRMED — exactly ONE session_id throughout, ZERO transcript_removed, no fork. MECHANISM CORRECTION: v0.46.0 /rewind appends BOTH a {$rewindTo:<id>} marker AND a {$set:{messages:[...]}} envelope that truncates the messages array — not just $rewindTo as assessed. The parser handles both ($set harvest+Skip; $rewindTo default-Skip), but the $set messages rewrite is transcript_activity that briefly flips ready→working→ready — so the original post-rewind no-working invariant does NOT hold and was dropped; the load-bearing in-place signal is no-transcript_removed + same session_id. PICKER: the RewindViewer is TWO-STAGE — keys:Up selects a prior message (selection opens on Stay-at-current-position at the bottom), keys:Enter opens a Confirm Rewind sub-dialog, second keys:Enter confirms; the recipe keys were Down→Up + a second Enter. Also: /rewind typed via send must not count as a turn (no gemini message) — the driver no longer bumps the turn counter for /-prefixed sends. Observed model gemini-3.5-flash (API-key tier), not gemini-3-flash-preview — corrected."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "node_modules/@google/gemini-cli/bundle/chunk-T55FPMGN.js:61288-61380",
+          "note": "rewindCommand: built-in /rewind, 'Jump back to a specific message and restart the conversation'; opens RewindViewer dialog; onRewind outcomes rewind_only/rewind_and_revert/revert_only call rewindConversation + revertFileChanges — in-place rewind that reverts conversation AND files (basis for agent=yes)."
+        },
+        {
+          "kind": "file",
+          "ref": "node_modules/@google/gemini-cli/bundle/chunk-T55FPMGN.js:79876-79888",
+          "note": "restoreCommand: built-in /restore gated on getCheckpointingEnabled(); 'Restore a tool call. This will reset the conversation and file history to the state it was in when the tool call was suggested' — confirms a second, checkpointing-gated full conversation+file restore exists."
+        },
+        {
+          "kind": "file",
+          "ref": "node_modules/@google/gemini-cli/bundle/chunk-G33JEOEV.js:282517-282533",
+          "note": "ChatRecordingService.rewindTo(): slices in-memory messages then appendRecord({$rewindTo: messageId}) — the rewind is an APPENDED marker line on the same chats jsonl, never an in-place truncation (the daemon-pillar load-bearing fact)."
+        },
+        {
+          "kind": "file",
+          "ref": "node_modules/@google/gemini-cli/bundle/chunk-G33JEOEV.js:282286-282299",
+          "note": "appendRecord(): fs.appendFileSync — the watched chats/*.jsonl is append-only; an offset-based tailer always sees only new growth, so the $rewindTo marker arrives as one new line, not a truncation."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/parser.go:55-65",
+          "note": "ParseLine switch: $set→harvest, type→message, default→ev.Skip=true. A {\"$rewindTo\":...} line has neither $set nor type → Skipped → the daemon ignores the rewind marker; the session keeps its header sessionId and stays in ready (daemon=full, in-place)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/agent.go:46-51",
+          "note": "Source is FilesUnderRoot{Dir: ~/.gemini/tmp} with the per-line Parser — the chats jsonl the rewindTo marker is appended to is exactly the file the daemon tails."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/gemini-cli/driver-interactive.sh:236",
+          "note": "keys) not_implemented keys || break  # TODO(gemini-cli): tmux send-keys raw sequence — the /rewind RewindViewer picker needs arrow+Enter, which this stub can't send (driver=gap:keys)."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/1-6_checkpoint-rewind/metadata.json",
+          "note": "Reference in-place recipe for the same scenario: /rewind + keys:Down + keys:Enter + a third turn — the recipe gemini-cli templates from (and the source of the keys requirement)."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "gemini on PATH and authenticated via Google OAuth (settings.json security.auth.selectedType=oauth-personal) — verified gemini 0.46.0",
+        "irrlichd is recording — run-cell.sh in isolated mode, or --attach against a daemon started with --record",
+        "DRIVER GAP (keys): the /rewind picker needs arrow-key + Enter navigation; the gemini-cli driver stubs `keys` as not_implemented (driver-interactive.sh:236). record MUST port the keys arm (a tmux send-keys -t \"$SESSION\" <key> wrapper) before driving. Without it the recipe halts at the first keys step.",
+        "IN-PLACE rewind (per assessment): gemini rewinds on the SAME session_id by appending a {\"$rewindTo\":...} marker to the same chats jsonl; the parser skips it, so do NOT assert any transcript_removed/new or a session_id change (gemini does NOT fork like codex)."
+      ],
+      "setup": [
+        "Driver launches `gemini -y` in a fresh per-run cwd under <staging>/cwd/ (isolates the trust-folder prompt; the driver auto-accepts it).",
+        "Gemini keys the session on the chats header sessionId and writes one append-only chats/session-*.jsonl. The daemon binds the launcher PID by cwd (harvested from the bootstrap <session_context>).",
+        "/rewind is sent as a plain send/slash step (text + Enter), then the RewindViewer is navigated with the TWO-STAGE picker: keys:Up moves the selection off the bottom \"Stay at current position\" entry onto the prior assistant message, keys:Enter selects it, then a \"Confirm Rewind\" sub-dialog appears and a second keys:Enter confirms \"1. Rewind conversation\". No fork, no new file — rewindTo appends $rewindTo to the existing chats jsonl."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: one"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: two"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        },
+        {
+          "type": "send",
+          "text": "/rewind"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "keys",
+          "keys": "Up"
+        },
+        {
+          "type": "sleep",
+          "seconds": 1
+        },
+        {
+          "type": "keys",
+          "keys": "Enter"
+        },
+        {
+          "type": "sleep",
+          "seconds": 2
+        },
+        {
+          "type": "keys",
+          "keys": "Enter"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: three"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the chats-keyed session entering ready shortly after launch (pre-session proc-<PID> handing off to the header sessionId), with the launcher PID bound by cwd",
+        "the session runs two working→ready turns ('one', 'two') — the checkpoints to rewind back from",
+        "after /rewind + Down + Enter, the session stays in ready on the SAME session_id (the rewind appends a $rewindTo marker the parser skips; no transcript_removed/new, no new session_id — gemini rewinds in place, it does NOT fork)",
+        "the post-rewind turn ('three') drives the SAME session ready → working → ready — a clean arc from the rewound point",
+        "final live state is ready"
+      ],
+      "settings": {},
+      "timeout_seconds": 180
+    }
+  }
+}

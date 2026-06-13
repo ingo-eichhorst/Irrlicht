@@ -1,0 +1,67 @@
+{
+  "scenario_id": "architect-editor-pair",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "incapable",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.46.0",
+    "daemon_version": "0.5.1+d98b8ce.dirty",
+    "confidence": 0.82,
+    "notes": "agent=yes daemon=incapable driver=ready — the full arc's defining waiting episode is the plan-approval gate, never persisted to the chat JSONL (route frozen)"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "architect-editor-pair",
+      "agent": "gemini-cli",
+      "assessed_at": "2026-06-11T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "incapable",
+      "driver_capability": "ready",
+      "confidence": 0.82,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: incapable\ndriver_capability: ready\n\nRoute: frozen. This cell is instantiation (b) of architect-editor-pair — Gemini CLI's plan→implement MODE pair (one model) captured across the approval gate, the FULL lifecycle arc `ready → working → waiting → working → ready` (NOT the Aider two-models-in-one-turn shape). Its load-bearing, defining observable is the mid-arc `working → waiting` episode driven by the Plan Approval pause, plus the post-approval `waiting → working → ready` continuation. Gemini genuinely raises that Plan Approval prompt, but the `→ waiting` transition produces ZERO trace in the only transport the daemon tails for Gemini — so no recording could verify the arc. This is the SAME architectural blocker the gemini-cli `user-blocking-plan-mode-approval` (2.18) cell established; this cell is its full-arc superset, and the very signal 2.18 proved Gemini cannot surface is the one this arc hinges on.\n\n## Two instantiations, and which one this is\n\nThe architect/editor essence is `a planning/architect contribution produces a plan, then an editing/editor contribution applies the edits`. Two instantiations: (a) two MODELS in one turn (Aider --architect), and (b) a plan→implement MODE pair across the approval gate (Claude Code plan mode; the broadened meaning the canonical claudecode cell instantiates). Gemini CLI cannot produce instantiation (a) — its parser captures one `model` per assistant message (parser.go:170) and there is no architect/editor two-model split within a turn. It DOES instantiate (b): plan mode + an approval-gated `exit_plan_mode` tool, identical in shape to claudecode's plan→ExitPlanMode→approve→implement. So this cell is judged as instantiation (b), exactly as the claudecode reference is.\n\n## What the scenario requires\n\nThe acceptance criteria and process assert the full topology `ready → working → waiting → working → ready` on ONE session, final state `ready`, a user-visible `waiting` episode (the approval gate), ≥1 tool call, and cross-phase token accumulation. Unlike 2.18 (which TERMINATES at the waiting gate, final_state waiting), this cell continues PAST approval through the editor/implement phase to ready. The mid-arc `working → waiting` (plan-approval gate) is the one observable that MUST land on disk for the arc to be verifiable; the post-approval `waiting → working → ready` recovery cannot exist without first reaching `waiting`. In the canonical claudecode cell that gate is the `ExitPlanMode` tool_use held open (NeedsUserAttention rule 1) plus the PreToolUse hook (PermissionPending rule 0). Neither mechanism is available for Gemini.\n\n## Why agent_supports is yes\n\nGemini CLI 0.46.0 ships a genuine plan mode (`--approval-mode plan`, `ApprovalMode.PLAN` enum) that is read-only AND surfaces a dedicated approval-gated `exit_plan_mode` tool (`EXIT_PLAN_MODE_TOOL_NAME`, class `ExitPlanModeTool`). Its `shouldConfirmExecute` returns `{type:\"exit_plan_mode\", title:\"Plan Approval\", planPath, onConfirm}`, driving the live scheduler to `CoreToolCallStatus.AwaitingApproval` (`awaiting_approval`) and pausing for a Plan Approval prompt; on approve it calls `setApprovalMode(...)` to leave plan mode and the implement phase proceeds (the editor contribution: a real write_file/replace), on cancel it stays in plan mode. So the agent deterministically performs the plan→approve→implement behavior the mode-pair instantiation names — `agent=yes`, consistent with the 2.18 sibling.\n\n## Why daemon_capability is incapable\n\nThe Gemini CLI adapter is a transcript-only Source — `agent.FilesUnderRoot{Dir: ~/.gemini/tmp/<project>/chats/}` tailing `*.jsonl` (agent.go:46-51) — and declares NO hook/permission transport in its `Permissions` (the only declared permission is the read-only `transcripts` observe gate). The daemon's two paths to a permission-driven `waiting` are both unreachable here:\n\n1. `state_classifier.go` rule 0 (`PermissionPending → waiting`) is set EXCLUSIVELY by the Claude Code permission-hook receiver; Gemini fires no such hook, so the flag is never set.\n2. `NeedsUserAttention()` (rule 1) requires an OPEN tool whose name is in `isUserBlockingToolName` = `AskUserQuestion / ExitPlanMode (CamelCase) / question` (core/pkg/tailer/tailer_config.go:34-37). Gemini's tool is `exit_plan_mode` (snake_case), absent from that set, AND the parser would never see it OPEN regardless.\n\nDecisively, Gemini never persists the awaiting-approval state to the chat JSONL the daemon tails. The geminicli parser opens each toolCall and immediately CLOSES it on its terminal status (parser.go:177-203: a `success`/`error`/`cancelled` toolCall is pushed to ToolUses and its callID pushed straight to ToolResultIDs in the same pass) — there is no parser path that derives a pending/awaiting/held-open signal from any Gemini transcript line. The recorded testdata transcript confirms this: a toolCall first appears on disk already at terminal `status:success` with no intermediate awaiting/executing line. So during the entire Plan Approval window the daemon sees NOTHING, and after resolution it sees only a finished `exit_plan_mode` call. The mid-arc `working → waiting` transition that DEFINES this cell can never be derived; without it the full arc collapses to `ready → working → ready` (indistinguishable from a basic turn) → `daemon=incapable`.\n\nContrast within the same agent: `user-blocking-question` (2.17) is `daemon=full` because ITS waiting is driven by the agent-agnostic trailing-`?` text heuristic on a `turn_done` (final text Gemini DOES persist). This cell's waiting is driven by a tool-call approval gate Gemini does NOT persist — same agent, opposite daemon verdict, because the load-bearing signal lives in a different place. (Tokens/model would observe fine — applyTokens accumulates per-message billable usage and one consistent ModelName — but token accumulation is moot when the arc itself cannot form.)\n\n## Why driver_capability is ready\n\nThe driver is not the blocker. `driver-interactive.sh` implements send / slash / wait_turn / sleep / keys / start_session / resume / reset_session / interrupt / sigkill / restart — no gapped primitive sits on this recipe's path. Gemini exposes `--approval-mode plan` as a launch flag, so engaging plan mode is a setup/precondition concern (swap the driver's `gemini -y` yolo launch for `--approval-mode plan`), not a missing step type. The blocker is correctly isolated to architecture (no transport trace), not tooling → route `frozen`, not `driver-gap`.\n\n## What would change this\n\nEither (a) Gemini CLI begins persisting the awaiting-approval scheduler state to the chat JSONL as a non-terminal toolCall status line written at schedule-time (then the parser could map a lingering open `exit_plan_mode` call to a held tool_use and the classifier could derive `working → waiting`, with the post-approval terminal close recovering `waiting → working → ready`), or (b) a Gemini permission-hook transport analogous to Claude Code's feeds `PermissionPending` directly. Neither exists in 0.46.0.",
+      "caveats": [
+        "This is the MODE-PAIR instantiation (b): one model, plan phase = architect, implement phase = editor. It is NOT the Aider two-models-in-one-turn shape — Gemini captures one model per assistant message and has no architect/editor model split within a turn.",
+        "Full-arc superset of user-blocking-plan-mode-approval (2.18): 2.18 terminates AT the waiting gate (final_state waiting) and is already daemon=incapable for the same reason; this cell would additionally need the post-approval waiting→working→ready continuation + a real edit + cross-phase token accumulation. Since the gating waiting transition is itself unobservable, the entire continuation is unverifiable — the arc cannot even begin.",
+        "Provisional on the EMISSION axis: the verdict that Gemini never writes the awaiting-approval state to the chat JSONL rests on the 0.46.0 bundle's recordCompletedToolCalls call-graph (only writer of tool-call lines, fed solely by terminal batches; awaiting_approval is in-memory/messageBus only) plus the recorded testdata transcript (no awaiting/executing line ever observed on disk) and the parser's immediate-close path. A live recording driving genuine plan mode is the only thing that could promote this from provisional to settled — hence confidence 0.82. Same emission caveat as the 2.18, tool-gate-permission-prompt, and auto-classified-permission cells.",
+        "AUTH DEADLINE: Gemini CLI stops serving Google One / unpaid tiers on 2026-06-18; any future re-assessment recording must use a paid tier or migrate off gemini-cli."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/agent.go",
+          "note": "Source is FilesUnderRoot tailing ~/.gemini/tmp/<project>/chats/*.jsonl (lines 46-51); Permissions declares only the read-only transcripts observe gate — no hook/permission transport for a permission-driven waiting."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/parser.go",
+          "note": "parseAssistant opens each toolCall and immediately closes it on terminal status (lines 177-203: callID pushed to ToolResultIDs in the same pass); no parser path derives a pending/awaiting/held-open signal — and exit_plan_mode is snake_case, absent from any user-blocking set."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer_config.go",
+          "note": "isUserBlockingToolName = AskUserQuestion / ExitPlanMode (CamelCase) / question (lines 34-37); Gemini's exit_plan_mode (snake_case) is not in the set, so even an open call could not drive NeedsUserAttention rule 1."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go",
+          "note": "Permission-driven waiting requires rule 0 (PermissionPending, Claude-Code-hook-only) or rule 1 (NeedsUserAttention over isUserBlockingTool); neither fires for Gemini's snake_case exit_plan_mode that is never persisted open — so the mid-arc working→waiting gate cannot be derived."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/gemini-cli/scenarios/2-18_user-blocking-plan-mode-approval/metadata.json",
+          "note": "Sibling 2.18 cell: same plan→exit_plan_mode→Plan Approval gate, already daemon=incapable because the →waiting transition leaves zero trace in the chat JSONL. This cell is 2.18's full-arc superset and inherits the same blocker on the gating transition."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@google/gemini-cli/bundle/chunk-6ZHP2EJW.js",
+          "note": "gemini-cli 0.46.0 bundle: ExitPlanModeTool shouldConfirmExecute returns {type:'exit_plan_mode',title:'Plan Approval'} gating into awaiting_approval; scheduler updateStatus(callId,'awaiting_approval') only mutates in-memory state + emitUpdate() then awaits resolveConfirmation; recordCompletedToolCalls is fed only terminal batches; ApprovalMode.PLAN enum. Confirms agent=yes (plan mode real) and the awaiting state is never flushed to disk."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "notes": "Route frozen (daemon=incapable). No recording is possible: the mid-arc working→waiting transition driven by the Plan Approval pause is never written to the chat JSONL the daemon tails, so the full ready→working→waiting→working→ready arc could not form on disk and no recipe could elicit a verifiable observation. Would become recordable only if Gemini begins persisting the awaiting-approval scheduler state (non-terminal toolCall line at schedule-time) or grows a permission-hook transport feeding PermissionPending — at which point the plan→approve→implement mode-pair recipe (--approval-mode plan launch, send the plan task, approve the gate, wait for the implement turn) would mirror the claudecode reference."
+    }
+  }
+}

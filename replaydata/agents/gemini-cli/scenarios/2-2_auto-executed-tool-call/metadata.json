@@ -1,0 +1,88 @@
+{
+  "scenario_id": "auto-executed-tool-call",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.46.0",
+    "daemon_version": "0.5.1+6fcc851",
+    "confidence": 0.82,
+    "notes": "agent_supports: yes; daemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "auto-executed-tool-call",
+      "agent": "gemini-cli",
+      "assessed_at": "2026-06-11T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.82,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Reasoning\n\n**agent (yes).** Gemini CLI is a tool-using agent: the model emits function calls (`toolCalls`) for built-in tools (run_shell_command, read_file, write_file, etc.), the runtime executes them, and feeds `functionResponse` results back into the next turn — all inside one user turn, no second prompt. Run under `gemini -y` (yolo) the tool calls auto-approve with no confirmation gate, which is exactly this scenario's gate-less happy path. A prompt like \"run echo hello via the shell tool, then reply done\" exercises run_shell_command directly.\n\n**daemon (full).** Confirmed against the live transcript fixture `core/adapters/inbound/agents/geminicli/testdata/real-toolcall-session.jsonl`, which contains the full arc the daemon parses: a `gemini` assistant message carrying `toolCalls` (parser.go parseAssistant → ev.ToolUses, content empty/tool-calling so the session stays `working`), a user-role message of `functionResponse` parts (parser.go parseUser → EventType `function_call_output`, closes the open tool WITHOUT ClearToolNames/settle), then a final `gemini` message with non-empty content and zero toolCalls (parser.go:209 → EventType `turn_done`, settling working→ready). The opening user prompt drives ready→working (parser.go parseUser → `user_message`). So the daemon emits ready→working (prompt), holds working across the tool round-trip, and working→ready on the terminal text turn — the scenario's `ready → working → ready` arc with a tool call inside the working span. Nothing in the auto-approved path sets PermissionPending, so `waiting` is unreachable, satisfying bullet 2.\n\n**driver (ready).** The recipe needs only `send` / `wait_turn` / `sleep`, all implemented by `replaydata/agents/gemini-cli/driver-interactive.sh` (DRIVE_ELICITS=\"send slash wait_turn sleep\"). The driver launches `gemini -y` (yolo auto-approves so no gate trips), auto-accepts the first-run trust-folder prompt, and `wait_turn` blocks on the transcript turn count — mirroring the parser's heuristic turn-end classification. No missing step type.\n\n## What the daemon does NOT surface (and why that's OK)\n\nIndividual tool_use / function_call_output pairs are parsed and counted but never flicker session state — by design intra-turn tool calls keep the session `working`. The spec asserts only state-level observables, which is what the daemon emits.",
+      "caveats": [
+        "Gemini emits NO explicit end-of-turn marker; the parser heuristically settles working→ready when an assistant message has non-empty content and zero toolCalls (parser.go:209). The turn-end edge is therefore emission-dependent — this is a doc/code+fixture verdict, PROVISIONAL on the exact streaming-flush ordering of a live run; record promotes it from provisional to settled.",
+        "A tool call that tripped an interactive approval would push state to waiting (different feature). The recipe runs under `gemini -y` (yolo) so every tool auto-approves and waiting stays unreachable.",
+        "Tool-call visibility is coarse in the transcript (call id + name, plus the functionResponse close); the phase DSL has no tool-event form, so the auto-executed tool call is asserted via the single uninterrupted working span plus the no-waiting invariant, not a dedicated phase.",
+        "RECORDING PREREQ: Gemini OAuth (oauth-personal) must be set up out-of-band; the Google One / unpaid tier stops serving on 2026-06-18, after which recordings on those tiers fail auth."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/parser.go",
+          "note": "parseUser: user_message drives ready→working, functionResponse → function_call_output closes tool without settling; parseAssistant: toolCalls → ToolUses keeps working, non-empty content + zero toolCalls (line 209) → turn_done settles working→ready."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/testdata/real-toolcall-session.jsonl",
+          "note": "Live transcript fixture: 1 gemini message with toolCalls, 2 functionResponse user parts, 1 terminal gemini text message with no toolCalls — the exact ready→working→ready arc with a tool call mid-turn."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/agent.go",
+          "note": "Adapter declares FilesUnderRoot(~/.gemini/tmp/<project>/chats) + JSONLineParser; commandPattern bin/gemini; isHeapBumpWorker excludes the V8 heap-bump re-exec so one launcher session is observed."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/gemini-cli/driver-interactive.sh",
+          "note": "DRIVE_ELICITS=\"send slash wait_turn sleep\" covers the recipe; launches `gemini -y` (yolo auto-approve), auto-accepts trust-folder, wait_turn blocks on transcript turn count."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "gemini CLI on PATH and authenticated via Google OAuth (oauth-personal), set up out-of-band",
+        "irrlichd is recording (dev daemon with --record, isolated IRRLICHT_ONBOARD_HOME + alt port so prod is untouched)",
+        "Driver runs `gemini -y` (yolo) so the shell tool auto-approves and no permission gate trips"
+      ],
+      "setup": [
+        "Driver stages a fresh cwd and launches gemini -y under tmux, auto-accepting the first-run trust-folder prompt",
+        "wait_turn resolves the rollout transcript created after launch and blocks on its turn count"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Run the shell command 'echo hello' using the run_shell_command tool, then reply 'done'."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the session entering ready, then exactly one ready→working transition for the session",
+        "events.jsonl shows exactly one working→ready transition (the terminal text turn)",
+        "events.jsonl contains at least one tool_use event (run_shell_command) inside the working span",
+        "events.jsonl contains NO state_transition to waiting for the session during the entire run",
+        "final session state is ready",
+        "a single process_exited on the session after the turn"
+      ],
+      "settings": {},
+      "timeout_seconds": 180
+    }
+  }
+}

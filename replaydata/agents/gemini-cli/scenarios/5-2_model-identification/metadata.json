@@ -1,0 +1,111 @@
+{
+  "scenario_id": "model-identification",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.46.0",
+    "daemon_version": "0.5.1+b9b61cb.dirty",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "model-identification",
+      "agent": "gemini-cli",
+      "assessed_at": "2026-06-11T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## What this cell asserts\n\n5.2 is the `--model`-PINNED sibling of 1.8 model-context-display: launch gemini with an explicit non-default model (`-m gemini-3-pro-preview`, vs the flash default the boot session would pick) and lock down that after a single no-op turn SessionMetrics.ModelName equals the launch model (not 'unknown') and ContextWindow matches that model's published window. The state arc is the plain basic-turn arc (ready -> working -> ready); the assertion lives in the post-turn metric vector.\n\n## Reasoning\n\n### agent_supports: yes\nGemini CLI v0.46.0 exposes `-m, --model <string>` as a top-level flag (`gemini --help`). `gemini-3-pro-preview` is a first-class served model id in the shipped bundle (66 occurrences in the bundle chunk files, alongside the `gemini-3-flash-preview` default) and is in irrlicht's capacity/alias table, so it is a valid, genuinely non-default `-m` target. The pinned model flows through to the assistant message's top-level `model` field exactly as the default does — `parseAssistant` reads `raw[\"model\"]` regardless of how the model was selected.\n\n### daemon_capability: full\nThe metric path is identical to 1.8 (same parser, same fields) — the only difference is which value lands in `model`:\n1. ModelName — `parseAssistant` (parser.go L162-172) sets `ev.ModelName = tailer.NormalizeModelName(raw[\"model\"])`. NormalizeModelName only rewrites Claude patterns (parser.go L433-458); a gemini id passes through unchanged, so model_name is the literal served model and != 'unknown' from the first assistant event.\n2. TotalTokens — `applyTokens` (parser.go L217-267) reads the per-message `tokens` block ({input,output,cached,total}), sets the latest-turn snapshot (context-utilization numerator) and a deduped billable Contribution (the cost source). parser_test confirms both land on a single trivial turn.\n3. ContextWindow — the geminicli parser sets NO context-window override, so `ComputeContextUtilization` (tailer_metrics.go L454-500) falls back to `capacityMgr.GetModelCapacity(modelName).ContextWindow` for the resolved gemini model; aliases.go L109 maps `gemini-3-pro` -> `gemini-3-pro-preview` and the served id `gemini-3-pro-preview` is itself a canonical LiteLLM key, so a positive window/pricing resolves whenever the LiteLLM cache carries that entry at record time.\n\nA final-text gemini message with no toolCalls emits `turn_done` (parser.go L208-211), settling ready -> working -> ready; parser_test confirms exactly one turn_done on the trivial path.\n\n### driver_capability: ready\nThe recipe needs only `send` / `wait_turn` / `sleep` plus the `-m` launch flag (a driver launch argument, not a recipe step type). driver-interactive.sh implements send/wait_turn/sleep (and keys/slash/reset_session/restart/sigkill). No gap.\n\n## What is PROVISIONAL (settled by record)\n\nTwo points, both the emission/data case the assess SKILL flags (daemon=full from a sound parser read, confidence held at 0.8):\n1. The exact model STRING the transcript records for `-m gemini-3-pro-preview`. The only captured gemini fixture ever shows the default `gemini-3-flash-preview`; I cannot confirm from docs/binary that a non-default `-m` value is echoed verbatim into the message `model` field (vs a backend-canonicalized id). The parser will faithfully report whatever string lands — but whether that string is exactly `gemini-3-pro-preview` is a live-recording question. If the live string differs it is a string update to observations.model, NOT a daemon bug.\n2. `context_window > 0` and `cost_nonzero` depend on the LiteLLM/capacity cache carrying a context_window + pricing entry for the resolved canonical key (`gemini-3-pro-preview`, a preview id) at record time. If the entry lags, ContextWindow falls back to unknown(0) and cost is 0 — model_name + the state arc still pass.",
+      "caveats": [
+        "PROVISIONAL model string: the only captured gemini fixture shows the default 'gemini-3-flash-preview'; the exact string the transcript records for the pinned '-m gemini-3-pro-preview' is unconfirmed from docs (the agent may canonicalize/route). The parser reports whatever lands faithfully — record settles observations.model; a different live string is a string update, not a daemon bug.",
+        "context_window > 0 and cost depend on the LiteLLM/capacity cache containing a context_window + pricing entry for the resolved canonical key 'gemini-3-pro-preview' (a preview id) at record time. The geminicli parser sets no context-window override, so a missing LiteLLM entry leaves ContextWindow unknown(0) and cost 0 — model_name + the ready->working->ready arc still pass. record settles this.",
+        "Gemini emits no explicit end-of-turn marker; the parser infers turn_done from a final-text message with no open tool calls. The no-op turn is a single non-tool text reply, so the inference is unambiguous — but the turn_done heuristic is a known geminicli property.",
+        "DEADLINE: Gemini CLI stops serving Google One / unpaid tiers on 2026-06-18 — after that, recordings on those tiers fail auth. The Pro model may also require a paid tier the maintainer's account must carry."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/parser.go L162-213",
+          "note": "parseAssistant sets ev.ModelName from raw.model via NormalizeModelName (same path for any model, pinned or default), applyTokens fills ev.Tokens + per-turn Contribution, and a final-text message with no toolCalls is promoted to turn_done (ready->working->ready)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/parser.go L433-458",
+          "note": "NormalizeModelName only rewrites Claude id patterns and strips the [1m] suffix; a gemini-3-pro-preview / gemini-3-flash-preview id passes through unchanged, so model_name is the literal served model and never 'unknown' once an assistant event has carried it."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer_metrics.go L454-500",
+          "note": "ComputeContextUtilization early-returns (0,0,unknown) only while TotalTokens==0 or ModelName==\"\"; once both populated returns ContextWindow (override else capacityMgr.GetModelCapacity) and utilization > 0. The geminicli parser passes no override, so the window comes from the capacity table for the resolved gemini model."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/capacity/aliases.go L103-111",
+          "note": "gemini-3-pro -> gemini-3-pro-preview; the served id gemini-3-pro-preview is itself a canonical LiteLLM key, so a positive context_window/pricing resolves iff the LiteLLM cache carries it at record time (the provisional data bit)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/parser_test.go L86-210",
+          "note": "Tests assert: a final-text message yields exactly one turn_done with model + non-zero contribution on the trivial path; re-emission under one id is not double-billed."
+        },
+        {
+          "kind": "command",
+          "ref": "gemini --help (v0.46.0) -> '-m, --model  Model  [string]'; grep gemini-3-pro-preview over @google/gemini-cli/bundle/chunk-*.js -> 66 hits",
+          "note": "The -m/--model flag is a documented top-level flag and gemini-3-pro-preview is a first-class served model id in the shipped bundle — primary evidence agent_supports=yes for a non-default pinned launch."
+        },
+        {
+          "kind": "spec",
+          "ref": "replaydata/agents/gemini-cli/scenarios/1-8_model-context-display/metadata.json",
+          "note": "The agent-agnostic, default-launch sibling of this cell (same metrics path: ModelName -> TotalTokens -> ComputeContextUtilization). 5.2 is the --model-pinned variant; 1.8's own note states 'the pinned variant is 5.2'."
+        },
+        {
+          "kind": "spec",
+          "ref": "replaydata/agents/claudecode/scenarios/5-2_model-identification/metadata.json",
+          "note": "Reference (recorded+full) cell for the same scenario: single no-op turn under a non-default --model, ModelName != 'unknown' and ContextWindow matches the published window."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "gemini CLI on PATH and authenticated via Google OAuth (selectedType=oauth-personal); set up out-of-band, no API key",
+        "DEADLINE: Gemini CLI stops serving Google One / unpaid tiers on 2026-06-18 — after that, recordings on those tiers fail auth; the pinned Pro model may also require a paid tier the account must carry",
+        "irrlichd is recording (dev daemon with --record; run-cell.sh isolated mode)",
+        "launch with the NON-DEFAULT pinned model: -m gemini-3-pro-preview (this is what distinguishes 5.2 from the default-launch 1.8)",
+        "fresh empty cwd; gemini shows a trust-folder prompt on first encounter — the driver auto-accepts (or use gemini -y)"
+      ],
+      "setup": [
+        "Create an empty cwd under the staging dir (gemini prompts to trust it on first run; driver auto-accepts or pre-trust)",
+        "Launch gemini interactively with -m gemini-3-pro-preview so the pinned model id flows through the assistant message's model field from turn 1",
+        "Assertions on model_name / context_window / context_utilization_percentage are checked AFTER wait_turn (the first turn_done)"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        }
+      ],
+      "verify": [
+        "events.jsonl shows one ready->working->ready cycle on the session",
+        "SessionMetrics.ModelName after turn_done is the pinned launch model (e.g. 'gemini-3-pro-preview') and != 'unknown' — record settles the exact string",
+        "SessionMetrics.ContextWindow after turn_done is > 0 (from the capacity table for the resolved gemini model)",
+        "SessionMetrics.ContextUtilization (context_utilization_percentage) after turn_done is > 0",
+        "cost is non-zero (capacity pricing applied to the per-turn token contribution)",
+        "final session state is ready"
+      ],
+      "settings": {},
+      "timeout_seconds": 120
+    }
+  }
+}

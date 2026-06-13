@@ -1,0 +1,69 @@
+{
+  "scenario_id": "quota-burndown",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "incapable",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.46.0",
+    "daemon_version": "0.5.1+92de9c4.dirty",
+    "confidence": 0.82,
+    "notes": "agent_supports: yes\ndaemon_capability: incapable (cross-turn burndown leaves no trace in the chat transcript the daemon tails)\ndriver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "quota-burndown",
+      "agent": "gemini-cli",
+      "assessed_at": "2026-06-11T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "incapable",
+      "driver_capability": "ready",
+      "confidence": 0.82,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: incapable (for the cross-turn burndown PROGRESSION in a recorded fixture)\ndriver_capability: ready\n\nroute: frozen\n\n## The scenario, restated\n\nquota-burndown asserts that, across >=2 turns that approach but do NOT cross the quota wall, a rate-limit window's `Windows[0].UsedPercent` is observed non-decreasing (P2 >= P1) with `SampledAt` advancing (T2 > T1) and no spurious reset to 0 between turns. The reference codex cell evidences this by replaying its transcript: codex writes a `rate_limits` map into the `payload` of every `token_count` event, so re-parsing the transcript re-derives the per-turn window history (extractCodexRateLimits, codex/parser.go:355-418). The question for gemini-cli is whether that progression is observable from a RECORDED fixture (transcript.jsonl + events.jsonl), which is what the matrix records and replays.\n\n## agent_supports: yes\n\nGemini CLI genuinely surfaces a subscription quota window. A `strings`-class scan of the installed bundle (@google/gemini-cli 0.46.0) shows a full quota surface: a `QuotaTracker`-style class with `getQuotaRemaining()/getQuotaLimit()/getQuotaResetTime()`, `lastQuotaFetchTime`, `emitQuotaChangedEvent()`, `modelQuotas`, `QuotaState`/`QuotaResetTime`/`QuotaRemaining`/`QuotaLimit`; a React `QuotaContext`/`QuotaProvider`/`useQuotaState` hook; a `QuotaDisplay.tsx` footer component (`{ remaining, limit, resetTime }`) and a `getUsedStatusColor(usedPercentage, thresholds)` helper that colors the footer by used-percent thresholds (warning/critical). So the agent fetches a live quota window and renders a burning-down used-percent in its TUI footer -- the feature exists.\n\n## daemon_capability: incapable -- and WHY (same shape as claudecode, NOT codex)\n\nThis is the load-bearing finding, and it hinges on where the quota data lives. Replay reconstructs metrics by re-running the captured **transcript.jsonl** (and the **events.jsonl** lifecycle sidecar) back through the production tailer + parser. The burndown assertion is satisfiable only if the rate-limit data lives in one of those two captured files. For gemini-cli it lives in NEITHER:\n\n1. **Not in the transcript.** The chat transcript the daemon tails (`~/.gemini/tmp/<project>/chats/session-*.jsonl`) is written by `ChatRecordingService.recordMessage()` via `newMessage(type, content, displayContent, id)`, which persists `{id, timestamp, type, content, displayContent}` plus, for a `gemini` message, `{thoughts, tokens, model}`. There is NO quota/usedPercent/remaining/resetTime/rate_limit field anywhere in the chatRecordingService write path -- a per-keyword scan of that region returns zero hits. The quota data instead flows over the in-process event bus (`coreEvents.emitQuotaChanged(remaining, limit, resetTime)` -> `QuotaContext` -> `QuotaDisplay` footer) and OpenTelemetry (`logger.emit(logRecord)` with OTel attributes), and is fetched live (`lastQuotaFetchTime`, `getQuotaRemaining`). None of it is ever written to the chat `.jsonl`. Re-parsing the gemini transcript yields zero rate-limit data.\n\n2. **Not in the gemini adapter parser.** The irrlicht gemini-cli parser (geminicli/parser.go) reads only message-level signals -- user/assistant text, model name, per-message `tokens` (input/output/cached/total), tool calls, inferred turn_done. It never sets `ParsedEvent.RateLimit` (grep `RateLimit` over the file = 0), because there is nothing in the transcript to read. The codex parser sets it because the codex transcript carries the window; the gemini transcript does not.\n\n3. **Not in the events.jsonl sidecar.** `lifecycle.Event` has no rate-limit field and there is no `KindRateLimit`; the sidecar format physically cannot carry a rate-limit snapshot for ANY adapter (the same structural fact that froze the claudecode cell).\n\nSo a recorded gemini-cli fixture contains NO trace of the rate-limit window at all -- not the progression, not even a single sample. Per the rubric, \"the behavior leaves no trace in the Source\" is `incapable` (architecture: the recording format / Source can't represent it), not `bug` (the daemon does the right thing live) and not a driver gap. This mirrors claudecode (whose statusline quota is out-of-band HTTP) and contrasts with codex (whose quota is native in the transcript).\n\n## driver_capability: ready\n\nNo missing step primitive. The recipe would need only multi-turn `send` + `wait_turn` (+ optional `sleep`); the gemini-cli interactive driver's recipe-lint reports send/slash/wait_turn/keys/sleep/interrupt/... all present. Marked `ready` (not `gap:*`) deliberately to avoid routing this to the wrong owner -- the blocker is observability architecture, not tooling. The gap is that there is nothing in the captured Source to assert against.\n\n## Conclusion / route\n\nFROZEN. The agent has the feature (yes) and the driver is ready, but irrlicht's recording format fundamentally cannot capture the burndown progression (incapable): the quota window is live, in-process React/footer state plus OTel, never persisted to the chat transcript and unrepresentable in the events.jsonl sidecar. This is a legitimate incapable verdict, NOT a recording failure. What would unblock it: either (a) Gemini CLI persists the quota window into the chat transcript (then the gemini parser could read it into `ParsedEvent.RateLimit` like codex, and daemon would move toward full), or (b) irrlicht gains a live-metrics-probe spec format and a recordable `KindRateLimit` lifecycle event (adding rate-limit fields to `lifecycle.Event`) so a fixture can capture per-tick history -- the same unblock noted for claudecode. A single live snapshot may be observable today only if irrlicht ingests it out-of-band; cross-turn progression in a fixture is not.",
+      "caveats": [
+        "Live vs recorded: this incapable verdict is specifically about the cross-turn PROGRESSION being unrepresentable in the transcript+events.jsonl fixture format the matrix records and replays. Gemini CLI does fetch and render a live quota footer in its own TUI -- but irrlicht never receives that data (it is in-process React state + OpenTelemetry, not the tailed transcript), so even a single snapshot is not observable by the daemon today.",
+        "Symmetry with claudecode (5-7 = incapable, frozen) and contrast with codex (5-7 = full): the deciding factor is purely whether the agent writes its rate-limit window into the transcript the daemon tails. Codex does; claudecode and gemini-cli do not.",
+        "Free-tier deadline (gemini-cli adapter facts): Gemini CLI's free OAuth tier (Google One / unpaid) was slated to stop 2026-06-18; even the underlying quota semantics may shift. This does not change the verdict -- the blocker is that the window is not persisted to the transcript regardless of tier.",
+        "If a future Gemini CLI release persists the quota window into session-*.jsonl, OR a future irrlicht release records a KindRateLimit lifecycle event, re-assess: daemon_capability would move toward full and the cell becomes recordable."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/parser.go",
+          "note": "The gemini-cli parser never sets ParsedEvent.RateLimit (grep RateLimit = 0). It reads only user/assistant text, model, per-message tokens (input/output/cached/total), tool calls, and inferred turn_done -- there is no rate-limit window to read from the transcript."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/codex/parser.go:355-418",
+          "note": "Contrast: extractCodexRateLimits()/extractCodexRateLimitWindow() read payload.rate_limits.primary.used_percent DIRECTLY off codex token_count events because the codex transcript carries the window. The gemini transcript carries no such field, which is why the gemini parser has no equivalent."
+        },
+        {
+          "kind": "file",
+          "ref": "@google/gemini-cli@0.46.0 bundle/chunk-G33JEOEV.js (packages/core/src/services/chatRecordingService.ts)",
+          "note": "ChatRecordingService.recordMessage() -> newMessage(type, content, displayContent, id) persists {id, timestamp, type, content, displayContent} plus {thoughts, tokens, model} for gemini messages to session-*.jsonl. A per-keyword scan of this region for usedPercent/quota/remaining/resetTime/rate_limit returns ZERO hits -- the transcript the daemon tails physically does not carry a quota window."
+        },
+        {
+          "kind": "file",
+          "ref": "@google/gemini-cli@0.46.0 bundle/chunk-XWSJWBAL.js (packages/cli/src/ui/components/QuotaDisplay.tsx, contexts/QuotaContext.tsx)",
+          "note": "agent_supports=yes: QuotaDisplay({remaining, limit, resetTime}) footer + getUsedStatusColor(usedPercentage, thresholds) + QuotaContext/QuotaProvider/useQuotaState React state. The quota window is real and rendered in the TUI -- but as in-process React state, not transcript data."
+        },
+        {
+          "kind": "file",
+          "ref": "@google/gemini-cli@0.46.0 bundle/chunk-RCJSF5RP.js (QuotaTracker.emitQuotaChangedEvent / coreEvents.emitQuotaChanged / lastQuotaFetchTime)",
+          "note": "Quota data is fetched live (lastQuotaFetchTime, getQuotaRemaining/Limit/ResetTime) and emitted over the in-process event bus (coreEvents.emitQuotaChanged) + OpenTelemetry, NOT routed to the chat recorder -- the same out-of-band shape that makes claudecode's statusline quota unrecordable."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/5-7_quota-burndown/metadata.json",
+          "note": "Precedent: claudecode quota-burndown = agent yes / daemon incapable / driver ready / frozen, for the identical reason (rate-limit data out-of-band, never in the transcript or events.jsonl). gemini-cli matches this pattern."
+        },
+        {
+          "kind": "spec",
+          "ref": ".specs/agent-scenarios.md -> quota-burndown",
+          "note": "Windows[].UsedPercent after turn N >= after turn N-1; SampledAt updates on each turn (no stale snapshot replay) -- the user-observable signal that requires per-turn rate-limit samples in the captured Source, which the gemini transcript does not contain."
+        }
+      ]
+    },
+    "recipe": {}
+  }
+}

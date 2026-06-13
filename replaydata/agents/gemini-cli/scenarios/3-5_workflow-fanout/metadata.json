@@ -1,0 +1,61 @@
+{
+  "scenario_id": "workflow-fanout",
+  "metadata": {
+    "agent_supports": "no",
+    "daemon_capability": "n/a",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.46.0",
+    "daemon_version": "0.5.1+a50ffdd.dirty",
+    "confidence": 0.8,
+    "notes": "agent_supports: no (Gemini CLI has subagents but no workflow/multi-agent fan-out feature)\ndaemon_capability: n/a\ndriver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "workflow-fanout",
+      "agent": "gemini-cli",
+      "assessed_at": "2026-06-11T00:00:00Z",
+      "agent_supports": "no",
+      "daemon_capability": "n/a",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: no\ndaemon_capability: n/a\ndriver_capability: ready\nroute: frozen\n\n## Reasoning\n\nThe scenario requires the agent's CLI to ship a **workflow / multi-agent-orchestration feature** that fans out several PARALLEL children at once (≈ 3 concurrent), where each child materializes its own transcript one level deeper than a plain subagent (under a per-run directory) alongside per-run bookkeeping files (a replay `journal.jsonl`), and `SubagentCount(parent)` tracks the live count of those concurrent children. The scenario description states this outright: \"Only agents whose CLI has a workflow/multi-agent feature can elicit this (currently claude-code's Workflow tool); per the matrix convention the row stays agent-agnostic and assess marks cells for agents without the feature as agent_supports=no.\" The load-bearing observables that make this scenario distinct from plain foreground subagents (3-1) are (a) parallel fan-out of N children and (b) a per-run journal/bookkeeping file that must NOT masquerade as a phantom session.\n\nGemini CLI 0.46.0 ships a real **subagents** feature (`docs/core/subagents.md`, built-ins `codebase_investigator` / `cli_help` / `generalist` / experimental `browser_agent`, custom `.gemini/agents/*.md`, A2A remote subagents) — but it is a SEQUENTIAL specialist-delegation model, not the workflow fan-out this scenario asserts:\n\n1. **No fan-out / no orchestration tool.** The doc frames subagents as specialists the main agent \"hires for a specific job\": \"the main agent calls the tool, it delegates the task to the subagent. Once the subagent completes its task, it reports back to the main agent.\" There is no Workflow/orchestrator tool that launches N agents in parallel with a per-run script + journal. A bundle scan (`@google/gemini-cli/bundle/chunk-*.js`) for `workflow|orchestrat|fan-?out|parallel.*agent` surfaces only prose (\"automate specific workflows\") — no fan-out construct. Worse for the scenario, the doc explicitly enforces **recursion protection**: \"subagents cannot call other subagents,\" so there is no nested orchestration layer.\n\n2. **No per-run directory / no journal bookkeeping file.** Gemini writes subagent transcripts flat at `~/.gemini/tmp/<project>/chats/<safeParentSessionId>/<safeSubagentSessionId>.jsonl` (bundle: `if (this.kind === \"subagent\" && this.context.parentSessionId) { const safeParentId = sanitizeFilenamePart(this.context.parentSessionId); ... } ... if (this.kind === \"subagent\") { filename = \\`${safeSessionId}.jsonl\\` }`). There is no `subagents/workflows/<run-id>/` per-run directory and no `journal.jsonl` replay-bookkeeping file (the only `journal` strings in the bundle are SQLite `PRAGMA journal_mode = WAL`, unrelated). The scenario's central anti-phantom assertion (\"no session named `journal`, no `unknown`-project session from the run's journal\") therefore has no analogue — there is no bookkeeping file to mis-detect.\n\nBecause the workflow fan-out feature is absent, `agent_supports = no` and the daemon-observation question is moot: `daemon_capability = n/a`.\n\nFor completeness on the transport (the cell stays honest about what the daemon WOULD do): even Gemini's ordinary subagents are NOT linked to their parent by the daemon today. The generic parent-link derivation (`core/application/services/helpers.go` `deriveParentSessionID`) matches only two layouts — Claude's path pattern `.../<parent>/subagents/<agent>.jsonl` (+ `.../subagents/workflows/<run-id>/agent-*.jsonl`) and Pi's transcript header `{\"type\":\"session\",\"parentSession\":\"...\"}`. Gemini's `chats/<parentSessionId>/<child>.jsonl` layout has no `subagents/` path segment, and the gemini-cli parser (`core/adapters/inbound/agents/geminicli/parser.go`) emits no `ParentSessionID` and reads no `parentSession` field. So Gemini subagents currently surface as top-level sessions, not parent-linked children. This is the subagent-linking gap of the FOREGROUND-SUBAGENT scenario (3-1) — it is out of scope here because this row is frozen on the agent pillar.\n\n## What would flip the verdict\n\nUpstream Gemini CLI would need to ship a workflow / multi-agent-orchestration tool that fans out N parallel children with a per-run directory and bookkeeping/journal files (the claude-code Workflow analogue). Only then would `agent_supports` move off `no`. Observing it would additionally require the gemini-cli adapter to derive `ParentSessionID` from Gemini's `chats/<parent>/<child>.jsonl` layout (a new path matcher or a parser-emitted parent id) and to drop any per-run journal bookkeeping file — work that would be assessed for the foreground-subagent row (3-1) first.",
+      "caveats": [
+        "Gemini CLI 0.46.0 DOES ship a subagents feature (codebase_investigator / cli_help / generalist built-ins, custom .gemini/agents/*.md, A2A remote subagents), and the main agent could call several subagent tools within one turn — but this is sequential specialist delegation, not the parallel workflow fan-out (per-run dir + replay journal) the scenario asserts; the doc explicitly forbids subagents calling other subagents (recursion protection). agent=no is anchored to the absence of the workflow-orchestration feature, not the absence of subagents.",
+        "Even Gemini's ordinary subagents are NOT parent-linked by the daemon today: deriveParentSessionID matches only Claude's .../subagents/... path and Pi's parentSession header; Gemini's chats/<parent>/<child>.jsonl layout matches neither and the parser emits no ParentSessionID. This is the foreground-subagent (3-1) linking gap, not assessed here because the row is frozen on the agent pillar.",
+        "confidence 0.8 (not higher): the absence of a workflow/orchestration tool is well-anchored in the bundle scan + the official subagents doc, but the subagents space is actively moving upstream (subagent flag #26947, thread-context fix #26449 in the latest changelog), so a future release could add a fan-out construct."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@google/gemini-cli/bundle/docs/core/subagents.md",
+          "note": "Official subagents doc (0.46.0): subagents are sequential specialists the main agent 'hires' and that 'report back'; recursion protection forbids subagents calling subagents; no workflow/fan-out/parallel-orchestration tool described"
+        },
+        {
+          "kind": "file",
+          "ref": "@google/gemini-cli/bundle/chunk-6ZHP2EJW.js (0.46.0)",
+          "note": "Subagent transcript layout: chats/<sanitized parentSessionId>/<sanitized subagentSessionId>.jsonl (kind==='subagent' branch). No subagents/workflows/<run-id>/ per-run dir; no journal.jsonl bookkeeping (only 'journal' string is SQLite PRAGMA journal_mode=WAL). Bundle scan for workflow|orchestrat|fan-out|parallel-agent finds no fan-out construct"
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/helpers.go",
+          "note": "deriveParentSessionID matches only Claude's .../<parent>/subagents/<agent>.jsonl (+ workflows/<run-id>/agent-*.jsonl) and Pi's transcript-header parentSession; Gemini's chats/<parent>/<child>.jsonl layout matches neither — so even ordinary Gemini subagents would not be parent-linked"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/parser.go",
+          "note": "Parser emits no ParentSessionID and reads no parentSession header field — the daemon has no transcript-side parent-link signal for Gemini subagents"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/3-5_workflow-fanout/metadata.json",
+          "note": "Contrast anchor: claudecode ships the Workflow tool (agent=yes, fan-out of N parallel agents under <parent>/subagents/workflows/<run-id>/ + journal.jsonl). Gemini-cli ships subagents but no such workflow fan-out, hence agent=no"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "notes": "agent_supports=no — Gemini CLI 0.46.0 has subagents but no workflow/multi-agent fan-out feature (no parallel orchestration tool, no per-run dir, no replay journal). No recipe; this cell is frozen."
+    }
+  }
+}

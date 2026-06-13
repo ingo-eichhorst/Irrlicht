@@ -1,0 +1,63 @@
+{
+  "scenario_id": "provider-failover-midturn",
+  "metadata": {
+    "agent_supports": "partial",
+    "daemon_capability": "incapable",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.46.0",
+    "daemon_version": "0.5.1+92de9c4.dirty",
+    "confidence": 0.6,
+    "notes": "agent_supports: partial (real Pro->Flash auto-fallback, but session-level not mid-turn). daemon_capability: incapable; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "provider-failover-midturn",
+      "agent": "gemini-cli",
+      "assessed_at": "2026-06-11T00:00:00Z",
+      "agent_supports": "partial",
+      "daemon_capability": "incapable",
+      "driver_capability": "ready",
+      "confidence": 0.6,
+      "body": "## Verdict\n\nagent_supports: partial\ndaemon_capability: incapable; driver_capability: ready\n\nroute: frozen (disposition applicable_false) — consistent with the rest of the 5.5 row (claudecode, codex, kiro-cli, pi all partial / incapable / applicable_false).\n\n## Reasoning\n\nThe scenario asserts a strict mid-turn arc: the primary model errors mid-turn, the agent falls back to a secondary model and completes the SAME turn under it, `ModelName` updates to the fallback, and state stays `working` through the failover with no flicker to `ready`.\n\n### agent_supports: partial\n\nUnlike claudecode (which has no built-in provider/model fallback chain), gemini-cli DOES ship an automatic model fallback: when the Pro model hits a rate limit / quota / 429, the CLI auto-switches to a Flash model. The binary carries the machinery directly — `strings`-equivalent grep over the bundled `chunk-RCJSF5RP.js` finds `FlashFallback` (8x), `fallbackModel` (25x), `FallbackModel` (7x), `setFallbackMode` (1x), `setModel` (4x) plus all the `gemini-2.5-flash*` / `gemini-2.0-flash*` model ids. The official docs and a long trail of issues (#2208, #2278 added a `fallbackEnabled`/disable flag) confirm the behavior is real and shipped.\n\nBut it is `partial`, not `yes`, for the SCENARIO'S arc:\n- The fallback handler's standard auto-routing mode (`retry_always`) calls `config.activateFallbackMode(fallbackModel, failedModel)` -> `setModel(model, true)`, which switches the active model **for the remainder of the session**, not for the in-flight turn. The failing Pro turn errors/interrupts; Flash then serves the NEXT and subsequent turns. This is the documented user complaint in #2208 (\"switches to flash for the remainder of the session\") and the buggy/non-deterministic edge in #9248, #11650, #15898 (sometimes it stays on Pro, sometimes it fails to switch).\n- There is a separate single-turn-override mode (`retry_once`) that routes one request to an available model without changing the session default — but per the handler comment it does NOT set the active model permanently, and is gated to RetryableQuotaError, so it is not the deterministic \"same turn continues on the fallback model name\" the scenario requires.\n\nNet: gemini-cli performs automatic model failover, but the scenario's load-bearing \"completes the SAME turn under the fallback with no ready-flicker\" is not the behavior the agent reliably exhibits — it errors the turn then runs subsequent turns on Flash.\n\n### daemon_capability: incapable (route-determining)\n\nThis is the pillar the route turns on, and it lands `incapable` for the same structural reason as the rest of the 5.5 row.\n\nWhat the daemon CAN see: gemini-cli writes a per-assistant-message `model` field into the transcript (e.g. `\"model\":\"gemini-3-flash-preview\"` in the adapter testdata), and the parser reads it on every `gemini` message (parser.go L170-172: `if model := raw[\"model\"]; model != \"\" { ev.ModelName = NormalizeModelName(model) }`). So a Pro->Flash switch that lands a Flash assistant message WOULD update `ModelName`. This is a genuine difference from claudecode, where `message.model` stays `claude-*` regardless of provider and the change is architecturally invisible — here the model NAME change across turns is observable, and is already covered by the model-identification scenario.\n\nWhat the daemon CANNOT represent is the scenario's actual assertion: a model change *mid-turn* while state stays continuously `working` with **no flicker to ready**. Because gemini-cli's fallback errors the failing Pro turn (turn settles `working -> ready`, an erroring assistant message closes the turn — parser.go L192-211) and only THEN serves Flash on a fresh turn, the observable arc is `working -> ready (error) -> working (Flash) -> ready`, not the spec's continuous-`working` mid-turn swap. The 3-state model + per-turn ModelName cannot express \"the model changed within a single uninterrupted working turn,\" because the agent does not produce that shape. So the spec-required observable (mid-turn change, no flicker) has no trace the daemon can represent -> `incapable`, applicable_false. (`bug` would be wrong: there is no spec-required observable the daemon mis-handles; the agent simply doesn't emit the mid-turn-continuous shape.)\n\n### driver_capability: ready\n\nThe interactive driver (replaydata/agents/gemini-cli/driver-interactive.sh) implements send / wait_turn / slash / keys / sleep / interrupt / reset_session / restart / sigkill / resume / session — a superset of anything a failover recipe would need (it would inject quota pressure, not a novel step type). So driver is `ready`. Moot under a frozen route.\n\n## What irrlicht does NOT see (and why that's OK)\n\n- The mid-turn model swap as a continuous-working event. gemini-cli doesn't produce it; it errors the turn then switches the session model. The cross-turn model-name change that DOES result is already covered by model-identification.\n- The HTTP-layer 429 retry/backoff before the user-visible error. Those retries leave no transcript line; state correctly stays `working` (which IS observable and correct) until the turn errors.\n- A mock was not authored: this harness records real CLI sessions; fabricating a mid-turn continuous-working Flash swap would invent an event gemini-cli never emits — worse than an honest applicable_false.",
+      "caveats": [
+        "gemini-cli's per-message `model` field IS read by the parser, so a Pro->Flash switch DOES change ModelName across turns — materially different from claudecode's invisible same-`claude-*` provider routing. The reason this cell is still incapable is narrower: the scenario asserts a MID-TURN change with no ready-flicker, and gemini's fallback errors the turn first. The genuinely-observable cross-turn model change is covered by model-identification.",
+        "If a future gemini-cli version makes `retry_once`/silent-retry the default and completes the SAME inflight turn on Flash WITHOUT settling to ready (no error message closing the turn), this verdict upgrades toward yes/full — the parser already extracts the fallback model name. Watch for the failing turn no longer settling to ready before the Flash continuation.",
+        "Fallback today is non-deterministic across auth types and versions (#9248, #11650, #15898 report it sometimes staying on Pro / not switching), so even an interactive recipe could not reliably elicit the strict arc — another reason recording is deferred, orthogonal to the architectural incapable verdict.",
+        "Confidence is 0.6 (not higher) because the precise turn-boundary semantics (does the erroring Pro turn ALWAYS settle to ready before Flash, for the OAuth-personal default path?) is inferred from docs + issues + the parser, not from a live recording. record could promote this from provisional to settled."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/parser.go L170-172, L192-211",
+          "note": "parseAssistant reads per-message `model` into ev.ModelName (so a Flash switch IS observable across turns); an erroring assistant message closes the turn and the no-tool-call final message settles to ready — establishing the working->ready turn boundary the fallback crosses."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/testdata/real-toolcall-session.jsonl",
+          "note": "Real transcript shows the per-assistant-message `\"model\":\"gemini-3-flash-preview\"` field the daemon extracts — confirms the model name is in the transcript body, not just the UI."
+        },
+        {
+          "kind": "file",
+          "ref": "binary scan: ~/.nvm/.../@google/gemini-cli/bundle/chunk-RCJSF5RP.js",
+          "note": "grep over the bundled CLI finds FlashFallback (8), fallbackModel (25), FallbackModel (7), setFallbackMode (1), setModel (4) plus gemini-2.5-flash*/gemini-2.0-flash* ids — authoritative evidence the auto-fallback shipped (not just docs). This is the binary scan grounding agent=partial rather than no."
+        },
+        {
+          "kind": "url",
+          "ref": "https://github.com/google-gemini/gemini-cli/issues/2208",
+          "note": "Feature Request: Option to Disable Automatic Model Fallback (Pro to Flash) — states the CLI 'automatically switches to the flash model for the remainder of the session', confirming the switch is session-level, not the scenario's mid-turn-same-turn arc."
+        },
+        {
+          "kind": "url",
+          "ref": "https://github.com/google-gemini/gemini-cli/issues/9248",
+          "note": "bug: Incorrect Model Fallback and Retry Logic for 429 Quota Errors — fallback relies on fragile error-string matching + a consecutive-error counter; behavior is non-deterministic, distinguishing retry_once vs retry_always intents. Grounds the 'partial / non-deterministic' qualifier."
+        },
+        {
+          "kind": "url",
+          "ref": "https://github.com/google-gemini/gemini-cli/pull/2278",
+          "note": "PR adding a CLI option to disable automatic model fallback (fallbackEnabled) — confirms the auto-fallback is a real, configurable shipped feature."
+        }
+      ]
+    }
+  }
+}

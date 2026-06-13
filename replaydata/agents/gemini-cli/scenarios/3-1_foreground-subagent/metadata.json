@@ -1,0 +1,99 @@
+{
+  "scenario_id": "foreground-subagent",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "incapable",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.46.0",
+    "daemon_version": "0.5.1+d98b8ce",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes (Subagents shipped, @name + auto-delegation); daemon_capability: incapable (no gemini parent-link path, child runs in-process + ephemeral artifacts); driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "foreground-subagent",
+      "agent": "gemini-cli",
+      "assessed_at": "2026-06-11T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "incapable",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: incapable\ndriver_capability: ready\n\nRoute: frozen — Gemini CLI 0.46.0 genuinely spawns foreground subagents, but the irrlicht gemini-cli adapter has no mechanism to bind a Gemini child to its parent, and Gemini runs the child IN-PROCESS (no separate OS process, no persisted child chat). So none of this scenario's load-bearing observables (a child SessionState appearing, ParentSessionID linkage, SubagentCount, parent_linked, a child transcript under <parent>/subagents/) can be emitted today.\n\n## agent_supports = yes\n\nGemini CLI shipped first-class Subagents (the 'Subagents have arrived in Gemini CLI' launch, docs slug docs/core/subagents). In the 0.46.0 bundle the subagent machinery is extensive and on a feature flag the user can enable: SubagentState (RUNNING/COMPLETED/ERROR/CANCELLED), SubagentProgressDisplay/SubagentGroupDisplay, Local/RemoteSubagentProtocol + Local/RemoteSubagentSession, an agentSessionSubagentEnabled feature flag ('Route subagent invocations through the AgentSession protocol'), and UI labels 'Subagents' / 'Remote subagents'. Per the docs a subagent is 'exposed to the main agent as a tool of the same name' and is invoked either by automatic delegation or by the explicit @subagent_name syntax. So Gemini performs exactly the parent→child→integrate behavior this scenario asserts.\n\n## daemon_capability = incapable (the freeze)\n\nThe irrlicht gemini-cli adapter cannot OBSERVE the parent/child binding, for two compounding structural reasons:\n\n1. **No separate child SessionState — subagents run in-process.** Per the official docs the subagent 'runs in its own isolated context loop' — a logical, not physical, separation; the child is NOT a separate OS process. The 0.46.0 bundle has zero child_process/spawn/fork near the subagent path. So the daemon's process-match path (agent.go commandPattern `bin/gemini` + DiscoverPID) mints no child pre-session: there is no second `node .../bin/gemini` to match for a subagent.\n2. **No daemon-readable parent link — and the on-disk child artifact is ephemeral + on no parser path.** Gemini's Source is FilesUnderRoot{~/.gemini/tmp} with a flat per-project layout (chats/session-*.jsonl). During a subagent run Gemini DOES write child artifacts, at chatsDir/<parentSessionId>/<agentId>.{json,jsonl} (deleteSubagentSessionDirAndArtifactsAsync), then DELETES them on completion. Even if the fswatcher transiently caught such a file: the gemini parser sets NO ParentSessionID (parser.go: zero parent/subagent hits), and deriveParentSession (core/application/services/helpers.go) recognizes ONLY the Claude-Code .../<parent>/subagents/<agent>.jsonl path pattern (parent-dir base must equal the literal 'subagents') and the Pi {parentSession:...} header. Gemini's chats/<parentSessionId>/<agentId>.jsonl matches NEITHER — its parent-dir base is the parent UUID, not 'subagents' — so deriveParentSessionID returns \"\".\n\nConsequence: a Gemini parent + spawned subagent surface to the daemon as, at most, the single parent session (the in-process subagent emits no observable child). ParentSessionID stays empty, SubagentCount(parent) is 0, no parent_linked event ever fires, and no child transcript persists. Every load-bearing assertion of this scenario is unobservable.\n\nThis is `incapable` rather than `bug`: there is no Gemini trace today that the daemon mis-handles — the adapter has no gemini parent-link rule at all, the child is in-process (no process to bind), and the transient on-disk artifact Gemini writes (chats/<parentId>/<agentId>.jsonl, then deleted) is on no path the gemini parser or deriveParentSession reads. Representing it would require NEW gemini-specific capability (recognize the chats/<parentId>/<agentId>.jsonl layout in deriveParentSession AND emit ParentSessionID before the artifact is deleted), i.e. an adapter capability that does not exist — not a fix to a mishandled signal.\n\n## driver_capability = ready\n\nNot the constraint, recorded honestly: replaydata/agents/gemini-cli/driver-interactive.sh genuinely elicits send/slash/wait_turn/sleep (DRIVE_ELICITS) and has every standard arm present. The recipe below (a single `send` asking Gemini to delegate a file-read to a subagent via @ syntax, wait, reply 'done') needs only send/wait_turn/sleep — all present. The driver could elicit the behavior the moment the daemon could observe it.\n\n## What would unblock\n\nA gemini-adapter change that binds child→parent before the ephemeral artifact is deleted: teach deriveParentSession to recognize Gemini's chats/<parentSessionId>/<agentId>.jsonl layout (parent-dir base = the parent's session id) and have the gemini parser emit ParentSessionID accordingly — AND confirm the artifact lives long enough for the fswatcher to tail it (it is deleted on subagent completion, so this may also require Gemini to persist the child, or the daemon to snapshot before deletion). Once a Gemini child carries a daemon-readable, durable parent link, re-assess: agent=yes + driver=ready means the cell would flip to `record`.",
+      "caveats": [
+        "agent_supports=yes is grounded in the bundle strings + official docs/launch (Subagents feature, @name invocation, in-process isolated context loop), not a captured local subagent run — Subagents are behind a user-enabled experimental flag ('Enable experimental subagents for task delegation (/settings)'), and the local ~/.gemini/tmp store has no subagent child artifact to inspect (flat chats/session-*.jsonl per project, no subagents subtree). Confidence held at 0.8 for that reason.",
+        "The EXACT lifetime of the chats/<parentSessionId>/<agentId>.jsonl artifact is inferred from deleteSubagentSessionDirAndArtifactsAsync — it is created during the run and deleted on completion. A live recording is needed to settle whether the fswatcher ever observes it at all (it may be written and deleted entirely within one debounce window), which would only harden the incapable verdict (transport reason), not soften it."
+      ],
+      "sources": [
+        {
+          "kind": "url",
+          "ref": "https://github.com/google-gemini/gemini-cli/blob/main/docs/core/subagents.md",
+          "note": "Subagents are 'exposed to the main agent as a tool of the same name', invoked by auto-delegation or explicit @subagent_name; each subagent 'runs in its own isolated context loop' — a logical, not physical, separation (in-process, not a separate OS process); history is kept separate to avoid bloating the parent context."
+        },
+        {
+          "kind": "url",
+          "ref": "https://developers.googleblog.com/subagents-have-arrived-in-gemini-cli/",
+          "note": "Official launch: Subagents shipped in Gemini CLI for task delegation / parallel agent workflows — establishes agent_supports=yes."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/parser.go",
+          "note": "gemini parser sets NO ParentSessionID and has no subagent/parent path (grep: zero hits) — emits only user_message/assistant_message/function_call_output/turn_done."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/agent.go",
+          "note": "Source = FilesUnderRoot{~/.gemini/tmp}; flat chats/session-*.jsonl per project. commandPattern `bin/gemini` + ExcludeArgv(heap-bump worker) means a session is one launcher process — an in-process subagent spawns no second matchable gemini process."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/helpers.go",
+          "note": "deriveParentSessionID keys on the parent-dir base being literally 'subagents' (Claude path) or the Pi {parentSession:...} header; a Gemini chats/<parentSessionId>/<agentId>.jsonl has parent-dir base = the parent UUID, matching NEITHER, so it returns \"\" (no link derived)."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.nvm/.../@google/gemini-cli/bundle/chunk-6ZHP2EJW.js",
+          "note": "0.46.0 bundle: SubagentState/SubagentProgressDisplay/Local+RemoteSubagentProtocol/agentSessionSubagentEnabled present; deleteSubagentSessionDirAndArtifactsAsync(parentSessionId, chatsDir, tempDir) writes child artifacts at chatsDir/<parentSessionId>/<agentId>.{json,jsonl} then DELETES them on completion (ephemeral); zero child_process/spawn/fork near the subagent path (in-process)."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.gemini/tmp (local store inspection)",
+          "note": "Flat per-project chats/session-*.jsonl; no subagents/ subtree and no <parent>/<child> child chat file anywhere — confirms no durable on-disk child transcript for the daemon to discover."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "gemini CLI 0.46.0+ on PATH and authenticated (OAuth or API key)",
+        "Subagents feature ENABLED (experimental flag via /settings — 'Enable experimental subagents for task delegation'); at least one subagent definition available so an @name or auto-delegation resolves",
+        "irrlichd is recording (dev daemon with --record, isolated IRRLICHT_HOME)",
+        "FROZEN: this recipe is documentary — the daemon cannot observe a Gemini child (in-process, no durable parent-linked transcript) today (daemon=incapable), so a recording would NOT satisfy the spec until an adapter parent-link rule lands"
+      ],
+      "setup": [
+        "Driver generates a fresh cwd under <staging>/cwd/",
+        "A README.md with a single H1 heading is seeded into the cwd so the subagent has a deterministic file to read"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Use a subagent to read the README.md in the current directory and report its first heading. Wait for the subagent to finish, then reply 'done'."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        }
+      ],
+      "verify": [
+        "(unblock-time) events.jsonl contains >= 1 parent_linked event binding the Gemini child to the parent session id",
+        "(unblock-time) a child SessionState materializes (durable child transcript) linked by ParentSessionID = parent.session_id",
+        "(unblock-time) the parent stays working until the child reports back, then a single working->ready; final parent state is ready"
+      ],
+      "settings": {},
+      "timeout_seconds": 240
+    }
+  }
+}

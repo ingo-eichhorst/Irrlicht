@@ -1,0 +1,104 @@
+{
+  "scenario_id": "mid-turn-message-queued",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.46.0",
+    "daemon_version": "0.5.1+6fcc851",
+    "confidence": 0.8,
+    "notes": "agent=yes (useMessageQueue, input.queueMessage); daemon=full (queue is in-memory React state, never written to transcript until streaming idle → contiguous working span, no flicker); driver=gap:keys (recipe needs the keys primitive to type a mid-turn follow-up; gemini-cli driver stubs keys, DRIVE_ELICITS lacks it)"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "mid-turn-message-queued",
+      "agent": "gemini-cli",
+      "assessed_at": "2026-06-11T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: gap:keys\n\n## Reasoning\n\n**agent = yes.** Gemini CLI 0.46.0 ships a first-class mid-turn message queue. The bundle defines `useMessageQueue` (packages/cli/src/ui/hooks/useMessageQueue.ts) with `addMessage`/`messageQueue` state and a keybinding `input.queueMessage`. While the agent is responding, a typed message submitted with Enter (or queued via the QUEUE_MESSAGE key) is appended to the queue rather than sent immediately. So the agent performs exactly the scenario's behavior — type a follow-up mid-turn, it is queued and consumed at a safe point.\n\n**daemon = full.** The three spec observables (state stays `working` through the queued-message arrival; no `→ ready` flicker when the queued input lands; cycle still ends at `ready`) all hold for the gemini-cli adapter:\n\n1. The queue lives entirely in React component state — `const [messageQueue2, setMessageQueue] = useState([])`; `addMessage` does `setMessageQueue(prev => [...prev, trimmedMessage])`. The queued text is NEVER passed to `submitQuery` (and therefore never written to the per-session JSONL transcript) until the flush effect fires, and that effect is gated on `streamingState === \"idle\"` — i.e. the current turn has fully completed. So during the working span the transcript receives no synthetic user-line for the queued text.\n2. irrlicht's gemini-cli parser (core/adapters/inbound/agents/geminicli/parser.go) is purely transcript-shape-driven. It settles to `ready` (`turn_done`) only on a `\"gemini\"` assistant message with non-empty final text and NO open tool calls; a `\"user\"` text message emits `user_message` (drives `working`). Since the queued text is absent from the transcript until consumption, the parser sees one contiguous `working` span and emits no premature `turn_done` → no `→ ready` flicker. It also never sees a `waiting` trigger from the queued input.\n3. When the turn ends and `streamingState` goes idle, the queue is flushed: all queued messages are joined and submitted as a single new query, which appears in the transcript as a normal follow-up user turn that the parser drives `ready → working → ready` for. The cycle ends at `ready`. This is identical in shape to the claudecode reference cell.\n\n**driver = gap:keys.** The recipe must type a second message into the live TUI while the agent is mid-turn — without the driver's normal `send`→`wait_turn` cycle (which would block until the first turn finishes, defeating the queueing). That is the `keys` primitive (raw tmux key sequence). The gemini-cli interactive driver (replaydata/agents/gemini-cli/driver-interactive.sh) stubs the `keys` arm as `not_implemented`, and its `DRIVE_ELICITS` constant is `send slash wait_turn sleep` — `keys` is absent, so recipe-lint flags this recipe as a semantic_gap before recording. `record` must port the `keys` seam (tmux `send-keys -l` of the text + Enter, fired during the working span) from the claudecode reference driver, then drive.\n\n## What irrlicht does NOT see (and why that's OK)\n\nThe queue itself is invisible to irrlicht — there is no event for 'user typed text now buffered in React state'. The spec asserts no such event; it asserts only state invariants on the working span, all of which the daemon verifies from its event stream.\n\n## Provisional note\n\nThe `daemon=full` verdict is grounded in the parser code plus the agent's queue-flush source (queued text only reaches the transcript at streaming-idle). It is provisional on emission ordering — that Gemini writes nothing transcript-side for the queued text mid-turn — which a live recording (after the driver `keys` gap is ported) will promote from provisional to settled. Hence confidence 0.8, not higher.",
+      "caveats": [
+        "Gemini queues a mid-turn message when the user submits with Enter while the agent is responding (addMessage → messageQueue state). The driver's keys step should type the follow-up text and press Enter once during the working span; the QUEUE_MESSAGE keybinding (Tab) is an alternative but the Enter-while-responding path is the canonical queue.",
+        "The flush effect joins all queued messages with \\n\\n and submits them as ONE query at streamingState idle — so multiple mid-turn lines collapse into a single follow-up turn. The spec accommodates this: it asserts the working span stays contiguous and the cycle ends at ready, not the consumption shape.",
+        "If a future Gemini CLI ever persisted queued text to the transcript as a synthetic user-line BEFORE consumption, the parser would emit user_message (and the turn-shape could flip toward ready). That regression is exactly what this scenario's no-flicker invariant catches — which is the test's purpose.",
+        "driver=gap:keys is tooling, not an observability limit: the cell is a real cell with a real recipe; record ports the keys seam from drive-claudecode-interactive.sh before driving."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@google/gemini-cli/bundle/interactiveCli-OYDA765S.js",
+          "note": "useMessageQueue hook (v0.46.0 bundle): messageQueue lives in React useState; addMessage appends; flush effect submits the joined queue to submitQuery ONLY when streamingState === 'idle' — queued text never hits the transcript mid-turn. Also defines input.queueMessage keybinding (Tab)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/parser.go",
+          "note": "Transcript-shape-driven state: turn_done (settle to ready) only on a 'gemini' message with non-empty text and no tool calls; 'user' text → user_message (working). With queued text absent from the transcript until consumption, the parser sees one contiguous working span and no premature settle."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/gemini-cli/driver-interactive.sh",
+          "note": "keys arm is not_implemented; DRIVE_ELICITS='send slash wait_turn sleep' (no keys) → recipe-lint semantic_gap for a recipe needing keys. record must port the keys seam before driving."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/2-10_mid-turn-message-queued/metadata.json",
+          "note": "Reference cell for this scenario: same daemon shape (queued text buffered inside the agent, not written to transcript until consumed → contiguous working span); recipe uses a keys step for the mid-turn follow-up."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "gemini CLI >=0.46.0 on PATH and authenticated via Google OAuth (set up out-of-band; Gemini CLI stops serving Google One / unpaid tiers 2026-06-18)",
+        "irrlichd is recording (dev daemon with --record; isolated IRRLICHT_HOME + alt port to coexist with prod)",
+        "Gemini launched with -y (yolo) so neither prompt trips a tool-permission dialog",
+        "DRIVER: the keys step type must be ported into drive-gemini-cli-interactive.sh (tmux send-keys -l of the text + Enter, fired during the working span) and added to DRIVE_ELICITS before recording"
+      ],
+      "setup": [
+        "Driver launches gemini -y under tmux in a fresh trusted cwd; Gemini mints its own sessionId (harvested from the transcript header)",
+        "The first prompt must keep gemini busy long enough (a few seconds) to type a follow-up into the TUI — a slow count-to-10 with explicit pauses is sufficient",
+        "The mid-turn follow-up is delivered via the keys step (tmux send-keys ending in Enter) while streamingState is responding; Gemini's useMessageQueue buffers it in React state and flushes it to submitQuery only when the turn reaches idle"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Count from 1 to 10, one number per line, with a brief pause between each. Then on the last line reply with exactly the word: done"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "keys",
+          "keys": "f o l l o w u p Space q u e u e d Enter"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the session entering ready, then a ready→working transition for the first prompt",
+        "events.jsonl contains NO state_transition to ready between the first ready→working and the queued-message consumption (the working span is contiguous through the queued arrival)",
+        "events.jsonl contains NO state_transition to waiting at any point during the working span",
+        "events.jsonl eventually shows a working→ready transition; final session state is ready",
+        "transcript shows the initial user prompt; the queued follow-up appears only as a later user line (consumed as a new turn at streaming idle) — never as a synthetic user-line during the working span"
+      ],
+      "settings": {},
+      "timeout_seconds": 240
+    }
+  }
+}

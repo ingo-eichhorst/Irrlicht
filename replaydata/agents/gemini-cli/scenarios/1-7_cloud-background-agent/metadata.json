@@ -1,0 +1,71 @@
+{
+  "scenario_id": "cloud-background-agent",
+  "metadata": {
+    "agent_supports": "no",
+    "daemon_capability": "n/a",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.46.0",
+    "daemon_version": "0.5.1+b3ccd19.dirty",
+    "confidence": 0.82,
+    "notes": "agent_supports: no\ndaemon_capability: n/a\ndriver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "cloud-background-agent",
+      "agent": "gemini-cli",
+      "assessed_at": "2026-06-11T00:00:00Z",
+      "agent_supports": "no",
+      "daemon_capability": "n/a",
+      "driver_capability": "ready",
+      "confidence": 0.82,
+      "body": "## Verdict\n\nagent_supports: no\ndaemon_capability: n/a\ndriver_capability: ready\n\n## Reasoning\n\nThe scenario requires the agent to launch a coding *session* that runs on remote infrastructure with no bound local PID (the Cursor Cloud / Codex Cloud / Devin model) and disappears when the remote run completes. Gemini CLI 0.46.0 ships no such first-party variant — unlike codex (`codex cloud exec` runs the task on OpenAI infra) and claudecode (web sessions / routines run on Anthropic infra), there is no Gemini equivalent that moves the session off the local machine.\n\nEvidence the feature is absent:\n\n- `gemini --help` (0.46.0) exposes exactly five subcommands — `mcp`, `extensions`, `skills`, `hooks`, `gemma` — plus the default interactive/headless launcher. There is no `gemini cloud`, no `--remote`, no `--teleport`, and no deploy-to-cloud / background-agent launch flag. Every execution mode (`-p`/`--prompt` headless, `-i` interactive, `-w`/`--worktree`, `-y`/`--yolo`, `--acp`) runs a LOCAL `node .../bin/gemini` process.\n- A keyword scan of the installed bundle (`@google/gemini-cli/bundle/chunk-*.js`) for `CloudRun` / `background agent` / `\"remote\"` matched only non-feature plumbing: the 45 `CloudRun` hits are google-auth-library GCP environment detection (`isCloudRun()` reads `K_CONFIGURATION` — detecting WHERE the process runs, not deploying anything); the `\"remote\"` hits are OpenTelemetry span-context (`parentSpanContext.isRemote`); the three `background agent` hits are a skill-creator prompt template (\"You are a background agent with no user interaction\"), not a launch surface.\n- The canonical upstream feature request for autonomous background agents — google-gemini/gemini-cli issue #4168 (\"Run autonomous background Agents\", proposing lifecycle management \"either locally, by deploying to Cloud Run or through Jules integrations\") — is CLOSED as not planned. The cloud/Jules background-agent capability the web surface alludes to was never shipped.\n- The one genuinely remote feature, A2A **remote subagents** (`/agents` commands, `agent_card_url`), does NOT match the scenario: the orchestrating Gemini session always runs as a local `gemini` process that merely *connects to* and *delegates to* a remote A2A agent as a tool. The user never launches a Gemini coding session that lives on remote infra; the remote A2A endpoint is a delegated service, not an observable session with its own dashboard lifecycle.\n\nBecause agent_supports is `no`, the daemon-observation question is moot: daemon_capability: n/a. For completeness on the transport (per the claudecode/codex anchors): even if a Gemini cloud variant existed, the gemini-cli adapter could not observe it as specified. `core/adapters/inbound/agents/geminicli/agent.go` uses `Source: agent.FilesUnderRoot{Dir: ~/.gemini/tmp, Parser: JSONL}` (sessions under `tmp/<project>/chats/*.jsonl`) and matches the process by command line (`CommandPattern{bin/gemini}` via `pgrep -f`) with `DiscoverPID` binding the lowest-PID local launcher. Both axes require a local OS process writing a local transcript; a PID-less, file-less cloud run leaves no trace under the watch. The adapter Source is a sealed sum (FilesUnderRoot / FilesUnderCWD / ProcessOwnedStore per AGENTS.md) with no RemoteAPI/webhook/SSE variant.\n\ndriver_capability: ready because the interactive driver is not the blocker — the agent simply lacks the feature. No driver step type is missing for a scenario that cannot be elicited; per the frozen-no-feature convention a no-feature cell parks the driver axis at `ready`, not at a `gap`.\n\n## What would flip the verdict\n\nUpstream Gemini CLI would need to ship a hosted/remote-execution product (a Gemini coding session running on Cloud Run / Jules / Google infra with a server-side session feed) — issue #4168 reopened and delivered. Only then would agent_supports move off `no`. Observing it would additionally require a new non-file Source variant (RemoteAPI/sidecar) in the adapter model, so daemon_capability would then become `incapable` (matching the claudecode/codex anchors) until such a transport landed.",
+      "caveats": [
+        "A2A remote subagents (`/agents`, agent_card_url) ARE a real shipping feature, but the orchestrating session stays a local gemini process — the remote agent is a delegated tool, not a user-launched cloud coding session, so it does not satisfy the scenario's PID-0 remote-session lifecycle.",
+        "The bundle's CloudRun strings are google-auth-library GCP env-detection (isCloudRun reads K_CONFIGURATION) and the 'background agent' strings are a skill-creator prompt template — neither is a launch/deploy surface; confidence is held at 0.82 (not 0.9) because the upstream cloud-background-agent space is actively moving (issue #4168) and a future release could ship the feature.",
+        "If Gemini ever shipped a hosted/remote variant, daemon_capability would become incapable (not n/a): the FilesUnderRoot Source watches only local ~/.gemini/tmp transcripts, so a PID-less, file-less cloud run would leave no trace under the watch."
+      ],
+      "sources": [
+        {
+          "kind": "cli",
+          "ref": "gemini --help (gemini-cli 0.46.0)",
+          "note": "Subcommands are only mcp/extensions/skills/hooks/gemma + default launcher; no cloud/remote/teleport/background-deploy flag — every mode runs a local node process"
+        },
+        {
+          "kind": "file",
+          "ref": "@google/gemini-cli/bundle/chunk-*.js (0.46.0)",
+          "note": "Keyword scan: 45 'CloudRun' = google-auth-library GCP env detection (isCloudRun reads K_CONFIGURATION); 'remote' = OpenTelemetry span context; 3 'background agent' = skill-creator prompt template — no launch surface"
+        },
+        {
+          "kind": "url",
+          "ref": "https://github.com/google-gemini/gemini-cli/issues/4168",
+          "note": "Canonical feature request 'Run autonomous background Agents' (local / Cloud Run / Jules) is CLOSED as not planned — the cloud background-agent capability was never shipped"
+        },
+        {
+          "kind": "url",
+          "ref": "https://geminicli.com/docs/core/remote-agents/",
+          "note": "A2A remote subagents: the CLI 'connects to' and 'delegates to' remote agents; orchestrating session is the local gemini process — managed via /agents list|reload|enable|disable, not a remote-session launcher"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/agent.go",
+          "note": "Source = FilesUnderRoot{~/.gemini/tmp, JSONL} + Process.Match = CommandPattern{bin/gemini} via pgrep -f + DiscoverPID — local transcript + local PID only, no remote feed"
+        },
+        {
+          "kind": "file",
+          "ref": "AGENTS.md",
+          "note": "Adapter Source is a sealed sum (FilesUnderRoot / FilesUnderCWD / ProcessOwnedStore) — no RemoteAPI/webhook/SSE variant exists"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/codex/scenarios/1-7_cloud-background-agent/metadata.json",
+          "note": "Contrast anchor: codex DOES ship codex cloud exec (agent=yes/daemon=incapable); gemini-cli ships no equivalent remote-session variant, hence agent=no"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "notes": "agent_supports=no — Gemini CLI has no cloud/remote background-agent variant. No recipe; this cell is frozen."
+    }
+  }
+}

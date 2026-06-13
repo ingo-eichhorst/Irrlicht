@@ -1,0 +1,105 @@
+{
+  "scenario_id": "model-context-display",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.46.0",
+    "daemon_version": "0.5.1+6fcc851.dirty",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "model-context-display",
+      "agent": "gemini-cli",
+      "assessed_at": "2026-06-11T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Why this cell exists\n\nThis is the early first-contact visibility check added by #599: after a single trivial turn the dashboard must already show WHICH model the session runs and HOW FULL its context is. Pulled forward to row 1.8 (from the late 5.2) so any new column that can't surface model + context is caught at first contact. This is the agent-agnostic, default-launch sibling of 5.2 — no --model flag, the boot model flows through naturally.\n\n## Reasoning\n\n### agent_supports: yes\nGemini CLI records the active model on every assistant (`type:\"gemini\"`) transcript message under a top-level `model` field, alongside a per-message `tokens` block ({input,output,cached,total}). The default-launched OAuth session reports a concrete model id (the captured fixture shows `gemini-3-flash-preview`) from the very first turn — no flag needed. Both the testdata fixture (real-toolcall-session.jsonl) and parser_test confirm the model + token block are present on the gemini message.\n\n### daemon_capability: full\nThe three acceptance inputs all flow through the geminicli parser on a single default turn:\n1. ModelName — `parseAssistant` (parser.go L162-172) sets `ev.ModelName = tailer.NormalizeModelName(raw[\"model\"])`. NormalizeModelName leaves `gemini-3-flash-preview` unchanged (no claude pattern matches), so model_name is non-empty and != \"unknown\".\n2. TotalTokens — `applyTokens` (parser.go L217-233) reads the per-message `tokens` block and sets `ev.Tokens` snapshot (Total) + a deduped per-turn billable Contribution. parser_test asserts the contribution and total land. TotalTokens > 0 after the first turn → the numerator for context utilization.\n3. ContextWindow — the geminicli parser sets NO context-window override, so `ComputeContextUtilization` (tailer_metrics.go L454-485) falls back to `capacityMgr.GetModelCapacity(modelName).ContextWindow`. aliases.go L105 maps `gemini-3-flash` → `gemini-3-flash-preview` (the fixture's model is itself a canonical LiteLLM key), so a positive window resolves whenever the LiteLLM cache carries that entry; utilization = totalTokens/contextWindow*100 > 0.\n\nThe state arc is the plain basic-turn arc: a final-text gemini message with no toolCalls emits `turn_done` (parser.go L208-211), settling ready → working → ready. parser_test confirms exactly one turn_done on the trivial path.\n\n### driver_capability: ready\nThe recipe needs only `send` / `wait_turn` / `sleep`; driver-interactive.sh implements all of them (plus keys/slash/reset_session/restart/sigkill). No gap.\n\n## What is PROVISIONAL (settled by record)\n\n`context_window > 0` and `cost_nonzero` are data-dependent, not parser-dependent: both derive from the LiteLLM/capacity remote table, which must carry a pricing + context_window entry for the canonical key `gemini-3-flash-preview` at record time. Well-established Gemini models are in LiteLLM, but a `-preview` id may lag. If the entry is absent, ContextWindow falls back to unknown (0) and cost is 0 — model_name + state arc still pass, but two acceptance bullets would not. This is the provisional emission/data case the assess SKILL flags: the parser read is sound (daemon=full), confidence held at 0.8, and `record` is the only thing that can promote it from provisional to settled.",
+      "caveats": [
+        "context_window > 0 and cost depend on the LiteLLM/capacity cache containing the canonical key 'gemini-3-flash-preview' (a preview id) at record time. The geminicli parser sets no context-window override, so a missing LiteLLM entry would leave ContextWindow unknown(0) and cost 0 — model_name + the ready->working->ready arc still pass. record settles this.",
+        "model_name is the agent's own normalized label; per the acceptance criteria a routing alias counts when that is what the agent itself displays. Gemini reports a concrete model id on the default turn, so the alias case is not exercised here.",
+        "Gemini emits no explicit end-of-turn marker; the parser infers turn_done from a final-text message with no open tool calls. For the trivial 'What is 6 times 7?' prompt the answer is a single non-tool text reply, so the inference is unambiguous — but the turn_done heuristic is a known geminicli property (no turn_done marker → heuristic)."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/parser.go L162-213",
+          "note": "parseAssistant sets ev.ModelName from raw.model via NormalizeModelName, applyTokens fills ev.Tokens + per-turn Contribution, and a final-text message with no toolCalls is promoted to turn_done (ready->working->ready)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/parser.go L217-267",
+          "note": "applyTokens reads the per-message tokens block ({input,output,cached,total}), sets ev.Tokens.Total (context-utilization numerator) and a deduped billable Contribution; cost derives from this Contribution via the capacity pricing table."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer_metrics.go L454-500",
+          "note": "ComputeContextUtilization early-returns (0,0,unknown) only while TotalTokens==0 or ModelName==\"\"; once both populated returns ContextWindow (override else capacityMgr.GetModelCapacity) and utilization = totalTokens/contextWindow*100 > 0. The geminicli parser passes no override, so the window comes from the capacity table."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/capacity/aliases.go L103-110",
+          "note": "Gemini alias targets resolve to preview-priced LiteLLM keys; gemini-3-flash -> gemini-3-flash-preview. The fixture's model gemini-3-flash-preview is itself a canonical key, so a positive context_window/pricing resolves iff the LiteLLM cache carries it at record time (the provisional bit)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/testdata/real-toolcall-session.jsonl",
+          "note": "Recorded gemini-cli transcript: gemini assistant message carries top-level model=gemini-3-flash-preview and a tokens block {input,output,cached,total} — primary evidence the model + usage are emitted to the file the daemon tails."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/parser_test.go L86-210",
+          "note": "Tests assert: placeholder gemini message stays working with a token contribution; tool-calling message stays assistant_message (not turn_done); a final-text message yields exactly one turn_done with model + non-zero contribution; re-emission under one id is not double-billed."
+        },
+        {
+          "kind": "spec",
+          "ref": "replaydata/agents/claudecode/scenarios/1-8_model-context-display/metadata.json",
+          "note": "Reference (recorded+full) cell for the same scenario; same metrics path (ModelName -> TotalTokens -> ComputeContextUtilization). This gemini-cli cell is the same default-launch first-contact variant for a non-Anthropic adapter."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "gemini CLI on PATH and authenticated via Google OAuth (selectedType=oauth-personal); set up out-of-band, no API key",
+        "DEADLINE: Gemini CLI stops serving Google One / unpaid tiers on 2026-06-18 — after that, recordings on those tiers fail auth",
+        "irrlichd is recording (dev daemon with --record; run-cell.sh isolated mode)",
+        "launch with the DEFAULT model — NO --model flag (this scenario asserts default-launch visibility, unlike 5.2)",
+        "fresh empty cwd; gemini shows a trust-folder prompt on first encounter — the driver auto-accepts (or use gemini -y)"
+      ],
+      "setup": [
+        "Create an empty cwd under the staging dir (gemini prompts to trust it on first run; driver auto-accepts or pre-trust)",
+        "Launch gemini interactively with NO --model flag so the default model id flows through the assistant message's model field from turn 1",
+        "Assertions on model_name / context_window / context_utilization_percentage are checked AFTER wait_turn (the first turn_done)"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "What is 6 times 7?"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        }
+      ],
+      "verify": [
+        "events.jsonl shows one ready->working->ready cycle on the session",
+        "SessionMetrics.ModelName after turn_done is non-empty and != 'unknown' (the default gemini model, e.g. 'gemini-3-flash-preview')",
+        "SessionMetrics.ContextWindow after turn_done is > 0 (from the capacity table for the resolved gemini model)",
+        "SessionMetrics.ContextUtilization (context_utilization_percentage) after turn_done is > 0",
+        "cost is non-zero (capacity pricing applied to the per-turn token contribution)",
+        "final session state is ready"
+      ],
+      "settings": {},
+      "timeout_seconds": 120
+    }
+  }
+}

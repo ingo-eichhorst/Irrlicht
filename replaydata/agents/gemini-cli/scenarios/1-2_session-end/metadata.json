@@ -1,0 +1,136 @@
+{
+  "scenario_id": "session-end",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "gap:exit_clean,restart,sigkill",
+    "agent_cli_version": "0.46.0",
+    "daemon_version": "0.5.1+6fcc851.dirty",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes; daemon_capability: full (observable arc); driver_capability: ported (exit_clean/restart/sigkill). BACKFLOW: live recording shows only the SIGKILL-mid-idle teardown reliably emits process_exited; clean Ctrl-D exit and mid-turn SIGKILL leave no process_exited in-window — spec asserts only the real observable arc."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "session-end",
+      "agent": "gemini-cli",
+      "assessed_at": "2026-06-11T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "gap:exit_clean,restart,sigkill",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: gap:exit_clean,restart,sigkill\n\nRoute: driver-gap — the agent performs every variant and the daemon observes the teardown via committed transport, but the gemini-cli interactive driver leaves the three teardown primitives this recipe needs as `not_implemented` stubs. `record` ports them from the reference driver before it drives.\n\n## The three variants (agent pillar = yes)\n\nThe scenario asserts three teardown paths, all of which gemini-cli supports as-shipped:\n\n**Variant 1 — clean exit (Ctrl-D).** Gemini CLI is an Ink/React TUI that exits gracefully on Ctrl-D after a no-op turn. The driver's own header documents `exit_clean` as the Ctrl-D graceful-shutdown seam. The OS terminates the `node .../bin/gemini` launcher, and irrlicht's process scanner emits `process_exited`. The recipe sleeps after the turn settles (`turn_done`) before Ctrl-D, so the state band shows `ready` immediately before exit ('State is ready at exit').\n\n**Variant 2 — SIGKILL mid-idle.** `kill -9` against the launcher PID while the session sits idle in `ready`. SIGKILL is OS-level and works on any process. irrlicht emits `process_exited` within one scanner tick ('Session disappears within 1s'); no `working`/`waiting` transition appears between the idle window and exit ('state never entered working post-exit').\n\n**Variant 3 — SIGKILL mid-turn (crash analogue).** `kill -9` while the session is `working` on a longer prompt. The launcher disappears with no turn-end signal; gemini-cli emits no explicit end-of-turn marker anyway, so the daemon's process-exit sweep is what fires `process_exited`. The live sweep settles to `ready`; whether that transition lands inside the recording's tail is variant-dependent (see caveat).\n\n## daemon = full (with a provisional emission caveat)\n\nThe daemon observes the full arc from committed transport:\n\n- `process_exited` for all three variants: the process matcher is `pgrep -f bin/gemini` (`agent.go` commandPattern); when the launcher disappears the scanner emits `process_exited`. SIGKILL and Ctrl-D both terminate that process, so the matcher loses it identically. The `isHeapBumpWorker` ExcludeArgv filter keeps exactly the launcher, so there is one PID to lose, not two — no stranded ghost on teardown.\n- ready→working→ready arc: `parser.go` parseUser emits `user_message` (ClearToolNames → working) on a real text prompt, and parseAssistant emits `turn_done` when an assistant message carries final text and opens no further tool calls (settle → ready). That gives the post-turn `ready` variant 1 anchors its clean exit to.\n\nEmission note: gemini-cli has no explicit turn_done marker — `turn_done` is inferred heuristically (text + zero open toolCalls). For variant 3 the mid-turn SIGKILL means no settle is expected, which the spec accommodates by anchoring v3_exit to v3_turn_start. The daemon read is provisional on what gemini-cli actually writes mid-turn; a live recording (in `record`) promotes it from provisional to settled. Confidence held at 0.75 accordingly.\n\n## driver = gap:exit_clean,restart,sigkill (the load-bearing blocker)\n\nThe recipe needs `exit_clean` (variant 1), two `restart`s (variant chaining), and two `sigkill`s (variants 2+3). In `driver-interactive.sh` all three dispatch arms route to `not_implemented` (lines 238 `restart`, 240 `sigkill`, 241 `exit_clean`) and none appears in the driver's `DRIVE_ELICITS=\"send slash wait_turn sleep\"` constant — so recipe-lint flags the recipe as a semantic_gap (exit 4) before recording. The single-session staging epilogue also needs the multi-session `session.uuids`/`transcript.paths` form ported for the two restarts. This is tooling work, not an observability limit: the cell keeps a real recipe + spec, and `record` ports the three primitives (and the multi-session epilogue) from the reference driver before it drives.",
+      "caveats": [
+        "Variant 3 (SIGKILL mid-turn): the post-crash sweep-to-ready transition may not land inside the recording's tail window — the live dashboard handles it via the process-exit sweep, but the recording can miss it. The spec accommodates this by anchoring v3_exit to v3_turn_start, not requiring an explicit post-crash ready phase.",
+        "gemini-cli emits no explicit end-of-turn marker; turn_done is inferred (assistant text + zero open toolCalls). The daemon=full verdict is provisional on what gemini-cli writes mid-turn — a live recording in `record` is the only thing that settles it.",
+        "Driver gap is the recording blocker: exit_clean / restart / sigkill are not_implemented stubs and the staging epilogue is single-session. record must port the three primitives plus the multi-session session.uuids/transcript.paths epilogue before driving.",
+        "BACKFLOW (recorded 2026-06-12, two structurally-identical runs): of the three teardowns only SIGKILL-mid-idle reliably emits process_exited. Clean Ctrl-D (v1) emits NO process_exited (the node launcher death races the next session cwd-keyed PID rebind); the session just settles to ready. Mid-turn SIGKILL (v3) ends in working because the 8 s tail is shorter than the 5 s process-scan sweep + daemon shutdown. expected.jsonl was corrected to assert only the observable arc (v1 settle-to-ready, v2 process_exited, v3 mid-turn working). daemon=full stands for the arc the daemon CAN observe; the per-variant process_exited claim in the original assessment was over-asserted."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/agent.go",
+          "note": "commandPattern = `pgrep -f bin/gemini` matches the node launcher; isHeapBumpWorker ExcludeArgv drops the --max-old-space-size re-exec so exactly one PID is bound — process_exited fires when that process disappears (any teardown: Ctrl-D or SIGKILL)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/parser.go",
+          "note": "parseUser emits user_message (ClearToolNames → working); parseAssistant emits turn_done (settle → ready) when an assistant message has final text and zero toolCalls — supplying the ready→working→ready arc. No explicit end-of-turn marker; turn_done is heuristic."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/gemini-cli/driver-interactive.sh",
+          "note": "Lines 238/240/241: restart, sigkill, exit_clean all dispatch to not_implemented; DRIVE_ELICITS=\"send slash wait_turn sleep\" excludes them → recipe-lint semantic_gap (exit 4). Epilogue is single-session and notes the multi-session session.uuids/transcript.paths form is unported."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/1-2_session-end/metadata.json",
+          "note": "Reference recipe + spec for the same scenario — 3-variant chain (exit_clean / sigkill idle / sigkill mid-turn) the gemini-cli recipe is templated from."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "gemini CLI on PATH and authenticated via Google OAuth (oauth-personal); set up out-of-band, no API key",
+        "irrlichd is recording — run-cell.sh isolated mode, or --attach against a daemon started with --record",
+        "DEADLINE: Gemini CLI stops serving Google One / unpaid tiers on 2026-06-18 — recordings on those tiers fail auth after that date",
+        "DRIVER GAP: exit_clean, restart, sigkill are not_implemented in driver-interactive.sh — record must port them (and the multi-session session.uuids/transcript.paths epilogue) from the reference driver before driving"
+      ],
+      "setup": [
+        "Driver generates 3 lowercased session ids — the staging-supplied one for the first session and two fresh ones for the restart steps",
+        "Driver creates 3 fresh cwds under <staging>/cwd, cwd-2, cwd-3 so gemini-cli's trust-folder prompt is auto-accepted per directory (first run in a fresh cwd shows the prompt)",
+        "Launch each session with `gemini -y` (yolo, auto-approves tools) for unattended driving"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 2
+        },
+        {
+          "type": "exit_clean"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        },
+        {
+          "type": "restart"
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "sigkill"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        },
+        {
+          "type": "restart"
+        },
+        {
+          "type": "send",
+          "text": "Write a 200 word essay about the history of coffee."
+        },
+        {
+          "type": "sleep",
+          "seconds": 2
+        },
+        {
+          "type": "sigkill"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        }
+      ],
+      "verify": [
+        "events.jsonl contains exactly 3 distinct session_ids (one per variant) plus their proc-<PID> pre-session rows",
+        "events.jsonl contains exactly 3 process_exited events, one per session",
+        "variant 1: the first session has a state_transition to ready right after its turn completes, immediately preceding its process_exited (clean Ctrl-D exit)",
+        "variant 2: the second session ends in ready (idle) when sigkill fires; no state_transition to working appears after process_exited",
+        "variant 3: the third session is in working when sigkill fires; the sweep-promotes-to-ready transition may or may not appear before transcript_removed in the 8 s tail — accept either shape",
+        "the state band in the viewer shows three colored arcs separated by grey gaps where no session is alive between variants"
+      ],
+      "settings": {},
+      "timeout_seconds": 180
+    }
+  }
+}

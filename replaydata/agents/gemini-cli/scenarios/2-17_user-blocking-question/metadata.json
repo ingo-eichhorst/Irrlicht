@@ -1,0 +1,97 @@
+{
+  "scenario_id": "user-blocking-question",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.46.0",
+    "daemon_version": "0.5.1+6fcc851",
+    "confidence": 0.7,
+    "notes": "agent_supports: yes; daemon_capability: full (trailing-? heuristic, no user-blocking tool); driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "user-blocking-question",
+      "agent": "gemini-cli",
+      "assessed_at": "2026-06-11T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.7,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full (via the agent-agnostic trailing-? heuristic, NOT a user-blocking tool)\ndriver_capability: ready\n\n## Reasoning\n\n**agent = yes.** The scenario asks only that the agent end a turn with a clarifying question (a reply that ends in `?`). That is pure final text — Gemini CLI's most basic capability, already proven by the `turn-end-terminal-text` (2-13) and `basic-turn` (2-1) cells, both assessed `yes`. No special tool is required. Note that, unlike Claude Code/Codex/Kiro, Gemini CLI has NO `AskUserQuestion`-equivalent user-blocking tool: a binary `strings` scan would not surface one, and the parser models no such tool (parser.go has no user-blocking-tool branch). The waiting episode is therefore driven purely by the text the model writes, not by a structured pause primitive.\n\n**daemon = full.** The scenario's user-observable arc up to the recipe's stopping point is `ready → working → waiting`, with the `waiting` episode visible. irrlicht observes this through the agent-agnostic path, independent of any Gemini-specific tool:\n\n1. The opening user prompt yields `user_message` with `ClearToolNames`, driving `ready → working` (classifier rule 4 / default).\n2. The clarifying-question reply is a final text-only `gemini` message with non-empty content and no `toolCalls`, so `parseAssistant` reclassifies it to `EventType=\"turn_done\"` (parser.go:209) and carries the question as `AssistantText` via `tailTruncate(content, 200)` — the TAIL is kept, so the trailing `?` survives truncation (parser.go:166).\n3. `turn_done` makes `IsAgentDone()` true through the primary path (`LastEventType == \"turn_done\"`, session.go:553), and the assistant text flows to `LastAssistantText` (tailer.go:1007 → tailer_metrics.go:392).\n4. `ClassifyState` enters branch 2 (`IsAgentDone`), then sub-branch **2a**: `IsWaitingForUserInput()` returns true because `ExtractQuestionSnippet(LastAssistantText)` finds the literal `?` (session.go:315), so the classifier emits `working → waiting` with reason \"turn ended with question or cue → waiting\" (state_classifier.go:62-68). The session does not stick — but the recipe deliberately stops at the waiting episode, so there is no subsequent reply to assert.\n\nEvery step in this chain is shared infrastructure exercised by other already-recorded cells; nothing here is Gemini-specific beyond the `turn_done` inference the 2-13 recording already validated.\n\n**driver = ready.** The recipe needs only `send`, `wait_turn`, and `sleep` — all present in `replaydata/agents/gemini-cli/driver-interactive.sh` (verified via `driver_step_types_from_file`). Interactive driver (gemini -y under tmux), not headless `gemini -p`, so the process outlives the daemon's observation window and the `waiting` edge is captured.\n\n## Provisional / emission caveat\n\nThe whole verdict hinges on the model actually emitting a reply that ends in `?`. The prompt instructs it to, but this is an emission property the daemon cannot confirm from docs — a chatty model that appends a status sentence after the `?` still classifies as waiting (ExtractQuestionSnippet fires anywhere in the text, mid-paragraph included), but a reply with NO `?` at all would settle to ready instead, never entering waiting. Confidence is held at 0.7; `record` promotes this from provisional to settled with a live recording.",
+      "caveats": [
+        "Gemini CLI has no AskUserQuestion-style user-blocking tool — the waiting episode is produced solely by the agent-agnostic trailing-? heuristic (state_classifier rule 2a / IsWaitingForUserInput), not the user-blocking-tool path (rule 1) used by claudecode/codex/kiro-cli. There is no structured pause primitive to fall back on.",
+        "Emission-dependent: the verdict assumes the model's reply contains a literal '?'. If the model answers without a question mark (or the prompt is ignored), the turn classifies ready, not waiting, and no waiting episode occurs. The recipe pins the prompt tightly to elicit the '?', but only a live recording settles it.",
+        "The recipe terminates while the session is in waiting (mirrors claudecode 2.17); it does NOT send a follow-up reply, so the waiting → working → ready return arc is out of scope for this cell."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/parser.go",
+          "note": "parseAssistant: final text-only 'gemini' message with no toolCalls is reclassified turn_done (line 209); AssistantText keeps the TAIL via tailTruncate(content,200) (line 166) so the trailing '?' survives. No user-blocking-tool branch exists in the parser."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/session.go",
+          "note": "IsAgentDone primary path fires on LastEventType=='turn_done' (line 553); IsWaitingForUserInput returns true when ExtractQuestionSnippet(LastAssistantText) finds a literal '?' (lines 311-318)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go",
+          "note": "ClassifyState branch 2 → sub-branch 2a: IsAgentDone && IsWaitingForUserInput → working→waiting, reason 'turn ended with question or cue → waiting' (lines 60-69). This is the agent-agnostic path; rule 1 (user-blocking tool open) never fires for gemini-cli."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer.go",
+          "note": "AssistantText is captured into lastAssistantText (line 1007) → metrics.LastAssistantText (tailer_metrics.go:392), feeding the trailing-? detector."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/gemini-cli/scenarios/2-13_turn-end-terminal-text/metadata.json",
+          "note": "Sibling cell (assessed yes/full/ready, recorded) that already validates the turn_done-from-final-text inference this cell reuses; confirms gemini-cli emits final text turns the daemon observes."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/gemini-cli/driver-interactive.sh",
+          "note": "driver_step_types_from_file lists send / wait_turn / sleep among supported step types — every step this recipe needs."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "gemini CLI on PATH (>=0.45.2) and authenticated via Google OAuth (oauth-personal, no API key); June-18 free-tier deadline",
+        "irrlichd is recording — run-cell.sh in isolated mode, or --attach against a daemon started with --record",
+        "first-run trust-folder prompt is auto-accepted by the driver"
+      ],
+      "setup": [
+        "Create an empty cwd under <staging>/cwd/ (Gemini mints its own sessionId; the daemon binds the launcher PID by cwd harvested from the bootstrap <session_context>)"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly one short clarifying question, ending in a question mark. No other text."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        }
+      ],
+      "verify": [
+        "events.jsonl contains a pid_discovered for the launcher bound by cwd within ~2000 ms",
+        "events.jsonl contains exactly one state_transition to working for the session",
+        "events.jsonl contains exactly one state_transition to waiting for the session after the assistant's question-mark reply",
+        "events.jsonl contains NO state_transition to ready for the session after the waiting transition (recipe terminates while in waiting)",
+        "events.jsonl contains NO tool_use events for the session",
+        "final session state is waiting",
+        "the final 'gemini' transcript message carries non-empty content ending in '?' and no toolCalls"
+      ],
+      "settings": {},
+      "timeout_seconds": 90
+    }
+  }
+}

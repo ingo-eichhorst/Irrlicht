@@ -1,0 +1,104 @@
+{
+  "scenario_id": "tool-gate-permission-prompt",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "incapable",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.46.0",
+    "daemon_version": "0.5.1+a50ffdd.dirty",
+    "confidence": 0.82,
+    "notes": "agent_supports: yes (per-call ask_user classifier; deterministic prompt for a gated tool) — daemon_capability: incapable (the defining working → waiting episode leaves no trace: no hook, awaiting_approval never flushed to the chat JSONL) → frozen"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "tool-gate-permission-prompt",
+      "agent": "gemini-cli",
+      "assessed_at": "2026-06-11T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "incapable",
+      "driver_capability": "ready",
+      "confidence": 0.82,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: incapable\ndriver_capability: ready\n\nRoute: frozen. This scenario's defining, load-bearing observable is a single user-visible `working → waiting` episode: a tool call opens a permission prompt, the session sits in `waiting`, and the recipe stops there (final state = `waiting`). Gemini CLI genuinely raises such a prompt, but that `→ waiting` transition produces ZERO trace in the only transport the daemon tails for Gemini — so no recording could verify the spec. Same architectural blocker, and the same root cause, as the gemini-cli `auto-classified-permission` cell; this scenario is the narrower single-arc form of that gate.\n\n## What the scenario requires\n\nThe acceptance criteria assert `ready → working → waiting` once a tool triggers a permission prompt, a user-visible `waiting` episode, and `waiting` as the final state (the recipe captures entry into `waiting` and stops — it does NOT drive the resolve arc or the late-PostToolUse no-op, which the scenario explicitly declares out of scope). So the one observable that MUST land on disk is the `→ waiting` transition. In the canonical claudecode cell this is driven through rule 0 of `state_classifier.go` (the `PermissionPending` gate, the most authoritative in the tree), which the scenario was authored to exercise — it is the #108 race defense (hook fires before the JSONL tool_use line lands).\n\n## Why agent_supports is yes\n\nGemini CLI 0.46.0 ships a genuine content-aware, per-call approval engine. `BaseDeclarativeTool.shouldConfirmExecute` consults a PolicyEngine via `getMessageBusDecision`, returning `allow` / `deny` / `ask_user` per tool call; a gated shell command (DEFAULT approval mode, no session allowlist entry) raises an `ask_user` prompt that blocks the call until the user resolves it, and the live scheduler holds the call at `CoreToolCallStatus.AwaitingApproval` (`awaiting_approval`). `shouldConfirmExecute`, `ask_user`, and the `AwaitingApproval`/`awaiting_approval` status are all present in the 0.46.0 bundle. So the agent deterministically performs the behavior the scenario names — `agent=yes`.\n\n## Why daemon_capability is incapable\n\nThe Gemini CLI adapter is a transcript-only Source — `agent.FilesUnderRoot{Dir: ~/.gemini/tmp/<project>/chats/}` tailing `*.jsonl` (agent.go:46) — and declares NO hook/permission transport in its `Permissions` (the only declared permission is the read-only `transcripts` observe gate). The daemon's only permission-prompt path to `waiting` is `state_classifier.go` rule 0 (`metrics.PermissionPending` → `waiting`, line 32), and that flag is set EXCLUSIVELY inside `SessionDetector.HandlePermissionHook` from the `d.permissionPending` map (session_detector_lifecycle.go:119 sets it on `PermissionRequest`/`PreToolUse`; session_detector_activity.go:460-468 copies it onto `state.Metrics`). That map is populated only by the Claude Code hook receiver; the installer wired for it is claudecode-only (hookinstaller.go). Gemini fires no such hook, so `PermissionPending` is never set and rule 0 never engages.\n\nThe two transcript-side fallbacks also cannot fire for a gated shell call: `NeedsUserAttention()` is limited to `AskUserQuestion`/`ExitPlanMode`/`question`, and the `OpenToolStalled` fallback (#488) is limited to in-process edit tools (`edit`/`write`/`multiedit`/`notebookedit`) — a gated benign `run_shell_command` matches neither.\n\nDecisively, Gemini never persists the awaiting-approval state to the chat JSONL the daemon tails. Chat history is written via `recordCompletedToolCalls(model, completedCalls)` — only AFTER `_scheduler.schedule()` resolves the call (post user-approve/deny). `AwaitingApproval` is a live, in-memory scheduler/UI status, never flushed to disk. The recorded testdata transcript confirms this: a toolCall first appears on disk already at terminal `status:success` (real-toolcall-session.jsonl line 6), with no intermediate awaiting/executing line, and the parser closes it immediately on `status:success` (parser.go:192) — there is no parser path that derives a pending/awaiting/waiting signal from any Gemini transcript line. So during the entire permission window the daemon sees NOTHING, and after resolution it sees only a finished call. The `→ waiting` transition that DEFINES this scenario can never be derived → `daemon=incapable`. (Note: the daemon could observe a degenerate `ready → working → ready` if the prompt is auto-resolved, but that arc carries none of the `waiting`-episode signal the scenario asserts, and the recipe deliberately stops in `waiting` anyway.)\n\n## Why driver_capability is ready\n\nThe driver is not the blocker. `driver-interactive.sh` implements send / slash / wait_turn / sleep / keys (and start_session / resume / reset_session / interrupt / sigkill / restart) — the full set a permission recipe would need, and Gemini even exposes `--approval-mode`. No gapped primitive is on the recipe path, so the blocker is correctly isolated to architecture (no transport trace), not tooling → route `frozen`, not `driver-gap`.\n\n## What would change this\n\nEither (a) Gemini CLI begins persisting the awaiting-approval scheduler state to the chat JSONL as a non-terminal toolCall status line written at schedule-time (then the parser could map a lingering open call to a held tool_use and the classifier could derive `working → waiting`), or (b) a Gemini permission-hook transport analogous to Claude Code's feeds `PermissionPending` directly. Neither exists in 0.46.0.",
+      "caveats": [
+        "Provisional on the EMISSION axis: the verdict that Gemini never writes the awaiting-approval state to the chat JSONL rests on the bundle's recordCompletedToolCalls path + the one recorded testdata transcript (no awaiting/executing line ever observed on disk). A live recording driving a genuinely-gated shell command (DEFAULT mode, no allowlist) is the only thing that could promote this from provisional to settled — hence confidence 0.82, not higher. Same emission caveat as the auto-classified-permission cell.",
+        "The scenario's resolve arc (waiting → working → ready) and the late-PostToolUse no-op are declared out of scope by the scenario itself; the verdict turns solely on the single → waiting observable, which is the part Gemini cannot surface.",
+        "AUTH DEADLINE: Gemini CLI stops serving Google One / unpaid tiers on 2026-06-18; any future re-assessment recording must use a paid tier or migrate off gemini-cli."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/agent.go",
+          "note": "Source is FilesUnderRoot (transcript-only) tailing ~/.gemini/tmp/<project>/chats/*.jsonl (line 46); Permissions declares only the read-only 'transcripts' observe gate — NO hook/permission transport exists, so the only inbound channel is the chat JSONL."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/parser.go",
+          "note": "Line 192: a toolCall is closed (ToolResultIDs emitted) the moment its status is success/error/cancelled. No parser path produces a pending/awaiting/waiting signal from any Gemini transcript line."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go",
+          "note": "Line 32: rule 0 (PermissionPending → waiting) is the only permission-prompt path to waiting and the gate this scenario was authored to exercise (#108 race defense). PermissionPending is hook-only and Gemini fires no hook. The transcript fallbacks (NeedsUserAttention / OpenToolStalled) don't cover a gated benign shell call."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/session_detector_lifecycle.go",
+          "note": "Line 119: d.permissionPending[sessionID]=true is set ONLY inside HandlePermissionHook on PermissionRequest/PreToolUse; the hook receiver is wired for Claude Code only. No parser-side path reaches it."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/session_detector_activity.go",
+          "note": "Lines 460-468: state.Metrics.PermissionPending is copied solely from the d.permissionPending map; with no Gemini hook the map is empty for Gemini sessions, so rule 0 never engages."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/claudecode/hookinstaller.go",
+          "note": "The PermissionRequest/PreToolUse/PostToolUse hook installer is claudecode-specific — there is no equivalent for gemini-cli, confirming the PermissionPending channel is unavailable to Gemini."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/testdata/real-toolcall-session.jsonl",
+          "note": "Recorded transcript: a toolCall first appears on disk already at terminal status:success (line 6); no intermediate awaiting_approval/executing line is ever persisted — the awaiting state is live-only, never flushed to the chat history file."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@google/gemini-cli/bundle/chunk-G33JEOEV.js",
+          "note": "Gemini 0.46.0 bundle: shouldConfirmExecute → getMessageBusDecision returns allow/deny/ask_user per call (content-aware classifier); CoreToolCallStatus.AwaitingApproval / 'awaiting_approval' exists only in the live scheduler; chat persistence is via recordCompletedToolCalls (post-resolution only). Confirms agent=yes and the emission blocker."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/gemini-cli/scenarios/2-11_auto-classified-permission/metadata.json",
+          "note": "Prior gemini-cli cell (assessed 2026-06-11) establishing the identical daemon=incapable finding for Gemini permission prompts; this scenario is the narrower single-arc (→ waiting only) form of that gate."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "gemini CLI on PATH and authenticated (Google One / API key; paid tier required after 2026-06-18)",
+        "irrlichd is recording with the gemini-cli adapter enabled (FilesUnderRoot transcript Source)",
+        "DEFAULT approval mode (NOT YOLO/-y) and no session allowlist entry for the target command, so the shell call is genuinely gated"
+      ],
+      "setup": [
+        "Fresh cwd under <staging>/cwd/ so no per-command-root session allowlist is pre-seeded",
+        "Start gemini interactively (driver start_session) — headless mode would exit at turn completion and never enter the waiting window"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Run the shell command 'echo hello' using the run_shell_command tool."
+        },
+        {
+          "type": "sleep",
+          "seconds": 15
+        }
+      ],
+      "verify": [
+        "NOTE: route=frozen — this recipe is documented for completeness but is not recorded; the defining → waiting observable produces no Gemini transcript trace, so a recording cannot verify the spec.",
+        "The agent would raise an ask_user permission prompt for the gated shell call (agent-side, user-visible in the TUI), but the daemon's chat JSONL would show only the post-resolution finished toolCall — never a → waiting transition."
+      ],
+      "timeout_seconds": 120
+    }
+  }
+}

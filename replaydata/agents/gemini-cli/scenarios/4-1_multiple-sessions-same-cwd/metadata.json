@@ -1,0 +1,134 @@
+{
+  "scenario_id": "multiple-sessions-same-cwd",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "bug",
+    "driver_capability": "gap:start_session",
+    "agent_cli_version": "0.46.0",
+    "daemon_version": "0.5.1+6fcc851",
+    "confidence": 0.8,
+    "notes": "agent=yes (each gemini invocation mints its own sessionId + transcript; two same-cwd sessions share projectHash but write distinct chats/*.jsonl files); daemon=bug (PID discovery is cwd-only and gemini's DiscoverPID hardcodes lowestPID, deliberately ignoring the PID-manager's claimed-aware disambiguator, so two same-cwd launchers BOTH bind to the lowest PID -> cross-contaminated PID-to-session binding); driver=gap:start_session (start_session + session slot-switch are not_implemented stubs). Route: driver-gap."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "multiple-sessions-same-cwd",
+      "agent": "gemini-cli",
+      "assessed_at": "2026-06-11T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "bug",
+      "driver_capability": "gap:start_session",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes (each `gemini` invocation mints its own `sessionId` and writes its own append-only `chats/<id>.jsonl`; two sessions in one cwd share the `projectHash` directory but are distinct files -> two distinct session rows)\ndaemon_capability: bug (PID discovery is cwd-only and the gemini adapter's `DiscoverPID` hardcodes `lowestPID`, deliberately DISCARDING the PID-manager's claimed-aware disambiguator, so two concurrent same-cwd launchers BOTH resolve to the single lowest PID -> the PID-to-session binding cross-contaminates, violating the scenario's core invariant)\ndriver_capability: gap:start_session (the interactive driver advertises `start_session` and `session` but both route to `not_implemented` stubs)\n-> route: **driver-gap** -- `record` ports `start_session` + `session` from the claudecode driver, then records `known_failing` against the PID cross-contamination bug. File the daemon issue at record time.\n\n## The scenario's user-observable signal\n\n4.1 asserts: two distinct session rows with separate `session_id`s AND separate PIDs; each transitions state independently (a turn on A does not move B); the PID-to-session binding is STABLE and does NOT cross-contaminate; no flapping; final state ready. The load-bearing observable the daemon cannot satisfy is the *separate, stable, non-cross-contaminated PID per session*.\n\n## Agent pillar (yes, confidence 0.9 on its own)\n\nGemini CLI persists one append-only JSONL per session under `~/.gemini/tmp/<projectHash>/chats/<sessionId>.jsonl`. The header line carries `{sessionId, projectHash, startTime, lastUpdated, kind:\"main\"}` (see the committed testdata fixture). `projectHash` is derived from the workspace path, so two sessions launched in the SAME cwd land in the SAME `chats/` directory but as TWO distinct files keyed by distinct `sessionId`s. Each `gemini` launch is an independent Node process with an independent transcript -- there is no shared-cwd serialization at the agent level. So the agent genuinely performs the precondition: two concurrent same-cwd sessions, each writing its own transcript and advancing independently.\n\n## Daemon pillar (bug, NOT incapable)\n\nThe *two-distinct-rows* and *independent-state-arcs* halves of the spec the daemon handles correctly: the Source is `FilesUnderRoot{~/.gemini/tmp}` with a fresh stateful `Parser{}` per file (`NewParser`), and the tailer keys each session by its transcript filename, so the two same-cwd transcripts surface as two distinct `session_id`s with independent working->ready arcs and no shared parser state. That part is `full`.\n\nThe *separate, stable, non-cross-contaminated PID* half is mis-handled. Gemini's transcript path encodes only the project (not the cwd, not the PID), and gemini keeps no session->PID metadata file (unlike claudecode's `~/.claude/sessions/<pid>.json`). So `DiscoverPID` (pid.go) resolves purely by cwd via `processlifecycle.DiscoverPIDByCWDAndCmdLine(\"bin/gemini\", cwd, lowestPID)`. For two same-cwd sessions, `narrowByCWD` returns BOTH launcher PIDs as candidates, and the disambiguator decides which one each session gets.\n\nThe PID-manager (`pid_manager.go:TryDiscoverPID`) constructs and passes a CLAIMED-AWARE disambiguator -- `disambiguate := func(pids){ prefer the highest UNCLAIMED pid, else highest any }` (built from `claimedPIDs(sessionID)`) -- precisely so a second same-cwd session does not steal the first session's already-bound PID. This is the exact mechanism that keeps claudecode's concurrent same-cwd binding stable.\n\nBut the gemini adapter's `DiscoverPID` IGNORES that callback. It passes its own `lowestPID` to `DiscoverPIDByCWDAndCmdLine` instead (pid.go documents this verbatim: \"The caller's disambiguate (prefer-highest) is therefore ignored in favour of lowest-PID.\"). `lowestPID` is NOT claimed-aware: it always returns the smallest PID across all same-cwd launchers. Consequently:\n\n- Session A (launcher pid 6185) binds 6185. Session B (launcher pid 7015), discovering in the same cwd, also gets `lowestPID([6185,7015]) = 6185` -> session B is mis-bound to session A's PID. The two rows share one PID -> CROSS-CONTAMINATION, the precise invariant 4.1 forbids.\n- The breakage compounds on teardown: when session A's process (6185) exits, the dead-PID sweep reaps BOTH rows bound to 6185, killing session B's row even though its process (7015) is still alive -- flapping/false-exit.\n\nThis is a `bug`, NOT `incapable`: the trace fully exists and is adapter-readable (two live launcher PIDs, two transcripts under the watched root); the daemon simply mis-resolves the binding. The fix is cheap and local -- have gemini's `DiscoverPID` HONOR the caller's claimed-aware disambiguator (it is built for exactly this multi-instance case) instead of discarding it for `lowestPID`. The lowest-PID rule was chosen to drop the heap-bump worker (keep the launcher ancestor), but that concern is already handled at scan time by `ExcludeArgv=isHeapBumpWorker`; the disambiguator does not need to re-litigate launcher-vs-worker and can safely defer to the claimed-aware caller.\n\nContrast `incapable`: codex's concurrent-session edge would be unobservable only if the binding lived somewhere the daemon never reads. Here both PIDs and both transcripts are right under the watched root -- the daemon has every input it needs and just picks wrong.\n\nUnder this bug, 4.1's PID-separation and no-flapping acceptance criteria fail today, so the cell records `known_failing`. The two-rows + independent-arcs criteria pass. The spec asserts the CORRECT (separate, stable, non-cross-contaminated PID) behavior unchanged.\n\n## Driver pillar (gap:start_session)\n\nThe recipe needs `send`/`wait_turn`/`sleep` (implemented for real), plus `start_session` (launch the 2nd concurrent session in the same cwd, keep the 1st alive) and `session` (route a later step back to slot 1 while slot 2 is alive). The gemini-cli interactive driver lists both arms but routes each to a loud `not_implemented` stub: `start_session) not_implemented start_session` (driver-interactive.sh:242) and `session) not_implemented session` (line 243). recipe-lint reports both as \"present\" because it parses case-arm LABELS, not bodies -- inspecting the bodies shows they are stubs. This is a tooling gap, not an observability limit: `record` ports the concurrent-session machinery (`start_session` + per-step `{\"session\":N}` slot routing) from the claudecode driver, whose recipe for this same scenario is the template, before it drives. The epilogue note in the driver already anticipates this (\"When the multi-session arms ... are ported, switch to the newline-list form session.uuids / transcript.paths\").\n\n## Routing\n\nagent=yes, daemon=bug, driver=gap:start_session -> the routing table's `yes/partial | full/bug | gap:* -> driver-gap` row. The cell keeps a full recipe + spec; `record` ports `start_session`+`session`, drives, and records `known_failing` against the PID cross-contamination bug. File the daemon issue (gemini DiscoverPID discards the claimed-aware disambiguator) at record time.",
+      "caveats": [
+        "Provisional emission (confidence 0.8): no two-concurrent-same-cwd gemini sessions have been run + recorded on this machine, so the exact live PID resolution -- that narrowByCWD returns both launcher PIDs as candidates at the moment each session discovers, and that lowestPID therefore collapses both to one binding -- is inferred from the adapter source (pid.go lowestPID + DiscoverPIDByCWDAndCmdLine) and the PID-manager's claimed-aware disambiguator (pid_manager.go:584), not from an observed concurrent run. A live record settles whether the second session's launcher is already scannable (cwd readable) at discovery time and whether the mis-bind manifests as a shared PID, a momentarily-late PID, or a sweep-induced false exit.",
+        "daemon=bug unblock path: have geminicli.DiscoverPID PASS the caller's claimed-aware disambiguate through to DiscoverPIDByCWDAndCmdLine instead of substituting lowestPID. The launcher-vs-heap-bump-worker concern that motivated lowestPID is already covered by ExcludeArgv=isHeapBumpWorker at scan time, so honoring the caller's disambiguator is safe and flips daemon -> full. Update agent_test.go's lowestPID expectation accordingly.",
+        "driver=gap:start_session: the driver advertises start_session AND session but both are not_implemented stubs (driver-interactive.sh:242-243). record ports both from the claudecode driver -- start_session must launch the 2nd gemini in the SAME cwd (no second trust prompt: gemini caches folder trust per directory) and the epilogue must emit the newline-list session.uuids / transcript.paths form (one per session) so the verify step can resolve both transcripts.",
+        "Anchor PID-separation phase checks at a moment after BOTH transcripts have written at least one line; during the brief startup window a second session may sit at PID=0 (retry) before the bug's mis-bind lands. The CORRECT post-fix expectation is two distinct, stable PIDs; the current (known_failing) behavior is a shared lowest PID."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/pid.go",
+          "note": "DiscoverPID(cwd, transcriptPath, disambiguate) -> DiscoverPIDByCWDAndCmdLine(\"bin/gemini\", cwd, lowestPID). The doc comment states verbatim: 'The caller's disambiguate (prefer-highest) is therefore ignored in favour of lowest-PID.' lowestPID returns the smallest PID across same-cwd launchers and is NOT claimed-aware -> two concurrent same-cwd sessions both bind the lowest PID (cross-contamination). This is the load-bearing daemon=bug citation."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/pid_manager.go",
+          "note": "TryDiscoverPID (line ~549) builds a CLAIMED-AWARE disambiguate from claimedPIDs(sessionID) -- prefer the highest UNCLAIMED pid, else highest any (lines 584-599) -- and passes it to the adapter's discoverFn precisely so a second same-cwd session does not steal the first's bound PID. The gemini adapter discards this callback; honoring it is the fix."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/processlifecycle/discovery.go",
+          "note": "DiscoverPIDByCWDAndCmdLine -> narrowByCWD filters live PIDs to those whose CWD == cwd, then resolves via the disambiguate callback. With two same-cwd gemini launchers both pass the CWD filter, so the candidate set has two PIDs and the disambiguator decides -- which is where gemini's lowestPID substitution causes the collision."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/agent.go",
+          "note": "Source: FilesUnderRoot{Dir: ~/.gemini/tmp, Parser: JSONLineParser{NewParser: () => &Parser{}}} -- a fresh stateful Parser per transcript, so two same-cwd sessions surface as two distinct session_ids with independent state arcs (that half is full). Process.Match = CommandPattern{bin/gemini}; ExcludeArgv=isHeapBumpWorker drops the --max-old-space-size worker at scan time (the launcher-vs-worker concern lowestPID was meant to solve is already handled here)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/parser.go",
+          "note": "The transcript path encodes only the project (projectHash), not the cwd or PID; the parser harvests cwd from the bootstrap <session_context> 'Workspace Directories:' block into state.CWD for PID binding. There is NO session->PID metadata anywhere -- the only binding input is cwd, which two same-cwd sessions share -> the daemon must disambiguate by PID, which is where the bug bites."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/testdata/real-toolcall-session.jsonl",
+          "note": "Header line: {\"sessionId\":\"2f12702b-...\",\"projectHash\":\"a603...\",\"startTime\":...,\"kind\":\"main\"}. Confirms one JSONL per sessionId; two same-cwd sessions share projectHash but are distinct files keyed by distinct sessionId -> two distinct session rows (agent=yes)."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/gemini-cli/driver-interactive.sh",
+          "note": "Lines 242-243: start_session) not_implemented start_session and session) not_implemented session -- both loud stubs (exit 3). send/slash/wait_turn/sleep are implemented for real. recipe-lint reports both as present because it parses case-arm labels, not bodies. -> driver=gap:start_session; record ports both from the claudecode driver. The epilogue note (lines 252-254) documents the session.uuids / transcript.paths multi-session form to switch to."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/4-1_multiple-sessions-same-cwd/metadata.json",
+          "note": "Reference cell for this scenario: claudecode is agent=yes/daemon=full/driver=ready because its DiscoverPID is metadata-first (~/.claude/sessions/<pid>.json sessionId match) and its Layer-2 cwd fallback EXCLUDES PIDs claimed by other sessions -- exactly the claimed-awareness gemini's lowestPID lacks. Its recipe (start_session + per-step {\"session\":1}) is the template for the gemini recipe."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "gemini CLI on PATH and authenticated via Google OAuth (set up out-of-band; DEADLINE 2026-06-18 for unpaid tiers)",
+        "irrlichd is recording (run-cell.sh isolated mode spawns its own --record daemon, or --attach against a --record daemon)",
+        "the interactive driver's start_session + session arms have been ported from the claudecode driver (driver-gap: they are not_implemented stubs today)"
+      ],
+      "setup": [
+        "Driver auto-starts session 1 (slot 1) in <staging>/cwd and accepts the trust-folder prompt",
+        "The start_session step launches session 2 (slot 2) in the SAME <staging>/cwd; gemini caches folder trust per directory so no second trust dialog fires",
+        "Steps carrying {\"session\":1} route send/wait_turn back to session 1 while session 2 stays alive -- exercising the concurrent, independent arcs and the stable PID binding"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: alpha"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        },
+        {
+          "type": "start_session"
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: bravo"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: alpha2",
+          "session": 1
+        },
+        {
+          "type": "wait_turn",
+          "session": 1
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        }
+      ],
+      "verify": [
+        "events.jsonl contains 2 distinct sessionId session_ids, both keyed to the same cwd / projectHash",
+        "each session_id has its own independent working->ready arc; no transition on one is attributed to the other",
+        "session 1 shows TWO working->ready arcs (turn1 + the post-start_session re-drive); session 2 shows ONE -- proving session 1 stayed bound and independent while session 2 was alive",
+        "KNOWN_FAILING: the two sessions must hold DISTINCT, stable PIDs and the daemon must never swap/share the binding. Today gemini's lowestPID collapses both to one PID -> this assertion fails until DiscoverPID honors the claimed-aware disambiguator"
+      ],
+      "settings": {},
+      "timeout_seconds": 180
+    }
+  }
+}

@@ -1,0 +1,133 @@
+{
+  "scenario_id": "long-agentic-session-stress",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.46.0",
+    "daemon_version": "0.5.1+badafab",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes; daemon_capability: full; driver_capability: ready — compressed multi-turn proxy; per-turn ready→working→ready arcs with no within-turn flicker; one turn elicits a yolo-approved run_shell_command tool call."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "long-agentic-session-stress",
+      "agent": "gemini-cli",
+      "assessed_at": "2026-06-11T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Reasoning\n\nLong, multi-turn agentic sessions are Gemini CLI's primary workload — the agent is a daily-driver coding CLI that streams many turns, each with multiple assistant fragments and (in yolo mode) auto-approved tool calls. The scenario is a compressed proxy (a handful of plain turns plus one tool-calling turn), and every user-observable signal it asserts maps onto an event the gemini-cli adapter produces today.\n\n### agent_supports: yes\n\nGemini CLI runs an arbitrary number of conversational round-trips in one interactive session. The 0.46.0 bundle ships `run_shell_command` (ShellTool), so the scenario's 'includes at least one tool call' criterion is satisfiable; `gemini -y` (yolo) auto-approves it so the tool-call turn never trips a permission gate. Sibling cells already confirm the agent's turn arc live (basic-turn 2026-06-09; self-correction 2-4 exercises back-to-back run_shell_command calls inside one turn). No special mode beyond `-y` is needed.\n\n### daemon_capability: full\n\nSource = `FilesUnderRoot{Dir: ~/.gemini/tmp/<project>/chats, Parser: JSONLineParser{Parser}}` (agent.go). The scenario's four acceptance bullets are all within transport:\n\n**Bullet 1 — within each turn, state stays `working` continuously (the core anti-flicker invariant).** Three adapter facts guarantee no within-turn flicker:\n  (a) The opening user text prompt is a `user`-type message; `parseUser` emits `user_message` with `ClearToolNames` (parser.go:155-157) → ready → working.\n  (b) The model's tool outputs are recorded as a `user`-role message of `functionResponse` parts; `parseUser` routes these to `function_call_output` and explicitly does NOT set `ClearToolNames` (parser.go:133-140, asserted by TestParseLine_UserFunctionResponseIsToolResult) — a tool result closes the open tool but never settles state. A failing tool's `error`/`cancelled` status sets `IsError` only (parser.go:197-202), which the classifier explicitly ignores (tailer.go:991-992).\n  (c) An assistant `gemini` message that carries `toolCalls` keeps `EventType=assistant_message` (parser.go:209-211, asserted by TestParseLine_AssistantToolCallOpensTool) — only a final text-only message with ZERO tool calls is reclassified `turn_done`. So intermediate streaming chunks and tool-call/result cycles inside a turn never settle to ready.\n\n**Bullet 2 — between turns: `working → ready` at turn end, `ready → working` on the next prompt.** The final text-only `gemini` message of each turn is inferred `turn_done` (parser.go:209-211, asserted by TestParseLine_FinalTextSettlesTurn) → working → ready; the next user text prompt re-opens via `user_message`+`ClearToolNames` → ready → working. One transition pair per turn boundary.\n\n**Bullet 3 — state never gets stuck across the whole session.** Each turn closes with a final text-only message (Gemini's last word) and each next turn opens with a fresh user prompt, so neither stickiness mode is reachable across the N-turn arc.\n\n**Bullet 4 — after the final turn, state reaches `ready`.** Follows from bullet 2 on the last turn; the phase contract closes on `ready`.\n\nNo AskUserQuestion / permission gate is involved (the driver runs `gemini -y`), so the session never enters `waiting`. All four bullets are emitted by the parser today → daemon=full.\n\n### driver_capability: ready\n\nThe interactive driver (driver-interactive.sh) launches `gemini -y` under tmux, keeps the process alive across all turns, and implements `wait_turn` as a poll that returns when a `gemini` message with non-empty text and no tool calls appears — exactly the parser's `turn_done` classification. The recipe needs only `send` (each prompt), `wait_turn` (block until the inferred turn end), and `sleep` (let the daemon observe the settle), all present in DRIVE_ELICITS (`send slash wait_turn sleep`) — driver=ready, no gap. An INTERACTIVE recipe is used deliberately: a headless `gemini -p` run exits at turn completion, before the daemon can observe the per-turn terminal ready edges.\n\n## What irrlicht does NOT assert (and why that's OK)\n\nTool visibility is coarse: each tool open/close is one functionResponse id, with no args / stdout / exit code in the event stream. The scenario's acceptance criteria are state-level (continuous within-turn `working`, clean between-turn transitions, ≥1 tool call), so this is fine — argument-level tool detail is not a spec observable.\n\n## Notes on stress sizing\n\nThe recording is a compressed proxy: a handful of turns (one of them tool-calling) is enough to exercise the no-flicker code paths. A truly long capture (hours, hundreds of turns) is impractical to record deterministically; the per-turn invariants generalise because no-flicker and clean-boundary are properties of every individual turn.",
+      "caveats": [
+        "PROVISIONAL on emission (the observation-vs-emission seam): the parser definitively will not flicker on a tool result or an intermediate tool-calling message, but a doc/code read cannot prove Gemini never writes an intermediate text-only assistant message (non-empty content, zero toolCalls) MID-turn — if it did, the turn_done heuristic would settle early and reopen on the next chunk, the exact within-turn flicker bullet 1 forbids. The within-turn working span should ride entirely on assistant-chunk / tool_use→functionResponse cycles; only the live recording promotes this from provisional to settled. Keep confidence < 0.9 until recorded.",
+        "Gemini emits no explicit end-of-turn marker; per-turn turn_done is INFERRED from a final text-only 'gemini' message with no open tool calls (parser.go:209-211). Correct for healthy turns, but heuristic rather than an in-band signal — the regression guard for any future early-settle.",
+        "If a turn hit a permission prompt the session would legitimately enter waiting; the driver runs `gemini -y` (yolo) so neither the plain turns nor the tool-calling turn trips a gate. The no-flicker invariant therefore excludes both ready and waiting within a turn.",
+        "cwd lives only in the transcript body (<session_context>), not the path/process; PID binding relies on the parser's cwd harvest + EnrichNewSession LastCWD fallback. Session identity, not the lifecycle arc.",
+        "Gemini CLI stops serving unpaid Google tiers on 2026-06-18; recording must happen before then (or on a paid tier), per the agent metadata DEADLINE."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/parser.go",
+          "note": "parseUser → user_message + ClearToolNames (ready→working, 155-157); functionResponse → function_call_output WITHOUT ClearToolNames/settle (133-140); error/cancelled sets IsError only (197-202); turn_done inferred only on final non-empty text + zero toolCalls (209-211) — a tool-calling message stays assistant_message and keeps the turn working."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/parser_test.go",
+          "note": "TestParseLine_UserFunctionResponseIsToolResult (tool result must NOT ClearToolNames), TestParseLine_AssistantToolCallOpensTool (tool-calling message is assistant_message NOT turn_done), TestParseLine_FinalTextSettlesTurn (final text settles) — directly assert the per-turn no-flicker invariant."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer.go",
+          "note": "Lines 991-992: 'parsed.IsError is for tool_result errors — not used by the classifier' — a failing tool result inside a turn cannot transition state away from working."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/agent.go",
+          "note": "Source = FilesUnderRoot{~/.gemini/tmp/<project>/chats, JSONLineParser}; CommandPattern bin/gemini + isHeapBumpWorker ExcludeArgv; DiscoverPID binds the launcher by cwd — long sessions are tailed file-on-disk, no exit needed to observe per-turn edges."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/gemini-cli/driver-interactive.sh",
+          "note": "gemini -y (yolo, auto-approves tools → no waiting); keeps the process alive across turns; wait_turn polls for a gemini message with text and no toolCalls (mirrors parser turn_done); DRIVE_ELICITS='send slash wait_turn sleep' covers every step the recipe needs."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@google/gemini-cli/bundle/chunk-MKQJU6N7.js",
+          "note": "gemini-cli 0.46.0 bundle ships run_shell_command (ShellTool) and yolo mode — confirms the agent can emit the scenario-required tool call auto-approved without a permission gate."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "gemini CLI on PATH and OAuth-authenticated (settings.json security.auth.selectedType=oauth-personal; set up out-of-band, no API key)",
+        "irrlichd is recording (run-cell.sh in isolated mode, or --attach against a daemon started with --record)",
+        "Launched via the interactive driver as `gemini -y` (yolo) so the tool-calling turn auto-approves run_shell_command — no permission gate that would flicker the session to waiting",
+        "Record before 2026-06-18 (Gemini CLI stops serving unpaid Google tiers; auth then fails) or on a paid tier"
+      ],
+      "setup": [
+        "Driver git-inits / trusts a fresh per-run cwd; auto-accepts the trust-folder prompt on first run in that dir",
+        "Gemini stores its transcript at ~/.gemini/tmp/<projectHash>/chats/session-<ts>-<id>.jsonl; the daemon tails it (FilesUnderRoot) and harvests the workspace cwd from the bootstrap <session_context> for PID binding"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: alpha"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: beta"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        },
+        {
+          "type": "send",
+          "text": "Use run_shell_command to run exactly `echo gamma`, then reply with just the word: gamma"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: delta"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the session entering ready after launch",
+        "for EACH of the 4 turns: exactly one ready→working transition and exactly one working→ready transition at turn end",
+        "the third turn's working span contains at least one run_shell_command tool_use event (the scenario's required tool call)",
+        "across the entire session, NO state_transition to ready fires inside any turn's working span (no within-turn flicker)",
+        "across the entire session, NO state_transition to waiting fires (yolo means no permission gate)",
+        "final session state is ready"
+      ],
+      "settings": {},
+      "timeout_seconds": 600
+    }
+  }
+}
