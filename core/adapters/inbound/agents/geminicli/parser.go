@@ -48,6 +48,64 @@ type Parser struct {
 //	  - /private/tmp/foo
 var workspaceRe = regexp.MustCompile(`(?s)Workspace Directories:[^\n]*\n\s*-\s*([^\n]+)`)
 
+// backgroundPIDRe pulls the PID out of the run_shell_command result text for a
+// backgrounded launch, e.g. "Command moved to background (PID: 33701). Output
+// hidden. Press Ctrl+B to view." The PID is Gemini's background-process handle.
+var backgroundPIDRe = regexp.MustCompile(`\(PID:\s*(\d+)\)`)
+
+// backgroundSpawnFromToolCall recognizes a `run_shell_command` toolCall launched
+// with `is_background: true` and returns the spawn keyed on its reported PID, so
+// the shared tailer increments BackgroundProcessCount (issue #661, the Gemini
+// parallel of #445). Detection is gated on the structured is_background arg —
+// not on the result text alone — so prose echoing the launch phrase can't
+// fabricate a phantom process.
+//
+// Unlike Claude Code, Gemini hides the backgrounded command's output (viewable
+// only via Ctrl+B) and writes no `tasks/<id>.output` file, so OutputPath is
+// empty. The daemon's working-hold (HasLiveBackgroundProcess) is engaged only
+// when an output path exists for the lsof liveness probe, so it stays
+// disengaged here: the bg-process count is surfaced for observability, but
+// holding the session `working` until the PID exits would need a PID-liveness
+// probe the daemon does not yet have. That part remains live-only / unfixed.
+func backgroundSpawnFromToolCall(tcm map[string]interface{}) *tailer.BackgroundSpawn {
+	if name, _ := tcm["name"].(string); name != "run_shell_command" {
+		return nil
+	}
+	args, _ := tcm["args"].(map[string]interface{})
+	if bg, _ := args["is_background"].(bool); !bg {
+		return nil
+	}
+	m := backgroundPIDRe.FindStringSubmatch(shellResultOutput(tcm))
+	if m == nil {
+		return nil
+	}
+	return &tailer.BackgroundSpawn{BashID: m[1]}
+}
+
+// shellResultOutput pulls the result's response.output text out of a finished
+// Gemini toolCall (toolCalls[].result[].functionResponse.response.output).
+func shellResultOutput(tcm map[string]interface{}) string {
+	res, _ := tcm["result"].([]interface{})
+	for _, r := range res {
+		rm, ok := r.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		fr, ok := rm["functionResponse"].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		resp, ok := fr["response"].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if out, _ := resp["output"].(string); out != "" {
+			return out
+		}
+	}
+	return ""
+}
+
 // ParseLine normalizes one Gemini CLI transcript line.
 func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 	ev := &tailer.ParsedEvent{Timestamp: tailer.ParseTimestamp(raw)}
@@ -184,6 +242,9 @@ func (p *Parser) parseAssistant(raw map[string]interface{}, ev *tailer.ParsedEve
 		name, _ := tcm["name"].(string)
 		if callID != "" || name != "" {
 			ev.ToolUses = append(ev.ToolUses, tailer.ToolUse{ID: callID, Name: name})
+		}
+		if sp := backgroundSpawnFromToolCall(tcm); sp != nil {
+			ev.BackgroundSpawns = append(ev.BackgroundSpawns, *sp)
 		}
 		// Gemini persists a finished toolCall with a terminal status and an
 		// embedded result, so close it here too — a session the daemon only
