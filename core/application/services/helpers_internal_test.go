@@ -28,6 +28,28 @@ func TestDeriveParentSessionID(t *testing.T) {
 	}
 }
 
+// Gemini CLI subagents (issue #663): the child transcript is written to a
+// nested path chats/<parentId>/session-<childId>.jsonl. The parent session id
+// is the directory name under chats/.
+func TestDeriveParentSessionGeminiNested(t *testing.T) {
+	cases := []struct {
+		name string
+		path string
+		want string
+	}{
+		{"gemini nested subagent", "/h/.gemini/tmp/proj/chats/parent-123/session-child-abc.jsonl", "parent-123"},
+		{"gemini top-level session", "/h/.gemini/tmp/proj/chats/session-main.jsonl", ""},
+		{"non-gemini chats lookalike", "/p/-Users-x/parent-123/subagents/agent-abc.jsonl", "parent-123"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := deriveParentSession(tc.path); got != tc.want {
+				t.Errorf("deriveParentSession(%q) = %q, want %q", tc.path, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestIsWorkflowBookkeepingFile(t *testing.T) {
 	cases := []struct {
 		name string

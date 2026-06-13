@@ -86,12 +86,30 @@ func cwdMissing(cwd string) bool {
 
 // deriveParentSession tries all known methods to extract a parent session ID.
 // 1. Claude Code path pattern: .../<parent-session-id>/subagents/<agent-id>.jsonl
-// 2. Pi transcript header: {"type": "session", "parentSession": "..."}
+// 2. Gemini CLI nested path: .../chats/<parent-session-id>/session-<child-id>.jsonl
+// 3. Pi transcript header: {"type": "session", "parentSession": "..."}
 func deriveParentSession(transcriptPath string) string {
 	if id := deriveParentSessionID(transcriptPath); id != "" {
 		return id
 	}
+	if id := deriveGeminiParentSessionID(transcriptPath); id != "" {
+		return id
+	}
 	return deriveParentSessionFromTranscript(transcriptPath)
+}
+
+// deriveGeminiParentSessionID extracts a parent session ID from a Gemini CLI
+// subagent transcript path. Gemini writes a foreground subagent's transcript to
+// a nested directory named after the parent session:
+// .../chats/<parent-session-id>/session-<child-id>.jsonl. The parent id is the
+// directory under chats/ (issue #663). A top-level session lives directly under
+// chats/, so its parent dir is "chats" and this returns "".
+func deriveGeminiParentSessionID(transcriptPath string) string {
+	dir := filepath.Dir(transcriptPath) // .../chats/<parent-session-id>
+	if filepath.Base(filepath.Dir(dir)) != "chats" {
+		return ""
+	}
+	return filepath.Base(dir)
 }
 
 // deriveParentSessionID extracts a parent session ID from a subagent transcript path.
