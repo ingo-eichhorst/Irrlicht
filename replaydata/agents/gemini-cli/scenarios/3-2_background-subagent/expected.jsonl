@@ -1,0 +1,1 @@
+{"notes":"frozen (agent_supports=no): gemini-cli 0.46.0 subagents are synchronous awaited tool calls — no fire-and-forget/background variant, so the parent cannot reach end_turn while a child is alive; the scenario's distinguishing observable cannot be elicited. No spec phases.","observations":{"agent":"gemini-cli"},"scenario_id":"background-subagent","schema_version":1}

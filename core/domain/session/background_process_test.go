@@ -51,3 +51,19 @@ func TestMergeMetrics_BackgroundProcessFields(t *testing.T) {
 		t.Errorf("BackgroundProcessOutputs = %v, want one path", merged.BackgroundProcessOutputs)
 	}
 }
+
+// AppliedTaskDeltas is per-pass transient: the merge takes newM's value with no
+// old-value fallback, so a pass that surfaced no deltas does not resurrect a
+// prior pass's — that is what keeps task_delta lifecycle events from being
+// re-recorded every refresh (#662).
+func TestMergeMetrics_AppliedTaskDeltasNoFallback(t *testing.T) {
+	newM := &SessionMetrics{AppliedTaskDeltas: []AppliedTaskDelta{{Op: "create", ID: "1", Subject: "build"}}}
+	old := &SessionMetrics{AppliedTaskDeltas: []AppliedTaskDelta{{Op: "update", ID: "9"}}}
+	if merged := MergeMetrics(newM, old); len(merged.AppliedTaskDeltas) != 1 || merged.AppliedTaskDeltas[0].ID != "1" {
+		t.Fatalf("AppliedTaskDeltas = %+v, want newM's single create", merged.AppliedTaskDeltas)
+	}
+	// A nil-delta pass must NOT carry over the old deltas.
+	if merged := MergeMetrics(&SessionMetrics{}, old); len(merged.AppliedTaskDeltas) != 0 {
+		t.Errorf("AppliedTaskDeltas = %+v, want empty (no old-value fallback)", merged.AppliedTaskDeltas)
+	}
+}

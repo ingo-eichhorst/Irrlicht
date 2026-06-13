@@ -1,0 +1,12 @@
+{
+  "id": "gemini-cli",
+  "name": "Gemini CLI",
+  "provider": "google",
+  "prerequisites": [
+    "Gemini CLI >=0.45.2 installed and on PATH as `gemini` (Node binary, e.g. ~/.nvm/.../bin/gemini)",
+    "Auth via AI Studio API key: export GEMINI_API_KEY before recording (e.g. 'set -a; . .build/.env; set +a'). The driver writes a workspace .gemini/settings.json (selectedType=gemini-api-key) into the run cwd so recordings use the API-key quota pool and never silently fall back to the user's global OAuth login",
+    "Model defaults to flash (gemini-3.5-flash on the API-key tier) — cheap, separate quota; the whole 44-scenario suite costs well under $1. API-key auth is unaffected by the 2026-06-18 OAuth/unpaid-tier shutdown",
+    "First run in a fresh cwd shows a trust-folder prompt; the driver auto-accepts it (or pre-trust the dir)",
+    "Use `gemini -y` (yolo, auto-approves tools) for interactive driving; `gemini -p \"<prompt>\"` for headless smoke"
+  ]
+}

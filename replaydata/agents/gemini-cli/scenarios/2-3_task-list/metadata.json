@@ -1,0 +1,92 @@
+{
+  "scenario_id": "task-list",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "bug",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.46.0",
+    "daemon_version": "0.5.1+8e3e229.dirty",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes (write_todos, gemini-2 models only)\ndaemon_capability: bug (write_todos toolCall leaves a trace but the geminicli parser emits no TaskDelta — Tasks stays empty); driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "task-list",
+      "agent": "gemini-cli",
+      "assessed_at": "2026-06-11T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "bug",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: bug; driver_capability: ready\n\n## Reasoning\n\n### agent_supports: yes\n\nGemini CLI's single-session task-list primitive is the **`write_todos`** tool (Claude Code uses TaskCreate/TaskUpdate; OpenCode uses todowrite; codex uses update_plan). The bundle is authoritative: `chunk-G33JEOEV.js` declares `WriteTodosTool` (static `Name = WRITE_TODOS_TOOL_NAME` = `\"write_todos\"`) with a `todos` array parameter, each item `{description: string, status}` where `TODO_STATUSES` = `pending | in_progress | completed | cancelled` and `validateToolParamValues` enforces \"Only one task can be in_progress at a time.\" It is a FULL-LIST REPLACE tool (the whole list is rewritten each call, like opencode todowrite / codex update_plan), runs inside the agent's own session (rendered as a TodoTray checklist, no child session, no ParentSessionID), so SubagentCount stays 0 — exactly the single-session task-list the scenario asserts, distinct from foreground/background-subagent.\n\nIMPORTANT model dependency: the tool is registered only when `getUseWriteTodos()` is true, and the config default is `useWriteTodos = isGemini2Model(model) && !isPreviewModel(model) && !trackerEnabled ? (params.useWriteTodos ?? true) : false` (chunk-G33JEOEV.js). `isGemini2Model` = `/^gemini-2(\\.|$)/`, so the tool is on by default for `gemini-2.5-pro`/`gemini-2.5-flash` but HARD-DISABLED for any gemini-3 model. This account is currently served gemini-3 models only (transcripts under ~/.gemini show `gemini-3-flash-preview` and `gemini-3.5-flash`; zero of the account's transcripts ever contain a write_todos call), so recording requires forcing a gemini-2 model — see prereq + caveats.\n\n### daemon_capability: bug\n\nA local trace EXISTS but the geminicli parser mis-handles it, so the load-bearing observable — three items surfacing in the session API `tasks` field with subject + status — is NOT produced. Gemini persists a finished `write_todos` invocation as a `toolCall` on a `gemini` assistant message (carrying name, args incl. the `todos[]` snapshot, and a terminal status). `core/adapters/inbound/agents/geminicli/parser.go` (`parseAssistant`) reads that toolCall ONLY as a generic `tailer.ToolUse{ID, Name}` (which keeps the session working and is closed on the functionResponse) — it never inspects the `todos` arg and never populates `ParsedEvent.TaskDeltas`. With no TaskDelta the tailer's task fold (`tailer.go:866`) has nothing to accumulate, so `SessionMetrics.Tasks` stays empty. This is the same class of parser bug as codex/update_plan (assessed daemon=bug): a real local trace the adapter routes through the generic function-call path instead of emitting task deltas — a parser bug, not architectural incapability. The fix mirrors opencode, whose parser/metrics translate the full-list `todowrite` snapshot into TaskDeltas keyed by content (`core/adapters/inbound/agents/opencode/parser.go appendTodowriteDeltas`, `metrics.go`); since gemini `write_todos` items carry no stable id, the same content-keyed reconciliation applies, keyed on `description`.\n\nThe lifecycle arc and SubagentCount=0 ARE observable: the `write_todos` toolCall keeps the session working (tool auto-executed under `gemini -y`, no permission gate), and the final assistant message with text + no further toolCalls drives the parser's inferred `turn_done` → working → ready. No child session is spawned, so SubagentCount stays 0. The spec therefore asserts the CORRECT behavior (incl. tasks content) and the meta flags known_failing for the tasks-content observable; `record` files the parser-bug issue and records known_failing.\n\n### driver_capability: ready\n\nThe recipe needs only `send` + `wait_turn` + `sleep`, all present in `replaydata/agents/gemini-cli/driver-interactive.sh`. Forcing the gemini-2 model is a `gemini -m gemini-2.5-pro` invocation setting (the CLI exposes `-m, --model`), not a missing step type — no driver gap.",
+      "caveats": [
+        "MODEL-DEPENDENT availability: write_todos is registered only on gemini-2 models (isGemini2Model). The recording account is currently served gemini-3 only (gemini-3-flash-preview / gemini-3.5-flash), where the tool is absent — recording must force `gemini -m gemini-2.5-pro` (or another gemini-2 model) AND the account must actually be served that model. After the 2026-06-18 Google-One/free-tier cutoff this may be impossible without a paid tier.",
+        "write_todos is full-list-replace (like opencode todowrite / codex update_plan), not incremental deltas — the daemon fix must reconcile each snapshot the way opencode's parser/metrics.go does (content/description-keyed), not apply per-item deltas. Gemini todos carry no stable id, so two items with identical description collapse.",
+        "daemon=bug is grounded in the parser source, not a recording — the trace shape (write_todos toolCall with todos[] arg + terminal status on a gemini message) is inferred from parser.go's toolCall handling + the tool's bundle schema; a live recording on a gemini-2 model is needed to confirm the exact persisted arg shape. Confidence held at 0.8.",
+        "The tasks-content assertion is not expressible in the phase DSL (mirroring claudecode/opencode/codex task-list, whose tasks pin lives in the replay golden's summary.tasks). For this known_failing cell the phase spec asserts the lifecycle arc + SubagentCount=0 (which pass) and the meta flags known_failing for the tasks-content observable.",
+        "Gemini emits no explicit end-of-turn marker; the parser infers turn_done from a final non-empty assistant message with no toolCalls. A live recording should confirm no spurious working→ready dip between the three write_todos calls."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/parser.go",
+          "note": "parseAssistant maps toolCalls to generic tailer.ToolUse{ID,Name} and never sets ParsedEvent.TaskDeltas — no path from write_todos to SessionMetrics.Tasks."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer.go",
+          "note": "line ~866: task fold consumes parsed.TaskDeltas; geminicli emits none, so Tasks stays empty."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/opencode/parser.go",
+          "note": "appendTodowriteDeltas — reference for translating a full-list todo snapshot (no stable ids, content-keyed) into TaskDeltas; the daemon=bug fix mirrors this."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@google/gemini-cli/bundle/chunk-G33JEOEV.js",
+          "note": "WriteTodosTool: Name=\"write_todos\", todos[].{description,status}, TODO_STATUSES=pending|in_progress|completed|cancelled, one in_progress max; getUseWriteTodos()-gated registration; useWriteTodos default = isGemini2Model && !isPreviewModel && !trackerEnabled (gemini-3 → off)."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.gemini/tmp/*/chats/*.jsonl",
+          "note": "account's served models are gemini-3-flash-preview + gemini-3.5-flash (both gemini-3 → write_todos disabled); zero transcripts contain a write_todos call."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/codex/scenarios/2-3_task-list/metadata.json",
+          "note": "precedent: codex update_plan assessed agent=yes/daemon=bug/driver=ready (same trace-exists-but-no-TaskDelta parser bug)."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "prompt": "Use your write_todos tool to create exactly three todo items, in this order: 'read README', 'summarize README', 'reply done'. Then work them one at a time: for each item call write_todos to set it in_progress, then call write_todos again to set it completed, before moving to the next. Keep everything in this one session — do not spawn any subagent. When all three items are completed, reply with exactly the word: done",
+      "model": "gemini-2.5-pro",
+      "verify": [
+        "transcript contains write_todos toolCalls whose todos[] snapshots walk three items 'read README' / 'summarize README' / 'reply done' from pending through in_progress to completed",
+        "no subagent/child session is spawned (SubagentCount stays 0; no parent-linked session)",
+        "the session API tasks field lists the three items with matching subjects, all ending completed (KNOWN FAILING — geminicli parser emits no TaskDelta)",
+        "state follows ready -> working -> ready; final session state is ready"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Use your write_todos tool to create exactly three todo items, in this order: 'read README', 'summarize README', 'reply done'. Then work them one at a time: for each item call write_todos to set it in_progress, then call write_todos again to set it completed, before moving to the next. Keep everything in this one session — do not spawn any subagent. When all three items are completed, reply with exactly the word: done"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 10
+        }
+      ],
+      "settings": {
+        "model": "gemini-2.5-pro"
+      },
+      "timeout_seconds": 180
+    }
+  }
+}

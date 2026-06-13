@@ -185,6 +185,12 @@ type SessionMetrics struct {
 	// drained by the detector each activity event. See issue #134.
 	SubagentCompletions []SubagentCompletion `json:"-"`
 
+	// AppliedTaskDeltas surfaces the task-list deltas folded into this session's
+	// task list during the most recent scan — one per applied create/update.
+	// Per-pass and transient (drained by the detector each activity event to
+	// record task_delta lifecycle events). See issue #662.
+	AppliedTaskDeltas []AppliedTaskDelta `json:"-"`
+
 	// Tasks is the current task list for this session, populated from
 	// TaskCreate / TaskUpdate tool calls in the Claude Code transcript.
 	// Nil for sessions that have not used TaskCreate (including non-Claude-Code
@@ -225,6 +231,17 @@ type SubagentCompletion struct {
 	AgentID   string
 	ToolUseID string
 	Status    string
+}
+
+// AppliedTaskDelta is the domain mirror of tailer.AppliedTaskDelta — one
+// task-list change the tailer folded in during a pass. The detector records a
+// task_delta lifecycle event per entry, making task tracking an assertable
+// observable in onboarding fixtures.
+type AppliedTaskDelta struct {
+	Op      string // create | update
+	ID      string
+	Subject string
+	Status  string
 }
 
 // Task is the domain mirror of tailer.Task. It represents one item in the
@@ -724,6 +741,7 @@ func MergeMetrics(newM, oldM *SessionMetrics) *SessionMetrics {
 		LastAssistantText:        newM.LastAssistantText,
 		PermissionMode:           newM.PermissionMode,
 		SubagentCompletions:      newM.SubagentCompletions,
+		AppliedTaskDeltas:        newM.AppliedTaskDeltas,
 		CumInputTokens:           newM.CumInputTokens,
 		CumOutputTokens:          newM.CumOutputTokens,
 		CumCacheReadTokens:       newM.CumCacheReadTokens,

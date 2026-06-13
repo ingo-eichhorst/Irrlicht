@@ -1,0 +1,113 @@
+{
+  "scenario_id": "autonomous-loop",
+  "metadata": {
+    "agent_supports": "partial",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.46.0",
+    "daemon_version": "0.5.1+6fcc851",
+    "confidence": 0.8,
+    "notes": "agent_supports: partial; daemon_capability: full; driver_capability: ready — gemini-cli has no native self-prompting loop (no /goal, no Stop-hook re-prompt, no max-iterations cap); the loop is driven EXTERNALLY by the driver, exactly like the codex sibling, and each iteration is a normal turn the parser observes."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "autonomous-loop",
+      "agent": "gemini-cli",
+      "assessed_at": "2026-06-11T00:00:00Z",
+      "agent_supports": "partial",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: partial\ndaemon_capability: full\ndriver_capability: ready\n\n## Reasoning\n\nThe scenario (claudecode-derived) asserts a self-prompting autonomous loop: `ready → working` at loop start, the state stays `working` across internally-generated iterations with no `ready` between them, and `working → ready` when the goal is reached. Claudecode implements this via `/goal <condition>` (a Stop hook that re-prompts after each `end_turn`). The irrlicht-relevant primitive — already relaxed for the claudecode and codex siblings — is whether the session cycles cleanly across back-to-back iterations of ONE ongoing goal without sticking in `working` and without false `waiting` flips, not whether the model literally self-prompts.\n\n### agent_supports: partial\n\nGemini CLI (v0.46.0) ships **no built-in autonomous self-prompting loop**. A scan of the installed bundle (`@google/gemini-cli/bundle/*.js`, the real code split across `core-*`/`interactiveCli-*`/`chunk-*` files — the top-level `gemini.js` is a 5KB loader stub) finds:\n\n- **No `/goal` (or any goal-/loop-/iterate-named slash command)** — a regex sweep of slash-command `name:\"…\"` definitions for `goal|loop|auto|iterat|continue|repeat` returns the empty set. There is no Stop-hook re-prompt construct (`goal_status`/`registerStopHook` absent; the 29 `stopHook` hits are the generic user-configurable `gemini hooks` subsystem seen in `--help`, not a self-prompting loop).\n- **No `--goal` / autonomous-loop / max-iterations flag** in `gemini --help` (the authoritative shipped surface). The closest flags are `-y`/`--yolo` (`--approval-mode yolo`) and `-i`/`--prompt-interactive` — neither self-prompts across turns.\n- **`AutoMode` (69 hits) is a red herring**: it is `getAutoModelDescription` / `isAutoModel` — the **\"auto\" MODEL selector** (model routing), not an autonomous loop.\n- **`Autonomous` (57 hits) is prompt TEXT**: the system instruction \"You are Gemini CLI, an autonomous CLI agent…\" and `getInteractiveYoloMode()` returns a prompt fragment \"# Autonomous Mode (YOLO) — You are operating in autonomous mode. The user has requested minimal interruption… work autonomously.\" This is **YOLO mode prose** that nudges the model to avoid asking and auto-approves tools — it removes permission gates WITHIN a turn; it does not re-prompt the agent across turns. The agent still completes one turn and returns to `ready`.\n- Gemini actually ships a `LoopDetection` subsystem (118 hits) — a guard that ABORTS runaway loops, the inverse of a self-prompting driver.\n\nSo, like codex, gemini-cli supports the loop only when the loop body is supplied **externally**: the driver feeds successive prompts to one live REPL session, each advancing one iteration of a single ongoing goal. agent_supports is therefore **partial** — it mirrors the codex `autonomous-loop` verdict exactly (codex also lacks native autonomy and models an externally-driven loop), and it mirrors how even claudecode's `/goal` flickers `ready↔working` per Stop-hook iteration rather than staying continuously `working`.\n\n### daemon_capability: full\n\nSource = `FilesUnderRoot{Dir: ~/.gemini/tmp/<project>/chats, Parser: JSONLineParser{Parser}}` (`core/adapters/inbound/agents/geminicli/agent.go`). Each externally-fed iteration is a normal gemini turn the parser already observes:\n\n- the iteration's user prompt → `parseUser` emits `user_message` + `ClearToolNames` → `ready → working` (parser.go ~L155);\n- any yolo-approved tool call keeps the turn `working` (a tool-calling `gemini` message stays `assistant_message`, parser.go ~L209; the user-role `functionResponse` is `function_call_output` WITHOUT `ClearToolNames`, so it never settles, parser.go ~L133);\n- the iteration's final text-only `gemini` message (non-empty content, zero tool calls) is reclassified `turn_done` → `working → ready` (parser.go ~L209).\n\nSo each loop iteration produces a clean `ready → working → ready` arc on the SAME rollout session (keyed on the transcript header `sessionId`). Under `gemini -y` no permission gate ever fires, so the session never enters `waiting`. The daemon sees: a transient `proc-<PID>` pre-session (born ready), the rollout session reconcile (new session_id, born ready), the launcher PID bound by cwd (harvested from the bootstrap `<session_context>`, since gemini encodes the cwd only in the transcript body), then N clean per-iteration arcs, then `process_exited` on REPL teardown. This is structurally identical to the already-recorded gemini-cli `long-agentic-session-stress` cell (multi-turn, one tool call), so the per-iteration arc shape is settled by an existing recording; only the intent differs (loop iterations of one goal vs unrelated prompts), which the spec captures as a no-false-flip / no-stuck-working / no-waiting invariant. The thing irrlicht does NOT surface — a first-class \"iteration 3/N\" counter — is not a gemini construct at all (no `goal_status` attachment) and is out of scope for this primitive.\n\n### driver_capability: ready\n\nThe interactive driver (`replaydata/agents/gemini-cli/driver-interactive.sh`) launches `gemini -y` under tmux and genuinely elicits `send slash wait_turn sleep` (its `DRIVE_ELICITS` constant). The externally-driven loop recipe needs only `send` (each iteration's prompt) + `wait_turn` (block until the inferred `turn_done`) + `sleep` (debounce between iterations so consecutive turns register as distinct arcs). Every step type the recipe touches is implemented — no stubbed primitive (interrupt/keys/reset_session/restart/resume/sigkill/exit_clean/start_session/session) is exercised — so the driver is `ready`. An INTERACTIVE recipe is deliberate: a headless `gemini -p` run exits at turn completion before the daemon observes the terminal ready edge, and only the live REPL outlives the daemon's observation window across all iterations.\n\n## Why not n/a / frozen\n\nNot n/a or frozen: the externally-driven multi-turn loop is fully expressible with gemini-cli's interactive driver and the resulting recording exercises exactly the irrlicht primitive the scenario cares about (clean cross-iteration cycling on one session, no stuck-working, no false waiting). It is a single-agent recording, NOT an orchestrator-only concept.",
+      "caveats": [
+        "Gemini CLI has no native autonomous self-prompting loop (no /goal, no Stop-hook re-prompt, no max-iterations cap); YOLO mode (-y / --approval-mode yolo) only auto-approves tools and nudges the model via prompt text — it does not re-prompt across turns. The loop body is supplied EXTERNALLY by the driver (send → wait_turn → sleep, repeated). The recording models an externally-driven loop, not gemini self-prompting — documented here so a re-record diff doesn't read as a regression. Same modeling as the codex sibling.",
+        "Spec strict reading ('state stays working for the entire run, no ready between iterations') does not hold for gemini-cli any more than for claudecode (/goal flickers per Stop-hook) or codex (externally driven): the session cycles ready↔working per externally-fed iteration. The recording asserts clean per-iteration cycling plus the no-waiting / no-stuck invariants, not a single continuous working span.",
+        "Mind the classifier debounce: ≥4s sleep between wait_turn and the next send so consecutive iterations register as distinct working→ready arcs rather than one coalesced turn.",
+        "Provisional on emission: turn_done is INFERRED from a final text-only 'gemini' message with no open tool calls (parser.go ~L209), not an in-band end-of-turn marker. A doc/code read can't prove gemini never writes an intermediate text-only message mid-iteration (which would settle early then reopen) — only the live recording promotes this from provisional to settled.",
+        "observations.model is left as the generic Google id 'gemini' (no -m flag; the live default boot model is account-dependent, e.g. gemini-3-flash-preview in prior gemini recordings); cost+tokens nonzero still run. A different live default is a string update, not a daemon bug."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@google/gemini-cli/bundle (chunk-*.js / core-*.js / interactiveCli-*.js scan)",
+          "note": "No /goal or goal/loop/iterate-named slash command (name:\"…\" sweep empty); no goal_status/registerStopHook. 'AutoMode' = isAutoModel/getAutoModelDescription (the 'auto' MODEL selector, not a loop). 'Autonomous' = system-prompt text + getInteractiveYoloMode() YOLO prose (auto-approve + minimal-interruption nudge, not cross-turn re-prompting). LoopDetection (118 hits) is a runaway-loop GUARD."
+        },
+        {
+          "kind": "file",
+          "ref": "gemini --help (v0.46.0, authoritative shipped surface)",
+          "note": "No --goal / autonomous-loop / max-iterations flag. Closest: -y/--yolo (--approval-mode yolo, auto-approve tools) and -i/--prompt-interactive (run prompt then continue interactive) — neither self-prompts across turns. 'gemini hooks' subcommand is the generic user-hook system, not a /goal loop."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/parser.go",
+          "note": "parseUser → user_message+ClearToolNames (ready→working, ~L155); tool-calling gemini message stays assistant_message and functionResponse is function_call_output without settling (~L133, ~L209); final text-only message with no tool calls → turn_done (working→ready, ~L209). Each externally-fed iteration is one clean arc; under yolo no waiting."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/gemini-cli/driver-interactive.sh",
+          "note": "DRIVE_ELICITS=\"send slash wait_turn sleep\"; gemini -y under tmux; the externally-driven loop recipe needs only send/wait_turn/sleep — all implemented, no stubbed primitive exercised → driver ready."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/codex/scenarios/2-7_autonomous-loop/metadata.json",
+          "note": "Sibling: codex also lacks native autonomy and models the loop as an externally-driven chain of per-iteration working→ready arcs on one rollout session (10/10 recorded). gemini-cli produces the same observable shape — this cell mirrors that verdict (agent=partial, daemon=full, driver=ready)."
+        }
+      ]
+    },
+    "recipe": {
+      "preconditions": [
+        "gemini CLI on PATH and authenticated via Google OAuth (oauth-personal, no API key; free-tier deadline 2026-06-18)",
+        "irrlichd is recording (--attach or isolated mode)",
+        "Gemini CLI has NO built-in autonomous self-prompting loop (no /goal, no full-auto); the loop is driven EXTERNALLY by the driver feeding successive prompts to the same live REPL session under gemini -y (yolo)"
+      ],
+      "setup": [
+        "Driver launches one interactive gemini -y REPL under tmux; gemini mints its own sessionId (UUID ignored) harvested from the transcript header. First run in a fresh cwd: the trust-folder prompt is auto-accepted by the driver."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "We are running an iterative loop toward one goal: print the numbers 1, 2, 3 one per iteration, never repeating a number. This is iteration 1 — run the shell command `echo 1` and report the next number you will print. Do not print the others yet."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        },
+        {
+          "type": "send",
+          "text": "Continue the loop: iteration 2. Run the shell command `echo 2` and report the next number. Do not print the final one yet."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        },
+        {
+          "type": "send",
+          "text": "Final loop iteration 3: run the shell command `echo 3`. The goal (1, 2, 3) is now complete — confirm and stop."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        }
+      ],
+      "verify": [
+        "events.jsonl contains the proc-PID pre-session born ready, then the rollout session reconcile (different session_id) born ready, then a pid_discovered for the rollout session",
+        "events.jsonl contains at least 2 working→ready transitions on the SAME rollout session_id — one clean cycle per externally-fed loop iteration",
+        "each iteration cycles ready→working→ready without the session sticking in working between iterations",
+        "final state of the session is ready after the last iteration, then process_exited on REPL teardown",
+        "no state_transition to waiting (gemini -y auto-approves every tool; no permission gates)"
+      ],
+      "settings": {},
+      "timeout_seconds": 240
+    }
+  }
+}

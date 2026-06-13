@@ -1,0 +1,61 @@
+{
+  "scenario_id": "user-blocking-plan-mode-approval",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "incapable",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.46.0",
+    "daemon_version": "0.5.1+d98b8ce.dirty",
+    "confidence": 0.82,
+    "notes": "agent=yes daemon=incapable driver=ready — plan-mode approval pause leaves zero trace in the chat JSONL (route frozen)"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "user-blocking-plan-mode-approval",
+      "agent": "gemini-cli",
+      "assessed_at": "2026-06-11T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "incapable",
+      "driver_capability": "ready",
+      "confidence": 0.82,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: incapable\ndriver_capability: ready\n\nRoute: frozen. This is the plan-mode variant of the same architectural blocker as the gemini-cli `tool-gate-permission-prompt` cell. The scenario's defining, load-bearing observable is a single user-visible `working → waiting` episode driven by an approval pause: the agent presents a plan, the session sits in `waiting`, the recipe stops there (final state = `waiting`). Gemini CLI genuinely raises such a Plan Approval prompt, but that `→ waiting` transition produces ZERO trace in the only transport the daemon tails for Gemini — so no recording could verify the spec.\n\n## What the scenario requires\n\nThe acceptance criteria assert `ready → working → waiting` once the agent emits its plan and pauses for approval, a user-visible `waiting` episode, and `waiting` as the final state (the resolve/approve arc is structurally identical to other waiting-resume paths and is out of scope for the captured recipe). So the one observable that MUST land on disk is the `→ waiting` transition. In the canonical claudecode cell this is the `ExitPlanMode` tool_use held open (NeedsUserAttention rule 1) plus the PreToolUse hook (PermissionPending rule 0). Neither mechanism is available for Gemini.\n\n## Why agent_supports is yes\n\nGemini CLI 0.46.0 ships a genuine plan mode (`--approval-mode plan`, `ApprovalMode.PLAN` enum) that is read-only AND surfaces a dedicated approval-gated `exit_plan_mode` tool (`EXIT_PLAN_MODE_TOOL_NAME`, class `ExitPlanModeTool`). Its `shouldConfirmExecute` returns a confirmation object `{type:\"exit_plan_mode\", title:\"Plan Approval\", planPath, onConfirm}`, driving the live scheduler to `CoreToolCallStatus.AwaitingApproval` (`awaiting_approval`) and pausing for a Plan Approval prompt; on approve it calls `setApprovalMode(...)` to leave plan mode, on cancel it stays in plan mode. So the agent deterministically performs the behavior the scenario names — `agent=yes`.\n\n## Why daemon_capability is incapable\n\nThe Gemini CLI adapter is a transcript-only Source — `agent.FilesUnderRoot{Dir: ~/.gemini/tmp/<project>/chats/}` tailing `*.jsonl` (agent.go:46) — and declares NO hook/permission transport in its `Permissions` (the only declared permission is the read-only `transcripts` observe gate). The daemon's two paths to a permission-driven `waiting` are both unreachable here:\n\n1. `state_classifier.go` rule 0 (`PermissionPending → waiting`) is set EXCLUSIVELY by the Claude Code permission-hook receiver (session_detector_lifecycle.go / hookinstaller.go); Gemini fires no such hook, so the flag is never set.\n2. `NeedsUserAttention()` (rule 1) requires an OPEN tool whose name is in `isUserBlockingTool` — `AskUserQuestion` / `ExitPlanMode` (CamelCase) / `question`. Gemini's tool is named `exit_plan_mode` (snake_case) and is NOT in that set, AND the parser would never see it OPEN regardless.\n\nDecisively, Gemini never persists the awaiting-approval state to the chat JSONL the daemon tails. The only writer of tool-call lines is `recordCompletedToolCalls(model, completedCalls)`, fed exclusively by terminal batches — it runs only AFTER the scheduler resolves the call (post user-approve/deny). `awaiting_approval` is a live, in-memory scheduler/UI (messageBus) status, never flushed to disk: the scheduler's `updateStatus(callId,\"awaiting_approval\",...)` only mutates in-memory state + `emitUpdate()`, then `await resolveConfirmation(...)`. The recorded testdata transcript confirms the pattern — a toolCall first appears on disk already at terminal `status:success` (real-toolcall-session.jsonl), with no intermediate awaiting/executing line, and `parseAssistant` (parser.go:192) closes it immediately on the terminal status. There is no parser path that derives a pending/awaiting/waiting signal from any Gemini transcript line. So during the entire Plan Approval window the daemon sees NOTHING, and after resolution it sees only a finished `exit_plan_mode` call. The `→ waiting` transition that DEFINES this scenario can never be derived → `daemon=incapable`.\n\nNote: unlike the gemini-cli `user-blocking-question` cell (which is `daemon=full` because its `waiting` episode is driven by the agent-agnostic trailing-`?` text heuristic on a `turn_done` — final text Gemini DOES persist), this scenario's `waiting` is driven by a tool-call approval gate that Gemini does NOT persist. Same agent, opposite daemon verdict, because the load-bearing signal lives in a different place.\n\n## Why driver_capability is ready\n\nThe driver is not the blocker. `driver-interactive.sh` implements send / slash / wait_turn / sleep (the DRIVE_ELICITS set the recipe path needs) plus keys / start_session / resume / reset_session / interrupt / sigkill / restart. Gemini even exposes `--approval-mode plan` as a launch flag, so engaging plan mode is a setup/precondition concern (swap the driver's `gemini -y` yolo launch for `--approval-mode plan`), not a missing step primitive. No gapped primitive is on the recipe path, so the blocker is correctly isolated to architecture (no transport trace), not tooling → route `frozen`, not `driver-gap`.\n\n## What would change this\n\nEither (a) Gemini CLI begins persisting the awaiting-approval scheduler state to the chat JSONL as a non-terminal toolCall status line written at schedule-time (then the parser could map a lingering open `exit_plan_mode` call to a held tool_use and the classifier could derive `working → waiting`), or (b) a Gemini permission-hook transport analogous to Claude Code's feeds `PermissionPending` directly. Neither exists in 0.46.0.",
+      "caveats": [
+        "Provisional on the EMISSION axis: the verdict that Gemini never writes the awaiting-approval state to the chat JSONL rests on the 0.46.0 bundle's recordCompletedToolCalls call-graph (only writer of tool-call lines, fed solely by terminal batches; awaiting_approval is in-memory/messageBus only) plus the one recorded testdata transcript (no awaiting/executing line ever observed on disk). A live recording driving genuine plan mode is the only thing that could promote this from provisional to settled — hence confidence 0.82. Same emission caveat as the tool-gate-permission-prompt and auto-classified-permission cells.",
+        "The scenario's resolve/approve arc (waiting → working → ready) is declared structurally identical to other waiting-resume paths and is out of scope for the captured recipe; the verdict turns solely on the single → waiting observable, which is the part Gemini cannot surface.",
+        "AUTH DEADLINE: Gemini CLI stops serving Google One / unpaid tiers on 2026-06-18; any future re-assessment recording must use a paid tier or migrate off gemini-cli."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/agent.go",
+          "note": "Source is FilesUnderRoot tailing ~/.gemini/tmp/<project>/chats/*.jsonl (line 46); Permissions declares only the read-only transcripts observe gate — no hook/permission transport."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/parser.go",
+          "note": "parseAssistant opens each toolCall and immediately closes it on terminal status (success/error/cancelled, lines 192-202); no parser path derives a pending/awaiting/waiting signal — and exit_plan_mode is snake_case, absent from any user-blocking set."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go",
+          "note": "Permission-driven waiting requires rule 0 (PermissionPending, Claude-Code-hook-only) or rule 1 (NeedsUserAttention over isUserBlockingTool = AskUserQuestion/ExitPlanMode/question); neither fires for Gemini's snake_case exit_plan_mode that is never persisted open."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/testdata/real-toolcall-session.jsonl",
+          "note": "Recorded transcript: a toolCall first appears on disk already at terminal status:success with no intermediate awaiting/executing line — confirms awaiting-approval is never flushed."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@google/gemini-cli/bundle/chunk-6ZHP2EJW.js",
+          "note": "gemini-cli 0.46.0 bundle: ChatRecordingService.recordToolCalls (282401) has ONE caller, recordCompletedToolCalls (330952, fed only terminal batches); scheduler updateStatus(callId,'awaiting_approval') (347199) only mutates in-memory state + emitUpdate() then awaits resolveConfirmation; ExitPlanModeTool (353304) shouldConfirmExecute returns {type:'exit_plan_mode',title:'Plan Approval'} gating into awaiting_approval; ApprovalMode.PLAN enum (270071)."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "notes": "Route frozen (daemon=incapable). No recording is possible: the → waiting transition driven by the Plan Approval pause is never written to the chat JSONL the daemon tails, so a recipe could not elicit a verifiable observation. Would become recordable only if Gemini begins persisting the awaiting-approval scheduler state (non-terminal toolCall line at schedule-time) or grows a permission-hook transport feeding PermissionPending."
+    }
+  }
+}

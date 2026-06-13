@@ -1,0 +1,92 @@
+{
+  "scenario_id": "multiple-agents-same-workspace",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.46.0",
+    "daemon_version": "0.5.1+6fcc851",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "multiple-agents-same-workspace",
+      "agent": "gemini-cli",
+      "assessed_at": "2026-06-11T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nThis cell is an irrlicht-dispatcher test that happens to be filed under the gemini-cli column. The scenario co-launches a `gemini` process and a non-gemini partner (here claudecode) in the SAME cwd and asserts irrlicht reports two rows under their correct adapter labels with no cross-contamination. The question is purely: does the gemini-cli adapter isolate cleanly from a coexisting adapter? It does, at all three isolation layers irrlicht relies on:\n\n1. **Process matching** — gemini-cli declares its own `Process.Match = CommandPattern{Regex: \"bin/gemini\"}` (agent.go), disjoint from claudecode's `ExactName{\"claude\"}`. The scanner runs each adapter's matcher independently and tags every PID with the originating adapter name. gemini-cli additionally drops its heap-bump Node worker via `ExcludeArgv` (isHeapBumpWorker), so it mints exactly one launcher pre-session — no extra ghost to confuse the per-cwd picture.\n2. **Transcript roots** — gemini-cli's Source is `FilesUnderRoot{Dir: \"~/.gemini/tmp\"}` (adapter.go defaultRootDir), disjoint from claudecode's `~/.claude/projects`. The fswatcher attaches a per-root parser-factory from maps.go, so a line under the gemini root can only ever reach the gemini Parser, never claudecode's, and vice versa.\n3. **Per-session metrics** — SessionState carries the adapter name; metrics, model, token, and subagent counters all key off the (adapter, session_id) tuple. There is no per-cwd aggregation in the domain, so no path exists for one adapter's tokens/model/parent-links to leak into the other's row.\n\nSpec bullets map cleanly:\n- 'Each session appears with its correct adapter label' — adapter is recorded at pre-session creation via the matcher-tagged scan result; gemini-cli binds the launcher PID by cwd (DiscoverPIDByCWDAndCmdLine, pid.go).\n- 'States transition independently per agent' — the two tailers are different goroutines reading different files; gemini-cli's classifier emits user_message → working and infers turn_done (working→ready) from a final text-only `gemini` message with no open tool calls (parser.go).\n- 'No cross-contamination of metrics/parent/subagent counts' — counters are registered per adapter name; gemini-cli's per-message token block and model are only ever applied to its own session.\n\n## What irrlicht does NOT see (and why that's OK)\n\nirrlicht has no first-class 'workspace' row — the session list is flat and the dashboard groups by cwd only visually. The scenario asks only about per-session correctness, so this is correct, not a gap.\n\n## gemini-cli specifics that matter here\n\n- cwd lives ONLY in the transcript body (`Workspace Directories:` inside the bootstrap `<session_context>`) — gemini-cli is the first adapter with no cwd in the path/process/sidecar. The general `metadata_enricher.EnrichNewSession` cwd fallback to the parser's LastCWD ensures the launcher PID still binds on a short session; without it the transcript session would stay unbound and duplicate against the scanner proc-presession. This is the one provisional edge for a two-arc coexist run: confidence is held at 0.85 until the live recording confirms gemini's session binds cleanly while a second adapter runs in the same cwd. record settles it.\n- Live-verified (column onboarding 2026-06-09): a real gemini session binds the launcher PID, transitions working→ready on turn_done, and reports model + cost + tokens. The isolation layers above are unchanged by a coexisting adapter, so the two-distinct-arcs assertion follows.\n\n## Recording\n\nRecorded by scripts/run-cell-multi.sh: it launches the gemini-cli and claudecode interactive drivers concurrently against ONE shared cwd (IRRLICHT_ONBOARD_CWD) under a single isolated --record daemon, then curates one per-adapter fixture each. This cell stores the gemini-cli transcript for its replay golden; the workspace events.jsonl + expected.jsonl span both adapters and are shared with the claudecode cell (each cell differs only in which transcript it keeps). expected.jsonl is adapter-agnostic (agentA = first to working, agentB = the distinct second), so any two coexisting sessions validate the two-independent-arcs assertion; a third coexisting adapter is tolerated.",
+      "caveats": [
+        "The recipe runs two different agent CLIs concurrently, so the rig (run-cell-multi.sh) needs both gemini and claude installed and authenticated. ONE recording satisfies both matrix rows: the gemini-cli and claudecode cells share the workspace events.jsonl + expected.jsonl, differing only in which transcript each stores for its replay golden.",
+        "gemini-cli's cwd is harvested only from the transcript body, so the launcher PID binds via the EnrichNewSession LastCWD fallback. On a coexist run this is the one property not yet live-confirmed (the column was verified solo, not alongside a second adapter); confidence is 0.85 and record promotes it from provisional to settled.",
+        "Gemini CLI stops serving Google One / unpaid tiers on 2026-06-18 — record this cell before then on a free tier, or use a paid tier / Antigravity CLI after."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/agent.go",
+          "note": "gemini-cli declares its own Process.Match = CommandPattern{bin/gemini} and Source = FilesUnderRoot{~/.gemini/tmp} — disjoint matcher and transcript root from every other adapter; ExcludeArgv drops the heap-bump worker so only the launcher pre-session is minted."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/pid.go",
+          "note": "DiscoverPID binds the launcher (lowest-PID ancestor) by cwd via DiscoverPIDByCWDAndCmdLine, narrowed to bin/gemini — independent of any coexisting adapter's processes."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/parser.go",
+          "note": "user_message → working; turn_done (working→ready) inferred from a final text-only 'gemini' message with no open tool calls; per-message token/model applied only to this adapter's session — no cross-adapter aggregation path."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/all.go",
+          "note": "geminicli.Agent() is registered in the same adapter list as claudecode/codex/pi; maps.go keys Parsers/PIDDiscoverers/SubagentCounters by Identity.Name, so no shared global parser or counter can leak state between adapters."
+        },
+        {
+          "kind": "spec",
+          "ref": ".specs/agent-scenarios.md → Feature: Multiple agents in same workspace",
+          "note": "Three Expected bullets: correct adapter labels, independent transitions, no metrics/parent/subagent cross-contamination."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "partner_adapter": "claudecode",
+      "preconditions": [
+        "gemini AND claude CLIs on PATH and authenticated (gemini via Google OAuth oauth-personal, set up out-of-band)",
+        "irrlichd is recording — run-cell-multi.sh isolated coexist mode (spawns its own --record daemon on an alternate port with its own IRRLICHT_HOME, so production keeps running)",
+        "no other gemini-cli/claudecode session is live in the run cwd",
+        "record before 2026-06-18 on a free tier (Gemini CLI free-tier auth deadline)"
+      ],
+      "setup": [
+        "run-cell-multi.sh creates ONE shared cwd and launches the gemini-cli and claudecode interactive drivers concurrently, both pointed at it via IRRLICHT_ONBOARD_CWD",
+        "the isolated daemon observes gemini-cli via its transcript fswatcher (~/.gemini/tmp, binding the launcher PID by cwd harvested from the bootstrap <session_context>) and claudecode via ~/.claude/projects — both keyed off the real $HOME — so it labels each adapter independently",
+        "this cell stores the gemini-cli transcript for the replay golden; its events.jsonl and expected.jsonl span the whole workspace (both adapters)"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: alpha"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 15
+        }
+      ],
+      "verify": [
+        "events.jsonl contains TWO distinct session_ids from two different adapters (gemini-cli + claudecode), both keyed to the same cwd slug",
+        "each session has its own independent working->ready arc; no transition on one is attributed to the other",
+        "no cross-contamination: the daemon never merges or flaps the two adapters' rows, and gemini-cli's model/tokens stay on its own session"
+      ],
+      "settings": {},
+      "timeout_seconds": 240
+    }
+  }
+}

@@ -1,0 +1,93 @@
+{
+  "scenario_id": "self-correction-iteration",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.46.0",
+    "daemon_version": "0.5.1+6258833",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes; daemon_capability: full; driver_capability: ready — failing run_shell_command result is a functionResponse that never settles state; turn stays working until final text-only message."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "self-correction-iteration",
+      "agent": "gemini-cli",
+      "assessed_at": "2026-06-11T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nSelf-correction is core agentic-loop behaviour for Gemini CLI. The agent calls its built-in `run_shell_command` (ShellTool) tool, the runtime records the failing command's output as a tool result (the bundle surfaces `Command failed` / `exited with code` strings), the model inspects that failing functionResponse, and re-issues a corrected `run_shell_command` in the next assistant message — all inside one user turn. The scenario's literal recipe (bash 'false' → inspect failure → bash 'echo recovered' → reply 'done') is directly executable.\n\nThe scenario's user-observable arc — `ready → working → ready`, a single contiguous working span with NO flicker across retries, and at least one tool call — maps cleanly onto the Gemini adapter:\n\n**ready → working (bullet 1).** The opening user prompt is a `user`-type message carrying text; parseUser emits `user_message` with `ClearToolNames` (parser.go:155-157), which the classifier turns into ready → working.\n\n**State stays working across all retry cycles, no flicker (bullet 2 — the core invariant).** Three independent reasons in the adapter:\n  (a) The model's tool outputs are recorded as a `user`-role message of `functionResponse` parts. parseUser routes these to `function_call_output` and explicitly does NOT set `ClearToolNames` (parser.go:133-140, asserted by TestParseLine_UserFunctionResponseIsToolResult) — \"NOT a new user turn — it must not ClearToolNames or settle state.\" So the failing tool result closes the open tool but never settles.\n  (b) A failing shell call's terminal status is `error`/`cancelled`, which sets `ev.IsError` (parser.go:197-202). The tailer classifier explicitly ignores IsError: \"parsed.IsError is for tool_result errors — not used by the classifier\" (tailer.go:991-992). A failed tool result cannot move the session to ready or waiting.\n  (c) The recovery assistant message carries `toolCalls`, so parseAssistant keeps EventType=`assistant_message` (NOT `turn_done`) because the turn-done heuristic only fires on non-empty text with ZERO tool calls (parser.go:209-211, asserted by TestParseLine_AssistantToolCallOpensTool). A tool-calling message keeps the session working.\n\n**working → ready (bullet 3).** The final assistant message (\"done\") has non-empty text and opens no further tool calls, so parseAssistant promotes it to `turn_done` (parser.go:209-211, asserted by TestParseLine_FinalTextSettlesTurn), and the classifier settles working → ready. No AskUserQuestion / permission gate is involved (the driver runs `gemini -y`), so the session never enters waiting.\n\n## Driver\n\nThe interactive driver (driver-interactive.sh) launches `gemini -y` (yolo auto-approves tool calls so neither the failing nor the recovery shell call stalls on a permission gate → no spurious waiting), keeps the process alive in tmux across the turn, and implements `wait_turn` as a poll that returns when a `gemini` message with non-empty text and no tool calls appears — exactly the parser's turn_done classification (driver lines 188-213). The recipe needs only `send`, `wait_turn`, `sleep` (plus `exit_clean` teardown), all present in DRIVE_ELICITS — driver=ready, no gap.\n\n## What irrlicht does NOT assert (and why that's OK)\n\nTool visibility is coarse: each tool open/close is one functionResponse id, with no args or stdout/exit-code payload in the event stream. The scenario's acceptance criteria are state-level (one contiguous working span + ≥1 tool call), so this is fine — the failing-vs-passing distinction is internal to the agent and not a spec observable.",
+      "caveats": [
+        "PROVISIONAL on emission timing (the observation-vs-emission seam): this verdict is grounded in the parser + classifier code, which definitively will not flicker on a failing tool result. The one thing a doc/code read cannot confirm is whether Gemini ever writes an intermediate text-only assistant message (non-empty content, zero tool calls) BETWEEN the failing and recovery shell calls — if it did, the turn_done heuristic would settle early and reopen on the next tool call (the exact flicker bullet 2 forbids). The retry should ride entirely on tool_use→functionResponse cycles, but only the live recording can promote this from provisional to settled. Keep confidence < 0.9 until recorded.",
+        "The recipe must phrase the instruction so the model emits the failing and recovery shell calls back-to-back (no narration turn in between). The prompt asks it to run, retry on failure, then reply 'done' in one go.",
+        "Gemini CLI stops serving unpaid Google tiers on 2026-06-18; recording must happen before then (or on a paid tier), per the agent metadata DEADLINE."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/parser.go",
+          "note": "parseUser routes functionResponse → function_call_output and does NOT ClearToolNames/settle (133-140); error/cancelled tool status sets IsError only (197-202); turn_done heuristic fires only on non-empty text + zero toolCalls (209-211); user text → user_message + ClearToolNames (155-157)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/parser_test.go",
+          "note": "TestParseLine_UserFunctionResponseIsToolResult (tool result must NOT ClearToolNames), TestParseLine_AssistantToolCallOpensTool (tool-calling message is assistant_message, NOT turn_done), TestParseLine_FinalTextSettlesTurn (final text settles) — directly assert the no-flicker invariant."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer.go",
+          "note": "Lines 991-992: 'parsed.IsError is for tool_result errors — not used by the classifier' — a failing tool result cannot transition state away from working."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/gemini-cli/driver-interactive.sh",
+          "note": "Lines 87,132,188-213: gemini -y (yolo, auto-approves tools → no waiting); wait_turn polls for a gemini message with text and no toolCalls (mirrors parser turn_done); DRIVE_ELICITS='send slash wait_turn sleep' covers the recipe."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@google/gemini-cli/bundle/chunk-6ZHP2EJW.js",
+          "note": "gemini-cli 0.46.0 bundle ships run_shell_command (ShellTool) and surfaces failures as 'Command failed' / 'exited with code' in the tool result — the failing-output signal the model inspects before retrying."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "gemini CLI on PATH and OAuth-authenticated (settings.json security.auth.selectedType=oauth-personal; set up out-of-band, no API key)",
+        "irrlichd is recording (run-cell.sh in isolated mode, or --attach against a daemon started with --record)",
+        "Launched via the interactive driver as `gemini -y` (yolo) so both the failing and the recovery run_shell_command auto-approve — neither attempt trips a permission gate that would flicker the session to waiting",
+        "Record before 2026-06-18 (Gemini CLI stops serving unpaid Google tiers; auth then fails) or on a paid tier"
+      ],
+      "setup": [
+        "Driver git-inits / trusts a fresh per-run cwd; auto-accepts the trust-folder prompt on first run in that dir",
+        "Gemini stores its transcript at ~/.gemini/tmp/<projectHash>/chats/session-<ts>-<id>.jsonl; the daemon tails it (FilesUnderRoot) and harvests the workspace cwd from the bootstrap <session_context> for PID binding"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Use run_shell_command to run exactly `false` (which exits non-zero and fails). When it fails, do not ask me anything — immediately retry by running `echo recovered`. After that succeeds, reply with just the word done."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        }
+      ],
+      "verify": [
+        "events.jsonl shows exactly one ready→working transition for the session",
+        "events.jsonl contains at least 2 run_shell_command tool_use events inside the working span (the failing `false` attempt and the `echo recovered` recovery)",
+        "events.jsonl contains NO state_transition to ready between the failing tool result and the recovery tool_use",
+        "events.jsonl contains NO state_transition to waiting at any point during the working span",
+        "events.jsonl shows exactly one working→ready transition at turn end",
+        "final session state is ready"
+      ],
+      "settings": {},
+      "timeout_seconds": 240
+    }
+  }
+}

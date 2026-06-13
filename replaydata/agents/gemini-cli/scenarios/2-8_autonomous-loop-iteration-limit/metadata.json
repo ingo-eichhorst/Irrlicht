@@ -1,0 +1,100 @@
+{
+  "scenario_id": "autonomous-loop-iteration-limit",
+  "metadata": {
+    "agent_supports": "partial",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.46.0",
+    "daemon_version": "0.5.1+ec2d6e2.dirty",
+    "confidence": 0.7,
+    "notes": "agent_supports: partial (no user-driven /goal self-prompt loop; only an internal AgentTool subagent capped at DEFAULT_MAX_TURNS=30)\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "autonomous-loop-iteration-limit",
+      "agent": "gemini-cli",
+      "assessed_at": "2026-06-11T00:00:00Z",
+      "agent_supports": "partial",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.7,
+      "body": "## Verdict\n\nagent_supports: partial\ndaemon_capability: full; driver_capability: ready\nroute: record\n\n## Reasoning\n\nThis is the failure-mode pair of `autonomous-loop`. The scenario tests the graceful-termination SHAPE of an autonomous loop: `working → ready` even when the goal isn't met, ≥2 turns, and the session never sticks in `working`. It does NOT require discriminating *why* the loop ended.\n\n**agent_supports: partial — no user-driven self-prompting loop, only an internal subagent runtime.**\n\nGemini CLI 0.46.0 has no equivalent to claudecode's `/goal` cross-turn self-prompting primitive:\n- No `/goal` slash command, no Stop-hook re-prompt mechanism, and no `maxIterations`/`max_iterations`/`MaxIterations` symbol anywhere in the bundle (all three count 0).\n- The bundle's only \"autonomous mode\" is `renderInteractiveYoloMode` — the **YOLO approval-skip permission mode** (\"minimal interruption\", gate the `ask_user` tool), NOT a loop. The agentic-persistence prompt \"keep going until the user's query is completely resolved\" is single-turn, not self-re-prompting.\n- Gemini DOES have an internal **agent/subagent framework** (`AgentTool`, 28 refs; `invoke_agent`; `delegate to`) whose executor enforces a real iteration cap: `AgentTerminateMode` enum carries `GOAL | MAX_TURNS | TIMEOUT | ERROR | ABORTED`, `DEFAULT_MAX_TURNS = 30`, and on cap-hit emits `Agent reached max turns limit (${maxTurns})` as an ERROR activity. So the autonomous-loop-with-iteration-cap primitive EXISTS, but in a degraded form for this scenario: it is model-invoked (not deterministically forceable from the recipe) and runs nested inside a single parent turn, so from the daemon's tailed main-chat transcript it appears as one `working → ready` span, not a user-driven cross-turn loop. This is the same `partial` the row already carries for aider, codex, and kiro-cli.\n\n**daemon_capability: full — the termination shape is observable.**\n\nThe scenario's three user-observable bullets map onto the gemini adapter:\n- `working → ready` (and ≥2 turns): each user prompt is a `user`-type text message → `parseUser` emits `user_message` with `ClearToolNames` (parser.go:155-157) → classifier ready → working. The turn settles when an assistant `gemini` message carries final text and opens no tool calls → the `turn_done` heuristic (parser.go:209-211) → working → ready. A multi-turn recipe yields ≥2 working→ready transitions on one session.\n- \"reaches ready even though the agent didn't fully succeed\": the terminal turn settles to ready by the same heuristic regardless of whether the objective was met — end-of-turn text is the only signal the parser keys on, so an abandoned/unsatisfiable goal still settles.\n- \"does not stick in working\": the heuristic settles on the first tool-call-free final text; the recipe's last instruction forces exactly such a turn.\n\n**driver_capability: ready.** The gemini interactive driver implements `send`, `wait_turn`, `sleep` (and `slash`, `keys`, `interrupt`, …); the recipe needs only `send`/`wait_turn`/`sleep`.\n\n**Why partial+full+ready and not yes:** like claudecode, the recipe cannot deterministically force a genuine iteration cap — the cap lives in the internal subagent runtime, not at the session level, and the session-level loop must be supplied by the recipe's own prompts. The recipe drives a couple of iterations toward an unsatisfiable objective and then a terminal stop, which exercises the identical state arc (working → ready, ≥2 turns, no stick) that a real cap-hit would produce. The daemon cannot distinguish cap-hit from recipe-driven-stop — both are end-of-turn → ready.\n\n## What would change agent to yes\n\n1. Gemini ships a user-facing self-prompting loop primitive (a `/goal`-style command, or a settings/flag that re-prompts the main session until a condition) — then a true cross-turn autonomous loop with a forceable cap exists at the session level.\n\n## What would lift confidence\n\nThe `turn_done` heuristic is the one provisional leg: a doc/code read cannot confirm the agent won't emit an intermediate text-only assistant message mid-objective that settles the turn early. The recipe phrases each iteration as a single self-contained turn so this is unlikely, but only the live recording promotes daemon=full from provisional to settled.",
+      "caveats": [
+        "PROVISIONAL on the turn_done heuristic (observation-vs-emission seam): daemon=full is grounded in the parser/classifier, which definitively settles working→ready on a tool-call-free final assistant text. The one thing a code read can't confirm is whether Gemini emits an intermediate text-only assistant message mid-iteration that would settle the turn early and add a spurious working→ready blip. The recipe asks for one terminal text per turn to avoid this; only the live recording can settle it. Keep confidence < 0.9 until recorded.",
+        "The recipe supplies the loop's iterations via successive prompts (gemini has no /goal self-prompt). It exercises the same termination SHAPE the spec asserts (working→ready, ≥2 turns, no stick) but is not a genuine session-level max-iterations cap. The cap that does exist (AgentTerminateMode.MAX_TURNS / DEFAULT_MAX_TURNS=30) is inside the internal AgentTool subagent runtime, nested in one parent turn and model-invoked, so it is not deterministically forceable from the recipe.",
+        "Distinct from token-quota-exhausted: that interrupts a single user-driven turn (one-shot), a different failure mode. This scenario tests the loop's graceful-termination shape.",
+        "Gemini CLI stops serving unpaid Google tiers on 2026-06-18; recording must happen before then (or on a paid tier), per the agent metadata DEADLINE."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@google/gemini-cli/bundle/chunk-6ZHP2EJW.js (gemini-cli 0.46.0 bundle)",
+          "note": "Authoritative binary scan. AgentTerminateMode enum = GOAL|MAX_TURNS|TIMEOUT|ERROR|ABORTED; DEFAULT_MAX_TURNS=30; 'Agent reached max turns limit (${maxTurns})' emitted as ERROR activity on cap-hit. AgentTool=28 refs, invoke_agent=1, 'delegate to'=2 — the loop+cap is the internal subagent runtime. maxIterations/max_iterations/MaxIterations all count 0 (no session-level self-prompt cap). 'Autonomous Mode (YOLO)' (renderInteractiveYoloMode) is an approval-skip permission mode, not a loop. No /goal command."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/parser.go",
+          "note": "parseUser emits user_message+ClearToolNames (L155-157) → ready→working; the turn_done heuristic settles working→ready when an assistant 'gemini' message has final text and zero open toolCalls (L209-211). This makes the working→ready arc (≥2 turns, ends in ready, doesn't stick) observable for any multi-turn recipe ending in a terminal text turn."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/2-8_autonomous-loop-iteration-limit/metadata.json",
+          "note": "Reference cell. Establishes the row asserts the termination SHAPE (working→ready, didn't fully succeed, doesn't stick) and that the cap isn't deterministically forceable — the recipe stands in for the cap-hit with an equivalent end_turn→ready path. Gemini follows the same approach with prompted iterations + a terminal stop."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "gemini CLI on PATH and authenticated (paid tier or before the 2026-06-18 free-tier deadline)",
+        "irrlichd is recording"
+      ],
+      "setup": [
+        "Driver generates a fresh session under a temp cwd"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "I am giving you an objective for several rounds. Objective: state the single integer that is BOTH strictly odd AND strictly even at the same time. This is impossible, but for THIS round give me your best single attempt as one short sentence, then stop and wait. Do not call any tools."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        },
+        {
+          "type": "send",
+          "text": "That attempt did not satisfy the objective. Try once more: give one more short best-guess attempt at the impossible integer, then stop and wait. Do not call any tools."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        },
+        {
+          "type": "send",
+          "text": "Stop. The objective is unsatisfiable, so abandon it. Reply with just the word done and do nothing else."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        }
+      ],
+      "verify": [
+        "events.jsonl contains at least 2 working->ready transitions on the same session",
+        "final state of the session is ready after the terminal 'done' turn",
+        "no state_transition to waiting"
+      ],
+      "settings": {},
+      "timeout_seconds": 180
+    }
+  }
+}

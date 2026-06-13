@@ -105,6 +105,40 @@ func TestTailer_TaskCompletedAt_EdgeOnly(t *testing.T) {
 	}
 }
 
+// AppliedTaskDeltas surfaces the deltas the tailer folded in DURING a pass, and
+// is reset each pass — so a re-scan that reads no new bytes surfaces none. That
+// per-pass contract is what lets the detector record each task_delta lifecycle
+// event exactly once (#662).
+func TestTailer_AppliedTaskDeltas_SurfacedPerPass(t *testing.T) {
+	path := writeTranscriptLines(t, []map[string]interface{}{
+		{"timestamp": ts(0), "task": map[string]interface{}{"op": "create", "subject": "build"}},
+		{"timestamp": ts(2), "task": map[string]interface{}{"op": "update", "id": "1", "status": "completed"}},
+	})
+	tl := newTaskStampTestTailer(path)
+	m, err := tl.TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.AppliedTaskDeltas) != 2 {
+		t.Fatalf("AppliedTaskDeltas = %+v, want 2 (create + update)", m.AppliedTaskDeltas)
+	}
+	if d := m.AppliedTaskDeltas[0]; d.Op != "create" || d.Subject != "build" || d.Status != TaskStatusPending {
+		t.Errorf("create delta = %+v", d)
+	}
+	if d := m.AppliedTaskDeltas[1]; d.Op != "update" || d.Status != TaskStatusCompleted {
+		t.Errorf("update delta = %+v", d)
+	}
+
+	// Second pass, no new transcript bytes → no deltas surfaced.
+	m2, err := tl.TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m2.AppliedTaskDeltas) != 0 {
+		t.Errorf("AppliedTaskDeltas on no-new-bytes pass = %+v, want empty", m2.AppliedTaskDeltas)
+	}
+}
+
 func TestTailer_TaskCompletedAt_StampedOnSnapshotReconcile(t *testing.T) {
 	// A task_reminder snapshot flipping a task to completed stamps the
 	// reconciling event's time (issue #282 path).

@@ -109,7 +109,7 @@ if [[ -n "$PARTNER_ADAPTER" ]]; then
   exit 2
 fi
 
-TIMEOUT_S="$(jq -r '.timeout_seconds' <<<"$CELL_JSON")"
+TIMEOUT_S="$(jq -r '.timeout_seconds // 120' <<<"$CELL_JSON")"   # default when a recipe omits it (else drivers get the literal "null")
 PROMPT="$(jq -r '.prompt // ""' <<<"$CELL_JSON")"
 SCRIPT_JSON="$(jq -c '.script // empty' <<<"$CELL_JSON")"
 if [[ -z "$PROMPT" && -z "$SCRIPT_JSON" ]]; then

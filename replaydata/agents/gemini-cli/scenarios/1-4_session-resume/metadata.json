@@ -1,0 +1,126 @@
+{
+  "scenario_id": "session-resume",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "gap:resume",
+    "agent_cli_version": "0.46.0",
+    "daemon_version": "0.5.1+e4c1170",
+    "confidence": 0.9,
+    "notes": "agent=yes; daemon=full (CONFIRMED by recording — resume reuses the same chats basename, one session_id across both PID lifetimes); driver=ported (resume+exit_clean). Observed model gemini-3.5-flash (API-key tier)."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "session-resume",
+      "agent": "gemini-cli",
+      "assessed_at": "2026-06-11T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "gap:resume",
+      "confidence": 0.9,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: gap:exit_clean,resume\nroute: driver-gap\n\n## Reasoning\n\n### agent_supports: yes\n\nGemini CLI 0.46.0 ships first-class session resumption (the adapter/driver were onboarded against 0.45.2, before these flags landed — the driver's \"Gemini does NOT accept an external UUID\" comment is now STALE). `gemini --help` lists `-r, --resume <latest|index|UUID>`, `--session-id <UUID>` (start a new session with a manually provided UUID), `--session-file`, `--list-sessions`, and `--delete-session`. The bundled doc (session-management.md) states: \"You can resume a previous session to continue the conversation with all prior context restored\" and documents `gemini --resume <full-session-UUID>`. So the recipe can clean-exit one lifetime then relaunch the SAME UUID + cwd — exactly the scenario's arc.\n\n### daemon_capability: full\n\nThe irrlicht adapter watches `FilesUnderRoot{~/.gemini/tmp}` and derives `session_id` from the transcript FILE BASENAME (`fswatcher.extractSessionID` = `TrimSuffix(filepath.Base(path), \".jsonl\")`), i.e. `session-2026-06-11T18-02-cc4f73b3` — NOT the in-file `sessionId` header. On resume Gemini's ChatRecordingService APPENDS new records to the ORIGINAL `chats/session-*.jsonl` file (issue #22604, maintainer: \"Messages are correctly saved to the original session file e.g. session-*-b8143df3\"). Same file → same basename → SAME daemon session_id → the same session row reappears (not a new one), satisfying the scenario's load-bearing criterion. PID rebinds across lifetimes because DiscoverPID matches on the cwd the parser harvests from the bootstrap <session_context> (same cwd across both launches). The turn arc (ready→working→ready) is observable per lifetime via the parser's user_message (open) and turn_done heuristic (a `gemini` message with non-empty text and no toolCalls = settle).\n\n### driver_capability: gap:exit_clean,resume\n\nThe interactive driver (`replaydata/agents/gemini-cli/driver-interactive.sh`) stubs BOTH step types the recipe needs as `not_implemented`: `exit_clean` (Ctrl-D graceful shutdown — TODO) and `resume` (relaunch same id+cwd — TODO). `record` must port both from a reference driver (e.g. claudecode's exit_clean + resume) before it can drive this cell. `send`, `wait_turn`, `sleep` are implemented. This is a TOOLING gap, not an observability limit — the cell keeps a real recipe + spec and records the moment the steps are ported.\n\n## Provisional note\n\nThe daemon=full verdict is derived from the parser + fswatcher source plus docs/issue, NOT a live recording. The emission property it hinges on — that resume reuses the same transcript filename rather than minting a new `session-*-<hash>.jsonl` — is asserted by the upstream issue but unconfirmed on THIS adapter. `record` promotes it from provisional to settled; if resume actually mints a new file, the daemon would see a new row and the verdict flips to daemon=bug/incapable (backflow correction).",
+      "caveats": [
+        "Provisional daemon=full: confirmed from parser+fswatcher source and upstream docs/#22604, not a live recording. The make-or-break emission fact (resume appends to the SAME chats/session-*.jsonl basename) must be verified by record; if Gemini mints a new session file on resume, the daemon sees a NEW row and this flips to daemon=bug.",
+        "Resume relies on the cwd handoff: both lifetimes must use the same cwd so the parser harvests the same workspace dir and DiscoverPID rebinds the new PID to the same session. The resume launch must reuse the original RUN_CWD.",
+        "Issue #22604: on resume Gemini tags the SIBLING logs.json with a fresh process-level id while still writing messages to the original session file. irrlicht does NOT read logs.json (it tails chats/*.jsonl), so this is orthogonal to the daemon verdict — noted only so a future audit doesn't mistake it for a session_id break.",
+        "Observed model varies by served tier (current transcripts show gemini-3-flash-preview; one shows gemini-3.5-flash). The observations vector pins gemini-3-flash-preview; record corrects via backflow if the account serves a different default.",
+        "Recipe records the clean-exit-then-resume case only (spec variant 1). Multiple kill+resume across PID lifetimes shares the same observability surface and can be a follow-up cell.",
+        "BACKFLOW (recorded 2026-06-12): daemon=full promoted from provisional to CONFIRMED — exactly one real session_id (chats basename) appears across both PID lifetimes; gemini --resume <full-UUID> appends to the original chats/session-*.jsonl. Observed model is gemini-3.5-flash (the API-key/AI-Studio tier default), not gemini-3-flash-preview — the observations vector was corrected. Driver needed a boot readiness poll: a --resume relaunch shows a Resuming session... spinner during history replay and swallows keystrokes typed before the input box is up; boot_session now waits for Type your message and the spinner clearing before the first send."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/fswatcher/watcher.go",
+          "note": "extractSessionID = TrimSuffix(filepath.Base(path), \".jsonl\") — the daemon's session_id is the transcript FILE BASENAME, so resume reusing the same file yields the same row."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/adapter.go",
+          "note": "Source = FilesUnderRoot{~/.gemini/tmp}; sessions live at tmp/<project>/chats/session-*.jsonl (one append-only JSONL per session)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/pid.go",
+          "note": "DiscoverPID matches the owning process by the cwd the parser harvests from <session_context> — same cwd across both launches rebinds the resumed PID to the same session."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/parser.go",
+          "note": "user_message opens a turn; a `gemini` message with non-empty text and no toolCalls is the turn_done heuristic that settles to ready — gives the per-lifetime ready→working→ready arc (no explicit end-of-turn marker)."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/gemini-cli/driver-interactive.sh",
+          "note": "Lines 239 & 241: `resume` and `exit_clean` are stubbed `not_implemented` (TODO) → driver gap. Line 133-134's 'Gemini does NOT accept an external UUID' comment is stale vs 0.46.0's --session-id."
+        },
+        {
+          "kind": "url",
+          "ref": "https://github.com/google-gemini/gemini-cli/blob/main/docs/cli/session-management.md",
+          "note": "Resume by --resume latest|index|full-UUID restores all prior context; sessions stored under ~/.gemini/tmp/<project_hash>/chats/; ChatRecordingService appends JSON records to the .jsonl file."
+        },
+        {
+          "kind": "url",
+          "ref": "https://github.com/google-gemini/gemini-cli/issues/22604",
+          "note": "Maintainer: on resume 'Messages are correctly saved to the original session file' — confirms the transcript file is reused; the only mismatch is the sibling logs.json process-id (a file irrlicht doesn't read)."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "gemini CLI >=0.46.0 on PATH and authenticated via Google OAuth (subscription tier; before the 2026-06-18 free-tier deadline)",
+        "irrlichd is recording (dev daemon with --record, isolated IRRLICHT_ONBOARD_HOME + alt port)",
+        "driver-interactive.sh has the exit_clean and resume step types ported (they are currently not_implemented stubs — record ports them first)"
+      ],
+      "setup": [
+        "Driver launches `gemini -y` under tmux in a fresh cwd, harvests the minted sessionId from the transcript header, and reuses the SAME cwd for the resume launch.",
+        "The resume step relaunches `gemini -y --resume <UUID>` (or `--resume latest`) in the same cwd so Gemini appends to the original chats/session-*.jsonl."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "exit_clean"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        },
+        {
+          "type": "resume"
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: again"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the FIRST launch's session entering ready, then the working/ready cycle for turn 1",
+        "events.jsonl contains a process_exited for the session after turn 1 (clean Ctrl-D exit)",
+        "the SAME session_id (same chats/session-*.jsonl basename) re-appears after the resume launch — NOT a new session row (proves the row persisted across PID lifetimes)",
+        "second-lifetime working transition fires on the SAME session_id, then back to ready",
+        "final session state is ready; tool calls == 0",
+        "cost and tokens are non-zero (two billed turns appended to the one transcript)"
+      ],
+      "settings": {},
+      "timeout_seconds": 180
+    }
+  }
+}

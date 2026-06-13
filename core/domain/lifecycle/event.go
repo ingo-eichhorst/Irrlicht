@@ -42,6 +42,11 @@ const (
 	// Pre-session lifecycle (process scanner detections).
 	KindPreSessionCreated Kind = "presession_created"
 	KindPreSessionRemoved Kind = "presession_removed"
+
+	// Task list deltas: one per TaskDelta the tailer folds into a session's
+	// task list (TaskCreate/TaskUpdate/assign_id). Makes task-list behavior an
+	// assertable observable in onboarding fixtures.
+	KindTaskDelta Kind = "task_delta"
 )
 
 // Event is a single recorded lifecycle signal. The Kind field discriminates
@@ -84,4 +89,10 @@ type Event struct {
 	// File-system events (KindFileEvent). Reserved by WS08 — emission pending.
 	Path   string `json:"path,omitempty"`
 	FileOp string `json:"file_op,omitempty"` // create | write | remove | rename
+
+	// Task list deltas (KindTaskDelta).
+	TaskOp      string `json:"task_op,omitempty"`      // create | update | assign_id
+	TaskID      string `json:"task_id,omitempty"`      // post-fold task id (authoritative once assigned)
+	TaskSubject string `json:"task_subject,omitempty"` // create only
+	TaskStatus  string `json:"task_status,omitempty"`  // pending | in_progress | completed
 }

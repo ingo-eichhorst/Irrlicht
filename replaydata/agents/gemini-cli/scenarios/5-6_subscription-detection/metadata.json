@@ -1,0 +1,75 @@
+{
+  "scenario_id": "subscription-detection",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "incapable",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.46.0",
+    "daemon_version": "0.5.1+92de9c4.dirty",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes (gemini-cli operates on a tier/quota billing model — OAuth login-with-google free tier, gemini-api-key/vertex paid; it tracks paid_tier/free_tier + 429/RESOURCE_EXHAUSTED quota) — daemon_capability: incapable (NONE of that reaches the tailed .jsonl; the geminicli adapter wires neither of irrlicht's two rate-limit transports) — driver_capability: ready (moot) -> route frozen"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "subscription-detection",
+      "agent": "gemini-cli",
+      "assessed_at": "2026-06-11T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "incapable",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: incapable; driver_capability: ready (moot)\n-> route: frozen\n\n## The scenario's assertion\n\nThe user-observable signal is whether the daemon surfaces a per-session subscription / billing-model reading: a non-nil `RateLimitSnapshot` (>=1 `Window`, or a non-empty `PlanType` / non-nil `Credits` for the codex variant) for a subscription session, vs. a nil snapshot for an API-key session. Two sibling adapters record this row, each via a DIFFERENT daemon surface:\n\n- **claudecode = full** — the subscription `rate_limits` block arrives OUT-OF-BAND via the statusline HTTP hook (`POST /api/v1/hooks/claudecode/statusline`); `statuslineToSnapshot()` turns it into a `RateLimitSnapshot`, nil when the block is absent (API-key path). (claudecode/statusline.go.)\n- **codex = full** — the `rate_limits` map (+ `plan_type` / `credits`) arrives IN-BAND inside the JSONL `token_count` event; `extractCodexRateLimits()` reads it straight off the tailed transcript (codex/parser.go:96,375-423). No hook needed.\n\nSo irrlicht has TWO working transports for this signal — an HTTP statusline receiver and an in-band JSONL `rate_limits` field — but BOTH are adapter-specific, and gemini-cli wires NEITHER.\n\n## Why agent=yes\n\ngemini-cli v0.46.0 unambiguously operates on a tier/quota billing model and is internally aware of subscription state. A keyword scan of the installed bundle finds dense subscription/quota machinery: `subscription` (317), `paidTier` (124), `freeTier` (36), `rate_limit` (186), `quotaRemaining` (30), `quotaExceeded` (12), `429` (817), plus the four auth modes it supports — `login-with-google` / `oauth-personal` (the Code Assist free tier), `gemini-api-key`, `vertex-ai`, `cloud-shell`. The CLI tracks paid-vs-free tier and handles 429 / RESOURCE_EXHAUSTED quota exhaustion with retry/backoff. By the higher-bar rule (the surface need not be a top-level flag — internal tier/quota state counts), agent=yes is honest: gemini genuinely runs on a billed tier and knows its quota posture.\n\n## Why daemon=incapable (the load-bearing verdict -> frozen)\n\nThe block is entirely on the daemon pillar, and it is architectural, not a fixable bug. Three independent, cited reasons:\n\n1. **The signal never reaches the Source the daemon tails.** gemini-cli's Source is `FilesUnderRoot{Dir: ~/.gemini/tmp, JSONLineParser}` (geminicli/agent.go:46-51) — the daemon tails ONLY the per-session `chats/*.jsonl`. Each transcript line is a session header `{sessionId, projectHash, startTime, kind}`, a `{\"$set\":{...}}` envelope (bootstrap messages / lastUpdated heartbeat), or a bare message `{id, type, content, tokens, toolCalls, model}` (parser.go:11-50). There is NO rate-limit, quota, plan_type, tier, credit, or subscription field anywhere in that vocabulary. A grep over ALL real on-disk gemini transcripts under ~/.gemini/tmp for `rate_limit|quota|plan_type|subscription|tier` returns ZERO hits — there is no event in `events.jsonl` that could prove a per-session subscription-vs-API-key reading, because no such field is in the tailed transport.\n\n2. **The rate-limit/quota machinery lives in the HTTP/error path, never the chat-record writer.** The bundle's subscription/quota handling is concentrated in the request retry/error path (RESOURCE_EXHAUSTED, retryDelay/retryDelayMultiplier, 429 backoff) and UI/telemetry — not in the transcript-record serializer. The chat-record writer validates only `id` / `sessionId` / `projectHash` string properties; it persists message text, tokens, toolCalls, and model, and nothing rate-limit-shaped. The signal is computed at HTTP-response time and discarded from the persisted log.\n\n3. **The geminicli adapter wires NO quota/statusline/capacity integration.** A repo-wide grep of `core/adapters/inbound/agents/geminicli/` for `rate.?limit|quota|subscription|plan.?type|statusline|RateLimit` matches ZERO lines — no handlers, no RateLimit-bearing event. The parser emits only `user_message / assistant_message / turn_done / function_call_output`, never a `RateLimit`-bearing event. The adapter registers a SINGLE permission, `transcripts` (agent.go:52-67) — no quota/statusline permission exists for it. There is no statusline HTTP receiver registered for gemini (the statusline hook path is claudecode-only, hardwired to the `claudecode/statusline` route + the claudecode transcript_path shape).\n\nNeither claudecode's nor codex's transport applies: gemini emits no in-band `rate_limits` JSONL field (unlike codex), and the gemini CLI is not configured/able to POST a statusline payload to the daemon (unlike claudecode's `statusLine.command` hook). The 3-state model + the tailed JSONL simply cannot represent a subscription reading for gemini. That is `daemon=incapable` — no trace exists in the Source — not `daemon=bug` (no mis-handled trace) and not a driver gap (no recipe step is missing; the signal itself is absent).\n\n## driver — moot under daemon=incapable\n\nThe gemini interactive driver is real and complete (driver-interactive.sh step types: send / wait_turn / sleep / slash / keys / session / reset_session / restart / resume / interrupt / sigkill / start_session / exit_clean / session) so the driver pillar is `ready`, but it is moot: there is no observation to elicit. No recipe would make the absent signal appear.\n\n## Disposition\n\nFrozen. gemini-cli genuinely runs on a tier/quota billing model (agent=yes), but no subscription/quota/rate-limit signal reaches the `chats/*.jsonl` the daemon tails, and the geminicli adapter wires neither of irrlicht's two existing transports (statusline hook / in-band rate_limits), so irrlicht fundamentally cannot observe a per-session subscription reading for gemini today. Re-assessable only if (a) a future gemini release writes a rate-limit/plan/tier/quota field into the tailed `.jsonl`, OR (b) a gemini statusline-style POST hook is added, AND the geminicli adapter grows matching ingestion (a snapshot mapping into RateLimitSnapshot).",
+      "caveats": [
+        "agent=yes for the RIGHT reason: gemini-cli operates on a tier/quota billing model (paid_tier/free_tier, OAuth Code-Assist free tier vs gemini-api-key/vertex, 429/RESOURCE_EXHAUSTED quota handling) and is internally aware of subscription state — but NONE of that reaches the daemon. The block is purely daemon=incapable, not agent.",
+        "irrlicht HAS two working transports for this signal (claudecode's out-of-band statusline hook; codex's in-band JSONL rate_limits field) — gemini wires NEITHER. This is architecture (incapable), not a mis-handled trace (bug) and not a missing driver step (gap).",
+        "The rate-limit/quota machinery is dense in the gemini bundle but lives entirely in the HTTP request retry/error path and UI/telemetry — it is computed at response time and never persisted to the chat-record JSONL the daemon tails (grep of all real ~/.gemini/tmp transcripts for rate_limit|quota|plan_type|subscription|tier = zero hits).",
+        "Structurally identical to the kiro-cli subscription-detection cell (agent=yes / daemon=incapable / frozen): the behavior exists but is invisible to the tailed transport.",
+        "Provisional only in the trivial sense — daemon=incapable is grounded in the transcript schema + adapter code + empty transcript grep, not a plausible parser read; a recording cannot change it because there is no signal to record (frozen, no recording produced).",
+        "Re-assess only if a future gemini release surfaces a rate-limit/plan/tier/quota field in the tailed .jsonl (or a gemini statusline POST hook lands) AND the geminicli adapter adds matching RateLimitSnapshot ingestion."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/agent.go:46-51,52-67",
+          "note": "Source = FilesUnderRoot{Dir: ~/.gemini/tmp, JSONLineParser} — the daemon tails ONLY the chats/*.jsonl (no rate-limit/quota trace). The adapter registers a SINGLE permission, 'transcripts'; there is no quota/statusline permission or handler for gemini."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/parser.go:11-50,100-213",
+          "note": "Transcript vocabulary = session header {sessionId,projectHash,startTime,kind} + $set envelopes + bare messages {id,type,content,tokens,toolCalls,model}. Parser emits only user_message/assistant_message/turn_done/function_call_output; NO model/rate-limit/quota/plan/credit field exists and no RateLimit-bearing event is ever produced."
+        },
+        {
+          "kind": "cmd",
+          "ref": "grep -rinE 'rate.?limit|quota|subscription|plan.?type|statusline|RateLimit' core/adapters/inbound/agents/geminicli/",
+          "note": "ZERO matches — the geminicli adapter wires no statusline receiver, no rate-limit ingestion, no quota/capacity integration."
+        },
+        {
+          "kind": "cmd",
+          "ref": "grep -ilE 'rate_?limit|quota|plan_?type|subscription|tier' $(find ~/.gemini/tmp -name '*.jsonl')",
+          "note": "ZERO matches over ALL real on-disk gemini transcripts — no subscription/rate-limit/quota/plan/tier field is ever persisted to the tailed chat log; the per-session subscription reading is absent from the Source the daemon reads."
+        },
+        {
+          "kind": "cmd",
+          "ref": "grep -rhoiE 'rate[_-]?limit|paid_?tier|free_?tier|subscription|plan_?type|quota_?(remaining|exceeded)|429' /usr/local/.../@google/gemini-cli/bundle (v0.46.0)",
+          "note": "Dense hits in the installed bundle (subscription 317, paidTier 124, rate_limit 186, freeTier 36, quotaRemaining 30, quotaExceeded 12, 429 817) plus auth modes login-with-google/oauth-personal/gemini-api-key/vertex-ai — gemini-cli DOES handle tier/quota internally (agent=yes), but the context is the HTTP retry/error path (RESOURCE_EXHAUSTED, retryDelay/retryDelayMultiplier), not the chat-record writer."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/claudecode/statusline.go",
+          "note": "Reference transport #1 (claudecode=full): the subscription rate_limits block arrives OUT-OF-BAND via POST /api/v1/hooks/claudecode/statusline; statuslineToSnapshot() builds a RateLimitSnapshot (nil when the block is absent). This route is claudecode-specific (hardwired route + claudecode transcript_path shape); gemini has no equivalent POST hook."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/codex/parser.go:96,375-423",
+          "note": "Reference transport #2 (codex=full): the rate_limits map (+ plan_type / credits) arrives IN-BAND inside the JSONL token_count event; extractCodexRateLimits() reads it off the tailed transcript. Gemini's JSONL has no such field, so this in-band path also does not apply."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/kiro-cli/scenarios/5-6_subscription-detection/metadata.json",
+          "note": "Structurally identical sibling — kiro-cli is also agent=yes (auth IS a subscription) / daemon=incapable (nothing subscription/credit reaches the tailed .jsonl; adapter wires neither transport) / frozen. Same verdict shape and the same load-bearing daemon-pillar reasoning."
+        }
+      ]
+    }
+  }
+}

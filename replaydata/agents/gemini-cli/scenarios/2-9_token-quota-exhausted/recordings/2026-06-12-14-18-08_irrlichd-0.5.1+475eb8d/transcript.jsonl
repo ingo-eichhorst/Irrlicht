@@ -1,0 +1,10 @@
+{"sessionId":"5e94e84c-ea3a-4789-8887-7458d443b55f","projectHash":"54e79c6e8983bc2e1ac0f1adc02cdf3202d27f54736e59fe1c3ed8967285c198","startTime":"2026-06-12T12:18:08.801Z","lastUpdated":"2026-06-12T12:18:08.801Z","kind":"main"}
+{"$set":{"messages":[{"id":"d04923d38bb0f6017037e74183378ef4","timestamp":"2026-06-12T12:18:08.801Z","type":"user","content":[{"text":"<session_context>\nThis is the Gemini CLI. We are setting up the context for our chat.\nToday's date is Friday, June 12, 2026 (formatted according to the user's locale).\nMy operating system is: darwin\nThe project's temporary directory is: /Users/ingo/.gemini/tmp/cwd-51\n- **Workspace Directories:**\n  - /Users/ingo/projects/irrlicht/.claude/worktrees/gemini-cli-onboard/.build/refresh/gemini-cli/2-9_token-quota-exhausted-20260612T121804/cwd\n- **Directory Structure:**\n\nShowing up to 200 items (files + folders).\n\n/Users/ingo/projects/irrlicht/.claude/worktrees/gemini-cli-onboard/.build/refresh/gemini-cli/2-9_token-quota-exhausted-20260612T121804/cwd/\n└───.gemini/\n    └───settings.json\n\n\n</session_context>"}]}],"lastUpdated":"2026-06-12T12:18:08.801Z"}}
+{"id":"e2e1fa03-e9ef-4a16-8021-4208acf7ec6c","timestamp":"2026-06-12T12:18:19.303Z","type":"user","content":[{"text":"Reply with exactly the word: ok"}]}
+{"$set":{"lastUpdated":"2026-06-12T12:18:19.304Z"}}
+{"id":"e6581460-4685-4717-b027-0d85dbdbdefe","timestamp":"2026-06-12T12:18:19.322Z","type":"gemini","content":"ok","thoughts":[],"tokens":{"input":12,"output":1,"cached":0,"thoughts":0,"tool":0,"total":13},"model":"gemini-3.5-flash"}
+{"$set":{"lastUpdated":"2026-06-12T12:18:19.322Z"}}
+{"id":"f86c55de-4975-4724-bb8b-078bc7c3ff29","timestamp":"2026-06-12T12:18:23.688Z","type":"user","content":[{"text":"Reply with exactly the word: again"}]}
+{"$set":{"lastUpdated":"2026-06-12T12:18:23.688Z"}}
+{"id":"2c1e7327-2378-4fe7-895a-b72a39953d41","timestamp":"2026-06-12T12:18:29.777Z","type":"info","content":"Request cancelled."}
+{"$set":{"lastUpdated":"2026-06-12T12:18:29.777Z"}}

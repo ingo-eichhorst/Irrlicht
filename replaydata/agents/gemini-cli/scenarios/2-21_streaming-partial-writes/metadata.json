@@ -1,0 +1,99 @@
+{
+  "scenario_id": "streaming-partial-writes",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.46.0",
+    "daemon_version": "0.5.1+a50ffdd",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes; daemon_capability: full; driver_capability: ready — streaming prose is real in the UI, but Gemini's ChatRecordingService writes the assistant text to the JSONL exactly once per turn (no intermediate partial-content records), so the no-flicker invariant holds trivially at the transport: parser emits exactly one turn_done → one working→ready."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "streaming-partial-writes",
+      "agent": "gemini-cli",
+      "assessed_at": "2026-06-11T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Reasoning\n\nThe scenario locks down the Bug-D streaming-flicker invariant: across all partial flushes of a multi-sentence prose response the session must stay solidly `working` and only flip to `ready` on the terminal turn-end signal — topology `ready → working → ready`, no tool calls, no premature `ready`.\n\n### agent_supports: yes\n\nGemini CLI streams a multi-sentence prose response token-by-token in the terminal UI; a 'write a 5-sentence story' prompt produces a real streaming window with no tool use. This is the agent's default conversational behavior (no flag needed), and the same single round-trip shape was live-verified for the basic-turn cell on 2026-06-09 (model `gemini-3-flash-preview`, non-zero cost+tokens, returns to ready on completion).\n\n### daemon_capability: full — and WHY it is full, not bug\n\nThis is the load-bearing call. The scenario was written against Claude's transport, where the transcript APPENDS one assistant line per chunk, each carrying a non-terminal `stop_reason` — so claudecode needs an explicit guard (`resolveAssistantStreaming`, parser.go:288) to keep those mid-stream lines from promoting to ready (issue #102). The naive worry for gemini-cli is symmetric: the parser's turn_done heuristic (parser.go ~L209) reclassifies ANY `gemini` message with non-empty `content` + no open tool calls as `turn_done` (working→ready). If Gemini rewrote its in-place assistant message with GROWING partial prose multiple times on disk, each such rewrite would fire turn_done and flicker the band — that would be a `bug`.\n\nIt does NOT. Gemini's `ChatRecordingService` (the JSONL chat log this adapter tails) writes the assistant TEXT content to the file exactly once per turn — only after the turn completes — via `recordMessage()`/`pushMessage()`/`appendRecord()`. There is no per-chunk write path; streaming chunks are never persisted to disk. The only in-place updates are metadata-only `$set` / `message_update` records carrying token counts, tool-call status, and thoughts — never partial prose content (confirmed in `packages/core/src/services/chatRecordingService.ts`). The captured fixture (`testdata/real-toolcall-session.jsonl`) shows exactly this shape: the assistant message first appears with `content:\"\"` (a placeholder the parser keeps as a non-turn_done `assistant_message` → stays working), the in-place rewrite adds only `toolCalls` (still working), and the final text answer lands as a single later `gemini` record carrying the complete prose with no tool calls (the one turn_done).\n\nConsequence for the spec's invariant: because the intermediate streaming window produces NO non-empty-content record on disk, the parser emits exactly ONE turn_done and the daemon performs exactly one working→ready transition at turn end. The no-flicker invariant holds trivially at the transport layer — there is no on-disk intermediate prose record for the heuristic to misfire on. The daemon observes the spec-required arc correctly, so `daemon=full`.\n\n### Observation vs emission (why confidence is 0.8, not 0.9)\n\nPer the assess observation-vs-emission rule, `daemon=full` for a property about what the agent WRITES to its transcript (streaming, partial flushes, atomicity) is PROVISIONAL from a parser+source read alone. The verdict here rests on the gemini-cli source establishing single-write emission (strong) plus the fixture confirming the placeholder-then-final shape (strong, but the fixture is a tool-call turn, not a pure long-prose turn). A live recording of a genuinely long prose answer is what promotes this from provisional to settled — record must confirm zero working→ready transitions before the terminal record across a ≥1.5s streaming window. If a future Gemini version began persisting partial-content rewrites, this would regress to `bug`; the single-write emission is the linchpin and is version-sensitive (binary moved 0.45.2→0.46.0; ChatRecordingService recently migrated whole-file→JSONL append).\n\n### driver_capability: ready\n\nThe interactive driver (`replaydata/agents/gemini-cli/driver-interactive.sh`) drives `gemini -y` under tmux and implements every step type this recipe needs — `send` (the long-prose prompt), `wait_turn` (block until the inferred turn_done), and a trailing `sleep` so the daemon observes the working→ready settle before teardown. No stubbed primitive (interrupt/keys/reset_session/restart/resume/sigkill/exit_clean/start_session/session) is exercised. INTERACTIVE deliberately: headless `gemini -p` exits at turn completion, before the daemon can observe the terminal ready edge.\n\n## What irrlicht does NOT see (narrow)\n\nThe agent's terminal-UI streaming itself is invisible to the daemon — only the single terminal disk write is observable. That is exactly why the no-flicker invariant is satisfied here for a transport reason rather than a parser-guard reason: irrlicht never sees the intermediate prose at all. This is a caveat about granularity, not a lifecycle gap; the spec's user-observable arc (state stays working, no early ready) is fully met.",
+      "caveats": [
+        "Provisional on emission: daemon=full rests on gemini-cli's ChatRecordingService writing assistant text once per turn (no per-chunk disk records). Confirmed in source + the placeholder-then-final fixture shape, but the captured fixture is a tool-call turn, not a long pure-prose turn — record must live-confirm zero working→ready transitions across the streaming window before the terminal record.",
+        "Version-sensitive linchpin: if a future Gemini version persisted GROWING partial-content rewrites under one id, the parser's text-only/no-tool turn_done heuristic (parser.go ~L209) would fire on each, flickering the band — that would regress to daemon=bug. ChatRecordingService recently migrated whole-file→JSONL append (PR #23749) and the binary moved 0.45.2→0.46.0, so re-confirm on version bumps.",
+        "Granularity caveat (not a gap): the agent's real terminal-UI streaming is invisible to the daemon; irrlicht observes only the single terminal disk write. The no-flicker invariant is satisfied because there is no intermediate on-disk prose, not because of a parser-side streaming guard like claudecode's resolveAssistantStreaming.",
+        "Gemini has no explicit end-of-turn marker; turn_done is INFERRED from a final text-only 'gemini' message with no open tool calls (parser.go ~L209). Correct for a tool-free prose turn, but heuristic rather than an in-band signal.",
+        "observations.model ('gemini-3-flash-preview') is the live-verified default boot model and is PROVISIONAL — record settles it; a different live default is a string update, not a daemon bug."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/parser.go",
+          "note": "parseAssistant (~L162-213): turn_done is reclassified ONLY when a 'gemini' message has non-empty content AND zero tool calls (~L209); an empty-content streaming placeholder stays assistant_message (working); applyTokens dedups per-id so in-place re-emissions aren't double-billed. The heuristic depends on intermediate streaming NOT landing as a non-empty-content disk record."
+        },
+        {
+          "kind": "url",
+          "ref": "https://raw.githubusercontent.com/google-gemini/gemini-cli/main/packages/core/src/services/chatRecordingService.ts",
+          "note": "ChatRecordingService writes assistant TEXT content exactly once per turn (recordMessage/pushMessage/appendRecord), only after the turn completes — no per-chunk write path. In-place updates are metadata-only $set/message_update records (token counts, tool-call status, thoughts), never partial prose content. This is the emission evidence that the streaming window produces no intermediate non-empty-content disk record."
+        },
+        {
+          "kind": "url",
+          "ref": "https://github.com/google-gemini/gemini-cli/pull/23749",
+          "note": "Migration of chat recording to append-only JSONL streaming log: session_metadata first line, then message objects; message_update record type for updates (tokens/tool results) without rewriting the message — confirms updates carry metadata, not prose deltas. Version-sensitivity flag for this cell."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/testdata/real-toolcall-session.jsonl",
+          "note": "Live fixture: assistant message first appears with content:\"\" (placeholder, stays working), in-place rewrite adds only toolCalls (still working), and the final text answer lands as a single later 'gemini' record with complete prose + no tool calls (the one turn_done). Confirms the placeholder-then-single-terminal-write shape."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/gemini-cli/driver-interactive.sh",
+          "note": "DRIVE_ELICITS=\"send slash wait_turn sleep\"; gemini -y under tmux; the recipe needs only send + wait_turn + sleep — every step type implemented, driver=ready."
+        },
+        {
+          "kind": "issue",
+          "ref": "ingo-eichhorst/Irrlicht#102",
+          "note": "Bug-D streaming-flicker family this scenario guards — drove claudecode's resolveAssistantStreaming allow-list. The gemini transport sidesteps it by not persisting intermediate streaming prose."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "Gemini CLI >=0.45.2 on PATH as `gemini`, authenticated via Google OAuth (oauth-personal); set up out-of-band, no API key",
+        "irrlichd is recording (dev daemon with --record; prod has no --record)",
+        "First run in a fresh cwd shows a trust-folder prompt; the driver auto-accepts it"
+      ],
+      "setup": [
+        "Driver launches `gemini -y` under tmux in a fresh cwd under <staging>/cwd/"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Write a 5-sentence story about a robot learning to paint. Put each sentence on its own line. Do not use any tools."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the session entering ready after launch and the launcher PID bound by cwd",
+        "events.jsonl shows exactly one ready→working transition for the session",
+        "across the streaming window NO state_transition to ready fires before the terminal text-only 'gemini' record",
+        "NO state_transition to waiting fires during the turn",
+        "events.jsonl shows exactly one working→ready transition at turn end",
+        "final session state is ready; zero tool calls",
+        "model reported gemini-3-flash-preview (or current default) with non-zero cost + tokens"
+      ],
+      "settings": {},
+      "timeout_seconds": 180
+    }
+  }
+}
