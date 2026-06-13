@@ -149,6 +149,42 @@ func TestParseLine_ErrorLineSettlesTurn(t *testing.T) {
 	}
 }
 
+func TestParseLine_TerminalInfoSettlesTurn(t *testing.T) {
+	p := &Parser{}
+	// A turn aborted by user Esc / quota records a TERMINAL type:"info" notice
+	// with no following gemini message. With no inactivity sweep on `working`,
+	// the parser must settle to ready — otherwise the session sticks (#676).
+	line := decode(t, `{"id":"i1","type":"info","content":"Request cancelled."}`)
+	ev := p.ParseLine(line)
+	if ev.Skip {
+		t.Fatal("terminal info line should not be skipped")
+	}
+	if ev.EventType != "turn_done" {
+		t.Fatalf("terminal info: want turn_done, got %q", ev.EventType)
+	}
+	if !ev.IsError {
+		t.Error("terminal info should set IsError")
+	}
+	if ev.AssistantText == "" {
+		t.Error("terminal info should carry the notice as AssistantText for waiting display")
+	}
+}
+
+func TestParseLine_BenignInfoSkipped(t *testing.T) {
+	p := &Parser{}
+	// A benign type:"info" notice (a model switch) does NOT end the turn — it
+	// must be skipped, never settle. A false-settle mid-turn is worse than the
+	// false-stick this guards against (#676).
+	line := decode(t, `{"id":"i2","type":"info","content":"Model set to gemini-2.5-flash"}`)
+	ev := p.ParseLine(line)
+	if !ev.Skip {
+		t.Fatalf("benign info line must be skipped, got EventType=%q", ev.EventType)
+	}
+	if ev.EventType == "turn_done" {
+		t.Error("benign info must not settle the turn (false-settle guard)")
+	}
+}
+
 func TestParseLine_StreamingReemissionNotDoubleBilled(t *testing.T) {
 	p := &Parser{}
 	first := decode(t, `{"id":"g4","type":"gemini","content":"","tokens":{"input":9925,"output":91,"cached":0,"total":10016},"model":"gemini-3-flash-preview"}`)

@@ -105,9 +105,22 @@ func (p *Parser) parseMessage(raw map[string]interface{}, ev *tailer.ParsedEvent
 		return p.parseAssistant(raw, ev)
 	case "error":
 		return p.parseError(raw, ev)
+	case "info":
+		return p.parseInfo(raw, ev)
 	default:
-		return false // system / info / compression / unknown
+		return false // system / compression / unknown
 	}
+}
+
+// terminalInfoMarkers are the observed type:"info" notices that ABORT the turn
+// with no following gemini message — the turn's last word. Kept to a
+// conservative allowlist of substrings seen in recorded fixtures: a cancelled
+// request (user Esc / quota abort: "Request cancelled.") and a failed request
+// ("This request failed. Press F12 …"). Benign info notices (e.g. "Model set to
+// gemini-2.5-flash", an empty placeholder) continue the turn and must NOT match.
+var terminalInfoMarkers = []string{
+	"Request cancelled",
+	"This request failed",
 }
 
 // parseError handles a top-level type:"error" message: gemini-cli records a
@@ -121,6 +134,26 @@ func (p *Parser) parseError(raw map[string]interface{}, ev *tailer.ParsedEvent) 
 	ev.AssistantText = tailTruncate(content, 200)
 	ev.IsError = true
 	return true
+}
+
+// parseInfo handles a top-level type:"info" notice. Unlike type:"error", info
+// is mixed-semantics: a TERMINAL notice ("Request cancelled.", "This request
+// failed …") aborts the turn with no following gemini message — the same stuck-
+// in-working gap as #665, settle to ready. A BENIGN notice ("Model set to …",
+// empty) continues the turn and is skipped. The classifier is a conservative
+// allowlist: when the content matches no terminal marker, skip (preserving
+// current behavior) — a false-settle mid-turn is worse than the false-stick (#676).
+func (p *Parser) parseInfo(raw map[string]interface{}, ev *tailer.ParsedEvent) bool {
+	content, _ := raw["content"].(string)
+	for _, marker := range terminalInfoMarkers {
+		if strings.Contains(content, marker) {
+			ev.EventType = "turn_done"
+			ev.AssistantText = tailTruncate(content, 200)
+			ev.IsError = true
+			return true
+		}
+	}
+	return false
 }
 
 // parseUser handles a user-role message: a real text prompt, or the model's
