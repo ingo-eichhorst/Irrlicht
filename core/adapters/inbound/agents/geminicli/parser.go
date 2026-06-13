@@ -44,8 +44,8 @@ type Parser struct {
 // workspaceRe pulls the first workspace directory out of the bootstrap
 // <session_context> block, whose relevant lines read:
 //
-//	- **Workspace Directories:**
-//	  - /private/tmp/foo
+//   - **Workspace Directories:**
+//   - /private/tmp/foo
 var workspaceRe = regexp.MustCompile(`(?s)Workspace Directories:[^\n]*\n\s*-\s*([^\n]+)`)
 
 // ParseLine normalizes one Gemini CLI transcript line.
@@ -149,6 +149,16 @@ func (p *Parser) parseUser(raw map[string]interface{}, ev *tailer.ParsedEvent) b
 		if m := workspaceRe.FindStringSubmatch(firstText); m != nil {
 			p.cwd = strings.TrimSpace(m[1])
 		}
+		return false
+	}
+
+	// A `!cmd` shell-escape runs in a local shell with no LLM round-trip, but
+	// Gemini still persists it as an ordinary user text message that opens with
+	// this preamble (gemini-cli's useExecutionLifecycle.ts). It is not a real
+	// user turn, and no terminal `gemini` message follows to settle it — so
+	// treating it as a prompt would stick the session in working. Skip it, the
+	// way claudecode skips its <bash-input>/<bash-stdout> wrappers.
+	if strings.HasPrefix(strings.TrimSpace(firstText), "I ran the following shell command:") {
 		return false
 	}
 
