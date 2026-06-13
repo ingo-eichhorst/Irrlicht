@@ -112,6 +112,17 @@ func (p *Parser) parseMessage(raw map[string]interface{}, ev *tailer.ParsedEvent
 	}
 }
 
+// terminalInfoMarkers are the observed type:"info" notices that ABORT the turn
+// with no following gemini message — the turn's last word. Kept to a
+// conservative allowlist of substrings seen in recorded fixtures: a cancelled
+// request (user Esc / quota abort: "Request cancelled.") and a failed request
+// ("This request failed. Press F12 …"). Benign info notices (e.g. "Model set to
+// gemini-2.5-flash", an empty placeholder) continue the turn and must NOT match.
+var terminalInfoMarkers = []string{
+	"Request cancelled",
+	"This request failed",
+}
+
 // parseError handles a top-level type:"error" message: gemini-cli records a
 // turn that aborted on an API error this way (upstream PR #13300). Gemini emits
 // no end-of-turn marker and there is no inactivity sweep on `working`, so this
@@ -125,17 +136,26 @@ func (p *Parser) parseError(raw map[string]interface{}, ev *tailer.ParsedEvent) 
 	return true
 }
 
-// parseInfo handles a bare "info" notice. The only one carrying an observable
-// signal is the cancel notice Gemini writes when the user aborts a turn with
-// ESC ("Request cancelled.") — it early-returns before flushing a terminal
-// "gemini" message, so unless it settles the open turn the session sticks in
-// working (#659; codex keys off a structural "turn_aborted" marker instead).
-// Every other info notice (compression, system chatter) is dropped so a notice
-// mid-turn cannot prematurely settle a still-working session.
+// parseInfo handles a bare "info" notice — a mixed-semantics line. A TERMINAL
+// notice aborts the turn with no following "gemini" message, the same stuck-in-
+// working gap as #665: the cancel notice Gemini writes when the user aborts with
+// ESC / on a quota abort ("Request cancelled.", #659), and a failed request
+// ("This request failed …", #676). Both settle the open turn to ready. A BENIGN
+// notice (compression, system chatter, "Model set to …", empty placeholder)
+// carries no signal and is skipped, so a mid-turn notice cannot prematurely
+// settle a still-working session. The classifier is a conservative substring
+// allowlist (terminalInfoMarkers): a false-settle mid-turn is worse than the
+// false-stick this guards against (codex keys off a structural "turn_aborted"
+// marker instead).
 func (p *Parser) parseInfo(raw map[string]interface{}, ev *tailer.ParsedEvent) bool {
-	if content, _ := raw["content"].(string); strings.TrimSpace(content) == "Request cancelled." {
-		ev.EventType = "turn_done"
-		return true
+	content, _ := raw["content"].(string)
+	for _, marker := range terminalInfoMarkers {
+		if strings.Contains(content, marker) {
+			ev.EventType = "turn_done"
+			ev.AssistantText = tailTruncate(content, 200)
+			ev.IsError = true
+			return true
+		}
 	}
 	return false
 }
