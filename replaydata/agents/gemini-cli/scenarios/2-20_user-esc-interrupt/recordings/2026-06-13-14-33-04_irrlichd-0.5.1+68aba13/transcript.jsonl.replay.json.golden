@@ -57,8 +57,7 @@
       "has_open_tool": false,
       "is_agent_done": true,
       "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "Request cancelled."
+      "waiting_for_user_input": false
     },
     {
       "index": 2,
@@ -72,8 +71,7 @@
       "has_open_tool": false,
       "is_agent_done": true,
       "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "Request cancelled."
+      "waiting_for_user_input": false
     },
     {
       "index": 3,

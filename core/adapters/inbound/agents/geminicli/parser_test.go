@@ -204,14 +204,16 @@ func TestParseLine_TerminalInfoSettlesTurn(t *testing.T) {
 	if ev.EventType != "turn_done" {
 		t.Fatalf("terminal info: want turn_done, got %q", ev.EventType)
 	}
-	if !ev.IsError {
-		t.Error("terminal info should set IsError")
+	// A terminal info is a user/system abort, not an agent error: it settles the
+	// turn but must NOT be flagged IsError or overwrite the assistant's last text.
+	if ev.IsError {
+		t.Error("terminal info must not set IsError (a cancel/abort is not an agent error)")
 	}
-	if ev.AssistantText == "" {
-		t.Error("terminal info should carry the notice as AssistantText for waiting display")
+	if ev.AssistantText != "" {
+		t.Errorf("terminal info must not overwrite AssistantText, got %q", ev.AssistantText)
 	}
 
-	// The failed-request notice is the other terminal marker — substring match
+	// The failed-request notice is the other terminal marker — prefix match
 	// (the live notice trails "Press F12 …"), so it must also settle (#676).
 	failed := decode(t, `{"id":"i3","type":"info","content":"This request failed. Press F12 for details."}`)
 	if ev := p.ParseLine(failed); ev.Skip || ev.EventType != "turn_done" {
@@ -231,6 +233,14 @@ func TestParseLine_BenignInfoSkipped(t *testing.T) {
 	}
 	if ev.EventType == "turn_done" {
 		t.Error("benign info must not settle the turn (false-settle guard)")
+	}
+
+	// A marker embedded mid-notice (not at the start) must NOT settle — the
+	// classifier anchors on the prefix, so quoted/echoed cancel text cannot
+	// false-settle a still-working turn.
+	embedded := decode(t, `{"id":"i4","type":"info","content":"Heads up: a prior Request cancelled is being retried"}`)
+	if ev := p.ParseLine(embedded); !ev.Skip || ev.EventType == "turn_done" {
+		t.Fatalf("embedded marker must be skipped, got Skip=%v EventType=%q", ev.Skip, ev.EventType)
 	}
 }
 

@@ -180,10 +180,11 @@ func (p *Parser) parseMessage(raw map[string]interface{}, ev *tailer.ParsedEvent
 
 // terminalInfoMarkers are the observed type:"info" notices that ABORT the turn
 // with no following gemini message — the turn's last word. Kept to a
-// conservative allowlist of substrings seen in recorded fixtures: a cancelled
-// request (user Esc / quota abort: "Request cancelled.") and a failed request
-// ("This request failed. Press F12 …"). Benign info notices (e.g. "Model set to
-// gemini-2.5-flash", an empty placeholder) continue the turn and must NOT match.
+// conservative allowlist of LEADING markers seen in recorded fixtures: a
+// cancelled request (user Esc / quota abort: "Request cancelled.") and a failed
+// request ("This request failed. Press F12 …"). Matched with HasPrefix on the
+// trimmed content. Benign info notices (e.g. "Model set to gemini-2.5-flash", an
+// empty placeholder) continue the turn and must NOT match.
 var terminalInfoMarkers = []string{
 	"Request cancelled",
 	"This request failed",
@@ -194,37 +195,35 @@ var terminalInfoMarkers = []string{
 // no end-of-turn marker and there is no inactivity sweep on `working`, so this
 // is the turn's last word — settle to ready, surfacing the error text for the
 // waiting display (#665).
-// settleError marks ev as a terminal turn_done carrying the notice text as the
-// (errored) last word — the shared settle shape for a top-level type:"error"
-// line and a terminal type:"info" notice.
-func settleError(ev *tailer.ParsedEvent, content string) bool {
+func (p *Parser) parseError(raw map[string]interface{}, ev *tailer.ParsedEvent) bool {
+	content, _ := raw["content"].(string)
 	ev.EventType = "turn_done"
 	ev.AssistantText = tailTruncate(content, 200)
 	ev.IsError = true
 	return true
 }
 
-func (p *Parser) parseError(raw map[string]interface{}, ev *tailer.ParsedEvent) bool {
-	content, _ := raw["content"].(string)
-	return settleError(ev, content)
-}
-
 // parseInfo handles a bare "info" notice — a mixed-semantics line. A TERMINAL
 // notice aborts the turn with no following "gemini" message, the same stuck-in-
 // working gap as #665: the cancel notice Gemini writes when the user aborts with
 // ESC / on a quota abort ("Request cancelled.", #659), and a failed request
-// ("This request failed …", #676). Both settle the open turn to ready. A BENIGN
-// notice (compression, system chatter, "Model set to …", empty placeholder)
-// carries no signal and is skipped, so a mid-turn notice cannot prematurely
-// settle a still-working session. The classifier is a conservative substring
-// allowlist (terminalInfoMarkers): a false-settle mid-turn is worse than the
-// false-stick this guards against (codex keys off a structural "turn_aborted"
-// marker instead).
+// ("This request failed …", #676). Both settle the open turn to ready. Unlike
+// parseError, a terminal info is NOT an agent error and carries no agent text,
+// so it settles with turn_done alone — no IsError, no AssistantText overwrite
+// (matching #659; a user ESC must not be surfaced as the agent's errored last
+// word). A BENIGN notice (compression, system chatter, "Model set to …", empty
+// placeholder) carries no signal and is skipped. The classifier is a
+// conservative PREFIX allowlist (terminalInfoMarkers) anchored on the trimmed
+// content, so a marker merely embedded mid-notice cannot false-settle a
+// still-working session — a false-settle mid-turn is worse than the false-stick
+// this guards against (codex keys off a structural "turn_aborted" marker).
 func (p *Parser) parseInfo(raw map[string]interface{}, ev *tailer.ParsedEvent) bool {
 	content, _ := raw["content"].(string)
+	trimmed := strings.TrimSpace(content)
 	for _, marker := range terminalInfoMarkers {
-		if strings.Contains(content, marker) {
-			return settleError(ev, content)
+		if strings.HasPrefix(trimmed, marker) {
+			ev.EventType = "turn_done"
+			return true
 		}
 	}
 	return false
