@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"os"
 	"testing"
+
+	"irrlicht/core/pkg/tailer"
 )
 
 // decode is a tiny helper turning a JSON object literal into the raw map the
@@ -373,6 +375,78 @@ func TestParseLine_WriteTodosSnapshotCarriesStatusReversion(t *testing.T) {
 	}
 	if got := (*ev.TaskSnapshot)[0]; got.ID != "1" || got.Status != "pending" {
 		t.Errorf("snapshot entry = %+v, want {ID:1 Status:pending}", got)
+	}
+}
+
+// --- run_shell_command is_background tracking (issue #661) ---
+
+// TestParseLine_BackgroundSpawn_FromShellToolCall asserts that a
+// run_shell_command toolCall carrying is_background:true and a "Command moved
+// to background (PID: N)" result emits a BackgroundSpawn keyed on the PID, so
+// the shared tailer increments BackgroundProcessCount. The session must stay
+// working (assistant message with an open tool call), NOT settle to ready.
+func TestParseLine_BackgroundSpawn_FromShellToolCall(t *testing.T) {
+	p := &Parser{}
+	line := decode(t, `{"id":"g5","type":"gemini","content":"","model":"gemini-3.5-flash","toolCalls":[
+		{"id":"run_shell_command__9cqstvzo","name":"run_shell_command","args":{"is_background":true,"command":"sleep 40 && echo BG_DONE"},
+		 "result":[{"functionResponse":{"id":"run_shell_command__9cqstvzo","name":"run_shell_command","response":{"output":"Command moved to background (PID: 33701). Output hidden. Press Ctrl+B to view."}}}],
+		 "status":"success"}
+	]}`)
+	ev := p.ParseLine(line)
+	if ev.EventType != "assistant_message" {
+		t.Fatalf("background-spawn message: want assistant_message (not turn_done), got %q", ev.EventType)
+	}
+	if len(ev.BackgroundSpawns) != 1 {
+		t.Fatalf("BackgroundSpawns = %d, want 1", len(ev.BackgroundSpawns))
+	}
+	if got := ev.BackgroundSpawns[0].BashID; got != "33701" {
+		t.Errorf("BackgroundSpawn.BashID = %q, want the PID 33701", got)
+	}
+	// Gemini hides background output (Ctrl+B to view) — no output file path, so
+	// the lsof working-hold probe cannot engage (that part stays live-only).
+	if got := ev.BackgroundSpawns[0].OutputPath; got != "" {
+		t.Errorf("BackgroundSpawn.OutputPath = %q, want empty (Gemini bg output is in-process, no file)", got)
+	}
+}
+
+// TestParseLine_NoBackgroundSpawnWhenForeground guards against a phantom spawn:
+// a normal (foreground) run_shell_command must not register a background
+// process even if its output happens to mention a PID.
+func TestParseLine_NoBackgroundSpawnWhenForeground(t *testing.T) {
+	p := &Parser{}
+	line := decode(t, `{"id":"g6","type":"gemini","content":"","model":"gemini-3.5-flash","toolCalls":[
+		{"id":"c1","name":"run_shell_command","args":{"command":"echo hi"},
+		 "result":[{"functionResponse":{"id":"c1","name":"run_shell_command","response":{"output":"hi"}}}],
+		 "status":"success"}
+	]}`)
+	if ev := p.ParseLine(line); len(ev.BackgroundSpawns) != 0 {
+		t.Errorf("foreground command must not spawn a background process, got %+v", ev.BackgroundSpawns)
+	}
+}
+
+// TestTailer_BackgroundProcessCount_GeminiSpawn drives the parser through the
+// shared tailer and asserts the open-background-process accounting increments
+// from a Gemini is_background launch. Mirrors the claudecode coverage in
+// background_process_test.go.
+func TestTailer_BackgroundProcessCount_GeminiSpawn(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/transcript.jsonl"
+	if err := os.WriteFile(path, []byte(
+		`{"id":"g5","type":"gemini","content":"","model":"gemini-3.5-flash","toolCalls":[{"id":"run_shell_command__9cqstvzo","name":"run_shell_command","args":{"is_background":true,"command":"sleep 40 && echo BG_DONE"},"result":[{"functionResponse":{"id":"run_shell_command__9cqstvzo","name":"run_shell_command","response":{"output":"Command moved to background (PID: 33701). Output hidden. Press Ctrl+B to view."}}}],"status":"success"}]}`+"\n",
+	), 0o644); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+	m, err := tailer.NewTranscriptTailer(path, &Parser{}, "gemini-cli").TailAndProcess()
+	if err != nil {
+		t.Fatalf("TailAndProcess: %v", err)
+	}
+	if m.BackgroundProcessCount != 1 {
+		t.Fatalf("BackgroundProcessCount = %d, want 1", m.BackgroundProcessCount)
+	}
+	// Gemini reports no output file, so the lsof-based working-hold has nothing
+	// to probe — BackgroundProcessOutputs stays empty by design (live-only hold).
+	if len(m.BackgroundProcessOutputs) != 0 {
+		t.Errorf("BackgroundProcessOutputs = %v, want empty (Gemini bg output is in-process)", m.BackgroundProcessOutputs)
 	}
 }
 
