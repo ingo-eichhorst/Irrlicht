@@ -24,7 +24,24 @@
     "cum_input_tokens": 41841,
     "cum_output_tokens": 468,
     "cum_cache_read_tokens": 60720,
-    "model_name": "gemini-2.5-pro"
+    "model_name": "gemini-2.5-pro",
+    "tasks": [
+      {
+        "id": "1",
+        "subject": "read README",
+        "status": "completed"
+      },
+      {
+        "id": "2",
+        "subject": "summarize README",
+        "status": "completed"
+      },
+      {
+        "id": "3",
+        "subject": "reply done",
+        "status": "completed"
+      }
+    ]
   },
   "transitions": [
     {
