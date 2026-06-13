@@ -103,11 +103,26 @@ func (p *Parser) parseMessage(raw map[string]interface{}, ev *tailer.ParsedEvent
 		return p.parseUser(raw, ev)
 	case "gemini":
 		return p.parseAssistant(raw, ev)
+	case "error":
+		return p.parseError(raw, ev)
 	case "info":
 		return p.parseInfo(raw, ev)
 	default:
 		return false // system / compression / unknown
 	}
+}
+
+// parseError handles a top-level type:"error" message: gemini-cli records a
+// turn that aborted on an API error this way (upstream PR #13300). Gemini emits
+// no end-of-turn marker and there is no inactivity sweep on `working`, so this
+// is the turn's last word — settle to ready, surfacing the error text for the
+// waiting display (#665).
+func (p *Parser) parseError(raw map[string]interface{}, ev *tailer.ParsedEvent) bool {
+	content, _ := raw["content"].(string)
+	ev.EventType = "turn_done"
+	ev.AssistantText = tailTruncate(content, 200)
+	ev.IsError = true
+	return true
 }
 
 // parseInfo handles a bare "info" notice. The only one carrying an observable

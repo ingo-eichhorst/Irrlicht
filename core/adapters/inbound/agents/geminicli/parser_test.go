@@ -149,6 +149,28 @@ func TestParseLine_FinalTextSettlesTurn(t *testing.T) {
 	}
 }
 
+func TestParseLine_ErrorLineSettlesTurn(t *testing.T) {
+	p := &Parser{}
+	// When a turn aborts on an API error, gemini-cli records the aborted turn
+	// as a type:"error" message (upstream PR #13300). With no inactivity sweep
+	// on `working`, the parser must treat it as the turn's end and settle to
+	// ready — otherwise the session sticks in `working` forever (#665).
+	line := decode(t, `{"id":"e1","type":"error","content":"API Error: 429 RESOURCE_EXHAUSTED"}`)
+	ev := p.ParseLine(line)
+	if ev.Skip {
+		t.Fatal("error line should not be skipped")
+	}
+	if ev.EventType != "turn_done" {
+		t.Fatalf("error line: want turn_done, got %q", ev.EventType)
+	}
+	if !ev.IsError {
+		t.Error("error line should set IsError")
+	}
+	if ev.AssistantText == "" {
+		t.Error("error line should carry the error text as AssistantText for waiting display")
+	}
+}
+
 func TestParseLine_StreamingReemissionNotDoubleBilled(t *testing.T) {
 	p := &Parser{}
 	first := decode(t, `{"id":"g4","type":"gemini","content":"","tokens":{"input":9925,"output":91,"cached":0,"total":10016},"model":"gemini-3-flash-preview"}`)
