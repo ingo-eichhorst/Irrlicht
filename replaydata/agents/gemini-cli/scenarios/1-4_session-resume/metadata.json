@@ -3,11 +3,11 @@
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
-    "driver_capability": "gap:resume",
+    "driver_capability": "ready",
     "agent_cli_version": "0.46.0",
     "daemon_version": "0.5.1+e4c1170",
     "confidence": 0.9,
-    "notes": "agent=yes; daemon=full (CONFIRMED by recording — resume reuses the same chats basename, one session_id across both PID lifetimes); driver=ported (resume+exit_clean). Observed model gemini-3.5-flash (API-key tier)."
+    "notes": "RECONCILED 2026-06-13 (dashboard axis sync, no re-record): driver gap:resume→ready — resume step implemented + recorded. agent=yes; daemon=full (CONFIRMED by recording — resume reuses the same chats basename, one session_id across both PID lifetimes); driver=ported (resume+exit_clean). Observed model gemini-3.5-flash (API-key tier)."
   },
   "details": {
     "assessment": {
@@ -17,7 +17,7 @@
       "assessed_at": "2026-06-11T00:00:00Z",
       "agent_supports": "yes",
       "daemon_capability": "full",
-      "driver_capability": "gap:resume",
+      "driver_capability": "ready",
       "confidence": 0.9,
       "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: gap:exit_clean,resume\nroute: driver-gap\n\n## Reasoning\n\n### agent_supports: yes\n\nGemini CLI 0.46.0 ships first-class session resumption (the adapter/driver were onboarded against 0.45.2, before these flags landed — the driver's \"Gemini does NOT accept an external UUID\" comment is now STALE). `gemini --help` lists `-r, --resume <latest|index|UUID>`, `--session-id <UUID>` (start a new session with a manually provided UUID), `--session-file`, `--list-sessions`, and `--delete-session`. The bundled doc (session-management.md) states: \"You can resume a previous session to continue the conversation with all prior context restored\" and documents `gemini --resume <full-session-UUID>`. So the recipe can clean-exit one lifetime then relaunch the SAME UUID + cwd — exactly the scenario's arc.\n\n### daemon_capability: full\n\nThe irrlicht adapter watches `FilesUnderRoot{~/.gemini/tmp}` and derives `session_id` from the transcript FILE BASENAME (`fswatcher.extractSessionID` = `TrimSuffix(filepath.Base(path), \".jsonl\")`), i.e. `session-2026-06-11T18-02-cc4f73b3` — NOT the in-file `sessionId` header. On resume Gemini's ChatRecordingService APPENDS new records to the ORIGINAL `chats/session-*.jsonl` file (issue #22604, maintainer: \"Messages are correctly saved to the original session file e.g. session-*-b8143df3\"). Same file → same basename → SAME daemon session_id → the same session row reappears (not a new one), satisfying the scenario's load-bearing criterion. PID rebinds across lifetimes because DiscoverPID matches on the cwd the parser harvests from the bootstrap <session_context> (same cwd across both launches). The turn arc (ready→working→ready) is observable per lifetime via the parser's user_message (open) and turn_done heuristic (a `gemini` message with non-empty text and no toolCalls = settle).\n\n### driver_capability: gap:exit_clean,resume\n\nThe interactive driver (`replaydata/agents/gemini-cli/driver-interactive.sh`) stubs BOTH step types the recipe needs as `not_implemented`: `exit_clean` (Ctrl-D graceful shutdown — TODO) and `resume` (relaunch same id+cwd — TODO). `record` must port both from a reference driver (e.g. claudecode's exit_clean + resume) before it can drive this cell. `send`, `wait_turn`, `sleep` are implemented. This is a TOOLING gap, not an observability limit — the cell keeps a real recipe + spec and records the moment the steps are ported.\n\n## Provisional note\n\nThe daemon=full verdict is derived from the parser + fswatcher source plus docs/issue, NOT a live recording. The emission property it hinges on — that resume reuses the same transcript filename rather than minting a new `session-*-<hash>.jsonl` — is asserted by the upstream issue but unconfirmed on THIS adapter. `record` promotes it from provisional to settled; if resume actually mints a new file, the daemon would see a new row and the verdict flips to daemon=bug/incapable (backflow correction).",
       "caveats": [
