@@ -141,6 +141,72 @@ func TestParseLine_StreamingReemissionNotDoubleBilled(t *testing.T) {
 	}
 }
 
+func TestParseLine_WriteTodosEmitsTaskDeltas(t *testing.T) {
+	p := &Parser{}
+
+	// First write_todos call: a full three-item snapshot, all pending. Each
+	// item must be Created (the tailer starts created tasks at pending).
+	first := decode(t, `{"id":"g1","type":"gemini","content":"","model":"gemini-2.5-pro","toolCalls":[
+		{"id":"wt_1","name":"write_todos","status":"success","args":{"todos":[
+			{"status":"pending","description":"read README"},
+			{"status":"pending","description":"summarize README"},
+			{"status":"pending","description":"reply done"}
+		]}}
+	]}`)
+	ev := p.ParseLine(first)
+	if len(ev.TaskDeltas) != 3 {
+		t.Fatalf("first write_todos: want 3 create deltas, got %d (%+v)", len(ev.TaskDeltas), ev.TaskDeltas)
+	}
+	for i, d := range ev.TaskDeltas {
+		if d.Op != "create" {
+			t.Errorf("delta[%d]: want create, got %q", i, d.Op)
+		}
+	}
+	if ev.TaskDeltas[0].Subject != "read README" {
+		t.Errorf("delta[0] subject: want 'read README', got %q", ev.TaskDeltas[0].Subject)
+	}
+	if ev.TaskSnapshot == nil || len(*ev.TaskSnapshot) != 3 {
+		t.Fatalf("first write_todos: want 3-entry snapshot, got %v", ev.TaskSnapshot)
+	}
+
+	// Second write_todos call: same list, but item 1 now in_progress. Only an
+	// Update for the changed item — no new Creates.
+	second := decode(t, `{"id":"g2","type":"gemini","content":"","model":"gemini-2.5-pro","toolCalls":[
+		{"id":"wt_2","name":"write_todos","status":"success","args":{"todos":[
+			{"status":"in_progress","description":"read README"},
+			{"status":"pending","description":"summarize README"},
+			{"status":"pending","description":"reply done"}
+		]}}
+	]}`)
+	ev = p.ParseLine(second)
+	if len(ev.TaskDeltas) != 1 {
+		t.Fatalf("second write_todos: want 1 update delta, got %d (%+v)", len(ev.TaskDeltas), ev.TaskDeltas)
+	}
+	if d := ev.TaskDeltas[0]; d.Op != "update" || d.Status != "in_progress" {
+		t.Errorf("second delta: want update/in_progress, got op=%q status=%q", d.Op, d.Status)
+	}
+	if ev.TaskSnapshot == nil || len(*ev.TaskSnapshot) != 3 {
+		t.Fatalf("second write_todos: want 3-entry snapshot, got %v", ev.TaskSnapshot)
+	}
+
+	// Third write_todos call: item 1 completed. The snapshot must carry its
+	// completed status so the tailer's reconcile stamps it done.
+	third := decode(t, `{"id":"g3","type":"gemini","content":"","model":"gemini-2.5-pro","toolCalls":[
+		{"id":"wt_3","name":"write_todos","status":"success","args":{"todos":[
+			{"status":"completed","description":"read README"},
+			{"status":"pending","description":"summarize README"},
+			{"status":"pending","description":"reply done"}
+		]}}
+	]}`)
+	ev = p.ParseLine(third)
+	if len(ev.TaskDeltas) != 1 {
+		t.Fatalf("third write_todos: want 1 update delta, got %d (%+v)", len(ev.TaskDeltas), ev.TaskDeltas)
+	}
+	if d := ev.TaskDeltas[0]; d.Op != "update" || d.Status != "completed" {
+		t.Errorf("third delta: want update/completed, got op=%q status=%q", d.Op, d.Status)
+	}
+}
+
 // TestParse_RealSession replays the real captured transcript end-to-end and
 // asserts the session-level signals: exactly one user turn, exactly one
 // settle-to-ready, the workspace cwd, tool open/close, and deduped billing.
