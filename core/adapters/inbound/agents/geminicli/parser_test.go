@@ -210,6 +210,13 @@ func TestParseLine_TerminalInfoSettlesTurn(t *testing.T) {
 	if ev.AssistantText == "" {
 		t.Error("terminal info should carry the notice as AssistantText for waiting display")
 	}
+
+	// The failed-request notice is the other terminal marker — substring match
+	// (the live notice trails "Press F12 …"), so it must also settle (#676).
+	failed := decode(t, `{"id":"i3","type":"info","content":"This request failed. Press F12 for details."}`)
+	if ev := p.ParseLine(failed); ev.Skip || ev.EventType != "turn_done" {
+		t.Fatalf("failed-request info: want turn_done, got Skip=%v EventType=%q", ev.Skip, ev.EventType)
+	}
 }
 
 func TestParseLine_BenignInfoSkipped(t *testing.T) {
