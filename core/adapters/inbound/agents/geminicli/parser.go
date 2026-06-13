@@ -194,12 +194,19 @@ var terminalInfoMarkers = []string{
 // no end-of-turn marker and there is no inactivity sweep on `working`, so this
 // is the turn's last word — settle to ready, surfacing the error text for the
 // waiting display (#665).
-func (p *Parser) parseError(raw map[string]interface{}, ev *tailer.ParsedEvent) bool {
-	content, _ := raw["content"].(string)
+// settleError marks ev as a terminal turn_done carrying the notice text as the
+// (errored) last word — the shared settle shape for a top-level type:"error"
+// line and a terminal type:"info" notice.
+func settleError(ev *tailer.ParsedEvent, content string) bool {
 	ev.EventType = "turn_done"
 	ev.AssistantText = tailTruncate(content, 200)
 	ev.IsError = true
 	return true
+}
+
+func (p *Parser) parseError(raw map[string]interface{}, ev *tailer.ParsedEvent) bool {
+	content, _ := raw["content"].(string)
+	return settleError(ev, content)
 }
 
 // parseInfo handles a bare "info" notice — a mixed-semantics line. A TERMINAL
@@ -217,10 +224,7 @@ func (p *Parser) parseInfo(raw map[string]interface{}, ev *tailer.ParsedEvent) b
 	content, _ := raw["content"].(string)
 	for _, marker := range terminalInfoMarkers {
 		if strings.Contains(content, marker) {
-			ev.EventType = "turn_done"
-			ev.AssistantText = tailTruncate(content, 200)
-			ev.IsError = true
-			return true
+			return settleError(ev, content)
 		}
 	}
 	return false
@@ -422,6 +426,9 @@ func (p *Parser) appendWriteTodosDeltas(tcm map[string]interface{}, ev *tailer.P
 	if len(todos) == 0 {
 		return
 	}
+	if p.todoIDByDesc == nil {
+		p.todoIDByDesc = make(map[string]string)
+	}
 	snapshot := make([]tailer.TaskSnapshotEntry, 0, len(todos))
 	for _, raw := range todos {
 		todo, _ := raw.(map[string]interface{})
@@ -437,9 +444,6 @@ func (p *Parser) appendWriteTodosDeltas(tcm map[string]interface{}, ev *tailer.P
 		if !seen {
 			p.nextTaskID++
 			id = strconv.Itoa(p.nextTaskID)
-			if p.todoIDByDesc == nil {
-				p.todoIDByDesc = make(map[string]string)
-			}
 			p.todoIDByDesc[desc] = id
 			ev.TaskDeltas = append(ev.TaskDeltas, tailer.TaskDelta{
 				Op:      tailer.TaskOpCreate,
