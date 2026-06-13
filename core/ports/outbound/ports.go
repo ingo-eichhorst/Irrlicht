@@ -146,6 +146,13 @@ type MetricsCollector interface {
 	// so a process spawned after the probe's snapshot survives. Same
 	// no-op-without-tailer semantics as IngestRateLimit.
 	PurgeDeadBackgroundProcs(transcriptPath string, outputs []string)
+	// PurgeDeadBackgroundPIDs is the PID-keyed counterpart for adapters that
+	// track a backgrounded command by its PID rather than an output file
+	// (Gemini CLI). The detector calls it when the PID-liveness probe verdicts
+	// them dead — Gemini writes no transcript termination, so the ledger would
+	// otherwise resurrect them as phantom open processes on every restart.
+	// Scoped to the probed PIDs; same no-op-without-tailer semantics. See #661.
+	PurgeDeadBackgroundPIDs(transcriptPath string, pids []string)
 }
 
 // PushBroadcaster fans out session state changes to subscribers (e.g. WebSocket clients).

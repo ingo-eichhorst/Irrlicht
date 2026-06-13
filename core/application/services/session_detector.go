@@ -165,6 +165,11 @@ type SessionDetector struct {
 	// (lsof); tests override it. See issue #445.
 	bgLiveProbe backgroundProbe
 
+	// bgPIDProbe is the alternate liveness path for adapters that report a
+	// backgrounded command's PID rather than an output file (Gemini CLI).
+	// Defaults to anyLivePID (kill(pid, 0)); tests override it. See issue #661.
+	bgPIDProbe backgroundPIDProbe
+
 	// bgMu guards bgLive / bgProbing. The probe (lsof) runs off the event-loop
 	// goroutine so a slow filesystem can't stall every other session's
 	// processing; processActivity reads the last-known liveness from bgLive
@@ -229,6 +234,7 @@ func NewSessionDetector(
 		compactPending:    make(map[string]int64),
 		editToolOpenSince: make(map[string]int64),
 		bgLiveProbe:       anyLiveOutputWriter,
+		bgPIDProbe:        anyLivePID,
 		bgLive:            make(map[string]bool),
 		bgProbing:         make(map[string]bool),
 	}
@@ -251,6 +257,13 @@ func (d *SessionDetector) SetDeletedCooldown(dur time.Duration) {
 // issue #445.
 func (d *SessionDetector) SetBackgroundProbeForTest(p func(outputPaths []string) bool) {
 	d.bgLiveProbe = p
+}
+
+// SetBackgroundPIDProbeForTest overrides the PID-liveness probe so tests can
+// simulate live / dead background PIDs without real OS processes. See issue
+// #661.
+func (d *SessionDetector) SetBackgroundPIDProbeForTest(p func(pids []string) bool) {
+	d.bgPIDProbe = p
 }
 
 // RunPIDLivenessSweepForTest runs one iteration of the liveness sweep

@@ -99,6 +99,13 @@ type SessionMetrics struct {
 	// probe lsof's them. Not serialized — recomputed each pass. See issue #445.
 	BackgroundProcessOutputs []string `json:"-"`
 
+	// BackgroundProcessPIDs holds the OS PIDs of those open background
+	// processes whose adapter reports a PID rather than an output file (Gemini
+	// CLI hides backgrounded output and surfaces only "(PID: N)"). The daemon's
+	// liveness probe signals these directly. Sorted for determinism, not
+	// serialized — recomputed each pass. See issue #661.
+	BackgroundProcessPIDs []string `json:"-"`
+
 	// SubagentCompletions surfaces parent-side "subagent done" signals
 	// discovered during the most recent TailAndProcess() pass. Cleared at
 	// the start of every pass so the detector drains fresh events only.
@@ -1121,5 +1128,16 @@ func (t *TranscriptTailer) PurgeBackgroundProcs(outputs []string) {
 		if dead[path] {
 			delete(t.openBackgroundProcs, id)
 		}
+	}
+}
+
+// PurgeBackgroundProcsByID is PurgeBackgroundProcs's key-keyed counterpart: it
+// drops tracked background processes whose background id (a PID, for adapters
+// like Gemini CLI that key the open set on the PID with no output path) is in
+// ids. Same dead-PID-doesn't-resurrect rationale as PurgeBackgroundProcs.
+// See issue #661.
+func (t *TranscriptTailer) PurgeBackgroundProcsByID(ids []string) {
+	for _, id := range ids {
+		delete(t.openBackgroundProcs, id)
 	}
 }
