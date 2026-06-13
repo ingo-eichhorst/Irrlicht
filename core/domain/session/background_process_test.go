@@ -67,3 +67,17 @@ func TestMergeMetrics_AppliedTaskDeltasNoFallback(t *testing.T) {
 		t.Errorf("AppliedTaskDeltas = %+v, want empty (no old-value fallback)", merged.AppliedTaskDeltas)
 	}
 }
+
+// MergeMetrics carries the PID-keyed background-process field too (Gemini CLI
+// reports a PID rather than an output file). See issue #661.
+func TestMergeMetrics_BackgroundProcessPIDs(t *testing.T) {
+	newM := &SessionMetrics{
+		BackgroundProcessCount: 1,
+		BackgroundProcessPIDs:  []string{"33701"},
+	}
+	old := &SessionMetrics{BackgroundProcessCount: 0}
+	merged := MergeMetrics(newM, old)
+	if len(merged.BackgroundProcessPIDs) != 1 || merged.BackgroundProcessPIDs[0] != "33701" {
+		t.Errorf("BackgroundProcessPIDs = %v, want [33701]", merged.BackgroundProcessPIDs)
+	}
+}

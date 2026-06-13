@@ -263,6 +263,12 @@ func (m *mockMetrics) PurgeDeadBackgroundProcs(path string, _ []string) {
 	m.mu.Unlock()
 }
 
+func (m *mockMetrics) PurgeDeadBackgroundPIDs(path string, _ []string) {
+	m.mu.Lock()
+	m.purged = append(m.purged, path)
+	m.mu.Unlock()
+}
+
 // purgedSnapshot returns a race-free copy of the PurgeDeadBackgroundProcs call
 // log so tests can poll for the purge without racing the probe goroutine.
 func (m *mockMetrics) purgedSnapshot() []string {
@@ -279,8 +285,10 @@ func (m *mockMetrics) purgedSnapshot() []string {
 type funcMetrics struct {
 	fn func(path, adapter string) (*session.SessionMetrics, error)
 
-	purgeMu sync.Mutex
-	purged  []string
+	purgeMu     sync.Mutex
+	purged      []string            // any purge call (path), kind-agnostic
+	purgedProcs map[string][]string // path → dead output paths handed to PurgeDeadBackgroundProcs
+	purgedPIDs  map[string][]string // path → dead PIDs handed to PurgeDeadBackgroundPIDs
 }
 
 func (m *funcMetrics) ComputeMetrics(path, adapter string) (*session.SessionMetrics, error) {
@@ -300,9 +308,23 @@ func (m *funcMetrics) IngestRateLimit(path string, snap *session.RateLimitSnapsh
 
 func (m *funcMetrics) IngestTaskEstimate(path string, est *session.TaskEstimate) {}
 
-func (m *funcMetrics) PurgeDeadBackgroundProcs(path string, _ []string) {
+func (m *funcMetrics) PurgeDeadBackgroundProcs(path string, outputs []string) {
 	m.purgeMu.Lock()
 	m.purged = append(m.purged, path)
+	if m.purgedProcs == nil {
+		m.purgedProcs = make(map[string][]string)
+	}
+	m.purgedProcs[path] = append([]string(nil), outputs...)
+	m.purgeMu.Unlock()
+}
+
+func (m *funcMetrics) PurgeDeadBackgroundPIDs(path string, pids []string) {
+	m.purgeMu.Lock()
+	m.purged = append(m.purged, path)
+	if m.purgedPIDs == nil {
+		m.purgedPIDs = make(map[string][]string)
+	}
+	m.purgedPIDs[path] = append([]string(nil), pids...)
 	m.purgeMu.Unlock()
 }
 
@@ -314,6 +336,23 @@ func (m *funcMetrics) purgedSnapshot() []string {
 	out := make([]string, len(m.purged))
 	copy(out, m.purged)
 	return out
+}
+
+// purgedProcsFor / purgedPIDsFor return the args of the last proc/PID purge for
+// path (nil if none), so a mixed-process test can assert that only the dead
+// kind was purged and with exactly its paths/PIDs. Race-free.
+func (m *funcMetrics) purgedProcsFor(path string) (outputs []string, called bool) {
+	m.purgeMu.Lock()
+	defer m.purgeMu.Unlock()
+	v, ok := m.purgedProcs[path]
+	return append([]string(nil), v...), ok
+}
+
+func (m *funcMetrics) purgedPIDsFor(path string) (pids []string, called bool) {
+	m.purgeMu.Lock()
+	defer m.purgeMu.Unlock()
+	v, ok := m.purgedPIDs[path]
+	return append([]string(nil), v...), ok
 }
 
 // --- AgentWatcher mock -------------------------------------------------------

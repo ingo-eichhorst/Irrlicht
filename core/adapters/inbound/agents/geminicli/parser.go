@@ -2,6 +2,7 @@ package geminicli
 
 import (
 	"regexp"
+	"strconv"
 	"strings"
 
 	"irrlicht/core/pkg/tailer"
@@ -39,6 +40,14 @@ import (
 type Parser struct {
 	cwd       string
 	committed map[string]tailer.UsageBreakdown
+
+	// write_todos snapshot state. Gemini-2 models register a `write_todos`
+	// tool that rewrites the whole todo list on every call (full-list
+	// replace, like codex `update_plan` / opencode `todowrite`). Todos carry
+	// no stable ID, so they're keyed by their `description` text and assigned
+	// a synthetic monotonic ID matching the tailer's Create-time numbering.
+	todoIDByDesc map[string]string
+	nextTaskID   int
 }
 
 // workspaceRe pulls the first workspace directory out of the bootstrap
@@ -47,6 +56,63 @@ type Parser struct {
 //   - **Workspace Directories:**
 //   - /private/tmp/foo
 var workspaceRe = regexp.MustCompile(`(?s)Workspace Directories:[^\n]*\n\s*-\s*([^\n]+)`)
+
+// backgroundPIDRe pulls the PID out of the run_shell_command result text for a
+// backgrounded launch, e.g. "Command moved to background (PID: 33701). Output
+// hidden. Press Ctrl+B to view." The PID is Gemini's background-process handle.
+var backgroundPIDRe = regexp.MustCompile(`\(PID:\s*(\d+)\)`)
+
+// backgroundSpawnFromToolCall recognizes a `run_shell_command` toolCall launched
+// with `is_background: true` and returns the spawn keyed on its reported PID, so
+// the shared tailer increments BackgroundProcessCount (issue #661, the Gemini
+// parallel of #445). Detection is gated on the structured is_background arg —
+// not on the result text alone — so prose echoing the launch phrase can't
+// fabricate a phantom process.
+//
+// Unlike Claude Code, Gemini hides the backgrounded command's output (viewable
+// only via Ctrl+B) and writes no `tasks/<id>.output` file, so OutputPath is
+// empty. Because the spawn is keyed on the PID, the tailer surfaces it in
+// BackgroundProcessPIDs and the daemon's PID-liveness probe (kill(pid, 0))
+// holds the session `working` until the process exits — the second half of
+// #661 (the lsof-on-output-file probe has nothing to inspect for Gemini).
+func backgroundSpawnFromToolCall(tcm map[string]interface{}) *tailer.BackgroundSpawn {
+	if name, _ := tcm["name"].(string); name != "run_shell_command" {
+		return nil
+	}
+	args, _ := tcm["args"].(map[string]interface{})
+	if bg, _ := args["is_background"].(bool); !bg {
+		return nil
+	}
+	m := backgroundPIDRe.FindStringSubmatch(shellResultOutput(tcm))
+	if m == nil {
+		return nil
+	}
+	return &tailer.BackgroundSpawn{BashID: m[1]}
+}
+
+// shellResultOutput pulls the result's response.output text out of a finished
+// Gemini toolCall (toolCalls[].result[].functionResponse.response.output).
+func shellResultOutput(tcm map[string]interface{}) string {
+	res, _ := tcm["result"].([]interface{})
+	for _, r := range res {
+		rm, ok := r.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		fr, ok := rm["functionResponse"].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		resp, ok := fr["response"].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if out, _ := resp["output"].(string); out != "" {
+			return out
+		}
+	}
+	return ""
+}
 
 // ParseLine normalizes one Gemini CLI transcript line.
 func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
@@ -103,6 +169,8 @@ func (p *Parser) parseMessage(raw map[string]interface{}, ev *tailer.ParsedEvent
 		return p.parseUser(raw, ev)
 	case "gemini":
 		return p.parseAssistant(raw, ev)
+	case "error":
+		return p.parseError(raw, ev)
 	case "info":
 		return p.parseInfo(raw, ev)
 	default:
@@ -110,17 +178,53 @@ func (p *Parser) parseMessage(raw map[string]interface{}, ev *tailer.ParsedEvent
 	}
 }
 
-// parseInfo handles a bare "info" notice. The only one carrying an observable
-// signal is the cancel notice Gemini writes when the user aborts a turn with
-// ESC ("Request cancelled.") — it early-returns before flushing a terminal
-// "gemini" message, so unless it settles the open turn the session sticks in
-// working (#659; codex keys off a structural "turn_aborted" marker instead).
-// Every other info notice (compression, system chatter) is dropped so a notice
-// mid-turn cannot prematurely settle a still-working session.
+// terminalInfoMarkers are the observed type:"info" notices that ABORT the turn
+// with no following gemini message — the turn's last word. Kept to a
+// conservative allowlist of LEADING markers seen in recorded fixtures: a
+// cancelled request (user Esc / quota abort: "Request cancelled.") and a failed
+// request ("This request failed. Press F12 …"). Matched with HasPrefix on the
+// trimmed content. Benign info notices (e.g. "Model set to gemini-2.5-flash", an
+// empty placeholder) continue the turn and must NOT match.
+var terminalInfoMarkers = []string{
+	"Request cancelled",
+	"This request failed",
+}
+
+// parseError handles a top-level type:"error" message: gemini-cli records a
+// turn that aborted on an API error this way (upstream PR #13300). Gemini emits
+// no end-of-turn marker and there is no inactivity sweep on `working`, so this
+// is the turn's last word — settle to ready, surfacing the error text for the
+// waiting display (#665).
+func (p *Parser) parseError(raw map[string]interface{}, ev *tailer.ParsedEvent) bool {
+	content, _ := raw["content"].(string)
+	ev.EventType = "turn_done"
+	ev.AssistantText = tailTruncate(content, 200)
+	ev.IsError = true
+	return true
+}
+
+// parseInfo handles a bare "info" notice — a mixed-semantics line. A TERMINAL
+// notice aborts the turn with no following "gemini" message, the same stuck-in-
+// working gap as #665: the cancel notice Gemini writes when the user aborts with
+// ESC / on a quota abort ("Request cancelled.", #659), and a failed request
+// ("This request failed …", #676). Both settle the open turn to ready. Unlike
+// parseError, a terminal info is NOT an agent error and carries no agent text,
+// so it settles with turn_done alone — no IsError, no AssistantText overwrite
+// (matching #659; a user ESC must not be surfaced as the agent's errored last
+// word). A BENIGN notice (compression, system chatter, "Model set to …", empty
+// placeholder) carries no signal and is skipped. The classifier is a
+// conservative PREFIX allowlist (terminalInfoMarkers) anchored on the trimmed
+// content, so a marker merely embedded mid-notice cannot false-settle a
+// still-working session — a false-settle mid-turn is worse than the false-stick
+// this guards against (codex keys off a structural "turn_aborted" marker).
 func (p *Parser) parseInfo(raw map[string]interface{}, ev *tailer.ParsedEvent) bool {
-	if content, _ := raw["content"].(string); strings.TrimSpace(content) == "Request cancelled." {
-		ev.EventType = "turn_done"
-		return true
+	content, _ := raw["content"].(string)
+	trimmed := strings.TrimSpace(content)
+	for _, marker := range terminalInfoMarkers {
+		if strings.HasPrefix(trimmed, marker) {
+			ev.EventType = "turn_done"
+			return true
+		}
 	}
 	return false
 }
@@ -169,6 +273,16 @@ func (p *Parser) parseUser(raw map[string]interface{}, ev *tailer.ParsedEvent) b
 		return false
 	}
 
+	// A `!cmd` shell-escape runs in a local shell with no LLM round-trip, but
+	// Gemini still persists it as an ordinary user text message that opens with
+	// this preamble (gemini-cli's useExecutionLifecycle.ts). It is not a real
+	// user turn, and no terminal `gemini` message follows to settle it — so
+	// treating it as a prompt would stick the session in working. Skip it, the
+	// way claudecode skips its <bash-input>/<bash-stdout> wrappers.
+	if strings.HasPrefix(strings.TrimSpace(firstText), "I ran the following shell command:") {
+		return false
+	}
+
 	ev.EventType = "user_message"
 	ev.ClearToolNames = true
 	return true
@@ -201,6 +315,14 @@ func (p *Parser) parseAssistant(raw map[string]interface{}, ev *tailer.ParsedEve
 		name, _ := tcm["name"].(string)
 		if callID != "" || name != "" {
 			ev.ToolUses = append(ev.ToolUses, tailer.ToolUse{ID: callID, Name: name})
+		}
+		// write_todos carries a full-list snapshot of the session's todos;
+		// reconcile it into TaskDeltas so the dashboard's task dots populate.
+		if name == "write_todos" {
+			p.appendWriteTodosDeltas(tcm, ev)
+		}
+		if sp := backgroundSpawnFromToolCall(tcm); sp != nil {
+			ev.BackgroundSpawns = append(ev.BackgroundSpawns, *sp)
 		}
 		// Gemini persists a finished toolCall with a terminal status and an
 		// embedded result, so close it here too — a session the daemon only
@@ -280,6 +402,71 @@ func (p *Parser) applyTokens(id string, raw map[string]interface{}, ev *tailer.P
 	if delta.Input > 0 || delta.Output > 0 || delta.CacheRead > 0 {
 		ev.Contribution = &tailer.PerTurnContribution{Model: ev.ModelName, Usage: delta}
 		p.committed[id] = billed
+	}
+}
+
+// appendWriteTodosDeltas reads the write_todos snapshot from toolCall.args.todos
+// and (a) appends the minimal TaskCreate/TaskUpdate sequence that brings the
+// accumulator in line with the snapshot, and (b) emits a TaskSnapshot listing
+// every todo currently tracked. The snapshot is what the tailer's
+// reconcileTaskSnapshot consumes to prune entries that vanished from a later
+// call and to honour status reversions the Update path skips by design.
+//
+// Mirrors opencode's todowrite handling — Gemini's todos likewise carry no
+// stable ID, so they're keyed by their `description` text. Two todos sharing
+// the same description collapse into one tracked task (a silent, acceptable
+// trade-off, as in opencode).
+func (p *Parser) appendWriteTodosDeltas(tcm map[string]interface{}, ev *tailer.ParsedEvent) {
+	args, _ := tcm["args"].(map[string]interface{})
+	if args == nil {
+		return
+	}
+	todos, _ := args["todos"].([]interface{})
+	if len(todos) == 0 {
+		return
+	}
+	if p.todoIDByDesc == nil {
+		p.todoIDByDesc = make(map[string]string)
+	}
+	snapshot := make([]tailer.TaskSnapshotEntry, 0, len(todos))
+	for _, raw := range todos {
+		todo, _ := raw.(map[string]interface{})
+		if todo == nil {
+			continue
+		}
+		desc, _ := todo["description"].(string)
+		status, _ := todo["status"].(string)
+		if desc == "" {
+			continue
+		}
+		id, seen := p.todoIDByDesc[desc]
+		if !seen {
+			p.nextTaskID++
+			id = strconv.Itoa(p.nextTaskID)
+			p.todoIDByDesc[desc] = id
+			ev.TaskDeltas = append(ev.TaskDeltas, tailer.TaskDelta{
+				Op:      tailer.TaskOpCreate,
+				Subject: desc,
+			})
+		}
+		// Create starts a task at pending; an Update is required to move it
+		// forward. Reversions back to pending are handled by the snapshot
+		// reconcile below (the delta-only path silently skips them).
+		if status != "" && status != tailer.TaskStatusPending {
+			ev.TaskDeltas = append(ev.TaskDeltas, tailer.TaskDelta{
+				Op:     tailer.TaskOpUpdate,
+				ID:     id,
+				Status: status,
+			})
+		}
+		snapshot = append(snapshot, tailer.TaskSnapshotEntry{
+			ID:      id,
+			Subject: desc,
+			Status:  status,
+		})
+	}
+	if len(snapshot) > 0 {
+		ev.TaskSnapshot = &snapshot
 	}
 }
 

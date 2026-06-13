@@ -627,17 +627,19 @@ func (d *SessionDetector) processActivityLocked(id agent.Identity, state *sessio
 }
 
 // applyBackgroundLiveness sets HasLiveBackgroundProcess on the session's
-// metrics from the last-known liveness of its Bash background processes
-// (run_in_background), and kicks off an off-loop refresh of that knowledge.
-// When true, IsAgentDone returns false and the classifier holds the session
-// `working` past end_turn until the process exits.
+// metrics from the last-known liveness of its background processes — Claude
+// Code's Bash run_in_background launches (probed via lsof on their output
+// files) and Gemini CLI's backgrounded shell commands (probed by signalling
+// their reported PID, issue #661) — and kicks off an off-loop refresh of that
+// knowledge. When true, IsAgentDone returns false and the classifier holds the
+// session `working` past end_turn until the process exits.
 //
 // Two deliberate choices (issue #445 review):
 //   - Gated on state == working. The feature only ever needs to PREVENT a
 //     working→ready transition; it must never RESURRECT a session the user
 //     already cancelled (ESC → ready) just because a detached process is still
 //     alive. Non-working sessions clear their cache and the flag.
-//   - The lsof probe runs in a goroutine, not inline, so a slow filesystem
+//   - The probe runs in a goroutine, not inline, so a slow filesystem (lsof)
 //     can't stall the single event-loop goroutine (and thus every other
 //     session). processActivity uses the last-known value — optimistically
 //     "alive" on first sight so a not-yet-probed process is never prematurely
@@ -646,8 +648,13 @@ func (d *SessionDetector) processActivityLocked(id agent.Identity, state *sessio
 func (d *SessionDetector) applyBackgroundLiveness(state *session.SessionState) {
 	sid := state.SessionID
 	m := state.Metrics
+	// Liveness is probed via output files (Claude Code) OR PIDs (Gemini CLI).
+	// A session with neither has no detached process to hold it `working`.
+	hasProbe := m != nil &&
+		(len(m.BackgroundProcessOutputs) > 0 && d.bgLiveProbe != nil ||
+			len(m.BackgroundProcessPIDs) > 0 && d.bgPIDProbe != nil)
 	if m == nil || state.State != session.StateWorking ||
-		m.BackgroundProcessCount == 0 || len(m.BackgroundProcessOutputs) == 0 || d.bgLiveProbe == nil {
+		m.BackgroundProcessCount == 0 || !hasProbe {
 		d.bgMu.Lock()
 		delete(d.bgLive, sid)
 		delete(d.bgProbing, sid)
@@ -676,18 +683,30 @@ func (d *SessionDetector) applyBackgroundLiveness(state *session.SessionState) {
 	}
 
 	outputs := append([]string(nil), m.BackgroundProcessOutputs...) // copy: goroutine must not alias state
+	pids := append([]string(nil), m.BackgroundProcessPIDs...)
 	transcriptPath := state.TranscriptPath
 	go func() {
-		live := d.bgLiveProbe(outputs)
+		// A session can carry both a Claude-Code output-file process and a
+		// Gemini PID process; it stays held while EITHER is alive.
+		liveOut := len(outputs) > 0 && d.bgLiveProbe != nil && d.bgLiveProbe(outputs)
+		livePID := len(pids) > 0 && d.bgPIDProbe != nil && d.bgPIDProbe(pids)
+		live := liveOut || livePID
 		// Dead verdict: drop the probed processes from the tailer's open set
 		// and the ledger. They died without a transcript-observable
 		// termination (e.g. the process exited with its parent shell), so
 		// the ledger entry would otherwise resurrect them as phantom open
 		// processes on every daemon restart, re-running this probe forever.
-		// Scoped to this probe's output snapshot — a process spawned since
-		// must survive and be judged by its own probe. See issue #649.
-		if !live && d.metrics != nil {
-			d.metrics.PurgeDeadBackgroundProcs(transcriptPath, outputs)
+		// Scoped to this probe's snapshot — a process spawned since must
+		// survive and be judged by its own probe. Outputs and PIDs are
+		// purged independently so a still-live one of either kind is kept.
+		// See issues #649, #661.
+		if d.metrics != nil {
+			if !liveOut && len(outputs) > 0 {
+				d.metrics.PurgeDeadBackgroundProcs(transcriptPath, outputs)
+			}
+			if !livePID && len(pids) > 0 {
+				d.metrics.PurgeDeadBackgroundPIDs(transcriptPath, pids)
+			}
 		}
 		d.bgMu.Lock()
 		prev, had := d.bgLive[sid]

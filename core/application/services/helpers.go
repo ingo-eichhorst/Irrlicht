@@ -86,12 +86,97 @@ func cwdMissing(cwd string) bool {
 
 // deriveParentSession tries all known methods to extract a parent session ID.
 // 1. Claude Code path pattern: .../<parent-session-id>/subagents/<agent-id>.jsonl
-// 2. Pi transcript header: {"type": "session", "parentSession": "..."}
+// 2. Gemini CLI nested path: .../chats/<parent-uuid>/<child-uuid>.jsonl
+// 3. Pi transcript header: {"type": "session", "parentSession": "..."}
 func deriveParentSession(transcriptPath string) string {
 	if id := deriveParentSessionID(transcriptPath); id != "" {
 		return id
 	}
+	if id := deriveGeminiParentSessionID(transcriptPath); id != "" {
+		return id
+	}
 	return deriveParentSessionFromTranscript(transcriptPath)
+}
+
+// deriveGeminiParentSessionID extracts the parent's registered session ID from a
+// Gemini CLI subagent transcript path. Gemini writes a foreground subagent's
+// transcript to a directory named after the parent's full session UUID:
+//
+//	.../chats/<parent-uuid>/<child-uuid>.jsonl
+//
+// The parent itself registers in the daemon under its FILENAME stem, not its
+// header UUID: the gemini parser skips the session header, so the watcher
+// derives the SessionID from the filename — which is
+// session-<timestamp>-<first8hexOfUUID>. The nested directory name is the full
+// parent UUID; its first 8 hex characters are the only part shared with the
+// parent's registered id, and the timestamp prefix is not derivable from the
+// UUID. So we resolve the sibling top-level transcript by matching that hex tag
+// and return its filename stem, which equals the parent's registered SessionID
+// (issue #663).
+//
+// Returns "" when: the path isn't a nested chats child, the dir name isn't a
+// resolvable UUID, or no matching sibling parent transcript exists on disk.
+func deriveGeminiParentSessionID(transcriptPath string) string {
+	dir := filepath.Dir(transcriptPath) // .../chats/<parent-uuid>
+	chats := filepath.Dir(dir)          // .../chats
+	if filepath.Base(chats) != "chats" {
+		return ""
+	}
+	parentUUID := filepath.Base(dir)
+	tag := geminiUUIDTag(parentUUID)
+	if tag == "" {
+		return ""
+	}
+	return geminiSiblingParentStem(chats, tag)
+}
+
+// geminiUUIDTag returns the first 8 hex characters of a canonical Gemini
+// session UUID (8-4-4-4-12). Returns "" if name isn't a UUID — guards against
+// matching a non-UUID directory (e.g. a Claude "subagents" sibling) as a
+// gemini parent.
+func geminiUUIDTag(name string) string {
+	const uuidLen = 36 // 8-4-4-4-12 with hyphens
+	if len(name) != uuidLen || name[8] != '-' || name[13] != '-' ||
+		name[18] != '-' || name[23] != '-' {
+		return ""
+	}
+	tag := name[:8]
+	for i := 0; i < len(tag); i++ {
+		c := tag[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return ""
+		}
+	}
+	return tag
+}
+
+// geminiSiblingParentStem scans the chats directory for the top-level parent
+// transcript whose filename carries the given 8-hex UUID tag
+// (session-<timestamp>-<tag>.jsonl) and returns its filename stem — the parent's
+// registered SessionID. Returns "" if no unambiguous match exists.
+func geminiSiblingParentStem(chatsDir, tag string) string {
+	entries, err := os.ReadDir(chatsDir)
+	if err != nil {
+		return ""
+	}
+	suffix := "-" + tag + ".jsonl"
+	var match string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if strings.HasPrefix(name, "session-") && strings.HasSuffix(name, suffix) {
+			if match != "" {
+				return "" // ambiguous: two parents share the tag, don't guess
+			}
+			match = name
+		}
+	}
+	if match == "" {
+		return ""
+	}
+	return strings.TrimSuffix(match, ".jsonl")
 }
 
 // deriveParentSessionID extracts a parent session ID from a subagent transcript path.

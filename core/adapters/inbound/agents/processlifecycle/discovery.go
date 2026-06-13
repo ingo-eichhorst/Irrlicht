@@ -48,12 +48,40 @@ func DiscoverPIDByCWD(processName, cwd string, disambiguate func([]int) int) (in
 // script is in argv[1]. Mirrors DiscoverPIDByCWD's contract: returns 0, nil
 // when no match.
 func DiscoverPIDByCWDAndCmdLine(cmdLinePattern, cwd string, disambiguate func([]int) int) (int, error) {
+	return DiscoverPIDByCWDAndCmdLineExcludingArgv(cmdLinePattern, cwd, disambiguate, nil)
+}
+
+// DiscoverPIDByCWDAndCmdLineExcludingArgv is DiscoverPIDByCWDAndCmdLine with an
+// extra per-PID argv filter applied before disambiguation. excludeArgv mirrors
+// the adapter's Process.ExcludeArgv predicate (the same one the Scanner runs
+// via argvExcluded): when it returns true the PID is dropped from the candidate
+// set, so a same-cmdline infrastructure process — e.g. Gemini's heap-bump Node
+// worker, which shares the launcher's cwd — never reaches the disambiguator.
+// Without this the disambiguator's "highest unclaimed PID" could pick the
+// higher-PID worker, the very process the scanner treats as a ghost (#664).
+//
+// argv is read through the same ProcessObserver seam (osProc.ArgvOf); a
+// nil/unreadable argv is passed through to the predicate, which per the
+// ExcludeArgv contract must not exclude on it. A nil excludeArgv disables
+// filtering — the legacy DiscoverPIDByCWDAndCmdLine behaviour.
+func DiscoverPIDByCWDAndCmdLineExcludingArgv(cmdLinePattern, cwd string, disambiguate func([]int) int, excludeArgv func([]string) bool) (int, error) {
 	if cwd == "" || cmdLinePattern == "" {
 		return 0, nil
 	}
 	pids, err := osProc.FindByCmdline(cmdLinePattern)
 	if err != nil {
 		return 0, fmt.Errorf("find processes matching %q: %w", cmdLinePattern, err)
+	}
+	if excludeArgv != nil {
+		kept := make([]int, 0, len(pids))
+		for _, pid := range pids {
+			argv, _ := osProc.ArgvOf(pid)
+			if excludeArgv(argv) {
+				continue
+			}
+			kept = append(kept, pid)
+		}
+		pids = kept
 	}
 	return narrowByCWD(pids, cwd, disambiguate), nil
 }

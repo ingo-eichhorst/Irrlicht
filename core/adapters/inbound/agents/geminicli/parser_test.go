@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"os"
 	"testing"
+
+	"irrlicht/core/pkg/tailer"
 )
 
 // decode is a tiny helper turning a JSON object literal into the raw map the
@@ -80,6 +82,24 @@ func TestParseLine_UserFunctionResponseIsToolResult(t *testing.T) {
 	}
 }
 
+func TestParseLine_SkipsShellEscape(t *testing.T) {
+	p := &Parser{}
+	// A `!cmd` shell-escape is persisted as a plain user text message opening
+	// with this preamble (gemini-cli's useExecutionLifecycle.ts), with NO
+	// following `gemini` turn. It must be skipped — classified as a real prompt
+	// it would open a turn that never settles, sticking the session in working.
+	// (The live form fences the command/result in ```sh blocks; only the
+	// preamble prefix is load-bearing.)
+	line := decode(t, `{"id":"u3","type":"user","content":[{"text":"I ran the following shell command:\necho hello_shell_escape\n\nThis produced the following result:\nhello_shell_escape"}]}`)
+	ev := p.ParseLine(line)
+	if !ev.Skip {
+		t.Fatalf("shell-escape preamble: want Skip, got EventType=%q", ev.EventType)
+	}
+	if ev.ClearToolNames {
+		t.Error("skipped shell-escape must NOT ClearToolNames")
+	}
+}
+
 func TestParseLine_AssistantPlaceholderStaysWorking(t *testing.T) {
 	p := &Parser{}
 	// Empty streaming placeholder, no tool calls: an assistant_message, NOT a
@@ -149,6 +169,81 @@ func TestParseLine_FinalTextSettlesTurn(t *testing.T) {
 	}
 }
 
+func TestParseLine_ErrorLineSettlesTurn(t *testing.T) {
+	p := &Parser{}
+	// When a turn aborts on an API error, gemini-cli records the aborted turn
+	// as a type:"error" message (upstream PR #13300). With no inactivity sweep
+	// on `working`, the parser must treat it as the turn's end and settle to
+	// ready — otherwise the session sticks in `working` forever (#665).
+	line := decode(t, `{"id":"e1","type":"error","content":"API Error: 429 RESOURCE_EXHAUSTED"}`)
+	ev := p.ParseLine(line)
+	if ev.Skip {
+		t.Fatal("error line should not be skipped")
+	}
+	if ev.EventType != "turn_done" {
+		t.Fatalf("error line: want turn_done, got %q", ev.EventType)
+	}
+	if !ev.IsError {
+		t.Error("error line should set IsError")
+	}
+	if ev.AssistantText == "" {
+		t.Error("error line should carry the error text as AssistantText for waiting display")
+	}
+}
+
+func TestParseLine_TerminalInfoSettlesTurn(t *testing.T) {
+	p := &Parser{}
+	// A turn aborted by user Esc / quota records a TERMINAL type:"info" notice
+	// with no following gemini message. With no inactivity sweep on `working`,
+	// the parser must settle to ready — otherwise the session sticks (#676).
+	line := decode(t, `{"id":"i1","type":"info","content":"Request cancelled."}`)
+	ev := p.ParseLine(line)
+	if ev.Skip {
+		t.Fatal("terminal info line should not be skipped")
+	}
+	if ev.EventType != "turn_done" {
+		t.Fatalf("terminal info: want turn_done, got %q", ev.EventType)
+	}
+	// A terminal info is a user/system abort, not an agent error: it settles the
+	// turn but must NOT be flagged IsError or overwrite the assistant's last text.
+	if ev.IsError {
+		t.Error("terminal info must not set IsError (a cancel/abort is not an agent error)")
+	}
+	if ev.AssistantText != "" {
+		t.Errorf("terminal info must not overwrite AssistantText, got %q", ev.AssistantText)
+	}
+
+	// The failed-request notice is the other terminal marker — prefix match
+	// (the live notice trails "Press F12 …"), so it must also settle (#676).
+	failed := decode(t, `{"id":"i3","type":"info","content":"This request failed. Press F12 for details."}`)
+	if ev := p.ParseLine(failed); ev.Skip || ev.EventType != "turn_done" {
+		t.Fatalf("failed-request info: want turn_done, got Skip=%v EventType=%q", ev.Skip, ev.EventType)
+	}
+}
+
+func TestParseLine_BenignInfoSkipped(t *testing.T) {
+	p := &Parser{}
+	// A benign type:"info" notice (a model switch) does NOT end the turn — it
+	// must be skipped, never settle. A false-settle mid-turn is worse than the
+	// false-stick this guards against (#676).
+	line := decode(t, `{"id":"i2","type":"info","content":"Model set to gemini-2.5-flash"}`)
+	ev := p.ParseLine(line)
+	if !ev.Skip {
+		t.Fatalf("benign info line must be skipped, got EventType=%q", ev.EventType)
+	}
+	if ev.EventType == "turn_done" {
+		t.Error("benign info must not settle the turn (false-settle guard)")
+	}
+
+	// A marker embedded mid-notice (not at the start) must NOT settle — the
+	// classifier anchors on the prefix, so quoted/echoed cancel text cannot
+	// false-settle a still-working turn.
+	embedded := decode(t, `{"id":"i4","type":"info","content":"Heads up: a prior Request cancelled is being retried"}`)
+	if ev := p.ParseLine(embedded); !ev.Skip || ev.EventType == "turn_done" {
+		t.Fatalf("embedded marker must be skipped, got Skip=%v EventType=%q", ev.Skip, ev.EventType)
+	}
+}
+
 func TestParseLine_StreamingReemissionNotDoubleBilled(t *testing.T) {
 	p := &Parser{}
 	first := decode(t, `{"id":"g4","type":"gemini","content":"","tokens":{"input":9925,"output":91,"cached":0,"total":10016},"model":"gemini-3-flash-preview"}`)
@@ -160,6 +255,238 @@ func TestParseLine_StreamingReemissionNotDoubleBilled(t *testing.T) {
 	second := decode(t, `{"id":"g4","type":"gemini","content":"","tokens":{"input":9925,"output":91,"cached":0,"total":10016},"model":"gemini-3-flash-preview","toolCalls":[{"id":"c","name":"x","status":"success"}]}`)
 	if ev := p.ParseLine(second); ev.Contribution != nil {
 		t.Errorf("re-emission under same id must not double-bill, got %+v", ev.Contribution)
+	}
+}
+
+func TestParseLine_WriteTodosEmitsTaskDeltas(t *testing.T) {
+	p := &Parser{}
+
+	// First write_todos call: a full three-item snapshot, all pending. Each
+	// item must be Created (the tailer starts created tasks at pending).
+	first := decode(t, `{"id":"g1","type":"gemini","content":"","model":"gemini-2.5-pro","toolCalls":[
+		{"id":"wt_1","name":"write_todos","status":"success","args":{"todos":[
+			{"status":"pending","description":"read README"},
+			{"status":"pending","description":"summarize README"},
+			{"status":"pending","description":"reply done"}
+		]}}
+	]}`)
+	ev := p.ParseLine(first)
+	if len(ev.TaskDeltas) != 3 {
+		t.Fatalf("first write_todos: want 3 create deltas, got %d (%+v)", len(ev.TaskDeltas), ev.TaskDeltas)
+	}
+	for i, d := range ev.TaskDeltas {
+		if d.Op != "create" {
+			t.Errorf("delta[%d]: want create, got %q", i, d.Op)
+		}
+	}
+	if ev.TaskDeltas[0].Subject != "read README" {
+		t.Errorf("delta[0] subject: want 'read README', got %q", ev.TaskDeltas[0].Subject)
+	}
+	if ev.TaskSnapshot == nil || len(*ev.TaskSnapshot) != 3 {
+		t.Fatalf("first write_todos: want 3-entry snapshot, got %v", ev.TaskSnapshot)
+	}
+
+	// Second write_todos call: same list, but item 1 now in_progress. Only an
+	// Update for the changed item — no new Creates.
+	second := decode(t, `{"id":"g2","type":"gemini","content":"","model":"gemini-2.5-pro","toolCalls":[
+		{"id":"wt_2","name":"write_todos","status":"success","args":{"todos":[
+			{"status":"in_progress","description":"read README"},
+			{"status":"pending","description":"summarize README"},
+			{"status":"pending","description":"reply done"}
+		]}}
+	]}`)
+	ev = p.ParseLine(second)
+	if len(ev.TaskDeltas) != 1 {
+		t.Fatalf("second write_todos: want 1 update delta, got %d (%+v)", len(ev.TaskDeltas), ev.TaskDeltas)
+	}
+	if d := ev.TaskDeltas[0]; d.Op != "update" || d.Status != "in_progress" {
+		t.Errorf("second delta: want update/in_progress, got op=%q status=%q", d.Op, d.Status)
+	}
+	if ev.TaskSnapshot == nil || len(*ev.TaskSnapshot) != 3 {
+		t.Fatalf("second write_todos: want 3-entry snapshot, got %v", ev.TaskSnapshot)
+	}
+
+	// Third write_todos call: item 1 completed. The snapshot must carry its
+	// completed status so the tailer's reconcile stamps it done.
+	third := decode(t, `{"id":"g3","type":"gemini","content":"","model":"gemini-2.5-pro","toolCalls":[
+		{"id":"wt_3","name":"write_todos","status":"success","args":{"todos":[
+			{"status":"completed","description":"read README"},
+			{"status":"pending","description":"summarize README"},
+			{"status":"pending","description":"reply done"}
+		]}}
+	]}`)
+	ev = p.ParseLine(third)
+	if len(ev.TaskDeltas) != 1 {
+		t.Fatalf("third write_todos: want 1 update delta, got %d (%+v)", len(ev.TaskDeltas), ev.TaskDeltas)
+	}
+	if d := ev.TaskDeltas[0]; d.Op != "update" || d.Status != "completed" {
+		t.Errorf("third delta: want update/completed, got op=%q status=%q", d.Op, d.Status)
+	}
+}
+
+// TestParseLine_WriteTodosPendingOnCreateSkipsUpdate ports opencode's
+// PendingOnCreateSkipsUpdate: a freshly-created item whose first sighting is
+// already in_progress must emit BOTH a Create (the tailer starts created tasks
+// at pending) AND an Update to reach in_progress — never a bare Create that
+// would leave the status wrong.
+func TestParseLine_WriteTodosPendingOnCreateSkipsUpdate(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(decode(t, `{"id":"g1","type":"gemini","content":"","model":"gemini-2.5-pro","toolCalls":[
+		{"id":"wt_1","name":"write_todos","status":"success","args":{"todos":[
+			{"status":"in_progress","description":"already in progress"}
+		]}}
+	]}`))
+	if len(ev.TaskDeltas) != 2 {
+		t.Fatalf("want 2 deltas (create + update), got %d (%+v)", len(ev.TaskDeltas), ev.TaskDeltas)
+	}
+	if d := ev.TaskDeltas[0]; d.Op != "create" || d.Subject != "already in progress" {
+		t.Errorf("deltas[0] = %+v, want create subject='already in progress'", d)
+	}
+	if d := ev.TaskDeltas[1]; d.Op != "update" || d.ID != "1" || d.Status != "in_progress" {
+		t.Errorf("deltas[1] = %+v, want update id=1 status=in_progress", d)
+	}
+}
+
+// TestParseLine_WriteTodosSnapshotPrunesDeletedTodos ports opencode's
+// SnapshotPrunesDeletedTodos: write_todos is a full-list replace, so a todo
+// missing from a later snapshot has been removed. The emitted TaskSnapshot
+// must carry only the surviving entries so the tailer can prune the stale one.
+func TestParseLine_WriteTodosSnapshotPrunesDeletedTodos(t *testing.T) {
+	p := &Parser{}
+	p.ParseLine(decode(t, `{"id":"g1","type":"gemini","content":"","model":"gemini-2.5-pro","toolCalls":[
+		{"id":"wt_1","name":"write_todos","status":"success","args":{"todos":[
+			{"status":"pending","description":"Task A"},
+			{"status":"pending","description":"Task B"},
+			{"status":"pending","description":"Task C"}
+		]}}
+	]}`))
+	ev := p.ParseLine(decode(t, `{"id":"g2","type":"gemini","content":"","model":"gemini-2.5-pro","toolCalls":[
+		{"id":"wt_2","name":"write_todos","status":"success","args":{"todos":[
+			{"status":"pending","description":"Task A"},
+			{"status":"pending","description":"Task B"}
+		]}}
+	]}`))
+	if ev.TaskSnapshot == nil {
+		t.Fatal("expected TaskSnapshot to be set")
+	}
+	if got, want := len(*ev.TaskSnapshot), 2; got != want {
+		t.Fatalf("snapshot len = %d, want %d", got, want)
+	}
+	ids := map[string]bool{}
+	for _, e := range *ev.TaskSnapshot {
+		ids[e.ID] = true
+	}
+	if !ids["1"] || !ids["2"] {
+		t.Errorf("snapshot IDs = %v, want {1, 2}", ids)
+	}
+	if ids["3"] {
+		t.Errorf("snapshot still contains pruned id=3: %v", ids)
+	}
+}
+
+// TestParseLine_WriteTodosSnapshotCarriesStatusReversion ports opencode's
+// SnapshotCarriesStatusReversion: a todo flipping in_progress → pending in a
+// later snapshot emits no Update delta (the Update path suppresses pending
+// writes), so the reversion must surface only via TaskSnapshot — without it
+// the tailer would freeze the stale in_progress.
+func TestParseLine_WriteTodosSnapshotCarriesStatusReversion(t *testing.T) {
+	p := &Parser{}
+	p.ParseLine(decode(t, `{"id":"g1","type":"gemini","content":"","model":"gemini-2.5-pro","toolCalls":[
+		{"id":"wt_1","name":"write_todos","status":"success","args":{"todos":[
+			{"status":"in_progress","description":"Task A"}
+		]}}
+	]}`))
+	ev := p.ParseLine(decode(t, `{"id":"g2","type":"gemini","content":"","model":"gemini-2.5-pro","toolCalls":[
+		{"id":"wt_2","name":"write_todos","status":"success","args":{"todos":[
+			{"status":"pending","description":"Task A"}
+		]}}
+	]}`))
+	// No Update delta because the new status is pending.
+	if len(ev.TaskDeltas) != 0 {
+		t.Errorf("TaskDeltas len = %d, want 0 (reversion via snapshot only)", len(ev.TaskDeltas))
+	}
+	if ev.TaskSnapshot == nil || len(*ev.TaskSnapshot) != 1 {
+		t.Fatalf("TaskSnapshot = %v, want one entry", ev.TaskSnapshot)
+	}
+	if got := (*ev.TaskSnapshot)[0]; got.ID != "1" || got.Status != "pending" {
+		t.Errorf("snapshot entry = %+v, want {ID:1 Status:pending}", got)
+	}
+}
+
+// --- run_shell_command is_background tracking (issue #661) ---
+
+// TestParseLine_BackgroundSpawn_FromShellToolCall asserts that a
+// run_shell_command toolCall carrying is_background:true and a "Command moved
+// to background (PID: N)" result emits a BackgroundSpawn keyed on the PID, so
+// the shared tailer increments BackgroundProcessCount. The session must stay
+// working (assistant message with an open tool call), NOT settle to ready.
+func TestParseLine_BackgroundSpawn_FromShellToolCall(t *testing.T) {
+	p := &Parser{}
+	line := decode(t, `{"id":"g5","type":"gemini","content":"","model":"gemini-3.5-flash","toolCalls":[
+		{"id":"run_shell_command__9cqstvzo","name":"run_shell_command","args":{"is_background":true,"command":"sleep 40 && echo BG_DONE"},
+		 "result":[{"functionResponse":{"id":"run_shell_command__9cqstvzo","name":"run_shell_command","response":{"output":"Command moved to background (PID: 33701). Output hidden. Press Ctrl+B to view."}}}],
+		 "status":"success"}
+	]}`)
+	ev := p.ParseLine(line)
+	if ev.EventType != "assistant_message" {
+		t.Fatalf("background-spawn message: want assistant_message (not turn_done), got %q", ev.EventType)
+	}
+	if len(ev.BackgroundSpawns) != 1 {
+		t.Fatalf("BackgroundSpawns = %d, want 1", len(ev.BackgroundSpawns))
+	}
+	if got := ev.BackgroundSpawns[0].BashID; got != "33701" {
+		t.Errorf("BackgroundSpawn.BashID = %q, want the PID 33701", got)
+	}
+	// Gemini hides background output (Ctrl+B to view) — no output file path, so
+	// the lsof working-hold probe cannot engage (that part stays live-only).
+	if got := ev.BackgroundSpawns[0].OutputPath; got != "" {
+		t.Errorf("BackgroundSpawn.OutputPath = %q, want empty (Gemini bg output is in-process, no file)", got)
+	}
+}
+
+// TestParseLine_NoBackgroundSpawnWhenForeground guards against a phantom spawn:
+// a normal (foreground) run_shell_command must not register a background
+// process even if its output happens to mention a PID.
+func TestParseLine_NoBackgroundSpawnWhenForeground(t *testing.T) {
+	p := &Parser{}
+	line := decode(t, `{"id":"g6","type":"gemini","content":"","model":"gemini-3.5-flash","toolCalls":[
+		{"id":"c1","name":"run_shell_command","args":{"command":"echo hi"},
+		 "result":[{"functionResponse":{"id":"c1","name":"run_shell_command","response":{"output":"hi"}}}],
+		 "status":"success"}
+	]}`)
+	if ev := p.ParseLine(line); len(ev.BackgroundSpawns) != 0 {
+		t.Errorf("foreground command must not spawn a background process, got %+v", ev.BackgroundSpawns)
+	}
+}
+
+// TestTailer_BackgroundProcessCount_GeminiSpawn drives the parser through the
+// shared tailer and asserts the open-background-process accounting increments
+// from a Gemini is_background launch. Mirrors the claudecode coverage in
+// background_process_test.go.
+func TestTailer_BackgroundProcessCount_GeminiSpawn(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/transcript.jsonl"
+	if err := os.WriteFile(path, []byte(
+		`{"id":"g5","type":"gemini","content":"","model":"gemini-3.5-flash","toolCalls":[{"id":"run_shell_command__9cqstvzo","name":"run_shell_command","args":{"is_background":true,"command":"sleep 40 && echo BG_DONE"},"result":[{"functionResponse":{"id":"run_shell_command__9cqstvzo","name":"run_shell_command","response":{"output":"Command moved to background (PID: 33701). Output hidden. Press Ctrl+B to view."}}}],"status":"success"}]}`+"\n",
+	), 0o644); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+	m, err := tailer.NewTranscriptTailer(path, &Parser{}, "gemini-cli").TailAndProcess()
+	if err != nil {
+		t.Fatalf("TailAndProcess: %v", err)
+	}
+	if m.BackgroundProcessCount != 1 {
+		t.Fatalf("BackgroundProcessCount = %d, want 1", m.BackgroundProcessCount)
+	}
+	// Gemini reports no output file, so BackgroundProcessOutputs stays empty —
+	// the lsof probe has nothing to inspect. Instead the PID surfaces in
+	// BackgroundProcessPIDs, which the daemon's PID-liveness probe signals to
+	// hold the session `working` until the process exits (issue #661).
+	if len(m.BackgroundProcessOutputs) != 0 {
+		t.Errorf("BackgroundProcessOutputs = %v, want empty (Gemini bg output is in-process)", m.BackgroundProcessOutputs)
+	}
+	if len(m.BackgroundProcessPIDs) != 1 || m.BackgroundProcessPIDs[0] != "33701" {
+		t.Errorf("BackgroundProcessPIDs = %v, want [33701]", m.BackgroundProcessPIDs)
 	}
 }
 

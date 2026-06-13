@@ -73,9 +73,9 @@ func Agent() agent.Agent {
 // re-execs a child with a larger V8 heap (`node --max-old-space-size=…
 // .../bin/gemini`); both match commandPattern and share the workspace cwd, so
 // without this filter each session would mint two pre-sessions and strand one
-// as a ghost. Excluding the worker leaves exactly the launcher — which is the
-// lowest-PID ancestor that DiscoverPID also binds (see pid.go), keeping the
-// scanner and PID discovery in agreement.
+// as a ghost. Excluding the worker leaves exactly the launcher. DiscoverPID
+// applies this same predicate before disambiguating (see pid.go), so the
+// scanner and PID discovery agree on binding the launcher, not the worker.
 //
 // Per the ExcludeArgv contract a nil/unreadable argv must NOT be excluded;
 // the loop over an empty slice naturally returns false. A future single-

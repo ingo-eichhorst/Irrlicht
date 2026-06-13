@@ -328,15 +328,25 @@ func (t *TranscriptTailer) computeMetrics() {
 	t.metrics.BackgroundProcessCount = len(t.openBackgroundProcs)
 	if len(t.openBackgroundProcs) > 0 {
 		outs := make([]string, 0, len(t.openBackgroundProcs))
-		for _, p := range t.openBackgroundProcs {
-			if p != "" {
+		var pids []string
+		for id, p := range t.openBackgroundProcs {
+			switch {
+			case p != "":
+				// Adapter wrote an output file (Claude Code) — probed via lsof.
 				outs = append(outs, p)
+			case isAllDigits(id):
+				// Adapter reports only a PID (Gemini CLI) — probed by signalling
+				// the PID directly. See issue #661.
+				pids = append(pids, id)
 			}
 		}
 		slices.Sort(outs)
+		slices.Sort(pids)
 		t.metrics.BackgroundProcessOutputs = outs
+		t.metrics.BackgroundProcessPIDs = pids
 	} else {
 		t.metrics.BackgroundProcessOutputs = nil
+		t.metrics.BackgroundProcessPIDs = nil
 	}
 
 	if len(t.metrics.MessageHistory) == 0 {
@@ -438,6 +448,21 @@ func (t *TranscriptTailer) computeMetrics() {
 	} else {
 		t.metrics.MessagesPerMinute = 0
 	}
+}
+
+// isAllDigits reports whether s is a non-empty run of ASCII digits — the shape
+// of a PID-keyed open background process (Gemini CLI), as opposed to an
+// alphanumeric background shell id (Claude Code). See issue #661.
+func isAllDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // computeContextUtilization calculates context utilization percentage and pressure level.

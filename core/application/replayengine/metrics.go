@@ -28,6 +28,7 @@ func TailerToDomain(m *tailer.SessionMetrics) *session.SessionMetrics {
 		OpenToolCallCount:                 m.OpenToolCallCount,
 		BackgroundProcessCount:            m.BackgroundProcessCount,
 		BackgroundProcessOutputs:          m.BackgroundProcessOutputs,
+		BackgroundProcessPIDs:             m.BackgroundProcessPIDs,
 		LastEventType:                     m.LastEventType,
 		LastOpenToolNames:                 copyStrings(m.LastOpenToolNames),
 		LastWasUserInterrupt:              m.LastWasUserInterrupt,
