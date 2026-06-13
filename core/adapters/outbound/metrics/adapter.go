@@ -282,6 +282,26 @@ func (a *Adapter) PurgeDeadBackgroundProcs(transcriptPath string, outputs []stri
 	lt.mu.Unlock()
 }
 
+// PurgeDeadBackgroundPIDs implements ports/outbound.MetricsCollector — the
+// PID-keyed counterpart to PurgeDeadBackgroundProcs for adapters that track a
+// backgrounded command by PID (Gemini CLI). Same no-op-without-tailer and
+// ledger-save semantics. See issue #661.
+func (a *Adapter) PurgeDeadBackgroundPIDs(transcriptPath string, pids []string) {
+	if transcriptPath == "" || len(pids) == 0 {
+		return
+	}
+	a.mu.Lock()
+	lt, ok := a.tailers[transcriptPath]
+	a.mu.Unlock()
+	if !ok {
+		return
+	}
+	lt.mu.Lock()
+	lt.t.PurgeBackgroundProcsByID(pids)
+	saveLedger(lt.lp, lt.t.GetLedgerState())
+	lt.mu.Unlock()
+}
+
 // domainRateLimitToTailer is the inbound counterpart to tailerRateLimitToDomain
 // — used by IngestRateLimit when the HTTP layer hands us a domain-typed
 // snapshot that has to land inside the tailer's mirror type.

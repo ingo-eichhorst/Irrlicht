@@ -83,6 +83,13 @@ type SessionMetrics struct {
 	// the transcript each pass, not persisted in session JSON.
 	BackgroundProcessOutputs []string `json:"-"`
 
+	// BackgroundProcessPIDs holds the OS PIDs of currently open background
+	// processes whose adapter reports a PID rather than an output file (Gemini
+	// CLI). The liveness probe signals these directly to decide whether the
+	// session is still working. Transient — recomputed from the transcript each
+	// pass, not persisted in session JSON. See issue #661.
+	BackgroundProcessPIDs []string `json:"-"`
+
 	// LastEventType is the type of the most recent transcript event
 	// (e.g. "assistant", "user", "tool_use", "tool_result").
 	LastEventType string `json:"last_event_type,omitempty"`
@@ -710,11 +717,12 @@ func MergeMetrics(newM, oldM *SessionMetrics) *SessionMetrics {
 		OpenToolCallCount:    newM.OpenToolCallCount,
 		OpenSubagents:        newM.OpenSubagents,
 		// Background-process fields are recomputed from the transcript every
-		// pass (count + output paths) — copy the new values verbatim.
+		// pass (count + output paths + PIDs) — copy the new values verbatim.
 		// HasLiveBackgroundProcess is set by the detector's probe *after* this
 		// merge, so newM always carries its zero value here.
 		BackgroundProcessCount:   newM.BackgroundProcessCount,
 		BackgroundProcessOutputs: newM.BackgroundProcessOutputs,
+		BackgroundProcessPIDs:    newM.BackgroundProcessPIDs,
 		HasLiveBackgroundProcess: newM.HasLiveBackgroundProcess,
 		LastEventType:            newM.LastEventType,
 		LastOpenToolNames:        newM.LastOpenToolNames,

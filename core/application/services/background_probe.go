@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -53,6 +54,33 @@ func anyLiveOutputWriter(outputPaths []string) bool {
 			continue
 		}
 		if _, err := strconv.Atoi(line); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// backgroundPIDProbe answers "is any of these PIDs still a live process?" — the
+// daemon's authoritative liveness check for adapters that report a backgrounded
+// command's PID rather than an output file (Gemini CLI hides the output and
+// surfaces only "(PID: N)"), so the lsof-on-output-file probe has nothing to
+// inspect. Modeled as a field so tests can inject a fake. See issue #661.
+type backgroundPIDProbe func(pids []string) bool
+
+// anyLivePID reports whether any of the given PIDs is a currently live process.
+// `kill(pid, 0)` performs the kernel's existence-and-permission check without
+// delivering a signal: a nil error (or EPERM — the process exists but is owned
+// by another user) means alive; ESRCH means gone. A non-numeric or non-positive
+// entry is skipped. An empty list is "nothing live", the safe degradation that
+// never pins a session `working` forever.
+func anyLivePID(pids []string) bool {
+	for _, s := range pids {
+		pid, err := strconv.Atoi(s)
+		if err != nil || pid <= 0 {
+			continue
+		}
+		switch err := syscall.Kill(pid, 0); err {
+		case nil, syscall.EPERM:
 			return true
 		}
 	}

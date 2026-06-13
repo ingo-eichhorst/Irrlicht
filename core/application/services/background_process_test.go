@@ -186,3 +186,129 @@ func TestSessionDetector_BackgroundProcess_DeadVerdictPurgesLedger(t *testing.T)
 	<-done
 	t.Fatal("dead probe verdict did not trigger PurgeDeadBackgroundProcs within deadline")
 }
+
+// End-to-end through the detector, PID-liveness path (Gemini CLI writes no
+// output file — only a PID): a working session whose transcript shows an open
+// background PID stays working while the PID probe reports it alive, and flips
+// to ready once the probe reports the PID gone. See issue #661.
+func TestSessionDetector_BackgroundPID_HoldsWorkingThenReady(t *testing.T) {
+	const sid = "bgpid1"
+	const path = "/home/.gemini/projects/-Users-test/bgpid1.jsonl"
+
+	// Gemini metrics: finished turn, one open background process carried by PID
+	// with NO output file — the output-writer probe has nothing to inspect.
+	metrics := &funcMetrics{fn: func(_, _ string) (*session.SessionMetrics, error) {
+		return &session.SessionMetrics{
+			LastEventType:          "turn_done",
+			BackgroundProcessCount: 1,
+			BackgroundProcessPIDs:  []string{"33701"},
+		}, nil
+	}}
+
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+	repo.states[sid] = &session.SessionState{
+		SessionID:      sid,
+		State:          session.StateWorking,
+		TranscriptPath: path,
+		FirstSeen:      time.Now().Unix(),
+		UpdatedAt:      time.Now().Unix(),
+	}
+
+	det := newDetectorWithMetrics(tw, pw, repo, metrics)
+	rec := &mockRecorder{}
+	det.SetRecorder(rec)
+
+	var pidLive atomic.Bool
+	pidLive.Store(true)
+	det.SetBackgroundPIDProbeForTest(func(pids []string) bool {
+		return pidLive.Load()
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	activity := func(terminal bool) {
+		tw.ch <- agent.Event{
+			Type:           agent.EventActivity,
+			SessionID:      sid,
+			ProjectDir:     "-Users-test",
+			TranscriptPath: path,
+			Terminal:       terminal,
+		}
+	}
+
+	// PID alive → session stays working despite turn_done.
+	activity(false)
+	time.Sleep(250 * time.Millisecond)
+	if n := readyTransitions(rec, sid); n != 0 {
+		t.Fatalf("session flipped to ready %d time(s) while background PID is alive", n)
+	}
+
+	// PID exits → probe reports it gone → session goes ready.
+	pidLive.Store(false)
+	activity(true)
+	waitForReadyTransition(t, rec, sid)
+
+	cancel()
+	<-done
+}
+
+// A dead PID verdict must purge the PID from the tailer's open set and ledger,
+// mirroring the output-file path — Gemini writes no transcript termination, so
+// the entry would otherwise resurrect as a phantom open process. See issue #661.
+func TestSessionDetector_BackgroundPID_DeadVerdictPurgesLedger(t *testing.T) {
+	const sid = "bgpid2"
+	const path = "/home/.gemini/projects/-Users-test/bgpid2.jsonl"
+
+	metrics := &funcMetrics{fn: func(_, _ string) (*session.SessionMetrics, error) {
+		return &session.SessionMetrics{
+			LastEventType:          "turn_done",
+			BackgroundProcessCount: 1,
+			BackgroundProcessPIDs:  []string{"33701"},
+		}, nil
+	}}
+
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+	repo.states[sid] = &session.SessionState{
+		SessionID:      sid,
+		State:          session.StateWorking,
+		TranscriptPath: path,
+		FirstSeen:      time.Now().Unix(),
+		UpdatedAt:      time.Now().Unix(),
+	}
+
+	det := newDetectorWithMetrics(tw, pw, repo, metrics)
+	det.SetBackgroundPIDProbeForTest(func(pids []string) bool { return false })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	tw.ch <- agent.Event{
+		Type:           agent.EventActivity,
+		SessionID:      sid,
+		ProjectDir:     "-Users-test",
+		TranscriptPath: path,
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if purged := metrics.purgedSnapshot(); len(purged) > 0 {
+			if purged[0] != path {
+				t.Errorf("purged transcript = %q, want %q", purged[0], path)
+			}
+			cancel()
+			<-done
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	<-done
+	t.Fatal("dead PID verdict did not trigger PurgeDeadBackgroundPIDs within deadline")
+}

@@ -263,6 +263,12 @@ func (m *mockMetrics) PurgeDeadBackgroundProcs(path string, _ []string) {
 	m.mu.Unlock()
 }
 
+func (m *mockMetrics) PurgeDeadBackgroundPIDs(path string, _ []string) {
+	m.mu.Lock()
+	m.purged = append(m.purged, path)
+	m.mu.Unlock()
+}
+
 // purgedSnapshot returns a race-free copy of the PurgeDeadBackgroundProcs call
 // log so tests can poll for the purge without racing the probe goroutine.
 func (m *mockMetrics) purgedSnapshot() []string {
@@ -301,6 +307,12 @@ func (m *funcMetrics) IngestRateLimit(path string, snap *session.RateLimitSnapsh
 func (m *funcMetrics) IngestTaskEstimate(path string, est *session.TaskEstimate) {}
 
 func (m *funcMetrics) PurgeDeadBackgroundProcs(path string, _ []string) {
+	m.purgeMu.Lock()
+	m.purged = append(m.purged, path)
+	m.purgeMu.Unlock()
+}
+
+func (m *funcMetrics) PurgeDeadBackgroundPIDs(path string, _ []string) {
 	m.purgeMu.Lock()
 	m.purged = append(m.purged, path)
 	m.purgeMu.Unlock()

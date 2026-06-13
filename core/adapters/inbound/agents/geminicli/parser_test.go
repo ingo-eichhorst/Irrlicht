@@ -208,10 +208,15 @@ func TestTailer_BackgroundProcessCount_GeminiSpawn(t *testing.T) {
 	if m.BackgroundProcessCount != 1 {
 		t.Fatalf("BackgroundProcessCount = %d, want 1", m.BackgroundProcessCount)
 	}
-	// Gemini reports no output file, so the lsof-based working-hold has nothing
-	// to probe — BackgroundProcessOutputs stays empty by design (live-only hold).
+	// Gemini reports no output file, so BackgroundProcessOutputs stays empty —
+	// the lsof probe has nothing to inspect. Instead the PID surfaces in
+	// BackgroundProcessPIDs, which the daemon's PID-liveness probe signals to
+	// hold the session `working` until the process exits (issue #661).
 	if len(m.BackgroundProcessOutputs) != 0 {
 		t.Errorf("BackgroundProcessOutputs = %v, want empty (Gemini bg output is in-process)", m.BackgroundProcessOutputs)
+	}
+	if len(m.BackgroundProcessPIDs) != 1 || m.BackgroundProcessPIDs[0] != "33701" {
+		t.Errorf("BackgroundProcessPIDs = %v, want [33701]", m.BackgroundProcessPIDs)
 	}
 }
 

@@ -62,11 +62,10 @@ var backgroundPIDRe = regexp.MustCompile(`\(PID:\s*(\d+)\)`)
 //
 // Unlike Claude Code, Gemini hides the backgrounded command's output (viewable
 // only via Ctrl+B) and writes no `tasks/<id>.output` file, so OutputPath is
-// empty. The daemon's working-hold (HasLiveBackgroundProcess) is engaged only
-// when an output path exists for the lsof liveness probe, so it stays
-// disengaged here: the bg-process count is surfaced for observability, but
-// holding the session `working` until the PID exits would need a PID-liveness
-// probe the daemon does not yet have. That part remains live-only / unfixed.
+// empty. Because the spawn is keyed on the PID, the tailer surfaces it in
+// BackgroundProcessPIDs and the daemon's PID-liveness probe (kill(pid, 0))
+// holds the session `working` until the process exits — the second half of
+// #661 (the lsof-on-output-file probe has nothing to inspect for Gemini).
 func backgroundSpawnFromToolCall(tcm map[string]interface{}) *tailer.BackgroundSpawn {
 	if name, _ := tcm["name"].(string); name != "run_shell_command" {
 		return nil
