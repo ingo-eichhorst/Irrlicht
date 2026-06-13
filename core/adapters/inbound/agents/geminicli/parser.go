@@ -2,6 +2,7 @@ package geminicli
 
 import (
 	"regexp"
+	"strconv"
 	"strings"
 
 	"irrlicht/core/pkg/tailer"
@@ -39,6 +40,14 @@ import (
 type Parser struct {
 	cwd       string
 	committed map[string]tailer.UsageBreakdown
+
+	// write_todos snapshot state. Gemini-2 models register a `write_todos`
+	// tool that rewrites the whole todo list on every call (full-list
+	// replace, like codex `update_plan` / opencode `todowrite`). Todos carry
+	// no stable ID, so they're keyed by their `description` text and assigned
+	// a synthetic monotonic ID matching the tailer's Create-time numbering.
+	todoIDByDesc map[string]string
+	nextTaskID   int
 }
 
 // workspaceRe pulls the first workspace directory out of the bootstrap
@@ -237,6 +246,11 @@ func (p *Parser) parseAssistant(raw map[string]interface{}, ev *tailer.ParsedEve
 		if callID != "" || name != "" {
 			ev.ToolUses = append(ev.ToolUses, tailer.ToolUse{ID: callID, Name: name})
 		}
+		// write_todos carries a full-list snapshot of the session's todos;
+		// reconcile it into TaskDeltas so the dashboard's task dots populate.
+		if name == "write_todos" {
+			p.appendWriteTodosDeltas(tcm, ev)
+		}
 		// Gemini persists a finished toolCall with a terminal status and an
 		// embedded result, so close it here too — a session the daemon only
 		// observes after the fact still balances. A duplicate close from the
@@ -315,6 +329,71 @@ func (p *Parser) applyTokens(id string, raw map[string]interface{}, ev *tailer.P
 	if delta.Input > 0 || delta.Output > 0 || delta.CacheRead > 0 {
 		ev.Contribution = &tailer.PerTurnContribution{Model: ev.ModelName, Usage: delta}
 		p.committed[id] = billed
+	}
+}
+
+// appendWriteTodosDeltas reads the write_todos snapshot from toolCall.args.todos
+// and (a) appends the minimal TaskCreate/TaskUpdate sequence that brings the
+// accumulator in line with the snapshot, and (b) emits a TaskSnapshot listing
+// every todo currently tracked. The snapshot is what the tailer's
+// reconcileTaskSnapshot consumes to prune entries that vanished from a later
+// call and to honour status reversions the Update path skips by design.
+//
+// Mirrors opencode's todowrite handling — Gemini's todos likewise carry no
+// stable ID, so they're keyed by their `description` text. Two todos sharing
+// the same description collapse into one tracked task (a silent, acceptable
+// trade-off, as in opencode).
+func (p *Parser) appendWriteTodosDeltas(tcm map[string]interface{}, ev *tailer.ParsedEvent) {
+	args, _ := tcm["args"].(map[string]interface{})
+	if args == nil {
+		return
+	}
+	todos, _ := args["todos"].([]interface{})
+	if len(todos) == 0 {
+		return
+	}
+	snapshot := make([]tailer.TaskSnapshotEntry, 0, len(todos))
+	for _, raw := range todos {
+		todo, _ := raw.(map[string]interface{})
+		if todo == nil {
+			continue
+		}
+		desc, _ := todo["description"].(string)
+		status, _ := todo["status"].(string)
+		if desc == "" {
+			continue
+		}
+		id, seen := p.todoIDByDesc[desc]
+		if !seen {
+			p.nextTaskID++
+			id = strconv.Itoa(p.nextTaskID)
+			if p.todoIDByDesc == nil {
+				p.todoIDByDesc = make(map[string]string)
+			}
+			p.todoIDByDesc[desc] = id
+			ev.TaskDeltas = append(ev.TaskDeltas, tailer.TaskDelta{
+				Op:      tailer.TaskOpCreate,
+				Subject: desc,
+			})
+		}
+		// Create starts a task at pending; an Update is required to move it
+		// forward. Reversions back to pending are handled by the snapshot
+		// reconcile below (the delta-only path silently skips them).
+		if status != "" && status != tailer.TaskStatusPending {
+			ev.TaskDeltas = append(ev.TaskDeltas, tailer.TaskDelta{
+				Op:     tailer.TaskOpUpdate,
+				ID:     id,
+				Status: status,
+			})
+		}
+		snapshot = append(snapshot, tailer.TaskSnapshotEntry{
+			ID:      id,
+			Subject: desc,
+			Status:  status,
+		})
+	}
+	if len(snapshot) > 0 {
+		ev.TaskSnapshot = &snapshot
 	}
 }
 
