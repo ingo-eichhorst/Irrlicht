@@ -44,8 +44,8 @@ type Parser struct {
 // workspaceRe pulls the first workspace directory out of the bootstrap
 // <session_context> block, whose relevant lines read:
 //
-//	- **Workspace Directories:**
-//	  - /private/tmp/foo
+//   - **Workspace Directories:**
+//   - /private/tmp/foo
 var workspaceRe = regexp.MustCompile(`(?s)Workspace Directories:[^\n]*\n\s*-\s*([^\n]+)`)
 
 // backgroundPIDRe pulls the PID out of the run_shell_command result text for a
