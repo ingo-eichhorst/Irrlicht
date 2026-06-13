@@ -211,10 +211,10 @@ func TestParse_RealSession(t *testing.T) {
 
 	p := &Parser{}
 	var (
-		userMsgs, turnDones int
-		lastCWD, finalText  string
-		toolNames           = map[string]bool{}
-		toolResults         = map[string]bool{}
+		userMsgs, turnDones               int
+		lastCWD, finalText                string
+		toolNames                         = map[string]bool{}
+		toolResults                       = map[string]bool{}
 		sumInput, sumOutput, sumCacheRead int64
 	)
 
