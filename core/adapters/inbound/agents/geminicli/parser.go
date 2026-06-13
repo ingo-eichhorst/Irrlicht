@@ -103,9 +103,26 @@ func (p *Parser) parseMessage(raw map[string]interface{}, ev *tailer.ParsedEvent
 		return p.parseUser(raw, ev)
 	case "gemini":
 		return p.parseAssistant(raw, ev)
+	case "info":
+		return p.parseInfo(raw, ev)
 	default:
-		return false // system / info / compression / unknown
+		return false // system / compression / unknown
 	}
+}
+
+// parseInfo handles a bare "info" notice. The only one carrying an observable
+// signal is the cancel notice Gemini writes when the user aborts a turn with
+// ESC ("Request cancelled.") — it early-returns before flushing a terminal
+// "gemini" message, so unless it settles the open turn the session sticks in
+// working (#659; codex keys off a structural "turn_aborted" marker instead).
+// Every other info notice (compression, system chatter) is dropped so a notice
+// mid-turn cannot prematurely settle a still-working session.
+func (p *Parser) parseInfo(raw map[string]interface{}, ev *tailer.ParsedEvent) bool {
+	if content, _ := raw["content"].(string); strings.TrimSpace(content) == "Request cancelled." {
+		ev.EventType = "turn_done"
+		return true
+	}
+	return false
 }
 
 // parseUser handles a user-role message: a real text prompt, or the model's

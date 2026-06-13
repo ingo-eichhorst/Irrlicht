@@ -94,6 +94,28 @@ func TestParseLine_AssistantPlaceholderStaysWorking(t *testing.T) {
 	}
 }
 
+func TestParseLine_CancelNoticeSettlesTurn(t *testing.T) {
+	p := &Parser{}
+	// User pressed ESC: Gemini writes only this info notice and never flushes a
+	// terminal "gemini" message. It must settle the open turn (#659), otherwise
+	// the session sticks in working.
+	cancel := decode(t, `{"id":"i1","type":"info","content":"Request cancelled."}`)
+	ev := p.ParseLine(cancel)
+	if ev.Skip {
+		t.Fatal("cancel notice must not be skipped")
+	}
+	if ev.EventType != "turn_done" {
+		t.Errorf("cancel notice: want turn_done, got %q", ev.EventType)
+	}
+
+	// Any other info notice carries no signal and must stay skipped, so it can't
+	// prematurely settle a still-working session.
+	other := decode(t, `{"id":"i2","type":"info","content":"Compressing conversation history."}`)
+	if ev := p.ParseLine(other); !ev.Skip {
+		t.Errorf("unrelated info notice: want Skip, got EventType=%q", ev.EventType)
+	}
+}
+
 func TestParseLine_AssistantToolCallOpensTool(t *testing.T) {
 	p := &Parser{}
 	line := decode(t, `{"id":"g2","type":"gemini","content":"","model":"gemini-3-flash-preview","toolCalls":[
