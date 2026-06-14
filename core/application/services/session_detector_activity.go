@@ -604,15 +604,16 @@ func (d *SessionDetector) processActivityLocked(id agent.Identity, state *sessio
 	d.refreshSubagentSummary(state)
 
 	// Only treat this pass as an activity event when the transcript actually
-	// grew. A bare refresh-tick re-read of a frozen transcript leaves UpdatedAt
-	// alone so the ready-TTL age-out can reap dead sessions (issue #667). A real
-	// state transition still bumps UpdatedAt via the write inside the classify
-	// block above, so #445's process-exit settle is unaffected.
+	// grew. A bare refresh-tick re-read of a frozen transcript leaves the
+	// activity markers (UpdatedAt / EventCount / LastEvent) alone so the
+	// ready-TTL age-out can reap dead sessions (issue #667). A real state
+	// transition still bumps UpdatedAt via the write inside the classify block
+	// above, so #445's process-exit settle is unaffected.
 	if transcriptGrew {
 		state.UpdatedAt = time.Now().Unix()
 		state.EventCount++
+		state.LastEvent = "transcript_activity"
 	}
-	state.LastEvent = "transcript_activity"
 
 	if err := d.repo.Save(state); err != nil {
 		d.log.LogError("session-detector", ev.SessionID,
