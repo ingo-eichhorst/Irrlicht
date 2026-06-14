@@ -63,6 +63,24 @@ func TestRecordPrereqCheck(t *testing.T) {
 	}
 }
 
+func TestRecordPrereqBudget(t *testing.T) {
+	root := recordRepo(t)
+	// An assessed-but-unrecorded claudecode cell for basic-turn (2 wait_turns)
+	// → pending-record, so prereq-check estimates the recording budget.
+	cell := filepath.Join(root, "replaydata", "agents", "claudecode", "scenarios", "2-1_basic-turn")
+	write(t, filepath.Join(cell, "metadata.json"), `{"scenario_id":"basic-turn","details":{`+
+		`"assessment":{"agent_supports":"yes","daemon_capability":"full","driver_capability":"ready"},`+
+		`"recipe":{"timeout_seconds":120,"settings":{},"script":[`+
+		`{"type":"send","text":"hi"},{"type":"wait_turn"},{"type":"send","text":"more"},{"type":"wait_turn"}]}}}`)
+	code, out, _ := runOf("record", "prereq-check", "--agent", "claudecode", "--repo-root", root)
+	if code != exitOK {
+		t.Fatalf("exit=%d out=%s", code, out)
+	}
+	if !strings.Contains(out, "1 cell(s) pending-record") || !strings.Contains(out, "~2 agent request") {
+		t.Fatalf("budget estimate missing/wrong: %s", out)
+	}
+}
+
 func TestRecordVerifyAlias(t *testing.T) {
 	root := recordRepo(t)
 	// give the session-start cell a golden + observations so verify has something

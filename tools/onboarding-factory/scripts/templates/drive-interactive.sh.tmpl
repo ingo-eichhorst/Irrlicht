@@ -6,14 +6,21 @@
 # which primitives still need porting, and the matrix can't silently freeze a
 # cell on a missing arm.
 #
+# It also starts ON the shared _lib/drive slot model (slots.sh + contracts.sh):
+# the multi-session bookkeeping and the staging-contract emission are already
+# wired, so porting a multi-session step is "fill the seam + call
+# alloc_slot/load_slot", never a mid-run refactor onto the slot model (#666).
+#
 # HOW TO USE THIS TEMPLATE
 #   cp scripts/templates/drive-interactive.sh.tmpl \
 #      scripts/drive-<agent>-interactive.sh
 #   sed -i '' 's/__AGENT__/<agent>/g' scripts/drive-<agent>-interactive.sh
 #   chmod +x scripts/drive-<agent>-interactive.sh
 # Then fill the three AGENT-SPECIFIC SEAMS marked TODO(__AGENT__) below by
-# porting from the reference drivers (drive-claudecode-interactive.sh, the
-# fullest; drive-codex-interactive.sh adds `fork`).
+# porting from the reference drivers. For the slot-model multi-session arms
+# (restart / resume / reset_session / start_session / session) read a slot-model
+# driver — drive-codex-interactive.sh or drive-gemini-cli-interactive.sh;
+# claudecode uses a different slot scheme and does NOT source _lib/drive.
 #
 # IMPORTANT — how a stubbed arm is caught: every standard arm is PRESENT here
 # (so recipe-lint's GRAMMAR check treats it as handled and will NOT report a
@@ -77,6 +84,25 @@ SCRIPT_JSON="$5"
 mkdir -p "$STAGING"
 DRIVER_LOG="$STAGING/driver.log"
 
+# Shared multi-session slot bookkeeping + staging-contract emission (#508 #3).
+# The scaffolded driver lives at replaydata/agents/<agent>/driver-interactive.sh,
+# so the lib is two dirs up under replaydata/_lib/drive. Sourcing it means a new
+# column starts ON the slot model: porting a multi-session step is "wire the seam
+# + call alloc_slot/load_slot", not rebuilding the slot bookkeeping (#666).
+_DRIVE_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../_lib/drive" && pwd)"
+DRIVE_MARKER_PREFIX="$STAGING/.__AGENT__-marker"
+# shellcheck source=/dev/null
+source "$_DRIVE_LIB/slots.sh"
+# shellcheck source=/dev/null
+source "$_DRIVE_LIB/contracts.sh"
+
+# Slot state the lib reads/writes (the driver owns these globals). A run starts
+# with zero slots; launch_repl allocs slot 1, and restart/start_session alloc
+# more. ACTIVE indexes the live slot; SESSION/TRANSCRIPT/UUID mirror it.
+N_SLOTS=0; ACTIVE=0
+SES_SESSION=(); SES_TRANSCRIPT=(); SES_UUID=(); SES_EXPECTED=()
+SES_MARKER=(); SES_CWD=(); SES_ALIVE=()
+
 # recipe-lint contract (#508 #4): the step types this driver genuinely ELICITS,
 # read directly by recipe-lint (no separate manifest). Start with ONLY the seams
 # that actually work in this scaffold (send/slash/sleep) and add each primitive
@@ -105,7 +131,10 @@ not_implemented() { # <step-type>
 # (including a `set -e` abort mid-launch) and tear tmux down if a session was
 # started. Set EXIT_REASON before a failing `exit` so the reason is accurate.
 cleanup() {
-  [[ -n "$SESSION" ]] && tmux kill-session -t "$SESSION" 2>/dev/null || true
+  local i
+  for (( i = 1; i <= N_SLOTS; i++ )); do
+    [[ -n "${SES_SESSION[$i]:-}" ]] && tmux kill-session -t "${SES_SESSION[$i]}" 2>/dev/null || true
+  done
   echo "$EXIT_REASON" > "$STAGING/driver.exit-reason"
 }
 trap cleanup EXIT
@@ -116,14 +145,19 @@ trap cleanup EXIT
 # preferred UUID if the agent accepts one. The cleanup trap above tears it down.
 launch_repl() {
   command -v tmux >/dev/null 2>&1 || { echo "[driver] tmux required" >&2; EXIT_REASON="nonzero(2)"; exit 1; }
-  SESSION="__AGENT__drv-$$-$(date +%s)"
+  # alloc_slot mints a fresh slot, points SESSION at its tmux name and ACTIVE at
+  # it, and clears the slot's TRANSCRIPT/UUID. restart/start_session call it again
+  # to open another session; per-slot stdout (.stdout.$ACTIVE) feeds the contract.
+  alloc_slot "__AGENT__drv-$$-$(date +%s)-$((N_SLOTS + 1))" "$RUN_CWD"
   tmux kill-session -t "$SESSION" 2>/dev/null || true
   # `|| { … exit … }` keeps a launch failure from aborting under set -e WITHOUT
   # an accurate exit-reason — the cleanup trap then records nonzero(2).
-  tmux new-session -d -s "$SESSION" -x 200 -y 50 -c "$RUN_CWD" "__AGENT__" \
-    >>"$DRIVER_LOG.stdout" 2>>"$DRIVER_LOG.stderr" \
+  tmux new-session -d -s "$SESSION" -x 200 -y 50 -c "${SES_CWD[$ACTIVE]}" "__AGENT__" \
+    >>"$DRIVER_LOG.stdout.$ACTIVE" 2>>"$DRIVER_LOG.stderr" \
     || { echo "[driver] failed to launch __AGENT__ under tmux" >&2; EXIT_REASON="nonzero(2)"; exit 1; }
-  : # TODO(__AGENT__): resolve & record SESSION_ID + transcript path (SEAM 3) once the session is live
+  : # TODO(__AGENT__): resolve the live session_id + transcript path and store it
+    #   on the active slot — SES_TRANSCRIPT[$ACTIVE]=<abs path> (SEAM 3). The
+    #   staging contract + multi-session lists are derived from SES_TRANSCRIPT.
 }
 
 # --- AGENT-SPECIFIC SEAM 2: detect a completed turn --------------------------
@@ -152,22 +186,26 @@ while IFS= read -r step; do
     sleep)           sleep "$(jq -r '.seconds // 1' <<<"$step")" ;;
     interrupt)       not_implemented interrupt || break ;;       # TODO(__AGENT__): Escape/Ctrl-C the in-flight turn
     keys)            not_implemented keys || break ;;            # TODO(__AGENT__): tmux send-keys raw sequence
-    reset_session)   not_implemented reset_session || break ;;   # TODO(__AGENT__): in-REPL /clear|/new → new session id
-    restart)         not_implemented restart || break ;;         # TODO(__AGENT__): end + fresh session (new id, new cwd)
-    resume)          not_implemented resume || break ;;          # TODO(__AGENT__): relaunch same id+cwd
-    sigkill)         not_implemented sigkill || break ;;         # TODO(__AGENT__): kill -9 the session PID
+    reset_session)   not_implemented reset_session || break ;;   # TODO(__AGENT__): in-REPL /clear|/new → new id, SAME slot; re-resolve SES_TRANSCRIPT[$ACTIVE] (SEAM 3)
+    restart)         not_implemented restart || break ;;         # TODO(__AGENT__): save_active; alloc_slot <name> <new-cwd>; launch — new slot carries the new id
+    resume)          not_implemented resume || break ;;          # TODO(__AGENT__): relaunch same id+cwd (1 session, 2 PIDs) — reuse the active slot
+    sigkill)         not_implemented sigkill || break ;;         # TODO(__AGENT__): kill -9 the active slot's PID
     exit_clean)      not_implemented exit_clean || break ;;      # TODO(__AGENT__): Ctrl-D graceful shutdown
-    start_session)   not_implemented start_session || break ;;   # TODO(__AGENT__): concurrent session, keep first alive
-    session)         not_implemented session || break ;;         # TODO(__AGENT__): switch active slot
+    start_session)   not_implemented start_session || break ;;   # TODO(__AGENT__): save_active; alloc_slot; launch a CONCURRENT session, keep the first alive
+    session)         not_implemented session || break ;;         # TODO(__AGENT__): save_active; load_slot N — switch the active slot
     *)               echo "[driver] unknown step type: $type" >&2; EXIT_REASON="nonzero(2)"; break ;;
   esac
   (( $(remaining_seconds) <= 0 )) && { EXIT_REASON="timeout"; break; }
 done < <(jq -c '.[]' <<<"$SCRIPT_JSON")
 
-# --- Write the staging contract ----------------------------------------------
-# driver.exit-reason is written by the cleanup trap on exit (so it's recorded
-# even on an early failure). TODO(__AGENT__): write session.uuid(s) +
-# transcript.path(s) the daemon keyed on, exactly like the reference driver
-# (single-session: session.uuid + transcript.path; multi-session
-# reset/restart/start: session.uuids + transcript.paths, one per line).
-[[ "$EXIT_REASON" == "ok" ]] && exit 0 || exit 1
+# --- Write the staging contract (shared) -------------------------------------
+# emit_session_contract writes session.uuid + transcript.path (slot 1) plus the
+# multi-session session.uuids / transcript.paths lists from SES_TRANSCRIPT, and
+# combines the per-slot stdout (_lib/drive/contracts.sh). It needs each slot's
+# SES_TRANSCRIPT[$i] populated by SEAM 3; until that's ported the paths are empty
+# — the contract SHAPE is already correct, the scaffold just records nothing
+# useful yet. The primary id is the daemon's session_id — daemon_sid of the
+# transcript path; switch to the first-line UUID if __AGENT__ keys on that (see
+# drive-pi-interactive.sh). drive_exit maps EXIT_REASON → the process exit code.
+emit_session_contract "$(daemon_sid "${SES_TRANSCRIPT[1]}")"
+drive_exit

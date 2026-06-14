@@ -74,6 +74,34 @@ func defaultRecipeFields(cell *shard.ShardAgent) {
 	}
 }
 
+// recipeTurnCount estimates how many agent turns (≈ requests) a recipe drives:
+// the count of wait_turn steps in its script. A recipe with no script (a
+// headless prompt cell) or one that doesn't parse counts as a single turn. Used
+// by `of record prereq-check` to size a column's request budget before a sweep.
+func recipeTurnCount(recipe json.RawMessage) int {
+	if len(recipe) == 0 {
+		return 1
+	}
+	var r struct {
+		Script []struct {
+			Type string `json:"type"`
+		} `json:"script"`
+	}
+	if json.Unmarshal(recipe, &r) != nil {
+		return 1
+	}
+	turns := 0
+	for _, s := range r.Script {
+		if s.Type == "wait_turn" {
+			turns++
+		}
+	}
+	if turns == 0 {
+		return 1
+	}
+	return turns
+}
+
 // recipeTimeoutFinding returns a validate finding when a recipe that would be
 // driven omits a positive numeric timeout_seconds — the field whose absence
 // crashed a driver. Empty string means no finding. settings is defaulted on

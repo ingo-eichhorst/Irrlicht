@@ -97,8 +97,9 @@ of status --json                      # the whole matrix
 
 The cells whose `display_state` is **`pending-record`** are the record
 work-list; cells with no assessment yet are the assess work-list. Dispatch
-**one Agent per cell**, then re-run `of status` to confirm none remain before
-reporting "done". `display_state` ∈ `observed` (terminal),
+**one Agent per assess cell**; **`record` cells may be batched a few per
+subagent** (see the parallelism rules). Then re-run `of status` to confirm none
+remain before reporting "done". `display_state` ∈ `observed` (terminal),
 `pending-record` (→ assess or record), `blocked-daemon` / `blocked-driver` /
 `unobservable` / `n.a.` (terminal — documented, no recording), `unknown`
 (→ assess). A sweep is finished only when every cell is terminal.
@@ -118,6 +119,11 @@ reporting "done". `display_state` ∈ `observed` (terminal),
   single `--attach` daemon; concurrent recordings on one daemon interleave. Run
   record cells one at a time. Because record is serial there is no commit race,
   so the record subagent commits its own recording (part of its contract).
+- **Batch a few serial cells per `record` subagent.** A record subagent records
+  one cell at a time internally, so handing it ~4 cells per dispatch is far
+  cheaper on dispatcher context/turns than strict one-subagent-per-cell, with no
+  downside (the recordings still serialize). Keep batches small enough that the
+  ≤7-line returns stay legible — one return block per cell in the batch.
 - **Commit every assessment before the first record.** Cell `metadata.json` +
   `expected.jsonl` dirty `replaydata/`; the recording precheck refuses a dirty
   tree. So land all the parent-side assessment commits first, then record.
