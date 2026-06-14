@@ -2,6 +2,7 @@ package services
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -410,6 +411,23 @@ func (d *SessionDetector) processActivityLocked(id agent.Identity, state *sessio
 	// Refresh CWD/branch/project and metrics from transcript.
 	d.enricher.RefreshOnActivity(state, ev.TranscriptPath)
 
+	// Did this pass observe new transcript bytes? The 5s refreshStaleSessions
+	// ticker re-reads working sessions to recover missed tool-call events, but
+	// for a frozen transcript (e.g. a gemini-cli session whose process died
+	// mid-turn, pid=0) that re-read sees nothing new — yet the unconditional
+	// UpdatedAt bump below would refresh it to wall-clock "now" every tick,
+	// defeating the ready-TTL age-out that reaps dead sessions (issue #667).
+	// Track size on the persisted LastTranscriptSize so UpdatedAt advances only
+	// on real activity. Fail-open: a stat error counts as growth so we only ever
+	// suppress the bump when we positively confirm the transcript is unchanged.
+	transcriptGrew := true
+	if ev.TranscriptPath != "" {
+		if fi, err := os.Stat(ev.TranscriptPath); err == nil {
+			transcriptGrew = fi.Size() != state.LastTranscriptSize
+			state.LastTranscriptSize = fi.Size()
+		}
+	}
+
 	// Probe Bash background-process liveness (run_in_background). Must run
 	// after RefreshOnActivity (which recomputes metrics, clearing the flag)
 	// and before ClassifyState (whose IsAgentDone check reads it). Gated on
@@ -576,7 +594,6 @@ func (d *SessionDetector) processActivityLocked(id agent.Identity, state *sessio
 			if newState == session.StateWaiting {
 				state.WaitingStartTime = &now
 			} else if newState == session.StateWorking {
-				state.LastTranscriptSize = 0
 				state.WaitingStartTime = nil
 			}
 		}
@@ -586,8 +603,15 @@ func (d *SessionDetector) processActivityLocked(id agent.Identity, state *sessio
 	// plus file-based children from the repo). See ComputeSubagentSummary.
 	d.refreshSubagentSummary(state)
 
-	state.UpdatedAt = time.Now().Unix()
-	state.EventCount++
+	// Only treat this pass as an activity event when the transcript actually
+	// grew. A bare refresh-tick re-read of a frozen transcript leaves UpdatedAt
+	// alone so the ready-TTL age-out can reap dead sessions (issue #667). A real
+	// state transition still bumps UpdatedAt via the write inside the classify
+	// block above, so #445's process-exit settle is unaffected.
+	if transcriptGrew {
+		state.UpdatedAt = time.Now().Unix()
+		state.EventCount++
+	}
 	state.LastEvent = "transcript_activity"
 
 	if err := d.repo.Save(state); err != nil {

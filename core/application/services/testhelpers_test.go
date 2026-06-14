@@ -114,6 +114,26 @@ func (r *mockRepo) eventCountOf(sessionID string) int {
 	return 0
 }
 
+// savesCount reads the total Save count under r.mu — the race-free signal a
+// test uses to wait out a processActivity pass that produces no observable
+// field change (e.g. a no-op refresh that is gated from bumping EventCount).
+func (r *mockRepo) savesCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.saves
+}
+
+// updatedAtOf reads a session's UpdatedAt under r.mu (race-free; background
+// goroutines mutate the shared *SessionState — issue #606).
+func (r *mockRepo) updatedAtOf(sessionID string) int64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if s, ok := r.states[sessionID]; ok {
+		return s.UpdatedAt
+	}
+	return 0
+}
+
 // waitForCondition polls fn until it returns true or the timeout elapses. The
 // generic poll-for-condition replacement for fixed sleeps in tests whose
 // completion signal isn't a saved State value (issue #606).
