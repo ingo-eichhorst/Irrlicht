@@ -112,6 +112,33 @@ func TestCheckPIDLiveness_StaleTranscript_Deleted(t *testing.T) {
 	}
 }
 
+// TestCheckPIDLiveness_DeadProcessWorking_Reaped guards the end-state the #667
+// fix relies on: once UpdatedAt is allowed to age (the activity bump no longer
+// refreshes it on no-op refresh passes), a working session with pid=0 whose
+// UpdatedAt is past readyTTL is reaped by the existing sweep — even with a fresh
+// transcript on disk, since the daemon can't probe liveness of a pid=0 session.
+func TestCheckPIDLiveness_DeadProcessWorking_Reaped(t *testing.T) {
+	tmp := t.TempDir()
+	transcript := filepath.Join(tmp, "gem.jsonl")
+	writeTranscript(t, transcript, time.Now()) // fresh transcript; only UpdatedAt is stale
+
+	repo := newMockRepo()
+	repo.states["gem"] = &session.SessionState{
+		SessionID:      "gem",
+		Adapter:        "gemini-cli",
+		State:          session.StateWorking,
+		PID:            0,
+		TranscriptPath: transcript,
+		UpdatedAt:      time.Now().Add(-11 * time.Minute).Unix(), // > 10m readyTTL
+	}
+
+	newPIDManagerForTest(repo).CheckPIDLiveness()
+
+	if repo.states["gem"] != nil {
+		t.Fatal("dead-process working session (pid=0, UpdatedAt past readyTTL) should be reaped")
+	}
+}
+
 // deadPIDForTest spawns and reaps a short-lived process, returning its PID.
 // Skips the test if the kernel races us and recycles the PID before we can
 // confirm it is dead — keeps the test deterministic.
