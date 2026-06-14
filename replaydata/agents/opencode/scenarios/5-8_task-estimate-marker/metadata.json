@@ -128,7 +128,9 @@
           "type": "sleep",
           "seconds": 12
         }
-      ]
+      ],
+      "settings": {},
+      "timeout_seconds": 120
     }
   }
 }

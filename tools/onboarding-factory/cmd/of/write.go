@@ -410,6 +410,9 @@ func runCellWrite(args []string, stdout, stderr io.Writer) int {
 	// overview tier so the two tiers can't drift — the author only has to get
 	// details.assessment right.
 	mirrorAssessmentPillars(&cell)
+	// Default the driver-consumed recipe fields a script recipe omits
+	// (timeout_seconds, settings) so a malformed recipe never reaches a driver.
+	defaultRecipeFields(&cell)
 	fold := resolveCellFolder(*repoRoot, *agent, sh, *folder)
 	metaPath := filepath.Join(*repoRoot, "replaydata", "agents", *agent, "scenarios", fold, "metadata.json")
 	if err := writeJSONFileAtomic(metaPath, cell); err != nil {

@@ -55,13 +55,23 @@ ports the missing step from the reference driver before it drives.
 
 For `create-scenario`, `create-agent`, `assess`, and `record`, spawn ONE
 `general-purpose` Agent and let it run the corresponding self-contained
-`SKILL.md`. Brief it minimally — the SKILL.md carries the full contract:
+`SKILL.md`. Brief it minimally — the SKILL.md carries the full contract — but
+ALWAYS bind its working directory explicitly. A spawned agent does **not**
+inherit the dispatcher's cwd: it starts in the main checkout even when you are
+in a worktree. Pass the absolute repo root and make the subagent `cd` there and
+assert the branch BEFORE any `git` or `of` write. Skipping this once landed 43
+cells on `main` instead of the worktree. Compute the root once
+(`git rev-parse --show-toplevel`) and substitute it for `<repo-root>`:
 
 ```
 Agent(
   subagent_type: "general-purpose",
   description: "<verb> <agent>/<scenario>",
   prompt: "Read and execute .claude/skills/ir:onboarding-factory/<verb>/SKILL.md.
+           Repo root: <repo-root>. FIRST cd there, then assert
+           `git rev-parse --show-toplevel` == <repo-root> and
+           `git branch --show-current` == <branch>; abort if either differs.
+           Run every of/git command from that root.
            Inputs: agent=<agent> scenario=<scenario>.
            Follow it exactly and return ONLY the summary it specifies."
 )
@@ -95,15 +105,22 @@ reporting "done". `display_state` ∈ `observed` (terminal),
 
 ## Parallelism + ordering rules for sweeps
 
-- **`assess` fans out.** It is read-only (web + file research, no daemon), so
-  dispatch assess cells in parallel waves to save wall-clock.
-- **`record` is serialized.** It drives a live CLI under the single
-  `--attach` daemon; concurrent recordings on one daemon interleave. Run record
-  cells one at a time.
-- **Commit assessments before the first record.** `assess` writes cell
-  `metadata.json` + `expected.jsonl` via `of`, dirtying `replaydata/`; the
-  recording precheck refuses a dirty `replaydata/` tree. So land the assessment
-  commits first, then record.
+- **`assess` fans out; the PARENT commits.** assess is read-only of the live
+  system (web + file research, no daemon), so dispatch assess cells in parallel
+  waves to save wall-clock. But an assess subagent only WRITES its cell (via
+  `of cell write` / `of cell spec`) — it does **not** commit. N parallel
+  `git commit`s on one worktree race, scramble attribution, and once stranded a
+  wave mid-`reset`. After each wave returns, the parent stages and commits the
+  cells serially (one commit per cell). Committing is version control, not
+  authoring — the iron rule forbids the parent *authoring* `replaydata/`, not
+  committing what the subagents already wrote through `of`.
+- **`record` is serialized and self-commits.** It drives a live CLI under the
+  single `--attach` daemon; concurrent recordings on one daemon interleave. Run
+  record cells one at a time. Because record is serial there is no commit race,
+  so the record subagent commits its own recording (part of its contract).
+- **Commit every assessment before the first record.** Cell `metadata.json` +
+  `expected.jsonl` dirty `replaydata/`; the recording precheck refuses a dirty
+  tree. So land all the parent-side assessment commits first, then record.
 - After a `record` subagent returns, the recording is already committed (part
   of its contract). Don't re-stage, re-diff, or re-commit — just relay the
   summary.
@@ -116,6 +133,23 @@ asks the dispatcher a question — it runs to a terminal outcome and returns
 `status: prereq_blocked` with the concrete blocker in `notes`. The dispatcher
 surfaces that line to the human and moves on to the next cell. `of record
 prereq-check --agent <agent>` lists an agent's known prerequisites up front.
+
+## Filing daemon-bug issues (parent step, with consent)
+
+A `record` subagent CANNOT file GitHub issues — outward-facing writes are denied
+in its permission context, so for a `daemon=bug` cell it returns an `issue:`
+payload (a temp-file body + a one-line title) instead of filing it. When a
+record return carries a non-`none` `issue:`, the dispatcher — not the subagent —
+files it: show the user the title + body, and ONLY on their confirmation run
+
+```bash
+gh issue create --repo ingo-eichhorst/Irrlicht --label bug \
+  --title "<title from the payload>" --body-file "<path from the payload>"
+```
+
+Report the new issue number to the user. Wiring the number back into the cell,
+if wanted, is a follow-up `assess`/`record` touch (a subagent) — the dispatcher
+never authors `replaydata/`.
 
 ## Orchestrators (inline — no subagent)
 

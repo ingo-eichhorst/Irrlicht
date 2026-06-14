@@ -38,6 +38,11 @@ lists its exact field set and points here for shared semantics.
   non-`none` value MUST be written back into the cell via `of cell write` in
   the SAME commit (correct the pillar, add a citing caveat) — the backflow
   loop, not a cue. `none` when the recording matched the assessment.
+- **`issue:`** (`record`) — a daemon-bug issue the subagent CANNOT file:
+  outward-facing writes are denied in the subagent context. The record subagent
+  writes the issue body to a temp file and returns `issue: <path> title="..."`;
+  the DISPATCHER files it via `gh issue create` with the user's consent (see the
+  dispatcher's issue-filing step). `none` for any cell that isn't `daemon=bug`.
 
 ## The three pillars (the assessment axes)
 
@@ -74,4 +79,4 @@ The canonical field list lives in each verb's own `## Return contract`:
 | `create-scenario` | `scenario_id:` | `wrote`, `acceptance`, `next` |
 | `create-agent` | `agent:` | `provider`, `prereqs`, `driver_needs`, `next` |
 | `assess` | `verdict:` + `route:` | `summary`, `wrote`, `prereqs` |
-| `record` | `status:` | `commit_sha`, `pass_rate`, `observations`, `observability_correction` |
+| `record` | `status:` | `commit_sha`, `pass_rate`, `observations`, `observability_correction`, `issue` |

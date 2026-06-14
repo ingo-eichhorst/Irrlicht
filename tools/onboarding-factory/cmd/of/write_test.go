@@ -110,6 +110,44 @@ func TestCellWriteFK(t *testing.T) {
 	}
 }
 
+func TestCellWriteDefaultsRecipeFields(t *testing.T) {
+	// writeRecipe writes a cell whose details.recipe is the given JSON, then
+	// returns the rendered metadata.json so callers assert on the defaults.
+	writeRecipe := func(t *testing.T, root, recipe string) string {
+		t.Helper()
+		cellFile := filepath.Join(t.TempDir(), "cell.json")
+		if err := os.WriteFile(cellFile, []byte(`{"details":{"recipe":`+recipe+`}}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if code, _, errs := runOf("cell", "write", "--agent", "claudecode", "--scenario", "basic-turn", "--file", cellFile, "--repo-root", root); code != exitOK {
+			t.Fatalf("cell write failed: %d %s", code, errs)
+		}
+		b, _ := os.ReadFile(filepath.Join(root, "replaydata", "agents", "claudecode", "scenarios", "2-1_basic-turn", "metadata.json"))
+		return string(b)
+	}
+	t.Run("script recipe gets timeout+settings defaults", func(t *testing.T) {
+		got := writeRecipe(t, validRepo(t), `{"script":[{"type":"send","text":"hi"}]}`)
+		if !strings.Contains(got, `"timeout_seconds": 120`) {
+			t.Fatalf("timeout_seconds not defaulted:\n%s", got)
+		}
+		if !strings.Contains(got, `"settings": {}`) {
+			t.Fatalf("settings not defaulted:\n%s", got)
+		}
+	})
+	t.Run("explicit values are preserved", func(t *testing.T) {
+		got := writeRecipe(t, validRepo(t), `{"timeout_seconds":240,"settings":{"k":"v"},"script":[{"type":"send","text":"hi"}]}`)
+		if !strings.Contains(got, `"timeout_seconds": 240`) {
+			t.Fatalf("explicit timeout overwritten:\n%s", got)
+		}
+	})
+	t.Run("record_blocked recipe is left alone", func(t *testing.T) {
+		got := writeRecipe(t, validRepo(t), `{"applicable":false,"script":[{"type":"send","text":"hi"}]}`)
+		if strings.Contains(got, `"timeout_seconds"`) {
+			t.Fatalf("record_blocked recipe should not be defaulted:\n%s", got)
+		}
+	})
+}
+
 func TestCellSpec(t *testing.T) {
 	root := validRepo(t)
 	specFile := filepath.Join(t.TempDir(), "expected.jsonl")
