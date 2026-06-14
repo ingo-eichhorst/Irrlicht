@@ -75,7 +75,9 @@
           "type": "sleep",
           "seconds": 15
         }
-      ]
+      ],
+      "settings": {},
+      "timeout_seconds": 120
     }
   }
 }

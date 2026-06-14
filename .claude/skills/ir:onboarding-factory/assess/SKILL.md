@@ -99,8 +99,8 @@ would prove this?" then "does this adapter's parser produce that event today?"
 
 - yes for all, handled correctly → `daemon=full`.
 - a trace exists but the daemon mis-handles a spec-required observable →
-  `daemon=bug` (cite the event; the cell records `known_failing` and an issue is
-  filed in `record`).
+  `daemon=bug` (cite the event; the cell records `known_failing`, and `record`
+  hands an `issue:` payload back for the dispatcher to file).
 - no trace at all (cloud session with no local file; behavior the 3-state model
   can't represent) → `daemon=incapable`.
 
@@ -122,6 +122,14 @@ claudecode's recipe for the same scenario when one exists. For a cell asserting
 the full lifecycle arc, prefer an INTERACTIVE recipe when the agent's headless
 mode exits at turn completion (the process must outlive the daemon's observation
 window, or the settle/teardown phases validate as missing).
+
+Every interactive (`script`) recipe MUST carry the two fields the driver reads
+positionally: **`timeout_seconds`** (the per-cell turn budget in seconds — size
+it to the scenario; 120 is the floor) and **`settings`** (the agent settings
+blob, or `{}` when none). `of cell write` defaults both when omitted and `of
+validate` REJECTS a script recipe missing `timeout_seconds` — its absence once
+reached a driver as the literal `null` and crashed it. Headless (`prompt`) and
+`applicable:false` recipes don't need them.
 
 Then judge the **driver** pillar against the agent's interactive driver:
 
@@ -195,32 +203,29 @@ mirror. (`of cell write` also forces `scenario_id`.)
       "caveats": ["..."],
       "sources": [{"kind":"url|file","ref":"...","note":"..."}]
     },
-    "recipe": { "script": [ {"type":"send","text":"..."}, {"type":"wait_turn"}, {"type":"sleep","seconds":10} ] }
+    "recipe": { "timeout_seconds": 120, "settings": {}, "script": [ {"type":"send","text":"..."}, {"type":"wait_turn"}, {"type":"sleep","seconds":10} ] }
   }
 }
 ```
 
-### 7. Surface recording prerequisites + commit
+### 7. Surface recording prerequisites — but do NOT commit
 
 If recording this cell needs a human action (auth switch, env var, mock,
 unavailable provider) name it — it becomes `prereqs` in your return and the
 dispatcher relays it to the human. If the cell is recordable now, `prereqs:
 none`.
 
-```bash
-git add replaydata/agents/<agent>/scenarios/
-git commit -m "feat(onboard): assess <agent>/<scenario> (recipe+spec)"
-git rev-parse --short HEAD
-```
+**Do NOT `git commit`.** You ran in a parallel assess wave, and N subagents
+committing the one worktree at once race (scrambled attribution, stranded
+resets). Write both artifacts via `of` and return — the **dispatcher** stages
+and commits each cell serially after the wave (it knows your cell from the
+dispatch). Leaving `replaydata/` dirty for the parent is correct here.
 
-> End commit messages with the trailer
-> `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`.
-
-**If the route is `frozen`, stop after the commit** — the metadata documents
-*why* the cell is frozen and what would unblock it; no spec phases are needed
-beyond the meta. **`driver-gap`** and **`record` / `record-known-failing`** all
-keep the recipe + spec so `record` can proceed (the driver-gap cell records the
-moment `record` ports the missing step).
+**If the route is `frozen`, you're done after the write** — the metadata
+documents *why* the cell is frozen and what would unblock it; no spec phases are
+needed beyond the meta. **`driver-gap`** and **`record` / `record-known-failing`**
+all keep the recipe + spec so `record` can proceed (the driver-gap cell records
+the moment `record` ports the missing step).
 
 ## Return contract
 
@@ -231,9 +236,8 @@ Return ONLY this (≤6 lines). Shared semantics + envelope rules live in
 verdict: agent=<v> daemon=<full|bug|incapable|n/a> driver=<ready|gap:*> (confidence <n>)
 route: record | record-known-failing | driver-gap | frozen
 summary: <one sentence — the load-bearing reason, citing the anchoring event/code for any non-full/non-ready verdict>
-wrote: metadata.json + expected.jsonl (via of cell write / of cell spec)
+wrote: metadata.json + expected.jsonl (via of cell write / of cell spec) — UNCOMMITTED; the dispatcher commits
 prereqs: <human action recording needs, or "none">
-commit_sha: <short sha>
 ```
 
 ## Anti-patterns

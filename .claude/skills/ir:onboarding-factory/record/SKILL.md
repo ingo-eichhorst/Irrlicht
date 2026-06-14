@@ -145,14 +145,22 @@ of cell write --agent <agent> --scenario <scenario> --file /tmp/<agent>-<scenari
 ```
 
 Update the affected pillar, add a caveat citing the recording that proved it,
-and set `observability_correction` in your return. For a `daemon=bug` cell, file
-the issue and put its number in the spec meta `notes` + your return:
+and set `observability_correction` in your return. For a `daemon=bug` cell, do
+**not** run `gh issue create` — outward-facing writes are denied in your
+subagent permission context, so it silently degrades to a cell note and files
+nothing. Instead, write the issue body to a temp file and hand it back for the
+**dispatcher** to file (with the user's consent):
 
 ```bash
-gh issue create --repo ingo-eichhorst/Irrlicht --label bug \
-  --title "<agent>/<scenario>: daemon mis-handles <observable>" \
-  --body "<cited events.jsonl evidence + what the spec requires>"
+cat > /tmp/<agent>-<scenario>.issue.md <<'EOF'
+<cited events.jsonl evidence + what the spec requires>
+EOF
 ```
+
+Return it as the `issue:` payload (the path + a one-line title). Keep
+`known_failing` set in the spec meta with the bug behavior cited in `notes`; the
+issue number is wired into the cell by a later touch, once the dispatcher has
+filed it.
 
 ### 5. Refresh the replay golden (mandatory)
 
@@ -187,7 +195,7 @@ now also gates recording completeness — the newest recording must carry
 
 ## Return contract
 
-Return ONLY this (≤6 lines). Shared semantics + envelope rules live in
+Return ONLY this (≤7 lines). Shared semantics + envelope rules live in
 [`../return-contract.md`](../return-contract.md):
 
 ```
@@ -196,7 +204,8 @@ commit_sha: <short sha>            # the recording commit (or driver commit), "n
 pass_rate: <N/M phases>            # "n/a" for non-pass statuses
 observations: model=<ok|MISMATCH> cost=<ok|zero> tokens=<ok|zero> agent=<ok|MISMATCH>
 observability_correction: <none | the live recording overrode the assess verdict — e.g. assessed daemon=full but the store proved no trace (→ incapable/bug)>
-notes: <one or two sentences — drift flag, retry count, issue #, or infra/prereq reason>
+issue: <none | /tmp/<agent>-<scenario>.issue.md title="<one-line title>">   # daemon=bug only; the dispatcher files it
+notes: <one or two sentences — drift flag, retry count, infra/prereq reason>
 ```
 
 ## Anti-patterns
@@ -211,6 +220,9 @@ notes: <one or two sentences — drift flag, retry count, issue #, or infra/prer
   step won't appear on a re-run; port it (Step 1) or return.
 - **Don't rebase `expected.jsonl`** to make a failing verify pass — flag the
   drift, don't paper over it.
+- **Don't run `gh issue create`** — outward-facing writes are denied in your
+  context, so it files nothing. Return the `issue:` payload and let the
+  dispatcher file it with the user's consent.
 - **Don't run an isolated daemon while production `irrlichd` is up** — use
   `--attach`.
 - **Don't skip the golden refresh**, and **don't blanket-regenerate** goldens —

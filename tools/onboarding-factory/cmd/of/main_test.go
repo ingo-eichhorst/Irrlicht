@@ -181,6 +181,12 @@ func TestValidateCatchesViolations(t *testing.T) {
 			_ = os.Remove(filepath.Join(r, "replaydata", "agents", "claudecode",
 				"scenarios", "1-1_session-start", "recordings", "r1", "transcript.jsonl.replay.json.golden"))
 		}, "incomplete recording: missing transcript.jsonl.replay.json.golden"},
+		{"script recipe without timeout_seconds", func(r string) {
+			// A recipe that would be driven (non-empty script, not record_blocked)
+			// must carry a timeout_seconds — its absence crashed a driver.
+			write(t, filepath.Join(r, "replaydata", "agents", "claudecode", "scenarios", "1-1_session-start", "metadata.json"),
+				`{"scenario_id":"session-start","details":{"recipe":{"script":[{"type":"send","text":"hi"}]}}}`)
+		}, "omits timeout_seconds"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

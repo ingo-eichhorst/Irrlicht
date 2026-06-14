@@ -178,6 +178,11 @@ func validateCells(repoRoot string, names map[string]bool, add func(path, msg st
 			} else if !names[cell.ScenarioID] {
 				add(rel+"/metadata.json", fmt.Sprintf("scenario_id %q not in the catalog", cell.ScenarioID))
 			}
+			// A recipe the driver will run must carry the fields the driver reads
+			// positionally — a missing timeout_seconds once crashed a driver.
+			if msg := recipeTimeoutFinding(cell.Details.Recipe); msg != "" {
+				add(rel+"/metadata.json", msg)
+			}
 			// A cell is "recorded" iff NewestRecordingDir resolves one — the SAME
 			// definition matrix.cellRecorded uses, so the two never disagree.
 			// (hasRecordings/dirHasChildren above is only for orphan detection:

@@ -109,6 +109,8 @@
           "seconds": 12
         }
       ],
+      "settings": {},
+      "timeout_seconds": 120,
       "verify": [
         "events.jsonl shows session_birth → prompt1 ready→working→ready arc (mock returns 200 + generateContent reply) → prompt2 ready→working arc (mock returns 429)",
         "prompt2 ends in process_exited (or a post-sweep working→ready) without sticking in working",

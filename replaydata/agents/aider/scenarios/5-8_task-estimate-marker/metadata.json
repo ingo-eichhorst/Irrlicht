@@ -71,11 +71,6 @@
         "tmux available — the interactive driver runs aider in a tmux REPL so it stays alive across turns (the working→ready settle is idle-flush-bound and must be observed before teardown).",
         "irrlichd is recording — run-cell.sh in isolated mode, or --attach against a daemon started with --record."
       ],
-      "setup": [
-        "The interactive driver git-inits a fresh per-run cwd under <staging>/cwd/ and launches `aider --no-auto-commits --yes-always --no-gitignore` (plus --model if IRRLICHT_AIDER_MODEL is set) in a tmux session, waiting for the `> Repo-map:` banner before sending the first prompt.",
-        "The marker FORMAT rule lives in the human-seeded persistent CONVENTIONS.md (via ~/.aider.conf.yml `read:`), which survives into the run; the prompts below CUE each round so completed_rounds advances. As a belt-and-suspenders fallback the first send also restates the marker fenced so a stripped-config run still sees the literal HTML comment.",
-        "DAEMON NOW HANDLES THIS (was known_failing): commit 1ae457d9 ported the marker scan to the aider adapter — closeModelCall scans the full prose buffer before truncation, so a working aider session emits task_estimate. The spec asserts the correct behavior and record verifies it against the live recording (provisional on model emission only)."
-      ],
       "script": [
         {
           "type": "send",
@@ -109,7 +104,14 @@
           "type": "sleep",
           "seconds": 10
         }
-      ]
+      ],
+      "settings": {},
+      "setup": [
+        "The interactive driver git-inits a fresh per-run cwd under <staging>/cwd/ and launches `aider --no-auto-commits --yes-always --no-gitignore` (plus --model if IRRLICHT_AIDER_MODEL is set) in a tmux session, waiting for the `> Repo-map:` banner before sending the first prompt.",
+        "The marker FORMAT rule lives in the human-seeded persistent CONVENTIONS.md (via ~/.aider.conf.yml `read:`), which survives into the run; the prompts below CUE each round so completed_rounds advances. As a belt-and-suspenders fallback the first send also restates the marker fenced so a stripped-config run still sees the literal HTML comment.",
+        "DAEMON NOW HANDLES THIS (was known_failing): commit 1ae457d9 ported the marker scan to the aider adapter — closeModelCall scans the full prose buffer before truncation, so a working aider session emits task_estimate. The spec asserts the correct behavior and record verifies it against the live recording (provisional on model emission only)."
+      ],
+      "timeout_seconds": 120
     }
   }
 }
