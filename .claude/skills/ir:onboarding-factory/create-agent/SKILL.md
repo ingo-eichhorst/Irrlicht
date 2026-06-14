@@ -93,20 +93,23 @@ column.
 
 ### 3. Scaffold the interactive driver
 
-Copy the template into the agent folder and adapt the three agent-specific
-seams (input mechanism, turn/effect detection, transcript export):
+Copy the template into the agent folder and substitute the agent slug:
 
 ```bash
 cp tools/onboarding-factory/scripts/templates/drive-interactive.sh.tmpl \
    replaydata/agents/<slug>/driver-interactive.sh
+sed -i '' 's/__AGENT__/<slug>/g' replaydata/agents/<slug>/driver-interactive.sh
 chmod +x replaydata/agents/<slug>/driver-interactive.sh
 ```
 
-Start with the sparsest grammar that works (`send` / `wait_turn` / `sleep`) —
-new agents grow richer step types (`keys`, `interrupt`, `restart`,
-`reset_session`, …) as scenarios demand them. `record` ports each missing step
-from the claudecode/codex reference drivers when it hits a gap. Sanity-check:
-`bash -n replaydata/agents/<slug>/driver-interactive.sh`.
+The template scaffolds EVERY standard step-type arm (the multi-session ones
+stubbed `not_implemented`) and sources the shared `_lib/drive` slot model
+(`slots.sh` + `contracts.sh`), so a new column starts ON that model instead of
+needing a mid-run refactor. Fill the three agent-specific seams — launch,
+turn/effect detection, and session-id + transcript resolution
+(`SES_TRANSCRIPT[$ACTIVE]`) — then `record` ports each remaining multi-session
+arm from a slot-model reference driver (codex / gemini-cli) when a recipe hits a
+gap. Sanity-check: `bash -n replaydata/agents/<slug>/driver-interactive.sh`.
 
 ### 4. Predict driver-needs (the punch-list)
 

@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 
+	"irrlicht/tools/onboarding-factory/internal/matrix"
 	"irrlicht/tools/onboarding-factory/internal/shard"
 )
 
@@ -95,13 +96,45 @@ func runRecordPrereq(args []string, stdout, stderr io.Writer) int {
 	prereqs := readPrereqs(*repoRoot, *agent)
 	if len(prereqs) == 0 {
 		fmt.Fprintf(stdout, "%s: no recording prerequisites declared\n", *agent)
-		return exitOK
+	} else {
+		fmt.Fprintf(stdout, "%s recording prerequisites (verify before recording):\n", *agent)
+		for _, p := range prereqs {
+			fmt.Fprintf(stdout, "  - %s\n", p)
+		}
 	}
-	fmt.Fprintf(stdout, "%s recording prerequisites (verify before recording):\n", *agent)
-	for _, p := range prereqs {
-		fmt.Fprintf(stdout, "  - %s\n", p)
+	// Request-budget estimate: how many recordings the column's pending-record
+	// cells need, and a rough agent-request count (≈ turns across their recipes),
+	// so a per-day rate limit can be planned around BEFORE the sweep (the gemini
+	// free tier's 20-RPD wall hit mid-run). Informational — never a gate.
+	if cells, turns := estimateColumnBudget(*repoRoot, *agent); cells > 0 {
+		fmt.Fprintf(stdout, "recording budget: %d cell(s) pending-record, ~%d agent request(s) "+
+			"(turns across their recipes) — check this against any per-day rate limit before starting\n", cells, turns)
 	}
 	return exitOK
+}
+
+// estimateColumnBudget counts an agent's pending-record cells and sums their
+// estimated turns (≈ requests). Best-effort: a load error yields (0, 0), so
+// prereq-check degrades to listing prerequisites only.
+func estimateColumnBudget(repoRoot, agent string) (cells, turns int) {
+	m, err := matrix.LoadRepo(repoRoot)
+	if err != nil {
+		return 0, 0
+	}
+	recipes := shard.LoadAdapterCells(repoRoot, agent) // keyed by scenario_id (= name)
+	for _, sh := range shard.LoadAll(repoRoot) {
+		cs, ok := m.Cell(agent, sh.Name)
+		if !ok || cs.DisplayState != "pending-record" {
+			continue
+		}
+		cells++
+		if cell, ok := recipes[sh.Name]; ok {
+			turns += recipeTurnCount(cell.Details.Recipe)
+		} else {
+			turns++ // no recipe yet → assume one turn
+		}
+	}
+	return cells, turns
 }
 
 func runRecordRun(args []string, stdout, stderr io.Writer) int {
