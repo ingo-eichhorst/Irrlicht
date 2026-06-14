@@ -160,13 +160,34 @@ subsequent lines are phases:
 (`of cell spec` forces `scenario_id` onto the meta line — you don't write it.)
 
 - **Phases** assert the user-observable arc only: state transitions, distinct
-  session counts, parent-links, lifecycle. Anchor the FIRST phase to `"start"`
-  UNPINNED so a transient `proc-<PID>` presession row can't steal the birth and
-  cascade failures. No internal flags, event kinds, reasons, or rule numbers.
+  session counts, parent-links, lifecycle. No internal flags, event kinds,
+  reasons, or rule numbers. Anchor the birth by the adapter's session model:
+  - **Single-birth adapters** (a stable session_id from launch — e.g.
+    claudecode): anchor the FIRST phase to `"start"` UNPINNED so a transient
+    `proc-<PID>` presession row can't steal the birth and cascade failures.
+  - **Presession adapters** (a transient `proc-<PID>` row reconciles into a real
+    session with a DIFFERENT session_id — codex, gemini-cli): model the birth as
+    TWO phases and anchor every post-birth phase to the REAL session, never the
+    presession row (which never goes `working`):
+    ```jsonl
+    {"phase":"presession_birth","expected_state":"ready","relative_to":"start"}
+    {"phase":"session_birth","expected_state":"ready","relative_to":"presession_birth","new_session":true}
+    ... every later phase: "same_session_as":"session_birth" ...
+    ```
+    Collapsing these into a single birth (so `session_birth` lands on the
+    presession proc-row, which never goes `working`) is the miss that verified
+    nearly every multi-phase presession cell PARTIAL until `record` re-anchored
+    it. Template from the codex sibling spec.
 - **Observations** assert the websocket metric vector the verify engine checks —
   exact-match categorical fields (`model`, `agent`), non-zero + tolerance for
   `cost`/`tokens`. This is the widened verify the factory added: a recording is
   verified on token/usage/cost/model, not just lifecycle state.
+  **Don't hard-pin a doc-guessed `model`.** Vendor docs lag the binary, and a
+  wrong `model` exact-match fails every recording until `record` corrects it
+  (assessed `gemini-3-flash-preview`; reality `gemini-3.5-flash`). Pin `model`
+  only when you can confirm it from the live surface (the binary's strings, a
+  shipped config default); otherwise leave it provisional and let `record` fill
+  it from the recording. Never pin a `cost` figure — assert non-zero only.
 - For a `daemon=bug` cell, set `known_failing` in the meta and keep the spec
   asserting the CORRECT behavior — never weaken it to match the bug.
 
@@ -251,6 +272,9 @@ prereqs: <human action recording needs, or "none">
   mislabeling routes the fix to the wrong owner.
 - **Don't fabricate sources.** An empty/honest `sources` with low `confidence`
   beats a fake citation that poisons future re-assessments.
+- **Don't pin a doc-guessed `model`/`cost`.** Confirm `model` from the live
+  surface or leave it provisional for `record` to fill; assert `cost` non-zero,
+  never a figure. A doc-derived model string fails every recording's verify.
 - **Don't set `confidence` ≥ 0.9 from general knowledge.** That band is for "the
   docs literally say this" / "the source has the exact behavior." `0.7–0.85` is
   the honest band for a thorough multi-source read.

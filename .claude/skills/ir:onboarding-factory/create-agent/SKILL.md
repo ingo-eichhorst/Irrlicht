@@ -76,6 +76,21 @@ of agent add --id <slug> --name "<Display Name>" --provider <provider> \
 of validate
 ```
 
+**Also register the slug in the tooling that hard-codes the adapter list.**
+There is no shared adapter registry yet, so a new column is invisible to two
+tools until its slug is added by hand (both rejected `gemini-cli` until patched):
+
+1. `tools/onboarding-factory/scripts/precheck.sh` — add `<slug>` to BOTH `case`
+   tables: the adapter-validation allowlist (`claudecode|codex|…)`) and the
+   CLI-bin/version table (`<slug>) CLI_BIN="<binary>"; VER_FIELD=<n> ;;`).
+2. `tools/onboarding-factory/cmd/replay/main.go` — add `<slug>.Agent()` to the
+   `allAgents` slice, add a `detectAdapter` case matching the agent's
+   session-storage path AND `replaydata/agents/<slug>/`, and — only if the
+   adapter needs a non-default transcript parser — a `parserFactories` entry.
+
+Until both are patched, `of record`'s precheck and the `replay` CLI reject the
+column.
+
 ### 3. Scaffold the interactive driver
 
 Copy the template into the agent folder and adapt the three agent-specific
