@@ -15,6 +15,10 @@ struct SettingsView: View {
     @AppStorage("showQuotaForecast") private var showQuotaForecast: Bool = true
     @AppStorage("launchAtLogin") private var launchAtLogin: Bool = true
     @AppStorage("taskEtaActivation") private var taskEtaActivation: Bool = false
+    // Advanced Settings disclosure state (#694) — collapsed by default; the
+    // power-user / still-maturing controls (debug, task-eta, sources, CLI tool)
+    // live under it.
+    @AppStorage("advancedSettingsExpanded") private var advancedSettingsExpanded: Bool = false
     @AppStorage("providerMode_anthropic") private var providerModeAnthropic: String = ProviderModePreference.auto.rawValue
     @AppStorage("providerMode_openai") private var providerModeOpenAI: String = ProviderModePreference.auto.rawValue
     @AppStorage(NotificationEvent.ready.enabledKey) private var notifyOnReady: Bool = false
@@ -58,12 +62,6 @@ struct SettingsView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    LeadingToggle(
-                        isOn: $debugMode,
-                        label: "Debug Mode",
-                        info: "Show session IDs, creation time, and time since last update."
-                    )
-
                     LeadingToggle(
                         isOn: $showCostDisplay,
                         label: "Show Estimated Cost",
@@ -123,102 +121,6 @@ struct SettingsView: View {
                         }
                     }
                     .onAppear { refreshLoginItemStatus() }
-
-                    // Task-eta global activation (issue #558). The daemon is
-                    // the source of truth: the toggle posts the flip and then
-                    // mirrors the daemon's answer, so a failed install never
-                    // shows as "on".
-                    LeadingToggle(
-                        isOn: $taskEtaActivation,
-                        label: "Task-Estimate Markers",
-                        info: "Add a managed emission rule to ~/.claude/CLAUDE.md so agents report task progress and sessions show a completion ETA. Only the Irrlicht-managed block is written; the rest of the file is untouched. Turning this off removes the block."
-                    )
-                    .onChange(of: taskEtaActivation) { newValue in
-                        // Swallow the change we made ourselves while reconciling
-                        // from the daemon — only a real user toggle should write.
-                        if taskEtaReconciling { taskEtaReconciling = false; return }
-                        Task {
-                            // nil = daemon unreachable: leave the toggle where the
-                            // user put it; the next open reconciles. Only correct
-                            // the toggle on a definite, differing answer.
-                            if let actual = await ActivationClient.set(enabled: newValue), actual != newValue {
-                                taskEtaReconciling = true
-                                taskEtaActivation = actual
-                            }
-                        }
-                    }
-                    .onAppear {
-                        Task {
-                            // Only reconcile on a definite answer — an unreachable
-                            // daemon (nil) must NOT flip the toggle off and trigger
-                            // a spurious uninstall of the managed CLAUDE.md block.
-                            if let actual = await ActivationClient.status(), actual != taskEtaActivation {
-                                taskEtaReconciling = true
-                                taskEtaActivation = actual
-                            }
-                        }
-                    }
-
-                    Divider()
-
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Sources")
-                            .font(.subheadline)
-                            .fontWeight(.medium)
-
-                        LeadingToggle(
-                            isOn: $useLocalDaemon,
-                            label: "Local",
-                            info: "Watch the daemon this app connects to directly."
-                        )
-
-                        LeadingToggle(
-                            isOn: $useRelayServer,
-                            label: "Relay server",
-                            info: "Also connect to a relay to see sessions from other machines."
-                        )
-
-                        if useRelayServer {
-                            HStack(spacing: 6) {
-                                TextField("ws://localhost:7839", text: $relayURLDraft)
-                                    .textFieldStyle(.roundedBorder)
-                                    .font(.system(.caption, design: .monospaced))
-                                    .autocorrectionDisabled(true)
-                                    .onChange(of: relayURLDraft) { newValue in
-                                        relayURLDebounceTask?.cancel()
-                                        relayURLDebounceTask = Task {
-                                            try? await Task.sleep(nanoseconds: 600_000_000)
-                                            guard !Task.isCancelled else { return }
-                                            relayServerURL = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
-                                        }
-                                    }
-                                Circle()
-                                    .fill(sessionManager.relayConnectionState.dotColor)
-                                    .frame(width: 8, height: 8)
-                                    .tooltip(sessionManager.relayConnectionState.shortLabel)
-                            }
-                            SecureField("Relay token (leave empty if the relay has no auth)", text: $relayTokenDraft)
-                                .textFieldStyle(.roundedBorder)
-                                .font(.system(.caption, design: .monospaced))
-                                .autocorrectionDisabled(true)
-                                .onChange(of: relayTokenDraft) { newValue in
-                                    KeychainStore.set(newValue.trimmingCharacters(in: .whitespacesAndNewlines), account: "relayToken")
-                                    // Keychain writes don't fire UserDefaults.didChangeNotification,
-                                    // so nudge the relay to reconnect with the new token.
-                                    sessionManager.relayTokenDidChange()
-                                }
-                        }
-                    }
-                    .onAppear {
-                        relayURLDraft = relayServerURL
-                        relayTokenDraft = KeychainStore.get(account: "relayToken")
-                    }
-                    .onChange(of: useRelayServer) { on in
-                        if on && relayURLDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                            relayURLDraft = "ws://localhost:7839"
-                        }
-                        commitRelayURL()
-                    }
 
                     Divider()
 
@@ -341,7 +243,138 @@ struct SettingsView: View {
 
                     Divider()
 
-                    CLIToolSection()
+                    // Advanced Settings (#694): power-user and still-maturing
+                    // controls, collapsed by default. Disclosure state persists
+                    // via @AppStorage("advancedSettingsExpanded").
+                    VStack(alignment: .leading, spacing: 12) {
+                        Button {
+                            withAnimation(IrrMotion.easeOut(duration: IrrMotion.fast)) {
+                                advancedSettingsExpanded.toggle()
+                            }
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: "chevron.right")
+                                    .font(.caption2.weight(.semibold))
+                                    .foregroundColor(.secondary)
+                                    .rotationEffect(.degrees(advancedSettingsExpanded ? 90 : 0))
+                                Text("Advanced Settings")
+                                    .font(.subheadline)
+                                    .fontWeight(.medium)
+                                Spacer()
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+
+                        if advancedSettingsExpanded {
+                            LeadingToggle(
+                                isOn: $debugMode,
+                                label: "Debug Mode",
+                                info: "Show session IDs, creation time, and time since last update."
+                            )
+
+                            // Task-eta global activation (issue #558). The daemon is
+                            // the source of truth: the toggle posts the flip and then
+                            // mirrors the daemon's answer, so a failed install never
+                            // shows as "on".
+                            LeadingToggle(
+                                isOn: $taskEtaActivation,
+                                label: "Task-Estimate Markers",
+                                info: "Add a managed emission rule to ~/.claude/CLAUDE.md so agents report task progress and sessions show a completion ETA. Only the Irrlicht-managed block is written; the rest of the file is untouched. Turning this off removes the block.",
+                                beta: true
+                            )
+                            .onChange(of: taskEtaActivation) { newValue in
+                                // Swallow the change we made ourselves while reconciling
+                                // from the daemon — only a real user toggle should write.
+                                if taskEtaReconciling { taskEtaReconciling = false; return }
+                                Task {
+                                    // nil = daemon unreachable: leave the toggle where the
+                                    // user put it; the next open reconciles. Only correct
+                                    // the toggle on a definite, differing answer.
+                                    if let actual = await ActivationClient.set(enabled: newValue), actual != newValue {
+                                        taskEtaReconciling = true
+                                        taskEtaActivation = actual
+                                    }
+                                }
+                            }
+                            .onAppear {
+                                Task {
+                                    // Only reconcile on a definite answer — an unreachable
+                                    // daemon (nil) must NOT flip the toggle off and trigger
+                                    // a spurious uninstall of the managed CLAUDE.md block.
+                                    if let actual = await ActivationClient.status(), actual != taskEtaActivation {
+                                        taskEtaReconciling = true
+                                        taskEtaActivation = actual
+                                    }
+                                }
+                            }
+
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack(spacing: 6) {
+                                    Text("Sources")
+                                        .font(.subheadline)
+                                        .fontWeight(.medium)
+                                    BetaBadge()
+                                    Spacer()
+                                }
+
+                                LeadingToggle(
+                                    isOn: $useLocalDaemon,
+                                    label: "Local",
+                                    info: "Watch the daemon this app connects to directly."
+                                )
+
+                                LeadingToggle(
+                                    isOn: $useRelayServer,
+                                    label: "Relay server",
+                                    info: "Also connect to a relay to see sessions from other machines."
+                                )
+
+                                if useRelayServer {
+                                    HStack(spacing: 6) {
+                                        TextField("ws://localhost:7839", text: $relayURLDraft)
+                                            .textFieldStyle(.roundedBorder)
+                                            .font(.system(.caption, design: .monospaced))
+                                            .autocorrectionDisabled(true)
+                                            .onChange(of: relayURLDraft) { newValue in
+                                                relayURLDebounceTask?.cancel()
+                                                relayURLDebounceTask = Task {
+                                                    try? await Task.sleep(nanoseconds: 600_000_000)
+                                                    guard !Task.isCancelled else { return }
+                                                    relayServerURL = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                                                }
+                                            }
+                                        Circle()
+                                            .fill(sessionManager.relayConnectionState.dotColor)
+                                            .frame(width: 8, height: 8)
+                                            .tooltip(sessionManager.relayConnectionState.shortLabel)
+                                    }
+                                    SecureField("Relay token (leave empty if the relay has no auth)", text: $relayTokenDraft)
+                                        .textFieldStyle(.roundedBorder)
+                                        .font(.system(.caption, design: .monospaced))
+                                        .autocorrectionDisabled(true)
+                                        .onChange(of: relayTokenDraft) { newValue in
+                                            KeychainStore.set(newValue.trimmingCharacters(in: .whitespacesAndNewlines), account: "relayToken")
+                                            // Keychain writes don't fire UserDefaults.didChangeNotification,
+                                            // so nudge the relay to reconnect with the new token.
+                                            sessionManager.relayTokenDidChange()
+                                        }
+                                }
+                            }
+                            .onAppear {
+                                relayURLDraft = relayServerURL
+                                relayTokenDraft = KeychainStore.get(account: "relayToken")
+                            }
+                            .onChange(of: useRelayServer) { on in
+                                if on && relayURLDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                    relayURLDraft = "ws://localhost:7839"
+                                }
+                                commitRelayURL()
+                            }
+
+                            CLIToolSection()
+                        }
+                    }
                 }
                 .padding(.horizontal, 20)
                 .padding(.vertical, 16)
@@ -629,6 +662,8 @@ struct LeadingToggle: View {
     @Binding var isOn: Bool
     let label: String
     var info: String? = nil
+    /// Flags a still-maturing feature with a "BETA" pill after the label (#694).
+    var beta: Bool = false
 
     var body: some View {
         HStack(spacing: 6) {
@@ -637,8 +672,26 @@ struct LeadingToggle: View {
             if let info {
                 InfoIcon(text: info)
             }
+            if beta {
+                BetaBadge()
+            }
             Spacer()
         }
+    }
+}
+
+/// Small "BETA" pill flagging a feature that's still maturing (#694). Mirrors
+/// the web dashboard's `.beta-badge`.
+struct BetaBadge: View {
+    var body: some View {
+        Text("BETA")
+            .font(.system(size: 9, weight: .bold))
+            .tracking(0.5)
+            .foregroundColor(IrrColors.working)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .background(Capsule().fill(IrrColors.working.opacity(0.15)))
+            .accessibilityLabel("Beta feature")
     }
 }
 

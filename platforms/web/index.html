@@ -41,45 +41,6 @@
           <span class="settings-hint">Display the per-session running cost in each row.</span>
         </span>
       </label>
-      <label>
-        <input type="checkbox" data-setting="debugMode">
-        <span class="settings-label-text">
-          <span class="settings-title">Debug mode</span>
-          <span class="settings-hint">Show session IDs and elapsed time in each row.</span>
-        </span>
-      </label>
-
-      <h2>Sources</h2>
-      <label>
-        <input type="checkbox" data-setting="enableLocalSource">
-        <span class="settings-label-text">
-          <span class="settings-title">Local</span>
-          <span class="settings-hint">Watch the daemon (or relay) that served this page.</span>
-        </span>
-      </label>
-      <label>
-        <input type="checkbox" data-setting="enableRelaySource">
-        <span class="settings-label-text">
-          <span class="settings-title">Relay server</span>
-          <span class="settings-hint">Also connect to a relay to see other machines' sessions.</span>
-        </span>
-      </label>
-      <label class="settings-text-row">
-        <span class="settings-label-text">
-          <span class="settings-title">Relay server URL</span>
-          <span class="settings-hint">e.g. ws://localhost:7839</span>
-        </span>
-        <input type="text" class="settings-text-input" data-setting="relayUrl"
-               placeholder="ws://localhost:7839" spellcheck="false" autocomplete="off">
-      </label>
-      <label class="settings-text-row">
-        <span class="settings-label-text">
-          <span class="settings-title">Relay token</span>
-          <span class="settings-hint">Only if the relay requires auth; leave empty otherwise.</span>
-        </span>
-        <input type="password" class="settings-text-input" data-setting="relayToken"
-               placeholder="bearer token" spellcheck="false" autocomplete="off">
-      </label>
 
       <h2>Permissions</h2>
       <div class="settings-action-row">
@@ -122,6 +83,51 @@
           <span class="settings-hint">Heads-up when a session approaches its context limit.</span>
         </span>
       </label>
+
+      <details class="settings-advanced" id="settings-advanced">
+        <summary>
+          <span class="settings-advanced-title">Advanced Settings</span>
+        </summary>
+        <label>
+          <input type="checkbox" data-setting="debugMode">
+          <span class="settings-label-text">
+            <span class="settings-title">Debug mode</span>
+            <span class="settings-hint">Show session IDs and elapsed time in each row.</span>
+          </span>
+        </label>
+
+        <h2>Sources <span class="beta-badge">Beta</span></h2>
+        <label>
+          <input type="checkbox" data-setting="enableLocalSource">
+          <span class="settings-label-text">
+            <span class="settings-title">Local</span>
+            <span class="settings-hint">Watch the daemon (or relay) that served this page.</span>
+          </span>
+        </label>
+        <label>
+          <input type="checkbox" data-setting="enableRelaySource">
+          <span class="settings-label-text">
+            <span class="settings-title">Relay server</span>
+            <span class="settings-hint">Also connect to a relay to see other machines' sessions.</span>
+          </span>
+        </label>
+        <label class="settings-text-row">
+          <span class="settings-label-text">
+            <span class="settings-title">Relay server URL</span>
+            <span class="settings-hint">e.g. ws://localhost:7839</span>
+          </span>
+          <input type="text" class="settings-text-input" data-setting="relayUrl"
+                 placeholder="ws://localhost:7839" spellcheck="false" autocomplete="off">
+        </label>
+        <label class="settings-text-row">
+          <span class="settings-label-text">
+            <span class="settings-title">Relay token</span>
+            <span class="settings-hint">Only if the relay requires auth; leave empty otherwise.</span>
+          </span>
+          <input type="password" class="settings-text-input" data-setting="relayToken"
+                 placeholder="bearer token" spellcheck="false" autocomplete="off">
+        </label>
+      </details>
 
       <div class="settings-modal-footer">
         <span class="settings-perm-note" id="settings-perm-note"></span>

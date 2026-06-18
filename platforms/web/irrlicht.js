@@ -2579,6 +2579,17 @@
       });
     }
 
+    // Advanced Settings disclosure (#694): collapsed by default, but its
+    // open/closed choice persists across reloads (native <details> forgets).
+    // Mirrors the macOS @AppStorage("advancedSettingsExpanded") behavior.
+    const advancedDetails = document.getElementById('settings-advanced');
+    if (advancedDetails) {
+      try { advancedDetails.open = localStorage.getItem('irrlicht_advancedSettingsExpanded') === 'true'; } catch (e) {}
+      advancedDetails.addEventListener('toggle', () => {
+        try { localStorage.setItem('irrlicht_advancedSettingsExpanded', advancedDetails.open ? 'true' : 'false'); } catch (e) {}
+      });
+    }
+
     // --- Daemon version (Irrlicht v$VERSION in the header) ---
     fetch('/api/v1/version').then(r => r.ok ? r.json() : null).catch(() => null).then(v => {
       const el = document.getElementById('app-version');

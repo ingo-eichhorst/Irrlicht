@@ -945,6 +945,48 @@
       margin-bottom: 10px;
     }
     .settings-modal h2:not(:first-child) { margin-top: 14px; }
+    /* "BETA" pill flagging a still-maturing feature (#694); mirrors macOS. */
+    .beta-badge {
+      display: inline-block;
+      font-family: var(--font-mono);
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      color: var(--working);
+      background: var(--working-dim);
+      border-radius: 6px;
+      padding: 1px 5px;
+      margin-left: 6px;
+      vertical-align: middle;
+    }
+    /* Advanced Settings disclosure (#694): collapsed by default, expandable. */
+    .settings-modal details.settings-advanced { margin-top: 14px; }
+    .settings-modal details.settings-advanced > summary {
+      list-style: none;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      user-select: none;
+      padding: 2px 0;
+    }
+    .settings-modal details.settings-advanced > summary::-webkit-details-marker { display: none; }
+    .settings-modal details.settings-advanced > summary::before {
+      content: '\25B8';
+      color: var(--muted);
+      font-size: 10px;
+      transition: transform 0.15s;
+    }
+    .settings-modal details.settings-advanced[open] > summary::before { transform: rotate(90deg); }
+    .settings-modal details.settings-advanced > summary .settings-advanced-title {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
     .settings-modal label {
       display: flex;
       align-items: flex-start;
