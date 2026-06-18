@@ -1248,10 +1248,11 @@ class SessionManager: ObservableObject {
     // message resumes as its own @MainActor turn, SwiftUI re-rendered the whole
     // (eager, non-virtualized) session list once per message — O(N) work × N
     // pushes/sec. We coalesce pure-metric updates: accumulate dirty session ids
-    // and apply one rebuild + patch per refresh window, so render volume is
-    // bounded by the window, not the push rate. State transitions and the
-    // notifications that depend on them still fire synchronously at message
-    // time, so alerts and sounds are never delayed.
+    // and apply one rebuild + one batched patch per refresh window, so render
+    // volume is bounded by the window, not the push rate. State transitions and
+    // the notifications that depend on them (ready/waiting sounds and banners)
+    // still fire synchronously at message time; only context-pressure alerts —
+    // which ride `rebuildSessionsFromMap` — are deferred, by at most one window.
 
     /// Session ids touched since the last flush.
     private var pendingDirtySessionIDs = Set<String>()
@@ -1280,9 +1281,8 @@ class SessionManager: ObservableObject {
     }
 
     /// Apply all pending session updates in one pass: a single flat-surface
-    /// rebuild plus an in-place apiGroups patch per dirty session. The multiple
-    /// @Published mutations in this one synchronous turn coalesce into a single
-    /// SwiftUI render.
+    /// rebuild plus one batched apiGroups patch. Both surfaces reassign in this
+    /// one synchronous turn, so SwiftUI coalesces them into a single render.
     private func flushUIRefresh() {
         uiRefreshScheduled = false
         guard !pendingDirtySessionIDs.isEmpty else { return }
@@ -1290,9 +1290,24 @@ class SessionManager: ObservableObject {
         pendingDirtySessionIDs.removeAll()
         uiRefreshFlushCount += 1
         rebuildSessionsFromMap()
-        for id in dirty {
-            guard let session = sessionMap[id] else { continue }
-            patchApiGroups(session: session)
+        patchApiGroups(sessions: dirty.compactMap { sessionMap[$0] })
+    }
+
+    /// Batch counterpart to `patchApiGroups(session:)` for the coalesced flush:
+    /// applies every dirty session to the group tree in a single map pass and
+    /// recomposes once, rather than one full map + recompose per session (#690).
+    /// A session with no row yet (created mid-window) self-heals via the same
+    /// debounced rehydration the single-session path uses.
+    private func patchApiGroups(sessions: [SessionState]) {
+        let present = sessions.filter { groupedSessionIds.contains($0.id) }
+        if !present.isEmpty {
+            localApiGroups = localApiGroups.map { group in
+                present.reduce(group) { patchGroup($0, with: $1) }
+            }
+            recomposeApiGroups()
+        }
+        if sessions.contains(where: { !groupedSessionIds.contains($0.id) }) {
+            scheduleRehydration()
         }
     }
 
@@ -1783,9 +1798,7 @@ class SessionManager: ObservableObject {
 
     // MARK: - Debug State Dump (IRRLICHT_DEBUG=1)
 
-    private var isDebugMode: Bool {
-        ProcessInfo.processInfo.environment["IRRLICHT_DEBUG"] == "1"
-    }
+    private var isDebugMode: Bool { irrlichtVerboseLogging }
 
     /// Writes current session state to ~/.irrlicht/debug-state.json when IRRLICHT_DEBUG=1.
     /// Agents can verify UI state with: cat ~/.irrlicht/debug-state.json
