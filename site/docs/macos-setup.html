@@ -87,6 +87,7 @@
 
       <h1>macOS Setup</h1>
       <p class="page-subtitle">A few system settings to make Irrlicht work at its best &mdash; especially when you spend most of your time in full-screen apps.</p>
+      <p><strong>Prerequisites:</strong> macOS 13 (Ventura) or later with Irrlicht installed (see <a href="installation.html">Installation</a>).</p>
 
       <!-- ── Permission wizard ── -->
       <h2>The Permission Wizard (First Run)</h2>
@@ -123,7 +124,7 @@
       <ol class="steps">
         <li>Click the flame icon in the menu bar to open the session list.</li>
         <li>Click the gear icon to open <strong>Settings</strong>.</li>
-        <li>Toggle <strong>Launch at Login</strong> on.</li>
+        <li>Toggle <strong>Launch at Login</strong> on &mdash; the toggle shows enabled, and Irrlicht will start automatically at each login.</li>
       </ol>
 
       <p>Irrlicht registers itself via <code>SMAppService</code> so macOS manages the lifecycle &mdash; it starts early in the login sequence, before most apps open.</p>

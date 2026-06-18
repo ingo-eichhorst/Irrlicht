@@ -1,7 +1,7 @@
 <!--
 Thanks for the PR! A few notes before you submit:
 
-  - Run ./validate.sh locally. A change is only done at exit 0.
+  - Run the full test suite locally (see AGENTS.md#testing). A change is only done when every layer passes.
   - Keep PRs focused — one concern per PR merges fastest.
   - For UI changes, include a screenshot or short screen recording.
   - Reference related issues with "Fixes #123" or "Refs #123".
@@ -22,7 +22,7 @@ Thanks for the PR! A few notes before you submit:
 
 <!-- How you verified the change. Be concrete. -->
 
-- [ ] `./validate.sh` passes locally
+- [ ] Full test suite passes locally (see [AGENTS.md](../AGENTS.md#testing))
 - [ ] Added or updated tests covering the change
 - [ ] Manually exercised the relevant flow (describe below)
 

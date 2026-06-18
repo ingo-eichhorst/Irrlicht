@@ -88,7 +88,7 @@ HasOpenToolCall=true AND any LastOpenToolName in {AskUserQuestion, ExitPlanMode}
 
 ```
 Primary:  LastEventType == "turn_done"
-Fallback: HasOpenToolCall=false AND LastEventType in {assistant, assistant_message, assistant_output}
+Fallback: HasOpenToolCall=false AND LastEventType in {assistant, assistant_output}
 ```
 
 ### Turn Completion Signals

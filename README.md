@@ -79,6 +79,7 @@ Stages: `stable` production-ready · `beta` feature-complete, edge cases remain 
 | VS Code extension     | planned | tracked in [#350](https://github.com/ingo-eichhorst/Irrlicht/issues/350) |
 | Linux (daemon-only)   | alpha   | `curl -fsSL https://irrlicht.io/install.sh \| sh` |
 | Windows               | planned | —                         |
+| iOS / iPadOS          | planned | —                         |
 
 → [Adapters reference](https://ingo-eichhorst.github.io/Irrlicht/docs/adapters.html#maturity-stages) for stage criteria, watch paths, model detection, and roadmap.
 

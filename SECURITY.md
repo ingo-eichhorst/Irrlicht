@@ -22,7 +22,7 @@ Report privately through one of these channels:
 Include as much of the following as you can:
 
 - A description of the issue and its impact
-- The Irrlicht version (`irrlichd --version`) and macOS version
+- The Irrlicht version (the daemon's `irrlichd --version`) and macOS version
 - Reproduction steps or a proof-of-concept
 - Any relevant log excerpts from `~/Library/Application Support/Irrlicht/logs/`
 - Whether the issue is already public
@@ -47,7 +47,7 @@ In scope:
 - The Go daemon (`irrlichd`) and its HTTP/WebSocket API on port 7837
 - The Swift macOS app and its IPC with the daemon
 - Local state files under `~/Library/Application Support/Irrlicht/`
-- Transcript parsing in the agent adapters (Claude Code, Codex, Pi, Aider, OpenCode, Gas Town)
+- Transcript parsing in the agent adapters (Claude Code, Codex, Pi, Aider, OpenCode, Kiro CLI, Gemini CLI) and the Gas Town orchestrator
 - Build and release scripts in `platforms/`
 
 Out of scope:

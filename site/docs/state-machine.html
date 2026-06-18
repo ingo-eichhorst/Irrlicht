@@ -270,7 +270,7 @@
       <p>Two detection paths, checked in order:</p>
       <ul>
         <li><strong>Primary:</strong> <code>LastEventType == "turn_done"</code></li>
-        <li><strong>Fallback:</strong> <code>HasOpenToolCall = false</code> AND <code>LastEventType</code> is one of <code>{assistant_message, assistant_output}</code></li>
+        <li><strong>Fallback:</strong> <code>HasOpenToolCall = false</code> AND <code>LastEventType</code> is one of <code>{assistant, assistant_output}</code></li>
       </ul>
       <p>When either path matches, the session transitions to <span class="badge badge-ready">ready</span>. The light turns green.</p>
 

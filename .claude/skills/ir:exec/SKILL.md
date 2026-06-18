@@ -26,7 +26,7 @@ If there is no branch or worktree ask the user for a ticket.
    - **Approach** — the chosen direction in 2–4 bullets, naming files/functions you'll touch.
    - **Steps** — ordered, concrete edits. Each step is one logical change.
    - **Risks / unknowns** — anything you'd want the user to weigh in on before coding.
-5. **Enter plan mode** with `ExitPlanMode` and present the plan for approval. Do not start editing until approved.
+5. **Present the plan for approval** by calling `ExitPlanMode`. Do not start editing until approved.
 
 ## Notes
 
