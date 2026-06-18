@@ -166,6 +166,66 @@
             <td><code>ask</code></td>
             <td>Consent behavior. <code>ask</code> (production default) keeps every per-agent permission pending until answered via the wizard &mdash; nothing is read or modified before a grant. <code>grant-all</code> auto-grants everything in-memory for demo / recording / test daemons; it is never persisted</td>
           </tr>
+          <tr>
+            <td><code>IRRLICHT_READY_SESSION_TTL</code></td>
+            <td>Duration</td>
+            <td><code>30m</code></td>
+            <td>How long an idle <code>ready</code> session is kept before automatic deletion. Used by test harnesses to expire long-idle sessions in seconds rather than half an hour</td>
+          </tr>
+          <tr>
+            <td><code>IRRLICHT_HOME</code></td>
+            <td>Path</td>
+            <td><code>~/.local/share/irrlicht</code></td>
+            <td>Relocate the daemon's entire state tree &mdash; socket, addr file, history rollups, session/cost/ledger stores, and recordings &mdash; for a fully isolated dev / test daemon that never touches the production install</td>
+          </tr>
+          <tr>
+            <td><code>IRRLICHT_DEMO_MODE</code></td>
+            <td>Boolean (1/0)</td>
+            <td>unset</td>
+            <td>When <code>1</code>, disables the process watcher and per-adapter file watchers &mdash; the daemon serves only seeded session state. For demos and screenshots</td>
+          </tr>
+          <tr>
+            <td><code>IRRLICHT_RECORD</code></td>
+            <td>Boolean (1/0)</td>
+            <td>unset</td>
+            <td>When <code>1</code> (equivalent to the <code>--record</code> flag), records the session lifecycle event stream to JSONL for replay fixtures</td>
+          </tr>
+          <tr>
+            <td><code>IRRLICHT_RECORDINGS_DIR</code></td>
+            <td>Path</td>
+            <td><code>&lt;dataDir&gt;/recordings</code></td>
+            <td>Override the directory lifecycle recordings are written to. Wins even when <code>IRRLICHT_HOME</code> is set, so a recording run can be pinned somewhere specific (only used while recording is enabled)</td>
+          </tr>
+          <tr>
+            <td><code>IRRLICHT_RELAY_URL</code></td>
+            <td>URL</td>
+            <td>unset</td>
+            <td>Opt-in outbound relay: forward this daemon's session events to a standalone <code>irrlichtrelay</code> so remote clients can see them. Accepts a bare base (e.g. <code>ws://host:7839</code>); <code>http(s)://</code> is rewritten to <code>ws(s)://</code> and the stream path is appended automatically</td>
+          </tr>
+          <tr>
+            <td><code>IRRLICHT_RELAY_TOKEN</code></td>
+            <td>String</td>
+            <td>unset</td>
+            <td>Bearer token for an auth-enabled relay. Overrides the <code>token</code> field of <code>&lt;dataDir&gt;/relay-token.json</code>; leave unset against a no-auth relay</td>
+          </tr>
+          <tr>
+            <td><code>IRRLICHT_MODEL_CAPACITY_CACHE</code></td>
+            <td>Path</td>
+            <td>auto-detect</td>
+            <td>Override the model capacity / pricing cache file with an explicit path. An escape hatch used by replay tests to pin pricing to a committed snapshot so cost resolution can't drift</td>
+          </tr>
+          <tr>
+            <td><code>NO_COLOR</code></td>
+            <td>Boolean (presence)</td>
+            <td>unset</td>
+            <td>Standard <a href="https://no-color.org/">no-color</a> convention &mdash; when set to any value, the <code>irrlicht-ls</code> CLI disables ANSI color in its text output</td>
+          </tr>
+          <tr>
+            <td><code>GT_ROOT</code></td>
+            <td>Path</td>
+            <td><code>~/gt</code></td>
+            <td>Override the Gas Town root directory the orchestrator adapter probes for <code>daemon/state.json</code> and rig layout</td>
+          </tr>
         </tbody>
       </table>
 
