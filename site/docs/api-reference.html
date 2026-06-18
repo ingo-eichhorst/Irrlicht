@@ -218,6 +218,168 @@
       <h3>POST /api/v1/permissions/answer</h3>
       <p>Submits wizard answers: <code>{"answers": [{"agent": "claude-code", "permission": "hooks", "grant": true}]}</code>. Grants are exercised immediately (hook install, watcher start); revokes actively undo (hook uninstall, watcher stop). Returns the updated snapshot. First answer wins when both surfaces have the wizard open &mdash; the daemon broadcasts <code>permissions_updated</code> so the other surface dismisses.</p>
 
+      <h3>POST /api/v1/sessions/{id}/focus</h3>
+
+      <p>Activates the host terminal or IDE window of the given session, bringing it to the foreground. This is what the <code>irrlicht-focus</code> CLI calls when you click a session row or notification. The session ID is taken from the path; the request has no body. The daemon broadcasts the focus request and the macOS app activates the launching window.</p>
+
+      <p>Responses:</p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Status</th>
+            <th>Meaning</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>200</code></td>
+            <td>Focus request broadcast (the Swift app activates the window)</td>
+          </tr>
+          <tr>
+            <td><code>400</code></td>
+            <td>Missing session ID in the path</td>
+          </tr>
+          <tr>
+            <td><code>404</code></td>
+            <td>Session not found</td>
+          </tr>
+          <tr>
+            <td><code>422</code></td>
+            <td>Session has no captured launcher information to focus</td>
+          </tr>
+          <tr>
+            <td><code>405</code></td>
+            <td>Method not allowed (only <code>POST</code> is accepted)</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <pre><code># Focus a session's terminal/IDE window
+curl -X POST http://127.0.0.1:7837/api/v1/sessions/52d087d1-.../focus</code></pre>
+
+      <h3>POST /api/v1/hooks/claudecode</h3>
+
+      <p>Receiver for Claude Code hook events (the permission-request integration). Claude Code is configured to POST here on <code>PermissionRequest</code>, <code>PreToolUse</code>, <code>PostToolUse</code>, <code>PostToolUseFailure</code>, and <code>PreCompact</code> events; the daemon uses them to surface user-blocking state (permission gates, <code>AskUserQuestion</code> / <code>ExitPlanMode</code> overlays) and to force <code>working</code> during a manual <code>/compact</code>. Consent-gated behind the <code>hooks</code> permission &mdash; while pending or denied the payload is dropped with <code>200</code>. The session is keyed off the <code>transcript_path</code> filename, not <code>session_id</code>.</p>
+
+      <p>Request body (only the fields the daemon reads; unknown fields are ignored):</p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Field</th>
+            <th>Type</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>session_id</code></td>
+            <td>string</td>
+            <td>Claude Code session ID (informational; routing keys off <code>transcript_path</code>)</td>
+          </tr>
+          <tr>
+            <td><code>transcript_path</code></td>
+            <td>string</td>
+            <td>Absolute path to the session's JSONL transcript (required &mdash; its filename stem is the session ID)</td>
+          </tr>
+          <tr>
+            <td><code>hook_event_name</code></td>
+            <td>string</td>
+            <td><code>PermissionRequest</code>, <code>PreToolUse</code>, <code>PostToolUse</code>, <code>PostToolUseFailure</code>, or <code>PreCompact</code></td>
+          </tr>
+          <tr>
+            <td><code>tool_name</code></td>
+            <td>string</td>
+            <td>Tool involved in the event (e.g. <code>AskUserQuestion</code>, <code>ExitPlanMode</code>)</td>
+          </tr>
+          <tr>
+            <td><code>tool_use_id</code></td>
+            <td>string</td>
+            <td>ID of the tool call, when present</td>
+          </tr>
+          <tr>
+            <td><code>permission_mode</code></td>
+            <td>string</td>
+            <td>Current permission mode, when present</td>
+          </tr>
+          <tr>
+            <td><code>is_interrupt</code></td>
+            <td>bool</td>
+            <td>Whether the event is an interrupt</td>
+          </tr>
+          <tr>
+            <td><code>tool_input</code></td>
+            <td>object</td>
+            <td>Tool call input; scanned on <code>PreToolUse</code> for an in-band task-estimate marker</td>
+          </tr>
+          <tr>
+            <td><code>trigger</code></td>
+            <td>string</td>
+            <td><code>manual</code> or <code>auto</code> on <code>PreCompact</code> events (the compaction cause); empty otherwise</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>Returns <code>200</code> with an empty body for recognized and ignored events (an empty <code>PermissionRequest</code> response means Claude Code shows its normal prompt). Returns <code>400</code> on invalid JSON or a missing <code>transcript_path</code>, and <code>405</code> for non-<code>POST</code> methods.</p>
+
+      <pre><code># Claude Code hook event (PermissionRequest)
+curl -X POST http://127.0.0.1:7837/api/v1/hooks/claudecode \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "session_id": "52d087d1-...",
+    "transcript_path": "/Users/me/.claude/projects/proj/52d087d1-....jsonl",
+    "hook_event_name": "PermissionRequest",
+    "tool_name": "Bash"
+  }'</code></pre>
+
+      <h3>POST /api/v1/hooks/claudecode/statusline</h3>
+
+      <p>Receiver for Claude Code's per-tick statusline JSON. Claude Code is configured (via <code>settings.json</code>'s <code>statusLine.command</code>) to pipe its statusline payload to a curl that POSTs here. The handler extracts the <code>rate_limits</code> block &mdash; subscription quota data available only to Claude.ai Pro/Max accounts &mdash; and routes it to the matching session's metrics. API-key, Bedrock, and Vertex users send no <code>rate_limits</code> block; the tick is acknowledged and nothing is recorded. Consent-gated behind the <code>statusline</code> permission &mdash; while pending or denied the payload is dropped with <code>200</code>.</p>
+
+      <p>Request body:</p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Field</th>
+            <th>Type</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>session_id</code></td>
+            <td>string</td>
+            <td>Claude Code session ID (informational; routing keys off <code>transcript_path</code>)</td>
+          </tr>
+          <tr>
+            <td><code>transcript_path</code></td>
+            <td>string</td>
+            <td>Absolute path to the session's JSONL transcript (required)</td>
+          </tr>
+          <tr>
+            <td><code>rate_limits</code></td>
+            <td>object</td>
+            <td>Optional. Subscription quota, with <code>five_hour</code> and <code>seven_day</code> windows (each <code>{"used_percentage": float, "resets_at": unix-seconds}</code>)</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>Returns <code>200</code> with an empty body on success (and when there is no <code>rate_limits</code> block to record). Returns <code>400</code> on invalid JSON or a missing <code>transcript_path</code>, and <code>405</code> for non-<code>POST</code> methods.</p>
+
+      <pre><code># Claude Code statusline tick (Pro/Max account)
+curl -X POST http://127.0.0.1:7837/api/v1/hooks/claudecode/statusline \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "session_id": "52d087d1-...",
+    "transcript_path": "/Users/me/.claude/projects/proj/52d087d1-....jsonl",
+    "rate_limits": {
+      "five_hour": { "used_percentage": 16,   "resets_at": 1778761800 },
+      "seven_day": { "used_percentage": 14.0, "resets_at": 1779188400 }
+    }
+  }'</code></pre>
+
       <h3>GET /</h3>
 
       <p>Serves the web dashboard UI from disk &mdash; <code>resolveUIDir</code> in <code>core/cmd/irrlichd/main.go</code> walks up from the executable to find <code>platforms/web/index.html</code>, with the production .app bundle layout and the curl <code>--daemon-only</code> install path as fallbacks.</p>
