@@ -265,6 +265,9 @@ struct SettingsView: View {
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
+                        .tooltip("Show debug, task-estimate markers, sources, and the command-line tool")
+                        .accessibilityElement(children: .combine)
+                        .accessibilityValue(advancedSettingsExpanded ? "expanded" : "collapsed")
 
                         if advancedSettingsExpanded {
                             LeadingToggle(
@@ -690,7 +693,7 @@ struct BetaBadge: View {
             .foregroundColor(IrrColors.working)
             .padding(.horizontal, 5)
             .padding(.vertical, 1)
-            .background(Capsule().fill(IrrColors.working.opacity(0.15)))
+            .background(Capsule().fill(IrrColors.workingDim))
             .accessibilityLabel("Beta feature")
     }
 }
