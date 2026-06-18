@@ -4,16 +4,16 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>CLI Tools — Irrlicht Docs</title>
-<meta name="description" content="Command-line utilities for interacting with Irrlicht: the irrlichd daemon and irrlicht-ls session listing tool.">
+<meta name="description" content="Command-line utilities for interacting with Irrlicht: the irrlichd daemon, the irrlicht-ls session listing tool, irrlicht-focus, and the irrlichtrelay relay server.">
 <link rel="canonical" href="https://irrlicht.io/docs/cli-tools.html">
 <meta property="og:type" content="article">
 <meta property="og:title" content="CLI Tools — Irrlicht Docs">
-<meta property="og:description" content="Command-line utilities for interacting with Irrlicht: the irrlichd daemon and irrlicht-ls session listing tool.">
+<meta property="og:description" content="Command-line utilities for interacting with Irrlicht: the irrlichd daemon, the irrlicht-ls session listing tool, irrlicht-focus, and the irrlichtrelay relay server.">
 <meta property="og:url" content="https://irrlicht.io/docs/cli-tools.html">
 <meta property="og:site_name" content="Irrlicht">
 <meta name="twitter:card" content="summary">
 <meta name="twitter:title" content="CLI Tools — Irrlicht Docs">
-<meta name="twitter:description" content="Command-line utilities for interacting with Irrlicht: the irrlichd daemon and irrlicht-ls session listing tool.">
+<meta name="twitter:description" content="Command-line utilities for interacting with Irrlicht: the irrlichd daemon, the irrlicht-ls session listing tool, irrlicht-focus, and the irrlichtrelay relay server.">
 
 <link rel="icon" type="image/svg+xml" href="../assets/favicon.svg">
 <link rel="icon" type="image/png" sizes="32x32" href="../assets/favicon-32x32.png">
@@ -166,12 +166,76 @@ ready    api-server   e5f6g7h8 gpt-5 3% 400k codex  (1m ago)</code></pre>
 
       <p><code>irrlicht-ls</code> ships inside <code>Irrlicht.app</code> and lands on your PATH automatically: the PKG installer and the <code>curl … | sh</code> installer symlink it to <code>/usr/local/bin/irrlicht-ls</code>. If you installed by dragging the DMG, open the menu bar panel → Settings → <em>Install Command-Line Tool</em>. Building from source: <code>go build ./cmd/irrlicht-ls/</code>.</p>
 
+      <!-- ── irrlicht-focus ── -->
+      <h2>irrlicht-focus</h2>
+
+      <p>Brings the terminal/IDE window for a session to the foreground.</p>
+
+      <h3>Usage</h3>
+
+      <pre><code>irrlicht-focus &lt;sessionID&gt;</code></pre>
+
+      <h3>Arguments</h3>
+
+      <ul>
+        <li><code>&lt;sessionID&gt;</code> &mdash; The session ID to focus (required positional argument; no flags)</li>
+      </ul>
+
+      <h3>What It Does</h3>
+
+      <ul>
+        <li>POSTs to the daemon's <code>POST /api/v1/sessions/{id}/focus</code> endpoint on <code>http://127.0.0.1:7837</code></li>
+        <li>The daemon broadcasts a <code>focus_requested</code> WebSocket message; the macOS menu-bar app receives it and activates the window</li>
+      </ul>
+
+      <h3>Exit Codes</h3>
+
+      <ul>
+        <li><code>0</code> &mdash; Success</li>
+        <li><code>1</code> &mdash; Usage error or daemon unreachable</li>
+        <li><code>2</code> &mdash; Session not found or has no launcher data</li>
+      </ul>
+
+      <!-- ── irrlichtrelay ── -->
+      <h2>irrlichtrelay</h2>
+
+      <p>The standalone relay server. Daemons push their session events to it over a WebSocket, and it fans them out to connected macOS/web clients while re-serving the dashboard and the daemon's HTTP API (<code>/api/v1/sessions</code>, <code>/api/v1/agents</code>, <code>/api/v1/version</code>) from an in-memory cache.</p>
+
+      <h3>Usage</h3>
+
+      <pre><code>irrlichtrelay [serve] [flags]
+irrlichtrelay token issue|list|revoke [flags]
+irrlichtrelay --version</code></pre>
+
+      <p>The default subcommand is <code>serve</code> (used when the first argument is a flag or absent); it runs the relay until <code>SIGINT</code>/<code>SIGTERM</code>. The <code>token</code> subcommand manages the hashed bearer-token store used by <code>--auth tokens-file</code>.</p>
+
+      <h3>serve Flags</h3>
+
+      <ul>
+        <li><code>--addr</code> &mdash; TCP address to listen on (default <code>127.0.0.1:7839</code>; pass <code>0.0.0.0:7839</code> to expose on the LAN, and only with <code>--auth</code> or behind a TLS-terminating proxy)</li>
+        <li><code>--tls-cert</code> &mdash; PEM certificate file for native TLS (<code>wss://</code>); pair with <code>--tls-key</code> (default empty)</li>
+        <li><code>--tls-key</code> &mdash; PEM private-key file for native TLS (<code>wss://</code>); pair with <code>--tls-cert</code> (default empty)</li>
+        <li><code>--auth</code> &mdash; Authentication mode: <code>off</code> (trusted LAN, accept any hello) or <code>tokens-file[:PATH]</code> (verify a hashed bearer token; PATH defaults to <code>&lt;data-dir&gt;/tokens.json</code>) (default <code>off</code>)</li>
+        <li><code>--origin-allowlist</code> &mdash; Comma-separated <code>Origin</code> hosts allowed for browser WS clients (empty = allow all, loopback-safe) (default empty)</li>
+        <li><code>--data-dir</code> &mdash; State directory for the tokens file (default empty &rarr; <code>$IRRLICHT_HOME</code> or <code>~/.local/share/irrlicht</code>)</li>
+        <li><code>--max-msg-bytes</code> &mdash; Max inbound WebSocket message size in bytes; <code>0</code> disables (default <code>1048576</code>)</li>
+        <li><code>--max-conns</code> &mdash; Max total concurrent connections; <code>0</code> disables (default <code>256</code>)</li>
+        <li><code>--max-conns-per-ip</code> &mdash; Max concurrent connections per remote IP; <code>0</code> disables (meaningless behind a proxy/NAT &mdash; see <code>--max-conns</code>) (default <code>32</code>)</li>
+        <li><code>--version</code>, <code>-v</code> &mdash; Print version and exit</li>
+      </ul>
+
+      <h3>Security Note</h3>
+
+      <p>The relay binds loopback by default. A non-loopback bind without <code>--auth</code> is wide open regardless of TLS &mdash; TLS encrypts the wire but does not authenticate the peer, so anyone who can reach the address can read every session and inject as a daemon. Enable <code>--auth</code> or restrict access at the network layer when exposing it.</p>
+
       <!-- ── Building CLI Tools ── -->
       <h2>Building CLI Tools</h2>
 
       <pre><code>cd core
-go build ./cmd/irrlichd/     # daemon
-go build ./cmd/irrlicht-ls/  # listing tool</code></pre>
+go build ./cmd/irrlichd/        # daemon
+go build ./cmd/irrlicht-ls/     # listing tool
+go build ./cmd/irrlicht-focus/  # focus a session's window
+go build ./cmd/irrlichtrelay/   # standalone relay server</code></pre>
 
       <p>Or use the release build script:</p>
 
