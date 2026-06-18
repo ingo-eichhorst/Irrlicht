@@ -1705,17 +1705,11 @@ struct SubagentRowView: View {
 
             Spacer()
 
-            // Duration
+            // Duration — driven by the shared 1 Hz DurationClock so N subagent
+            // rows cost one timer, not N independent TimelineView schedulers (#690).
             if let metrics = session.metrics {
                 let isActive = session.state == .working || session.state == .waiting
-                TimelineView(.periodic(from: .now, by: 1.0)) { timeline in
-                    let _ = timeline.date
-                    Text(isActive
-                        ? metrics.formattedRealtimeElapsedTime(sessionFirstSeen: session.firstSeen)
-                        : (metrics.elapsedSeconds > 0 ? metrics.formattedElapsedTime : "—"))
-                        .font(.caption2)
-                        .foregroundColor(.secondary.opacity(0.7))
-                }
+                LiveDurationText(isActive: isActive, metrics: metrics, firstSeen: session.firstSeen)
             } else {
                 Text("—")
                     .font(.caption2)
@@ -1732,6 +1726,44 @@ struct SubagentRowView: View {
         }
         .accessibilityIdentifier("subagent-card-\(session.id)")
         .accessibilityLabel("subagent \(session.state.rawValue)")
+    }
+}
+
+// MARK: - Shared duration clock (#690)
+
+/// One 1 Hz clock shared by every live duration label. Replaces the per-row
+/// `TimelineView(.periodic)` schedulers so N visible rows cost a single timer
+/// instead of N. Only the leaf `LiveDurationText` views observe it, so a tick
+/// re-renders just those labels — never their parent rows.
+@MainActor
+final class DurationClock: ObservableObject {
+    static let shared = DurationClock()
+    /// Bumped every second purely to invalidate observing labels; the duration
+    /// strings read the wall clock themselves, so the value is never consumed.
+    @Published private(set) var tick: UInt64 = 0
+    private var timer: Timer?
+
+    private init() {
+        timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.tick &+= 1 }
+        }
+    }
+}
+
+/// A duration label that refreshes once per second off the shared `DurationClock`.
+/// Active sessions show realtime elapsed; finished ones show their frozen total.
+private struct LiveDurationText: View {
+    @ObservedObject private var clock = DurationClock.shared
+    let isActive: Bool
+    let metrics: SessionMetrics
+    let firstSeen: Date
+
+    var body: some View {
+        Text(isActive
+            ? metrics.formattedRealtimeElapsedTime(sessionFirstSeen: firstSeen)
+            : (metrics.elapsedSeconds > 0 ? metrics.formattedElapsedTime : "—"))
+            .font(.caption2)
+            .foregroundColor(.secondary.opacity(0.7))
     }
 }
 

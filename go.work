@@ -4,4 +4,5 @@ use (
 	./core
 	./tools/onboarding-factory
 	./tools/seed-demo-sessions
+	./tools/wsload
 )

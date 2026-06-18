@@ -1042,7 +1042,7 @@ class SessionManager: ObservableObject {
     /// (reset on every (re)connect). See #600.
     private var lastPushSeq: UInt64 = 0
 
-    private func handleWsMessage(_ text: String) {
+    func handleWsMessage(_ text: String) {
         guard let data = text.data(using: .utf8) else { return }
         do {
             let envelope = try JSONDecoder().decode(WsEnvelope.self, from: data)
@@ -1072,17 +1072,23 @@ class SessionManager: ObservableObject {
                         session = session.preservingRole(from: existing)
                     }
                     sessionMap[session.id] = session
-                    rebuildSessionsFromMap()
                     if isDebugMode {
                         let cost = session.metrics?.estimatedCostUSD ?? 0
                         let ctx = session.metrics?.contextUtilization ?? 0
                         let inGroups = groupedSessionIds.contains(session.id)
                         print("📨 session_updated id=\(session.id) state=\(session.state.rawValue) cost=\(cost) ctx=\(ctx) inGroupedIds=\(inGroups)")
                     }
-                    patchApiGroups(session: session)
+                    let stateChanged = oldState != nil && oldState != session.state
                     if let old = oldState, old != session.state {
                         checkStateTransitionNotification(session: session, previousState: old)
                     }
+                    // #690: coalesce the expensive rebuild + apiGroups patch. With
+                    // 40+ working agents each ticking metrics, this case used to
+                    // re-render the whole (eager, non-virtualized) list once per
+                    // push. Batch pure-metric updates into one refresh per window;
+                    // flush state transitions immediately so they stay snappy
+                    // (transitions fire at human pace, not metric-tick rate).
+                    enqueueUIRefresh(for: session.id, immediate: stateChanged)
                 }
             case "session_deleted":
                 if let session = envelope.session {
@@ -1232,6 +1238,67 @@ class SessionManager: ObservableObject {
             guard !Task.isCancelled else { return }
             await hydrateSessions()
         }
+    }
+
+    // MARK: - Coalesced UI refresh (#690)
+    //
+    // With 40+ working agents each emitting frequent metric ticks, every
+    // `session_updated` used to run a full `rebuildSessionsFromMap()` +
+    // `patchApiGroups()` and reassign @Published surfaces. Because each WS
+    // message resumes as its own @MainActor turn, SwiftUI re-rendered the whole
+    // (eager, non-virtualized) session list once per message — O(N) work × N
+    // pushes/sec. We coalesce pure-metric updates: accumulate dirty session ids
+    // and apply one rebuild + patch per refresh window, so render volume is
+    // bounded by the window, not the push rate. State transitions and the
+    // notifications that depend on them still fire synchronously at message
+    // time, so alerts and sounds are never delayed.
+
+    /// Session ids touched since the last flush.
+    private var pendingDirtySessionIDs = Set<String>()
+    /// True while a trailing flush is already scheduled (dedupes timers).
+    private var uiRefreshScheduled = false
+    /// Refresh window. Injectable so tests can flush deterministically.
+    var uiRefreshInterval: TimeInterval = 0.1
+    /// Count of coalesced flushes performed — test seam proving a burst of N
+    /// pushes collapses into far fewer renders.
+    private(set) var uiRefreshFlushCount = 0
+
+    /// Queue a session for the next coalesced UI refresh. `immediate` bypasses
+    /// the window (used for state transitions, which are rare and want to feel
+    /// instant); the metric-tick storm always coalesces.
+    private func enqueueUIRefresh(for sessionID: String, immediate: Bool) {
+        pendingDirtySessionIDs.insert(sessionID)
+        if immediate {
+            flushUIRefresh()
+            return
+        }
+        guard !uiRefreshScheduled else { return }
+        uiRefreshScheduled = true
+        Timer.scheduledTimer(withTimeInterval: uiRefreshInterval, repeats: false) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.flushUIRefresh() }
+        }
+    }
+
+    /// Apply all pending session updates in one pass: a single flat-surface
+    /// rebuild plus an in-place apiGroups patch per dirty session. The multiple
+    /// @Published mutations in this one synchronous turn coalesce into a single
+    /// SwiftUI render.
+    private func flushUIRefresh() {
+        uiRefreshScheduled = false
+        guard !pendingDirtySessionIDs.isEmpty else { return }
+        let dirty = pendingDirtySessionIDs
+        pendingDirtySessionIDs.removeAll()
+        uiRefreshFlushCount += 1
+        rebuildSessionsFromMap()
+        for id in dirty {
+            guard let session = sessionMap[id] else { continue }
+            patchApiGroups(session: session)
+        }
+    }
+
+    /// Test seam: synchronously apply any pending coalesced refresh.
+    func flushPendingUIRefreshForTests() {
+        flushUIRefresh()
     }
 
     private func rebuildSessionsFromMap() {
@@ -1546,7 +1613,9 @@ class SessionManager: ObservableObject {
 
         orderedSessions.append(contentsOf: sortedNewSessions)
 
-        print("🔢 Sorted \(orderedSessions.count) sessions (\(sessionOrder.count) from saved order, \(sortedNewSessions.count) new)")
+        if irrlichtVerboseLogging {
+            print("🔢 Sorted \(orderedSessions.count) sessions (\(sessionOrder.count) from saved order, \(sortedNewSessions.count) new)")
+        }
         return orderedSessions
     }
 

@@ -3,6 +3,12 @@ import Foundation
 import SwiftUI
 import os
 
+/// Verbose per-message/per-render debug logging, enabled with `IRRLICHT_DEBUG=1`.
+/// A global initializes lazily exactly once, so the hot decode/render path — which
+/// runs on every WebSocket push — reads a cached flag instead of re-checking the
+/// environment per call (#690).
+let irrlichtVerboseLogging = ProcessInfo.processInfo.environment["IRRLICHT_DEBUG"] == "1"
+
 /// Branding for one inbound agent adapter, served by the daemon's
 /// GET /api/v1/agents endpoint. Co-locating display name + icon SVGs with
 /// the Go adapter (issue #260) lets a Go-only contributor add a new adapter
@@ -726,14 +732,12 @@ struct SessionState: Identifiable, Codable {
             updatedAt = Date()
         }
         
-        // Log session data for debugging (after all properties are set)
-        let sessionId = id
-        let sessionState = state.rawValue
-        let topLevelModel = model
-        let metricsModelName = metrics?.modelName ?? "nil"
-        let safeEventCount = eventCount ?? 0
-        let safeLastEvent = lastEvent ?? "nil"
-        print("🔍 Decoded session: id=\(sessionId), state=\(sessionState), topLevelModel=\(topLevelModel), metricsModel=\(metricsModelName), eventCount=\(safeEventCount), lastEvent=\(safeLastEvent)")
+        // Log session data for debugging (after all properties are set). Gated:
+        // this fires on every decode (one per WebSocket push), so leaving it
+        // unconditional burns real CPU under many-agent load (#690).
+        if irrlichtVerboseLogging {
+            print("🔍 Decoded session: id=\(id), state=\(state.rawValue), topLevelModel=\(model), metricsModel=\(metrics?.modelName ?? "nil"), eventCount=\(eventCount ?? 0), lastEvent=\(lastEvent ?? "nil")")
+        }
     }
     
     // Regular initializer for testing/preview purposes
@@ -900,7 +904,9 @@ struct SessionState: Identifiable, Codable {
     var effectiveModel: String {
         // Prefer metrics.model_name if available, otherwise fall back to top-level model
         let effective = metrics?.modelName.isEmpty == false ? metrics!.modelName : model
-        print("🎯 effectiveModel for \(shortId): using '\(effective)' (metrics='\(metrics?.modelName ?? "nil")', topLevel='\(model)')")
+        if irrlichtVerboseLogging {
+            print("🎯 effectiveModel for \(shortId): using '\(effective)' (metrics='\(metrics?.modelName ?? "nil")', topLevel='\(model)')")
+        }
         return effective
     }
     
