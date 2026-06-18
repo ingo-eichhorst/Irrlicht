@@ -266,6 +266,8 @@ struct SettingsView: View {
                             sampleText: "Context pressure: 80% threshold reached",
                             onImportError: { customImportError = $0 }
                         )
+                        ContextThresholdRow(enabled: notifyOnContextPressure)
+                            .padding(.leading, 18)
 
                         if let error = customImportError {
                             Text(error)
@@ -503,6 +505,67 @@ private struct WindowAccessor: NSViewRepresentable {
         return v
     }
     func updateNSView(_ nsView: NSView, context: Context) {}
+}
+
+/// The "Alert at [value] [% / tokens]" control under the context-pressure
+/// notification row. One threshold, entered as a percentage of the context
+/// window or as an absolute token count (issue #689).
+private struct ContextThresholdRow: View {
+    @AppStorage(ContextPressureThreshold.valueKey) private var value: Double = ContextPressureThreshold.defaultValue
+    @AppStorage(ContextPressureThreshold.unitKey) private var unitRaw: String = ContextPressureThreshold.defaultUnit.rawValue
+    let enabled: Bool
+
+    @State private var draft: String = ""
+
+    private var unit: ContextPressureThreshold.Unit {
+        ContextPressureThreshold.Unit(rawValue: unitRaw) ?? ContextPressureThreshold.defaultUnit
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text("Alert at")
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            TextField("", text: $draft)
+                .textFieldStyle(.roundedBorder)
+                .multilineTextAlignment(.trailing)
+                .font(.system(.caption, design: .monospaced))
+                .frame(width: 72)
+                .onChange(of: draft) { _ in commit() }
+                .onSubmit { commit(); draft = formatted(value) }
+                .tooltip(unit == .percent
+                    ? "Alert when context reaches this % of the window"
+                    : "Alert when the session reaches this many tokens")
+
+            Picker("", selection: $unitRaw) {
+                Text("%").tag(ContextPressureThreshold.Unit.percent.rawValue)
+                Text("tokens").tag(ContextPressureThreshold.Unit.tokens.rawValue)
+            }
+            .labelsHidden()
+            .frame(width: 92)
+            .onChange(of: unitRaw) { newRaw in
+                let newUnit = ContextPressureThreshold.Unit(rawValue: newRaw) ?? ContextPressureThreshold.defaultUnit
+                value = ContextPressureThreshold.defaultValue(for: newUnit)
+                draft = formatted(value)
+            }
+
+            Spacer()
+        }
+        .disabled(!enabled)
+        .onAppear { draft = formatted(value) }
+    }
+
+    private func formatted(_ v: Double) -> String { "\(Int(v))" }
+
+    private func commit() {
+        let trimmed = draft.trimmingCharacters(in: .whitespaces)
+        guard let parsed = Double(trimmed) else { return }
+        switch unit {
+        case .percent: value = min(max(parsed, 1), 99)
+        case .tokens: value = max(parsed, 1)
+        }
+    }
 }
 
 /// One row in the Settings notifications section: enable toggle, sound

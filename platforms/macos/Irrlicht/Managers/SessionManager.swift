@@ -205,6 +205,10 @@ class SessionManager: ObservableObject {
             "useLocalDaemon": true,
             "useRelayServer": false,
             "relayServerURL": "",
+            // Context-fill alert threshold (#689): default 80% preserves the
+            // historical first-alert point for existing users.
+            ContextPressureThreshold.valueKey: ContextPressureThreshold.defaultValue,
+            ContextPressureThreshold.unitKey: ContextPressureThreshold.defaultUnit.rawValue,
         ]
         for event in NotificationEvent.allCases {
             defaultsSeed[event.enabledKey] = false
@@ -1332,36 +1336,59 @@ class SessionManager: ObservableObject {
         }
     }
 
-    /// Checks active sessions for context utilization crossing 80% or 95% thresholds.
-    /// Fires a macOS notification the first time each threshold is crossed per session.
+    /// Checks active sessions for context usage reaching the configured alert
+    /// threshold (#689). Fires a macOS notification the first time the threshold
+    /// is reached per session. The fired-set is keyed by the active threshold
+    /// value, so changing the setting naturally re-arms the alert.
     private func checkContextPressureAlerts(sessions: [SessionState]) {
-        let thresholds = [80, 95]
+        let threshold = ContextPressureThreshold.current
+        let key = Int(threshold.value)
         for session in sessions {
             guard session.state == .working || session.state == .waiting,
                   let metrics = session.metrics,
-                  metrics.contextUtilization > 0 else { continue }
+                  threshold.isExceeded(by: metrics) else { continue }
 
-            let utilization = metrics.contextUtilization
             var fired = notifiedThresholds[session.id] ?? Set<Int>()
-
-            for threshold in thresholds where Double(threshold) <= utilization && !fired.contains(threshold) {
-                fired.insert(threshold)
-                notifiedThresholds[session.id] = fired
-                sendContextPressureNotification(session: session, threshold: threshold, utilization: utilization)
-            }
+            guard !fired.contains(key) else { continue }
+            fired.insert(key)
+            notifiedThresholds[session.id] = fired
+            sendContextPressureNotification(session: session, threshold: threshold, metrics: metrics)
         }
     }
 
-    private func sendContextPressureNotification(session: SessionState, threshold: Int, utilization: Double) {
+    private func sendContextPressureNotification(session: SessionState, threshold: ContextPressureThreshold, metrics: SessionMetrics) {
         guard UserDefaults.standard.bool(forKey: NotificationEvent.contextPressure.enabledKey) else { return }
         let label = session.projectName ?? session.shortId
+
+        let title: String
+        switch threshold.unit {
+        case .percent:
+            title = "Context pressure: \(Int(threshold.value))% threshold reached"
+        case .tokens:
+            title = "Context pressure: \(Self.formatTokens(Int64(threshold.value))) tokens reached"
+        }
+
+        // Prefer the percentage when the model's context window is known,
+        // otherwise report the raw token count so token-mode alerts on
+        // unknown-window models still read sensibly.
+        let usage = metrics.contextUtilization > 0
+            ? "at \(String(format: "%.1f%%", metrics.contextUtilization)) context"
+            : "at \(Self.formatTokens(metrics.totalTokens)) tokens"
+
         sendNotification(
-            identifier: "irrlicht-context-\(session.id)-\(threshold)",
-            title: "Context pressure: \(threshold)% threshold reached",
-            body: "\(label) is at \(String(format: "%.1f%%", utilization)) context. Consider switching to a fresh session.",
+            identifier: "irrlicht-context-\(session.id)-\(Int(threshold.value))",
+            title: title,
+            body: "\(label) is \(usage). Consider switching to a fresh session.",
             sessionID: session.id,
             event: .contextPressure
         )
+    }
+
+    /// Compact token count for notification copy (e.g. 150000 → "150K").
+    private static func formatTokens(_ count: Int64) -> String {
+        if count < 1000 { return "\(count)" }
+        if count < 1_000_000 { return String(format: "%.0fK", Double(count) / 1000) }
+        return String(format: "%.1fM", Double(count) / 1_000_000)
     }
 
     // MARK: - State Transition Notifications
