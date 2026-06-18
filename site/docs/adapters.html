@@ -165,6 +165,17 @@
         <li>Stage: <strong>alpha</strong> &mdash; closes #280</li>
       </ul>
 
+      <h3>Gemini CLI Adapter</h3>
+
+      <ul>
+        <li><strong>Package:</strong> <code>core/adapters/inbound/agents/geminicli/</code></li>
+        <li><strong>Watches:</strong> JSONL transcripts under <code>~/.gemini/tmp/</code> (session files named <code>session-&lt;timestamp&gt;-&lt;hash&gt;</code>; nested subagent chats at <code>chats/&lt;parent-uuid&gt;/&lt;child-uuid&gt;.jsonl</code>)</li>
+        <li>Process discovery via command-line match on <code>bin/gemini</code> (the OS process is <code>node</code>); the working directory is read from the transcript body, not a header line</li>
+        <li>No explicit end-of-turn marker &mdash; a text-only assistant message maps to <code>turn_done</code>, while benign info notices (e.g. "Model set to gemini-2.5-flash") are ignored</li>
+        <li><strong>Adapter name:</strong> <code>"gemini-cli"</code></li>
+        <li>Stage: <strong>alpha</strong></li>
+      </ul>
+
       <h3>Process Scanner</h3>
 
       <ul>
