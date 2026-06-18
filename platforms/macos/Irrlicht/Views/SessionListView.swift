@@ -1131,10 +1131,19 @@ struct SessionRowView: View {
     @AppStorage("debugMode") private var debugMode: Bool = false
     @AppStorage("showCostDisplay") private var showCostDisplay: Bool = false
     @AppStorage("displayMode") private var displayModeRaw: String = DisplayMode.context.rawValue
+    @AppStorage(ContextPressureThreshold.valueKey) private var contextThresholdValue: Double = ContextPressureThreshold.defaultValue
+    @AppStorage(ContextPressureThreshold.unitKey) private var contextThresholdUnitRaw: String = ContextPressureThreshold.defaultUnit.rawValue
     @EnvironmentObject var sessionManager: SessionManager
     @State private var isHovered = false
 
     private var displayMode: DisplayMode { DisplayMode(rawValue: displayModeRaw) ?? .context }
+
+    private var contextThreshold: ContextPressureThreshold {
+        ContextPressureThreshold(
+            value: contextThresholdValue > 0 ? contextThresholdValue : ContextPressureThreshold.defaultValue,
+            unit: ContextPressureThreshold.Unit(rawValue: contextThresholdUnitRaw) ?? ContextPressureThreshold.defaultUnit
+        )
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -1321,14 +1330,13 @@ struct SessionRowView: View {
                     .tooltip(text)
             }
 
-            // Context pressure alert (80%+, active sessions only)
+            // Context pressure alert (configurable threshold, active sessions only — #689)
             if let metrics = session.metrics,
                (session.state == .working || session.state == .waiting),
-               metrics.contextUtilization >= 80 {
-                let isCritical = metrics.contextUtilization >= 95
-                let alertColor = isCritical ? IrrColors.pressureCritical : IrrColors.pressureHigh
+               contextThreshold.isExceeded(by: metrics) {
+                let alertColor = IrrColors.pressureHigh
                 HStack(spacing: 4) {
-                    Image(systemName: isCritical ? "exclamationmark.triangle.fill" : "exclamationmark.triangle")
+                    Image(systemName: "exclamationmark.triangle")
                         .font(.system(size: 9))
                         .foregroundColor(alertColor)
                     Text("Switch to a fresh session soon")
@@ -1341,7 +1349,7 @@ struct SessionRowView: View {
                 .background(alertColor.opacity(0.08))
                 .cornerRadius(IrrRadius.sm)
                 .padding(.top, 2)
-                .tooltip(isCritical ? "Context window critically full" : "Context window nearing limit")
+                .tooltip("Context window nearing limit")
             }
 
             // Task progress + completion ETA share one line: dots left, ETA
