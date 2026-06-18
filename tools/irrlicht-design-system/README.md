@@ -47,7 +47,6 @@ SKILL.md                    ← Claude Code-compatible skill manifest
 colors_and_type.css         ← CSS custom properties for the whole system
 
 assets/
-  logo.png                  ← Hero/banner logo (1.3MB, dark bg)
   banner.png                ← README banner (1.3MB)
   irrlicht-explainer.png    ← 3-light UI explainer screenshot
   bg_lights.png             ← Starry night bg with wisps (full-bleed)
@@ -59,7 +58,7 @@ preview/                    ← Design-system cards (see Design System tab)
   type-*.html               · typography specimens
   color-*.html              · palette swatches
   spacing-*.html            · radii, shadows, tokens
-  component-*.html          · buttons, badges, cards, inputs
+  comp-*.html               · buttons, badges, cards, inputs
   brand-*.html              · logos, wisp mark, backgrounds
 
 ui_kits/

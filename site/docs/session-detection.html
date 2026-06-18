@@ -174,6 +174,26 @@
         <li>PID discovery via <code>pgrep -x opencode</code> + CWD match</li>
       </ul>
 
+      <h3>Kiro CLI</h3>
+
+      <ul>
+        <li><strong>Transcript location:</strong> <code>~/.kiro/sessions/cli/&lt;uuid&gt;.jsonl</code> (one file per session, live-appended)</li>
+        <li>The transcript carries no cwd; the working directory is read from the <code>&lt;uuid&gt;.json</code> metadata sidecar next to it</li>
+        <li>A text-only <code>AssistantMessage</code> maps to <code>turn_done</code>; one carrying <code>toolUse</code> blocks keeps the turn open</li>
+        <li>PID discovery via <code>pgrep -x kiro-cli</code> + CWD match; headless <code>--no-interactive</code> runs persist no session files and are invisible</li>
+        <li><strong>Adapter name:</strong> <code>kiro-cli</code></li>
+      </ul>
+
+      <h3>Gemini CLI</h3>
+
+      <ul>
+        <li><strong>Transcript location:</strong> <code>~/.gemini/tmp/&lt;hash&gt;/session-&lt;timestamp&gt;-&lt;hash&gt;</code> (JSONL; nested subagent chats at <code>chats/&lt;parent-uuid&gt;/&lt;child-uuid&gt;.jsonl</code>)</li>
+        <li>The cwd is read from the transcript body, not a header line</li>
+        <li>No explicit end-of-turn marker &mdash; a text-only assistant message maps to <code>turn_done</code>; benign info notices are ignored</li>
+        <li>Process discovery via command-line match on <code>bin/gemini</code> (the OS process is <code>node</code>)</li>
+        <li><strong>Adapter name:</strong> <code>gemini-cli</code></li>
+      </ul>
+
       <h2>PID Discovery</h2>
 
       <table>

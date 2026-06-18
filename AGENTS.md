@@ -42,7 +42,7 @@ Before marking a ticket done, run the full suite — every layer must pass:
   ./tools/onboarding-factory/cmd/replay/... -count=1` (the `-count=1`
   matters — without it the cached test result skips the write). Commit only
   the goldens of the adapter you touched.
-- replaydata integrity: `go run ./tools/onboarding-factory/cmd/of validate`
+- replaydata integrity (the onboarding recording/fixture catalog): `go run ./tools/onboarding-factory/cmd/of validate`
   (schema + referential integrity over the catalog + cells — a CI gate). When a
   `web/` or recording-rig change is in play, also `bash
   tools/onboarding-factory/scripts/smoke-test.sh` (the rig's `bash -n` + lib

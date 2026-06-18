@@ -26,12 +26,12 @@ Prerequisites: macOS 13+, Go 1.21+, Swift 5.9+, Xcode Command Line Tools.
 git clone https://github.com/ingo-eichhorst/Irrlicht.git
 cd Irrlicht
 ./tools/build-release.sh       # build daemon + macOS app
-./validate.sh                  # run the full validation pipeline
+go test ./core/... -race -count=1   # run the Go suite (see AGENTS.md for the full list)
 ```
 
-`./validate.sh` runs Go build → Swift build → Go tests → Swift tests →
-integration tests. **A change is only done when `./validate.sh` exits 0.**
-No exceptions.
+The full suite — Go unit + e2e, the onboarding-factory, replay fixtures, and the
+web suites — is listed in [AGENTS.md](AGENTS.md#testing). **A change is only done
+when every layer passes.** No exceptions.
 
 Project layout:
 
@@ -50,7 +50,7 @@ expected to follow.
 1. Fork and branch from `main` using a prefix: `feat/`, `fix/`, `docs/`, `refactor/`, `test/`.
 2. Keep the change focused — one concern per PR.
 3. Add tests for new behavior; prefer table-driven tests in Go.
-4. Run `./validate.sh` locally.
+4. Run the full test suite locally (see [AGENTS.md](AGENTS.md#testing)).
 5. Push and open a PR. Fill in the PR template (summary, test plan, screenshots for UI work).
 6. Expect review feedback. Small PRs merge faster.
 
@@ -102,7 +102,7 @@ deterministic, honest signals.
 
 If you're an AI coding agent working on this repo:
 
-- Run `./validate.sh` after every change. A task is only complete at exit 0.
+- Run the full test suite (see [AGENTS.md](AGENTS.md#testing)) after every change. A task is only complete when every layer passes.
 - Never mark a task done based on compilation alone.
 - If validation fails, find the root cause. Don't skip, comment out, or weaken assertions.
 - Record session semantics in adapter parsers, not in shared tailer code.
