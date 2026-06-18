@@ -516,6 +516,7 @@ private struct ContextThresholdRow: View {
     let enabled: Bool
 
     @State private var draft: String = ""
+    @FocusState private var fieldFocused: Bool
 
     private var unit: ContextPressureThreshold.Unit {
         ContextPressureThreshold.Unit(rawValue: unitRaw) ?? ContextPressureThreshold.defaultUnit
@@ -532,8 +533,11 @@ private struct ContextThresholdRow: View {
                 .multilineTextAlignment(.trailing)
                 .font(.system(.caption, design: .monospaced))
                 .frame(width: 72)
-                .onChange(of: draft) { _ in commit() }
-                .onSubmit { commit(); draft = formatted(value) }
+                .focused($fieldFocused)
+                .onSubmit { commit() }
+                .onChange(of: fieldFocused) { focused in
+                    if !focused { commit() }
+                }
                 .tooltip(unit == .percent
                     ? "Alert when context reaches this % of the window"
                     : "Alert when the session reaches this many tokens")
@@ -558,13 +562,18 @@ private struct ContextThresholdRow: View {
 
     private func formatted(_ v: Double) -> String { "\(Int(v))" }
 
+    /// Parse, clamp, and persist the draft, then reformat the field from the
+    /// stored value so it never displays a number that wasn't saved (an empty
+    /// or unparseable entry reverts to the current value).
     private func commit() {
         let trimmed = draft.trimmingCharacters(in: .whitespaces)
-        guard let parsed = Double(trimmed) else { return }
-        switch unit {
-        case .percent: value = min(max(parsed, 1), 99)
-        case .tokens: value = max(parsed, 1)
+        if let parsed = Double(trimmed) {
+            switch unit {
+            case .percent: value = min(max(parsed, 1), 99)
+            case .tokens: value = max(parsed, 1)
+            }
         }
+        draft = formatted(value)
     }
 }
 
