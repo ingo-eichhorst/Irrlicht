@@ -43,6 +43,12 @@ describe('collapsedGroups store', () => {
     expect(store.isGroupCollapsed('x')).toBe(true)
   })
 
+  test('ignores valid JSON that is not an array', async () => {
+    localStorage.setItem(KEY, JSON.stringify({ alpha: true }))
+    const store = await freshStore()
+    expect(store.isGroupCollapsed('alpha')).toBe(false)
+  })
+
   test('drops non-string entries from a persisted array', async () => {
     localStorage.setItem(KEY, JSON.stringify(['ok', 42, null, 'fine']))
     const store = await freshStore()
