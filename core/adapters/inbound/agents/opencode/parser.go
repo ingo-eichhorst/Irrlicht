@@ -1,7 +1,6 @@
 package opencode
 
 import (
-	"strconv"
 	"time"
 
 	"irrlicht/core/pkg/tailer"
@@ -34,13 +33,10 @@ import (
 // Each Parser instance corresponds to one transcript/session scan; state
 // resets across scans because ComputeMetrics constructs a fresh Parser.
 type Parser struct {
-	// nextTaskID mirrors the tailer's monotonic taskSeq so emitted Update
-	// IDs match the IDs the tailer assigns at Create time.
-	nextTaskID int
-	// todoIDByContent maps a todo's `content` field to the synthetic ID
-	// assigned on first sight. OpenCode todos have no stable identifier;
-	// content is the closest thing to identity. Lazily initialized.
-	todoIDByContent map[string]string
+	// todos reconciles OpenCode's todowrite snapshots into task-progress
+	// deltas. OpenCode todos have no stable identifier, so they're keyed by
+	// `content` — the closest thing to identity.
+	todos tailer.TodoReconciler
 }
 
 // ParseLine parses a raw map representing one OpenCode part row into a
@@ -282,55 +278,18 @@ func (p *Parser) appendTodowriteDeltas(state map[string]interface{}, ev *tailer.
 	if input == nil {
 		return
 	}
-	todos, _ := input["todos"].([]interface{})
-	if len(todos) == 0 {
-		return
-	}
-	snapshot := make([]tailer.TaskSnapshotEntry, 0, len(todos))
-	for _, raw := range todos {
+	rawTodos, _ := input["todos"].([]interface{})
+	todos := make([]tailer.Todo, 0, len(rawTodos))
+	for _, raw := range rawTodos {
 		todo, _ := raw.(map[string]interface{})
 		if todo == nil {
 			continue
 		}
 		content, _ := todo["content"].(string)
 		status, _ := todo["status"].(string)
-		if content == "" {
-			continue
-		}
-		id, seen := p.todoIDByContent[content]
-		if !seen {
-			p.nextTaskID++
-			id = strconv.Itoa(p.nextTaskID)
-			if p.todoIDByContent == nil {
-				p.todoIDByContent = make(map[string]string)
-			}
-			p.todoIDByContent[content] = id
-			ev.TaskDeltas = append(ev.TaskDeltas, tailer.TaskDelta{
-				Op:      tailer.TaskOpCreate,
-				Subject: content,
-			})
-		}
-		// Emit an Update for any non-pending status — the tailer's Create
-		// path always starts a task at pending, so an Update is required
-		// to move it forward. Pending updates are handled by the snapshot
-		// reconcile below (it can drive a task BACK to pending, which the
-		// delta-only path silently skips).
-		if status != "" && status != tailer.TaskStatusPending {
-			ev.TaskDeltas = append(ev.TaskDeltas, tailer.TaskDelta{
-				Op:     tailer.TaskOpUpdate,
-				ID:     id,
-				Status: status,
-			})
-		}
-		snapshot = append(snapshot, tailer.TaskSnapshotEntry{
-			ID:      id,
-			Subject: content,
-			Status:  status,
-		})
+		todos = append(todos, tailer.Todo{Key: content, Status: status})
 	}
-	if len(snapshot) > 0 {
-		ev.TaskSnapshot = &snapshot
-	}
+	p.todos.Reconcile(todos, ev)
 }
 
 // extractCost reads the top-level "cost" field from a part data map.

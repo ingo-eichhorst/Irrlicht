@@ -2,7 +2,6 @@ package geminicli
 
 import (
 	"regexp"
-	"strconv"
 	"strings"
 
 	"irrlicht/core/pkg/tailer"
@@ -41,13 +40,11 @@ type Parser struct {
 	cwd       string
 	committed map[string]tailer.UsageBreakdown
 
-	// write_todos snapshot state. Gemini-2 models register a `write_todos`
-	// tool that rewrites the whole todo list on every call (full-list
-	// replace, like codex `update_plan` / opencode `todowrite`). Todos carry
-	// no stable ID, so they're keyed by their `description` text and assigned
-	// a synthetic monotonic ID matching the tailer's Create-time numbering.
-	todoIDByDesc map[string]string
-	nextTaskID   int
+	// todos reconciles the `write_todos` snapshot Gemini-2 models emit (a
+	// full-list-replace tool, like codex `update_plan` / opencode
+	// `todowrite`) into task-progress deltas. Todos carry no stable ID, so
+	// they're keyed by their `description` text.
+	todos tailer.TodoReconciler
 }
 
 // workspaceRe pulls the first workspace directory out of the bootstrap
@@ -421,53 +418,18 @@ func (p *Parser) appendWriteTodosDeltas(tcm map[string]interface{}, ev *tailer.P
 	if args == nil {
 		return
 	}
-	todos, _ := args["todos"].([]interface{})
-	if len(todos) == 0 {
-		return
-	}
-	if p.todoIDByDesc == nil {
-		p.todoIDByDesc = make(map[string]string)
-	}
-	snapshot := make([]tailer.TaskSnapshotEntry, 0, len(todos))
-	for _, raw := range todos {
+	rawTodos, _ := args["todos"].([]interface{})
+	todos := make([]tailer.Todo, 0, len(rawTodos))
+	for _, raw := range rawTodos {
 		todo, _ := raw.(map[string]interface{})
 		if todo == nil {
 			continue
 		}
 		desc, _ := todo["description"].(string)
 		status, _ := todo["status"].(string)
-		if desc == "" {
-			continue
-		}
-		id, seen := p.todoIDByDesc[desc]
-		if !seen {
-			p.nextTaskID++
-			id = strconv.Itoa(p.nextTaskID)
-			p.todoIDByDesc[desc] = id
-			ev.TaskDeltas = append(ev.TaskDeltas, tailer.TaskDelta{
-				Op:      tailer.TaskOpCreate,
-				Subject: desc,
-			})
-		}
-		// Create starts a task at pending; an Update is required to move it
-		// forward. Reversions back to pending are handled by the snapshot
-		// reconcile below (the delta-only path silently skips them).
-		if status != "" && status != tailer.TaskStatusPending {
-			ev.TaskDeltas = append(ev.TaskDeltas, tailer.TaskDelta{
-				Op:     tailer.TaskOpUpdate,
-				ID:     id,
-				Status: status,
-			})
-		}
-		snapshot = append(snapshot, tailer.TaskSnapshotEntry{
-			ID:      id,
-			Subject: desc,
-			Status:  status,
-		})
+		todos = append(todos, tailer.Todo{Key: desc, Status: status})
 	}
-	if len(snapshot) > 0 {
-		ev.TaskSnapshot = &snapshot
-	}
+	p.todos.Reconcile(todos, ev)
 }
 
 // workspaceFromContent finds the first workspace directory inside a message's
