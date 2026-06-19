@@ -220,10 +220,10 @@
         </tbody>
       </table>
 
-      <p>Irrlicht sends macOS notifications at two thresholds:</p>
+      <p>Irrlicht sends a macOS notification at a single configurable context-pressure threshold:</p>
       <ul>
-        <li><strong>80% utilization</strong> &mdash; a heads-up that context is getting heavy</li>
-        <li><strong>95% utilization</strong> &mdash; urgent warning before auto-compaction kicks in</li>
+        <li><strong>A threshold you set</strong> &mdash; a percentage of the context window (default 80%) or an absolute token count, configured under Settings &rarr; Notifications. The alert fires once per session and re-arms when you change the setting.</li>
+        <li>A token threshold also covers models whose context window size is unknown, where a percentage can never be computed.</li>
       </ul>
 
       <div class="callout callout-info">
