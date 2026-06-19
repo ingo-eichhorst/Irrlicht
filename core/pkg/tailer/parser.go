@@ -370,8 +370,11 @@ type TranscriptPathAware interface {
 //
 // History: 3 — #615 (authoritative task IDs + TaskSeq);
 // 4 — #649 (LastEventType persisted; the bump also heals sessions stranded
-// in `working` by pre-#642 parsers, since the re-scan reclassifies them).
-const LedgerSchemaVersion = 4
+// in `working` by pre-#642 parsers, since the re-scan reclassifies them);
+// 5 — #705 (LastAssistantText persisted; the bump also heals sessions
+// mis-demoted from `waiting` to `ready` on restart, since the re-scan
+// recovers the question text IsWaitingForUserInput needs).
+const LedgerSchemaVersion = 5
 
 // LedgerState is the durable portion of a tailer's accumulation state, written
 // to disk after every TailAndProcess pass so that daemon restarts don't reset
@@ -422,6 +425,12 @@ type LedgerState struct {
 	// an empty LastEventType, IsAgentDone can never fire, and no future
 	// activity arrives to re-classify. See issue #649.
 	LastEventType string `json:"last_event_type,omitempty"`
+	// LastAssistantText persists the tail of the most recent assistant message
+	// so a daemon restart that resumes at LastOffset (zero new lines) can still
+	// answer IsWaitingForUserInput. Without it, a session persisted as `waiting`
+	// (turn ended on a question) loses the question text on restart and the seed
+	// re-classification demotes it to `ready`. See issue #705.
+	LastAssistantText string `json:"last_assistant_text,omitempty"`
 }
 
 // --- Shared helpers used by multiple parsers ---

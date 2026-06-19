@@ -404,6 +404,7 @@ func (t *TranscriptTailer) GetLedgerState() LedgerState {
 		CumProviderCostUSD: t.cumProviderCostUSD,
 		ModelName:          t.metrics.ModelName,
 		LastEventType:      t.metrics.LastEventType,
+		LastAssistantText:  t.lastAssistantText,
 	}
 	if len(t.cumByModel) > 0 {
 		// Direct assignment is safe: the caller JSON-marshals immediately
@@ -469,6 +470,17 @@ func (t *TranscriptTailer) SetLedgerState(s LedgerState) {
 	// a finished turn (issue #649).
 	if s.LastEventType != "" {
 		t.metrics.LastEventType = s.LastEventType
+	}
+	// Restore the question text the same way: a resume-at-EOF pass would
+	// otherwise leave it empty and IsWaitingForUserInput would mis-classify a
+	// persisted `waiting` turn as `ready` (issue #705). Set both — t.metrics
+	// directly so the value survives computeMetrics' empty-MessageHistory early
+	// return on this resume-at-EOF pass (which skips the lastAssistantText
+	// copy), and the private field so it stays the source of truth for the next
+	// ledger write and for computeMetrics on later passes that carry new lines.
+	if s.LastAssistantText != "" {
+		t.lastAssistantText = s.LastAssistantText
+		t.metrics.LastAssistantText = s.LastAssistantText
 	}
 	if s.ParserState != nil {
 		if pp, ok := t.parser.(ParserStateProvider); ok {
