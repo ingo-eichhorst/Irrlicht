@@ -4,23 +4,22 @@
 
   <defs>
     <linearGradient id="flameGradient" x1="0.62" y1="0.95" x2="0.38" y2="0.08">
-      <stop offset="0%" stop-color="#FFF3B0"/>
-      <stop offset="24%" stop-color="#FFD36B"/>
-      <stop offset="50%" stop-color="#FFAA3A"/>
-      <stop offset="76%" stop-color="#FF7C2E"/>
-      <stop offset="100%" stop-color="#FF5A34"/>
+      <stop offset="0%" stop-color="#FFB347"/>
+      <stop offset="30%" stop-color="#FF8C33"/>
+      <stop offset="65%" stop-color="#F2531F"/>
+      <stop offset="100%" stop-color="#D33E18"/>
     </linearGradient>
 
     <radialGradient id="innerGlowTop" cx="0.35" cy="0.18" r="0.85">
-      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.36"/>
-      <stop offset="33%" stop-color="#FFF6D5" stop-opacity="0.22"/>
-      <stop offset="67%" stop-color="#FFD88D" stop-opacity="0.08"/>
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.13"/>
+      <stop offset="33%" stop-color="#FFF6D5" stop-opacity="0.08"/>
+      <stop offset="67%" stop-color="#FFD88D" stop-opacity="0.03"/>
       <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0"/>
     </radialGradient>
 
     <radialGradient id="innerGlowBottom" cx="0.53" cy="0.92" r="0.42">
-      <stop offset="0%" stop-color="#FFC18C" stop-opacity="0.45"/>
-      <stop offset="45%" stop-color="#FF9F69" stop-opacity="0.22"/>
+      <stop offset="0%" stop-color="#FFC18C" stop-opacity="0.16"/>
+      <stop offset="45%" stop-color="#FF9F69" stop-opacity="0.08"/>
       <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0"/>
     </radialGradient>
 

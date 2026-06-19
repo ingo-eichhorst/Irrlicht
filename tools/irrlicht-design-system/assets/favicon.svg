@@ -6,9 +6,9 @@
       <stop offset="100%" stop-color="#4c1d95" stop-opacity="0"></stop>
     </radialGradient>
     <linearGradient id="wisp-body" x1="50%" y1="100%" x2="50%" y2="0%">
-      <stop offset="0%" stop-color="#e9d5ff"></stop>
-      <stop offset="35%" stop-color="#a78bfa"></stop>
-      <stop offset="100%" stop-color="#6d28d9"></stop>
+      <stop offset="0%" stop-color="#a78bfa"></stop>
+      <stop offset="35%" stop-color="#8B5CF6"></stop>
+      <stop offset="100%" stop-color="#5b21b6"></stop>
     </linearGradient>
     <filter id="wisp-glow" x="-50%" y="-50%" width="200%" height="200%">
       <feGaussianBlur stdDeviation="1.1" result="b"></feGaussianBlur>
