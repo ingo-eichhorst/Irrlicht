@@ -34,7 +34,7 @@ fail() {
 
 # 1. Adapter is supported by a driver.
 case "$ADAPTER" in
-  claudecode|codex|pi|aider|opencode|kiro-cli|gemini-cli) ;;
+  claudecode|codex|pi|aider|opencode|kiro-cli|gemini-cli|antigravity) ;;
   *)
     fail "unknown adapter: $ADAPTER"
     ;;
@@ -100,15 +100,17 @@ MIN_VERSION="$(jq -r --arg a "$ADAPTER" '.meta.min_versions[$a] // empty' "$CATA
 # Version-string layout per adapter: <bin>:<awk-field-of-version-token>.
 # claude --version → "X.Y.Z (...)"; codex --version → "codex-cli X.Y.Z";
 # pi --version → "X.Y.Z"; aider --version → "aider X.Y.Z";
-# kiro-cli --version → "kiro-cli X.Y.Z"; gemini --version → "X.Y.Z".
+# kiro-cli --version → "kiro-cli X.Y.Z"; gemini --version → "X.Y.Z";
+# agy --version → "X.Y.Z".
 case "$ADAPTER" in
-  claudecode) CLI_BIN="claude";   VER_FIELD=1 ;;
-  codex)      CLI_BIN="codex";    VER_FIELD=2 ;;
-  pi)         CLI_BIN="pi";       VER_FIELD=1 ;;
-  aider)      CLI_BIN="aider";    VER_FIELD=2 ;;
-  opencode)   CLI_BIN="opencode"; VER_FIELD=1 ;;
-  kiro-cli)   CLI_BIN="kiro-cli"; VER_FIELD=2 ;;
-  gemini-cli) CLI_BIN="gemini";   VER_FIELD=1 ;;
+  claudecode)  CLI_BIN="claude";   VER_FIELD=1 ;;
+  codex)       CLI_BIN="codex";    VER_FIELD=2 ;;
+  pi)          CLI_BIN="pi";       VER_FIELD=1 ;;
+  aider)       CLI_BIN="aider";    VER_FIELD=2 ;;
+  opencode)    CLI_BIN="opencode"; VER_FIELD=1 ;;
+  kiro-cli)    CLI_BIN="kiro-cli"; VER_FIELD=2 ;;
+  gemini-cli)  CLI_BIN="gemini";   VER_FIELD=1 ;;
+  antigravity) CLI_BIN="agy";      VER_FIELD=1 ;;
 esac
 
 command -v "$CLI_BIN" >/dev/null 2>&1 || fail "$CLI_BIN CLI not on PATH"

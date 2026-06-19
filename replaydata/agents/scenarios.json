@@ -2,6 +2,7 @@
   "meta": {
     "min_versions": {
       "aider": "0.86.0",
+      "antigravity": "1.0.10",
       "claudecode": "2.0.0",
       "codex": "0.50.0",
       "gemini-cli": "0.45.2",

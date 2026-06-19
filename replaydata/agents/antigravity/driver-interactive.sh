@@ -1,0 +1,211 @@
+#!/usr/bin/env bash
+# drive-antigravity-interactive.sh — drive antigravity's REPL via tmux, executing a
+# step-script. SCAFFOLDED from scripts/templates/drive-interactive.sh.tmpl
+# (#496 RC2): a new adapter starts with EVERY standard step-type arm present
+# (stubbed), not a 3-step stub — so the column driver-gap forecast tells you
+# which primitives still need porting, and the matrix can't silently freeze a
+# cell on a missing arm.
+#
+# It also starts ON the shared _lib/drive slot model (slots.sh + contracts.sh):
+# the multi-session bookkeeping and the staging-contract emission are already
+# wired, so porting a multi-session step is "fill the seam + call
+# alloc_slot/load_slot", never a mid-run refactor onto the slot model (#666).
+#
+# HOW TO USE THIS TEMPLATE
+#   cp scripts/templates/drive-interactive.sh.tmpl \
+#      scripts/drive-<agent>-interactive.sh
+#   sed -i '' 's/antigravity/<agent>/g' scripts/drive-<agent>-interactive.sh
+#   chmod +x scripts/drive-<agent>-interactive.sh
+# Then fill the three AGENT-SPECIFIC SEAMS marked TODO(antigravity) below by
+# porting from the reference drivers. For the slot-model multi-session arms
+# (restart / resume / reset_session / start_session / session) read a slot-model
+# driver — drive-codex-interactive.sh or drive-gemini-cli-interactive.sh;
+# claudecode uses a different slot scheme and does NOT source _lib/drive.
+#
+# IMPORTANT — how a stubbed arm is caught: every standard arm is PRESENT here
+# (so recipe-lint's GRAMMAR check treats it as handled and will NOT report a
+# driver_gap for it). The real backstop is the SEMANTIC lint: the DRIVE_ELICITS
+# constant below lists ONLY the step types this driver actually elicits, and
+# recipe-lint reads it straight from this file (#508 #4 — no separate manifest)
+# and flags any recipe needing a stubbed-but-unlisted primitive as a
+# semantic_gap (exit 4) BEFORE recording. Keep DRIVE_ELICITS accurate: add a
+# primitive the moment you genuinely port its seam, not when you stub the arm.
+#
+# Standard step types (port each from the reference driver):
+#   send / slash   — type text + Enter (slash is the same keystrokes)
+#   wait_turn      — block until the agent finishes the turn (SEAM 2)
+#   interrupt      — cancel the in-flight turn (Escape / Ctrl-C)
+#   keys           — raw tmux key sequence (arrow-key pickers, etc.)
+#   sleep          — pause N seconds
+#   reset_session  — in-REPL reset (/clear, /new): same process, new session id
+#   restart        — end the session, start a FRESH one (new id, new cwd)
+#   resume         — relaunch the SAME id+cwd (daemon sees one session, 2 PIDs)
+#   sigkill        — kill -9 the active session's PID
+#   exit_clean     — Ctrl-D graceful shutdown
+#   start_session  — launch a concurrent session without tearing the first down
+#   session        — switch the active slot (carried as {"session": N})
+#
+# ----------------------------------------------------------------------------
+# HEADLESS ESCAPE HATCH
+#   If antigravity has a true headless-per-turn mode (e.g. `antigravity run -p …`
+#   that blocks until the turn ends), a tmux-REPL driver may be overkill for
+#   the happy path — model the headless path like drive-opencode-interactive.sh
+#   instead, where `send` launches a subprocess and `wait_turn` is a no-op. BUT:
+#   headless modes usually CANNOT deliver in-REPL slash commands or signals
+#   (opencode stores `/new` as literal text), so reset_session/slash/interrupt
+#   still need a live-TUI path. opencode's driver carries BOTH: a headless path
+#   and a run_live() tmux path the dispatcher picks when a recipe needs a TUI
+#   primitive. Copy that hybrid shape if antigravity is headless-first.
+# ----------------------------------------------------------------------------
+#
+# Staging contract (identical across all drivers — do NOT change these names):
+#   driver.log[.stdout|.stderr]  — captured CLI output
+#   driver.exit-reason           — ok | timeout | killed | nonzero(N)
+#   session.uuid / session.uuids — the session id(s) the daemon will key on
+#   transcript.path / transcript.paths — absolute path(s) to the transcript(s)
+#
+# Usage:
+#   drive-antigravity-interactive.sh <staging-dir> <session-uuid> \
+#       <timeout-seconds> <settings-path> <script-json>
+
+set -euo pipefail
+
+if [[ $# -ne 5 ]]; then
+  echo "usage: drive-antigravity-interactive.sh <staging> <uuid> <timeout-s> <settings-path> <script-json>" >&2
+  exit 2
+fi
+
+STAGING="$1"
+UUID="$2"            # preferred session id; some agents mint their own (ignore then)
+TIMEOUT_S="$3"
+SETTINGS_PATH="$4"   # scenario settings blob; wire into the launch if the agent reads one
+SCRIPT_JSON="$5"
+
+mkdir -p "$STAGING"
+DRIVER_LOG="$STAGING/driver.log"
+
+# Shared multi-session slot bookkeeping + staging-contract emission (#508 #3).
+# The scaffolded driver lives at replaydata/agents/<agent>/driver-interactive.sh,
+# so the lib is two dirs up under replaydata/_lib/drive. Sourcing it means a new
+# column starts ON the slot model: porting a multi-session step is "wire the seam
+# + call alloc_slot/load_slot", not rebuilding the slot bookkeeping (#666).
+_DRIVE_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../_lib/drive" && pwd)"
+DRIVE_MARKER_PREFIX="$STAGING/.antigravity-marker"
+# shellcheck source=/dev/null
+source "$_DRIVE_LIB/slots.sh"
+# shellcheck source=/dev/null
+source "$_DRIVE_LIB/contracts.sh"
+
+# Slot state the lib reads/writes (the driver owns these globals). A run starts
+# with zero slots; launch_repl allocs slot 1, and restart/start_session alloc
+# more. ACTIVE indexes the live slot; SESSION/TRANSCRIPT/UUID mirror it.
+N_SLOTS=0; ACTIVE=0
+SES_SESSION=(); SES_TRANSCRIPT=(); SES_UUID=(); SES_EXPECTED=()
+SES_MARKER=(); SES_CWD=(); SES_ALIVE=()
+
+# recipe-lint contract (#508 #4): the step types this driver genuinely ELICITS,
+# read directly by recipe-lint (no separate manifest). Start with ONLY the seams
+# that actually work in this scaffold (send/slash/sleep) and add each primitive
+# as you port its seam — a stubbed `not_implemented` arm must NOT be listed, so
+# recipe-lint flags a recipe needing it as a semantic_gap before recording. Set
+# DRIVE_SLASH_REQUIRES_STEP_TYPE=true if antigravity is headless-first (a bare
+# send "/cmd" stores literal text instead of reaching the REPL).
+DRIVE_ELICITS="send slash sleep"
+DRIVE_SLASH_REQUIRES_STEP_TYPE=false
+RUN_CWD="${IRRLICHT_ONBOARD_CWD:-$STAGING/cwd}"
+mkdir -p "$RUN_CWD"
+RUN_CWD="$(cd "$RUN_CWD" && pwd -P)"   # canonicalize (resolve symlinks) for the daemon's cwd match
+DEADLINE=$(( $(date +%s) + TIMEOUT_S ))
+EXIT_REASON="ok"
+SESSION=""
+
+remaining_seconds() { local now; now=$(date +%s); (( now >= DEADLINE )) && echo 0 || echo $((DEADLINE - now)); }
+
+not_implemented() { # <step-type>
+  echo "[driver] STUB: step type '$1' not yet ported for antigravity — see scripts/templates/drive-interactive.sh.tmpl and drive-claudecode-interactive.sh" >&2
+  EXIT_REASON="nonzero(3)"
+  return 3
+}
+
+# Always honor the staging contract: write driver.exit-reason on ANY exit
+# (including a `set -e` abort mid-launch) and tear tmux down if a session was
+# started. Set EXIT_REASON before a failing `exit` so the reason is accurate.
+cleanup() {
+  local i
+  for (( i = 1; i <= N_SLOTS; i++ )); do
+    [[ -n "${SES_SESSION[$i]:-}" ]] && tmux kill-session -t "${SES_SESSION[$i]}" 2>/dev/null || true
+  done
+  echo "$EXIT_REASON" > "$STAGING/driver.exit-reason"
+}
+trap cleanup EXIT
+
+# --- AGENT-SPECIFIC SEAM 1: launch the REPL under tmux -----------------------
+# Port from the reference driver. Start the agent in a detached tmux session in
+# $RUN_CWD, capturing stdout/stderr to "$DRIVER_LOG.stdout|.stderr". Pass the
+# preferred UUID if the agent accepts one. The cleanup trap above tears it down.
+launch_repl() {
+  command -v tmux >/dev/null 2>&1 || { echo "[driver] tmux required" >&2; EXIT_REASON="nonzero(2)"; exit 1; }
+  # alloc_slot mints a fresh slot, points SESSION at its tmux name and ACTIVE at
+  # it, and clears the slot's TRANSCRIPT/UUID. restart/start_session call it again
+  # to open another session; per-slot stdout (.stdout.$ACTIVE) feeds the contract.
+  alloc_slot "antigravitydrv-$$-$(date +%s)-$((N_SLOTS + 1))" "$RUN_CWD"
+  tmux kill-session -t "$SESSION" 2>/dev/null || true
+  # `|| { … exit … }` keeps a launch failure from aborting under set -e WITHOUT
+  # an accurate exit-reason — the cleanup trap then records nonzero(2).
+  tmux new-session -d -s "$SESSION" -x 200 -y 50 -c "${SES_CWD[$ACTIVE]}" "agy" \
+    >>"$DRIVER_LOG.stdout.$ACTIVE" 2>>"$DRIVER_LOG.stderr" \
+    || { echo "[driver] failed to launch agy under tmux" >&2; EXIT_REASON="nonzero(2)"; exit 1; }
+  : # TODO(antigravity): resolve the live session_id + transcript path and store it
+    #   on the active slot — SES_TRANSCRIPT[$ACTIVE]=<abs path> (SEAM 3). The
+    #   staging contract + multi-session lists are derived from SES_TRANSCRIPT.
+}
+
+# --- AGENT-SPECIFIC SEAM 2: detect a completed turn --------------------------
+# Port the agent's turn-done signal: claudecode polls the transcript for
+# stop_reason=="end_turn"; codex polls the rollout for task_complete; opencode
+# polls the SQLite store for a step-finish. Return 0 when a NEW turn completed
+# (or times out via remaining_seconds()).
+wait_turn() {
+  not_implemented wait_turn   # TODO(antigravity): replace with the real turn-done poll
+}
+
+# --- AGENT-SPECIFIC SEAM 3: send text -----------------------------------------
+send_text() { # <text>
+  tmux send-keys -t "$SESSION" -l "$1"
+  tmux send-keys -t "$SESSION" Enter
+}
+
+# --- Step dispatch: ALL standard arms present; stubs fail loudly -------------
+launch_repl
+EXPECTED_TURNS=0
+while IFS= read -r step; do
+  type="$(jq -r '.type' <<<"$step")"
+  case "$type" in
+    send|slash)      send_text "$(jq -r '.text' <<<"$step")" ;;
+    wait_turn)       wait_turn || break ;;
+    sleep)           sleep "$(jq -r '.seconds // 1' <<<"$step")" ;;
+    interrupt)       not_implemented interrupt || break ;;       # TODO(antigravity): Escape/Ctrl-C the in-flight turn
+    keys)            not_implemented keys || break ;;            # TODO(antigravity): tmux send-keys raw sequence
+    reset_session)   not_implemented reset_session || break ;;   # TODO(antigravity): in-REPL /clear|/new → new id, SAME slot; re-resolve SES_TRANSCRIPT[$ACTIVE] (SEAM 3)
+    restart)         not_implemented restart || break ;;         # TODO(antigravity): save_active; alloc_slot <name> <new-cwd>; launch — new slot carries the new id
+    resume)          not_implemented resume || break ;;          # TODO(antigravity): relaunch same id+cwd (1 session, 2 PIDs) — reuse the active slot
+    sigkill)         not_implemented sigkill || break ;;         # TODO(antigravity): kill -9 the active slot's PID
+    exit_clean)      not_implemented exit_clean || break ;;      # TODO(antigravity): Ctrl-D graceful shutdown
+    start_session)   not_implemented start_session || break ;;   # TODO(antigravity): save_active; alloc_slot; launch a CONCURRENT session, keep the first alive
+    session)         not_implemented session || break ;;         # TODO(antigravity): save_active; load_slot N — switch the active slot
+    *)               echo "[driver] unknown step type: $type" >&2; EXIT_REASON="nonzero(2)"; break ;;
+  esac
+  (( $(remaining_seconds) <= 0 )) && { EXIT_REASON="timeout"; break; }
+done < <(jq -c '.[]' <<<"$SCRIPT_JSON")
+
+# --- Write the staging contract (shared) -------------------------------------
+# emit_session_contract writes session.uuid + transcript.path (slot 1) plus the
+# multi-session session.uuids / transcript.paths lists from SES_TRANSCRIPT, and
+# combines the per-slot stdout (_lib/drive/contracts.sh). It needs each slot's
+# SES_TRANSCRIPT[$i] populated by SEAM 3; until that's ported the paths are empty
+# — the contract SHAPE is already correct, the scaffold just records nothing
+# useful yet. The primary id is the daemon's session_id — daemon_sid of the
+# transcript path; switch to the first-line UUID if antigravity keys on that (see
+# drive-pi-interactive.sh). drive_exit maps EXIT_REASON → the process exit code.
+emit_session_contract "$(daemon_sid "${SES_TRANSCRIPT[1]}")"
+drive_exit

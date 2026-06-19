@@ -1,0 +1,11 @@
+{
+  "id": "antigravity",
+  "name": "Antigravity",
+  "provider": "google",
+  "prerequisites": [
+    "Antigravity CLI >=1.0.10 installed and on PATH as `agy` (standalone native binary, e.g. ~/.local/bin/agy); `agy --version` prints just the version",
+    "Auth via Google OAuth: oauth_creds.json already provisioned under ~/.gemini (login out-of-band, e.g. `agy` first-run browser flow). No API key env var needed",
+    "Drive the REPL via tmux (send-keys + capture-pane), never human-in-the-loop; one agy process maps to one conversation",
+    "Cost/token accounting is NOT in the JSONL transcript (only in per-conversation SQLite protobuf blobs) — token/cost scenarios (5.x) are deferred/unavailable for v1"
+  ]
+}
