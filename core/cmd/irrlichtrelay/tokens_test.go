@@ -10,7 +10,7 @@ import (
 func TestIssueValidateRevoke(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "tokens.json")
 
-	id, plaintext, err := issueToken(path, "laptop")
+	id, plaintext, err := issueToken(path, "laptop", "")
 	if err != nil {
 		t.Fatalf("issue: %v", err)
 	}
@@ -22,14 +22,14 @@ func TestIssueValidateRevoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newAuthStore: %v", err)
 	}
-	gotID, ok := store.validate(plaintext)
+	gotID, _, ok := store.validate(plaintext)
 	if !ok || gotID != id {
 		t.Fatalf("validate(plaintext) = %q,%v; want %q,true", gotID, ok, id)
 	}
-	if _, ok := store.validate("bogus"); ok {
+	if _, _, ok := store.validate("bogus"); ok {
 		t.Fatal("validate accepted a bogus token")
 	}
-	if _, ok := store.validate(""); ok {
+	if _, _, ok := store.validate(""); ok {
 		t.Fatal("validate accepted an empty token")
 	}
 	if !store.valid(id) {
@@ -44,7 +44,7 @@ func TestIssueValidateRevoke(t *testing.T) {
 	if err := store.reload(); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
-	if _, ok := store.validate(plaintext); ok {
+	if _, _, ok := store.validate(plaintext); ok {
 		t.Fatal("validate accepted a revoked token after reload")
 	}
 	if store.valid(id) {
@@ -57,9 +57,36 @@ func TestIssueValidateRevoke(t *testing.T) {
 	}
 }
 
+func TestTokenWorkspaceRoundTrips(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tokens.json")
+
+	_, wsPlain, err := issueToken(path, "tenant-a", "ws-a")
+	if err != nil {
+		t.Fatalf("issue ws token: %v", err)
+	}
+	_, defPlain, err := issueToken(path, "legacy", "")
+	if err != nil {
+		t.Fatalf("issue default token: %v", err)
+	}
+
+	// A fresh store (as `serve` builds) must surface the persisted workspace,
+	// proving it survives the marshal → file → reload path, not just the
+	// in-memory issue call.
+	store, err := newAuthStore(path)
+	if err != nil {
+		t.Fatalf("newAuthStore: %v", err)
+	}
+	if _, ws, ok := store.validate(wsPlain); !ok || ws != "ws-a" {
+		t.Fatalf("validate(ws token) = workspace %q ok=%v; want \"ws-a\",true", ws, ok)
+	}
+	if _, ws, ok := store.validate(defPlain); !ok || ws != "" {
+		t.Fatalf("validate(default token) = workspace %q ok=%v; want \"\",true", ws, ok)
+	}
+}
+
 func TestTokensFileHashedAtRest(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "tokens.json")
-	_, plaintext, err := issueToken(path, "x")
+	_, plaintext, err := issueToken(path, "x", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +110,7 @@ func TestTokensFileMode0600(t *testing.T) {
 		t.Skip("POSIX file modes not meaningful on Windows")
 	}
 	path := filepath.Join(t.TempDir(), "tokens.json")
-	if _, _, err := issueToken(path, "x"); err != nil {
+	if _, _, err := issueToken(path, "x", ""); err != nil {
 		t.Fatal(err)
 	}
 	fi, err := os.Stat(path)

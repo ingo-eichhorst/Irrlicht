@@ -27,12 +27,15 @@ const tokensFilename = "tokens.json"
 
 // TokenRecord is one issued token. Hash is the hex SHA-256 of the plaintext;
 // the plaintext itself is never persisted. Label and Created are operator
-// metadata for `token list`.
+// metadata for `token list`. Workspace is the tenant scope a connection
+// presenting this token is bound to; "" is the default workspace (single-
+// tenant, the behavior of every token issued before this field existed).
 type TokenRecord struct {
-	ID      string `json:"id"`
-	Label   string `json:"label"`
-	Hash    string `json:"hash"`
-	Created int64  `json:"created"`
+	ID        string `json:"id"`
+	Label     string `json:"label"`
+	Hash      string `json:"hash"`
+	Created   int64  `json:"created"`
+	Workspace string `json:"workspace,omitempty"`
 }
 
 // hashToken returns the hex SHA-256 of a plaintext token — the only form stored
@@ -72,10 +75,10 @@ func saveTokens(path string, recs []TokenRecord) error {
 	return os.WriteFile(path, data, 0o600)
 }
 
-// issueToken mints a new 256-bit token, appends its hash to the store, and
-// returns the id plus the plaintext (shown to the operator once and never
-// recoverable thereafter).
-func issueToken(path, label string) (id, plaintext string, err error) {
+// issueToken mints a new 256-bit token bound to workspace, appends its hash to
+// the store, and returns the id plus the plaintext (shown to the operator once
+// and never recoverable thereafter). An empty workspace is the default tenant.
+func issueToken(path, label, workspace string) (id, plaintext string, err error) {
 	recs, err := loadTokens(path)
 	if err != nil {
 		return "", "", err
@@ -92,7 +95,7 @@ func issueToken(path, label string) (id, plaintext string, err error) {
 	}
 	id = hex.EncodeToString(idb[:])
 
-	recs = append(recs, TokenRecord{ID: id, Label: label, Hash: hashToken(plaintext), Created: time.Now().Unix()})
+	recs = append(recs, TokenRecord{ID: id, Label: label, Hash: hashToken(plaintext), Created: time.Now().Unix(), Workspace: workspace})
 	if err := saveTokens(path, recs); err != nil {
 		return "", "", err
 	}
@@ -121,6 +124,13 @@ func revokeToken(path, id string) (bool, error) {
 	return true, saveTokens(path, out)
 }
 
+// tokenIdentity is what a valid token resolves to: its id (for revoke
+// detection) and the workspace the connection is scoped to.
+type tokenIdentity struct {
+	id        string
+	workspace string
+}
+
 // authStore is the relay's live view of valid tokens while serving. It is
 // reloaded from disk whenever the tokens file's mtime changes so `token revoke`
 // (a separate process editing the file) propagates without a restart.
@@ -128,7 +138,7 @@ type authStore struct {
 	path string
 
 	mu     sync.RWMutex
-	hashes map[string]string // token hash → id
+	hashes map[string]tokenIdentity // token hash → identity
 	byID   map[string]struct{}
 	mtime  time.Time
 }
@@ -137,7 +147,7 @@ type authStore struct {
 // returned so `serve` refuses to start with an unreadable tokens file rather
 // than silently accepting no one.
 func newAuthStore(path string) (*authStore, error) {
-	a := &authStore{path: path, hashes: map[string]string{}, byID: map[string]struct{}{}}
+	a := &authStore{path: path, hashes: map[string]tokenIdentity{}, byID: map[string]struct{}{}}
 	if err := a.reload(); err != nil {
 		return nil, err
 	}
@@ -150,10 +160,10 @@ func (a *authStore) reload() error {
 	if err != nil {
 		return err
 	}
-	hashes := make(map[string]string, len(recs))
+	hashes := make(map[string]tokenIdentity, len(recs))
 	byID := make(map[string]struct{}, len(recs))
 	for _, r := range recs {
-		hashes[r.Hash] = r.ID
+		hashes[r.Hash] = tokenIdentity{id: r.ID, workspace: r.Workspace}
 		byID[r.ID] = struct{}{}
 	}
 	var mtime time.Time
@@ -198,20 +208,22 @@ func (a *authStore) watch(stop <-chan struct{}, every time.Duration) {
 	}
 }
 
-// validate reports the token id for a plaintext token, ok=false if the token is
-// empty or unknown. The store is keyed by the SHA-256 hash of the token, so a
-// direct map lookup of the candidate's hash is O(1) and leaks no
-// secret-dependent timing (the hashing already happened; the lookup key is a
-// fixed-width digest of an unguessable 256-bit token).
-func (a *authStore) validate(plaintext string) (string, bool) {
+// validate reports the token id and workspace for a plaintext token, ok=false
+// if the token is empty or unknown. The workspace is server-derived from the
+// stored record, never client-supplied — the connection's tenant scope cannot
+// be spoofed. The store is keyed by the SHA-256 hash of the token, so a direct
+// map lookup of the candidate's hash is O(1) and leaks no secret-dependent
+// timing (the hashing already happened; the lookup key is a fixed-width digest
+// of an unguessable 256-bit token).
+func (a *authStore) validate(plaintext string) (id, workspace string, ok bool) {
 	if plaintext == "" {
-		return "", false
+		return "", "", false
 	}
 	want := hashToken(plaintext)
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	id, ok := a.hashes[want]
-	return id, ok
+	ident, ok := a.hashes[want]
+	return ident.id, ident.workspace, ok
 }
 
 // valid reports whether a token id is still present, used by connection read

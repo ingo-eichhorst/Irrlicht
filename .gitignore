@@ -7,6 +7,7 @@ build/
 bin/
 core/bin/
 core/irrlicht-ls
+/irrlichtrelay
 
 # Xcode
 *.xcodeproj
