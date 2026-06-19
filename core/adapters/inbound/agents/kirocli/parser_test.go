@@ -173,8 +173,13 @@ func TestParser_AssistantTextTruncated(t *testing.T) {
 		},
 	}
 	ev := p.ParseLine(raw)
-	if got := len([]rune(ev.AssistantText)); got != 200 {
-		t.Errorf("AssistantText length = %d, want 200", got)
+	// Tail truncation keeps the trailing 200 runes with a leading ellipsis
+	// (the shared tailer.TruncateAssistantText rule) — not the head.
+	if got := len([]rune(ev.AssistantText)); got != 201 {
+		t.Errorf("AssistantText rune count = %d, want 201 (… + 200 runes)", got)
+	}
+	if !strings.HasPrefix(ev.AssistantText, "…") {
+		t.Errorf("AssistantText = %q, want leading … (tail truncation)", ev.AssistantText)
 	}
 }
 

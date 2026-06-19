@@ -521,19 +521,26 @@ func ExtractAssistantText(raw map[string]interface{}) string {
 		collectText(arr)
 	}
 
-	var text string
-	switch len(parts) {
-	case 0:
-		return ""
-	case 1:
-		text = strings.TrimSpace(parts[0])
-	default:
-		text = strings.TrimSpace(strings.Join(parts, " "))
-	}
+	return TruncateAssistantText(strings.Join(parts, " "))
+}
 
+// MaxAssistantTextRunes caps the assistant text kept for waiting-state display.
+const MaxAssistantTextRunes = 200
+
+// TruncateAssistantText reduces s to the assistant text kept for waiting-state
+// display: trimmed, then at most the trailing MaxAssistantTextRunes runes with a
+// leading ellipsis when it drops text. Keeping the tail (not the head) preserves
+// the agent's most recent words — the part that signals whether it is waiting on
+// the user, and where a trailing question mark lands.
+//
+// This is the single display-truncation rule shared by every agent adapter.
+// Adapters MUST scan the full text for markers (ScanTaskEstimate) BEFORE calling
+// this — the dropped head can carry a task-estimate marker.
+func TruncateAssistantText(s string) string {
+	text := strings.TrimSpace(s)
 	runes := []rune(text)
-	if len(runes) > 200 {
-		return "…" + string(runes[len(runes)-200:])
+	if len(runes) > MaxAssistantTextRunes {
+		return "…" + string(runes[len(runes)-MaxAssistantTextRunes:])
 	}
 	return text
 }

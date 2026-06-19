@@ -47,7 +47,7 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": false,
-      "last_assistant_text_head": "\u003c!-- {\"marker\":\"irrlicht-eta\",\"total_rounds\":3,\"completed_rounds\":3} --\u003e\n\nAll 3 …"
+      "last_assistant_text_head": "…eted_rounds\":3} --\u003e\n\nAll 3 rounds complete. The planning task produced: a lis…"
     },
     {
       "index": 2,
@@ -62,7 +62,7 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": false,
-      "last_assistant_text_head": "\u003c!-- {\"marker\":\"irrlicht-eta\",\"total_rounds\":3,\"completed_rounds\":3} --\u003e\n\nAll 3 …"
+      "last_assistant_text_head": "…eted_rounds\":3} --\u003e\n\nAll 3 rounds complete. The planning task produced: a lis…"
     }
   ]
 }

@@ -102,7 +102,7 @@ func (p *Parser) ParseLineRaw(line string) *tailer.ParsedEvent {
 		text := strings.TrimPrefix(line, "#### ")
 		return &tailer.ParsedEvent{
 			EventType:      "user_message",
-			AssistantText:  truncate(text),
+			AssistantText:  tailer.TruncateAssistantText(text),
 			ClearToolNames: true,
 		}
 	}
@@ -181,7 +181,7 @@ func (p *Parser) closeModelCall(m []string) *tailer.ParsedEvent {
 	return &tailer.ParsedEvent{
 		EventType:     "assistant_message",
 		ModelName:     p.model,
-		AssistantText: truncate(text),
+		AssistantText: tailer.TruncateAssistantText(text),
 		Contribution:  contribution,
 		TaskEstimate:  taskEstimate,
 		Tokens: &tailer.TokenSnapshot{
@@ -205,7 +205,7 @@ func (p *Parser) flushErrorTurn(line string) *tailer.ParsedEvent {
 	return &tailer.ParsedEvent{
 		EventType:     "turn_done",
 		ModelName:     p.model,
-		AssistantText: truncate(errText),
+		AssistantText: tailer.TruncateAssistantText(errText),
 	}
 }
 
@@ -265,13 +265,4 @@ func parseTokenCount(s string) int64 {
 		return 0
 	}
 	return int64(v * float64(mult))
-}
-
-func truncate(s string) string {
-	const max = 200
-	runes := []rune(strings.TrimSpace(s))
-	if len(runes) <= max {
-		return string(runes)
-	}
-	return "…" + string(runes[len(runes)-max:])
 }
