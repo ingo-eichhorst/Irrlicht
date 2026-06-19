@@ -88,6 +88,88 @@
       <h1>Changelog</h1>
       <p class="page-subtitle">All notable changes to Irrlicht, following Keep a Changelog conventions.</p>
 
+      <h2>v0.5.2 <small>(2026-06-19)</small></h2>
+
+      <h3>Gemini CLI joins the lineup, the menu bar gets ~3&times; lighter under load, and context-pressure alerts become configurable.</h3>
+
+      <h3>Highlights</h3>
+
+      <h4>Gemini CLI is now a supported agent</h4>
+
+      <figure style="margin: 0.5rem 0 1rem; max-width: 720px;">
+        <picture>
+          <source srcset="../assets/releases/v0.5.2/gemini-cli.webp" type="image/webp">
+          <img src="../assets/releases/v0.5.2/gemini-cli.png" alt="Gemini CLI shown as a newly supported agent alongside Claude Code, Codex, Pi, Aider, OpenCode and Kiro CLI" style="display:block; width:100%; height:auto; border-radius:6px; border:1px solid var(--border);">
+        </picture>
+      </figure>
+
+      <p>Irrlicht now watches Gemini CLI sessions and reports them in the same working / waiting / ready vocabulary as every other agent. It reads Gemini&rsquo;s JSONL transcripts under <code>~/.gemini/tmp</code>, follows nested subagent chats, and tracks per-turn token deltas &mdash; no SDK, no config. The adapter ships at the alpha maturity stage with 44 recorded scenarios behind it.</p>
+
+      <p><strong>Why it matters:</strong> if quota pushes you from Claude Code or Codex over to Gemini CLI, your monitoring follows you instead of going dark. (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/668" target="_blank" rel="noopener">#668</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/659" target="_blank" rel="noopener">#659</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/679" target="_blank" rel="noopener">#679</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/680" target="_blank" rel="noopener">#680</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/681" target="_blank" rel="noopener">#681</a>)</p>
+
+      <h4>~3&times; less CPU when you&rsquo;re running a lot of agents</h4>
+
+      <figure style="margin: 0.5rem 0 1rem; max-width: 720px;">
+        <picture>
+          <source srcset="../assets/releases/v0.5.2/cpu-coalescing.webp" type="image/webp">
+          <img src="../assets/releases/v0.5.2/cpu-coalescing.png" alt="Before/after CPU bar chart: ~100% of a core before, ~31% after, with 40 agents at 200 WebSocket pushes per second" style="display:block; width:100%; height:auto; border-radius:6px; border:1px solid var(--border);">
+        </picture>
+      </figure>
+
+      <p>With dozens of agents all ticking metrics at once, the macOS app used to redraw the whole session list on every single WebSocket message and saturate a CPU core. WebSocket-driven refreshes are now coalesced into one redraw per ~100ms window, and the per-row 1-second timers collapse into a single shared clock. State changes still flash through immediately, so the menu bar stays as responsive as ever.</p>
+
+      <p><strong>Why it matters:</strong> running a fleet of agents no longer spins up your fan or drains your battery &mdash; measured ~100% &rarr; ~31% of a core under 40 agents. (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/693" target="_blank" rel="noopener">#693</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/690" target="_blank" rel="noopener">#690</a>)</p>
+
+      <h4>Context-pressure alerts you can tune</h4>
+
+      <figure style="margin: 0.5rem 0 1rem; max-width: 480px;">
+        <picture>
+          <source srcset="../assets/releases/v0.5.2/configurable-alerts.webp" type="image/webp">
+          <img src="../assets/releases/v0.5.2/configurable-alerts.png" alt="The Context pressure alert setting with a spoken-voice option and an Alert at 80% threshold field" style="display:block; width:100%; height:auto; border-radius:6px; border:1px solid var(--border);">
+        </picture>
+      </figure>
+
+      <p>The context-fill alert that warns you before a session runs out of room now has a threshold you set yourself &mdash; fire it at 80%, 90%, or wherever you like &mdash; instead of a fixed cutoff. The new alert lives in a tidied-up settings panel where less-common options collapse under an <strong>Advanced Settings</strong> group and in-progress features carry a <strong>Beta</strong> badge.</p>
+
+      <p><strong>Why it matters:</strong> people who want an early heads-up and people who only want a last-second warning can each set the threshold that fits how they work. (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/692" target="_blank" rel="noopener">#692</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/689" target="_blank" rel="noopener">#689</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/702" target="_blank" rel="noopener">#702</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/694" target="_blank" rel="noopener">#694</a>)</p>
+
+      <h3>Added</h3>
+      <ul>
+        <li><strong>Gemini CLI adapter</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/668" target="_blank" rel="noopener">#668</a>) &mdash; transcript-, process- and PID-aware monitoring for Gemini CLI sessions, at the alpha stage.</li>
+        <li><strong><code>/ir:doc-review</code> skill</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/698" target="_blank" rel="noopener">#698</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/691" target="_blank" rel="noopener">#691</a>) &mdash; an objective, binary-criteria documentation audit that files one agent-ready GitHub issue per doc surface; supports a <code>--report-only</code> dry run.</li>
+        <li><strong>Configurable context-fill alert threshold</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/692" target="_blank" rel="noopener">#692</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/689" target="_blank" rel="noopener">#689</a>) &mdash; set the context-pressure alert as a percentage (default 80%) or an absolute token count; the former 95% critical tier folds into the single configurable threshold.</li>
+        <li><strong>Settings: Advanced Settings group + Beta badges</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/702" target="_blank" rel="noopener">#702</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/694" target="_blank" rel="noopener">#694</a>) &mdash; less-common controls collapse under a disclosure group, and in-progress features are marked Beta.</li>
+        <li><strong>Full docs for every environment variable, hook, and focus/CLI endpoint</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/699" target="_blank" rel="noopener">#699</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/700" target="_blank" rel="noopener">#700</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/701" target="_blank" rel="noopener">#701</a>).</li>
+      </ul>
+
+      <h3>Fixed</h3>
+      <ul>
+        <li><strong>Dead sessions now age out correctly</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/684" target="_blank" rel="noopener">#684</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/667" target="_blank" rel="noopener">#667</a>) &mdash; a no-op refresh no longer bumps <code>updated_at</code>, so a crashed or abandoned agent stops looking alive.</li>
+        <li><strong>Manual <code>/compact</code> shows the full lifecycle</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/658" target="_blank" rel="noopener">#658</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/656" target="_blank" rel="noopener">#656</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/657" target="_blank" rel="noopener">#657</a>) &mdash; <strong>working</strong> for the whole compaction window, back to <strong>ready</strong> when it finishes, via a Claude Code <code>PreCompact</code> hook and treating the manual <code>compact_boundary</code> as a turn boundary; existing installs pick up the hook on the next daemon restart, and an interrupted compaction is bounded by a timeout.</li>
+        <li><strong>Installer downloads and verifies before removing the existing install</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/654" target="_blank" rel="noopener">#654</a>) &mdash; a failed download can&rsquo;t leave you with no app.</li>
+        <li><strong>gemini-cli: ESC-cancel and aborted-turn notices settle the turn</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/659" target="_blank" rel="noopener">#659</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/679" target="_blank" rel="noopener">#679</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/680" target="_blank" rel="noopener">#680</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/681" target="_blank" rel="noopener">#681</a>) &mdash; plus a batch of consolidated detector edge cases.</li>
+      </ul>
+
+      <h3>Changed / Distribution</h3>
+      <ul>
+        <li><strong>Gemini CLI moves from planned to alpha</strong> in the compatibility grids.</li>
+        <li><strong>Release DMGs are codesigned before notarization</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/652" target="_blank" rel="noopener">#652</a>) &mdash; Gatekeeper&rsquo;s primary-signature check now passes on the DMG file itself.</li>
+        <li><strong>Dependency bumps</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/686" target="_blank" rel="noopener">#686</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/687" target="_blank" rel="noopener">#687</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/688" target="_blank" rel="noopener">#688</a>) &mdash; <code>vite</code> 8.0.14 &rarr; 8.0.16, <code>form-data</code> 4.0.5 &rarr; 4.0.6.</li>
+      </ul>
+
+      <h3>Technical appendix</h3>
+      <ul>
+        <li><strong>gemini-cli adapter (#668)</strong> &mdash; new transcript + process + PID adapter at <code>core/adapters/inbound/agents/geminicli/</code>. Watches JSONL session files under <code>~/.gemini/tmp</code> named <code>session-&lt;ts&gt;-&lt;first8hex&gt;</code> (session id is the filename stem, not the header UUID), with nested subagent chats at <code>chats/&lt;parent-uuid&gt;/&lt;child-uuid&gt;.jsonl</code>. Process discovery matches the <code>bin/gemini</code> command line (the OS process is <code>node</code>); cwd is read from the transcript body, forcing an <code>EnrichNewSession</code> pass off <code>m.LastCWD</code>. No explicit end-of-turn marker &mdash; a text-only assistant message maps to <code>turn_done</code>, benign info notices are ignored, and ESC-cancel / aborted-turn notices settle the turn (#659, #665). 44 scenarios recorded; consolidated detector fixes in #679 cover #660&ndash;#664, #676.</li>
+        <li><strong>WebSocket refresh coalescing (#693, #690)</strong> &mdash; <code>session_updated</code> pushes are batched into a single <code>flushUIRefresh</code> per ~100ms window that patches all dirty sessions in one map pass + one recompose (<code>patchApiGroups(sessions:)</code>) rather than O(K&middot;N) per-message recomposes. Per-row 1Hz duration <code>TimelineView</code>s collapse into one shared <code>DurationClock</code> observed only by leaf labels. Context-pressure alerts ride <code>rebuildSessionsFromMap</code> and are deferred by at most one window; state-transition notifications still fire synchronously. Per-message debug <code>print()</code>s gated behind <code>IRRLICHT_DEBUG</code>. Added <code>tools/wsload</code> plus a deterministic coalescing regression test. Measured 40 sessions / 200 pushes/sec, release: ~100% &rarr; ~31% of a core.</li>
+        <li><strong>Configurable context-fill alert threshold (#692, #689)</strong> &mdash; new <code>ContextPressureThreshold</code> value type (value + unit) as the single source of truth with a pure <code>isExceeded(by:)</code>; <code>SessionManager</code> seeds the 80%/percent default, drives <code>checkContextPressureAlerts</code> off the configured value (fires once per session, re-arms on change), and adapts the notification title/body to the unit. The session-row badge reads the threshold via <code>@AppStorage</code> and collapses to one tier &mdash; the former 95% critical tier is removed. A token-count mode fires even when the model&rsquo;s context window is unknown.</li>
+        <li><strong>Settings reorganization (#702, #694)</strong> &mdash; less-common controls collapse under an <strong>Advanced Settings</strong> disclosure group; in-progress features carry a <strong>Beta</strong> badge.</li>
+        <li><strong>Detector no-op refresh (#684, #667)</strong> &mdash; a refresh that produces no state change no longer advances <code>updated_at</code>, so the idle-sweep age-out timer isn&rsquo;t reset on every poll and dead sessions transition out as designed.</li>
+        <li><strong>claudecode manual <code>/compact</code> lifecycle (#658, #656, #657)</strong> &mdash; a <code>PreCompact</code> hook forces <strong>working</strong> during compaction and the manual <code>compact_boundary</code> releases to <strong>ready</strong> after; <code>EnsureHooksInstalled</code> adds the hook on daemon restart, and an interrupted compaction is bounded by a timeout.</li>
+        <li><strong>Docs (#698, #691, #699, #700, #701)</strong> &mdash; the <code>/ir:doc-review</code> skill audits every doc surface against binary criteria and files one issue per surface; this release&rsquo;s docs also gained full coverage of environment variables, hooks, focus endpoints, and the CLI tools.</li>
+        <li><strong>Release tooling (#652, #653, #655)</strong> &mdash; <code>tools/build-release.sh</code> codesigns the DMG between <code>hdiutil create</code> and <code>notarytool submit</code> so the stapled ticket covers the signed bytes; release-skill docs record the DMG-signature ordering and port-safe smoke/canary guidance.</li>
+        <li><strong>Model aliases</strong> &mdash; codeburn <code>BUILTIN_ALIASES</code> sync ran at release time: no new entries needed (the upstream <code>gpt-4.1</code> self-alias is a documented no-op); all eight <code>LOCAL_OVERRIDE</code> entries unchanged.</li>
+      </ul>
+
       <h2>v0.5.1 <small>(2026-06-07)</small></h2>
 
       <h3>Ghost sessions and stuck states fixed: /compact strandings, Claude Code 2.1.168&rsquo;s background daemon, and restart amnesia.</h3>

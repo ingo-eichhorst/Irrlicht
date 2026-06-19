@@ -329,7 +329,7 @@ launchctl setenv IRRLICHT_DEBUG 1
 
       <ul>
         <li>Notifications are <strong>opt-in by default</strong> &mdash; no banners or sounds play until you enable an event in Preferences (part of the consent-first rollout in v0.5.0)</li>
-        <li>Three events &mdash; <code>ready</code>, <code>waiting</code>, and context pressure (80% / 95%) &mdash; each has its own enable toggle and sound picker in Preferences</li>
+        <li>Three events &mdash; <code>ready</code>, <code>waiting</code>, and context pressure (a single configurable threshold, default 80% of the context window or an absolute token count) &mdash; each has its own enable toggle and sound picker in Preferences</li>
         <li>Built-in sounds: Ping, Chime, Funk, Whoosh, Sosumi; defaults Ready=Funk, Waiting=Ping, Context=Sosumi</li>
         <li><strong>None</strong> &mdash; the banner still appears but plays no sound</li>
         <li><strong>Speak aloud</strong> &mdash; routes the title and body through <code>AVSpeechSynthesizer</code> (pinned to en-US) with three voice variants: Default, Zoe-Premium (female), Jamie-Premium (male). If a premium voice isn't installed, the row deep-links to System Settings &rarr; Accessibility &rarr; Spoken Content</li>

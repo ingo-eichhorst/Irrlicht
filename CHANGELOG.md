@@ -12,20 +12,75 @@ beyond), see the [Roadmap](https://irrlicht.io/docs/roadmap.html).
 
 ## [Unreleased]
 
+## [0.5.2] — 2026-06-19
+
+### Gemini CLI joins the lineup, the menu bar gets ~3× lighter under load, and context-pressure alerts become configurable.
+
+### Highlights
+
+#### Gemini CLI is now a supported agent
+
+![Gemini CLI shown as a newly supported agent alongside Claude Code, Codex, Pi, Aider, OpenCode and Kiro CLI](assets/releases/v0.5.2/gemini-cli.png)
+
+Irrlicht now watches Gemini CLI sessions and reports them in the same working / waiting / ready vocabulary as every other agent. It reads Gemini's JSONL transcripts under `~/.gemini/tmp`, follows nested subagent chats, and tracks per-turn token deltas — no SDK, no config. The adapter ships at the alpha maturity stage with 44 recorded scenarios behind it.
+
+**Why it matters:** if quota pushes you from Claude Code or Codex over to Gemini CLI, your monitoring follows you instead of going dark.
+
+(#668, #659, #679, #680, #681)
+
+#### ~3× less CPU when you're running a lot of agents
+
+![Before/after CPU bar chart: ~100% of a core before, ~31% after, with 40 agents at 200 WebSocket pushes per second](assets/releases/v0.5.2/cpu-coalescing.png)
+
+With dozens of agents all ticking metrics at once, the macOS app used to redraw the whole session list on every single WebSocket message and saturate a CPU core. WebSocket-driven refreshes are now coalesced into one redraw per ~100ms window, and the per-row 1-second timers collapse into a single shared clock. State changes still flash through immediately, so the menu bar stays as responsive as ever.
+
+**Why it matters:** running a fleet of agents no longer spins up your fan or drains your battery — measured ~100% → ~31% of a core under 40 agents.
+
+(#693, #690)
+
+#### Context-pressure alerts you can tune
+
+![The Context pressure alert setting with a spoken-voice option and an "Alert at 80%" threshold field](assets/releases/v0.5.2/configurable-alerts.png)
+
+The context-fill alert that warns you before a session runs out of room now has a threshold you set yourself — fire it at 80%, 90%, or wherever you like — instead of a fixed cutoff. The new alert lives in a tidied-up settings panel where less-common options collapse under an **Advanced Settings** group and in-progress features carry a **Beta** badge.
+
+**Why it matters:** people who want an early heads-up and people who only want a last-second warning can each set the threshold that fits how they work.
+
+(#692, #689, #702, #694)
+
+### Added
+
+- **Gemini CLI adapter** — transcript-, process- and PID-aware monitoring for Gemini CLI sessions, at the alpha stage. (#668)
+- **`/ir:doc-review` skill** — an objective, binary-criteria documentation audit that files one agent-ready GitHub issue per doc surface; supports a `--report-only` dry run. (#698, #691)
+- **Configurable context-fill alert threshold** — set the context-pressure alert as a percentage (default 80%) or an absolute token count; the former 95% critical tier is folded into the single configurable threshold. (#692, #689)
+- **Settings: Advanced Settings group + Beta badges** — less-common controls collapse under a disclosure group, and in-progress features are marked Beta. (#702, #694)
+- Full documentation of every environment variable, hook, and focus/CLI endpoint in the site docs. (#699, #700, #701)
+
 ### Fixed
 
-- A manual `/compact` now shows the full lifecycle: the session goes **working**
-  for the whole compaction window and returns to **ready** when it finishes.
-  Previously the compaction window (which writes nothing to the transcript)
-  stayed frozen at the pre-compact state, and a `/compact` invoked mid tool-use
-  was stranded in "working" forever. The fix adds a Claude Code `PreCompact`
-  hook (forces working during) and treats the manual `compact_boundary` as a
-  turn boundary (releases to ready after). (#656, #657; follow-up to #641)
-  - **Existing installs** pick up the "working during compaction" half on the
-    next daemon restart — `EnsureHooksInstalled` adds the new `PreCompact` entry
-    to `~/.claude/settings.json` automatically.
-  - An interrupted compaction that never finishes is bounded by a timeout, so a
-    cancelled `/compact` can't strand the session in "working" either.
+- Dead sessions now age out correctly: a no-op refresh no longer bumps `updated_at`, so a crashed or abandoned agent stops looking alive. (#684, #667)
+- A manual `/compact` now shows the full lifecycle — **working** for the whole compaction window, back to **ready** when it finishes — instead of staying frozen at the pre-compact state or stranding a mid-tool-use compaction in "working". The fix adds a Claude Code `PreCompact` hook and treats the manual `compact_boundary` as a turn boundary; existing installs pick up the hook on the next daemon restart, and an interrupted compaction is bounded by a timeout. (#658, #656, #657; follow-up to #641)
+- The curl installer downloads and verifies the new build before removing the existing install, so a failed download can't leave you with no app. (#654)
+- gemini-cli: ESC-cancel and aborted-turn notices now settle the turn, and a batch of detector edge cases are consolidated. (#659, #679, #680, #681)
+
+### Changed / Distribution
+
+- Gemini CLI moves from **planned** to **alpha** in the compatibility grids.
+- Release DMGs are now codesigned before notarization, so Gatekeeper's primary-signature check passes on the DMG file itself. (#652)
+- Dependency bumps: `vite` 8.0.14 → 8.0.16, `form-data` 4.0.5 → 4.0.6. (#686, #687, #688)
+
+### Technical appendix
+
+- **gemini-cli adapter** (`core/adapters/inbound/agents/geminicli/`): new transcript + process + PID adapter. Watches JSONL session files under `~/.gemini/tmp` named `session-<ts>-<first8hex>` (session id is the filename stem, not the header UUID), with nested subagent chats at `chats/<parent-uuid>/<child-uuid>.jsonl`. Process discovery matches the `bin/gemini` command line (the OS process is `node`); cwd is read from the transcript body, not a header line, which forced an `EnrichNewSession` pass off `m.LastCWD`. No explicit end-of-turn marker — a text-only assistant message maps to `turn_done`, benign info notices ("Model set to …") are ignored, and ESC-cancel / aborted-turn notices settle the turn (#659, #665). 44 scenarios recorded; consolidated detector fixes in #679 cover #660–#664, #676. (#668)
+- **WebSocket refresh coalescing** (macOS): `session_updated` pushes are batched into a single `flushUIRefresh` per ~100ms window that patches all dirty sessions in one map pass + one recompose (`patchApiGroups(sessions:)`) rather than O(K·N) per-message recomposes. Per-row 1Hz duration `TimelineView`s collapse into one shared `DurationClock` observed only by leaf labels. Context-pressure alerts ride `rebuildSessionsFromMap` and are deferred by at most one window; state-transition notifications still fire synchronously at message time. Per-message debug `print()`s are gated behind `IRRLICHT_DEBUG` via the cached `irrlichtVerboseLogging` global. Added `tools/wsload` (a faithful WS load harness) plus a deterministic coalescing regression test. Measured 40 sessions / 200 pushes/sec, release: ~100% → ~31% of a core. (#693, #690)
+- **Configurable context-fill alert threshold** (macOS): new `ContextPressureThreshold` value type (value + unit) as the single source of truth with a pure `isExceeded(by:)`; `SessionManager` seeds the 80%/percent default, drives `checkContextPressureAlerts` off the configured value (fires once per session, re-arms when the setting changes), and adapts the notification title/body to the unit. The session-row badge reads the threshold via `@AppStorage` and collapses to one tier — the former 95% critical tier (red badge + escalation notification) is removed. A token-count mode also fires when the model's context window is unknown (where percentage utilization stays 0). (#692, #689)
+- **Settings reorganization** (macOS): less-common controls collapse under an **Advanced Settings** disclosure group; in-progress features carry a **Beta** badge. (#702, #694)
+- **Detector no-op refresh** (`core/`): a refresh that produces no state change no longer advances `updated_at`, so the idle-sweep age-out timer isn't reset on every poll and dead sessions transition out as designed. (#684, #667)
+- **claudecode manual `/compact` lifecycle**: a `PreCompact` hook forces **working** during compaction and the manual `compact_boundary` is treated as a turn boundary (releases to **ready** after); `EnsureHooksInstalled` adds the new hook on daemon restart, and an interrupted compaction is bounded by a timeout. (#658, #656, #657)
+- **`/ir:doc-review` skill**: audits every documentation surface against binary criteria, anchors each finding to a quoted location with a stable ID so independent runs converge, and files one GitHub issue per surface with exact fixes. (#698, #691)
+- **Docs**: documented all environment variables in `configuration.html` (#699), hooks + focus endpoints in `api-reference.html` (#700), and `irrlicht-focus` + `irrlichtrelay` in `cli-tools.html` (#701).
+- **Release tooling**: `tools/build-release.sh` codesigns the DMG between `hdiutil create` and `notarytool submit` so the stapled ticket covers the signed bytes (#652); release-skill docs record the DMG-signature ordering, pre-v0.5.2 spctl interpretation, and port-safe smoke/canary guidance (#653, #655).
+- **Dependencies**: `vite` 8.0.14 → 8.0.16 in `platforms/web` (#686, #687); `form-data` 4.0.5 → 4.0.6 in the onboarding viewer (#688).
 
 ## [0.5.1] — 2026-06-07
 
@@ -1037,7 +1092,8 @@ Four distinct bugs caused long-running Claude Code sessions to bounce between
 - First bundled macOS installer `Irrlicht-0.2.0-mac-installer.pkg` containing
   the daemon, menu bar app, and auto-start LaunchAgent.
 
-[Unreleased]: https://github.com/ingo-eichhorst/Irrlicht/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/ingo-eichhorst/Irrlicht/compare/v0.5.2...HEAD
+[0.5.2]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.5.2
 [0.5.1]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.5.1
 [0.5.0]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.5.0
 [0.4.8]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.4.8
