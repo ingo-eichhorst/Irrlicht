@@ -8,6 +8,10 @@ bin/
 core/bin/
 core/irrlicht-ls
 /irrlichtrelay
+# stray daemon binary from `go build ./core/...` (anchored so it never
+# matches the core/cmd/irrlichd/ source dir)
+/irrlichd
+core/irrlichd
 
 # Xcode
 *.xcodeproj
