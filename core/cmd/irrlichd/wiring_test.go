@@ -5,25 +5,57 @@ import (
 	"time"
 
 	"irrlicht/core/adapters/inbound/agents"
+	"irrlicht/core/adapters/inbound/agents/fswatcher"
+	"irrlicht/core/adapters/inbound/agents/opencode"
+	"irrlicht/core/adapters/inbound/agents/processlifecycle"
 	"irrlicht/core/domain/agent"
 )
 
 // buildAgentWatchers must dispatch every registered adapter's Source variant
-// without panicking, and produce the right watcher set: a process scanner for
-// every adapter, plus a dedicated file/store watcher for FilesUnderRoot and
-// ProcessOwnedStore. FilesUnderCWD is scanner-only.
+// without panicking and build the right watcher set: exactly one process
+// scanner for every adapter, plus the variant's dedicated watcher — an
+// fswatcher for FilesUnderRoot, the opencode store watcher for
+// ProcessOwnedStore, and none for FilesUnderCWD (scanner-only). The set is
+// checked by concrete type, not just count, so wiring the wrong watcher is
+// caught.
 func TestBuildAgentWatchers_PerSourceVariant(t *testing.T) {
 	noCheck := func(string, int) bool { return true }
 	for _, a := range agents.All() {
-		a := a
 		t.Run(a.Identity.Name, func(t *testing.T) {
 			watchers, _ := buildAgentWatchers(a, time.Minute, noCheck)
-			want := 2 // file/store watcher + scanner
-			if _, ok := a.Source.(agent.FilesUnderCWD); ok {
-				want = 1 // scanner only
+
+			var scanners, fswatchers, stores int
+			for _, w := range watchers {
+				switch w.(type) {
+				case *processlifecycle.Scanner:
+					scanners++
+				case *fswatcher.Watcher:
+					fswatchers++
+				case *opencode.Watcher:
+					stores++
+				default:
+					t.Errorf("%s: unexpected watcher type %T", a.Identity.Name, w)
+				}
 			}
-			if len(watchers) != want {
-				t.Errorf("%s (%T): got %d watchers, want %d", a.Identity.Name, a.Source, len(watchers), want)
+
+			if scanners != 1 {
+				t.Errorf("%s: got %d process scanners, want 1", a.Identity.Name, scanners)
+			}
+			switch a.Source.(type) {
+			case agent.FilesUnderRoot:
+				if fswatchers != 1 || stores != 0 {
+					t.Errorf("%s (FilesUnderRoot): fswatchers=%d stores=%d, want 1/0", a.Identity.Name, fswatchers, stores)
+				}
+			case agent.ProcessOwnedStore:
+				if stores != 1 || fswatchers != 0 {
+					t.Errorf("%s (ProcessOwnedStore): stores=%d fswatchers=%d, want 1/0", a.Identity.Name, stores, fswatchers)
+				}
+			case agent.FilesUnderCWD:
+				if fswatchers != 0 || stores != 0 {
+					t.Errorf("%s (FilesUnderCWD): want scanner-only, got fswatchers=%d stores=%d", a.Identity.Name, fswatchers, stores)
+				}
+			default:
+				t.Fatalf("%s: unhandled Source variant %T — update this test", a.Identity.Name, a.Source)
 			}
 		})
 	}
