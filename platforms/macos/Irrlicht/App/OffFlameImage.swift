@@ -42,12 +42,12 @@ enum OffFlameImage {
 
         // "Action required" (#593 follow-up): pending permission items mean
         // monitoring is paused until the human answers the wizard. Orange
-        // flame (waiting hue) + red exclamation badge — must read as "do
+        // flame (brand orange) + red exclamation badge — must read as "do
         // something", clearly distinct from the gray no-sessions flame.
         static let attention = Config(
             bodyStops: """
-            <stop offset="0%" stop-color="#FF9500" stop-opacity="0.95"/>
-            <stop offset="100%" stop-color="#FF7A00" stop-opacity="0.95"/>
+            <stop offset="0%" stop-color="#FFB347" stop-opacity="0.95"/>
+            <stop offset="100%" stop-color="#D33E18" stop-opacity="0.95"/>
             """,
             // Red badge bottom-right with a white exclamation. White outline
             // separates the badge from the orange flame at 18 pt.
