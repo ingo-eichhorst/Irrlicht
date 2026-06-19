@@ -99,7 +99,7 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": false,
-      "last_assistant_text_head": "\n\ntwo"
+      "last_assistant_text_head": "two"
     }
   ]
 }

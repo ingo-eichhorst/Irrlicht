@@ -198,7 +198,7 @@ var terminalInfoMarkers = []string{
 func (p *Parser) parseError(raw map[string]interface{}, ev *tailer.ParsedEvent) bool {
 	content, _ := raw["content"].(string)
 	ev.EventType = "turn_done"
-	ev.AssistantText = tailTruncate(content, 200)
+	ev.AssistantText = tailer.TruncateAssistantText(content)
 	ev.IsError = true
 	return true
 }
@@ -294,7 +294,7 @@ func (p *Parser) parseAssistant(raw map[string]interface{}, ev *tailer.ParsedEve
 	ev.EventType = "assistant_message"
 
 	content, _ := raw["content"].(string)
-	ev.AssistantText = tailTruncate(content, 200)
+	ev.AssistantText = tailer.TruncateAssistantText(content)
 	if est := tailer.ScanTaskEstimate(content, ev.Timestamp); est != nil {
 		ev.TaskEstimate = est
 	}
@@ -491,16 +491,6 @@ func workspaceFromContent(content interface{}) string {
 		}
 	}
 	return ""
-}
-
-// tailTruncate keeps the last n runes of s — matching the waiting-display
-// convention of the other adapters (most-recent words win).
-func tailTruncate(s string, n int) string {
-	r := []rune(s)
-	if len(r) <= n {
-		return s
-	}
-	return string(r[len(r)-n:])
 }
 
 // intFromAny coerces a JSON number (decoded as float64) to int64.

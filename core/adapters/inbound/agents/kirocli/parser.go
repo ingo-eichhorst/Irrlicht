@@ -103,10 +103,7 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 			ev.EventType = "turn_done"
 			p.applySidecarMetrics(ev)
 		}
-		if runes := []rune(lastText); len(runes) > 200 {
-			lastText = string(runes[:200])
-		}
-		ev.AssistantText = lastText
+		ev.AssistantText = tailer.TruncateAssistantText(lastText)
 
 	case "ToolResults":
 		ev.EventType = "tool_result"

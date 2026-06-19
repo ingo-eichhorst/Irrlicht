@@ -15,19 +15,19 @@
     "last_event_time": "2026-04-06T20:39:45.037Z",
     "wall_clock_session_duration": 15454196000000,
     "state_durations": {
-      "ready": 11872449000000,
-      "waiting": 652890000000,
+      "ready": 11421081000000,
+      "waiting": 1104258000000,
       "working": 2928857000000
     },
-    "flicker_count": 11,
+    "flicker_count": 10,
     "flickers_by_category": {
       "ready_between_working": 1,
-      "working_between_ready": 9,
+      "working_between_ready": 8,
       "working_between_waiting": 1
     },
     "flickers_by_reason": {
       "agent finished turn → ready": 1,
-      "force ready→working on first activity": 9,
+      "force ready→working on first activity": 8,
       "transcript activity (waiting → working)": 1
     },
     "cum_input_tokens": 910869,
@@ -106,7 +106,7 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": false,
-      "last_assistant_text_head": "Done — committed and pushed.\n\n- **Commit:** `b1a70a8`\n- **Message:** `Simplify…"
+      "last_assistant_text_head": "…mport AGENTS.md`\n- **Branch:** `test/subagent-display-regression-88`\n- **Push…"
     },
     {
       "index": 5,
@@ -135,7 +135,7 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": false,
-      "last_assistant_text_head": "Merged and synced successfully ✅\n\nWhat I did:\n\n1. Checked out `main`\n2. Pulled…"
+      "last_assistant_text_head": "…ed `test/subagent-display-regression-88` into `main`\n4. Pushed `main` to orig…"
     },
     {
       "index": 7,
@@ -164,7 +164,7 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": false,
-      "last_assistant_text_head": "Done — I followed the `ir:test-mac` flow and rebuilt/restarted the local mac d…"
+      "last_assistant_text_head": "…PID: `17808`\n- App PID: `18073`\n- `curl http://localhost:7837/api/v1/sessions…"
     },
     {
       "index": 9,
@@ -179,7 +179,7 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": false,
-      "last_assistant_text_head": "Done — I followed the `ir:test-mac` flow and rebuilt/restarted the local mac d…"
+      "last_assistant_text_head": "…PID: `17808`\n- App PID: `18073`\n- `curl http://localhost:7837/api/v1/sessions…"
     },
     {
       "index": 10,
@@ -194,7 +194,7 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": false,
-      "last_assistant_text_head": "Done — I followed the `ir:test-mac` flow and rebuilt/restarted the local mac d…"
+      "last_assistant_text_head": "…PID: `17808`\n- App PID: `18073`\n- `curl http://localhost:7837/api/v1/sessions…"
     },
     {
       "index": 11,
@@ -223,7 +223,7 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": false,
-      "last_assistant_text_head": "Found it. Root cause is in the **Pi parser/state pipeline**, not your session fi…"
+      "last_assistant_text_head": "…ion appears `ready` while compact is running.\n\nIf you want, I can patch this …"
     },
     {
       "index": 13,
@@ -252,7 +252,7 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": false,
-      "last_assistant_text_head": "Done — I created a branch, implemented the fix with tests, verified it, and op…"
+      "last_assistant_text_head": "…o test ./... -count=1` ✅\n\n### Commit\n- `5a634bf`\n- Message: **Treat Pi comp…"
     },
     {
       "index": 15,
@@ -281,7 +281,7 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": false,
-      "last_assistant_text_head": "I checked that exact Pi session transcript and the detector logic.  \nThe main is…"
+      "last_assistant_text_head": "…ressively for Pi’s normal tool durations + missing permission-mode signal f…"
     },
     {
       "index": 17,
@@ -310,7 +310,7 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": false,
-      "last_assistant_text_head": "Yes — your instinct is right.\n\n## Verdict\n**Adapter-specific waiting logic is …"
+      "last_assistant_text_head": "…orrectly entering `waiting` during normal long-running `bash/read/write` tool…"
     },
     {
       "index": 19,
@@ -339,7 +339,7 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": false,
-      "last_assistant_text_head": "Implemented ✅ — adapter-specific waiting logic is now in place.\n\n### What I …"
+      "last_assistant_text_head": "…cd core \u0026\u0026 go test ./... -count=1` ✅\n\n---\n\n### Commit \u0026 PR\n\n- **Commit:** `…"
     },
     {
       "index": 21,
@@ -368,7 +368,7 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": false,
-      "last_assistant_text_head": "Done — I merged the latest `main` into your branch and pushed it.\n\n- Branch: `…"
+      "last_assistant_text_head": "…ushed it.\n\n- Branch: `fix/pi-compaction-working-state`\n- Merged: `origin/main…"
     },
     {
       "index": 23,
@@ -397,7 +397,7 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": false,
-      "last_assistant_text_head": "Done — local dev stack rebuilt and restarted.\n\n### Executed\n- Built daemon: `c…"
+      "last_assistant_text_head": "…rocess + API response\n\n### Running now\n- Daemon PID: `85218`\n- App PID: `8565…"
     },
     {
       "index": 25,
@@ -483,7 +483,7 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": false,
-      "last_assistant_text_head": "Found the root cause in that session’s latest task.\n\n### What’s wrong\n\nIn tr…"
+      "last_assistant_text_head": "…i model behavior issue; it’s a **tailer ingestion bug with oversized JSONL …"
     },
     {
       "index": 31,
@@ -540,7 +540,7 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": false,
-      "last_assistant_text_head": "Continued and applied the fix.\n\nI found this could not be fixed purely in `pi/pa…"
+      "last_assistant_text_head": "…rlichd` + debug macOS app), so you can test immediately.\n\nIf you want, I can …"
     },
     {
       "index": 35,
@@ -569,7 +569,7 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": false,
-      "last_assistant_text_head": "Rebuilt and redeployed both ✅\n\n- Daemon rebuilt to: `/tmp/irrlichd`\n- Swift ap…"
+      "last_assistant_text_head": "…ocket cleaned\n- Dev daemon restarted\n- Dev app restarted\n- Verified running +…"
     },
     {
       "index": 37,
@@ -627,7 +627,7 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": false,
-      "last_assistant_text_head": "Done — I triggered **two very long JSONL tool results in a row** in this same …"
+      "last_assistant_text_head": "…i/agent/sessions/--Users-ingo-projects-irrlicht--/2026-04-06T16-22-10-841Z_25…"
     },
     {
       "index": 41,
@@ -642,7 +642,7 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": false,
-      "last_assistant_text_head": "Done — I triggered **two very long JSONL tool results in a row** in this same …"
+      "last_assistant_text_head": "…i/agent/sessions/--Users-ingo-projects-irrlicht--/2026-04-06T16-22-10-841Z_25…"
     },
     {
       "index": 42,
@@ -657,7 +657,7 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": false,
-      "last_assistant_text_head": "Done — I triggered **two very long JSONL tool results in a row** in this same …"
+      "last_assistant_text_head": "…i/agent/sessions/--Users-ingo-projects-irrlicht--/2026-04-06T16-22-10-841Z_25…"
     },
     {
       "index": 43,
@@ -714,7 +714,7 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": false,
-      "last_assistant_text_head": "Great catch — you’re exactly right.\n\n### Where the data points came from\n\nFo…"
+      "last_assistant_text_head": "…used: `35650 / 200000 = 17.8%` (wrong basis)\n- should be with 256k: `35650 / …"
     },
     {
       "index": 47,
@@ -743,7 +743,7 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": false,
-      "last_assistant_text_head": "Good fix is:\n\n### 1) Add the missing model mapping (root cause)\n`core/pkg/capaci…"
+      "last_assistant_text_head": "…loying, restart daemon / re-tail session so cached metrics are recomputed fro…"
     },
     {
       "index": 49,
@@ -772,7 +772,7 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": false,
-      "last_assistant_text_head": "Updated ✅ — I applied the fix for the Codex 5.3 context window miscalculatio…"
+      "last_assistant_text_head": "…=1`\n- `cd core \u0026\u0026 go test ./pkg/capacity ./pkg/tailer -count=1`\n\nAll passing.…"
     },
     {
       "index": 51,
@@ -801,7 +801,7 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": false,
-      "last_assistant_text_head": "Done — committed and pushed to the PR branch.\n\n### Pushed\n- **Branch:** `fix/p…"
+      "last_assistant_text_head": "…*Message:** `Fix Codex gpt-5.3 context window mapping to 256K`\n\n### Includes\n…"
     },
     {
       "index": 53,
@@ -830,7 +830,7 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": false,
-      "last_assistant_text_head": "Merged and pushed to `main` ✅\n\n- Merged branch: `fix/pi-compaction-working-sta…"
+      "last_assistant_text_head": "…n` ✅\n\n- Merged branch: `fix/pi-compaction-working-state`\n- Merge commit on …"
     },
     {
       "index": 55,
@@ -881,23 +881,23 @@
       "virtual_time": "2026-04-06T19:03:24.203Z",
       "cause": "event",
       "prev_state": "working",
-      "new_state": "ready",
-      "reason": "agent finished turn → ready",
+      "new_state": "waiting",
+      "reason": "turn ended with question or cue → waiting",
       "last_event_type": "turn_done",
       "has_open_tool": false,
       "is_agent_done": true,
       "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "Easy way: add it as a **skill**.\n\nI checked the skills index and found web-searc…"
+      "waiting_for_user_input": true,
+      "last_assistant_text_head": "…lls need an API key (depends on provider: Brave/Exa/etc.).\n- Check the skill …"
     },
     {
       "index": 59,
       "event_index": 518,
       "virtual_time": "2026-04-06T19:10:55.571Z",
       "cause": "event",
-      "prev_state": "ready",
+      "prev_state": "waiting",
       "new_state": "working",
-      "reason": "force ready→working on first activity",
+      "reason": "transcript activity (waiting → working)",
       "last_event_type": "user_message",
       "has_open_tool": false,
       "is_agent_done": false,
@@ -1149,7 +1149,7 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": false,
-      "last_assistant_text_head": "Created both issues in `bd`:\n\n1. **irrlicht-ahy** — *Update README images*  \n2…"
+      "last_assistant_text_head": "… issues in `bd`:\n\n1. **irrlicht-ahy** — *Update README images*  \n2. **irrli…"
     },
     {
       "index": 77,

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -502,6 +503,27 @@ func TestParser_BashExecutionSkipped_PreservesLastEvent(t *testing.T) {
 	}
 	if m.LastEventType != "turn_done" {
 		t.Errorf("LastEventType = %q, want turn_done (bashExecution should be skipped)", m.LastEventType)
+	}
+}
+
+// extractPiAssistantText keeps the trailing 200 runes with a leading ellipsis
+// (the shared tailer.TruncateAssistantText rule). Tail, not head: the latest
+// words — including a trailing "?" that waiting-state detection reads — survive.
+func TestExtractPiAssistantText_TailTruncated(t *testing.T) {
+	piMsg := map[string]interface{}{
+		"content": []interface{}{
+			map[string]interface{}{"type": "text", "text": strings.Repeat("x", 300) + "?"},
+		},
+	}
+	got := extractPiAssistantText(piMsg)
+	if n := len([]rune(got)); n != 201 {
+		t.Errorf("rune count = %d, want 201 (… + 200 runes)", n)
+	}
+	if !strings.HasPrefix(got, "…") {
+		t.Errorf("got %q, want leading … (tail truncation)", got)
+	}
+	if !strings.HasSuffix(got, "?") {
+		t.Error("trailing question mark dropped — head truncated instead of tail")
 	}
 }
 

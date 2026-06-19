@@ -72,7 +72,7 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": false,
-      "last_assistant_text_head": "ts, before concluding with actionable strategies to cultivate a healthy, sustain…"
+      "last_assistant_text_head": "…ts, before concluding with actionable strategies to cultivate a healthy, sust…"
     },
     {
       "index": 3,
@@ -101,7 +101,7 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": false,
-      "last_assistant_text_head": " absolute confidence, and construct resilient continuous integration pipelines t…"
+      "last_assistant_text_head": "… absolute confidence, and construct resilient continuous integration pipeline…"
     },
     {
       "index": 5,
@@ -130,7 +130,7 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": false,
-      "last_assistant_text_head": "ases, improve performance, and cleanly integrate new capabilities, knowing that …"
+      "last_assistant_text_head": "…ases, improve performance, and cleanly integrate new capabilities, knowing th…"
     },
     {
       "index": 7,
@@ -159,7 +159,7 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": false,
-      "last_assistant_text_head": "ssertions, teams can build a sustainable testing culture that keeps codebases ag…"
+      "last_assistant_text_head": "…ssertions, teams can build a sustainable testing culture that keeps codebases…"
     },
     {
       "index": 9,

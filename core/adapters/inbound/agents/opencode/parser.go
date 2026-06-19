@@ -208,12 +208,7 @@ func parseTextPart(raw map[string]interface{}, ev *tailer.ParsedEvent) *tailer.P
 		if est := tailer.ScanTaskEstimate(text, ev.Timestamp); est != nil {
 			ev.TaskEstimate = est
 		}
-		runes := []rune(text)
-		if len(runes) > 200 {
-			ev.AssistantText = "…" + string(runes[len(runes)-200:])
-		} else {
-			ev.AssistantText = text
-		}
+		ev.AssistantText = tailer.TruncateAssistantText(text)
 	}
 	return ev
 }

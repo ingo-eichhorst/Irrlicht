@@ -197,8 +197,5 @@ func extractPiAssistantText(piMsg map[string]interface{}) string {
 			}
 		}
 	}
-	if len([]rune(text)) > 200 {
-		return string([]rune(text)[:200])
-	}
-	return text
+	return tailer.TruncateAssistantText(text)
 }

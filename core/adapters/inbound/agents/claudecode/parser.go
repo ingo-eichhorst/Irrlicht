@@ -634,12 +634,7 @@ func applyAssistantText(raw map[string]interface{}, ev *tailer.ParsedEvent, even
 	case "assistant", eventTypeAssistantStreaming, "assistant_message", "assistant_output":
 		ev.AssistantText = tailer.ExtractAssistantText(raw)
 		if ev.AssistantText == "" && askUserQuestion != "" {
-			runes := []rune(askUserQuestion)
-			if len(runes) > 200 {
-				ev.AssistantText = "…" + string(runes[len(runes)-200:])
-			} else {
-				ev.AssistantText = askUserQuestion
-			}
+			ev.AssistantText = tailer.TruncateAssistantText(askUserQuestion)
 		}
 	case "user", "user_message", "user_input":
 		ev.ClearToolNames = true
