@@ -52,6 +52,14 @@ func TestLedger_PersistsLastAssistantText(t *testing.T) {
 		t.Errorf("post-restart LastAssistantText = %q, want question text (resume-at-EOF must not forget the question)", m.LastAssistantText)
 	}
 
+	// The restored text must also re-persist so a *second* restart survives.
+	// This pins the private-field half of SetLedgerState: restoring only
+	// t.metrics would satisfy the assertions above (the empty pass keeps
+	// metrics) yet leave GetLedgerState reading an empty t.lastAssistantText.
+	if got := tl2.GetLedgerState().LastAssistantText; got != question {
+		t.Errorf("re-persisted LastAssistantText = %q, want %q (private field must be restored too)", got, question)
+	}
+
 	// The downstream classifier reads LastAssistantText via the domain helper:
 	// without the persisted text it would report not-waiting and rule 2b would
 	// demote waiting → ready on startup (issue #705).
