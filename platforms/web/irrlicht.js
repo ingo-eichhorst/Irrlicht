@@ -1,3 +1,5 @@
+import { isGroupCollapsed, toggleGroupCollapsed } from './collapsedGroups.js';
+
     // --- State ---
     let dashboardGroups = [];
     // Per-provider trailing-window spend (providerKey → timeframe → USD) from
@@ -8,19 +10,6 @@
     // registry is essentially static (changes require a daemon restart).
     let agentRegistry = {};
     let sessionIndex = new Map();
-    // Collapsed group names persist across reloads so a deliberate collapse
-    // survives a refresh. Restored from localStorage on load.
-    let collapsedGroups = new Set();
-    try {
-      const raw = localStorage.getItem('irrlicht_collapsedGroups');
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) collapsedGroups = new Set(parsed.filter(s => typeof s === 'string'));
-      }
-    } catch (e) {}
-    function persistCollapsedGroups() {
-      try { localStorage.setItem('irrlicht_collapsedGroups', JSON.stringify([...collapsedGroups])); } catch (e) {}
-    }
 
     // --- Theme ---
     // The explicit override (localStorage["irrlicht_theme"] = "light" | "dark")
@@ -726,12 +715,7 @@
       // so reused header elements toggle the right rig, not a stale closure.
       el.addEventListener('click', () => {
         const k = el._groupKey || group.name;
-        if (collapsedGroups.has(k)) {
-          collapsedGroups.delete(k);
-        } else {
-          collapsedGroups.add(k);
-        }
-        persistCollapsedGroups();
+        toggleGroupCollapsed(k);
         render();
       });
       const costEl = el.querySelector('.group-cost');
@@ -805,7 +789,7 @@
       const countEl = el.querySelector('.group-count');
       if (countEl.textContent !== countText) countEl.textContent = countText;
 
-      const isCollapsed = collapsedGroups.has(key);
+      const isCollapsed = isGroupCollapsed(key);
       const chevron = el.querySelector('.group-chevron');
       chevron.classList.toggle('collapsed', isCollapsed);
 
@@ -1122,7 +1106,7 @@
           // Collapse only applies while its header is rendered (#564): with a
           // single flat group no header exists, so a stale persisted collapse
           // would otherwise blank the dashboard with no way to recover.
-          if (showHeaders && collapsedGroups.has(key)) return;
+          if (showHeaders && isGroupCollapsed(key)) return;
           for (const a of (g.agents || [])) {
             if (isShadowedRemote(a, localIds)) continue;
             agentNum++;
