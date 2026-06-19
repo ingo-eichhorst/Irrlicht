@@ -31,7 +31,7 @@ final class MenuBarImageBuilderTests: XCTestCase {
     func testAttentionSVGUsesOrangeBodyAndExclamationBadge() {
         let svg = OffFlameImage.buildSVG(pointSize: 18, config: .attention)
         // Orange flame body — not the gray no-sessions stops.
-        XCTAssertTrue(svg.contains("#FF9500"), "attention body should be orange")
+        XCTAssertTrue(svg.contains("#FFB347"), "attention body should be brand orange")
         XCTAssertFalse(svg.contains("#9ca3af"), "attention must not reuse the gray no-sessions stops")
         // Red badge with the white exclamation (stem + dot).
         XCTAssertTrue(svg.contains("#FF3B30"), "badge should be red")

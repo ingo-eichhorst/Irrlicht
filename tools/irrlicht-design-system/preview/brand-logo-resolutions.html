@@ -104,21 +104,21 @@ body{overflow-y:auto}
   <div class="palette-rows" style="margin-top:10px;display:flex;flex-direction:column;gap:10px">
     <div class="palette-row">
       <span class="palette-label">working</span>
-      <span class="swatch-chip" style="background:#E9DDFF"></span><span class="hex">#E9DDFF</span>
+      <span class="swatch-chip" style="background:#A78BFA"></span><span class="hex">#A78BFA</span>
       <span class="swatch-chip" style="background:#8B5CF6"></span><span class="hex">#8B5CF6</span>
-      <span class="swatch-chip" style="background:#6D28D9"></span><span class="hex">#6D28D9</span>
+      <span class="swatch-chip" style="background:#5B21B6"></span><span class="hex">#5B21B6</span>
     </div>
     <div class="palette-row">
       <span class="palette-label">waiting</span>
-      <span class="swatch-chip" style="background:#FFF3B0"></span><span class="hex">#FFF3B0</span>
-      <span class="swatch-chip" style="background:#FFAA3A"></span><span class="hex">#FFAA3A</span>
-      <span class="swatch-chip" style="background:#FF5A34"></span><span class="hex">#FF5A34</span>
+      <span class="swatch-chip" style="background:#FFB347"></span><span class="hex">#FFB347</span>
+      <span class="swatch-chip" style="background:#FF8C33"></span><span class="hex">#FF8C33</span>
+      <span class="swatch-chip" style="background:#D33E18"></span><span class="hex">#D33E18</span>
     </div>
     <div class="palette-row">
       <span class="palette-label">ready</span>
-      <span class="swatch-chip" style="background:#ECFFF4"></span><span class="hex">#ECFFF4</span>
       <span class="swatch-chip" style="background:#4ADE80"></span><span class="hex">#4ADE80</span>
-      <span class="swatch-chip" style="background:#16A34A"></span><span class="hex">#16A34A</span>
+      <span class="swatch-chip" style="background:#22C55E"></span><span class="hex">#22C55E</span>
+      <span class="swatch-chip" style="background:#166534"></span><span class="hex">#166534</span>
     </div>
     <div class="palette-row">
       <span class="palette-label">mono</span>
@@ -137,19 +137,19 @@ const FLAME = "M590 166L587 168L586 173L592 180L604 200L608 209L612 223L613 247L
 // Gradient stop palettes per hue, lifted verbatim from assets/irrlicht_flame_gradient_*.svg
 const HUES = {
   purple: {
-    linear: [['0%','#E9DDFF',1],['24%','#C9B2FF',1],['50%','#8B5CF6',1],['76%','#7C3AED',1],['100%','#6D28D9',1]],
-    innerTop: [['0%','#FFFFFF',0.34],['33%','#F5F0FF',0.20],['67%','#D9C8FF',0.07],['100%','#FFFFFF',0]],
-    innerBottom: [['0%','#B691FF',0.28],['45%','#8B5CF6',0.14],['100%','#FFFFFF',0]]
+    linear: [['0%','#A78BFA',1],['30%','#8B5CF6',1],['65%','#6D28D9',1],['100%','#5B21B6',1]],
+    innerTop: [['0%','#FFFFFF',0.13],['33%','#F5F0FF',0.08],['67%','#D9C8FF',0.03],['100%','#FFFFFF',0]],
+    innerBottom: [['0%','#B691FF',0.16],['45%','#8B5CF6',0.08],['100%','#FFFFFF',0]]
   },
   orange: {
-    linear: [['0%','#FFF3B0',1],['24%','#FFD36B',1],['50%','#FFAA3A',1],['76%','#FF7C2E',1],['100%','#FF5A34',1]],
-    innerTop: [['0%','#FFFFFF',0.36],['33%','#FFF6D5',0.22],['67%','#FFD88D',0.08],['100%','#FFFFFF',0]],
-    innerBottom: [['0%','#FFC18C',0.45],['45%','#FF9F69',0.22],['100%','#FFFFFF',0]]
+    linear: [['0%','#FFB347',1],['30%','#FF8C33',1],['65%','#F2531F',1],['100%','#D33E18',1]],
+    innerTop: [['0%','#FFFFFF',0.13],['33%','#FFF6D5',0.08],['67%','#FFD88D',0.03],['100%','#FFFFFF',0]],
+    innerBottom: [['0%','#FFC18C',0.16],['45%','#FF9F69',0.08],['100%','#FFFFFF',0]]
   },
   green: {
-    linear: [['0%','#ECFFF4',1],['22%','#B4F5C8',1],['48%','#4ADE80',1],['76%','#22C55E',1],['100%','#16A34A',1]],
-    innerTop: [['0%','#FFFFFF',0.35],['25%','#F3FFF7',0.22],['54%','#C8FFD9',0.08],['100%','#FFFFFF',0]],
-    innerBottom: [['0%','#92F6AE',0.35],['45%','#4ADE80',0.16],['100%','#FFFFFF',0]]
+    linear: [['0%','#4ADE80',1],['30%','#22C55E',1],['65%','#15803D',1],['100%','#166534',1]],
+    innerTop: [['0%','#FFFFFF',0.13],['25%','#F3FFF7',0.08],['54%','#C8FFD9',0.03],['100%','#FFFFFF',0]],
+    innerBottom: [['0%','#92F6AE',0.16],['45%','#4ADE80',0.08],['100%','#FFFFFF',0]]
   }
 };
 
