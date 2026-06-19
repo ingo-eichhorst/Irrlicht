@@ -159,9 +159,10 @@ both roles against a store hashed at rest (SHA-256); default path
 `<data-dir>/tokens.json` (`$IRRLICHT_HOME` or `~/.local/share/irrlicht`).
 
 ```
-irrlichtrelay token issue --label "ingo-laptop"   # prints the plaintext ONCE
-irrlichtrelay token list                          # id, created, label
-irrlichtrelay token revoke <id>                    # next frame closed with 4401
+irrlichtrelay token issue --label "ingo-laptop"             # prints the plaintext ONCE
+irrlichtrelay token issue --label "acme" --workspace acme   # scoped to a tenant
+irrlichtrelay token list                                    # id, created, workspace, label
+irrlichtrelay token revoke <id>                             # next frame closed with 4401
 ```
 
 A serving relay re-reads the tokens file when it changes, so `revoke` takes
@@ -178,6 +179,19 @@ When `--auth` is on the gate also covers the read endpoints `GET
 the WS stream, so a token is required via `Authorization: Bearer <t>` or a
 `?token=<t>` query param. `GET /api/v1/version` stays open as a health check.
 `/api/v1/tokens` REST management is deferred — CLI-only for now.
+
+**Workspaces (multi-tenant isolation).** A token may be scoped to a *workspace*
+(`token issue --workspace <id>`); the workspace is stored with the token's hash
+and is **server-derived at every handshake** — it is never read from the wire,
+so it cannot be spoofed (the `hello` frame has no workspace field, and daemons
+need no change). The relay partitions all cached state by
+`(workspace, daemon_id, session_id)` and scopes both the WS fan-out and the
+HTTP reads to the connection's own workspace, so a peer only ever sees its own
+tenant's sessions — even if a daemon in another workspace claims a colliding
+`daemon_id`. Isolation is on routing metadata only; payloads stay unread. A
+token issued without `--workspace` (and every connection on a `--auth off`
+relay) lives in the default workspace `""`, i.e. single-tenant — the behavior of
+every relay before workspaces existed.
 
 ## Running it
 

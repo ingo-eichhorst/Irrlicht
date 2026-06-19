@@ -240,6 +240,7 @@ func runToken(args []string) {
 	tokensFile := fs.String("tokens-file", "", "path to the tokens file (default: <data-dir>/tokens.json)")
 	dataDirFlag := fs.String("data-dir", "", "state directory for the tokens file (default: $IRRLICHT_HOME or ~/.local/share/irrlicht)")
 	label := fs.String("label", "", "human label for the issued token (issue only)")
+	workspace := fs.String("workspace", "", "tenant workspace the issued token is scoped to (issue only; empty = default single-tenant workspace)")
 	_ = fs.Parse(rest)
 
 	path := *tokensFile
@@ -253,11 +254,11 @@ func runToken(args []string) {
 
 	switch sub {
 	case "issue":
-		id, plaintext, err := issueToken(path, *label)
+		id, plaintext, err := issueToken(path, *label, *workspace)
 		if err != nil {
 			log.Fatalf("token issue: %v", err)
 		}
-		fmt.Printf("token %s issued (label %q)\n", id, *label)
+		fmt.Printf("token %s issued (label %q, workspace %q)\n", id, *label, *workspace)
 		fmt.Printf("  %s\n", plaintext)
 		fmt.Println("Store it now — it is shown only once and only its hash is kept.")
 	case "list":
@@ -270,7 +271,11 @@ func runToken(args []string) {
 			return
 		}
 		for _, r := range recs {
-			fmt.Printf("%s\t%s\t%s\n", r.ID, time.Unix(r.Created, 0).Format(time.RFC3339), r.Label)
+			ws := r.Workspace
+			if ws == "" {
+				ws = "-"
+			}
+			fmt.Printf("%s\t%s\t%s\t%s\n", r.ID, time.Unix(r.Created, 0).Format(time.RFC3339), ws, r.Label)
 		}
 	case "revoke":
 		if len(fs.Args()) == 0 {
@@ -294,17 +299,20 @@ func runToken(args []string) {
 // off (store == nil) it is a pass-through, so existing no-auth deployments are
 // unchanged. With auth on, the request must carry a valid token in either an
 // `Authorization: Bearer <t>` header or a `?token=<t>` query param (the WS
-// endpoint authenticates via the hello frame instead and is not wrapped).
+// endpoint authenticates via the hello frame instead and is not wrapped). The
+// token's workspace is attached to the request context so the handler reads
+// only that tenant's sessions.
 func requireToken(store *authStore, next http.HandlerFunc) http.HandlerFunc {
 	if store == nil {
 		return next
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		if _, ok := store.validate(bearerToken(r)); !ok {
+		_, workspace, ok := store.validate(bearerToken(r))
+		if !ok {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		next(w, r)
+		next(w, r.WithContext(withWorkspace(r.Context(), workspace)))
 	}
 }
 

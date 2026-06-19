@@ -54,17 +54,21 @@ func defaultLimits() limits {
 const maxDaemonMsgBytes = 32 << 20
 
 // hub is the relay's in-memory core: it tracks connected daemons, caches the
-// latest session state per (daemon_id, session_id) and the per-daemon adapter
-// registry, and fans daemon push frames out to all connected clients. Single
-// node, no auth, no persistence — everything here is lost on restart and
-// rebuilt from each daemon's reconnect daemon_snapshot.
+// latest session state per (workspace, daemon_id, session_id) and the per-
+// daemon adapter registry, and fans daemon push frames out to the clients in
+// the matching workspace. Single node, no auth, no persistence — everything
+// here is lost on restart and rebuilt from each daemon's reconnect
+// daemon_snapshot.
 type hub struct {
-	mu       sync.Mutex
-	clients  map[*clientConn]struct{}
-	daemons  map[string]*daemonState                     // daemon_id → liveness
-	sessions map[string]map[string]*session.SessionState // daemon_id → session_id → state
-	agents   map[string][]relay.AgentInfo                // daemon_id → adapter registry
-	upgrader websocket.Upgrader
+	mu      sync.Mutex
+	clients map[*clientConn]struct{}
+	// workspaces partitions all cached state by tenant. A connection's
+	// workspace is server-derived from its bearer token (never client-supplied),
+	// so a daemon in one workspace can neither read nor overwrite another's slot
+	// even if it claims a colliding daemon_id. "" is the default workspace used
+	// by no-auth relays and by tokens issued without an explicit workspace.
+	workspaces map[string]*workspaceState
+	upgrader   websocket.Upgrader
 
 	// auth is nil when the relay runs with --auth off (trusted-LAN default):
 	// every hello is accepted. When set, both daemon and client hellos must
@@ -76,6 +80,23 @@ type hub struct {
 	totalConns    int            // live connections across all peers
 	ipConns       map[string]int // remote IP → live connections
 	lastRejectLog time.Time      // throttle for over-cap rejection logs
+}
+
+// workspaceState holds one tenant's view: the daemons connected under that
+// workspace's tokens, their cached sessions, and their adapter registries. It
+// mirrors the hub's pre-multi-tenant per-daemon maps, one set per workspace.
+type workspaceState struct {
+	daemons  map[string]*daemonState                     // daemon_id → liveness
+	sessions map[string]map[string]*session.SessionState // daemon_id → session_id → state
+	agents   map[string][]relay.AgentInfo                // daemon_id → adapter registry
+}
+
+func newWorkspaceState() *workspaceState {
+	return &workspaceState{
+		daemons:  make(map[string]*daemonState),
+		sessions: make(map[string]map[string]*session.SessionState),
+		agents:   make(map[string][]relay.AgentInfo),
+	}
 }
 
 // daemonState tracks one daemon's connection liveness. conns counts live
@@ -91,10 +112,11 @@ type daemonState struct {
 // closed by the read pump when the socket drops so the write pump exits
 // promptly instead of waiting for the next ping tick.
 type clientConn struct {
-	conn    *websocket.Conn
-	send    chan []byte
-	done    chan struct{}
-	tokenID string // bearer-token id (empty on a no-auth relay); watched for revoke
+	conn      *websocket.Conn
+	send      chan []byte
+	done      chan struct{}
+	tokenID   string // bearer-token id (empty on a no-auth relay); watched for revoke
+	workspace string // tenant scope from the bearer token (server-derived)
 }
 
 // newHub builds a no-auth, all-origins hub with the given connection limits
@@ -107,15 +129,24 @@ func newHub(lim limits) *hub { return newHubWithAuth(nil, nil, lim) }
 // from v0).
 func newHubWithAuth(auth *authStore, allowedOrigins []string, lim limits) *hub {
 	return &hub{
-		clients:  make(map[*clientConn]struct{}),
-		daemons:  make(map[string]*daemonState),
-		sessions: make(map[string]map[string]*session.SessionState),
-		agents:   make(map[string][]relay.AgentInfo),
-		auth:     auth,
-		limits:   lim,
-		ipConns:  make(map[string]int),
-		upgrader: websocket.Upgrader{CheckOrigin: originChecker(allowedOrigins)},
+		clients:    make(map[*clientConn]struct{}),
+		workspaces: make(map[string]*workspaceState),
+		auth:       auth,
+		limits:     lim,
+		ipConns:    make(map[string]int),
+		upgrader:   websocket.Upgrader{CheckOrigin: originChecker(allowedOrigins)},
 	}
+}
+
+// wsLocked returns the workspace's state, creating it on first use. The caller
+// must hold h.mu.
+func (h *hub) wsLocked(workspace string) *workspaceState {
+	ws := h.workspaces[workspace]
+	if ws == nil {
+		ws = newWorkspaceState()
+		h.workspaces[workspace] = ws
+	}
+	return ws
 }
 
 // originChecker gates the WS upgrade by the request Origin. An empty allowlist
@@ -192,20 +223,22 @@ func (h *hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 	// token is ignored. Otherwise the hello.token must hash to a known token;
 	// an empty/invalid token closes the socket with relay.CloseRevoked.
 	tokenID := ""
+	workspace := ""
 	if h.auth != nil {
-		id, ok := h.auth.validate(hello.Token)
+		id, ws, ok := h.auth.validate(hello.Token)
 		if !ok {
 			closeWith(conn, relay.CloseRevoked, "unauthorized")
 			return
 		}
 		tokenID = id
+		workspace = ws
 	}
 
 	if hello.Type == relay.MsgHello && hello.Role == relay.RoleDaemon {
-		h.serveDaemon(conn, hello, tokenID)
+		h.serveDaemon(conn, hello, tokenID, workspace)
 		return
 	}
-	h.serveClient(conn, tokenID)
+	h.serveClient(conn, tokenID, workspace)
 }
 
 // closeWith sends a WebSocket close frame with the given code and reason, then
@@ -294,7 +327,7 @@ func remoteIP(r *http.Request) string {
 
 // --- daemon side ---
 
-func (h *hub) serveDaemon(conn *websocket.Conn, hello relay.Hello, tokenID string) {
+func (h *hub) serveDaemon(conn *websocket.Conn, hello relay.Hello, tokenID, workspace string) {
 	if hello.DaemonID == "" {
 		log.Printf("relay: refusing daemon hello with empty daemon_id")
 		return // untracked, undedupable — refuse
@@ -310,8 +343,8 @@ func (h *hub) serveDaemon(conn *websocket.Conn, hello relay.Hello, tokenID strin
 		return
 	}
 
-	h.daemonConnected(id, label)
-	defer h.daemonDisconnected(id)
+	h.daemonConnected(workspace, id, label)
+	defer h.daemonDisconnected(workspace, id)
 
 	// Ping the daemon so an idle link stays alive (and dead ones are detected
 	// at pongTimeout). Sole writer after the hello_ack above, satisfying
@@ -333,21 +366,21 @@ func (h *hub) serveDaemon(conn *websocket.Conn, hello relay.Hello, tokenID strin
 		if h.closeIfRevoked(conn, tokenID) {
 			return
 		}
-		h.handleDaemonFrame(id, data)
+		h.handleDaemonFrame(workspace, id, data)
 	}
 }
 
-func (h *hub) handleDaemonFrame(daemonID string, data []byte) {
+func (h *hub) handleDaemonFrame(workspace, daemonID string, data []byte) {
 	switch relay.FrameType(data) {
 	case relay.MsgDaemonSnapshot:
 		var ds relay.DaemonSnapshot
 		if json.Unmarshal(data, &ds) == nil {
-			h.applyDaemonSnapshot(daemonID, ds)
+			h.applyDaemonSnapshot(workspace, daemonID, ds)
 		}
 	case relay.MsgPush:
 		var p relay.Push
 		if json.Unmarshal(data, &p) == nil {
-			h.applyPush(daemonID, p)
+			h.applyPush(workspace, daemonID, p)
 		}
 	}
 }
@@ -357,7 +390,7 @@ func (h *hub) handleDaemonFrame(daemonID string, data []byte) {
 // session_deleted for each that vanished since the prior snapshot. This lets a
 // client that connected before the daemon (or before a reconnect) converge
 // live, without depending on an HTTP re-poll.
-func (h *hub) applyDaemonSnapshot(daemonID string, ds relay.DaemonSnapshot) {
+func (h *hub) applyDaemonSnapshot(workspace, daemonID string, ds relay.DaemonSnapshot) {
 	newMap := make(map[string]*session.SessionState, len(ds.Sessions))
 	for _, s := range ds.Sessions {
 		if s != nil && s.SessionID != "" {
@@ -366,17 +399,18 @@ func (h *hub) applyDaemonSnapshot(daemonID string, ds relay.DaemonSnapshot) {
 	}
 
 	h.mu.Lock()
-	old := h.sessions[daemonID]
-	h.sessions[daemonID] = newMap
-	h.agents[daemonID] = ds.Agents
+	ws := h.wsLocked(workspace)
+	old := ws.sessions[daemonID]
+	ws.sessions[daemonID] = newMap
+	ws.agents[daemonID] = ds.Agents
 	h.mu.Unlock()
 
 	for _, s := range newMap {
-		h.fanoutPush(daemonID, outbound.PushMessage{Type: outbound.PushTypeUpdated, Session: s})
+		h.fanoutPush(workspace, daemonID, outbound.PushMessage{Type: outbound.PushTypeUpdated, Session: s})
 	}
 	for sid, s := range old {
 		if _, ok := newMap[sid]; !ok {
-			h.fanoutPush(daemonID, outbound.PushMessage{Type: outbound.PushTypeDeleted, Session: s})
+			h.fanoutPush(workspace, daemonID, outbound.PushMessage{Type: outbound.PushTypeDeleted, Session: s})
 		}
 	}
 }
@@ -385,15 +419,16 @@ func (h *hub) applyDaemonSnapshot(daemonID string, ds relay.DaemonSnapshot) {
 // reflects live state) and fans every frame out to clients. History frames
 // carry no Session and are forwarded but not cached — history re-hydration of
 // late-joining clients is deferred to a later phase.
-func (h *hub) applyPush(daemonID string, p relay.Push) {
+func (h *hub) applyPush(workspace, daemonID string, p relay.Push) {
 	msg := p.Msg
 	if msg.Session != nil && msg.Session.SessionID != "" {
 		sid := msg.Session.SessionID
 		h.mu.Lock()
-		m := h.sessions[daemonID]
+		ws := h.wsLocked(workspace)
+		m := ws.sessions[daemonID]
 		if m == nil {
 			m = make(map[string]*session.SessionState)
-			h.sessions[daemonID] = m
+			ws.sessions[daemonID] = m
 		}
 		if msg.Type == outbound.PushTypeDeleted {
 			delete(m, sid)
@@ -402,16 +437,17 @@ func (h *hub) applyPush(daemonID string, p relay.Push) {
 		}
 		h.mu.Unlock()
 	}
-	h.fanoutPush(daemonID, msg)
+	h.fanoutPush(workspace, daemonID, msg)
 }
 
-func (h *hub) daemonConnected(id, label string) {
+func (h *hub) daemonConnected(workspace, id, label string) {
 	now := time.Now().Unix()
 	h.mu.Lock()
-	d := h.daemons[id]
+	ws := h.wsLocked(workspace)
+	d := ws.daemons[id]
 	if d == nil {
 		d = &daemonState{label: label, since: now}
-		h.daemons[id] = d
+		ws.daemons[id] = d
 	} else {
 		d.label = label
 		if d.conns == 0 {
@@ -420,13 +456,18 @@ func (h *hub) daemonConnected(id, label string) {
 	}
 	d.conns++
 	h.mu.Unlock()
-	h.broadcastDaemonStatus(id, label, relay.StatusConnected, now)
+	h.broadcastDaemonStatus(workspace, id, label, relay.StatusConnected, now)
 }
 
-func (h *hub) daemonDisconnected(id string) {
+func (h *hub) daemonDisconnected(workspace, id string) {
 	now := time.Now().Unix()
 	h.mu.Lock()
-	d := h.daemons[id]
+	ws := h.workspaces[workspace]
+	if ws == nil {
+		h.mu.Unlock()
+		return
+	}
+	d := ws.daemons[id]
 	if d == nil {
 		h.mu.Unlock()
 		return
@@ -437,9 +478,20 @@ func (h *hub) daemonDisconnected(id string) {
 		h.mu.Unlock()
 		return // another live connection for this daemon remains
 	}
-	delete(h.daemons, id)
-	delete(h.sessions, id)
-	delete(h.agents, id)
+	delete(ws.daemons, id)
+	delete(ws.sessions, id)
+	delete(ws.agents, id)
+	// Drop the tenant's container once its last daemon leaves so a churn of
+	// short-lived workspaces doesn't grow the map unbounded; it is recreated
+	// lazily on the next daemon hello. daemons is the authoritative lifecycle
+	// key — every sessions/agents entry is keyed by a connected daemon's id and
+	// deleted above — so an empty daemons map means the container is empty. A
+	// client still connected to this workspace keeps receiving live frames via
+	// fanout (which filters by the client's own workspace, independent of this
+	// map).
+	if len(ws.daemons) == 0 {
+		delete(h.workspaces, workspace)
+	}
 	h.mu.Unlock()
 
 	// Announce the disconnect and let clients decide how to present the now-
@@ -449,13 +501,13 @@ func (h *hub) daemonDisconnected(id string) {
 	// dashboard drops them. The cache is still evicted, so /api/v1/sessions and
 	// any late-joining client reflect only live daemons, and a reconnect
 	// reconciles via a fresh daemon_snapshot.
-	h.broadcastDaemonStatus(id, label, relay.StatusDisconnected, now)
+	h.broadcastDaemonStatus(workspace, id, label, relay.StatusDisconnected, now)
 }
 
 // --- client side ---
 
-func (h *hub) serveClient(conn *websocket.Conn, tokenID string) {
-	cc := &clientConn{conn: conn, send: make(chan []byte, 64), done: make(chan struct{}), tokenID: tokenID}
+func (h *hub) serveClient(conn *websocket.Conn, tokenID, workspace string) {
+	cc := &clientConn{conn: conn, send: make(chan []byte, 64), done: make(chan struct{}), tokenID: tokenID, workspace: workspace}
 
 	// Register before snapshotting so no daemon_status fired between the two
 	// is missed: any daemon present at snapshot time is in the snapshot, any
@@ -466,7 +518,7 @@ func (h *hub) serveClient(conn *websocket.Conn, tokenID string) {
 	h.mu.Unlock()
 	defer h.removeClient(cc)
 
-	if data, err := json.Marshal(h.clientSnapshot()); err == nil {
+	if data, err := json.Marshal(h.clientSnapshot(workspace)); err == nil {
 		// Non-blocking, like every other send: the write pump that drains
 		// cc.send only starts below, so a blocking send to a buffer already
 		// filled by concurrent fan-out (between registration and here) would
@@ -498,9 +550,11 @@ func (h *hub) replaySessions(cc *clientConn) {
 	}
 	h.mu.Lock()
 	items := make([]item, 0)
-	for did, m := range h.sessions {
-		for _, s := range m {
-			items = append(items, item{did, s})
+	if ws := h.workspaces[cc.workspace]; ws != nil {
+		for did, m := range ws.sessions {
+			for _, s := range m {
+				items = append(items, item{did, s})
+			}
 		}
 	}
 	h.mu.Unlock()
@@ -572,31 +626,35 @@ func (h *hub) clientWritePump(cc *clientConn) {
 
 // --- fan-out + snapshots ---
 
-func (h *hub) fanoutPush(daemonID string, msg outbound.PushMessage) {
+func (h *hub) fanoutPush(workspace, daemonID string, msg outbound.PushMessage) {
 	data, err := json.Marshal(relay.Push{Type: relay.MsgPush, Source: daemonID, TS: time.Now().Unix(), Msg: msg})
 	if err != nil {
 		return
 	}
-	h.fanout(data)
+	h.fanout(workspace, data)
 }
 
-func (h *hub) broadcastDaemonStatus(id, label, status string, since int64) {
+func (h *hub) broadcastDaemonStatus(workspace, id, label, status string, since int64) {
 	data, err := json.Marshal(relay.DaemonStatus{
 		Type: relay.MsgDaemonStatus, DaemonID: id, DaemonLabel: label, Status: status, Since: since,
 	})
 	if err != nil {
 		return
 	}
-	h.fanout(data)
+	h.fanout(workspace, data)
 }
 
-// fanout delivers one frame to every client, dropping it for any client whose
-// buffer is full (mirrors the daemon push service's slow-consumer policy).
-func (h *hub) fanout(data []byte) {
+// fanout delivers one frame to every client in workspace, dropping it for any
+// client whose buffer is full (mirrors the daemon push service's slow-consumer
+// policy). Scoping by workspace is the isolation boundary: a daemon's frames
+// never reach a client outside its tenant.
+func (h *hub) fanout(workspace string, data []byte) {
 	h.mu.Lock()
 	targets := make([]*clientConn, 0, len(h.clients))
 	for cc := range h.clients {
-		targets = append(targets, cc)
+		if cc.workspace == workspace {
+			targets = append(targets, cc)
+		}
 	}
 	h.mu.Unlock()
 	for _, cc := range targets {
@@ -607,44 +665,52 @@ func (h *hub) fanout(data []byte) {
 	}
 }
 
-func (h *hub) clientSnapshot() relay.Snapshot {
+func (h *hub) clientSnapshot(workspace string) relay.Snapshot {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	daemons := make([]relay.DaemonInfo, 0, len(h.daemons))
-	for id, d := range h.daemons {
-		daemons = append(daemons, relay.DaemonInfo{DaemonID: id, DaemonLabel: d.label, Status: relay.StatusConnected})
+	daemons := make([]relay.DaemonInfo, 0)
+	if ws := h.workspaces[workspace]; ws != nil {
+		for id, d := range ws.daemons {
+			daemons = append(daemons, relay.DaemonInfo{DaemonID: id, DaemonLabel: d.label, Status: relay.StatusConnected})
+		}
 	}
 	return relay.Snapshot{Type: relay.MsgSnapshot, Daemons: daemons}
 }
 
-// buildSessions flattens the per-daemon caches into one list for the HTTP
-// /api/v1/sessions handler.
-func (h *hub) buildSessions() []*session.SessionState {
+// buildSessions flattens one workspace's per-daemon caches into a list for the
+// HTTP /api/v1/sessions handler. The workspace is the caller's token scope, so
+// the response carries only that tenant's sessions.
+func (h *hub) buildSessions(workspace string) []*session.SessionState {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	var all []*session.SessionState
-	for _, m := range h.sessions {
-		for _, s := range m {
-			all = append(all, s)
+	if ws := h.workspaces[workspace]; ws != nil {
+		for _, m := range ws.sessions {
+			for _, s := range m {
+				all = append(all, s)
+			}
 		}
 	}
 	return all
 }
 
-// buildAgents returns the union of every daemon's adapter registry, deduped by
-// adapter name (frontends key off Name). Always non-nil so the JSON is [].
-func (h *hub) buildAgents() []relay.AgentInfo {
+// buildAgents returns the union of one workspace's daemon adapter registries,
+// deduped by adapter name (frontends key off Name). Always non-nil so the JSON
+// is [].
+func (h *hub) buildAgents(workspace string) []relay.AgentInfo {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	seen := make(map[string]bool)
 	out := []relay.AgentInfo{}
-	for _, infos := range h.agents {
-		for _, a := range infos {
-			if seen[a.Name] {
-				continue
+	if ws := h.workspaces[workspace]; ws != nil {
+		for _, infos := range ws.agents {
+			for _, a := range infos {
+				if seen[a.Name] {
+					continue
+				}
+				seen[a.Name] = true
+				out = append(out, a)
 			}
-			seen[a.Name] = true
-			out = append(out, a)
 		}
 	}
 	return out

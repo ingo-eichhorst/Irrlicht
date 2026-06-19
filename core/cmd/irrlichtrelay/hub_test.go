@@ -81,6 +81,45 @@ func httpGet(t *testing.T, url string) []byte {
 	return body
 }
 
+// httpGetAuth issues a bearer-authenticated GET, asserting a 200, and returns
+// the body. Used to read a workspace-scoped slice of /api/v1/sessions.
+func httpGetAuth(t *testing.T, url, token string) []byte {
+	t.Helper()
+	req, _ := http.NewRequest("GET", url, nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET %s: %v", url, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET %s: status %d", url, resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	return body
+}
+
+// assertNeverSeesSession reads frames from c until within elapses and fails if
+// a push for sid arrives — the core cross-tenant leakage assertion. A read
+// deadline (or close) ends the wait cleanly with no leak observed.
+func assertNeverSeesSession(t *testing.T, c *websocket.Conn, sid string, within time.Duration) {
+	t.Helper()
+	c.SetReadDeadline(time.Now().Add(within))
+	for {
+		_, data, err := c.ReadMessage()
+		if err != nil {
+			return // deadline or close: nothing leaked
+		}
+		if relay.FrameType(data) != relay.MsgPush {
+			continue
+		}
+		var p relay.Push
+		if json.Unmarshal(data, &p) == nil && p.Msg.Session != nil && p.Msg.Session.SessionID == sid {
+			t.Fatalf("workspace leak: client saw session %q from another tenant", sid)
+		}
+	}
+}
+
 func TestRelayRoundTrip(t *testing.T) {
 	wsURL, baseURL := newTestServer(t)
 
@@ -284,7 +323,7 @@ func newTestServerWithAuth(t *testing.T, labels ...string) (wsURL string, tokens
 	tokensPath = filepath.Join(t.TempDir(), "tokens.json")
 	tokens = make(map[string]string, len(labels))
 	for _, l := range labels {
-		_, plaintext, err := issueToken(tokensPath, l)
+		_, plaintext, err := issueToken(tokensPath, l, "")
 		if err != nil {
 			t.Fatalf("seed token %q: %v", l, err)
 		}
@@ -387,6 +426,113 @@ func TestAuthRevokeClosesLiveDaemon(t *testing.T) {
 	expectClose4401(t, d)
 }
 
+// TestWorkspaceIsolation proves a connection only ever sees its own tenant's
+// sessions — over WS replay, over a live push, and over the HTTP read API —
+// even when a daemon in another workspace claims a colliding daemon_id.
+func TestWorkspaceIsolation(t *testing.T) {
+	tokensPath := filepath.Join(t.TempDir(), "tokens.json")
+	mint := func(label, ws string) string {
+		_, pt, err := issueToken(tokensPath, label, ws)
+		if err != nil {
+			t.Fatalf("issue %s: %v", label, err)
+		}
+		return pt
+	}
+	daemonA := mint("daemon-a", "ws-a")
+	clientA := mint("client-a", "ws-a")
+	daemonB := mint("daemon-b", "ws-b")
+	clientB := mint("client-b", "ws-b")
+
+	store, err := newAuthStore(tokensPath)
+	if err != nil {
+		t.Fatalf("newAuthStore: %v", err)
+	}
+	h := newHubWithAuth(store, nil, defaultLimits())
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/v1/sessions/stream", h.ServeWS)
+	mux.HandleFunc("GET /api/v1/sessions", requireToken(store, handleSessions(h)))
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/v1/sessions/stream"
+
+	// Both daemons claim the SAME daemon_id "d1" but authenticate into different
+	// workspaces, so a colliding id must not let one tenant read or overwrite
+	// the other's slot.
+	connectDaemon := func(token, sid, proj string) *websocket.Conn {
+		d := dial(t, wsURL)
+		if err := d.WriteJSON(relay.Hello{
+			Type: relay.MsgHello, ProtocolVersion: relay.ProtocolVersion,
+			Role: relay.RoleDaemon, DaemonID: "d1", DaemonLabel: "host", Token: token,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		var ack relay.HelloAck
+		if err := d.ReadJSON(&ack); err != nil {
+			t.Fatal(err)
+		}
+		if err := d.WriteJSON(relay.DaemonSnapshot{
+			Type:     relay.MsgDaemonSnapshot,
+			Sessions: []*session.SessionState{{SessionID: sid, State: "working", ProjectName: proj}},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return d
+	}
+	connectDaemon(daemonA, "sa", "proj-a")
+	dB := connectDaemon(daemonB, "sb", "proj-b")
+	// Let both snapshots ingest before the clients connect (the replay path).
+	time.Sleep(50 * time.Millisecond)
+
+	// Client A replays only ws-a's session, never ws-b's.
+	ca := dial(t, wsURL)
+	if err := ca.WriteJSON(relay.Hello{Type: relay.MsgHello, ProtocolVersion: relay.ProtocolVersion, Role: relay.RoleClient, Token: clientA}); err != nil {
+		t.Fatal(err)
+	}
+	var p relay.Push
+	mustJSON(t, readUntil(t, ca, relay.MsgPush), &p)
+	if p.Msg.Session == nil || p.Msg.Session.SessionID != "sa" {
+		t.Fatalf("client A replay = %+v; want session sa", p.Msg.Session)
+	}
+
+	cb := dial(t, wsURL)
+	if err := cb.WriteJSON(relay.Hello{Type: relay.MsgHello, ProtocolVersion: relay.ProtocolVersion, Role: relay.RoleClient, Token: clientB}); err != nil {
+		t.Fatal(err)
+	}
+	mustJSON(t, readUntil(t, cb, relay.MsgPush), &p)
+	if p.Msg.Session == nil || p.Msg.Session.SessionID != "sb" {
+		t.Fatalf("client B replay = %+v; want session sb", p.Msg.Session)
+	}
+
+	// HTTP reads are scoped by the bearer token's workspace, both directions.
+	bodyA := httpGetAuth(t, srv.URL+"/api/v1/sessions", clientA)
+	if !bytes.Contains(bodyA, []byte(`"session_id":"sa"`)) {
+		t.Fatalf("client A HTTP missing sa: %s", bodyA)
+	}
+	if bytes.Contains(bodyA, []byte(`"session_id":"sb"`)) {
+		t.Fatalf("client A HTTP leaked ws-b's sb: %s", bodyA)
+	}
+	bodyB := httpGetAuth(t, srv.URL+"/api/v1/sessions", clientB)
+	if !bytes.Contains(bodyB, []byte(`"session_id":"sb"`)) {
+		t.Fatalf("client B HTTP missing sb: %s", bodyB)
+	}
+	if bytes.Contains(bodyB, []byte(`"session_id":"sa"`)) {
+		t.Fatalf("client B HTTP leaked ws-a's sa: %s", bodyB)
+	}
+
+	// A live delta in ws-b reaches client B but never client A.
+	if err := dB.WriteJSON(relay.Push{
+		Type: relay.MsgPush,
+		Msg:  outbound.PushMessage{Type: outbound.PushTypeUpdated, Session: &session.SessionState{SessionID: "sb2", State: "ready"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	mustJSON(t, readUntil(t, cb, relay.MsgPush), &p)
+	if p.Msg.Session == nil || p.Msg.Session.SessionID != "sb2" {
+		t.Fatalf("client B live delta = %+v; want sb2", p.Msg.Session)
+	}
+	assertNeverSeesSession(t, ca, "sb2", 300*time.Millisecond)
+}
+
 func TestOriginChecker(t *testing.T) {
 	// Empty allowlist: every origin (and none) is allowed.
 	allow := originChecker(nil)
@@ -423,7 +569,7 @@ func reqWithOrigin(origin string) *http.Request {
 
 func TestRequireTokenGatesHTTP(t *testing.T) {
 	tokensPath := filepath.Join(t.TempDir(), "tokens.json")
-	_, plaintext, err := issueToken(tokensPath, "http")
+	_, plaintext, err := issueToken(tokensPath, "http", "")
 	if err != nil {
 		t.Fatal(err)
 	}
