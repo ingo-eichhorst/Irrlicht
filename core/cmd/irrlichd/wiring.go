@@ -36,19 +36,29 @@ func buildAgentWatchers(
 		labels   []string
 	)
 
-	if s, ok := a.Source.(agent.FilesUnderRoot); ok {
+	// Source-specific watcher. FilesUnderRoot gets an fswatcher rooted at its
+	// Dir; ProcessOwnedStore gets its dedicated store watcher; FilesUnderCWD
+	// gets none here — its transcript is discovered by the process scanner
+	// below, configured with the variant's Filename. A new Source variant that
+	// reaches the default fails loudly rather than silently running
+	// scanner-only (grant-all daemons exercise every factory at boot, so CI
+	// catches it).
+	switch s := a.Source.(type) {
+	case agent.FilesUnderRoot:
 		w := fswatcher.New(s.RootDirFor(runtime.GOOS), a.Identity.Name, maxSessionAge).WithIdentity(a.Identity)
 		watchers = append(watchers, w)
 		labels = append(labels, fmt.Sprintf("%s (%s)", a.Identity.Name, w.Root()))
-	}
-
-	if _, ok := a.Source.(agent.ProcessOwnedStore); ok {
+	case agent.ProcessOwnedStore:
 		if a.Identity.Name != opencode.AdapterName {
 			panic(fmt.Sprintf("buildAgentWatchers: no store watcher wired for ProcessOwnedStore adapter %q — add its construction here", a.Identity.Name))
 		}
 		w := opencode.New(maxSessionAge).WithIdentity(a.Identity)
 		watchers = append(watchers, w)
 		labels = append(labels, fmt.Sprintf("%s-db (%s)", a.Identity.Name, w.Root()))
+	case agent.FilesUnderCWD:
+		// Scanner-only (configured below); no dedicated file watcher.
+	default:
+		panic(fmt.Sprintf("buildAgentWatchers: unhandled agent.Source variant %T for adapter %q — add its watcher construction here", a.Source, a.Identity.Name))
 	}
 
 	scanner := processlifecycle.NewScanner(processNameFor(a), a.Identity.Name, 0).WithIdentity(a.Identity)
