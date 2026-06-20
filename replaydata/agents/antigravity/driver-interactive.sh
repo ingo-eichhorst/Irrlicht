@@ -110,14 +110,29 @@ SES_MARKER=(); SES_CWD=(); SES_ALIVE=()
 # recipe-lint flags a recipe needing it as a semantic_gap before recording. Set
 # DRIVE_SLASH_REQUIRES_STEP_TYPE=true if antigravity is headless-first (a bare
 # send "/cmd" stores literal text instead of reaching the REPL).
-DRIVE_ELICITS="send slash sleep"
+DRIVE_ELICITS="send slash wait_turn sleep"
 DRIVE_SLASH_REQUIRES_STEP_TYPE=false
 RUN_CWD="${IRRLICHT_ONBOARD_CWD:-$STAGING/cwd}"
 mkdir -p "$RUN_CWD"
 RUN_CWD="$(cd "$RUN_CWD" && pwd -P)"   # canonicalize (resolve symlinks) for the daemon's cwd match
 DEADLINE=$(( $(date +%s) + TIMEOUT_S ))
 EXIT_REASON="ok"
+
+# View vars owned by the driver (the slot lib reads/writes these). SESSION is the
+# active tmux session; TRANSCRIPT/UUID are the resolved transcript path + conv-id;
+# EXPECTED_TURNS is the turn-done count wait_turn waits past; MARKER gates which
+# brain conv dir resolve_transcript may claim for this slot.
 SESSION=""
+TRANSCRIPT=""
+UUID=""
+EXPECTED_TURNS=0
+MARKER=""
+
+# Antigravity's CLI brain store. A turn writes a NEW conversation dir
+# <conv-id>/.system_generated/logs/transcript.jsonl; the conv-id directory name
+# IS the daemon's session_id (SessionIDFromPath in the adapter).
+ANTIGRAVITY_BRAIN_ROOT="${HOME}/.gemini/antigravity-cli/brain"
+ANTIGRAVITY_TRANSCRIPT_REL=".system_generated/logs/transcript.jsonl"
 
 remaining_seconds() { local now; now=$(date +%s); (( now >= DEADLINE )) && echo 0 || echo $((DEADLINE - now)); }
 
@@ -155,23 +170,144 @@ launch_repl() {
   tmux new-session -d -s "$SESSION" -x 200 -y 50 -c "${SES_CWD[$ACTIVE]}" "agy" \
     >>"$DRIVER_LOG.stdout.$ACTIVE" 2>>"$DRIVER_LOG.stderr" \
     || { echo "[driver] failed to launch agy under tmux" >&2; EXIT_REASON="nonzero(2)"; exit 1; }
-  : # TODO(antigravity): resolve the live session_id + transcript path and store it
-    #   on the active slot — SES_TRANSCRIPT[$ACTIVE]=<abs path> (SEAM 3). The
-    #   staging contract + multi-session lists are derived from SES_TRANSCRIPT.
+  # agy mints the conversation dir + transcript only AFTER the first prompt lands,
+  # so there's nothing to resolve at boot — resolve_transcript runs on the first
+  # wait_turn (SEAM 3, marker-gated by alloc_slot's MARKER).
+  #
+  # A FRESH cwd (every recording uses a brand-new staging cwd/) triggers agy's
+  # "Do you trust the contents of this project?" gate, which BLOCKS the REPL until
+  # answered — "Yes, I trust this folder" is the default-highlighted choice, so a
+  # bare Enter dismisses it. Without this the input box never appears, the first
+  # send is typed into the trust dialog, and no turn ever happens. Accept it, THEN
+  # wait for the "? for shortcuts" footer (the input-ready marker) so the first
+  # send isn't swallowed, then settle briefly so Ink finishes mounting the prompt.
+  local waited=0
+  while (( waited < 40 )); do
+    if tmux capture-pane -t "$SESSION" -p -S -50 2>/dev/null | grep -qiE 'trust the contents|trust this folder'; then
+      tmux send-keys -t "$SESSION" Enter
+      echo "[driver] accepted agy trust-folder prompt" >&2
+      break
+    fi
+    # The footer can also appear directly (already-trusted cwd) — stop waiting then.
+    tmux capture-pane -t "$SESSION" -p -S -50 2>/dev/null | grep -q '? for shortcuts' && break
+    sleep 0.5; waited=$((waited + 1))
+  done
+
+  waited=0; local ready=0
+  while (( waited < 60 )); do
+    if tmux capture-pane -t "$SESSION" -p -S -50 2>/dev/null | grep -q '? for shortcuts'; then
+      ready=1; break
+    fi
+    sleep 0.5; waited=$((waited + 1))
+  done
+  if (( ready )); then
+    echo "[driver] agy input ready (slot=$ACTIVE, cwd=${SES_CWD[$ACTIVE]})" >&2
+    sleep 1
+  else
+    echo "[driver] WARNING: agy input-ready marker not seen after 30s; proceeding" >&2
+  fi
+}
+
+# transcript_claimed reports whether another slot already owns transcript path $1
+# (so a concurrent slot / restart claims the NEXT-newest conv dir, not a sibling's).
+transcript_claimed() { # <abs-path>
+  local p="$1" i
+  for (( i = 1; i <= N_SLOTS; i++ )); do
+    [[ "${SES_TRANSCRIPT[$i]:-}" == "$p" ]] && return 0
+  done
+  return 1
+}
+
+# --- AGENT-SPECIFIC SEAM 3: resolve the transcript agy just created ----------
+# agy writes a NEW conversation dir under $ANTIGRAVITY_BRAIN_ROOT only after the
+# first user message lands. Find the newest <conv-id>/.system_generated/logs/
+# transcript.jsonl created AFTER this slot's MARKER (so a restart, which bumps the
+# marker, excludes the prior conv) that isn't bound to another slot. The conv-id
+# DIRECTORY name is the daemon's session_id (SessionIDFromPath in the adapter),
+# so UUID is harvested from the path, not the transcript body. Caches once resolved.
+resolve_transcript() {
+  [[ -n "$TRANSCRIPT" ]] && return 0
+  # agy writes transcript.jsonl only once the first turn produces output, which on
+  # the free tier can lag tens of seconds behind the send — poll generously (the
+  # recipe timeout is the real backstop).
+  local _ candidate="" conv_dir
+  for _ in $(seq 1 120); do
+    candidate=""
+    # newest-first by mtime of the transcript; -newer "$MARKER" excludes prior convs.
+    while IFS= read -r f; do
+      [[ -z "$f" ]] && continue
+      transcript_claimed "$f" && continue
+      candidate="$f"; break
+    done < <(find "$ANTIGRAVITY_BRAIN_ROOT" -maxdepth 4 -type f \
+                  -path "*/$ANTIGRAVITY_TRANSCRIPT_REL" -newer "$MARKER" \
+                  -exec ls -t {} + 2>/dev/null)
+    if [[ -n "$candidate" && -s "$candidate" ]]; then
+      # <brain>/<conv-id>/.system_generated/logs/transcript.jsonl → <conv-id>.
+      conv_dir="${candidate%/.system_generated/logs/transcript.jsonl}"
+      UUID="$(basename "$conv_dir")"
+      TRANSCRIPT="$candidate"
+      # Persist onto the slot so the staging contract (SES_TRANSCRIPT) sees it.
+      SES_TRANSCRIPT[$ACTIVE]="$TRANSCRIPT"
+      SES_UUID[$ACTIVE]="$UUID"
+      echo "[driver] resolve_transcript[s$ACTIVE]: $TRANSCRIPT (conv-id=$UUID, sid=$UUID)" >&2
+      return 0
+    fi
+    sleep 0.5
+  done
+  return 1
+}
+
+# --- AGENT-SPECIFIC SEAM 2: count completed turns ----------------------------
+# Mirror core/adapters/inbound/agents/antigravity/parser.go: the turn's terminal
+# line is a MODEL PLANNER_RESPONSE with NO tool_calls (often empty content). A
+# text-only answer and a tool-using turn both end this way; tool-calling and
+# RESULT lines keep the session working and are excluded. SYSTEM steps
+# (CONVERSATION_HISTORY, CHECKPOINT) can TRAIL the terminal line, so count the
+# markers rather than inspect only the last line.
+turn_count() {
+  [[ -f "$TRANSCRIPT" ]] || { echo 0; return; }
+  jq -r 'select(.source=="MODEL" and .type=="PLANNER_RESPONSE"
+                and ((.tool_calls // []) | length) == 0) | "x"' \
+    "$TRANSCRIPT" 2>/dev/null | wc -l | tr -d ' '
 }
 
 # --- AGENT-SPECIFIC SEAM 2: detect a completed turn --------------------------
-# Port the agent's turn-done signal: claudecode polls the transcript for
-# stop_reason=="end_turn"; codex polls the rollout for task_complete; opencode
-# polls the SQLite store for a step-finish. Return 0 when a NEW turn completed
-# (or times out via remaining_seconds()).
+# Block until a NEW terminal PLANNER_RESPONSE appears (turn_count >= the bumped
+# EXPECTED_TURNS), or time out via remaining_seconds().
 wait_turn() {
-  not_implemented wait_turn   # TODO(antigravity): replace with the real turn-done poll
+  resolve_transcript || {
+    echo "[driver] wait_turn[s$ACTIVE]: agy never created a transcript under $ANTIGRAVITY_BRAIN_ROOT" >&2
+    EXIT_REASON="transcript_missing"; return 1
+  }
+  EXPECTED_TURNS=$((EXPECTED_TURNS + 1))
+  while (( $(remaining_seconds) > 0 )); do
+    local now; now="$(turn_count)"
+    if (( now >= EXPECTED_TURNS )); then
+      echo "[driver] wait_turn[s$ACTIVE]: count=$now (expected ≥ $EXPECTED_TURNS)" >&2
+      return 0
+    fi
+    sleep 1
+  done
+  echo "[driver] wait_turn[s$ACTIVE]: timeout (count=$(turn_count), expected ≥ $EXPECTED_TURNS)" >&2
+  EXIT_REASON="timeout"; return 1
 }
 
 # --- AGENT-SPECIFIC SEAM 3: send text -----------------------------------------
+# Type the line, then CONFIRM it echoed into agy's input box before pressing
+# Enter. agy's Ink input occasionally swallows the very first keystrokes after
+# boot, leaving an empty prompt — Enter on an empty box does nothing, no turn
+# happens, and wait_turn then times out with "never created a transcript". A
+# distinctive substring of the text is the cheap, reliable echo probe; re-type
+# once if it's missing.
 send_text() { # <text>
-  tmux send-keys -t "$SESSION" -l "$1"
+  local probe; probe="${1:0:20}"
+  tmux send-keys -t "$SESSION" -l -- "$1"
+  sleep 0.5   # let agy's input render
+  if ! tmux capture-pane -t "$SESSION" -p -S -10 2>/dev/null | grep -qF -- "$probe"; then
+    echo "[driver] send_text: input not echoed, re-typing once" >&2
+    tmux send-keys -t "$SESSION" -l -- "$1"
+    sleep 0.5
+  fi
   tmux send-keys -t "$SESSION" Enter
 }
 
@@ -201,11 +337,10 @@ done < <(jq -c '.[]' <<<"$SCRIPT_JSON")
 # --- Write the staging contract (shared) -------------------------------------
 # emit_session_contract writes session.uuid + transcript.path (slot 1) plus the
 # multi-session session.uuids / transcript.paths lists from SES_TRANSCRIPT, and
-# combines the per-slot stdout (_lib/drive/contracts.sh). It needs each slot's
-# SES_TRANSCRIPT[$i] populated by SEAM 3; until that's ported the paths are empty
-# — the contract SHAPE is already correct, the scaffold just records nothing
-# useful yet. The primary id is the daemon's session_id — daemon_sid of the
-# transcript path; switch to the first-line UUID if antigravity keys on that (see
-# drive-pi-interactive.sh). drive_exit maps EXIT_REASON → the process exit code.
-emit_session_contract "$(daemon_sid "${SES_TRANSCRIPT[1]}")"
+# combines the per-slot stdout (_lib/drive/contracts.sh). For antigravity the
+# daemon's session_id is the <conv-id> DIRECTORY (sessionIDFromPath in the
+# adapter), NOT daemon_sid of the constant transcript.jsonl filename ("transcript")
+# — so pass the resolved conv-id from slot 1 (SES_UUID[1]) as the primary id.
+# drive_exit maps EXIT_REASON → the process exit code.
+emit_session_contract "${SES_UUID[1]}"
 drive_exit
