@@ -62,14 +62,14 @@
       "script": [
         {
           "type": "send",
-          "text": "Use a multi-agent workflow to fan out THREE parallel subagents at once (a single invoke). Have each one independently spend about 20 seconds counting and describing the files in this directory, then summarize all three results for me."
+          "text": "Use your multi-agent workflow to fan out exactly THREE subagents in a SINGLE invoke (all three in one Subagents array). Instruct EACH subagent to: first run the shell command `sleep 15`, THEN count and briefly describe the files in this directory. Do not run them sequentially — dispatch all three at once. After all three finish, summarize their three results for me."
         },
         {
           "type": "wait_turn"
         },
         {
           "type": "sleep",
-          "seconds": 15
+          "seconds": 10
         }
       ],
       "verify": [
