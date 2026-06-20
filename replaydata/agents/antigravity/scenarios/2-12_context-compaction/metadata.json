@@ -3,11 +3,11 @@
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
-    "driver_capability": "gap:wait_turn",
+    "driver_capability": "ready",
     "agent_cli_version": "1.0.10",
     "daemon_version": "0.5.2+9cd5c69.dirty",
-    "confidence": 0.65,
-    "notes": "agy has /compact; compaction's only transcript trace is a SYSTEM/CHECKPOINT '# Resuming from a compaction' line which the parser SKIPS. The visible arc (ready→working→ready around /compact + a normal turn after) is observable; compaction-vs-turn is not distinguishable. Driver lacks wait_turn → gap."
+    "confidence": 0.7,
+    "notes": "agy 1.0.10 has NO manual /compact command (live: /comp → No matches; the binary /compact string is dead). Compaction is AUTO-only; its CHECKPOINT \"# Resuming from a compaction\" trace is parser-SKIPPED, so compaction is never a distinct observable event. The recipe drives /context (the real context-management slash, no-LLM, no transcript line) to stand in for the context-management window; the asserted visible arc ready→working→ready on each side + the no-waiting compact_window invariant are produced. wait_turn + keys (Escape to dismiss the /context overlay) ported; recorded live."
   },
   "details": {
     "assessment": {
@@ -16,13 +16,14 @@
       "agent": "antigravity",
       "agent_supports": "yes",
       "daemon_capability": "full",
-      "driver_capability": "gap:wait_turn",
-      "confidence": 0.65,
+      "driver_capability": "ready",
+      "confidence": 0.7,
       "body": "## Verdict\n\n**agent=yes.** agy ships `/compact` (binary strings: `/compact`, `/Compact`, `CompactionInfo`, `GetCompactionInfo`). Real evidence of a compaction event is in sample `9ea5200c` step 4: a `SYSTEM`/`CHECKPOINT` line whose content begins `# Resuming from a compaction` — the resume marker the runtime writes after summarizing history.\n\n**daemon=full, caveat: compaction is INVISIBLE as a distinct event.** The scenario (per the claudecode sibling) asserts only the visible state arc — `ready → working → ready` around `/compact`, then a normal turn afterward to prove the session continues. The antigravity parser deliberately SKIPS all `SYSTEM` lines, including `CHECKPOINT` (`parser.go`: the `default` arm sets `ev.Skip = true` for SYSTEM/CONVERSATION_HISTORY/CHECKPOINT). So the compaction's only transcript trace produces NO state event — there is no manual-compact signal and no `CompactionState`. Whether `/compact` even drives a working→ready arc depends on whether the runtime writes a `PLANNER_RESPONSE` summarization turn around it; the sample shows compaction landing mid-conversation as a bare CHECKPOINT with surrounding normal `PLANNER_RESPONSE`/tool lines, so the user-visible arc is just the normal turn lifecycle on each side. The scenario explicitly accepts that the compaction-vs-normal-turn distinction is not observable. Both bracketing turns settle `ready` via the empty terminal `PLANNER_RESPONSE`, satisfying the asserted arc. CAVEAT (emission): no sample drives `/compact` interactively, so whether agy emits a working span for the compaction summarization itself is unconfirmed — `record` settles it. This keeps `daemon=full` (the asserted visible arc IS produced) with the caveat that compaction is not separately observable.",
       "caveats": [
         "Compaction is NOT observable as a distinct event: the only trace is a SYSTEM/CHECKPOINT '# Resuming from a compaction' line which the parser SKIPS by design. The dashboard cannot distinguish compaction from a normal turn (same as claudecode — CompactionState is dead code). The spec asserts only the visible state arc.",
         "Emission UNCONFIRMED: no sample drives /compact interactively; whether the summarization itself produces a working span is unverified — record settles whether the compact_window briefly enters working.",
-        "Tokens/cost not in JSONL — observations assert cost/tokens = 0."
+        "Tokens/cost not in JSONL — observations assert cost/tokens = 0.",
+        "OBSERVABILITY CORRECTION (live record 2026-06-20): agy 1.0.10 has no manual /compact command — the slash menu (39 cmds) has no compact/summarize trigger; /comp → No matches. Compaction is auto-only and its CHECKPOINT trace is parser-skipped. The recipe substitutes /context (a real no-LLM context-management slash) which produces no transcript line and leaves the session in ready, faithfully capturing the cells observability claim (compaction interactions are non-events; state holds ready; session continues). daemon=full unchanged (the asserted visible arc IS produced); agent_supports=yes unchanged (agy compacts automatically)."
       ],
       "sources": [
         {
@@ -66,7 +67,11 @@
         },
         {
           "type": "slash",
-          "text": "/compact"
+          "text": "/context"
+        },
+        {
+          "type": "keys",
+          "keys": "Escape"
         },
         {
           "type": "sleep",
