@@ -6,8 +6,8 @@
     "driver_capability": "ready",
     "agent_cli_version": "1.0.10",
     "daemon_version": "0.5.2+9cd5c69.dirty",
-    "confidence": 0.6,
-    "notes": "agy REPL buffers mid-turn input; the filtered transcript (DONE-only) writes no turn boundary for queued text, so the parser sees one contiguous working span. keys + wait_turn ported; recorded live."
+    "confidence": 0.7,
+    "notes": "agy REPL buffers mid-turn input: while a long turn streams (esc to cancel), a typed follow-up shows as a queued message (Press up to edit queued messages) and writes NO transcript line until consumed — so the daemon sees one contiguous working span. Live-verified 2026-06-20. keys + wait_turn ported; recorded live."
   },
   "details": {
     "assessment": {
@@ -17,12 +17,12 @@
       "agent_supports": "yes",
       "daemon_capability": "full",
       "driver_capability": "ready",
-      "confidence": 0.6,
+      "confidence": 0.7,
       "body": "## Verdict\n\n**agent=yes.** agy runs an interactive bubbletea REPL (binary strings reference `executor has not processed the previous input yet` and `Shell command queued as pending`), so typed input arriving mid-turn is buffered by the runtime rather than starting a new turn — the same queueing model claudecode and codex have.\n\n**daemon=full (provisional).** The scenario asserts the visible contract: state stays `working` through the queued-message arrival (no `→ ready` flicker, no `→ waiting`), and the cycle still ends at `ready`. The antigravity parser drives `working` only from `USER_INPUT` (turn open) and back to `ready` only from an empty terminal `PLANNER_RESPONSE`. The FILTERED transcript.jsonl contains only `status:\"DONE\"` steps — there is no intermediate/queued status — so a buffered follow-up does NOT appear as a synthetic `USER_INPUT` line until it is consumed. While the first turn runs, the parser sees a contiguous run of `PLANNER_RESPONSE`/tool-result lines = one unbroken working span, exactly the no-flicker invariant. The cycle ends `ready` at the final empty `PLANNER_RESPONSE`. CAVEAT (emission, unconfirmed): no sample exercises mid-turn queueing, so whether agy writes the queued prompt as a mid-turn `USER_INPUT` line BEFORE consumption (which would flicker the span) is unverified — `record` must confirm the single contiguous working span.\n\n**driver=gap:wait_turn.** The recipe needs `keys` (type the follow-up into the TUI mid-turn) and `wait_turn` (block on each turn's completion). Both are `not_implemented` in the scaffolded driver. `record` ports the agy turn-done poll and the raw-keys arm before driving.",
       "caveats": [
-        "Emission UNCONFIRMED: no sample exercises mid-turn queueing. The filtered transcript is DONE-only, which strongly implies a queued prompt is invisible until consumed — but record must verify a single contiguous working span (no →ready flicker when the follow-up lands).",
         "Driver needs keys + wait_turn ported; the recorded gap primitive is wait_turn.",
-        "Tokens/cost not in JSONL — observations assert cost/tokens = 0."
+        "Tokens/cost not in JSONL — observations assert cost/tokens = 0.",
+        "CONFIRMED (live record 2026-06-20): while the first (long) turn streams, a typed follow-up buffers (footer: Press up to edit queued messages) and writes NO transcript line until consumed — so the working span is contiguous for the full generation. The first prompt must be a genuine long generation (a count-to-10 finished in <3s and the queued text then landed as a normal 2nd turn). The queued prompt is phrased to settle ready (Reply with the word: queued), NOT a clarifying-question phrasing which the parser classifies as waiting."
       ],
       "sources": [
         {
@@ -51,27 +51,27 @@
       ],
       "setup": [
         "Fresh cwd under <staging>/cwd/; agy mints its own <conv-id>",
-        "First prompt must keep agy busy long enough to type a follow-up (a slow count-to-10)"
+        "First prompt is a long (~400-word) generation that keeps agy busy ~15-20s; the queued prompt is typed at +8s while it is still streaming (esc-to-cancel footer), so it buffers (Press up to edit queued messages) rather than starting a new turn"
       ],
       "script": [
         {
           "type": "send",
-          "text": "Count from 1 to 10, one number per line, pausing briefly between each. On the last line reply with exactly the word: done"
+          "text": "Write a detailed 400-word explanation of how TCP congestion control works, covering slow start, congestion avoidance, fast retransmit and fast recovery. End with the word: done"
         },
         {
           "type": "sleep",
-          "seconds": 3
+          "seconds": 8
         },
         {
           "type": "keys",
-          "keys": "f o l l o w u p Space q u e u e d Enter"
+          "keys": "R e p l y Space w i t h Space t h e Space s i n g l e Space w o r d Space q u e u e d Enter"
         },
         {
           "type": "wait_turn"
         },
         {
           "type": "sleep",
-          "seconds": 6
+          "seconds": 4
         },
         {
           "type": "wait_turn"
