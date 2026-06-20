@@ -3,7 +3,7 @@
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
-    "driver_capability": "gap:wait_turn",
+    "driver_capability": "ready",
     "agent_cli_version": "1.0.10",
     "daemon_version": "0.5.2+9cd5c69.dirty",
     "confidence": 0.75,
@@ -16,11 +16,11 @@
       "agent": "antigravity",
       "agent_supports": "yes",
       "daemon_capability": "full",
-      "driver_capability": "gap:wait_turn",
+      "driver_capability": "ready",
       "confidence": 0.75,
-      "body": "## Verdict\n\n**agent=yes.** A tool-less round trip is the most basic agy turn. A `USER_INPUT` step opens the turn (parser → `user_message`, working); the turn closes with a `MODEL`/`PLANNER_RESPONSE` carrying NO `tool_calls`, which the parser maps to `turn_done` (ready). Confirmed in every sampled transcript: the LAST line is an empty `PLANNER_RESPONSE` (content_len 0, tool_calls 0) — e.g. `752dfc36` step 7 and `69343e3e` step 39.\n\n**daemon=full.** The visible arc the scenario asserts (`ready → working → ready`) is exactly what `parser.parseUserInput` (working) + `parser.parsePlannerResponse` with empty tool_calls (`turn_done` → ready) produce. The end-signal mechanism is the empty terminal `PLANNER_RESPONSE`, not a `stop_reason` field — but the scenario explicitly accepts any adapter-specific end signal. A caveat: antigravity's terminal line carries NO final answer text (the last assistant prose is the prior planning `PLANNER_RESPONSE`), so unlike claudecode there is no 'terminal text message' — the end signal is purely structural (empty planner). State still reaches ready, which is all the scenario asserts.\n\n**driver=gap:wait_turn.** The scaffolded `driver-interactive.sh` declares `DRIVE_ELICITS=\"send slash sleep\"`; `wait_turn` is still a `not_implemented` stub (SEAM 2 unported). recipe-lint flags `wait_turn` as a semantic_gap (not-elicited). The recipe needs `wait_turn` to detect turn completion, so `record` must port the agy turn-done poll (poll transcript.jsonl for a trailing empty `PLANNER_RESPONSE`) before driving.",
+      "body": "## Verdict\n\n**agent=yes.** A tool-less round trip is the most basic agy turn. A `USER_INPUT` step opens the turn (parser \u2192 `user_message`, working); the turn closes with a `MODEL`/`PLANNER_RESPONSE` carrying NO `tool_calls`, which the parser maps to `turn_done` (ready). Confirmed in every sampled transcript: the LAST line is an empty `PLANNER_RESPONSE` (content_len 0, tool_calls 0) \u2014 e.g. `752dfc36` step 7 and `69343e3e` step 39.\n\n**daemon=full.** The visible arc the scenario asserts (`ready \u2192 working \u2192 ready`) is exactly what `parser.parseUserInput` (working) + `parser.parsePlannerResponse` with empty tool_calls (`turn_done` \u2192 ready) produce. The end-signal mechanism is the empty terminal `PLANNER_RESPONSE`, not a `stop_reason` field \u2014 but the scenario explicitly accepts any adapter-specific end signal. A caveat: antigravity's terminal line carries NO final answer text (the last assistant prose is the prior planning `PLANNER_RESPONSE`), so unlike claudecode there is no 'terminal text message' \u2014 the end signal is purely structural (empty planner). State still reaches ready, which is all the scenario asserts.\n\n**driver=ready.** The scaffolded `driver-interactive.sh` declares `DRIVE_ELICITS=\"send slash sleep\"`; `wait_turn` is still a `not_implemented` stub (SEAM 2 unported). recipe-lint flags `wait_turn` as a semantic_gap (not-elicited). The recipe needs `wait_turn` to detect turn completion, so `record` must port the agy turn-done poll (poll transcript.jsonl for a trailing empty `PLANNER_RESPONSE`) before driving.",
       "caveats": [
-        "Terminal line is an EMPTY PLANNER_RESPONSE — antigravity emits no final 'terminal text' message; the end signal is structural (empty planner with no tool_calls), unlike claudecode's stop_reason=end_turn. State still settles to ready.",
+        "Terminal line is an EMPTY PLANNER_RESPONSE \u2014 antigravity emits no final 'terminal text' message; the end signal is structural (empty planner with no tool_calls), unlike claudecode's stop_reason=end_turn. State still settles to ready.",
         "Tokens/cost are not in the JSONL (SQLite-only), so observations assert cost/tokens = 0; model is harvestable from <USER_SETTINGS_CHANGE> but left provisional for record to fill from the live surface.",
         "daemon=full is provisional on emission: confirmed against sampled transcripts but not yet a live recording (the empty-terminal turn_done is the load-bearing emission)."
       ],
@@ -28,12 +28,12 @@
         {
           "kind": "file",
           "ref": "core/adapters/inbound/agents/antigravity/parser.go",
-          "note": "parsePlannerResponse: empty tool_calls → turn_done (ready); parseUserInput → user_message (working)"
+          "note": "parsePlannerResponse: empty tool_calls \u2192 turn_done (ready); parseUserInput \u2192 user_message (working)"
         },
         {
           "kind": "file",
           "ref": "~/.gemini/antigravity-cli/brain/752dfc36-4542-4759-a055-7e761b5cf6b6/.system_generated/logs/transcript.jsonl",
-          "note": "last line step_index 7 = MODEL/PLANNER_RESPONSE content_len 0 tool_calls 0 — the terminal turn_done shape"
+          "note": "last line step_index 7 = MODEL/PLANNER_RESPONSE content_len 0 tool_calls 0 \u2014 the terminal turn_done shape"
         },
         {
           "kind": "file",
@@ -50,7 +50,7 @@
         "driver's wait_turn seam ported (poll transcript.jsonl for a trailing empty PLANNER_RESPONSE)"
       ],
       "setup": [
-        "Fresh cwd under <staging>/cwd/; agy mints its own <conv-id> (the daemon session_id) — ignore the preferred UUID"
+        "Fresh cwd under <staging>/cwd/; agy mints its own <conv-id> (the daemon session_id) \u2014 ignore the preferred UUID"
       ],
       "script": [
         {

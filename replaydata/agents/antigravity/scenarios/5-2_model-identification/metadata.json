@@ -3,11 +3,11 @@
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
-    "driver_capability": "gap:wait_turn",
+    "driver_capability": "ready",
     "agent_cli_version": "1.0.10",
     "daemon_version": "0.3.13+dev",
     "confidence": 0.75,
-    "notes": "agent=yes daemon=full driver=gap:wait_turn — the model name is harvested from the <USER_SETTINGS_CHANGE> block in the transcript and attached to assistant events, so ModelName is observable; the interactive driver still stubs wait_turn (DRIVE_ELICITS='send slash sleep'), so record must port the turn-done poll first (route driver-gap)."
+    "notes": "agent=yes daemon=full driver=ready — the model name is harvested from the <USER_SETTINGS_CHANGE> block in the transcript and attached to assistant events, so ModelName is observable; the interactive driver still stubs wait_turn (DRIVE_ELICITS='send slash sleep'), so record must port the turn-done poll first (route driver-gap)."
   },
   "details": {
     "assessment": {
@@ -16,11 +16,11 @@
       "agent": "antigravity",
       "agent_supports": "yes",
       "daemon_capability": "full",
-      "driver_capability": "gap:wait_turn",
+      "driver_capability": "ready",
       "confidence": 0.75,
-      "body": "## Verdict\n\n**agent=yes** — `agy` runs under a selected model (Gemini 3 Flash by default; Claude 4.5/opus/sonnet/haiku also offered). The selection is recorded in the transcript as a `<USER_SETTINGS_CHANGE>` block (`changed setting \\`Model Selection\\` from None to Gemini 3.5 Flash (Medium).`), confirmed present in 3 of 4 sample transcripts on this machine.\n\n**daemon=full** — The parser harvests the model name from that block via `userSettingsModelRe`, normalizes it, and attaches it to every subsequent assistant event (`ev.ModelName = p.model`). So after one turn `SessionMetrics.ModelName` is the running model string (not 'unknown'), and ContextWindow falls out of the capacity table for the resolved model. This is the basic-turn state arc plus a populated ModelName — fully observable from the tailed JSONL. (PROVISIONAL on emission only: the model line is harvested on the FIRST switch; if a session boots on the account default with no settings-change line in the transcript, ModelName would stay empty until a switch — record confirms whether the boot model writes a settings-change line.)\n\n**driver=gap:wait_turn** — The recipe needs `wait_turn` to gate the assertion after turn completion, but the antigravity interactive driver stubs it (`wait_turn(){ not_implemented wait_turn }`; `DRIVE_ELICITS=\"send slash sleep\"`). Also SEAM 1/SEAM 3 (resolve live session_id + transcript path) are unported. record ports the turn-done poll from a reference driver (claudecode polls transcript stop, gemini-cli polls for turn_done) before driving.\n\nObservations: `model` left provisional (do not hard-pin a doc-guessed id) — record fills it from the recording; `agent=antigravity`. Tokens/cost are SQLite-only so the cost/token observations are NOT asserted for this cell.",
+      "body": "## Verdict\n\n**agent=yes** \u2014 `agy` runs under a selected model (Gemini 3 Flash by default; Claude 4.5/opus/sonnet/haiku also offered). The selection is recorded in the transcript as a `<USER_SETTINGS_CHANGE>` block (`changed setting \\`Model Selection\\` from None to Gemini 3.5 Flash (Medium).`), confirmed present in 3 of 4 sample transcripts on this machine.\n\n**daemon=full** \u2014 The parser harvests the model name from that block via `userSettingsModelRe`, normalizes it, and attaches it to every subsequent assistant event (`ev.ModelName = p.model`). So after one turn `SessionMetrics.ModelName` is the running model string (not 'unknown'), and ContextWindow falls out of the capacity table for the resolved model. This is the basic-turn state arc plus a populated ModelName \u2014 fully observable from the tailed JSONL. (PROVISIONAL on emission only: the model line is harvested on the FIRST switch; if a session boots on the account default with no settings-change line in the transcript, ModelName would stay empty until a switch \u2014 record confirms whether the boot model writes a settings-change line.)\n\n**driver=ready** \u2014 The recipe needs `wait_turn` to gate the assertion after turn completion, but the antigravity interactive driver stubs it (`wait_turn(){ not_implemented wait_turn }`; `DRIVE_ELICITS=\"send slash sleep\"`). Also SEAM 1/SEAM 3 (resolve live session_id + transcript path) are unported. record ports the turn-done poll from a reference driver (claudecode polls transcript stop, gemini-cli polls for turn_done) before driving.\n\nObservations: `model` left provisional (do not hard-pin a doc-guessed id) \u2014 record fills it from the recording; `agent=antigravity`. Tokens/cost are SQLite-only so the cost/token observations are NOT asserted for this cell.",
       "caveats": [
-        "Model name is harvested ONLY from <USER_SETTINGS_CHANGE>; if the boot model emits no such line, ModelName stays empty until a switch — record must confirm the boot model writes one.",
+        "Model name is harvested ONLY from <USER_SETTINGS_CHANGE>; if the boot model emits no such line, ModelName stays empty until a switch \u2014 record must confirm the boot model writes one.",
         "ContextWindow depends on the capacity table having the resolved antigravity/Gemini model id.",
         "cost/tokens observations omitted: usage is SQLite-protobuf only (no MetricsReader)."
       ],
@@ -38,7 +38,7 @@
         {
           "kind": "file",
           "ref": "replaydata/agents/antigravity/driver-interactive.sh",
-          "note": "wait_turn stubbed (not_implemented); DRIVE_ELICITS='send slash sleep'; SEAM 1/3 unported → driver gap"
+          "note": "wait_turn stubbed (not_implemented); DRIVE_ELICITS='send slash sleep'; SEAM 1/3 unported \u2192 driver gap"
         }
       ]
     },
