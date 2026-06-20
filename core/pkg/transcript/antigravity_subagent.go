@@ -1,6 +1,7 @@
 package transcript
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -123,7 +124,10 @@ func transcriptTailContains(path, needle string) bool {
 		return false
 	}
 	buf := make([]byte, info.Size()-start)
-	if _, err := f.Read(buf); err != nil && len(buf) > 0 {
+	// io.ReadFull, not a bare Read: a single Read may return fewer bytes than
+	// requested for a 256KB buffer, leaving the tail zero-filled and silently
+	// dropping a needle that lands in the unread portion.
+	if _, err := io.ReadFull(f, buf); err != nil {
 		return false
 	}
 	return strings.Contains(string(buf), needle)

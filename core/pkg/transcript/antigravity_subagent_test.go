@@ -3,6 +3,7 @@ package transcript
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -75,5 +76,34 @@ func TestAntigravityParentConvID_StaleSiblingExcluded(t *testing.T) {
 func TestAntigravityParentConvID_NonAntigravityPath(t *testing.T) {
 	if got := AntigravityParentConvID("/Users/x/.codex/sessions/2026/06/19/rollout-abc.jsonl"); got != "" {
 		t.Errorf("non-antigravity path got %q, want \"\"", got)
+	}
+}
+
+// TestAntigravityParentConvID_LargeParentTail guards the tail read: a parent
+// transcript far larger than subagentParentTailBytes, with the child's
+// conversationId in the LAST line, must still be matched (the read must fill the
+// whole tail buffer, not short-read it). A convId that appears only BEFORE the
+// tail window is correctly NOT matched.
+func TestAntigravityParentConvID_LargeParentTail(t *testing.T) {
+	brain := filepath.Join(t.TempDir(), ".gemini", "antigravity-cli", "brain")
+	now := time.Now()
+	parent := "eeeeeeee-0000-0000-0000-000000000000"
+	child := "ffffffff-0000-0000-0000-000000000000"
+	filler := strings.Repeat(`{"source":"MODEL","type":"PLANNER_RESPONSE","content":"padding line"}`+"\n", 6000) // > 256KB
+	parentBody := filler + `{"source":"MODEL","type":"INVOKE_SUBAGENT","content":"conversationId: ` + child + `"}` + "\n"
+	writeConv(t, brain, parent, parentBody, now)
+	childPath := writeConv(t, brain, child, `{"type":"USER_INPUT"}`+"\n", now)
+	if got := AntigravityParentConvID(childPath); got != parent {
+		t.Errorf("child convId in the tail of a >256KB parent: got %q, want %q", got, parent)
+	}
+
+	// Same size, but the convId is only in the FIRST line (outside the tail) →
+	// not matched (documents the tail-only semantics).
+	brain2 := filepath.Join(t.TempDir(), ".gemini", "antigravity-cli", "brain")
+	headBody := `{"source":"MODEL","type":"INVOKE_SUBAGENT","content":"conversationId: ` + child + `"}` + "\n" + filler
+	writeConv(t, brain2, parent, headBody, now)
+	childPath2 := writeConv(t, brain2, child, `{"type":"USER_INPUT"}`+"\n", now)
+	if got := AntigravityParentConvID(childPath2); got != "" {
+		t.Errorf("convId outside the tail window: got %q, want \"\"", got)
 	}
 }
