@@ -149,6 +149,38 @@ func TestModelExtraction(t *testing.T) {
 	}
 }
 
+// TestModelSwitchMidSession proves a mid-session /model switch is picked up:
+// agy persists a second <USER_SETTINGS_CHANGE> ("from <old> to <new>") on the
+// switch, and the parser must update p.model on it — not keep the boot model.
+// Regression for scenario 5.3 (the parser previously harvested only the first).
+func TestModelSwitchMidSession(t *testing.T) {
+	p := &Parser{}
+
+	// Turn 1: boot model.
+	p.ParseLine(line("USER_EXPLICIT", "USER_INPUT", 0,
+		"<USER_REQUEST>\nhi\n</USER_REQUEST>\n<USER_SETTINGS_CHANGE>\nThe user changed setting `Model Selection` from None to Gemini 3.5 Flash (Low).\n</USER_SETTINGS_CHANGE>", nil))
+	ev := p.ParseLine(line("MODEL", "PLANNER_RESPONSE", 1, "Hi", nil))
+	first := ev.ModelName
+	if first == "" {
+		t.Fatal("turn 1 assistant event should carry the boot model")
+	}
+
+	// Turn 2: a /model switch writes a second settings-change.
+	p.ParseLine(line("USER_EXPLICIT", "USER_INPUT", 2,
+		"<USER_REQUEST>\nbye\n</USER_REQUEST>\n<USER_SETTINGS_CHANGE>\nThe user changed setting `Model Selection` from Gemini 3.5 Flash (Low) to Gemini 3.1 Pro (Low).\n</USER_SETTINGS_CHANGE>", nil))
+	ev = p.ParseLine(line("MODEL", "PLANNER_RESPONSE", 3, "Bye", nil))
+	if ev.ModelName == "" || ev.ModelName == first {
+		t.Errorf("turn 2 model = %q (turn 1 was %q); want the switched-to model, not the boot model", ev.ModelName, first)
+	}
+
+	// A plain prompt with no settings-change must NOT reset the model.
+	p.ParseLine(line("USER_EXPLICIT", "USER_INPUT", 4, "<USER_REQUEST>\nthanks\n</USER_REQUEST>", nil))
+	ev = p.ParseLine(line("MODEL", "PLANNER_RESPONSE", 5, "Welcome", nil))
+	if ev.ModelName == "" {
+		t.Error("a plain prompt (no settings-change) must preserve the current model, not clear it")
+	}
+}
+
 // TestRawModelCapture isolates the capture group (pre-normalization) so the
 // regex itself is asserted independently of NormalizeModelName.
 func TestRawModelCapture(t *testing.T) {

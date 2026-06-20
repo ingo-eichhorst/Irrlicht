@@ -80,14 +80,18 @@ func (p *Parser) ParseLine(raw map[string]any) *tailer.ParsedEvent {
 	return ev
 }
 
-// parseUserInput opens a turn and harvests the model name (the only place it
-// appears) from a <USER_SETTINGS_CHANGE> block on the first model switch.
+// parseUserInput opens a turn and harvests the model name from a
+// <USER_SETTINGS_CHANGE> block — the only place the model appears. The block is
+// emitted on the first turn ("from None to <model>") and again on every later
+// /model switch ("from <old> to <new>"), so the parser updates p.model on EACH
+// occurrence rather than only the first — otherwise a mid-session switch would
+// be silently ignored and every turn would keep reporting the boot model
+// (issue #707, scenario 5.3 model-switch-midsession). A normal prompt carries no
+// settings-change, so the regex misses and the current model is preserved.
 func (p *Parser) parseUserInput(raw map[string]any, ev *tailer.ParsedEvent) {
-	if p.model == "" {
-		if content, _ := raw["content"].(string); content != "" {
-			if m := userSettingsModelRe.FindStringSubmatch(content); m != nil {
-				p.model = tailer.NormalizeModelName(strings.TrimSpace(m[1]))
-			}
+	if content, _ := raw["content"].(string); content != "" {
+		if m := userSettingsModelRe.FindStringSubmatch(content); m != nil {
+			p.model = tailer.NormalizeModelName(strings.TrimSpace(m[1]))
 		}
 	}
 	ev.EventType = "user_message"
