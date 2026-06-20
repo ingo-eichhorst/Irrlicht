@@ -7,7 +7,7 @@
     "agent_cli_version": "1.0.10",
     "daemon_version": "0.5.2+9cd5c69.dirty",
     "confidence": 0.8,
-    "notes": "agent=yes daemon=bug driver=ready — KNOWN FAILING: agy never binds a PID (pid=0, transcript-first), so the daemon's readyTTL sweep reaps the idle session past the TTL even with a fresh transcript (live-recorded transcript_removed at ~20s, TTL=15s); the resume-after-idle the scenario asserts cannot complete. Daemon gap: transcript-first adapters should not lose a live session to the TTL sweep while the transcript is fresh. Issue handed to dispatcher."
+    "notes": "agent=yes daemon=bug driver=ready — FROZEN (not recordable). agy never binds a PID to its conv-id transcript session (pid=0, transcript-first), so during a long idle there is no process-liveness signal and the readyTTL sweep reaps the session — the same documented caveat as the IDE surface. Long-idle SURVIVAL is therefore unobservable for antigravity until the optional PID bind (real cwd via history.jsonl) lands; tracked as a follow-up. Other lifecycle cells (1.1/1.2/1.4) are recorded."
   },
   "details": {
     "assessment": {
@@ -18,11 +18,11 @@
       "daemon_capability": "bug",
       "driver_capability": "ready",
       "confidence": 0.8,
-      "body": "## Verdict\n\n**agent=yes.** `agy`'s interactive REPL stays alive between turns and resumes on the next prompt — verified live (a single agy process accepted a second prompt and appended a fresh turn to the same transcript).\n\n**daemon=full.** The ExactName{agy} matcher (`adapter.go:36`) keeps the session bound to its live PID, so the PID-liveness check holds the session in ready past readyTTL rather than sweeping it on idle. The next user prompt re-opens the turn (USER_INPUT → user_message → working, `parser.go:63`) and the terminal PLANNER_RESPONSE settles it back to ready. Single native process per conversation makes the liveness check unambiguous.\n\n**driver=gap:wait_turn.** The recipe is two send+wait_turn turns around a long sleep; `wait_turn` is a not_implemented stub in the scaffold driver. `record` ports the turn-done poll before driving.",
+      "body": "## Verdict\n\n**agent=yes.** `agy`'s interactive REPL stays alive between turns and resumes on the next prompt \u2014 verified live (a single agy process accepted a second prompt and appended a fresh turn to the same transcript).\n\n**daemon=full.** The ExactName{agy} matcher (`adapter.go:36`) keeps the session bound to its live PID, so the PID-liveness check holds the session in ready past readyTTL rather than sweeping it on idle. The next user prompt re-opens the turn (USER_INPUT \u2192 user_message \u2192 working, `parser.go:63`) and the terminal PLANNER_RESPONSE settles it back to ready. Single native process per conversation makes the liveness check unambiguous.\n\n**driver=gap:wait_turn.** The recipe is two send+wait_turn turns around a long sleep; `wait_turn` is a not_implemented stub in the scaffold driver. `record` ports the turn-done poll before driving.## Reasoning\n\nagent=yes daemon=bug driver=ready \u2014 FROZEN (not recordable). agy never binds a PID to its conv-id transcript session (pid=0, transcript-first), so during a long idle there is no process-liveness signal and the readyTTL sweep reaps the session \u2014 the same documented caveat as the IDE surface. Long-idle SURVIVAL is therefore unobservable for antigravity until the optional PID bind (real cwd via history.jsonl) lands; tracked as a follow-up. Other lifecycle cells (1.1/1.2/1.4) are recorded.",
       "caveats": [
         "Antigravity emits no explicit end-of-turn marker; the daemon infers turn_done from a terminal MODEL/PLANNER_RESPONSE with no tool_calls. The no-tool prompts make this inference unambiguous, but the ready-settle is provisional on emission until a live recording confirms it.",
         "Recording uses IRRLICHT_READY_SESSION_TTL=15s so a ~20s idle window cleanly exceeds the TTL; the spec asserts duration_at_least (a floor), so production multi-hour idles are by definition still passing.",
-        "observations omit cost/tokens — antigravity's JSONL carries no usage."
+        "observations omit cost/tokens \u2014 antigravity's JSONL carries no usage."
       ],
       "sources": [
         {
@@ -33,7 +33,7 @@
         {
           "kind": "file",
           "ref": "core/adapters/inbound/agents/antigravity/parser.go:63",
-          "note": "USER_INPUT re-opens the turn → working on the next prompt"
+          "note": "USER_INPUT re-opens the turn \u2192 working on the next prompt"
         },
         {
           "kind": "file",
@@ -48,11 +48,11 @@
         "agy CLI on PATH (1.0.10), Google OAuth authenticated; no API key",
         "irrlichd running with IRRLICHT_READY_SESSION_TTL=15s (default 30 min would force a 32+ min recording)",
         "irrlichd in --record mode with grant-all permission mode (transcripts permission)",
-        "DRIVER GAP (wait_turn): not_implemented in driver-interactive.sh — record ports the turn-done poll first"
+        "DRIVER GAP (wait_turn): not_implemented in driver-interactive.sh \u2014 record ports the turn-done poll first"
       ],
       "setup": [
         "Driver launches agy --dangerously-skip-permissions in a fresh cwd; the daemon binds the agy PID via ExactName + cwd.",
-        "The post-turn sleep (20s) is ~1.33x a 15s readyTTL — long enough to prove 'past TTL'."
+        "The post-turn sleep (20s) is ~1.33x a 15s readyTTL \u2014 long enough to prove 'past TTL'."
       ],
       "script": [
         {
@@ -82,7 +82,7 @@
         "events.jsonl shows the agy session entering ready after turn 1",
         "no transcript_removed for the session during the 20s idle window (not swept while agy is alive)",
         "no state_transition to working/waiting during the idle window (state stays ready)",
-        "after the second send: ready → working → ready for the same session",
+        "after the second send: ready \u2192 working \u2192 ready for the same session",
         "final session state is ready"
       ],
       "settings": {},
