@@ -3,7 +3,7 @@
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
-    "driver_capability": "gap:wait_turn",
+    "driver_capability": "ready",
     "agent_cli_version": "1.0.10",
     "daemon_version": "0.5.2+9cd5c69.dirty",
     "confidence": 0.85,
@@ -16,7 +16,7 @@
       "agent": "antigravity",
       "agent_supports": "yes",
       "daemon_capability": "full",
-      "driver_capability": "gap:wait_turn",
+      "driver_capability": "ready",
       "confidence": 0.85,
       "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: gap:wait_turn\n\nRoute: driver-gap (record ports the stubbed wait_turn seam, then drives).\n\n## What the scenario pins\n\nThe scenario asserts only the visible state arc `ready → working → ready` with no parser stall causing a stuck `working`; the absence of a stall is INFERRED from the arc completing. Tool calls ≤ 0. It is a sanity-check, not a true >2MB cap-stress (the canonical claudecode cell notes 5000 words ≈ 30KB, well under irrlicht's 64MB tailer cap).\n\n## agent_supports: yes\n\nThe agy CLI takes a free-form prompt and produces a normal turn; prompting for a single very long sentence is just a long assistant response, which agy handles. No flag needed.\n\n## daemon_capability: full\n\nKey emission finding from the live transcripts: Antigravity itself caps oversized field content BEFORE writing the JSONL line. Every oversized step carries `truncated_fields:[\"content\"]` and the content is hard-capped at ~4KB (observed line at brain/69343e3e.../transcript.jsonl index 3: 5054 bytes, truncated_fields=[\"content\"], content len 4120). So agy NEVER writes a truly oversized line — the line the parser sees is always bounded. The JSONLineParser/bufio path therefore never approaches the 2MB scanner limit or the 64MB tailer cap for this scenario; the line is decoded normally and the arc resolves cleanly: USER_INPUT→working, MODEL/PLANNER_RESPONSE(+tool_calls or not), terminal no-tool PLANNER_RESPONSE→turn_done→ready. The visible arc is fully observable. (Note: the tailer must still tolerate a multi-KB line, which it does.)\n\n## driver_capability: gap:wait_turn\n\nThe interactive recipe needs `wait_turn` to block until the turn completes, but the scaffolded driver-interactive.sh declares DRIVE_ELICITS=\"send slash sleep\" and stubs the wait_turn arm (not_implemented). recipe-lint flags wait_turn as not-elicited → semantic_gap. `record` must port the turn-done poll (SEAM 2 — poll the transcript for the terminal no-tool PLANNER_RESPONSE) before driving.",
       "caveats": [
