@@ -2,12 +2,12 @@
   "scenario_id": "long-idle-live-session",
   "metadata": {
     "agent_supports": "yes",
-    "daemon_capability": "full",
-    "driver_capability": "gap:wait_turn",
+    "daemon_capability": "bug",
+    "driver_capability": "ready",
     "agent_cli_version": "1.0.10",
     "daemon_version": "0.5.2+9cd5c69.dirty",
     "confidence": 0.8,
-    "notes": "agent=yes daemon=full driver=gap:wait_turn — PID-liveness keeps the agy session alive past readyTTL; scaffold driver stubs wait_turn."
+    "notes": "agent=yes daemon=bug driver=ready — KNOWN FAILING: agy never binds a PID (pid=0, transcript-first), so the daemon's readyTTL sweep reaps the idle session past the TTL even with a fresh transcript (live-recorded transcript_removed at ~20s, TTL=15s); the resume-after-idle the scenario asserts cannot complete. Daemon gap: transcript-first adapters should not lose a live session to the TTL sweep while the transcript is fresh. Issue handed to dispatcher."
   },
   "details": {
     "assessment": {
@@ -15,8 +15,8 @@
       "scenario_id": "long-idle-live-session",
       "agent": "antigravity",
       "agent_supports": "yes",
-      "daemon_capability": "full",
-      "driver_capability": "gap:wait_turn",
+      "daemon_capability": "bug",
+      "driver_capability": "ready",
       "confidence": 0.8,
       "body": "## Verdict\n\n**agent=yes.** `agy`'s interactive REPL stays alive between turns and resumes on the next prompt — verified live (a single agy process accepted a second prompt and appended a fresh turn to the same transcript).\n\n**daemon=full.** The ExactName{agy} matcher (`adapter.go:36`) keeps the session bound to its live PID, so the PID-liveness check holds the session in ready past readyTTL rather than sweeping it on idle. The next user prompt re-opens the turn (USER_INPUT → user_message → working, `parser.go:63`) and the terminal PLANNER_RESPONSE settles it back to ready. Single native process per conversation makes the liveness check unambiguous.\n\n**driver=gap:wait_turn.** The recipe is two send+wait_turn turns around a long sleep; `wait_turn` is a not_implemented stub in the scaffold driver. `record` ports the turn-done poll before driving.",
       "caveats": [
