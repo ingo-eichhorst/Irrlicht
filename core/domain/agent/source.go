@@ -22,6 +22,28 @@ type FilesUnderRoot struct {
 	// the $HOME-relative Dir. Empty (the common case) means "use Dir
 	// everywhere." Resolved by the daemon in RootDirFor.
 	DirByOS map[string]string
+
+	// ExtraDirs lists ADDITIONAL root directories to watch beyond Dir, each
+	// resolved the same way as Dir (absolute used as-is, otherwise under
+	// $HOME). The daemon builds one fswatcher per root. Used by adapters whose
+	// sessions are split across sibling stores that must not be unified under a
+	// shared parent: Antigravity writes the CLI's transcripts under
+	// ~/.gemini/antigravity-cli/brain and the IDE's under ~/.gemini/antigravity/
+	// brain, and rooting at the common ~/.gemini parent would collide with the
+	// Gemini CLI adapter's ~/.gemini/tmp. Empty (the common case) means "watch
+	// only Dir". Collected by AllRootsFor.
+	ExtraDirs []string
+
+	// SessionIDFromPath optionally overrides how the watcher derives a
+	// session's ID from a transcript file path. The default (nil) uses the
+	// filename stem (`<uuid>.jsonl` → `<uuid>`). Adapters whose transcript
+	// filename is a constant supply this to source the ID from a path
+	// component and to skip sibling files: Antigravity writes
+	// brain/<conv-id>/.system_generated/logs/transcript.jsonl, so the ID is the
+	// <conv-id> directory and transcript_full.jsonl must be ignored. The
+	// function receives the absolute file path and returns "" for any file the
+	// adapter does not own (skipping it entirely).
+	SessionIDFromPath func(path string) string
 }
 
 func (FilesUnderRoot) isSource() {}
@@ -35,6 +57,15 @@ func (s FilesUnderRoot) RootDirFor(goos string) string {
 		return d
 	}
 	return s.Dir
+}
+
+// AllRootsFor returns every directory the runtime should watch for this source
+// on the given OS: RootDirFor(goos) followed by ExtraDirs in order. The daemon
+// builds one fswatcher per returned root.
+func (s FilesUnderRoot) AllRootsFor(goos string) []string {
+	roots := make([]string, 0, 1+len(s.ExtraDirs))
+	roots = append(roots, s.RootDirFor(goos))
+	return append(roots, s.ExtraDirs...)
 }
 
 // FilesUnderCWD — each running process writes a known filename inside

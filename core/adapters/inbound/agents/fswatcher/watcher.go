@@ -24,6 +24,13 @@ type Watcher struct {
 	identity agent.Identity // populated via WithIdentity
 	maxAge   time.Duration  // ignore files older than this (0 = no limit)
 
+	// sessionID, when non-nil, overrides how a transcript file's session ID is
+	// derived from its path (set via WithSessionID). The default uses the
+	// filename stem. Returning "" skips the file — adapters whose transcript
+	// filename is constant use this both to source the ID from a path component
+	// and to ignore sibling files (e.g. Antigravity's transcript_full.jsonl).
+	sessionID func(path string) string
+
 	subMu sync.Mutex
 	subs  []chan agent.Event
 
@@ -69,6 +76,24 @@ func (w *Watcher) WithIdentity(id agent.Identity) *Watcher {
 // zero value if WithIdentity was never called.
 func (w *Watcher) Identity() agent.Identity {
 	return w.identity
+}
+
+// WithSessionID sets a custom session-ID extractor (see the sessionID field).
+// Returns the watcher for chaining. Callers in cmd/irrlichd/wiring.go invoke
+// this for FilesUnderRoot adapters that declare SessionIDFromPath.
+func (w *Watcher) WithSessionID(fn func(path string) string) *Watcher {
+	w.sessionID = fn
+	return w
+}
+
+// idFor derives a transcript file's session ID using the custom extractor when
+// one is set, otherwise the default filename-stem rule. Returning "" means the
+// file should be skipped.
+func (w *Watcher) idFor(path string) string {
+	if w.sessionID != nil {
+		return w.sessionID(path)
+	}
+	return extractSessionID(path)
 }
 
 // New creates a Watcher for the given directory. If dir is absolute, it is
@@ -215,7 +240,7 @@ func (w *Watcher) handleEvent(watcher *fsnotify.Watcher, ev fsnotify.Event) {
 		return
 	}
 
-	sessionID := extractSessionID(name)
+	sessionID := w.idFor(name)
 	if sessionID == "" {
 		return
 	}
@@ -388,7 +413,7 @@ func (w *Watcher) emitExistingFiles(dir string) {
 			continue
 		}
 		fullPath := filepath.Join(dir, e.Name())
-		sessionID := extractSessionID(fullPath)
+		sessionID := w.idFor(fullPath)
 		if sessionID == "" {
 			continue
 		}

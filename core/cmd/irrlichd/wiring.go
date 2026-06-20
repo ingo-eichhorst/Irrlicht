@@ -45,9 +45,19 @@ func buildAgentWatchers(
 	// catches it).
 	switch s := a.Source.(type) {
 	case agent.FilesUnderRoot:
-		w := fswatcher.New(s.RootDirFor(runtime.GOOS), a.Identity.Name, maxSessionAge).WithIdentity(a.Identity)
-		watchers = append(watchers, w)
-		labels = append(labels, fmt.Sprintf("%s (%s)", a.Identity.Name, w.Root()))
+		// One fswatcher per root: most adapters watch a single Dir; an adapter
+		// whose sessions span sibling stores (Antigravity's CLI + IDE brain
+		// dirs) declares ExtraDirs and gets one watcher each. SessionIDFromPath,
+		// when set, overrides the default filename-stem session-ID derivation
+		// (Antigravity's constant transcript.jsonl filename).
+		for _, root := range s.AllRootsFor(runtime.GOOS) {
+			w := fswatcher.New(root, a.Identity.Name, maxSessionAge).WithIdentity(a.Identity)
+			if s.SessionIDFromPath != nil {
+				w = w.WithSessionID(s.SessionIDFromPath)
+			}
+			watchers = append(watchers, w)
+			labels = append(labels, fmt.Sprintf("%s (%s)", a.Identity.Name, w.Root()))
+		}
 	case agent.ProcessOwnedStore:
 		if a.Identity.Name != opencode.AdapterName {
 			panic(fmt.Sprintf("buildAgentWatchers: no store watcher wired for ProcessOwnedStore adapter %q — add its construction here", a.Identity.Name))
