@@ -8,14 +8,28 @@ import (
 // PermissionKeyTranscripts gates all Antigravity monitoring (issue #570).
 const PermissionKeyTranscripts = "transcripts"
 
-// Antigravity — an upward arrow (anti-gravity / lift). Google blue on light,
-// the lighter dark-mode blue on dark so the mark reads against either chrome.
+// Antigravity's mark: a smooth multicolor arch (the brand's "lift" hump), not a
+// literal arrow. The sweep is drawn as three solid-colored sub-arcs — blue leg,
+// warm peak, green leg — meeting at shared endpoints with round caps so the
+// joins blend. Solid segments (not a <linearGradient>) are deliberate: the
+// macOS menu-bar renderer (NSImage(data:)) flattens an SVG gradient to a single
+// flat color, so a gradient would lose the multicolor there; segments render in
+// full color in both the web dashboard and the app. Dark uses Google's lighter
+// tonal variants so the mark reads against dark chrome.
 const iconSVGLight = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 100 100">
-  <path d="M50 12 L82 56 H62 V84 H38 V56 H18 Z" fill="#4285F4"/>
+  <g fill="none" stroke-width="15" stroke-linecap="round">
+    <path d="M16 82 Q27.3 39.3 38.7 25.1" stroke="#4285F4"/>
+    <path d="M38.7 25.1 Q50 10.9 61.3 25.1" stroke="#EA4335"/>
+    <path d="M61.3 25.1 Q72.7 39.3 84 82" stroke="#34A853"/>
+  </g>
 </svg>`
 
 const iconSVGDark = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 100 100">
-  <path d="M50 12 L82 56 H62 V84 H38 V56 H18 Z" fill="#8AB4F8"/>
+  <g fill="none" stroke-width="15" stroke-linecap="round">
+    <path d="M16 82 Q27.3 39.3 38.7 25.1" stroke="#8AB4F8"/>
+    <path d="M38.7 25.1 Q50 10.9 61.3 25.1" stroke="#F28B82"/>
+    <path d="M61.3 25.1 Q72.7 39.3 84 82" stroke="#81C995"/>
+  </g>
 </svg>`
 
 // Agent returns the Antigravity adapter registration. One adapter covers both
