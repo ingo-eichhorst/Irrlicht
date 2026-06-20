@@ -159,6 +159,13 @@ func (p *Parser) parseToolResult(raw map[string]any, ev *tailer.ParsedEvent) {
 // cwdFromToolCall pulls the working directory out of a run_command tool call's
 // Cwd arg. Antigravity stores each arg value as a JSON-quoted string (e.g.
 // "Cwd":"\"/Users/ingo\""), so the surrounding quotes are stripped.
+//
+// When agy sandboxes a command it reports its OWN internal scratch directory
+// (…/.gemini/antigravity{,-cli}/scratch) as the Cwd rather than the user's
+// workspace — which is never a real project and would mislabel the session, so
+// it's rejected (the session stays transcript-first with no cwd). A non-sandbox
+// run reports the real workspace, which still flows through for project
+// labeling and the optional PID bind.
 func cwdFromToolCall(tcm map[string]any) string {
 	if name, _ := tcm["name"].(string); name != "run_command" {
 		return ""
@@ -167,8 +174,25 @@ func cwdFromToolCall(tcm map[string]any) string {
 	if args == nil {
 		return ""
 	}
-	cwd, _ := args["Cwd"].(string)
-	return strings.Trim(strings.TrimSpace(cwd), `"`)
+	cwd := strings.Trim(strings.TrimSpace(toString(args["Cwd"])), `"`)
+	if isScratchDir(cwd) {
+		return ""
+	}
+	return cwd
+}
+
+// isScratchDir reports whether a path is agy's internal sandbox scratch
+// directory rather than a user workspace. agy's scratch lives at
+// …/.gemini/antigravity-cli/scratch (CLI) or …/.gemini/antigravity/scratch (IDE).
+func isScratchDir(cwd string) bool {
+	return strings.Contains(cwd, ".gemini/antigravity") && strings.Contains(cwd, "/scratch")
+}
+
+// toString coerces a JSON value to its string form (Cwd is always a string in
+// practice; the guard keeps a non-string from panicking).
+func toString(v any) string {
+	s, _ := v.(string)
+	return s
 }
 
 // commandFailed reports whether a tool RESULT's text indicates failure.

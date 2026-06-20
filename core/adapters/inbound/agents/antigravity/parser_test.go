@@ -121,6 +121,28 @@ func TestSuccessfulResultNotError(t *testing.T) {
 	}
 }
 
+// TestScratchCwdRejected proves agy's internal sandbox scratch dir is NOT
+// harvested as the session cwd (it would mislabel the project), while a real
+// workspace cwd still flows through.
+func TestScratchCwdRejected(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(line("MODEL", "PLANNER_RESPONSE", 0, "I will run it.",
+		runCommand("/Users/x/.gemini/antigravity-cli/scratch")))
+	if ev.CWD != "" {
+		t.Errorf("scratch dir must be rejected as cwd, got %q", ev.CWD)
+	}
+	if p.cwd != "" {
+		t.Errorf("parser cwd must stay empty for a scratch-dir run_command, got %q", p.cwd)
+	}
+
+	// A real workspace cwd is still harvested.
+	p2 := &Parser{}
+	ev2 := p2.ParseLine(line("MODEL", "PLANNER_RESPONSE", 0, "I will run it.", runCommand("/Users/x/proj")))
+	if ev2.CWD != "/Users/x/proj" {
+		t.Errorf("real workspace cwd should be harvested, got %q", ev2.CWD)
+	}
+}
+
 // TestModelExtraction covers the <USER_SETTINGS_CHANGE> regex against name
 // shapes with dotted versions and trailing modes/punctuation.
 func TestModelExtraction(t *testing.T) {
