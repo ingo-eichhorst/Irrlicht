@@ -3,7 +3,7 @@
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
-    "driver_capability": "gap:wait_turn",
+    "driver_capability": "ready",
     "agent_cli_version": "1.0.10",
     "daemon_version": "0.3.13+dev",
     "confidence": 0.7,
@@ -16,7 +16,7 @@
       "agent": "antigravity",
       "agent_supports": "yes",
       "daemon_capability": "full",
-      "driver_capability": "gap:wait_turn",
+      "driver_capability": "ready",
       "confidence": 0.7,
       "body": "## Verdict\n\n**agent=yes** — `agy` lets the user change the active model mid-session. Each change writes a `<USER_SETTINGS_CHANGE>` block (`changed setting \\`Model Selection\\` from <A> to <B>.`) into the next USER_INPUT step's content — the exact shape `TestModelExtraction` asserts (`from Gemini 2.0 to Claude Opus 4.1`).\n\n**daemon=full** — The parser harvests the model from that block and attaches it to subsequent assistant events; a second switch lands a fresh model string. MergeMetrics' latest-non-unknown-wins rule promotes `ModelName` to model B by turn 2. So turn-1-model-A → turn-2-model-B is observable from the tailed transcript. (PROVISIONAL caveat: the v1 parser harvests the model ONLY when `p.model == \"\"` — i.e. the FIRST settings-change seen. A SECOND mid-session switch may NOT update p.model under the current `if p.model == \"\"` guard, so the recorded ModelName could stay pinned to model A even though agy switched. This is the load-bearing unknown record must settle: if the second switch does not flip ModelName, this becomes daemon=bug (the parser ignores later switches) with a known_failing spec. Assessed daemon=full provisionally because the transcript DOES carry the second switch — the signal reaches the Source; whether the parser promotes it is what record verifies.)\n\n**driver=gap:wait_turn** — Needs `wait_turn` between turns (stubbed) plus the model switch as a `slash`/`keys` step. Verify whether agy's model switch is an inline slash (`/model <id>` → `slash` step) or an arrow-key picker (`keys` step) during record; the driver stubs both `wait_turn` and `keys`. record ports the turn-done poll + the switch primitive first.\n\nObservations: `model` provisional (record fills both A and B from the recording); cost/tokens omitted (SQLite-only).",
       "caveats": [
@@ -59,7 +59,23 @@
         },
         {
           "type": "sleep",
-          "seconds": 2
+          "seconds": 3
+        },
+        {
+          "type": "keys",
+          "keys": "Down Down"
+        },
+        {
+          "type": "sleep",
+          "seconds": 1
+        },
+        {
+          "type": "keys",
+          "keys": "Enter"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
         },
         {
           "type": "send",
