@@ -278,6 +278,17 @@ turn_count() {
 # --- AGENT-SPECIFIC SEAM 2: detect a completed turn --------------------------
 # Block until a NEW terminal PLANNER_RESPONSE appears (turn_count >= the bumped
 # EXPECTED_TURNS), or time out via remaining_seconds().
+#
+# agy 1.0.10 gates every run_command (and other write/exec tools) behind an
+# in-turn "Requesting permission for: <cmd> / Do you want to proceed?" dialog —
+# tool execution does NOT auto-run even for a plain `agy` launch (live-verified
+# 2026-06-20: the turn stalls at the planner intent with no RUN_COMMAND result
+# until answered). The dialog is UI-only; it is NOT written to transcript.jsonl,
+# so the daemon never sees it (the session stays `working`, never `waiting`).
+# Option 1 "Yes" is pre-highlighted, so a bare Enter grants it. A multi-tool turn
+# fires the dialog once PER tool call, so accept it every time it is on screen
+# (Enter on an empty input box mid-generation is a harmless no-op). This mirrors
+# the claudecode driver's in-turn "Run a dynamic workflow?" auto-accept.
 wait_turn() {
   resolve_transcript || {
     echo "[driver] wait_turn[s$ACTIVE]: agy never created a transcript under $ANTIGRAVITY_BRAIN_ROOT" >&2
@@ -289,6 +300,11 @@ wait_turn() {
     if (( now >= EXPECTED_TURNS )); then
       echo "[driver] wait_turn[s$ACTIVE]: count=$now (expected ≥ $EXPECTED_TURNS)" >&2
       return 0
+    fi
+    if tmux capture-pane -t "$SESSION" -p -S -50 2>/dev/null \
+         | grep -qiE 'Requesting permission for|Do you want to proceed'; then
+      tmux send-keys -t "$SESSION" Enter
+      echo "[driver] wait_turn[s$ACTIVE]: granted agy run_command permission dialog" >&2
     fi
     sleep 1
   done
