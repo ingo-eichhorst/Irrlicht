@@ -147,6 +147,12 @@ func (a *Adapter) GetCWDFromTranscript(transcriptPath string) string {
 		// next to the transcript, never in the JSONL lines themselves.
 		lastCWD = transcript.ExtractCWDFromSidecar(transcriptPath)
 	}
+	if lastCWD == "" {
+		// Antigravity records only its sandbox scratch dir in the transcript
+		// body; the real workspace lives in the sibling history.jsonl index,
+		// keyed by conversationId (no-op for non-antigravity paths).
+		lastCWD = transcript.ExtractCWDFromAntigravityHistory(transcriptPath)
+	}
 	return lastCWD
 }
 
