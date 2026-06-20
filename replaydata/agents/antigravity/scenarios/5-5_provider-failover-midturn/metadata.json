@@ -1,0 +1,49 @@
+{
+  "scenario_id": "provider-failover-midturn",
+  "metadata": {
+    "agent_supports": "unknown",
+    "daemon_capability": "incapable",
+    "driver_capability": "gap:wait_turn",
+    "agent_cli_version": "1.0.10",
+    "daemon_version": "0.3.13+dev",
+    "confidence": 0.6,
+    "notes": "agent=unknown daemon=incapable driver=gap:wait_turn — no evidence agy does an automatic mid-turn provider failover, and even if it did the per-turn model attribution/cost change lives in the SQLite protobuf store, not the tailed transcript; a mid-turn ModelName flip can't be observed (route frozen)."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "provider-failover-midturn",
+      "agent": "antigravity",
+      "agent_supports": "unknown",
+      "daemon_capability": "incapable",
+      "driver_capability": "gap:wait_turn",
+      "confidence": 0.6,
+      "body": "## Verdict\n\n**agent=unknown** — No evidence `agy` performs an automatic mid-turn primary→secondary model failover. The binary lists multiple models (Gemini 3 Flash, Claude 4.5/opus/sonnet/haiku) and a `<USER_SETTINGS_CHANGE>` model-selection mechanism, but nothing in the strings scan indicates an automatic in-turn fallback on a 5xx/rate-limit. The sibling gemini-cli has a real Pro→Flash auto-fallback but it is SESSION-level, not mid-turn (assessed partial there); for antigravity the mid-turn behavior is simply unconfirmed.\n\n**daemon=incapable** — Even granting a failover happened, the daemon could not observe the scenario's required signal. The ONLY place a model name appears in the tailed transcript is the `<USER_SETTINGS_CHANGE>` block on an explicit user model switch (harvested by the parser's `userSettingsModelRe`); an automatic provider failover is not a user settings change, so it would emit no model-flip line. The parser attaches a single harvested `p.model` to assistant events — there is no per-step model field in `PLANNER_RESPONSE` to drive a mid-turn `ModelName` change. And the cost/usage that would corroborate a provider switch lives only in the SQLite protobuf store (no MetricsReader). So a mid-turn `ModelName` flip with continuous `working` state cannot be surfaced.\n\n**driver=gap:wait_turn** — Moot under the freeze; the recipe would need `wait_turn` (stubbed), and there is no driver primitive to force a primary-model outage anyway.\n\nUnblock path: confirm agy does mid-turn failover AND have it write a per-step model into the transcript; neither is evidenced.",
+      "caveats": [
+        "agent=unknown not no: a mid-turn failover may exist but is unconfirmed from docs/binary; would need a live forced-outage to settle, which the driver can't stage.",
+        "Model name only appears on explicit user settings changes in the transcript — an automatic failover emits no model line."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/antigravity/parser.go",
+          "note": "model harvested ONLY from <USER_SETTINGS_CHANGE> (user action); PLANNER_RESPONSE has no per-step model field; no usage emitted"
+        },
+        {
+          "kind": "file",
+          "ref": "~/.local/bin/agy (strings scan)",
+          "note": "multiple models + Model Selection switch present; no automatic in-turn failover string found"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/gemini-cli/scenarios/5-5_provider-failover-midturn/metadata.json",
+          "note": "sibling: agent=partial (fallback is session-level not mid-turn), daemon=incapable"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "reason": "frozen (agent=unknown / daemon=incapable): no confirmed mid-turn failover, and a model flip would not appear in the transcript (model name only on explicit user settings changes); cost corroboration is SQLite-only."
+    }
+  }
+}

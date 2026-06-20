@@ -1,0 +1,62 @@
+{
+  "scenario_id": "oversized-transcript-line",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "gap:wait_turn",
+    "agent_cli_version": "1.0.10",
+    "daemon_version": "0.5.2+9cd5c69.dirty",
+    "confidence": 0.85,
+    "notes": "agy pre-truncates oversized fields (truncated_fields:[\"content\"], capped ~4KB) so no oversized line ever reaches the parser; the ready→working→ready arc is fully observable. Driver stubs wait_turn → driver-gap."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "oversized-transcript-line",
+      "agent": "antigravity",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "gap:wait_turn",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: gap:wait_turn\n\nRoute: driver-gap (record ports the stubbed wait_turn seam, then drives).\n\n## What the scenario pins\n\nThe scenario asserts only the visible state arc `ready → working → ready` with no parser stall causing a stuck `working`; the absence of a stall is INFERRED from the arc completing. Tool calls ≤ 0. It is a sanity-check, not a true >2MB cap-stress (the canonical claudecode cell notes 5000 words ≈ 30KB, well under irrlicht's 64MB tailer cap).\n\n## agent_supports: yes\n\nThe agy CLI takes a free-form prompt and produces a normal turn; prompting for a single very long sentence is just a long assistant response, which agy handles. No flag needed.\n\n## daemon_capability: full\n\nKey emission finding from the live transcripts: Antigravity itself caps oversized field content BEFORE writing the JSONL line. Every oversized step carries `truncated_fields:[\"content\"]` and the content is hard-capped at ~4KB (observed line at brain/69343e3e.../transcript.jsonl index 3: 5054 bytes, truncated_fields=[\"content\"], content len 4120). So agy NEVER writes a truly oversized line — the line the parser sees is always bounded. The JSONLineParser/bufio path therefore never approaches the 2MB scanner limit or the 64MB tailer cap for this scenario; the line is decoded normally and the arc resolves cleanly: USER_INPUT→working, MODEL/PLANNER_RESPONSE(+tool_calls or not), terminal no-tool PLANNER_RESPONSE→turn_done→ready. The visible arc is fully observable. (Note: the tailer must still tolerate a multi-KB line, which it does.)\n\n## driver_capability: gap:wait_turn\n\nThe interactive recipe needs `wait_turn` to block until the turn completes, but the scaffolded driver-interactive.sh declares DRIVE_ELICITS=\"send slash sleep\" and stubs the wait_turn arm (not_implemented). recipe-lint flags wait_turn as not-elicited → semantic_gap. `record` must port the turn-done poll (SEAM 2 — poll the transcript for the terminal no-tool PLANNER_RESPONSE) before driving.",
+      "caveats": [
+        "agent_supports/daemon=full is doc+transcript-grounded but PROVISIONAL on a live recording: the very-long-sentence prompt was not driven live here. Because agy pre-truncates, deep >2MB cap-stress is not exercisable from a real agy CLI; a synthetic hand-crafted >2MB line could extend coverage in a follow-up (mirrors the claudecode caveat).",
+        "Tokens/cost are not in the JSONL (SQLite protobuf only), so observations assert no cost/tokens for this cell."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "~/.gemini/antigravity-cli/brain/69343e3e-d308-42ff-80a8-d727aead60bb/.system_generated/logs/transcript.jsonl",
+          "note": "line index 3: status DONE, truncated_fields:[\"content\"], content capped at 4120 bytes (line 5054 bytes) — agy pre-truncates oversized fields before writing"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/antigravity/parser.go",
+          "note": "JSONLineParser ParseLine handles bounded lines; turn_done on no-tool PLANNER_RESPONSE settles to ready"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/antigravity/driver-interactive.sh",
+          "note": "DRIVE_ELICITS=\"send slash sleep\"; wait_turn arm is not_implemented stub → driver gap"
+        }
+      ]
+    },
+    "recipe": {
+      "timeout_seconds": 180,
+      "settings": {},
+      "script": [
+        {
+          "type": "send",
+          "text": "Write one single continuous sentence of at least 600 words about the history of computing, with no line breaks and no lists. Output only that one sentence."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        }
+      ]
+    }
+  }
+}

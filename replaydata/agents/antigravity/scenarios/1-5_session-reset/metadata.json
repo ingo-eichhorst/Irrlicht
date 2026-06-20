@@ -1,0 +1,44 @@
+{
+  "scenario_id": "session-reset",
+  "metadata": {
+    "agent_supports": "no",
+    "daemon_capability": "n/a",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.0.10",
+    "daemon_version": "0.5.2+9cd5c69.dirty",
+    "confidence": 0.85,
+    "notes": "agent=no — agy has NO in-REPL clear/new/reset command (palette enumerated live; /clear returns 'No matches')."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "session-reset",
+      "agent": "antigravity",
+      "agent_supports": "no",
+      "daemon_capability": "n/a",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\n**agent=no.** Session-reset requires an in-REPL command that ends the current conversation and starts a fresh one with a new session_id (claudecode /clear, gemini-cli /clear|/new). `agy` has NO such command. I enumerated the full live slash-command palette (38 commands) by scrolling the picker under tmux: there is NO `/clear`, `/new`, or `/reset`. Typing `/clear` into the palette returns 'No matches'. The closest commands are `/rename` (renames the current conversation in place — same session_id) and `/btw` (side question without interrupting) — neither rotates the session_id. Starting a new conversation requires relaunching the binary (a restart, scenario 1.4-adjacent), not an in-session reset. There is no top-level reset flag in `agy --help` either.\n\n**daemon=n/a.** With no agent surface to trigger the reset, there is no transcript signal to observe; the pillar is n/a (no feature → frozen).\n\n**driver=ready** is moot for a frozen cell — the reset_session step type exists in the scaffold (stubbed) but there is no agent command for it to drive.",
+      "caveats": [
+        "Re-assess if a future agy release adds a /clear|/new|/reset REPL command — the daemon would then observe a conv-id rotation (a new <conv-id> dir under the brain store) exactly like the gemini-cli session-reset cell.",
+        "SYSTEM/CHECKPOINT lines in the transcript are auto-generated planner checkpoints, NOT user-triggered resets; the parser skips them."
+      ],
+      "sources": [
+        {
+          "kind": "url",
+          "ref": "agy REPL slash-command palette (live, tmux)",
+          "note": "enumerated 38 commands; no /clear, /new, /reset; /clear filter → 'No matches'. Closest: /rename (in-place, same session_id)"
+        },
+        {
+          "kind": "url",
+          "ref": "agy --help",
+          "note": "no top-level reset flag (only --continue/--conversation for resume)"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "notes": "agent_supports=no — agy has no in-REPL clear/new/reset command (live palette enumeration; /clear → 'No matches'). No recipe; this cell is frozen."
+    }
+  }
+}

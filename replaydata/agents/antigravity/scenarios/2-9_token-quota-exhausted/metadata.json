@@ -1,0 +1,50 @@
+{
+  "scenario_id": "token-quota-exhausted",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "unknown",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.0.10",
+    "daemon_version": "0.5.2+9cd5c69.dirty",
+    "confidence": 0.6,
+    "notes": "agy surfaces quota exhaustion ('Quota exhausted', 'Out of credits', 'try again later') with backoff/retry. The state arc is plausibly observable if agy writes a terminal decline, but UNRECORDABLE: Google OAuth has no mock hook to force a 429, and antigravity's prereqs defer token/cost scenarios. daemon=unknown, prereq_blocked → frozen."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "token-quota-exhausted",
+      "agent": "antigravity",
+      "agent_supports": "yes",
+      "daemon_capability": "unknown",
+      "driver_capability": "ready",
+      "confidence": 0.6,
+      "body": "## Verdict\n\n**agent=yes.** agy has a real quota/budget path — binary strings `Quota exhausted`, `Out of credits`, `out of quota.`, `quota exceeded`, `try again later.`, `try again in a minute.`, `rate limiting`, `429`, plus `Budget`/`BudgetExpired` protobuf types and `Backoff`/`RETRY` machinery, and the in-REPL `/quota`, `/usage`, `/cost` commands. So agy detects budget exhaustion and surfaces it.\n\n**daemon=unknown.** The scenario asserts the STATE arc — `working → ready` when the budget is hit, and subsequent prompts STAY `ready` until reset. Whether the daemon observes this depends on what agy writes on quota exhaustion: if it emits a terminal `PLANNER_RESPONSE` (declining the turn), the parser settles to ready and the arc holds; if instead it enters a silent backoff/retry loop with no terminal line, the session would stick in `working` (the daemon has no working-state inactivity sweep — post-#106) unless the process exits (`process_exited`). No sampled transcript exercises quota exhaustion, so I cannot confirm which path agy takes from docs/code alone — this is the emission question the SKILL says only a live recording can settle. Note tokens/cost themselves are NOT in the JSONL (SQLite-only), but this scenario asserts STATE, not token metrics, so that is not the blocker.\n\n**driver=ready.** A two-prompt `send`/`wait_turn` recipe would suffice IF the cell were recordable — but it is not (below). wait_turn would still need porting, but that's moot under the recording blocker.\n\n**Route: frozen (prereq_blocked).** The cell cannot be recorded: agy authenticates via Google OAuth with no API key / base-url override, so the claudecode mock-429 approach (mock-anthropic + ANTHROPIC_BASE_URL) does not translate — there is no way to force a 429 short of actually exhausting the real account's daily quota. antigravity's own prerequisites explicitly defer token/cost scenarios for v1. So the daemon pillar stays `unknown` and the cell is frozen until a human provides a quota-exhaustion harness (a Google-side proxy that returns 429, or a throwaway exhausted account).",
+      "caveats": [
+        "RECORDING BLOCKED (prereq): no mock hook for Google OAuth to force a 429; would require burning real account quota. antigravity prereqs defer token/cost (5.x) scenarios for v1.",
+        "Tokens/cost are not in the JSONL (SQLite-only) — observations assert cost/tokens = 0. The scenario asserts STATE not token metrics, so this is orthogonal to the freeze.",
+        "If a 429 harness is provided, re-assess: confirm whether agy writes a terminal PLANNER_RESPONSE (→ daemon full) or a silent retry loop that sticks in working (→ daemon incapable, like 2.14)."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.local/bin/agy",
+          "note": "strings: 'Quota exhausted', 'Out of credits', 'out of quota.', 'try again later.', Budget/BudgetExpired, Backoff/RETRY, /quota /usage /cost — the quota surface exists"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/antigravity/metadata.json",
+          "note": "prerequisites: 'Cost/token accounting is NOT in the JSONL ... token/cost scenarios (5.x) are deferred/unavailable for v1'"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/parser.go",
+          "note": "'no inactivity sweep on working' — if agy retries silently the session would stick in working with no daemon resolution"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "reason": "frozen (prereq_blocked): cannot force quota exhaustion — Google OAuth has no API-key/base-url hook to inject a 429 (the claudecode mock-anthropic-429 approach does not translate), and antigravity's prereqs defer token/cost scenarios for v1. Also daemon=unknown until a recording confirms whether agy writes a settling terminal line on quota exhaustion."
+    }
+  }
+}

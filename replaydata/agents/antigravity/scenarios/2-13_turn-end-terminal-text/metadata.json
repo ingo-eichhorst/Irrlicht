@@ -1,0 +1,78 @@
+{
+  "scenario_id": "turn-end-terminal-text",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "gap:wait_turn",
+    "agent_cli_version": "1.0.10",
+    "daemon_version": "0.5.2+9cd5c69.dirty",
+    "confidence": 0.75,
+    "notes": "ready→working→ready around a tool-less turn; antigravity's terminal line is an EMPTY PLANNER_RESPONSE (no final text) which the parser maps to turn_done. Driver lacks an elicited wait_turn → gap."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "turn-end-terminal-text",
+      "agent": "antigravity",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "gap:wait_turn",
+      "confidence": 0.75,
+      "body": "## Verdict\n\n**agent=yes.** A tool-less round trip is the most basic agy turn. A `USER_INPUT` step opens the turn (parser → `user_message`, working); the turn closes with a `MODEL`/`PLANNER_RESPONSE` carrying NO `tool_calls`, which the parser maps to `turn_done` (ready). Confirmed in every sampled transcript: the LAST line is an empty `PLANNER_RESPONSE` (content_len 0, tool_calls 0) — e.g. `752dfc36` step 7 and `69343e3e` step 39.\n\n**daemon=full.** The visible arc the scenario asserts (`ready → working → ready`) is exactly what `parser.parseUserInput` (working) + `parser.parsePlannerResponse` with empty tool_calls (`turn_done` → ready) produce. The end-signal mechanism is the empty terminal `PLANNER_RESPONSE`, not a `stop_reason` field — but the scenario explicitly accepts any adapter-specific end signal. A caveat: antigravity's terminal line carries NO final answer text (the last assistant prose is the prior planning `PLANNER_RESPONSE`), so unlike claudecode there is no 'terminal text message' — the end signal is purely structural (empty planner). State still reaches ready, which is all the scenario asserts.\n\n**driver=gap:wait_turn.** The scaffolded `driver-interactive.sh` declares `DRIVE_ELICITS=\"send slash sleep\"`; `wait_turn` is still a `not_implemented` stub (SEAM 2 unported). recipe-lint flags `wait_turn` as a semantic_gap (not-elicited). The recipe needs `wait_turn` to detect turn completion, so `record` must port the agy turn-done poll (poll transcript.jsonl for a trailing empty `PLANNER_RESPONSE`) before driving.",
+      "caveats": [
+        "Terminal line is an EMPTY PLANNER_RESPONSE — antigravity emits no final 'terminal text' message; the end signal is structural (empty planner with no tool_calls), unlike claudecode's stop_reason=end_turn. State still settles to ready.",
+        "Tokens/cost are not in the JSONL (SQLite-only), so observations assert cost/tokens = 0; model is harvestable from <USER_SETTINGS_CHANGE> but left provisional for record to fill from the live surface.",
+        "daemon=full is provisional on emission: confirmed against sampled transcripts but not yet a live recording (the empty-terminal turn_done is the load-bearing emission)."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/antigravity/parser.go",
+          "note": "parsePlannerResponse: empty tool_calls → turn_done (ready); parseUserInput → user_message (working)"
+        },
+        {
+          "kind": "file",
+          "ref": "~/.gemini/antigravity-cli/brain/752dfc36-4542-4759-a055-7e761b5cf6b6/.system_generated/logs/transcript.jsonl",
+          "note": "last line step_index 7 = MODEL/PLANNER_RESPONSE content_len 0 tool_calls 0 — the terminal turn_done shape"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/antigravity/driver-interactive.sh",
+          "note": "DRIVE_ELICITS=\"send slash sleep\"; wait_turn arm is not_implemented (SEAM 2 unported)"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "agy CLI >=1.0.10 on PATH, authenticated via Google OAuth (oauth_creds.json under ~/.gemini)",
+        "irrlichd recording (isolated run-cell mode or --attach against a --record daemon)",
+        "driver's wait_turn seam ported (poll transcript.jsonl for a trailing empty PLANNER_RESPONSE)"
+      ],
+      "setup": [
+        "Fresh cwd under <staging>/cwd/; agy mints its own <conv-id> (the daemon session_id) — ignore the preferred UUID"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly: hello world"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the conv-id session entering ready after launch",
+        "exactly one state_transition to working and one to ready for the session",
+        "NO tool_use events (tool-less turn)",
+        "final session state is ready"
+      ],
+      "settings": {},
+      "timeout_seconds": 120
+    }
+  }
+}

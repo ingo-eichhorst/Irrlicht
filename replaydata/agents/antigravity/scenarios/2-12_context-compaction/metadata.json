@@ -1,0 +1,97 @@
+{
+  "scenario_id": "context-compaction",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "gap:wait_turn",
+    "agent_cli_version": "1.0.10",
+    "daemon_version": "0.5.2+9cd5c69.dirty",
+    "confidence": 0.65,
+    "notes": "agy has /compact; compaction's only transcript trace is a SYSTEM/CHECKPOINT '# Resuming from a compaction' line which the parser SKIPS. The visible arc (ready→working→ready around /compact + a normal turn after) is observable; compaction-vs-turn is not distinguishable. Driver lacks wait_turn → gap."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "context-compaction",
+      "agent": "antigravity",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "gap:wait_turn",
+      "confidence": 0.65,
+      "body": "## Verdict\n\n**agent=yes.** agy ships `/compact` (binary strings: `/compact`, `/Compact`, `CompactionInfo`, `GetCompactionInfo`). Real evidence of a compaction event is in sample `9ea5200c` step 4: a `SYSTEM`/`CHECKPOINT` line whose content begins `# Resuming from a compaction` — the resume marker the runtime writes after summarizing history.\n\n**daemon=full, caveat: compaction is INVISIBLE as a distinct event.** The scenario (per the claudecode sibling) asserts only the visible state arc — `ready → working → ready` around `/compact`, then a normal turn afterward to prove the session continues. The antigravity parser deliberately SKIPS all `SYSTEM` lines, including `CHECKPOINT` (`parser.go`: the `default` arm sets `ev.Skip = true` for SYSTEM/CONVERSATION_HISTORY/CHECKPOINT). So the compaction's only transcript trace produces NO state event — there is no manual-compact signal and no `CompactionState`. Whether `/compact` even drives a working→ready arc depends on whether the runtime writes a `PLANNER_RESPONSE` summarization turn around it; the sample shows compaction landing mid-conversation as a bare CHECKPOINT with surrounding normal `PLANNER_RESPONSE`/tool lines, so the user-visible arc is just the normal turn lifecycle on each side. The scenario explicitly accepts that the compaction-vs-normal-turn distinction is not observable. Both bracketing turns settle `ready` via the empty terminal `PLANNER_RESPONSE`, satisfying the asserted arc. CAVEAT (emission): no sample drives `/compact` interactively, so whether agy emits a working span for the compaction summarization itself is unconfirmed — `record` settles it. This keeps `daemon=full` (the asserted visible arc IS produced) with the caveat that compaction is not separately observable.",
+      "caveats": [
+        "Compaction is NOT observable as a distinct event: the only trace is a SYSTEM/CHECKPOINT '# Resuming from a compaction' line which the parser SKIPS by design. The dashboard cannot distinguish compaction from a normal turn (same as claudecode — CompactionState is dead code). The spec asserts only the visible state arc.",
+        "Emission UNCONFIRMED: no sample drives /compact interactively; whether the summarization itself produces a working span is unverified — record settles whether the compact_window briefly enters working.",
+        "Tokens/cost not in JSONL — observations assert cost/tokens = 0."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.local/bin/agy",
+          "note": "strings: /compact, CompactionInfo, GetCompactionInfo — the compaction slash command + protobuf surface"
+        },
+        {
+          "kind": "file",
+          "ref": "~/.gemini/antigravity-cli/brain/9ea5200c-3d8a-4075-8f85-2609cef25e78/.system_generated/logs/transcript.jsonl",
+          "note": "step 4 = SYSTEM/CHECKPOINT content '# Resuming from a compaction' — the only compaction trace; parser skips it"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/antigravity/parser.go",
+          "note": "default arm sets ev.Skip=true for SYSTEM lines (CONVERSATION_HISTORY, CHECKPOINT) — no compaction state event"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "agy CLI >=1.0.10 on PATH, authenticated via Google OAuth",
+        "irrlichd recording",
+        "driver wait_turn seam ported (slash is already elicited)"
+      ],
+      "setup": [
+        "Fresh cwd under <staging>/cwd/; agy mints its own <conv-id>"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "slash",
+          "text": "/compact"
+        },
+        {
+          "type": "sleep",
+          "seconds": 10
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: still-here"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        }
+      ],
+      "verify": [
+        "first prompt: ready→working→ready",
+        "after /compact the session settles back to ready (no stick in waiting)",
+        "post-compaction prompt: ready→working→ready — proves the session continues",
+        "final session state is ready"
+      ],
+      "settings": {},
+      "timeout_seconds": 180
+    }
+  }
+}

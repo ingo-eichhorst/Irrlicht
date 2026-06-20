@@ -1,0 +1,84 @@
+{
+  "scenario_id": "session-start",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "gap:wait_turn",
+    "agent_cli_version": "1.0.10",
+    "daemon_version": "0.5.2+9cd5c69.dirty",
+    "confidence": 0.85,
+    "notes": "agent=yes daemon=full driver=gap:wait_turn — presession proc-<PID> bridges launch to the conv-id-keyed session row; the scaffold driver still stubs wait_turn."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "session-start",
+      "agent": "antigravity",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "gap:wait_turn",
+      "confidence": 0.85,
+      "body": "## Verdict\n\n**agent=yes.** `agy` launches into an interactive REPL in the cwd and sits idle awaiting input. Verified live: launching `agy` in a fresh `/tmp/agyresume` cwd minted a new conversation `f4826a94-…` whose transcript materialized after the first user input.\n\n**daemon=full.** Antigravity is a presession adapter on the gemini-cli model. At launch `agy` creates the `<conv-id>/` brain directory but does NOT write `.system_generated/logs/transcript.jsonl` until the first user input lands (verified: conv `13f44c58` sat with an empty dir, and a freshly launched conv had no transcript until the prompt). So the daemon's ExactName{agy} process scanner discovers the `agy` PID at the first tick — a transient `proc-<PID>` presession row bridges the gap — and the conv-id-keyed session (SessionIDFromPath off the `<conv-id>` dir, `core/adapters/inbound/agents/antigravity/adapter.go:58`) is born + settles to `ready` once the first turn's terminal `MODEL/PLANNER_RESPONSE` (no tool_calls) is parsed (`parser.go:113`). PID binds by cwd harvested from a `run_command` tool_call's `args.Cwd` (`parser.go:157`); a trivial no-tool prompt yields no cwd, so PID binding for a pure no-op turn anchors only when a tool runs — but `agy`'s first turn typically lists the dir / runs a command (observed `list_dir`+`run_command` in real transcripts), landing the cwd.\n\n**driver=gap:wait_turn.** The scaffold `driver-interactive.sh` declares `DRIVE_ELICITS=\"send slash sleep\"` and `wait_turn()` is a `not_implemented` stub (line 168-170). The session-start recipe is `send`+`wait_turn`, so `record` must port the turn-done poll (poll the filtered transcript for a terminal `MODEL/PLANNER_RESPONSE` with no `tool_calls`) before driving.",
+      "caveats": [
+        "Presession birth: the transcript appears only after the first user input, so the conv-id session_birth/ready anchor to the first turn, not bare launch; the proc-<PID> row + PID discovery anchor to launch. Birth is modeled as two phases (presession_birth → session_birth).",
+        "PID binding relies on the parser harvesting cwd from a run_command tool_call's args.Cwd — a pure no-tool first turn lands no cwd, so the PID may bind only once a tool runs. The recipe's nudge typically triggers a list_dir/run_command, but this is provisional on emission until record confirms.",
+        "Antigravity links no tool call/result by ID and runs tools sequentially; the parser models one open tool at a time (parser.go openToolID)."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/antigravity/adapter.go:58",
+          "note": "sessionIDFromPath derives session_id from the <conv-id> dir; constant transcript.jsonl"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/antigravity/parser.go:113",
+          "note": "terminal PLANNER_RESPONSE with no tool_calls → turn_done (ready)"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/antigravity/driver-interactive.sh:168",
+          "note": "wait_turn() is a not_implemented stub; DRIVE_ELICITS lacks wait_turn"
+        },
+        {
+          "kind": "file",
+          "ref": "~/.gemini/antigravity-cli/brain/13f44c58-2cd3-40bc-9be7-07462a92aeaa",
+          "note": "live: conv dir exists with no transcript yet — transcript materializes after first user input (presession birth)"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "agy CLI on PATH (1.0.10), authenticated via Google OAuth (oauth_creds.json under ~/.gemini; no API key)",
+        "irrlichd recording — run-cell.sh isolated mode, or --attach against a daemon started with --record",
+        "DRIVER GAP (wait_turn): driver-interactive.sh stubs wait_turn as not_implemented; record must port the turn-done poll (terminal MODEL/PLANNER_RESPONSE with no tool_calls) before driving"
+      ],
+      "setup": [
+        "Create an empty cwd under <staging>/cwd/",
+        "Launch agy --dangerously-skip-permissions in that cwd (auto-approves the dir/tool prompts so the first turn runs unattended)"
+      ],
+      "prompt": "Reply with exactly the word: ok",
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        }
+      ],
+      "verify": [
+        "events.jsonl contains a pid_discovered for the agy process within ~1s of launch (proc-<PID> presession row)",
+        "events.jsonl contains the conv-id-keyed session settling to ready after the first turn completes",
+        "final session state is ready; tool calls remain low (the nudge may trigger one list_dir/run_command for cwd binding)"
+      ],
+      "settings": {},
+      "timeout_seconds": 120
+    }
+  }
+}

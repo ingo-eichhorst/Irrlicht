@@ -1,0 +1,70 @@
+{
+  "scenario_id": "self-correction-iteration",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "gap:wait_turn",
+    "agent_cli_version": "1.0.10",
+    "daemon_version": "0.5.2+9cd5c69.dirty",
+    "confidence": 0.85,
+    "notes": "agent=yes daemon=full driver=gap:wait_turn — agy retries after a failing command within one continuous working span; failing function_call_output sets IsError but is non-settling, so no flicker. wait_turn is a driver stub."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "self-correction-iteration",
+      "agent": "antigravity",
+      "assessed_at": "2026-06-20T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "gap:wait_turn",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: gap:wait_turn\n\n## Reasoning\n\nThe scenario asserts a SINGLE contiguous `working` span across retry cycles: a failing tool result, then a corrected retry, with NO flicker to `ready` or `waiting` between the failed attempt and the recovery, ending `ready`.\n\n### agent_supports: yes\n\nThis is the BEST-fit antigravity scenario — the real samples capture exactly this self-correction loop. In `~/.gemini/antigravity-cli/brain/9ea5200c-...`, the agent runs `bd ready --json` (RUN_COMMAND result: \"The command failed with exit code: 1\"), inspects the failure, retries with `git status` (\"failed with exit code: 128\"), then keeps iterating on corrected commands — all inside one turn. The longer `69343e3e-...` sample does 17+ run_command cycles with interleaved failures and successes, self-correcting each time, before the terminal turn_done. agy genuinely runs the run→fail→inspect→retry loop.\n\n### daemon_capability: full\n\nWalking the no-flicker invariant against `parser.go`:\n\n1. **`ready → working`** — `parseUserInput` → `user_message` on the opening prompt.\n2. **Each attempt** — `parsePlannerResponse` WITH tool_calls → `assistant_message` + synthesized ToolUse (non-settling, stays `working`).\n3. **Failing result** — `parseToolResult` → `function_call_output` with `IsError = true` (the classifier `commandFailed` matches the result text \"The command failed\"; parser.go ~L143-152, ~L172-174). Critically, `function_call_output` is explicitly a NON-SETTLING event (docstring: \"so the turn stays working until the terminal PLANNER_RESPONSE\"), and `IsError` does NOT settle the state — there is no error→ready or error→waiting path. So a failed attempt keeps the session `working`, no flicker.\n4. **Retry** — the next `assistant_message`+ToolUse and its result repeat, all within the same continuous `working` span.\n5. **`working → ready`** — only the terminal empty `MODEL/PLANNER_RESPONSE` → `turn_done` → `ready`.\n\nThe antigravity parser has no intermediate settle and no waiting path, so the spec's hard invariant (\"state stays continuously working across all retry cycles; no flicker\") holds structurally → `daemon=full`. The scenario's `ready → working → ready` topology with ≥1 tool call and final `ready` matches.\n\n### driver_capability: gap:wait_turn\n\nThe recipe needs `send` + `wait_turn` + `sleep`; `wait_turn()` is a driver stub (DRIVE_ELICITS=\"send slash sleep\"). The retry loop terminates on the terminal empty PLANNER_RESPONSE; wait_turn must poll for it (and must NOT return on an intermediate failing result). `record` ports the wait_turn seam + launch_repl session-resolution SEAM before driving. INTERACTIVE recipe.",
+      "caveats": [
+        "Tokens/cost not in the antigravity JSONL; observations assert tokens_nonzero:false, cost_nonzero:false. Not a daemon bug.",
+        "No-flicker invariant is structural: function_call_output (incl. IsError) is a non-settling event in the antigravity parser, and there is no waiting path — only the terminal empty PLANNER_RESPONSE settles to ready. The failing-result IsError classifier is unit-tested (TestParseTurn / TestSuccessfulResultNotError).",
+        "Strongly grounded: the live sample 9ea5200c shows bd ready→fail→git status→fail→retry, and 69343e3e shows 17+ self-correcting run_command cycles in one turn. record promotes provisional→settled.",
+        "driver=gap:wait_turn: wait_turn is a driver stub (must not return on a mid-turn failing result); record ports it + the launch_repl session-resolution SEAM first."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/antigravity/parser.go",
+          "note": "parseToolResult → function_call_output with IsError when commandFailed matches 'The command failed' (~L143-152, ~L172-174); function_call_output is explicitly NON-settling (turn stays working); no error/waiting settle path — only terminal empty PLANNER_RESPONSE → turn_done → ready."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.gemini/antigravity-cli/brain/9ea5200c-3d8a-4075-8f85-2609cef25e78/.system_generated/logs/transcript.jsonl",
+          "note": "Real sample: run_command `bd ready` → RUN_COMMAND 'failed with exit code: 1' → retry git status → 'failed with exit code: 128' → continues self-correcting — exactly the scenario's retry loop, all in one turn."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/antigravity/parser_test.go",
+          "note": "TestParseTurn asserts a failing RUN_COMMAND result → function_call_output with IsError and closes the open tool; TestSuccessfulResultNotError guards the classifier — neither settles the turn."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/antigravity/driver-interactive.sh",
+          "note": "DRIVE_ELICITS=\"send slash sleep\"; wait_turn() is a stub → driver=gap:wait_turn."
+        }
+      ]
+    },
+    "recipe": {
+      "timeout_seconds": 150,
+      "settings": {},
+      "script": [
+        {
+          "type": "send",
+          "text": "Run the shell command `false` (it will fail). Inspect the failure, then run `echo recovered` to recover. Work through this autonomously without asking me anything, then reply with exactly the word: done"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        }
+      ]
+    }
+  }
+}

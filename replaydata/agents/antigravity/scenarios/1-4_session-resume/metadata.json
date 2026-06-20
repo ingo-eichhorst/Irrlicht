@@ -1,0 +1,107 @@
+{
+  "scenario_id": "session-resume",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "gap:wait_turn,exit_clean,resume",
+    "agent_cli_version": "1.0.10",
+    "daemon_version": "0.5.2+9cd5c69.dirty",
+    "confidence": 0.9,
+    "notes": "agent=yes daemon=full driver=gap — agy --continue appends to the SAME conv-id (live-verified); scaffold driver stubs wait_turn/exit_clean/resume."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "session-resume",
+      "agent": "antigravity",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "gap:wait_turn,exit_clean,resume",
+      "confidence": 0.9,
+      "body": "## Verdict\n\n**agent=yes.** `agy --help` documents two resume mechanisms: `--continue` / `-c` (Continue the most recent conversation) and `--conversation <ID>` (Resume a previous conversation by ID). **Live-verified**: after a clean exit, launching `agy --continue` in the same cwd appended the second turn to the SAME conv-id transcript (`f4826a94-…/transcript.jsonl` went 4→6 lines; NO new conversation dir was minted).\n\n**daemon=full.** Because resume reuses the same `<conv-id>` directory, `sessionIDFromPath` (`adapter.go:58`) returns the SAME session_id across both PID lifetimes — the daemon sees the original session row re-appear (not a new row), exactly the scenario's load-bearing assertion. DiscoverPID rebinds the new agy PID to the same session by cwd (`pid.go:19`). This is the strongest of the lifecycle cells: the make-or-break emission fact (same transcript file on resume) is confirmed live, not just from code.\n\n**driver=gap.** The scaffold driver stubs `wait_turn`, `exit_clean`, and `resume` as `not_implemented`. `record` must port them — the `resume` arm relaunches `agy --continue` (or `--conversation <id>`) in the SAME cwd so agy appends to the original transcript.",
+      "caveats": [
+        "Resume relies on the cwd handoff: both lifetimes must use the same cwd so DiscoverPID rebinds the new PID to the same session. The resume launch must reuse the original RUN_CWD.",
+        "Antigravity emits no explicit end-of-turn marker; turn_done is inferred from a terminal MODEL/PLANNER_RESPONSE with no tool_calls.",
+        "observations omit cost/tokens — antigravity's JSONL carries no usage.",
+        "--continue resumes the MOST RECENT conversation in the cwd; if the driver runs concurrent conversations in one cwd, prefer --conversation <id> to target the right one."
+      ],
+      "sources": [
+        {
+          "kind": "url",
+          "ref": "agy --help",
+          "note": "--continue / -c (Continue the most recent conversation); --conversation (Resume a previous conversation by ID)"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/antigravity/adapter.go:58",
+          "note": "sessionIDFromPath returns the same session_id across resume (same conv-id dir)"
+        },
+        {
+          "kind": "file",
+          "ref": "~/.gemini/antigravity-cli/brain",
+          "note": "live: agy --continue appended turn 2 to the same conv-id transcript (4→6 lines), no new conv minted"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/antigravity/driver-interactive.sh:191",
+          "note": "resume/exit_clean arms are not_implemented stubs"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "agy CLI on PATH (1.0.10), Google OAuth authenticated; no API key",
+        "irrlichd recording (dev daemon with --record, isolated IRRLICHT_ONBOARD_HOME + alt port)",
+        "DRIVER GAP: wait_turn, exit_clean, resume are not_implemented in driver-interactive.sh — record ports them first"
+      ],
+      "setup": [
+        "Driver launches agy --dangerously-skip-permissions under tmux in a fresh cwd; agy mints its own conv-id (derived from the brain dir).",
+        "The resume step relaunches agy --continue (or --conversation <conv-id>) in the SAME cwd so agy appends to the original conv-id transcript."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "exit_clean"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        },
+        {
+          "type": "resume"
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: again"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the FIRST launch's session entering ready, then the working/ready cycle for turn 1",
+        "events.jsonl contains a process_exited for the session after turn 1 (clean exit)",
+        "the SAME session_id (same conv-id) re-appears after the resume launch — NOT a new session row",
+        "second-lifetime working transition fires on the SAME session_id, then back to ready",
+        "final session state is ready; tool calls == 0"
+      ],
+      "settings": {},
+      "timeout_seconds": 180
+    }
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "scenario_id": "background-process",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "incapable",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.0.10",
+    "daemon_version": "0.5.2+9cd5c69.dirty",
+    "confidence": 0.8,
+    "notes": "agy backgrounds commands (WaitMsBeforeAsync) but emits no backgroundTaskId/PID; transcript shows one DONE result, no held-working arc — incapable, frozen"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "background-process",
+      "agent": "antigravity",
+      "assessed_at": "2026-06-20T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "incapable",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: incapable\ndriver_capability: ready\nroute: frozen\n\n## Reasoning\n\n**Agent (yes).** Antigravity can launch a long-running command in the background. Its `run_command` tool has a required `WaitMsBeforeAsync` arg whose schema reads: \"the number of milliseconds to wait after starting the command before sending it to the BACKGROUND ... If you're starting an interactive or long-running command, set it to a large enough value ...\". A real sample transcript shows `WaitMsBeforeAsync:\"5000\"` on every `run_command`. There is also a separate command-status tool (\"Number of seconds to wait for command completion before getting the status ... Set to 0 to get the status immediately\"). So the agent genuinely supports a backgrounded process plus a poll-for-status, the moral equivalent of run_in_background + BashOutput.\n\n**Daemon (incapable).** The scenario's user-observable arc is `BackgroundProcessCount > 0` while the detached process is alive and the session HELD `working` past the turn's own end_turn, settling to `ready` only once the process exits. For Antigravity the daemon cannot reconstruct this:\n\n- No `backgroundTaskId`, PID, or output-file handle is emitted to the transcript. claudecode's #450 mechanism keys entirely on `toolUseResult.backgroundTaskId` + an `lsof` probe of `tasks/<id>.output`; the Antigravity `RUN_COMMAND` step carries no such id. In every real sample, RUN_COMMAND statuses are uniformly `DONE` — the async command reconciles to a SINGLE terminal result line, with no spawn event and no separate completion event.\n- The adapter parser has NO BackgroundSpawn path. `parseToolResult` simply closes the open tool (emitting `function_call_output`) and reads success/failure from the result text; the antigravity package has ZERO references to `BackgroundProcess`, `BackgroundSpawn`, or `backgroundTaskId` (grep over `core/adapters/inbound/agents/antigravity/`). There is no `HasLiveBackgroundProcess` gate, so `IsAgentDone` is not held — the terminal `PLANNER_RESPONSE` with no tool_calls settles the session to `ready` at turn end.\n- Because the background command's life is mediated by `WaitMsBeforeAsync` inside the agent and surfaces as one DONE result, the daemon sees a normal working→ready turn, never `BackgroundProcessCount > 0` and never a held-working dwell.\n\nNo background-process liveness signal exists in the transcript Source, so `daemon_capability` is `incapable` (no trace), not `bug`.\n\n**Driver (ready).** Daemon-frozen, so the driver axis parks at `ready` per the #476 convention.\n\n## What would flip the verdict\n\nAntigravity would have to emit a structured background-task id / output handle into the transcript (so the daemon could probe liveness) AND the adapter grow a BackgroundSpawn parse path + a liveness gate on IsAgentDone, mirroring claudecode's #450 design.",
+      "caveats": [
+        "agent_supports=yes is grounded in the run_command WaitMsBeforeAsync schema + the separate command-status tool, confirmed by a real transcript sample (WaitMsBeforeAsync:5000); it is not a live recording of a long-running background process.",
+        "The async command's completion is mediated inside the agent (WaitMsBeforeAsync) and surfaces as a single DONE result line — there is no spawn/exit pair the daemon could bracket a held-working window around."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/antigravity/parser.go",
+          "note": "parseToolResult closes the open tool as function_call_output; no BackgroundSpawn / backgroundTaskId path; terminal PLANNER_RESPONSE settles ready at turn end"
+        },
+        {
+          "kind": "file",
+          "ref": "~/.gemini/antigravity-cli/brain/.../transcript.jsonl",
+          "note": "Every run_command carries WaitMsBeforeAsync:5000; all RUN_COMMAND statuses are DONE (single terminal result, no spawn/exit pair, no PID/handle)"
+        },
+        {
+          "kind": "file",
+          "ref": "agy v1.0.10 binary strings",
+          "note": "run_command WaitMsBeforeAsync schema ('sending it to the background'); separate command-status tool ('wait for command completion before getting the status')"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/claudecode/background_process_test.go",
+          "note": "Contrast: claudecode's BackgroundProcessCount keys on toolUseResult.backgroundTaskId + lsof probe — none of which antigravity emits or the adapter parses"
+        }
+      ]
+    }
+  }
+}

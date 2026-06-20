@@ -1,0 +1,93 @@
+{
+  "scenario_id": "mid-turn-message-queued",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "gap:wait_turn",
+    "agent_cli_version": "1.0.10",
+    "daemon_version": "0.5.2+9cd5c69.dirty",
+    "confidence": 0.6,
+    "notes": "agy REPL buffers mid-turn input; the filtered transcript (DONE-only) writes no turn boundary for queued text, so the parser sees one contiguous working span. Recipe needs keys + wait_turn — both unelicited → gap."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "mid-turn-message-queued",
+      "agent": "antigravity",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "gap:wait_turn",
+      "confidence": 0.6,
+      "body": "## Verdict\n\n**agent=yes.** agy runs an interactive bubbletea REPL (binary strings reference `executor has not processed the previous input yet` and `Shell command queued as pending`), so typed input arriving mid-turn is buffered by the runtime rather than starting a new turn — the same queueing model claudecode and codex have.\n\n**daemon=full (provisional).** The scenario asserts the visible contract: state stays `working` through the queued-message arrival (no `→ ready` flicker, no `→ waiting`), and the cycle still ends at `ready`. The antigravity parser drives `working` only from `USER_INPUT` (turn open) and back to `ready` only from an empty terminal `PLANNER_RESPONSE`. The FILTERED transcript.jsonl contains only `status:\"DONE\"` steps — there is no intermediate/queued status — so a buffered follow-up does NOT appear as a synthetic `USER_INPUT` line until it is consumed. While the first turn runs, the parser sees a contiguous run of `PLANNER_RESPONSE`/tool-result lines = one unbroken working span, exactly the no-flicker invariant. The cycle ends `ready` at the final empty `PLANNER_RESPONSE`. CAVEAT (emission, unconfirmed): no sample exercises mid-turn queueing, so whether agy writes the queued prompt as a mid-turn `USER_INPUT` line BEFORE consumption (which would flicker the span) is unverified — `record` must confirm the single contiguous working span.\n\n**driver=gap:wait_turn.** The recipe needs `keys` (type the follow-up into the TUI mid-turn) and `wait_turn` (block on each turn's completion). Both are `not_implemented` in the scaffolded driver. `record` ports the agy turn-done poll and the raw-keys arm before driving.",
+      "caveats": [
+        "Emission UNCONFIRMED: no sample exercises mid-turn queueing. The filtered transcript is DONE-only, which strongly implies a queued prompt is invisible until consumed — but record must verify a single contiguous working span (no →ready flicker when the follow-up lands).",
+        "Driver needs keys + wait_turn ported; the recorded gap primitive is wait_turn.",
+        "Tokens/cost not in JSONL — observations assert cost/tokens = 0."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.local/bin/agy",
+          "note": "strings: 'executor has not processed the previous input yet', 'Shell command queued as pending' — runtime buffers input rather than starting a turn"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/antigravity/parser.go",
+          "note": "working only from USER_INPUT, ready only from empty terminal PLANNER_RESPONSE; no per-step status drives state"
+        },
+        {
+          "kind": "file",
+          "ref": "~/.gemini/antigravity-cli/brain/69343e3e-d308-42ff-80a8-d727aead60bb/.system_generated/logs/transcript.jsonl",
+          "note": "39-line transcript: all steps status DONE; no in-progress/queued status in the filtered view"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "agy CLI >=1.0.10 on PATH, authenticated via Google OAuth",
+        "irrlichd recording",
+        "driver keys + wait_turn seams ported"
+      ],
+      "setup": [
+        "Fresh cwd under <staging>/cwd/; agy mints its own <conv-id>",
+        "First prompt must keep agy busy long enough to type a follow-up (a slow count-to-10)"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Count from 1 to 10, one number per line, pausing briefly between each. On the last line reply with exactly the word: done"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "keys",
+          "keys": "f o l l o w u p Space q u e u e d Enter"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        }
+      ],
+      "verify": [
+        "state stays working across the queued-input arrival — no →ready or →waiting flicker",
+        "the cycle eventually ends at ready",
+        "final session state is ready"
+      ],
+      "settings": {},
+      "timeout_seconds": 180
+    }
+  }
+}

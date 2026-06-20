@@ -1,0 +1,67 @@
+{
+  "scenario_id": "streaming-partial-writes",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "gap:wait_turn",
+    "agent_cli_version": "1.0.10",
+    "daemon_version": "0.5.2+9cd5c69.dirty",
+    "confidence": 0.8,
+    "notes": "agy writes each step only on completion (status DONE); intermediate prose is NOT split into no-tool PLANNER_RESPONSE chunks, so the no-flicker invariant holds trivially (like gemini-cli, unlike codex). daemon=full; driver stubs wait_turn → driver-gap."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "streaming-partial-writes",
+      "agent": "antigravity",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "gap:wait_turn",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: gap:wait_turn\n\nRoute: driver-gap (record ports the stubbed wait_turn seam, then drives).\n\n## What the scenario pins\n\nThe no-flicker streaming invariant: across all partial flushes of a multi-sentence prose response the session stays solidly `working` and only flips to `ready` on the terminal turn-end signal — topology `ready → working → ready`, no tool calls, no premature `ready`.\n\n## agent_supports: yes\n\nThe agy CLI produces a normal conversational turn for a 'write a 5-sentence story' prompt with no tool use — its default behavior, no flag needed.\n\n## daemon_capability: full\n\nThis is the gemini-cli case, NOT the codex case. The key emission finding: agy persists each transcript step ONLY on completion (every line in both transcript.jsonl AND transcript_full.jsonl is status:\"DONE\" — verified across all real conversations). Crucially, intermediate assistant prose is NOT written as separate intermediate no-tool PLANNER_RESPONSE records: every completed turn contains EXACTLY ONE no-tool PLANNER_RESPONSE — the terminal sentinel — and its content is EMPTY (contentlen 0 observed at brain/69343e3e index 38 and 752dfc36 index 6). The parser emits `turn_done` only on a no-tool PLANNER_RESPONSE (parser.go parsePlannerResponse, len(toolCalls)==0 branch). Since agy writes no mid-turn no-tool prose chunk, there is no intermediate record that could prematurely fire turn_done; the band stays `working` across the streaming window and flips to `ready` exactly once, on the terminal empty PLANNER_RESPONSE. The no-flicker invariant holds — daemon=full, recordable.\n\n## driver_capability: gap:wait_turn\n\nThe recipe needs `wait_turn` (block until the terminal no-tool PLANNER_RESPONSE) but driver-interactive.sh declares DRIVE_ELICITS=\"send slash sleep\" and stubs the wait_turn arm. recipe-lint flags it as a semantic_gap. `record` must port the turn-done poll (SEAM 2) before driving.",
+      "caveats": [
+        "daemon=full is PROVISIONAL on emission until a live recording: it depends on agy writing the assistant prose as a single completed step with the terminal no-tool PLANNER_RESPONSE carrying empty content. Verified structurally on tool-heavy transcripts (one empty terminal PLANNER_RESPONSE per turn); record must live-confirm zero working→ready transitions across the streaming window on a genuinely long PROSE-only turn.",
+        "Tokens/cost are not in the JSONL (SQLite protobuf only); observations assert no cost/tokens."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "~/.gemini/antigravity-cli/brain/69343e3e-d308-42ff-80a8-d727aead60bb/.system_generated/logs/transcript.jsonl",
+          "note": "exactly one no-tool PLANNER_RESPONSE per turn (index 38), EMPTY content — terminal sentinel; no intermediate no-tool prose chunks"
+        },
+        {
+          "kind": "file",
+          "ref": "~/.gemini/antigravity-cli/brain/69343e3e-d308-42ff-80a8-d727aead60bb/.system_generated/logs/transcript_full.jsonl",
+          "note": "even the unfiltered full transcript is 100% status:\"DONE\" — agy appends steps on completion only, never partial flushes"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/antigravity/parser.go",
+          "note": "parsePlannerResponse: turn_done only when len(toolCalls)==0; a single such terminal line per turn means no streaming flicker"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/gemini-cli/scenarios/2-21_streaming-partial-writes/metadata.json",
+          "note": "sibling daemon=full rationale: single-write-per-turn agents have no partial-content record to flicker on"
+        }
+      ]
+    },
+    "recipe": {
+      "timeout_seconds": 180,
+      "settings": {},
+      "script": [
+        {
+          "type": "send",
+          "text": "Write a five-sentence story about a lighthouse keeper. Just prose, no tools, no lists."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        }
+      ]
+    }
+  }
+}

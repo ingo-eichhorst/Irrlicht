@@ -1,0 +1,85 @@
+{
+  "scenario_id": "shell-escape-command",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "gap:wait_turn",
+    "agent_cli_version": "1.0.10",
+    "daemon_version": "0.5.2+9cd5c69.dirty",
+    "confidence": 0.6,
+    "notes": "agy HAS a !cmd shell-escape ('Start your message with ! to run a shell command'); it is a TUI-local shell, so state should stay ready (no synthesized turn). Recipe needs keys + wait_turn — both unelicited in the driver → gap."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "shell-escape-command",
+      "agent": "antigravity",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "gap:wait_turn",
+      "confidence": 0.6,
+      "body": "## Verdict\n\n**agent=yes.** agy ships a `!cmd` shell-escape — the binary string `\"Start your message with ! to run a shell command.\"` is the in-REPL affordance, mirroring claudecode's `!echo hello`. The shell runs locally with no model round trip.\n\n**daemon=full (provisional).** The scenario's intent reading (adopted by the claudecode sibling) is 'state must not stick in working — no synthesized turn'. The antigravity parser only mints state from `USER_INPUT` (working), `PLANNER_RESPONSE` (assistant/turn_done) and MODEL tool-result lines; it has no path that would classify a user-initiated shell escape as a turn. So if the shell escape is absent from the filtered transcript.jsonl (the expected case — it is a TUI-local shell, not a MODEL tool_call), state stays `ready` throughout, which satisfies the scenario. The follow-up normal prompt then drives a clean `ready → working → ready` arc, proving the session is alive. CAVEAT (emission, unconfirmed): no sampled transcript contains a `!cmd` escape, so whether agy writes ANY wrapper line for it to the FILTERED transcript is unverified. If it writes a `USER_INPUT`-shaped line, the parser would (wrongly) open a turn — that would be a `daemon=bug`. `record` must confirm which: this is exactly the emission question the SKILL says only a live recording can settle.\n\n**driver=gap:wait_turn.** The recipe needs `keys` (to type the literal `!echo hello`, since a `send` of `!...` plus Enter would still need raw keystrokes for the bang prefix) AND `wait_turn` (the final-turn settle). Both are `not_implemented` stubs in the scaffolded driver (`DRIVE_ELICITS=\"send slash sleep\"`). `wait_turn` is the load-bearing gap; `keys` is also unported. `record` ports both before driving.",
+      "caveats": [
+        "Emission UNCONFIRMED: no sampled transcript contains a !cmd escape. If agy writes the escape into the FILTERED transcript.jsonl as a USER_INPUT-shaped line, the parser would open a spurious turn → that would flip daemon to bug. record must verify the shell-escape is absent (or a SYSTEM/skipped line) before settling daemon=full. Hence low confidence.",
+        "Driver needs BOTH keys (bang-prefixed keystroke) and wait_turn ported; the gap primitive recorded is wait_turn (the turn-settle), keys is the secondary.",
+        "Tokens/cost not in JSONL — observations assert cost/tokens = 0."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.local/bin/agy",
+          "note": "strings: 'Start your message with ! to run a shell command.' — confirms the !cmd shell-escape affordance (v1.0.10)"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/antigravity/parser.go",
+          "note": "no parser path classifies a user shell-escape as a turn; only USER_INPUT / PLANNER_RESPONSE / MODEL tool-result lines drive state"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/antigravity/driver-interactive.sh",
+          "note": "keys and wait_turn arms are not_implemented; DRIVE_ELICITS lacks both"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "agy CLI >=1.0.10 on PATH, authenticated via Google OAuth",
+        "irrlichd recording",
+        "driver keys + wait_turn seams ported"
+      ],
+      "setup": [
+        "Fresh cwd under <staging>/cwd/; agy mints its own <conv-id>"
+      ],
+      "script": [
+        {
+          "type": "keys",
+          "keys": "! e c h o Space h e l l o Enter"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: alive"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        }
+      ],
+      "verify": [
+        "during the ~5s window after !echo hello, NO state_transition to working or waiting for the session (shell escape is not a turn)",
+        "after the normal prompt, events.jsonl shows ready→working→ready",
+        "final session state is ready"
+      ],
+      "settings": {},
+      "timeout_seconds": 120
+    }
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "scenario_id": "background-subagent",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "incapable",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.0.10",
+    "daemon_version": "0.5.2+9cd5c69.dirty",
+    "confidence": 0.8,
+    "notes": "background subagents run (run_subagent, background tasks), but no child session/parent-link ever reaches the transcript.jsonl — incapable, frozen"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "background-subagent",
+      "agent": "antigravity",
+      "assessed_at": "2026-06-20T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "incapable",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: incapable\ndriver_capability: ready\nroute: frozen\n\n## Reasoning\n\n**Agent (yes).** Background subagents are exactly what Antigravity's subagent feature is: the `agy` v1.0.10 `run_subagent` tool schema says \"Each subagent runs in the BACKGROUND with its own prompt and reports back when done,\" and the binary carries `GetSubagents`/`HasSubagents`/`KillSubagent` plus the IDE's \"Background Tasks\" auxiliary pane and `TimerCondition` referencing a \"background task ID\". So the parent can dispatch a fire-and-forget background child and finish its own reply.\n\n**Daemon (incapable).** The distinguishing observable for this scenario is timing: the parent's own reply reaches turn-end while a detached child keeps working, yet the SESSION stays `working` because `SubagentCount(parent)` includes the live background child, and only drains to `ready` after the last child finishes. For Antigravity none of the prerequisites exist:\n\n- The background child is NOT a separate transcript file. Real conversations under `~/.gemini/antigravity-cli/brain/` are flat top-level dirs with a single `transcript.jsonl`; there is no `subagents/` subdir and no second conversation dir spawned by a background subagent, so the fswatcher discovers no child `SessionState` to count or hold the parent against.\n- The filtered `transcript.jsonl` (and the unfiltered `transcript_full.jsonl`) contain no `run_subagent` step and no parent reference — only USER_INPUT / PLANNER_RESPONSE / RUN_COMMAND / LIST_DIRECTORY / CONVERSATION_HISTORY / CHECKPOINT. The parser sees a terminal `PLANNER_RESPONSE` with no tool_calls and settles the parent to `ready` (turn_done) the instant the parent's own reply ends — it has no `hasActiveChildren` signal to hold it working.\n- The adapter declares no `SubagentCounter` and no `ParentSessionID` (grep of `core/adapters/inbound/agents/antigravity/` is empty for both), and `ComputeSubagentSummary` has nothing to count. The held-working-across-the-child-lifetime arc the spec requires cannot be reconstructed.\n\nThis is `incapable` (architecture / no trace), not `bug`: the background-child lifecycle is recorded only in the per-conversation SQLite protobuf store the daemon does not read, never in the transcript Source.\n\n**Driver (ready).** Frozen on the daemon axis, so the driver parks at `ready` per the #476 convention.\n\n## What would flip the verdict\n\nAntigravity would have to expose the background child as a discoverable transcript (or the adapter grow a SQLite-protobuf Source that reads sub-trajectory + parent_references) AND declare a SubagentCounter so the parent could be held working while a child is alive.",
+      "caveats": [
+        "agent_supports=yes is grounded in the run_subagent 'runs in the background' schema + Background Tasks pane, not a live recording; the incapable verdict is independent of it.",
+        "Same root cause as 3.1/3.4/3.5: child lifecycle lives only in the per-conversation SQLite protobuf store, never in the filtered transcript.jsonl."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/antigravity/parser.go",
+          "note": "Terminal PLANNER_RESPONSE with no tool_calls => turn_done => parent settles ready immediately; no held-working, no SubagentCount"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/antigravity/adapter.go",
+          "note": "One session per conv transcript; no child transcript files, no SubagentCounter/ParentSessionID in the package"
+        },
+        {
+          "kind": "file",
+          "ref": "~/.gemini/antigravity-cli/brain/",
+          "note": "Flat top-level conv dirs; no subagents/ subdir; transcript.jsonl + transcript_full.jsonl show no run_subagent step and no parent reference"
+        },
+        {
+          "kind": "file",
+          "ref": "agy v1.0.10 binary strings",
+          "note": "run_subagent schema: 'Each subagent runs in the background ... reports back when done'; Background Tasks auxiliary pane; TimerCondition references background task ID"
+        }
+      ]
+    }
+  }
+}

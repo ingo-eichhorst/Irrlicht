@@ -1,0 +1,49 @@
+{
+  "scenario_id": "architect-editor-pair",
+  "metadata": {
+    "agent_supports": "partial",
+    "daemon_capability": "incapable",
+    "driver_capability": "gap:wait_turn",
+    "agent_cli_version": "1.0.10",
+    "daemon_version": "0.3.13+dev",
+    "confidence": 0.7,
+    "notes": "agent=partial daemon=incapable driver=gap:wait_turn — the arc's defining waiting episode (a plan/approval gate) is never persisted to the tailed transcript JSONL, and cross-model token accumulation needs the SQLite-only usage the daemon can't read; the full ready→working→waiting→working→ready arc can't be observed (route frozen)."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "architect-editor-pair",
+      "agent": "antigravity",
+      "agent_supports": "partial",
+      "daemon_capability": "incapable",
+      "driver_capability": "gap:wait_turn",
+      "confidence": 0.7,
+      "body": "## Verdict\n\n**agent=partial** — `agy` can plan-then-implement within a turn and does emit `PLANNER_RESPONSE` steps, but the scenario's defining shape is the FULL lifecycle arc `ready→working→waiting→working→ready` with a user-visible `waiting` approval gate plus cross-model token accumulation. Antigravity runs as a continuous planner/executor loop; the binary advertises a permissions/approval UI (`PreToolUse`, `KeyApprove`) but those approvals are interactive UI prompts, not steps persisted to the filtered transcript.\n\n**daemon=incapable** — Two independent blocks:\n1. **No `waiting` trace.** The parser models only `user_message` / `assistant_message` / `function_call_output` / `turn_done` from the transcript; there is no step kind that drives the session to `waiting`. A plan-approval gate (if it fires) is a live UI prompt, not a transcript line, so the daemon never sees the `waiting` episode the acceptance criteria require. Same root cause as sibling gemini-cli 5.4 (daemon=incapable: the plan-approval gate is never persisted to the chat JSONL).\n2. **No cross-model token accumulation.** `TotalTokens` accumulating contributions from both model calls needs usage the daemon can't read — tokens live only in the SQLite protobuf store (no MetricsReader).\n\n**driver=gap:wait_turn** — Moot under the freeze; the recipe would need `wait_turn` (stubbed).\n\nUnblock path: the `waiting` gate would need to be persisted to the transcript AND a MetricsReader added; neither exists.",
+      "caveats": [
+        "Antigravity is a one-model planner/executor (mode-pair), so even the per-turn two-model attribution sub-assertion lacks distinct model contributions in the transcript.",
+        "If agy persisted an approval-gate step to the transcript, the waiting half could become observable — but tokens would still be blocked."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/antigravity/parser.go",
+          "note": "event kinds are user_message/assistant_message/function_call_output/turn_done only — no kind drives waiting; no usage emitted"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/gemini-cli/scenarios/5-4_architect-editor-pair/metadata.json",
+          "note": "sibling: daemon=incapable — the full arc's waiting episode is never persisted to the chat JSONL"
+        },
+        {
+          "kind": "file",
+          "ref": "~/.gemini/antigravity-cli/brain/*/.system_generated/logs/transcript.jsonl",
+          "note": "no approval-gate / waiting step in any sample transcript; no usage keys"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "reason": "frozen (daemon=incapable): the waiting approval gate is never written to the tailed transcript and cross-model token accumulation needs SQLite-only usage the daemon can't read."
+    }
+  }
+}

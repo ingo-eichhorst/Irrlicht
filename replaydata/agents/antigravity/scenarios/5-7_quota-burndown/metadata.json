@@ -1,0 +1,49 @@
+{
+  "scenario_id": "quota-burndown",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "incapable",
+    "driver_capability": "gap:wait_turn",
+    "agent_cli_version": "1.0.10",
+    "daemon_version": "0.3.13+dev",
+    "confidence": 0.82,
+    "notes": "agent=yes daemon=incapable driver=gap:wait_turn — quota/rate-limit burndown leaves no trace in the tailed transcript JSONL; any usage/quota state lives in the SQLite protobuf store and the v1 adapter has no MetricsReader/RateLimitSnapshot path (route frozen)."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "quota-burndown",
+      "agent": "antigravity",
+      "agent_supports": "yes",
+      "daemon_capability": "incapable",
+      "driver_capability": "gap:wait_turn",
+      "confidence": 0.82,
+      "body": "## Verdict\n\n**agent=yes** — `agy` runs on a Google-account quota model (Gemini-family tiering); cumulative consumption exists account-side.\n\n**daemon=incapable** — There is no `RateLimitSnapshot` surface for antigravity. Unlike claudecode (a statusLine hook POSTs a `rate_limits` block to the daemon), antigravity has NO hook delivery and NO MetricsReader. The transcript JSONL the daemon tails carries only `{step_index,source,type,status,created_at,content,tool_calls,thinking}` — `grep -iE 'tokens|usage|cost|cache'` over every sample transcript returns zero hits, and there is no `rate_limits`/`quota`/`UsedPercent` field anywhere in the tailed Source. Cross-turn `Windows[].UsedPercent` burndown therefore has no trace the daemon can read; `RateLimitSnapshot` stays nil. Same root cause as the sibling gemini-cli 5.7 (daemon=incapable: cross-turn burndown leaves no transcript trace), compounded here by the absence of any hook channel.\n\n**driver=gap:wait_turn** — Moot under the freeze; the multi-turn recipe would need `wait_turn`, stubbed in the antigravity driver.\n\nUnblock path: a hook or MetricsReader that surfaces a per-account quota window; re-assess afterward.",
+      "caveats": [
+        "claudecode's quota path is hook-delivered (statusline POST); antigravity has no equivalent hook channel.",
+        "Even a future SQLite MetricsReader would surface tokens, not necessarily a rate-limit window with UsedPercent/ResetsAt."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/antigravity/agent.go",
+          "note": "single transcripts Permission over JSONL; no MetricsReader, no hook installer, no RateLimitSnapshot path"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/antigravity/parser.go",
+          "note": "envelope carries no usage/quota; tokens/cost live in SQLite protobuf store"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/gemini-cli/scenarios/5-7_quota-burndown/metadata.json",
+          "note": "sibling Gemini-family verdict: daemon=incapable (cross-turn burndown leaves no transcript trace)"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "reason": "frozen (daemon=incapable): no RateLimitSnapshot surface for antigravity — no hook channel and no MetricsReader; quota state never reaches the tailed transcript JSONL."
+    }
+  }
+}

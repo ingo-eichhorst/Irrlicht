@@ -1,0 +1,132 @@
+{
+  "scenario_id": "session-end",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "gap:wait_turn,exit_clean,restart,sigkill",
+    "agent_cli_version": "1.0.10",
+    "daemon_version": "0.5.2+9cd5c69.dirty",
+    "confidence": 0.75,
+    "notes": "agent=yes daemon=full driver=gap — three teardown variants observable via process-exit sweep; the scaffold driver stubs wait_turn/exit_clean/restart/sigkill."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "session-end",
+      "agent": "antigravity",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "gap:wait_turn,exit_clean,restart,sigkill",
+      "confidence": 0.75,
+      "body": "## Verdict\n\n**agent=yes.** `agy` is a standalone native binary (1 process ↔ 1 conversation) that can exit cleanly (Ctrl-D / Ctrl-C) or be killed. All three session-end variants (clean exit after a no-op turn, SIGKILL mid-idle, SIGKILL mid-turn) are achievable.\n\n**daemon=full.** The ExactName{agy} matcher (`adapter.go:36`) binds the live process, and the process-lifecycle observer surfaces process_exited on death. Because `agy` is a single native process per conversation (no Node launcher/worker split like gemini-cli), the death is a clean single-PID exit — the over-asserted multi-process race that made gemini-cli's clean-exit variant emit no process_exited does not apply here. The session settles to ready before/at exit and disappears within readyTTL.\n\n**driver=gap.** The scaffold `driver-interactive.sh` stubs `wait_turn`, `exit_clean`, `restart`, and `sigkill` as `not_implemented` (DRIVE_ELICITS = send/slash/sleep only). `record` must port all four (plus the multi-session session.uuids/transcript.paths epilogue — three variants = three sessions) from a reference driver before driving.",
+      "caveats": [
+        "Variant 3 (SIGKILL mid-turn): the post-crash sweep-to-ready transition may not land inside the recording's tail window — the live dashboard handles it via the process-exit sweep, but a short tail can end with the session still in working. The spec anchors v3 without requiring an explicit post-crash ready phase (mirrors the gemini-cli sibling).",
+        "Antigravity emits no explicit end-of-turn marker; turn_done is inferred from a terminal MODEL/PLANNER_RESPONSE with no tool_calls. daemon=full is provisional on what agy writes mid-turn — a live recording in record settles it.",
+        "Whether agy's clean Ctrl-D exit reliably emits process_exited in-window is provisional (single-process, so more likely than gemini-cli's launcher race, but unconfirmed); record promotes it from provisional to settled.",
+        "Driver gap is the recording blocker: wait_turn/exit_clean/restart/sigkill are not_implemented stubs."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/antigravity/adapter.go:36",
+          "note": "ExactName{agy} matcher binds the CLI process for liveness"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/antigravity/pid.go:19",
+          "note": "DiscoverPID — single native process per conversation, no argv filtering needed"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/antigravity/driver-interactive.sh:187",
+          "note": "exit_clean/restart/sigkill arms are not_implemented stubs"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/gemini-cli/scenarios/1-2_session-end/expected.jsonl",
+          "note": "sibling presession session-end spec template (3-variant arc)"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "agy CLI on PATH (1.0.10), Google OAuth authenticated; no API key",
+        "irrlichd recording — run-cell.sh isolated mode, or --attach against a daemon started with --record",
+        "DRIVER GAP: wait_turn, exit_clean, restart, sigkill are not_implemented in driver-interactive.sh — record must port them (and the multi-session epilogue) before driving"
+      ],
+      "setup": [
+        "Driver creates 3 fresh cwds under <staging>/cwd, cwd-2, cwd-3 (one per variant)",
+        "Launch each session with agy --dangerously-skip-permissions for unattended driving"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 2
+        },
+        {
+          "type": "exit_clean"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        },
+        {
+          "type": "restart"
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "sigkill"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        },
+        {
+          "type": "restart"
+        },
+        {
+          "type": "send",
+          "text": "Write a 200 word essay about the history of coffee."
+        },
+        {
+          "type": "sleep",
+          "seconds": 2
+        },
+        {
+          "type": "sigkill"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        }
+      ],
+      "verify": [
+        "events.jsonl contains 3 distinct conv-id session_ids plus their proc-<PID> presession rows",
+        "variant 1: clean Ctrl-D exit after the turn — session in ready immediately preceding its process_exited",
+        "variant 2: SIGKILL mid-idle — process_exited fires while the session is in ready; no transition to working/waiting after",
+        "variant 3: SIGKILL mid-turn — session is in working when killed; the sweep-to-ready may or may not land in the 8s tail (accept either)",
+        "the state band shows three colored arcs separated by grey gaps"
+      ],
+      "settings": {},
+      "timeout_seconds": 180
+    }
+  }
+}

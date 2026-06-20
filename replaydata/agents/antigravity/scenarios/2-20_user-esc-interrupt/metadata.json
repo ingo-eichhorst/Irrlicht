@@ -1,0 +1,49 @@
+{
+  "scenario_id": "user-esc-interrupt",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "incapable",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.0.10",
+    "daemon_version": "0.5.2+9cd5c69.dirty",
+    "confidence": 0.8,
+    "notes": "agy can cancel a turn (STEP_STATUS_INTERRUPTED / 'cancelled by user' in binary) but no interrupt marker reaches the transcript (all lines status:DONE) and the parser has no IsUserInterrupt path for antigravity. daemon=incapable → frozen. Matches codex 2.20 (incapable); driver also stubs interrupt."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "user-esc-interrupt",
+      "agent": "antigravity",
+      "agent_supports": "yes",
+      "daemon_capability": "incapable",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: incapable\ndriver_capability: ready (n/a — frozen; the driver also stubs interrupt)\n\nRoute: frozen (an ESC interrupt is not observable for antigravity).\n\n## What the scenario pins\n\n`ready → working → ready`; state does not stick in `working` post-interrupt; an interrupt is observed.\n\n## agent_supports: yes\n\nThe agy CLI can cancel an in-flight turn — the binary carries the cancel/interrupt vocabulary (`STEP_STATUS_INTERRUPTED`, `STEP_STATUS_CANCELED`, `canceled by user` / `cancelled by user`, `AskQuestion cancelled by user`). So ESC/cancel is a real agent capability.\n\n## daemon_capability: incapable\n\nThe canonical claudecode/gemini-cli cells observe the interrupt via a transcript marker: claudecode's parser.recordUserInterruptFlags fires on the `[Request interrupted by user]` line, and gemini-cli writes an equivalent marker its parser detects. Antigravity emits NO such marker: (1) the parser has no IsUserInterrupt path — parser.go models only USER_INPUT→working, PLANNER_RESPONSE→working/ready, and tool results; there is no interrupt-marker branch. (2) The interrupt is never persisted: every line in BOTH transcript.jsonl and transcript_full.jsonl is status:\"DONE\" (verified across all real conversations), and no `[Request interrupted...]` / `cancelled by user` text appears in any recorded transcript — the cancel is an internal IPC state (STEP_STATUS_INTERRUPTED) that is never appended. With no marker, an interrupted turn simply has no terminal no-tool PLANNER_RESPONSE, so the daemon cannot distinguish 'cancelled' from 'still working'. No trace exists → the working→ready interrupt edge cannot be observed. This matches the codex 2.20 verdict (daemon=incapable, frozen).\n\n## driver_capability: n/a\n\nMoot under a frozen route — and additionally the driver-interactive.sh `interrupt` arm is a not_implemented stub (DRIVE_ELICITS=\"send slash sleep\"), so even were the daemon capable the cell would be driver=gap:interrupt.",
+      "caveats": [
+        "Re-assess if Antigravity ever persists an interrupt/cancel marker (or a STEP_STATUS_INTERRUPTED step) to the transcript, AND the adapter gains an IsUserInterrupt path. Both are required to observe the working→ready interrupt edge."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/antigravity/parser.go",
+          "note": "no IsUserInterrupt / interrupt-marker branch; an interrupted turn just lacks its terminal no-tool PLANNER_RESPONSE"
+        },
+        {
+          "kind": "file",
+          "ref": "~/.gemini/antigravity-cli/brain/69343e3e-d308-42ff-80a8-d727aead60bb/.system_generated/logs/transcript_full.jsonl",
+          "note": "100% status:\"DONE\"; no '[Request interrupted...]' / 'cancelled by user' text — the cancel is never persisted"
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.local/bin/agy",
+          "note": "binary strings: STEP_STATUS_INTERRUPTED / 'cancelled by user' confirm the agent can cancel, but the marker stays internal"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/antigravity/driver-interactive.sh",
+          "note": "interrupt arm is not_implemented (DRIVE_ELICITS omits it) — secondary driver gap"
+        }
+      ]
+    }
+  }
+}

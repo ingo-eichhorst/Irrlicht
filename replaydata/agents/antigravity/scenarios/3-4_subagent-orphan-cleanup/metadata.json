@@ -1,0 +1,51 @@
+{
+  "scenario_id": "subagent-orphan-cleanup",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "incapable",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.0.10",
+    "daemon_version": "0.5.2+9cd5c69.dirty",
+    "confidence": 0.8,
+    "notes": "subagents exist but never appear as child sessions in the transcript, so there is no orphaned child for the sweep to reap — incapable, frozen"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "subagent-orphan-cleanup",
+      "agent": "antigravity",
+      "assessed_at": "2026-06-20T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "incapable",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: incapable\ndriver_capability: ready\nroute: frozen\n\n## Reasoning\n\n**Agent (yes).** Antigravity has subagents (the `run_subagent` tool, `GetSubagents`/`KillSubagent`/`SubagentSpec` symbols in the `agy` v1.0.10 binary), so a parent CAN launch a child whose process could be orphaned by a SIGKILL of the parent's group.\n\n**Daemon (incapable).** The scenario's invariant — after a restart sweep, the orphaned CHILD session disappears via `process_exited` WITHOUT a spurious `state_transition` to `working` (issue #321) — presupposes that the daemon ever modelled the child as a distinct session in the first place. For Antigravity it never does:\n\n- A subagent leaves no separate transcript file. Real conversations under `~/.gemini/antigravity-cli/brain/` are flat top-level dirs with one `transcript.jsonl`; there is no `subagents/` subdir and no nested child conversation dir, so the fswatcher mints no child `SessionState`. With no child session there is no orphan to sweep and no #321 invariant to assert.\n- `subagent-orphan-cleanup` also depends on `parent_linked` firing (the recipe waits for it before the SIGKILL). The antigravity parser emits no parent link and the package declares no `ParentSessionID` (grep of `core/adapters/inbound/agents/antigravity/` is empty). The transcript carries no `run_subagent` step and no child birth.\n- PID binding is moreover optional CLI-only enrichment (`DiscoverPID` by cwd); a subagent has no separate `agy` process bound to a separate session row, so there is no per-child PID for `pid_manager` to find dead and reap.\n\nNo child session = no orphan = nothing for the sweep to observe. This is `incapable` (no trace / the model can't represent the parent-child topology), not `bug`.\n\n**Driver (ready).** Daemon-frozen, so the driver axis parks at `ready` per #476 (and the scaffolded driver lacks `sigkill` anyway — but that gap is moot because the cell is frozen on the daemon axis).\n\n## What would flip the verdict\n\nAntigravity would have to surface subagents as discoverable child sessions (separate transcripts or a SQLite-protobuf Source) AND the adapter declare parent linkage, so that an orphaned child becomes a real session row the restart sweep can reap.",
+      "caveats": [
+        "Even setting the daemon aside, the scaffolded interactive driver lacks a working sigkill step — but the daemon=incapable verdict already freezes the cell, so the driver gap is not the routing reason.",
+        "Same root cause as 3.1/3.2/3.5: no child session is ever modelled because subagent linkage lives only in the per-conversation SQLite protobuf store."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/antigravity/adapter.go",
+          "note": "One session per conv transcript, no child transcript files; no orphaned child row for the sweep"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/antigravity/parser.go",
+          "note": "No parent_linked / ParentSessionID emission; nothing to assert the #321 no-working-on-cleanup invariant against"
+        },
+        {
+          "kind": "file",
+          "ref": "~/.gemini/antigravity-cli/brain/",
+          "note": "Flat top-level conv dirs, no subagents/ subdir; no nested child transcript to be orphaned"
+        },
+        {
+          "kind": "file",
+          "ref": "agy v1.0.10 binary strings",
+          "note": "run_subagent / GetSubagents / KillSubagent — agent has subagents, but the lifecycle is not in the transcript Source"
+        }
+      ]
+    }
+  }
+}

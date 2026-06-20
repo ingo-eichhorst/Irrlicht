@@ -1,0 +1,51 @@
+{
+  "scenario_id": "foreground-subagent",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "incapable",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.0.10",
+    "daemon_version": "0.5.2+9cd5c69.dirty",
+    "confidence": 0.8,
+    "notes": "agent runs subagents (run_subagent), but child sessions never appear in the filtered transcript.jsonl the daemon tails — incapable, frozen"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "foreground-subagent",
+      "agent": "antigravity",
+      "assessed_at": "2026-06-20T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "incapable",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: incapable\ndriver_capability: ready\nroute: frozen\n\n## Reasoning\n\n**Agent (yes).** Antigravity genuinely has a subagent feature. The `agy` v1.0.10 binary carries a `run_subagent` tool whose schema reads \"Invokes one or more subagents by name with a single tool call. Each subagent runs in the background with its own prompt and reports back when done,\" plus the protobuf/runtime symbols `GetSubagents`, `HasSubagents`, `KillSubagent`, `SubagentSpec`, `SubagentName`, `TriggerSubagentApprovalFast`, and `RespondToSubagentToolConfirmation`. The IDE even surfaces an \"HTML Auxiliary Pane (Subagents, Background Tasks, Artifacts...)\". So the CLI can launch a foreground subagent that reads a file and reports back.\n\n**Daemon (incapable).** The scenario's user-observable signal is a CHILD SESSION with `ParentSessionID = parent.session_id`, `SubagentCount(parent) = 1` while the child is alive, and the parent held `working` until the child ends. None of this can reach the daemon for Antigravity:\n\n- The adapter's Source is `FilesUnderRoot` over the per-conversation `transcript.jsonl`, and `sessionIDFromPath` mints exactly ONE session per `<conv-id>/.system_generated/logs/transcript.jsonl`. Inspected real CLI conversations under `~/.gemini/antigravity-cli/brain/` are FLAT top-level dirs — there is no `subagents/` subdir, no nested child transcript dir, no second conversation dir spawned by a subagent. A subagent leaves no new transcript file for the fswatcher to discover, so there is no `transcript_new` for a child and no second `SessionState`.\n- Across every sampled `transcript.jsonl` AND the unfiltered sibling `transcript_full.jsonl`, the ONLY (source,type) pairs are `USER_EXPLICIT/USER_INPUT`, `MODEL/PLANNER_RESPONSE`, `MODEL/RUN_COMMAND`, `MODEL/LIST_DIRECTORY`, `SYSTEM/CONVERSATION_HISTORY`, `SYSTEM/CHECKPOINT`. There is no `run_subagent` tool call, no subagent step, no `parent_reference`. The sub-trajectory linkage lives in the per-conversation SQLite protobuf store (`steps.has_subtrajectory`, `parent_references`), which the daemon does not read and which the parser never sees.\n- The adapter models none of it: the antigravity package has ZERO references to `SubagentCounter`, `ParentSessionID`, `parent_linked`, or `SubagentSummary` (grep over `core/adapters/inbound/agents/antigravity/` returns nothing), in deliberate contrast to claudecode (`OpenSubagents`, sidechain transcripts under `<parent>/subagents/`). The parser emits only `user_message`, `assistant_message`, `function_call_output`, `turn_done` — never a parent link or a child birth.\n\nNo trace of the parent-child relationship exists in any file the daemon tails, so `daemon_capability` is `incapable` (not `bug`): there is nothing to mis-handle, the signal simply is not emitted to the transcript Source. Observing it would require a new SQLite/protobuf Source variant the adapter does not have.\n\n**Driver (ready).** Per the #476 frozen convention, when the daemon is the structural blocker the driver axis parks at `ready` — the interactive driver is not the reason this cell can't record.\n\n## What would flip the verdict\n\nEither Antigravity starts writing subagent steps / child-transcript files into the filtered `transcript.jsonl` (so the fswatcher can discover a child and the parser can emit a parent link), or the adapter grows a Source that reads the per-conversation SQLite protobuf store (`has_subtrajectory` / `parent_references`) and the adapter declares a `SubagentCounter` + parent linkage. Until then this cell is frozen.",
+      "caveats": [
+        "agent_supports=yes is grounded in the binary's run_subagent schema + Subagent* symbols, not a live recording of a subagent run; the daemon=incapable verdict does not depend on it.",
+        "Antigravity DOES track sub-trajectories, but only in the per-conversation SQLite protobuf store (has_subtrajectory column, parent_references table) — nothing in the filtered transcript.jsonl exposes child sessions."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/antigravity/adapter.go",
+          "note": "FilesUnderRoot over transcript.jsonl; sessionIDFromPath mints exactly one session per <conv-id>; flat top-level conv dirs, no subagents/ subdir"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/antigravity/parser.go",
+          "note": "Parser emits only user_message/assistant_message/function_call_output/turn_done; no ParentSessionID, no parent_linked, no child-transcript discovery"
+        },
+        {
+          "kind": "file",
+          "ref": "~/.gemini/antigravity-cli/brain/",
+          "note": "Real CLI conversations are flat top-level dirs; transcript.jsonl + transcript_full.jsonl both show only 6 (source,type) pairs, no run_subagent step, no nested child transcript"
+        },
+        {
+          "kind": "file",
+          "ref": "agy v1.0.10 binary strings",
+          "note": "run_subagent tool ('subagents run in the background, report back when done'), GetSubagents/HasSubagents/KillSubagent/SubagentSpec/TriggerSubagentApprovalFast — agent-level subagent feature exists"
+        }
+      ]
+    }
+  }
+}

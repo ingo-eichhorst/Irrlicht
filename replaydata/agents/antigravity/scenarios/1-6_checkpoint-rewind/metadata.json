@@ -1,0 +1,49 @@
+{
+  "scenario_id": "checkpoint-rewind",
+  "metadata": {
+    "agent_supports": "no",
+    "daemon_capability": "n/a",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.0.10",
+    "daemon_version": "0.5.2+9cd5c69.dirty",
+    "confidence": 0.8,
+    "notes": "agent=no — agy has NO user-facing rewind/checkpoint/restore/fork command (palette enumerated live); transcript CHECKPOINT lines are auto-generated, not user-triggered."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "checkpoint-rewind",
+      "agent": "antigravity",
+      "agent_supports": "no",
+      "daemon_capability": "n/a",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\n**agent=no.** Checkpoint-rewind requires a user-triggered command/shortcut to restore an earlier checkpoint (claudecode Esc+Esc / /rewind; codex /fork). The `agy` CLI exposes NO such surface. I enumerated the full live slash-command palette (38 commands) under tmux: there is NO `/rewind`, `/checkpoint`, `/restore`, or `/fork`. `agy --help` lists no rewind flag and no rewind keybinding surfaced in /help. The transcript DOES contain auto-generated `SYSTEM`/`CHECKPOINT` lines (observed in every real transcript) — but these are the planner's own automatic checkpoints, NOT a user-triggered rewind, and the parser explicitly SKIPS them (`parser.go:71`, the default case). There is no way for a user (or a driver) to rewind the conversation to an earlier checkpoint from the CLI.\n\n**daemon=n/a.** With no agent surface to trigger a rewind, there is no rewind signal (no transcript truncation, no $rewindTo marker, no fork) for the daemon to observe; the pillar is n/a (no feature → frozen).\n\n**driver=ready** is moot for a frozen cell — the keys/slash step types exist but there is no agent command to navigate.",
+      "caveats": [
+        "Re-assess if a future agy release exposes a user-facing rewind (slash command, keybinding, or the IDE's checkpoint UI surfacing through the CLI store). Antigravity's CHECKPOINT transcript lines suggest the engine maintains checkpoints internally; if a rewind command is later added, the daemon would observe either an in-place truncation or a fork (a new <conv-id>), and this cell flips to a real cell.",
+        "The Antigravity IDE (not installed here) may surface a rewind UI, but that is out of scope for the agy CLI; a future IDE-store recording could revisit this."
+      ],
+      "sources": [
+        {
+          "kind": "url",
+          "ref": "agy REPL slash-command palette (live, tmux)",
+          "note": "enumerated 38 commands; no /rewind, /checkpoint, /restore, /fork"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/antigravity/parser.go:71",
+          "note": "SYSTEM/CHECKPOINT lines are SKIPPED — they are auto-generated planner checkpoints, not user rewinds"
+        },
+        {
+          "kind": "url",
+          "ref": "agy --help",
+          "note": "no rewind/checkpoint flag"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "notes": "agent_supports=no — agy exposes no user-facing rewind/checkpoint/restore/fork command (live palette enumeration); the transcript's CHECKPOINT lines are auto-generated and parser-skipped. No recipe; this cell is frozen."
+    }
+  }
+}
