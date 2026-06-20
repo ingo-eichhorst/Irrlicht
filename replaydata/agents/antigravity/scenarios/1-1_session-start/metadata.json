@@ -3,7 +3,7 @@
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
-    "driver_capability": "gap:wait_turn",
+    "driver_capability": "ready",
     "agent_cli_version": "1.0.10",
     "daemon_version": "0.5.2+9cd5c69.dirty",
     "confidence": 0.85,
@@ -16,7 +16,7 @@
       "agent": "antigravity",
       "agent_supports": "yes",
       "daemon_capability": "full",
-      "driver_capability": "gap:wait_turn",
+      "driver_capability": "ready",
       "confidence": 0.85,
       "body": "## Verdict\n\n**agent=yes.** `agy` launches into an interactive REPL in the cwd and sits idle awaiting input. Verified live: launching `agy` in a fresh `/tmp/agyresume` cwd minted a new conversation `f4826a94-…` whose transcript materialized after the first user input.\n\n**daemon=full.** Antigravity is a presession adapter on the gemini-cli model. At launch `agy` creates the `<conv-id>/` brain directory but does NOT write `.system_generated/logs/transcript.jsonl` until the first user input lands (verified: conv `13f44c58` sat with an empty dir, and a freshly launched conv had no transcript until the prompt). So the daemon's ExactName{agy} process scanner discovers the `agy` PID at the first tick — a transient `proc-<PID>` presession row bridges the gap — and the conv-id-keyed session (SessionIDFromPath off the `<conv-id>` dir, `core/adapters/inbound/agents/antigravity/adapter.go:58`) is born + settles to `ready` once the first turn's terminal `MODEL/PLANNER_RESPONSE` (no tool_calls) is parsed (`parser.go:113`). PID binds by cwd harvested from a `run_command` tool_call's `args.Cwd` (`parser.go:157`); a trivial no-tool prompt yields no cwd, so PID binding for a pure no-op turn anchors only when a tool runs — but `agy`'s first turn typically lists the dir / runs a command (observed `list_dir`+`run_command` in real transcripts), landing the cwd.\n\n**driver=gap:wait_turn.** The scaffold `driver-interactive.sh` declares `DRIVE_ELICITS=\"send slash sleep\"` and `wait_turn()` is a `not_implemented` stub (line 168-170). The session-start recipe is `send`+`wait_turn`, so `record` must port the turn-done poll (poll the filtered transcript for a terminal `MODEL/PLANNER_RESPONSE` with no `tool_calls`) before driving.",
       "caveats": [
