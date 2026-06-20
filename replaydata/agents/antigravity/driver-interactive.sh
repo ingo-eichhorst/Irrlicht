@@ -110,7 +110,7 @@ SES_MARKER=(); SES_CWD=(); SES_ALIVE=()
 # recipe-lint flags a recipe needing it as a semantic_gap before recording. Set
 # DRIVE_SLASH_REQUIRES_STEP_TYPE=true if antigravity is headless-first (a bare
 # send "/cmd" stores literal text instead of reaching the REPL).
-DRIVE_ELICITS="send slash wait_turn sleep exit_clean restart resume sigkill"
+DRIVE_ELICITS="send slash wait_turn keys sleep exit_clean restart resume sigkill"
 DRIVE_SLASH_REQUIRES_STEP_TYPE=false
 RUN_CWD="${IRRLICHT_ONBOARD_CWD:-$STAGING/cwd}"
 mkdir -p "$RUN_CWD"
@@ -331,6 +331,20 @@ send_text() { # <text>
   tmux send-keys -t "$SESSION" Enter
 }
 
+# --- AGENT-SPECIFIC SEAM: keys — raw tmux key sequence -----------------------
+# Send a raw, word-split key list (e.g. "! e c h o Space h e l l o Enter") to the
+# active REPL — for the `!cmd` shell-escape and mid-turn buffered typing, where a
+# literal `send` of the line is wrong (the `!` prefix and the in-turn buffering
+# both need raw keystrokes, not a probe-confirmed `send_text`). Mirrors the
+# claudecode/gemini-cli step_keys: intentional word-splitting of the key list.
+step_keys() { # <keys>
+  local keys="$1"
+  # shellcheck disable=SC2086 — intentional word-splitting of the key list
+  tmux send-keys -t "$SESSION" $keys
+  echo "[driver] keys[s$ACTIVE]: $keys" >&2
+  sleep 0.3
+}
+
 # --- AGENT-SPECIFIC SEAM: find the agy PID the daemon binds ------------------
 # Mirror core/adapters/inbound/agents/antigravity/pid.go: a plain process-name
 # (agy) + cwd match, lowest PID — agy is a single native process per
@@ -443,7 +457,7 @@ while IFS= read -r step; do
     wait_turn)       wait_turn || break ;;
     sleep)           sleep "$(jq -r '.seconds // 1' <<<"$step")" ;;
     interrupt)       not_implemented interrupt || break ;;       # TODO(antigravity): Escape/Ctrl-C the in-flight turn
-    keys)            not_implemented keys || break ;;            # TODO(antigravity): tmux send-keys raw sequence
+    keys)            step_keys "$(jq -r '.keys' <<<"$step")" ;;
     reset_session)   not_implemented reset_session || break ;;   # TODO(antigravity): in-REPL /clear|/new → new id, SAME slot; re-resolve SES_TRANSCRIPT[$ACTIVE] (SEAM 3)
     restart)         step_restart ;;
     resume)          step_resume ;;
