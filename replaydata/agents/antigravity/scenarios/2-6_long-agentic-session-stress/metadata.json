@@ -3,7 +3,7 @@
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
-    "driver_capability": "gap:wait_turn",
+    "driver_capability": "ready",
     "agent_cli_version": "1.0.10",
     "daemon_version": "0.5.2+9cd5c69.dirty",
     "confidence": 0.8,
@@ -17,7 +17,7 @@
       "assessed_at": "2026-06-20T00:00:00Z",
       "agent_supports": "yes",
       "daemon_capability": "full",
-      "driver_capability": "gap:wait_turn",
+      "driver_capability": "ready",
       "confidence": 0.8,
       "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: gap:wait_turn\n\n## Reasoning\n\nThe scenario is a compressed proxy for a long session: 4 plain user prompts in one session, asserting per-turn `ready → working → ready` arcs with NO flicker WITHIN a turn, clean `working → ready` / `ready → working` transitions BETWEEN turns, and the state never stuck.\n\n### agent_supports: yes\n\nagy sustains a multi-turn conversation in one session: the `--continue` flag and the REPL both keep one `<conv-id>` across many prompts, each prompt opening a fresh turn. The real samples each show a multi-step turn with several intermediate assistant/tool lines before the terminal PLANNER_RESPONSE, so even plain prompts produce multi-chunk turns (the within-turn no-flicker invariant is meaningful).\n\n### daemon_capability: full\n\nThe antigravity Source tails ONE `transcript.jsonl` per `<conv-id>`, appending across turns. Per turn, `parseUserInput` → `user_message` (`ready → working`); intermediate `assistant_message`/`function_call_output` lines are NON-settling (the turn stays `working`); the terminal empty `MODEL/PLANNER_RESPONSE` → `turn_done` (`working → ready`). There is no intermediate settle and no waiting path, so WITHIN each turn the session stays continuously `working` (no flicker), and BETWEEN turns the next `USER_INPUT` cleanly re-opens `working`. Four prompts produce the `ready → working → ready → working → ready → working → ready → working → ready` topology the scenario asserts, never stuck. Like the modern claudecode long-session cell, plain prompts keep the recording deterministic (and avoid any tool-permission stall), while each turn still has multiple intermediate chunks. → `daemon=full`.\n\n### driver_capability: gap:wait_turn\n\nThe recipe sends 4 prompts, each needing `wait_turn` to block until that turn's terminal empty PLANNER_RESPONSE before sending the next (so the per-turn `working → ready` settle is observed cleanly, not merged with the next turn). `wait_turn()` is a driver stub (DRIVE_ELICITS=\"send slash sleep\"). → `driver=gap:wait_turn`. `record` ports the wait_turn seam + the launch_repl session-resolution SEAM before driving. INTERACTIVE recipe (one continuous REPL session across all 4 turns).",
       "caveats": [
