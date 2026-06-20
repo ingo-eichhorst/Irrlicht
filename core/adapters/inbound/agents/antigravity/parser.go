@@ -4,6 +4,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"irrlicht/core/pkg/tailer"
 )
@@ -54,7 +55,7 @@ var userSettingsModelRe = regexp.MustCompile(`Model Selection.{0,3}from .+? to (
 
 // ParseLine normalizes one Antigravity transcript line.
 func (p *Parser) ParseLine(raw map[string]any) *tailer.ParsedEvent {
-	ev := &tailer.ParsedEvent{Timestamp: tailer.ParseTimestamp(raw)}
+	ev := &tailer.ParsedEvent{Timestamp: parseCreatedAt(raw)}
 
 	source, _ := raw["source"].(string)
 	typ, _ := raw["type"].(string)
@@ -171,6 +172,19 @@ func cwdFromToolCall(tcm map[string]any) string {
 // or "The command failed with exit code: N".
 func commandFailed(content string) bool {
 	return strings.Contains(content, "The command failed")
+}
+
+// parseCreatedAt reads Antigravity's RFC3339 `created_at` step timestamp (e.g.
+// "2026-06-19T05:33:39Z"). Falls back to tailer.ParseTimestamp — which checks
+// the generic `timestamp` field and ultimately time.Now() — when `created_at`
+// is absent or unparseable, so an event always carries a usable time.
+func parseCreatedAt(raw map[string]any) time.Time {
+	if s, _ := raw["created_at"].(string); s != "" {
+		if t, err := time.Parse(time.RFC3339, s); err == nil {
+			return t
+		}
+	}
+	return tailer.ParseTimestamp(raw)
 }
 
 // intFromAny coerces a JSON number (decoded as float64) to int64.

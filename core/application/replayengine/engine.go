@@ -320,6 +320,11 @@ func loadEvents(path string) ([]rawEvent, error) {
 			} else if v, ok := raw["_ts"].(float64); ok && v > 0 {
 				// OpenCode transcripts carry _ts as Unix milliseconds.
 				ts = time.UnixMilli(int64(v)).UTC()
+			} else if v, ok := raw["created_at"].(string); ok {
+				// Antigravity steps carry an RFC3339 created_at.
+				if parsed, err := time.Parse(time.RFC3339, v); err == nil {
+					ts = parsed
+				}
 			}
 		}
 
