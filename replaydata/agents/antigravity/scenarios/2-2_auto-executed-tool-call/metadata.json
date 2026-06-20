@@ -3,7 +3,7 @@
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
-    "driver_capability": "gap:wait_turn",
+    "driver_capability": "ready",
     "agent_cli_version": "1.0.10",
     "daemon_version": "0.5.2+9cd5c69.dirty",
     "confidence": 0.8,
@@ -17,7 +17,7 @@
       "assessed_at": "2026-06-20T00:00:00Z",
       "agent_supports": "yes",
       "daemon_capability": "full",
-      "driver_capability": "gap:wait_turn",
+      "driver_capability": "ready",
       "confidence": 0.8,
       "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: gap:wait_turn\n\n## Reasoning\n\nThe scenario asserts a `ready → working → ready` arc with at least one tool_use mid-turn, and the invariant that state NEVER enters `waiting` for an auto-executed tool call.\n\n### agent_supports: yes\n\nEvery real sample conversation under `~/.gemini/antigravity-cli/brain/` exercises exactly this: a `MODEL/PLANNER_RESPONSE` states intent (\"I will list the contents of the workspace directory.\") and carries a `tool_calls` array (`list_dir` or `run_command`), and the following `MODEL/<TYPE>` line (`LIST_DIRECTORY` / `RUN_COMMAND`) is the auto-executed RESULT. The `agy` CLI auto-runs its tools by default (and `--dangerously-skip-permissions` makes that unconditional); the samples were recorded with tools auto-approving, no user gate. The toolset (`run_command`, `list_dir`, `read_file`, `write_file`, `edit_file`, `view_file`, `grep_search`) is confirmed in the binary strings.\n\n### daemon_capability: full\n\nWalking the signal against `parser.go`:\n\n1. **`ready → working`** — `parseUserInput` emits `user_message` (ClearToolNames) on the opening `USER_INPUT`.\n2. **tool_use mid-turn** — `parsePlannerResponse` on a planner step WITH `tool_calls` emits `EventType = \"assistant_message\"` plus a synthesized `ToolUse` (id `<step_index>-<i>` since antigravity carries no tool ids; parser.go ~L120-137). It harvests the cwd from a `run_command`'s `Cwd` arg onto every event for PID binding.\n3. **tool result, no waiting** — the next `MODEL/<TYPE>` result line hits `parseToolResult` → `EventType = \"function_call_output\"`, which CLOSES the open tool (ToolResultIDs) and is explicitly a NON-settling event so the turn stays `working` until the terminal PLANNER_RESPONSE (parser.go ~L143-152, docstring confirms \"the turn stays working until the terminal PLANNER_RESPONSE\"). The antigravity adapter declares NO permission-gate event path on a tool call — the parser maps tool execution to assistant_message/function_call_output only, never a `waiting` state. So the `state never entered waiting` invariant holds structurally.\n4. **`working → ready`** — the terminal empty `MODEL/PLANNER_RESPONSE` → `turn_done` → `ready`.\n\nTopology `ready → working → ready` with ≥1 tool call and no `waiting` is exactly what the parser produces today → `daemon=full`.\n\n### driver_capability: gap:wait_turn\n\nSame driver scaffold limit as the other lifecycle cells: the recipe needs `send` + `wait_turn` + `sleep`, and `wait_turn()` is a stub (`not_implemented`; DRIVE_ELICITS=\"send slash sleep\"). The auto-executed tool turn ends on a terminal empty PLANNER_RESPONSE; wait_turn must poll for that. `record` ports the wait_turn seam + the launch_repl session-resolution SEAM before driving. INTERACTIVE recipe (headless --print exits before the daemon sees the terminal working→ready edge).",
       "caveats": [
