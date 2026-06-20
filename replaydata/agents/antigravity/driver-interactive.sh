@@ -110,7 +110,7 @@ SES_MARKER=(); SES_CWD=(); SES_ALIVE=()
 # recipe-lint flags a recipe needing it as a semantic_gap before recording. Set
 # DRIVE_SLASH_REQUIRES_STEP_TYPE=true if antigravity is headless-first (a bare
 # send "/cmd" stores literal text instead of reaching the REPL).
-DRIVE_ELICITS="send slash wait_turn sleep"
+DRIVE_ELICITS="send slash wait_turn sleep exit_clean restart resume sigkill"
 DRIVE_SLASH_REQUIRES_STEP_TYPE=false
 RUN_CWD="${IRRLICHT_ONBOARD_CWD:-$STAGING/cwd}"
 mkdir -p "$RUN_CWD"
@@ -159,15 +159,19 @@ trap cleanup EXIT
 # $RUN_CWD, capturing stdout/stderr to "$DRIVER_LOG.stdout|.stderr". Pass the
 # preferred UUID if the agent accepts one. The cleanup trap above tears it down.
 launch_repl() {
+  # Optional extra args (e.g. --continue for resume) are passed through to agy.
+  # The caller must have alloc_slot'd the active slot before calling — the boot
+  # itself (trust prompt + input-ready wait) is identical across launch/restart/
+  # resume, so they all share this body.
+  local extra_args=("$@")
   command -v tmux >/dev/null 2>&1 || { echo "[driver] tmux required" >&2; EXIT_REASON="nonzero(2)"; exit 1; }
-  # alloc_slot mints a fresh slot, points SESSION at its tmux name and ACTIVE at
-  # it, and clears the slot's TRANSCRIPT/UUID. restart/start_session call it again
-  # to open another session; per-slot stdout (.stdout.$ACTIVE) feeds the contract.
-  alloc_slot "antigravitydrv-$$-$(date +%s)-$((N_SLOTS + 1))" "$RUN_CWD"
   tmux kill-session -t "$SESSION" 2>/dev/null || true
   # `|| { … exit … }` keeps a launch failure from aborting under set -e WITHOUT
   # an accurate exit-reason — the cleanup trap then records nonzero(2).
+  # ${arr[@]+"${arr[@]}"} expands to nothing when the array is empty WITHOUT
+  # tripping `set -u` on bash 3.2 (macOS) — a bare "${arr[@]}" is "unbound".
   tmux new-session -d -s "$SESSION" -x 200 -y 50 -c "${SES_CWD[$ACTIVE]}" "agy" \
+    ${extra_args[@]+"${extra_args[@]}"} \
     >>"$DRIVER_LOG.stdout.$ACTIVE" 2>>"$DRIVER_LOG.stderr" \
     || { echo "[driver] failed to launch agy under tmux" >&2; EXIT_REASON="nonzero(2)"; exit 1; }
   # agy mints the conversation dir + transcript only AFTER the first prompt lands,
@@ -311,7 +315,109 @@ send_text() { # <text>
   tmux send-keys -t "$SESSION" Enter
 }
 
+# --- AGENT-SPECIFIC SEAM: find the agy PID the daemon binds ------------------
+# Mirror core/adapters/inbound/agents/antigravity/pid.go: a plain process-name
+# (agy) + cwd match, lowest PID — agy is a single native process per
+# conversation, so no argv filtering. Fallback to the tmux pane's agy child so a
+# SIGKILL can't merely orphan agy (an orphan keeps the cwd alive and the daemon
+# would never observe process_exited).
+agy_pid() {
+  local cwd="${SES_CWD[$ACTIVE]}" best="" p pcwd
+  for p in $(pgrep -x 'agy' 2>/dev/null); do
+    pcwd="$(lsof -a -p "$p" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1)"
+    [[ "$pcwd" == "$cwd" ]] || continue
+    if [[ -z "$best" || "$p" -lt "$best" ]]; then best="$p"; fi
+  done
+  if [[ -z "$best" ]]; then
+    local pane_pid
+    pane_pid=$(tmux list-panes -t "$SESSION" -F '#{pane_pid}' 2>/dev/null | head -1)
+    if [[ -n "$pane_pid" ]]; then
+      best=$(pgrep -x 'agy' -P "$pane_pid" 2>/dev/null | head -1)
+      [[ -z "$best" ]] && best="$pane_pid"
+    fi
+  fi
+  echo "$best"
+}
+
+# --- AGENT-SPECIFIC SEAM: exit_clean — Ctrl-D graceful shutdown --------------
+# agy's Ink REPL exits on Ctrl-D; the OS terminates the agy process and the
+# daemon's process scanner emits process_exited. Sleep gives agy time to flush.
+step_exit_clean() {
+  resolve_transcript || true
+  tmux send-keys -t "$SESSION" C-d
+  sleep 2
+  SES_ALIVE[$ACTIVE]=0
+  echo "[driver] exit_clean[s$ACTIVE]: sent Ctrl-D to $SESSION" >&2
+}
+
+# --- AGENT-SPECIFIC SEAM: sigkill — kill -9 the active session's agy PID ------
+step_sigkill() {
+  resolve_transcript || true
+  local pid; pid="$(agy_pid)"
+  if [[ -n "$pid" ]]; then
+    kill -9 "$pid" 2>/dev/null || true
+    echo "[driver] sigkill[s$ACTIVE]: killed PID $pid (conv-id=$UUID)" >&2
+  else
+    echo "[driver] sigkill[s$ACTIVE]: no agy PID found (cwd=${SES_CWD[$ACTIVE]}, session=$SESSION)" >&2
+  fi
+  SES_ALIVE[$ACTIVE]=0
+  # Leave the dead tmux pane for teardown — the kill alone produces process_exited.
+  sleep 1
+}
+
+# --- AGENT-SPECIFIC SEAM: restart — end this session, start a FRESH one -------
+# A new session id (new conv-id), new chats dir, fresh cwd. Used between
+# session-end variants so each lands as its own session row separated by a grey
+# gap. By the time restart runs the active process is usually already gone (an
+# exit_clean or sigkill preceded it); retire the slot regardless but keep it in
+# the list so the epilogue flushes its conv-id. A fresh cwd keeps each variant's
+# brain dir cleanly separated and gives it its own trust state.
+step_restart() {
+  resolve_transcript || true
+  save_active
+  SES_ALIVE[$ACTIVE]=0
+  tmux kill-session -t "$SESSION" 2>/dev/null || true
+  sleep 1
+  local idx=$(( N_SLOTS + 1 ))
+  alloc_slot "antigravitydrv-$$-$(date +%s)-${idx}" "${RUN_CWD}-${idx}"
+  mkdir -p "${SES_CWD[$ACTIVE]}"
+  SES_CWD[$ACTIVE]="$(cd "${SES_CWD[$ACTIVE]}" && pwd -P)"
+  echo "[driver] restart: new session slot #${ACTIVE} (cwd=${SES_CWD[$ACTIVE]})" >&2
+  launch_repl
+}
+
+# --- AGENT-SPECIFIC SEAM: resume — relaunch agy --continue in the SAME cwd ----
+# agy --continue resumes the MOST RECENT conversation in the cwd: it APPENDS to
+# the SAME <conv-id>/transcript.jsonl across both PID lifetimes (live-verified),
+# so the daemon sees the SAME session_id re-appear, not a new row. This is ONE
+# session (one slot) with two process lifetimes: TRANSCRIPT/UUID/MARKER stay
+# unchanged and we do NOT alloc a new slot (which would double-list the conv-id
+# at curate time). Only the tmux session name rotates; the cwd is reused so
+# DiscoverPID rebinds the new PID to the same session.
+step_resume() {
+  resolve_transcript || true
+  # If exit_clean didn't precede this, end the running agy cleanly first.
+  if [[ "${SES_ALIVE[$ACTIVE]}" == "1" ]]; then
+    tmux send-keys -t "$SESSION" C-d
+    sleep 2
+  fi
+  tmux kill-session -t "$SESSION" 2>/dev/null || true
+  sleep 1
+  SESSION="antigravitydrv-$$-$(date +%s)-r${ACTIVE}"
+  SES_SESSION[$ACTIVE]="$SESSION"
+  SES_ALIVE[$ACTIVE]=1
+  # Keep the SAME transcript cached across the relaunch: agy appends to it rather
+  # than minting a new file, so resolve_transcript must NOT run again (clearing +
+  # re-finding could race the new process / claim a sibling). TRANSCRIPT/UUID/
+  # EXPECTED_TURNS stay as-is.
+  echo "[driver] resume[s$ACTIVE]: relaunch agy --continue (same conv-id=$UUID, cwd=${SES_CWD[$ACTIVE]})" >&2
+  launch_repl --continue
+}
+
 # --- Step dispatch: ALL standard arms present; stubs fail loudly -------------
+# Bring up the first session as slot 1. restart allocates further slots; resume
+# relaunches in place (same slot, same conv-id).
+alloc_slot "antigravitydrv-$$-$(date +%s)" "$RUN_CWD"
 launch_repl
 EXPECTED_TURNS=0
 while IFS= read -r step; do
@@ -323,10 +429,10 @@ while IFS= read -r step; do
     interrupt)       not_implemented interrupt || break ;;       # TODO(antigravity): Escape/Ctrl-C the in-flight turn
     keys)            not_implemented keys || break ;;            # TODO(antigravity): tmux send-keys raw sequence
     reset_session)   not_implemented reset_session || break ;;   # TODO(antigravity): in-REPL /clear|/new → new id, SAME slot; re-resolve SES_TRANSCRIPT[$ACTIVE] (SEAM 3)
-    restart)         not_implemented restart || break ;;         # TODO(antigravity): save_active; alloc_slot <name> <new-cwd>; launch — new slot carries the new id
-    resume)          not_implemented resume || break ;;          # TODO(antigravity): relaunch same id+cwd (1 session, 2 PIDs) — reuse the active slot
-    sigkill)         not_implemented sigkill || break ;;         # TODO(antigravity): kill -9 the active slot's PID
-    exit_clean)      not_implemented exit_clean || break ;;      # TODO(antigravity): Ctrl-D graceful shutdown
+    restart)         step_restart ;;
+    resume)          step_resume ;;
+    sigkill)         step_sigkill ;;
+    exit_clean)      step_exit_clean ;;
     start_session)   not_implemented start_session || break ;;   # TODO(antigravity): save_active; alloc_slot; launch a CONCURRENT session, keep the first alive
     session)         not_implemented session || break ;;         # TODO(antigravity): save_active; load_slot N — switch the active slot
     *)               echo "[driver] unknown step type: $type" >&2; EXIT_REASON="nonzero(2)"; break ;;
@@ -335,12 +441,19 @@ while IFS= read -r step; do
 done < <(jq -c '.[]' <<<"$SCRIPT_JSON")
 
 # --- Write the staging contract (shared) -------------------------------------
+# Persist the live view back to the active slot so multi-session runs flush every
+# conv-id (restart allocs new slots; the loop's last save was the active one).
+save_active
 # emit_session_contract writes session.uuid + transcript.path (slot 1) plus the
-# multi-session session.uuids / transcript.paths lists from SES_TRANSCRIPT, and
-# combines the per-slot stdout (_lib/drive/contracts.sh). For antigravity the
-# daemon's session_id is the <conv-id> DIRECTORY (sessionIDFromPath in the
-# adapter), NOT daemon_sid of the constant transcript.jsonl filename ("transcript")
-# — so pass the resolved conv-id from slot 1 (SES_UUID[1]) as the primary id.
-# drive_exit maps EXIT_REASON → the process exit code.
+# multi-session session.uuids / transcript.paths lists, and combines the per-slot
+# stdout (_lib/drive/contracts.sh). For antigravity the daemon's session_id is the
+# <conv-id> DIRECTORY (sessionIDFromPath in the adapter), NOT daemon_sid of the
+# constant transcript.jsonl filename ("transcript") — so pass the resolved conv-id
+# from slot 1 (SES_UUID[1]) as the primary id, then OVERRIDE the session.uuids list
+# (which emit_ wrote as daemon_sid = "transcript" for every slot) with the conv-ids.
 emit_session_contract "${SES_UUID[1]}"
+: > "$STAGING/session.uuids"
+for (( i = 1; i <= N_SLOTS; i++ )); do
+  echo "${SES_UUID[$i]}" >> "$STAGING/session.uuids"
+done
 drive_exit
