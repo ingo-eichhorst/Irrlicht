@@ -252,6 +252,10 @@ else
               IRRLICHT_BIND_ADDR="$ONBOARD_BIND"
               IRRLICHT_PERMISSION_MODE=grant-all)
   [[ -n "$ONBOARD_HOME" ]] && DAEMON_ENV+=(IRRLICHT_HOME="$ONBOARD_HOME")
+  # Forward a caller-set ready-session TTL so idle-survival cells (1.3) can
+  # shrink the 30-min production default to a recordable window. The daemon's
+  # explicit env array would otherwise drop the inherited override.
+  [[ -n "${IRRLICHT_READY_SESSION_TTL:-}" ]] && DAEMON_ENV+=(IRRLICHT_READY_SESSION_TTL="$IRRLICHT_READY_SESSION_TTL")
   env "${DAEMON_ENV[@]}" "$DAEMON" --record >"$DAEMON_LOG" 2>&1 &
   DAEMON_PID=$!
   echo "daemon started (pid $DAEMON_PID, bind=$ONBOARD_BIND${ONBOARD_HOME:+, home=$ONBOARD_HOME})"
