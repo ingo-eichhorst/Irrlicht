@@ -63,18 +63,18 @@
       "script": [
         {
           "type": "send",
-          "text": "Use a subagent to read every file in this directory one at a time and summarize each — take your time and be thorough."
+          "text": "Immediately dispatch ONE subagent (use invoke_subagent right away, do not do the work yourself first) whose task is: run the shell command `sleep 40`, then read and summarize every file in this directory. Just dispatch it — do not wait for it."
         },
         {
           "type": "sleep",
-          "seconds": 12
+          "seconds": 18
         },
         {
           "type": "sigkill"
         },
         {
           "type": "sleep",
-          "seconds": 20
+          "seconds": 25
         }
       ],
       "verify": [
