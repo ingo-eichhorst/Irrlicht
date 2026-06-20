@@ -3,11 +3,11 @@
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
-    "driver_capability": "gap:wait_turn",
+    "driver_capability": "ready",
     "agent_cli_version": "1.0.10",
     "daemon_version": "0.5.2+9cd5c69.dirty",
     "confidence": 0.7,
-    "notes": "Safe (auto-approved) path: agy has an auto-approve/permission system; the filtered transcript is DONE-only (no permission-pending status) and the parser emits NO waiting signal at all — so the safe arc ready→working→ready (never waiting, tool call fires) is observable. Driver lacks wait_turn → gap."
+    "notes": "Safe (auto-approved) path: agy has an auto-approve/permission system; the filtered transcript is DONE-only (no permission-pending status) and the parser emits NO waiting signal at all — so the safe arc ready→working→ready (never waiting, tool call fires) is observable. wait_turn ported; recorded live."
   },
   "details": {
     "assessment": {
@@ -16,7 +16,7 @@
       "agent": "antigravity",
       "agent_supports": "yes",
       "daemon_capability": "full",
-      "driver_capability": "gap:wait_turn",
+      "driver_capability": "ready",
       "confidence": 0.7,
       "body": "## Verdict\n\n**agent=yes (safe path).** agy ships an auto-classifying permission system — binary strings `Tool Permission`, `Auto-approve`, `auto-approve`, `DenyRule`/`DenyList`/`requires permission`, plus the `--dangerously-skip-permissions` flag. A benign tool call (e.g. `run_command echo hello`, or a directory listing) is auto-approved without a prompt, which is the safe arc this cell captures. (The risky arc — `working→waiting→working→ready` — is the sibling tool-gate scenario, not this one; the claudecode sibling likewise captures only the safe arc.)\n\n**daemon=full.** The safe arc the scenario asserts is `ready → working → ready` with the invariant 'never enters waiting' plus 'at least one tool call'. This is exactly what the antigravity parser produces: `USER_INPUT` opens working; a `PLANNER_RESPONSE` WITH `tool_calls` emits an `assistant_message` + ToolUse (the tool-call requirement); the MODEL tool-result line closes it (`function_call_output`, non-settling); the empty terminal `PLANNER_RESPONSE` settles to ready. Critically, the parser has NO path that ever produces `waiting` — there is no permission-pending emission, and the FILTERED transcript.jsonl contains only `status:\"DONE\"` steps (no pending status), so a waiting transition is structurally impossible. The 'never waiting' invariant is therefore GUARANTEED for the safe path. The sampled transcripts confirm the `PLANNER_RESPONSE(tool_calls) → tool-result → … → empty PLANNER_RESPONSE` shape with no pending status (e.g. `9ea5200c` steps 2–3, 5–6).\n\n**driver=gap:wait_turn.** The recipe needs `send` (tool-triggering prompt) + `wait_turn`. `wait_turn` is `not_implemented` in the scaffolded driver (`DRIVE_ELICITS=\"send slash sleep\"`). `record` ports the agy turn-done poll before driving. NOTE: the risky/waiting branch is NOT capturable here — the filtered transcript shows no permission-pending status, so antigravity's waiting state for a tool gate would be a separate (likely incapable) concern owned by tool-gate-permission-prompt, not this safe-path cell.",
       "caveats": [
