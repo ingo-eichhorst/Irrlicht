@@ -69,7 +69,7 @@
         },
         {
           "type": "sleep",
-          "seconds": 10
+          "seconds": 30
         }
       ],
       "verify": [
