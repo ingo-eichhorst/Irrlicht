@@ -24,7 +24,8 @@
         "Tokens/cost are NOT in the antigravity JSONL (per-conversation SQLite protobuf store the parser does not read); observations assert tokens_nonzero:false, cost_nonzero:false. Not a daemon bug — the lifecycle arc + tool_use are fully observed.",
         "No-waiting invariant is structural: the antigravity parser maps a tool call to assistant_message/function_call_output and never to a waiting state (the adapter declares no permission-gate path on tool execution), so under auto-approve the session cannot flicker to waiting.",
         "Provisional on emission: grounded in the parser read + four real samples (every one auto-executes list_dir/run_command). record promotes provisional→settled.",
-        "driver=gap:wait_turn: wait_turn is a driver stub; record ports it (and the launch_repl session-id/transcript SEAM) before driving."
+        "driver=gap:wait_turn: wait_turn is a driver stub; record ports it (and the launch_repl session-id/transcript SEAM) before driving.",
+        "OBSERVABILITY NOTE (live-verified 2026-06-20, recordings/2026-06-20-13-11-54_irrlichd-0.5.2+66c9f4d): agy 1.0.10 does NOT auto-execute run_command — it gates every tool call behind a UI-only 'Requesting permission for / Do you want to proceed?' dialog. That dialog is NOT written to transcript.jsonl, so the daemon never observes it: the session stays working (never waiting) until the gate is answered. The 'state never entered waiting' invariant + daemon=full verdict therefore still hold exactly as assessed — the gate is invisible to the parser. The driver's wait_turn grants the dialog (Enter on the pre-selected 'Yes') so the tool runs and the turn completes; the recorded arc (USER_INPUT → planner+tool_calls → RUN_COMMAND result → terminal PLANNER_RESPONSE) is byte-identical to a true auto-execute."
       ],
       "sources": [
         {
