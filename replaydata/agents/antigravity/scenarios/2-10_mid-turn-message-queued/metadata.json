@@ -3,11 +3,11 @@
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
-    "driver_capability": "gap:wait_turn",
+    "driver_capability": "ready",
     "agent_cli_version": "1.0.10",
     "daemon_version": "0.5.2+9cd5c69.dirty",
     "confidence": 0.6,
-    "notes": "agy REPL buffers mid-turn input; the filtered transcript (DONE-only) writes no turn boundary for queued text, so the parser sees one contiguous working span. Recipe needs keys + wait_turn — both unelicited → gap."
+    "notes": "agy REPL buffers mid-turn input; the filtered transcript (DONE-only) writes no turn boundary for queued text, so the parser sees one contiguous working span. keys + wait_turn ported; recorded live."
   },
   "details": {
     "assessment": {
@@ -16,7 +16,7 @@
       "agent": "antigravity",
       "agent_supports": "yes",
       "daemon_capability": "full",
-      "driver_capability": "gap:wait_turn",
+      "driver_capability": "ready",
       "confidence": 0.6,
       "body": "## Verdict\n\n**agent=yes.** agy runs an interactive bubbletea REPL (binary strings reference `executor has not processed the previous input yet` and `Shell command queued as pending`), so typed input arriving mid-turn is buffered by the runtime rather than starting a new turn — the same queueing model claudecode and codex have.\n\n**daemon=full (provisional).** The scenario asserts the visible contract: state stays `working` through the queued-message arrival (no `→ ready` flicker, no `→ waiting`), and the cycle still ends at `ready`. The antigravity parser drives `working` only from `USER_INPUT` (turn open) and back to `ready` only from an empty terminal `PLANNER_RESPONSE`. The FILTERED transcript.jsonl contains only `status:\"DONE\"` steps — there is no intermediate/queued status — so a buffered follow-up does NOT appear as a synthetic `USER_INPUT` line until it is consumed. While the first turn runs, the parser sees a contiguous run of `PLANNER_RESPONSE`/tool-result lines = one unbroken working span, exactly the no-flicker invariant. The cycle ends `ready` at the final empty `PLANNER_RESPONSE`. CAVEAT (emission, unconfirmed): no sample exercises mid-turn queueing, so whether agy writes the queued prompt as a mid-turn `USER_INPUT` line BEFORE consumption (which would flicker the span) is unverified — `record` must confirm the single contiguous working span.\n\n**driver=gap:wait_turn.** The recipe needs `keys` (type the follow-up into the TUI mid-turn) and `wait_turn` (block on each turn's completion). Both are `not_implemented` in the scaffolded driver. `record` ports the agy turn-done poll and the raw-keys arm before driving.",
       "caveats": [
