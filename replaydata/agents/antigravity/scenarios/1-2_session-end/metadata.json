@@ -3,7 +3,7 @@
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
-    "driver_capability": "gap:wait_turn,exit_clean,restart,sigkill",
+    "driver_capability": "ready",
     "agent_cli_version": "1.0.10",
     "daemon_version": "0.5.2+9cd5c69.dirty",
     "confidence": 0.75,
@@ -16,7 +16,7 @@
       "agent": "antigravity",
       "agent_supports": "yes",
       "daemon_capability": "full",
-      "driver_capability": "gap:wait_turn,exit_clean,restart,sigkill",
+      "driver_capability": "ready",
       "confidence": 0.75,
       "body": "## Verdict\n\n**agent=yes.** `agy` is a standalone native binary (1 process ↔ 1 conversation) that can exit cleanly (Ctrl-D / Ctrl-C) or be killed. All three session-end variants (clean exit after a no-op turn, SIGKILL mid-idle, SIGKILL mid-turn) are achievable.\n\n**daemon=full.** The ExactName{agy} matcher (`adapter.go:36`) binds the live process, and the process-lifecycle observer surfaces process_exited on death. Because `agy` is a single native process per conversation (no Node launcher/worker split like gemini-cli), the death is a clean single-PID exit — the over-asserted multi-process race that made gemini-cli's clean-exit variant emit no process_exited does not apply here. The session settles to ready before/at exit and disappears within readyTTL.\n\n**driver=gap.** The scaffold `driver-interactive.sh` stubs `wait_turn`, `exit_clean`, `restart`, and `sigkill` as `not_implemented` (DRIVE_ELICITS = send/slash/sleep only). `record` must port all four (plus the multi-session session.uuids/transcript.paths epilogue — three variants = three sessions) from a reference driver before driving.",
       "caveats": [
