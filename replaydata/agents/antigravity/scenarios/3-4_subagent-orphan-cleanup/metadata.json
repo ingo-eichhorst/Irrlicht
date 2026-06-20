@@ -2,50 +2,90 @@
   "scenario_id": "subagent-orphan-cleanup",
   "metadata": {
     "agent_supports": "yes",
-    "daemon_capability": "incapable",
+    "daemon_capability": "full",
     "driver_capability": "ready",
     "agent_cli_version": "1.0.10",
-    "daemon_version": "0.5.2+9cd5c69.dirty",
-    "confidence": 0.8,
-    "notes": "subagents exist but never appear as child sessions in the transcript, so there is no orphaned child for the sweep to reap — incapable, frozen"
+    "daemon_version": "0.5.2+79d7f10",
+    "confidence": 0.7,
+    "notes": "agent=yes daemon=full driver=ready — UNBLOCKED by subagent linking (antigravity_subagent.go). With the child now modelled as a linked session (parent_linked), the #321 no-working-on-cleanup invariant finally has something to assert. Recipe: spawn parent + 1 foreground subagent, wait for parent_linked, SIGKILL the parent's agy process; the pid_manager sweep reaps the parent (process_exited) and the orphaned child via deleteWithChildren WITHOUT a spurious state_transition to working for the child. The child has no own process (pid=0) — it is reaped through the parent's children cascade. driver sigkill step is implemented."
   },
   "details": {
     "assessment": {
       "schema_version": 1,
       "scenario_id": "subagent-orphan-cleanup",
       "agent": "antigravity",
-      "assessed_at": "2026-06-20T00:00:00Z",
       "agent_supports": "yes",
-      "daemon_capability": "incapable",
+      "daemon_capability": "full",
       "driver_capability": "ready",
-      "confidence": 0.8,
-      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: incapable\ndriver_capability: ready\nroute: frozen\n\n## Reasoning\n\n**Agent (yes).** Antigravity has subagents (the `run_subagent` tool, `GetSubagents`/`KillSubagent`/`SubagentSpec` symbols in the `agy` v1.0.10 binary), so a parent CAN launch a child whose process could be orphaned by a SIGKILL of the parent's group.\n\n**Daemon (incapable).** The scenario's invariant — after a restart sweep, the orphaned CHILD session disappears via `process_exited` WITHOUT a spurious `state_transition` to `working` (issue #321) — presupposes that the daemon ever modelled the child as a distinct session in the first place. For Antigravity it never does:\n\n- A subagent leaves no separate transcript file. Real conversations under `~/.gemini/antigravity-cli/brain/` are flat top-level dirs with one `transcript.jsonl`; there is no `subagents/` subdir and no nested child conversation dir, so the fswatcher mints no child `SessionState`. With no child session there is no orphan to sweep and no #321 invariant to assert.\n- `subagent-orphan-cleanup` also depends on `parent_linked` firing (the recipe waits for it before the SIGKILL). The antigravity parser emits no parent link and the package declares no `ParentSessionID` (grep of `core/adapters/inbound/agents/antigravity/` is empty). The transcript carries no `run_subagent` step and no child birth.\n- PID binding is moreover optional CLI-only enrichment (`DiscoverPID` by cwd); a subagent has no separate `agy` process bound to a separate session row, so there is no per-child PID for `pid_manager` to find dead and reap.\n\nNo child session = no orphan = nothing for the sweep to observe. This is `incapable` (no trace / the model can't represent the parent-child topology), not `bug`.\n\n**Driver (ready).** Daemon-frozen, so the driver axis parks at `ready` per #476 (and the scaffolded driver lacks `sigkill` anyway — but that gap is moot because the cell is frozen on the daemon axis).\n\n## What would flip the verdict\n\nAntigravity would have to surface subagents as discoverable child sessions (separate transcripts or a SQLite-protobuf Source) AND the adapter declare parent linkage, so that an orphaned child becomes a real session row the restart sweep can reap.",
+      "confidence": 0.7,
+      "body": "## Verdict\n\n**agent=yes.** Antigravity has subagents (`run_subagent`/`define_subagent`/`invoke_subagent`, `GetSubagents`/`KillSubagent`/`SubagentSpec` in v1.0.10), so a parent CAN launch a foreground child that becomes orphaned when the parent's process is SIGKILLed. Capable model required (Gemini 3.1 Pro High / 3.5 Flash).\n\n**daemon=full (UNBLOCKED).** Previously frozen `incapable` precisely because the daemon never modelled the child as a distinct session, so there was no orphan to sweep and no #321 invariant to assert. Subagent linking removes both blockers: the child is now its own session (`brain/<child>/transcript.jsonl` → `transcript_new`) and is bound to the parent via `AntigravityParentConvID` → `parent_linked` (helpers.go:102) — the recipe's precondition (`parent_linked` fires before the SIGKILL) is now satisfiable. On the SIGKILL of the parent's agy process, the `pid_manager` sweep emits `process_exited` for the parent and reaps the orphaned child through `deleteWithChildren` (pid_manager.go), WITHOUT a spurious `state_transition` to `working` for the orphaned child during cleanup — the #321 invariant. The child has no own process (pid=0, runs inside the parent's invoke), so it is reaped via the parent's children cascade rather than its own dead-PID detection — the no-working-transition invariant is identical for any N≥1, so the minimal 1-child shape suffices.\n\n**driver=ready.** The recipe needs `send` + `wait_turn` + `sigkill`. All three are implemented in `driver-interactive.sh` — `step_sigkill` resolves the agy PID and `kill -9`s it, leaving the dead pane for teardown so the kill alone produces process_exited (driver L500 + step_sigkill). No driver gap (unlike gemini-cli, whose scaffold lacked sigkill).",
       "caveats": [
-        "Even setting the daemon aside, the scaffolded interactive driver lacks a working sigkill step — but the daemon=incapable verdict already freezes the cell, so the driver gap is not the routing reason.",
-        "Same root cause as 3.1/3.2/3.5: no child session is ever modelled because subagent linkage lives only in the per-conversation SQLite protobuf store."
+        "daemon=full is derived from the linking code + the standard #321 cleanup machinery; the actual process_exited for parent AND the orphaned-child cleanup WITHOUT a working flicker are PROVISIONAL until record confirms (confidence 0.7).",
+        "The orphaned child has no own agy process (pid=0) — it is reaped via the parent's deleteWithChildren cascade, not per-child dead-PID detection. The no-working invariant holds either way.",
+        "parent_killed / child_cleanup should anchor on a LANDED phase (parent_turn_start) so a provisional parent_linked doesn't cascade — mirrors the gemini-cli 3.4 sibling anchoring.",
+        "observations omit cost/tokens — antigravity's JSONL carries no usage."
       ],
       "sources": [
         {
           "kind": "file",
-          "ref": "core/adapters/inbound/agents/antigravity/adapter.go",
-          "note": "One session per conv transcript, no child transcript files; no orphaned child row for the sweep"
+          "ref": "core/pkg/transcript/antigravity_subagent.go",
+          "note": "AntigravityParentConvID makes the child a linked session — without it there is no orphan to sweep (the old incapable reason)"
         },
         {
           "kind": "file",
-          "ref": "core/adapters/inbound/agents/antigravity/parser.go",
-          "note": "No parent_linked / ParentSessionID emission; nothing to assert the #321 no-working-on-cleanup invariant against"
+          "ref": "core/application/services/pid_manager.go",
+          "note": "SweepDeadPIDs / deleteWithChildren reaps the parent and cascades to the orphaned child on process_exited, without a working transition (#321)"
         },
         {
           "kind": "file",
-          "ref": "~/.gemini/antigravity-cli/brain/",
-          "note": "Flat top-level conv dirs, no subagents/ subdir; no nested child transcript to be orphaned"
+          "ref": "replaydata/agents/antigravity/driver-interactive.sh:500",
+          "note": "sigkill step implemented (step_sigkill: kill -9 the agy PID) — no driver gap"
         },
         {
           "kind": "file",
           "ref": "agy v1.0.10 binary strings",
-          "note": "run_subagent / GetSubagents / KillSubagent — agent has subagents, but the lifecycle is not in the transcript Source"
+          "note": "run_subagent / KillSubagent / SubagentSpec — the subagent feature"
         }
       ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "agy CLI on PATH (1.0.10), Google OAuth authenticated; no API key",
+        "A CAPABLE model selected (Gemini 3.1 Pro High or Gemini 3.5 Flash) — GPT-OSS 120B fumbles the invoke_subagent schema",
+        "irrlichd in --record mode with grant-all permission mode (transcripts permission)",
+        "A small file in the workspace cwd for the child to read (gives the child enough work to still be alive at SIGKILL time)"
+      ],
+      "setup": [
+        "Driver launches agy under tmux in a fresh workspace cwd; the parent conv-id session binds pid>0 (history.jsonl cwd).",
+        "The send spawns ONE foreground subagent doing a slow task; wait_turn is NOT used to wait for completion — instead a short sleep lets parent_linked fire, then sigkill orphans the still-running child."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Use a subagent to read every file in this directory one at a time and summarize each — take your time and be thorough."
+        },
+        {
+          "type": "sleep",
+          "seconds": 12
+        },
+        {
+          "type": "sigkill"
+        },
+        {
+          "type": "sleep",
+          "seconds": 20
+        }
+      ],
+      "verify": [
+        "the parent conv-id session: ready → working at spawn",
+        "a child session appears (transcript_new) and parent_linked binds child → parent BEFORE the sigkill",
+        "after sigkill: process_exited for the parent",
+        "the orphaned child is reaped (removed/process_exited via deleteWithChildren) WITHOUT a state_transition to working/waiting during cleanup (#321)",
+        "all sessions disappear after the sweep; final state ready"
+      ],
+      "settings": {},
+      "timeout_seconds": 180
     }
   }
 }

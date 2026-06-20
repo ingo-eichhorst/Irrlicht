@@ -2,50 +2,85 @@
   "scenario_id": "workflow-fanout",
   "metadata": {
     "agent_supports": "yes",
-    "daemon_capability": "incapable",
+    "daemon_capability": "full",
     "driver_capability": "ready",
     "agent_cli_version": "1.0.10",
-    "daemon_version": "0.5.2+9cd5c69.dirty",
-    "confidence": 0.8,
-    "notes": "agy has a workflow/fan-out feature (GetWorkflows, encodeFanout) but workflow children never surface in the transcript.jsonl — incapable, frozen"
+    "daemon_version": "0.5.2+79d7f10",
+    "confidence": 0.7,
+    "notes": "agent=yes daemon=full driver=ready — UNBLOCKED by subagent linking (antigravity_subagent.go). agy fans out several parallel children from one parent via a single invoke_subagent whose Subagents array holds several {TypeName,Role,Prompt} entries (the [Project Orchestrator] workflow feature: GetWorkflows/WorkflowSpec/encodeFanout). Each child is its own top-level brain/<child>/ conversation (transcript_new), all linked to the one parent via AntigravityParentConvID → parent_linked; SubagentCount(parent)=N peaks while children run, decrements as each ends, parent working→ready only after the last child. UNLIKE claudecode there is NO per-run subdir and NO journal/bookkeeping file (children are flat top-level conversations), so the 'journal never surfaces as a phantom session' assertion is vacuous for antigravity. Capable model required."
   },
   "details": {
     "assessment": {
       "schema_version": 1,
       "scenario_id": "workflow-fanout",
       "agent": "antigravity",
-      "assessed_at": "2026-06-20T00:00:00Z",
       "agent_supports": "yes",
-      "daemon_capability": "incapable",
+      "daemon_capability": "full",
       "driver_capability": "ready",
-      "confidence": 0.8,
-      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: incapable\ndriver_capability: ready\nroute: frozen\n\n## Reasoning\n\n**Agent (yes).** Antigravity has a genuine workflow / multi-agent-orchestration feature. The `agy` v1.0.10 binary carries `GetWorkflows`, `WorkflowName`, `WorkflowSpec`, `encodeFanout`, and a `[Project Orchestrator]` system-prompt template; the `run_subagent` tool \"invokes one or more subagents by name with a single tool call,\" each running in the background. So the parent can fan out several parallel children at once.\n\n**Daemon (incapable).** The scenario asserts that workflow children appear as the parent's subagents (`ParentSessionID = parent.session_id`, `SubagentCount(parent) = N`), that the run's bookkeeping/journal file never surfaces as a phantom session, and that children follow the ordinary child lifecycle and are swept. For Antigravity none of this reaches the transcript Source:\n\n- Workflow children leave no separate transcript files. Real conversations under `~/.gemini/antigravity-cli/brain/` are flat top-level dirs with a single `transcript.jsonl`; there is no `subagents/` subdir, no per-run `workflows/<run-id>/` directory, and no journal/bookkeeping file under the conv dir. The fswatcher discovers no child `SessionState`, so there is no fan-out to count and (conversely) no phantom 'journal'/'unknown' session to guard against.\n- The filtered `transcript.jsonl` and the unfiltered `transcript_full.jsonl` contain no `run_subagent`/workflow step and no parent reference — only USER_INPUT / PLANNER_RESPONSE / RUN_COMMAND / LIST_DIRECTORY / CONVERSATION_HISTORY / CHECKPOINT. The orchestration is recorded in the per-conversation SQLite protobuf store (`has_subtrajectory`, `parent_references`, WorkflowSpec), which the daemon does not read.\n- The adapter declares no `SubagentCounter` and no `ParentSessionID` (grep of `core/adapters/inbound/agents/antigravity/` is empty), so even if children appeared they could be neither linked nor counted.\n\nNo workflow-child trace exists in any file the daemon tails — `daemon_capability` is `incapable` (no trace), not `bug`.\n\n**Driver (ready).** Daemon-frozen, so the driver axis parks at `ready` per the #476 convention.\n\n## What would flip the verdict\n\nAntigravity would have to write workflow children as discoverable transcripts (or the adapter grow a SQLite-protobuf Source reading WorkflowSpec / parent_references) AND declare a SubagentCounter + parent linkage, including dropping the run's bookkeeping file before any lifecycle recording.",
+      "confidence": 0.7,
+      "body": "## Verdict\n\n**agent=yes.** Antigravity has a genuine workflow / multi-agent-orchestration feature: the v1.0.10 binary carries `GetWorkflows`/`WorkflowName`/`WorkflowSpec`/`encodeFanout` and a `[Project Orchestrator]` system-prompt template, and the `run_subagent`/`invoke_subagent` tool 'invokes one or more subagents by name with a SINGLE tool call' — its `Subagents` array can hold several `{TypeName,Role,Prompt}` entries, so the parent fans out several parallel children at once. Requires a capable model (Gemini 3.1 Pro High / 3.5 Flash); GPT-OSS 120B fumbles the schema.\n\n**daemon=full (UNBLOCKED).** Previously frozen `incapable` because workflow children left no discoverable transcript and the adapter declared no parent link. Subagent linking resolves it: each fan-out child runs as its OWN top-level conversation `brain/<child>/.system_generated/logs/transcript.jsonl` → its own session via `FilesUnderRoot`/`sessionIDFromPath` (transcript_new per child), and ALL of them link to the single parent via `AntigravityParentConvID` (the parent's one `INVOKE_SUBAGENT` step references every child conv-id) → `parent_linked` per child (helpers.go:102). The standard machinery then applies: `ComputeSubagentSummary` makes `SubagentCount(parent) = N` while N children are alive (the parent shows them as its subagents throughout the run); `reevaluateParent` holds the parent `working` while it has active children; children transition `working → ready` as they finish (SubagentCount decrements); the parent settles `working → ready` only after the last child ends; the children are then swept like ordinary child sessions, returning SubagentCount to 0. The scenario's 'run's bookkeeping/journal file never surfaces as a phantom session' guard is VACUOUSLY satisfied for antigravity — its children are flat top-level conversations with NO per-run `workflows/<run-id>/` directory and NO journal/bookkeeping file under any conv dir (the layout that produced claudecode's #565 phantom-journal risk simply does not exist here).\n\n**driver=ready.** A single `send` (opt-in workflow wording, ≈3 trivial children) + `wait_turn` + a settle `sleep`. All implemented in `driver-interactive.sh`. No slash/interrupt/sigkill needed.",
       "caveats": [
-        "agent_supports=yes is grounded in the binary's GetWorkflows/WorkflowSpec/encodeFanout symbols + [Project Orchestrator] template, not a live recording; the incapable verdict is independent of it.",
-        "Same root cause as 3.1/3.2/3.4: the workflow/sub-trajectory linkage lives only in the per-conversation SQLite protobuf store, never in the filtered transcript.jsonl."
+        "daemon=full is derived from the linking code + LIVE-VERIFIED single-child linking note; the N-child fan-out (SubagentCount peak=N, per-child link + decrement) is PROVISIONAL until record confirms multiple children link to the one parent (confidence 0.7).",
+        "The fan-out children have no own agy process — they stay pid=0 (transcript-first). Assert ParentSessionID linkage + the N-count, NOT child PIDs.",
+        "If a capable model still emits a single combined child instead of N, the recipe must be re-prompted to force the Subagents array to hold several entries — a 1-child result is NOT a valid fan-out.",
+        "observations omit cost/tokens — antigravity's JSONL carries no usage."
       ],
       "sources": [
         {
           "kind": "file",
+          "ref": "core/pkg/transcript/antigravity_subagent.go",
+          "note": "AntigravityParentConvID links each fan-out child (the parent's single INVOKE_SUBAGENT step references every child conv-id) — the link that flips this cell"
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/helpers.go:102",
+          "note": "deriveParentSession calls AntigravityParentConvID; ComputeSubagentSummary then tracks SubagentCount(parent)=N"
+        },
+        {
+          "kind": "file",
           "ref": "core/adapters/inbound/agents/antigravity/adapter.go",
-          "note": "One session per conv transcript; no workflows/<run-id>/ dir, no child transcripts, no journal/bookkeeping file under the conv dir"
-        },
-        {
-          "kind": "file",
-          "ref": "core/adapters/inbound/agents/antigravity/parser.go",
-          "note": "Emits no parent_linked / ParentSessionID and no workflow step; nothing to count as a fan-out child"
-        },
-        {
-          "kind": "file",
-          "ref": "~/.gemini/antigravity-cli/brain/",
-          "note": "Flat top-level conv dirs; transcript.jsonl + transcript_full.jsonl show no workflow/run_subagent step and no per-run subdir"
+          "note": "Flat top-level brain/<child>/ conversations — NO per-run subdir, NO journal/bookkeeping file; the #565 phantom-journal guard is vacuous for antigravity"
         },
         {
           "kind": "file",
           "ref": "agy v1.0.10 binary strings",
-          "note": "GetWorkflows / WorkflowName / WorkflowSpec / encodeFanout / [Project Orchestrator] template — workflow fan-out feature exists at the agent level"
+          "note": "GetWorkflows / WorkflowSpec / encodeFanout / [Project Orchestrator] template; invoke_subagent Subagents array holds several entries"
         }
       ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "agy CLI on PATH (1.0.10), Google OAuth authenticated; no API key",
+        "A CAPABLE model selected (Gemini 3.1 Pro High or Gemini 3.5 Flash) — GPT-OSS 120B fumbles the invoke_subagent schema",
+        "irrlichd in --record mode with grant-all permission mode (transcripts permission)"
+      ],
+      "setup": [
+        "Driver launches agy under tmux in a fresh workspace cwd; the parent conv-id session binds pid>0 (history.jsonl cwd).",
+        "The single send uses workflow opt-in wording instructing the parent to fan out ~3 parallel subagents in ONE invoke_subagent call, each doing a trivial ~20s task, so the observer catches several children working concurrently."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Use a multi-agent workflow to fan out THREE parallel subagents at once (a single invoke). Have each one independently spend about 20 seconds counting and describing the files in this directory, then summarize all three results for me."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 15
+        }
+      ],
+      "verify": [
+        "the parent conv-id session: ready → working when the workflow starts",
+        "≈3 child sessions appear (transcript_new each), all parent_linked to the SAME parent (ParentSessionID = parent), NOT top-level sessions",
+        "SubagentCount(parent) peaks at N (~3) while children run; no 'journal'/'unknown' phantom session (vacuous for antigravity — no such file)",
+        "children transition working → ready as they finish; SubagentCount decrements; parent working → ready only after the last child",
+        "children swept; SubagentCount(parent) returns to 0; final state ready"
+      ],
+      "settings": {},
+      "timeout_seconds": 240
     }
   }
 }
