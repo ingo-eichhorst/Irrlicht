@@ -110,7 +110,7 @@ SES_MARKER=(); SES_CWD=(); SES_ALIVE=()
 # recipe-lint flags a recipe needing it as a semantic_gap before recording. Set
 # DRIVE_SLASH_REQUIRES_STEP_TYPE=true if antigravity is headless-first (a bare
 # send "/cmd" stores literal text instead of reaching the REPL).
-DRIVE_ELICITS="send slash wait_turn keys sleep exit_clean restart resume sigkill"
+DRIVE_ELICITS="send slash wait_turn keys sleep exit_clean restart resume sigkill start_session session"
 DRIVE_SLASH_REQUIRES_STEP_TYPE=false
 RUN_CWD="${IRRLICHT_ONBOARD_CWD:-$STAGING/cwd}"
 mkdir -p "$RUN_CWD"
@@ -444,6 +444,28 @@ step_resume() {
   launch_repl --continue
 }
 
+# --- AGENT-SPECIFIC SEAM: start_session — launch a CONCURRENT agy -------------
+# Launch a NEW agy session WITHOUT tearing the active one down: the previous slot
+# keeps running (its tmux survives), so the daemon observes both as independent
+# session rows. Defaults to slot 1's cwd (the same-cwd scenario); pass a directory
+# to launch elsewhere. Claim the active slot's transcript BEFORE spawning the
+# concurrent one — if the prior slot is unresolved, a turn still streaming there
+# keeps bumping its mtime past the new slot's just-touched marker, and the new
+# slot's resolve_transcript could bind to the OLD conv dir. Resolving here marks
+# it claimed so transcript_claimed excludes it from the new slot's discovery.
+step_start_session() { # [cwd]
+  local req_cwd="$1"
+  resolve_transcript || true
+  save_active
+  local idx=$(( N_SLOTS + 1 ))
+  local new_cwd="${req_cwd:-$RUN_CWD}"
+  mkdir -p "$new_cwd"
+  new_cwd="$(cd "$new_cwd" && pwd -P)"
+  alloc_slot "antigravitydrv-$$-$(date +%s)-${idx}" "$new_cwd"
+  echo "[driver] start_session: concurrent session slot #${ACTIVE} (cwd=$new_cwd)" >&2
+  launch_repl
+}
+
 # --- Step dispatch: ALL standard arms present; stubs fail loudly -------------
 # Bring up the first session as slot 1. restart allocates further slots; resume
 # relaunches in place (same slot, same conv-id).
@@ -452,6 +474,20 @@ launch_repl
 EXPECTED_TURNS=0
 while IFS= read -r step; do
   type="$(jq -r '.type' <<<"$step")"
+  # Optional inline session target: switch the active slot to N before running
+  # the step (mirrors the codex driver). start_session is exempt — it allocs its
+  # own slot. The target slot must already exist.
+  tgt="$(jq -r '.session // empty' <<<"$step")"
+  if [[ -n "$tgt" && "$type" != "start_session" && "$tgt" != "$ACTIVE" ]]; then
+    if [[ "$tgt" =~ ^[0-9]+$ && "$tgt" -ge 1 && "$tgt" -le "$N_SLOTS" ]]; then
+      save_active
+      load_slot "$tgt"
+      echo "[driver] switch -> session slot $tgt (conv-id=$UUID)" >&2
+    else
+      echo "[driver] switch: invalid session slot '$tgt' (have $N_SLOTS)" >&2
+      EXIT_REASON="nonzero(2)"; break
+    fi
+  fi
   case "$type" in
     send|slash)      send_text "$(jq -r '.text' <<<"$step")" ;;
     wait_turn)       wait_turn || break ;;
@@ -463,8 +499,8 @@ while IFS= read -r step; do
     resume)          step_resume ;;
     sigkill)         step_sigkill ;;
     exit_clean)      step_exit_clean ;;
-    start_session)   not_implemented start_session || break ;;   # TODO(antigravity): save_active; alloc_slot; launch a CONCURRENT session, keep the first alive
-    session)         not_implemented session || break ;;         # TODO(antigravity): save_active; load_slot N — switch the active slot
+    start_session)   step_start_session "$(jq -r '.cwd // empty' <<<"$step")" ;;
+    session)         : ;;   # pure focus switch — already handled by the inline target block
     *)               echo "[driver] unknown step type: $type" >&2; EXIT_REASON="nonzero(2)"; break ;;
   esac
   (( $(remaining_seconds) <= 0 )) && { EXIT_REASON="timeout"; break; }
