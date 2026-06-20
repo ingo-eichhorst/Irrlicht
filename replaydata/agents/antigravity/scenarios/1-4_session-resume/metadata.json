@@ -3,7 +3,7 @@
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
-    "driver_capability": "gap:wait_turn,exit_clean,resume",
+    "driver_capability": "ready",
     "agent_cli_version": "1.0.10",
     "daemon_version": "0.5.2+9cd5c69.dirty",
     "confidence": 0.9,
@@ -16,7 +16,7 @@
       "agent": "antigravity",
       "agent_supports": "yes",
       "daemon_capability": "full",
-      "driver_capability": "gap:wait_turn,exit_clean,resume",
+      "driver_capability": "ready",
       "confidence": 0.9,
       "body": "## Verdict\n\n**agent=yes.** `agy --help` documents two resume mechanisms: `--continue` / `-c` (Continue the most recent conversation) and `--conversation <ID>` (Resume a previous conversation by ID). **Live-verified**: after a clean exit, launching `agy --continue` in the same cwd appended the second turn to the SAME conv-id transcript (`f4826a94-…/transcript.jsonl` went 4→6 lines; NO new conversation dir was minted).\n\n**daemon=full.** Because resume reuses the same `<conv-id>` directory, `sessionIDFromPath` (`adapter.go:58`) returns the SAME session_id across both PID lifetimes — the daemon sees the original session row re-appear (not a new row), exactly the scenario's load-bearing assertion. DiscoverPID rebinds the new agy PID to the same session by cwd (`pid.go:19`). This is the strongest of the lifecycle cells: the make-or-break emission fact (same transcript file on resume) is confirmed live, not just from code.\n\n**driver=gap.** The scaffold driver stubs `wait_turn`, `exit_clean`, and `resume` as `not_implemented`. `record` must port them — the `resume` arm relaunches `agy --continue` (or `--conversation <id>`) in the SAME cwd so agy appends to the original transcript.",
       "caveats": [
