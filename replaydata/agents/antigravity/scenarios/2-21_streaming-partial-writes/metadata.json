@@ -3,7 +3,7 @@
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
-    "driver_capability": "gap:wait_turn",
+    "driver_capability": "ready",
     "agent_cli_version": "1.0.10",
     "daemon_version": "0.5.2+9cd5c69.dirty",
     "confidence": 0.8,
@@ -16,7 +16,7 @@
       "agent": "antigravity",
       "agent_supports": "yes",
       "daemon_capability": "full",
-      "driver_capability": "gap:wait_turn",
+      "driver_capability": "ready",
       "confidence": 0.8,
       "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: gap:wait_turn\n\nRoute: driver-gap (record ports the stubbed wait_turn seam, then drives).\n\n## What the scenario pins\n\nThe no-flicker streaming invariant: across all partial flushes of a multi-sentence prose response the session stays solidly `working` and only flips to `ready` on the terminal turn-end signal — topology `ready → working → ready`, no tool calls, no premature `ready`.\n\n## agent_supports: yes\n\nThe agy CLI produces a normal conversational turn for a 'write a 5-sentence story' prompt with no tool use — its default behavior, no flag needed.\n\n## daemon_capability: full\n\nThis is the gemini-cli case, NOT the codex case. The key emission finding: agy persists each transcript step ONLY on completion (every line in both transcript.jsonl AND transcript_full.jsonl is status:\"DONE\" — verified across all real conversations). Crucially, intermediate assistant prose is NOT written as separate intermediate no-tool PLANNER_RESPONSE records: every completed turn contains EXACTLY ONE no-tool PLANNER_RESPONSE — the terminal sentinel — and its content is EMPTY (contentlen 0 observed at brain/69343e3e index 38 and 752dfc36 index 6). The parser emits `turn_done` only on a no-tool PLANNER_RESPONSE (parser.go parsePlannerResponse, len(toolCalls)==0 branch). Since agy writes no mid-turn no-tool prose chunk, there is no intermediate record that could prematurely fire turn_done; the band stays `working` across the streaming window and flips to `ready` exactly once, on the terminal empty PLANNER_RESPONSE. The no-flicker invariant holds — daemon=full, recordable.\n\n## driver_capability: gap:wait_turn\n\nThe recipe needs `wait_turn` (block until the terminal no-tool PLANNER_RESPONSE) but driver-interactive.sh declares DRIVE_ELICITS=\"send slash sleep\" and stubs the wait_turn arm. recipe-lint flags it as a semantic_gap. `record` must port the turn-done poll (SEAM 2) before driving.",
       "caveats": [
