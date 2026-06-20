@@ -24,7 +24,8 @@
         "Tokens/cost not in the antigravity JSONL; observations assert tokens_nonzero:false, cost_nonzero:false. Not a daemon bug.",
         "No-flicker invariant is structural: function_call_output (incl. IsError) is a non-settling event in the antigravity parser, and there is no waiting path — only the terminal empty PLANNER_RESPONSE settles to ready. The failing-result IsError classifier is unit-tested (TestParseTurn / TestSuccessfulResultNotError).",
         "Strongly grounded: the live sample 9ea5200c shows bd ready→fail→git status→fail→retry, and 69343e3e shows 17+ self-correcting run_command cycles in one turn. record promotes provisional→settled.",
-        "driver=gap:wait_turn: wait_turn is a driver stub (must not return on a mid-turn failing result); record ports it + the launch_repl session-resolution SEAM first."
+        "driver=gap:wait_turn: wait_turn is a driver stub (must not return on a mid-turn failing result); record ports it + the launch_repl session-resolution SEAM first.",
+        "OBSERVABILITY NOTE (live-verified 2026-06-20, recordings/2026-06-20-13-14-32_irrlichd-0.5.2+a489d47): agy 1.0.10 gates each run_command behind a UI-only 'Requesting permission for / Do you want to proceed?' dialog (it does NOT auto-execute). The dialog is NOT written to transcript.jsonl, so the daemon never observes it: the session stays continuously working (never waiting) across the failed attempt AND the retry. The driver's wait_turn grants each dialog (two grants this run:  then recovered). The recorded arc — failing RUN_COMMAND ('The command failed with exit code: 1', IsError) → retry → terminal PLANNER_RESPONSE — is one contiguous working span; the no-flicker invariant + daemon=full hold exactly as assessed."
       ],
       "sources": [
         {
