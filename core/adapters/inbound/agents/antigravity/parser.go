@@ -160,8 +160,8 @@ func (p *Parser) parsePlannerResponse(raw map[string]any, ev *tailer.ParsedEvent
 // and canonical model id from the sibling conversation store (#719). The
 // transcript carries neither — only the display model name and no usage — so
 // without this the context bar never appears for Antigravity. The store is read
-// once per turn_done (memoized by mtime/size); a missing or unreadable store
-// leaves the event unchanged.
+// once per turn_done (memoized while the store is unchanged); a missing or
+// unreadable store leaves the event unchanged.
 //
 // The store's canonical id (e.g. "gemini-3.1-pro-low") is preferred over the
 // transcript's display name ("Gemini 3.1 Pro") because only the dash form

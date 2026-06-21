@@ -74,6 +74,22 @@ func writeStore(t *testing.T, root, conv string, rows map[int][]byte) string {
 	return filepath.Join(root, "brain", conv, ".system_generated", "logs", transcriptFilename)
 }
 
+// upsertGen opens an existing store and inserts/replaces one gen_metadata row,
+// changing the main .db's mtime/size so a stale cache must invalidate.
+func upsertGen(t *testing.T, dbPath string, idx int, blob []byte) {
+	t.Helper()
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT OR REPLACE INTO gen_metadata (idx, data, size) VALUES (?, ?, ?)`, idx, blob, len(blob)); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // --- tests -------------------------------------------------------------------
 
 func TestDecodeGenMetadata(t *testing.T) {
@@ -190,5 +206,70 @@ func TestTurnDoneNoStoreIsHarmless(t *testing.T) {
 	}
 	if done.Tokens != nil {
 		t.Errorf("absent store must leave Tokens nil, got %+v", done.Tokens)
+	}
+}
+
+// TestStoreCacheFreshness proves the cache returns fresh data when the store
+// changes: a new gen_metadata row (main .db grows) and, separately, a grown
+// -wal file (where live agy writes land before any checkpoint) both invalidate.
+func TestStoreCacheFreshness(t *testing.T) {
+	root := t.TempDir()
+	conv := "abc-123"
+	tp := writeStore(t, root, conv, map[int][]byte{0: genBlob(8106, "gemini-3.1-pro-low")})
+	dbPath := storePathForTranscript(tp)
+
+	var cache dbCache
+	if got, _ := readStoreModelTokens(tp, &cache); got.contextTokens != 8106 {
+		t.Fatalf("first read = %d, want 8106", got.contextTokens)
+	}
+
+	// A new, higher generation must be picked up (not served stale from cache).
+	upsertGen(t, dbPath, 1, genBlob(16353, "gemini-3.1-pro-low"))
+	if got, _ := readStoreModelTokens(tp, &cache); got.contextTokens != 16353 {
+		t.Errorf("after new row, read = %d, want 16353 (cache must invalidate on .db change)", got.contextTokens)
+	}
+
+	// A grown -wal must invalidate too: in WAL mode the committed write sits in
+	// the -wal while the main .db is unchanged, so without this an active
+	// session's bar would freeze. After the read above, cache.walSize == 0 (no
+	// -wal existed). Growing the -wal changes the freshness key, so a correct
+	// cache must NOT serve a hit — i.e. it must not return (ok && walSize still
+	// 0). (We don't assert the value: a synthetic -wal is not a real SQLite WAL,
+	// so the re-read may legitimately succeed or fail; either way it's not a hit.)
+	if err := os.WriteFile(dbPath+"-wal", []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := readStoreModelTokens(tp, &cache); ok && cache.walSize == 0 {
+		t.Errorf("grown -wal served stale from cache (got %d); walSize must be part of the freshness key", got.contextTokens)
+	}
+}
+
+// TestModelSwitchSurvivesStore proves the store write-back does NOT clobber a
+// mid-session model switch: the switch is captured by parseUserInput and the
+// next turn_done canonicalizes it to the switched-to model, not the prior one.
+func TestModelSwitchSurvivesStore(t *testing.T) {
+	root := t.TempDir()
+	conv := "abc-123"
+	tp := writeStore(t, root, conv, map[int][]byte{0: genBlob(5000, "gemini-3.5-flash-low")})
+	dbPath := storePathForTranscript(tp)
+
+	p := &Parser{}
+	p.SetTranscriptPath(tp)
+
+	// Turn 1 on Flash → turn_done canonicalizes to the store's flash id.
+	p.ParseLine(line("USER_EXPLICIT", "USER_INPUT", 0,
+		"<USER_REQUEST>\nhi\n</USER_REQUEST>\n<USER_SETTINGS_CHANGE>\nThe user changed setting `Model Selection` from None to Gemini 3.5 Flash (Low).\n</USER_SETTINGS_CHANGE>", nil))
+	d1 := p.ParseLine(line("MODEL", "PLANNER_RESPONSE", 1, "", nil))
+	if d1.ModelName != "gemini-3.5-flash-low" {
+		t.Fatalf("turn 1 ModelName = %q, want gemini-3.5-flash-low", d1.ModelName)
+	}
+
+	// Turn 2: user switches to Pro; the store's next generation reflects it.
+	upsertGen(t, dbPath, 1, genBlob(6000, "gemini-3.1-pro-low"))
+	p.ParseLine(line("USER_EXPLICIT", "USER_INPUT", 2,
+		"<USER_REQUEST>\nmore\n</USER_REQUEST>\n<USER_SETTINGS_CHANGE>\nThe user changed setting `Model Selection` from Gemini 3.5 Flash (Low) to Gemini 3.1 Pro (Low).\n</USER_SETTINGS_CHANGE>", nil))
+	d2 := p.ParseLine(line("MODEL", "PLANNER_RESPONSE", 3, "", nil))
+	if d2.ModelName != "gemini-3.1-pro-low" {
+		t.Errorf("turn 2 ModelName = %q, want gemini-3.1-pro-low — the switch must survive the store write-back", d2.ModelName)
 	}
 }

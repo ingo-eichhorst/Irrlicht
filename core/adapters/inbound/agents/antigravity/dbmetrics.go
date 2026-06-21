@@ -29,15 +29,18 @@ type dbModelTokens struct {
 	contextTokens int64
 }
 
-// dbCache memoizes one store read keyed by (mtime, size) so a backfill of a
-// long transcript — every historical turn_done re-reading the same growing
-// .db — costs one query per change, not one per turn (mirrors kirocli's
-// sidecarCache).
+// dbCache memoizes one store read keyed by the store's (mtime, size) plus the
+// -wal file size, so a backfill of a long transcript — every historical
+// turn_done re-reading the same growing .db — costs one query per change, not
+// one per turn (mirrors kirocli's sidecarCache). The -wal size is part of the
+// key because live agy writes land in the WAL before any checkpoint; without it
+// an active session's bar would freeze on the first read (see readStoreModelTokens).
 type dbCache struct {
-	mtime time.Time
-	size  int64
-	val   dbModelTokens
-	ok    bool
+	mtime   time.Time
+	size    int64
+	walSize int64
+	val     dbModelTokens
+	ok      bool
 }
 
 // storePathForTranscript maps a transcript path to its sibling conversation
@@ -68,7 +71,17 @@ func readStoreModelTokens(transcriptPath string, cache *dbCache) (dbModelTokens,
 	if err != nil {
 		return dbModelTokens{}, false
 	}
-	if cache != nil && cache.ok && fi.ModTime().Equal(cache.mtime) && fi.Size() == cache.size {
+	// Live agy writes land in the -wal file; the main .db's mtime/size only move
+	// on checkpoint, so the WAL must be part of the freshness key or an active
+	// session's bar would freeze until SQLite next checkpoints. Use its size, not
+	// mtime, so our own read-only opens (which may touch -wal/-shm) don't
+	// spuriously invalidate the cache and re-trigger an O(N) backfill.
+	var walSize int64
+	if wfi, werr := os.Stat(dbPath + "-wal"); werr == nil {
+		walSize = wfi.Size()
+	}
+	if cache != nil && cache.ok &&
+		fi.ModTime().Equal(cache.mtime) && fi.Size() == cache.size && walSize == cache.walSize {
 		return cache.val, true
 	}
 
@@ -89,7 +102,7 @@ func readStoreModelTokens(transcriptPath string, cache *dbCache) (dbModelTokens,
 
 	val := decodeGenMetadata(blob)
 	if cache != nil {
-		*cache = dbCache{mtime: fi.ModTime(), size: fi.Size(), val: val, ok: true}
+		*cache = dbCache{mtime: fi.ModTime(), size: fi.Size(), walSize: walSize, val: val, ok: true}
 	}
 	return val, true
 }
