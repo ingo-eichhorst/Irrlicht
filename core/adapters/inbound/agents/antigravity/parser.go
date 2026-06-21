@@ -29,22 +29,34 @@ import (
 //     failure from the result text.
 //   - source "SYSTEM" (CONVERSATION_HISTORY, CHECKPOINT) — skipped.
 //
-// Tokens/cost are not in the JSONL (they live in the per-conversation SQLite
-// protobuf store), so the parser surfaces no usage; state, cwd, model, and
-// tool/timeline activity all derive from the transcript alone.
+// Cost is not surfaced (the JSONL carries no per-turn pricing), but token usage
+// and the canonical model id ARE read on turn_done from the sibling per-
+// conversation SQLite store (see dbmetrics.go) so the context bar can render
+// (#719); state, cwd, the display model, and tool/timeline activity all derive
+// from the transcript alone.
 //
 // Statefulness:
 //   - cwd: harvested from a run_command tool call's Cwd arg and attached to
 //     every emitted event so PID discovery can match the owning agy process.
 //   - model: harvested from the first <USER_SETTINGS_CHANGE> and attached to
-//     subsequent assistant events.
+//     subsequent assistant events; replaced by the store's canonical id once
+//     read so the model stays resolvable and the context bar doesn't flicker.
 //   - openToolID: the synthetic ID of the currently-open tool call, closed by
 //     the next result line (and swept by the tailer on turn_done).
+//   - path: the transcript path, injected via tailer.TranscriptPathAware, used
+//     to locate the sibling conversation store on turn_done.
+//   - db: memoizes the last store read by (mtime, size).
 type Parser struct {
 	cwd        string
 	model      string
 	openToolID string
+	path       string
+	db         dbCache
 }
+
+// SetTranscriptPath implements tailer.TranscriptPathAware: the tailer injects
+// the transcript path so turn_done can locate the sibling conversation store.
+func (p *Parser) SetTranscriptPath(path string) { p.path = path }
 
 // userSettingsModelRe pulls the model name out of a <USER_SETTINGS_CHANGE>
 // block, e.g. "changed setting `Model Selection` from None to Gemini 3.5 Flash
@@ -117,8 +129,10 @@ func (p *Parser) parsePlannerResponse(raw map[string]any, ev *tailer.ParsedEvent
 
 	if len(toolCalls) == 0 {
 		// No tool call follows — the turn is over (the terminal line is usually
-		// an empty PLANNER_RESPONSE).
+		// an empty PLANNER_RESPONSE). The store has the completed generation's
+		// usage by now, so harvest tokens + the canonical model here.
 		ev.EventType = "turn_done"
+		p.applyDBMetrics(ev)
 		return
 	}
 
@@ -139,6 +153,35 @@ func (p *Parser) parsePlannerResponse(raw map[string]any, ev *tailer.ParsedEvent
 		if cwd := cwdFromToolCall(tcm); cwd != "" {
 			p.cwd = cwd
 		}
+	}
+}
+
+// applyDBMetrics enriches a turn_done event with the latest context-token count
+// and canonical model id from the sibling conversation store (#719). The
+// transcript carries neither — only the display model name and no usage — so
+// without this the context bar never appears for Antigravity. The store is read
+// once per turn_done (memoized while the store is unchanged); a missing or
+// unreadable store leaves the event unchanged.
+//
+// The store's canonical id (e.g. "gemini-3.1-pro-low") is preferred over the
+// transcript's display name ("Gemini 3.1 Pro") because only the dash form
+// resolves in the capacity context-window map. It is written back to p.model so
+// later working-phase events report the same resolvable id and the bar stays
+// lit between turns rather than blinking off.
+func (p *Parser) applyDBMetrics(ev *tailer.ParsedEvent) {
+	if p.path == "" {
+		return
+	}
+	val, ok := readStoreModelTokens(p.path, &p.db)
+	if !ok {
+		return
+	}
+	if val.model != "" {
+		p.model = tailer.NormalizeModelName(val.model)
+		ev.ModelName = p.model
+	}
+	if val.contextTokens > 0 {
+		ev.Tokens = &tailer.TokenSnapshot{Total: val.contextTokens}
 	}
 }
 

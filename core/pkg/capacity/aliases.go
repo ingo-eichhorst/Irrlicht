@@ -100,12 +100,18 @@ var modelAliases = map[string]string{
 	"kimi-code":       "moonshot.kimi-k2-thinking", // LOCAL_OVERRIDE: codeburn → kimi-k2-thinking (not in LiteLLM).
 	"kimi-for-coding": "moonshot.kimi-k2-thinking", // LOCAL_OVERRIDE: codeburn → kimi-k2-thinking (not in LiteLLM).
 
-	// Antigravity Gemini IDs resolve to preview-priced entries.
+	// Antigravity Gemini IDs resolve to preview-priced entries. The conversation
+	// store also emits ids the transcript never shows: "gemini-pro-default" (the
+	// unpinned default Pro) and "gemini-3-flash-a" (the short agent-flash form).
+	// All gemini-3.x share the 1M context window, so the context bar resolves
+	// regardless of which preview tier they price as.
 	"gemini-3.1-pro":         "gemini-3.1-pro-preview",
 	"gemini-3-flash":         "gemini-3-flash-preview",
 	"gemini-3.1-pro-high":    "gemini-3.1-pro-preview",
 	"gemini-3.1-pro-low":     "gemini-3.1-pro-preview",
 	"gemini-3-flash-agent":   "gemini-3-flash-preview",
+	"gemini-3-flash-a":       "gemini-3-flash-preview",
+	"gemini-pro-default":     "gemini-3.1-pro-preview",
 	"gemini-3-pro":           "gemini-3-pro-preview",
 	"gemini-3.1-flash-image": "gemini-3.1-flash-image-preview",
 	"gemini-3.1-flash-lite":  "gemini-3.1-flash-lite-preview",
@@ -117,6 +123,10 @@ var modelAliases = map[string]string{
 	"Gemini 3.5 Flash (High)":   "gemini-3.5-flash",
 	"Gemini 3.5 Flash (Medium)": "gemini-3.5-flash",
 	"Gemini 3.5 Flash (Low)":    "gemini-3.5-flash",
+	// Antigravity also routes OpenAI's open gpt-oss models; the reasoning-effort
+	// suffix ("-medium") rides on the base id. Resolve to the LiteLLM key for the
+	// 128k context window.
+	"gpt-oss-120b-medium": "openai.gpt-oss-120b-1:0",
 
 	// Warp — auto-router slugs plus the literal "GPT-5.3 Codex (… reasoning)"
 	// display strings Warp emits. codeburn maps the codex tier to
