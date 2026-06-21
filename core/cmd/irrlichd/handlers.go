@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"irrlicht/core/adapters/outbound/httputil"
+	"irrlicht/core/adapters/outbound/relay"
 	"irrlicht/core/application/services"
 	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/session"
@@ -232,6 +233,37 @@ func handleGetAgents(allAgents []agent.Agent) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(entries)
+	}
+}
+
+// handleGetPublishStatus serves the daemon → relay forwarder's live link state
+// so the macOS app can show a publish-connection indicator (issue #718). The
+// forwarder runs only when publishing is enabled (IRRLICHT_RELAY_URL set); when
+// it is off, fwd is nil and the endpoint reports {"enabled":false}.
+func handleGetPublishStatus(fwd *relay.Forwarder) http.HandlerFunc {
+	type publishStatusResp struct {
+		Enabled     bool   `json:"enabled"`
+		URL         string `json:"url,omitempty"`
+		State       string `json:"state,omitempty"`
+		LastError   string `json:"lastError,omitempty"`
+		DaemonID    string `json:"daemonId,omitempty"`
+		DaemonLabel string `json:"daemonLabel,omitempty"`
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if fwd == nil {
+			json.NewEncoder(w).Encode(publishStatusResp{Enabled: false})
+			return
+		}
+		s := fwd.Status()
+		json.NewEncoder(w).Encode(publishStatusResp{
+			Enabled:     true,
+			URL:         s.URL,
+			State:       s.State,
+			LastError:   s.LastError,
+			DaemonID:    s.DaemonID,
+			DaemonLabel: s.DaemonLabel,
+		})
 	}
 }
 
