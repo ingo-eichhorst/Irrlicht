@@ -49,17 +49,21 @@ final class DaemonManagerTests: XCTestCase {
         XCTAssertEqual(env["PATH"], "/usr/bin", "base environment must be preserved")
     }
 
-    func testBuildDaemonEnvNoLongerLayersRelayPublishVars() {
-        // Relay publishing now travels over loopback (issue #722), not launch
-        // env: buildDaemonEnv must not inject IRRLICHT_RELAY_* of its own. An
-        // inherited value is left untouched (the app's own environment), but the
-        // builder adds nothing.
+    func testBuildDaemonEnvStripsInheritedRelayVars() {
+        // Relay publishing travels over loopback now (issue #722), not launch
+        // env, and the daemon self-seeds its forwarder from IRRLICHT_RELAY_URL at
+        // boot. So buildDaemonEnv must both add no relay vars of its own AND strip
+        // any inherited from the app's environment — otherwise an app-spawned
+        // daemon would publish to a stale relay the user never configured until
+        // the app's corrective PUT landed.
         let env = DaemonManager.buildDaemonEnv(
-            base: [:],
+            base: ["IRRLICHT_RELAY_URL": "wss://stale", "IRRLICHT_RELAY_TOKEN": "stale", "PATH": "/usr/bin"],
             bindAddr: "127.0.0.1:7837"
         )
-        XCTAssertNil(env["IRRLICHT_RELAY_URL"])
-        XCTAssertNil(env["IRRLICHT_RELAY_TOKEN"])
+        XCTAssertNil(env["IRRLICHT_RELAY_URL"], "inherited relay URL must be stripped")
+        XCTAssertNil(env["IRRLICHT_RELAY_TOKEN"], "inherited relay token must be stripped")
+        XCTAssertEqual(env["IRRLICHT_BIND_ADDR"], "127.0.0.1:7837")
+        XCTAssertEqual(env["PATH"], "/usr/bin", "unrelated base vars must be preserved")
     }
 
     func testPublishSettingsDidChangeDoesNotRelaunchDaemon() {

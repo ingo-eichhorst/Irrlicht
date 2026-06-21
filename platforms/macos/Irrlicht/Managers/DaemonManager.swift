@@ -37,13 +37,19 @@ final class DaemonManager: ObservableObject {
     }
 
     /// Builds the daemon's launch environment from a base (the app's own
-    /// environment). Only `IRRLICHT_BIND_ADDR` is layered on, so the daemon
-    /// listens on the port the app connects to. Relay publishing is no longer
-    /// passed as launch env — the app drives it live over the daemon's loopback
-    /// `PUT /api/v1/relay/publish` instead (issue #722).
+    /// environment). `IRRLICHT_BIND_ADDR` is layered on so the daemon listens on
+    /// the port the app connects to. Relay publishing is no longer passed as
+    /// launch env — the app drives it live over the daemon's loopback
+    /// `PUT /api/v1/relay/publish` (issue #722) — so any `IRRLICHT_RELAY_URL` /
+    /// `IRRLICHT_RELAY_TOKEN` inherited from the app's own environment is
+    /// stripped. The daemon self-seeds its forwarder from those vars at boot, so
+    /// without this an app-spawned daemon would start publishing to a relay the
+    /// user never configured in the UI until the app's corrective PUT landed.
     static func buildDaemonEnv(base: [String: String], bindAddr: String) -> [String: String] {
         var env = base
         env["IRRLICHT_BIND_ADDR"] = bindAddr
+        env.removeValue(forKey: "IRRLICHT_RELAY_URL")
+        env.removeValue(forKey: "IRRLICHT_RELAY_TOKEN")
         return env
     }
 
@@ -57,10 +63,15 @@ final class DaemonManager: ObservableObject {
         pushPublishConfig()
     }
 
-    /// PUT the current publish settings to the daemon now (fire-and-forget).
-    /// Used when the daemon is already known to be reachable (the adopt path and
-    /// settings nudges). The daemon's Apply is idempotent, so re-POSTing the
-    /// config already in effect is a cheap no-op.
+    /// PUT the current publish settings to the daemon now. Used when the daemon
+    /// is already known to be reachable (the adopt path and settings nudges). The
+    /// daemon's Apply is idempotent, so re-POSTing the config already in effect is
+    /// a cheap no-op.
+    ///
+    /// Best-effort with a few retries: publishing now depends entirely on this
+    /// PUT (the app no longer seeds the daemon via launch env, issue #722), so a
+    /// single dropped request must not strand the daemon in the wrong publish
+    /// state — nothing else re-pushes the config until the next settings change.
     ///
     /// The UserDefaults flags are read on the main actor (cheap), but the
     /// Keychain token read and the network call run on a detached task: Keychain
@@ -72,7 +83,12 @@ final class DaemonManager: ObservableObject {
         Task.detached {
             let token = KeychainStore.get(account: "relayToken")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            await PublishClient.apply(enabled: enabled, url: url, token: token)
+            for attempt in 0..<3 {
+                if await PublishClient.apply(enabled: enabled, url: url, token: token) {
+                    return
+                }
+                if attempt < 2 { try? await Task.sleep(nanoseconds: 300_000_000) }
+            }
         }
     }
 
