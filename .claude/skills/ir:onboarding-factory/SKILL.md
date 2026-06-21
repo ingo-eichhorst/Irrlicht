@@ -11,7 +11,10 @@ description: >
   the parent keeps its context for strategic decisions instead of drowning in
   per-cell tool output. Use when the user says "/ir:onboarding-factory",
   "onboard agent", "add a scenario", "assess fixtures", "record fixtures", or
-  "regenerate recordings".
+  "regenerate recordings". For unattended / overnight runs ("push through",
+  "onboard everything", "implement everything that can be"), see the Overnight
+  push-through mode section — implement every feasible unlock and deliver a
+  report-as-PR, autonomously.
 ---
 
 # Irrlicht onboarding factory — dispatcher
@@ -35,6 +38,60 @@ done. So each cell's work is ONE `Agent` call that burns its OWN context and
 returns a short summary. The parent decides *which* cells to touch; the
 subagents do the work and report back. See
 [`return-contract.md`](return-contract.md) for the shared ≤6-line envelope.
+
+## Overnight push-through mode (the maintainer's default for unattended runs)
+
+Triggered by "push through", "everything", "onboard fully", "overnight", or any
+unattended / scheduled run. The goal is **a valid report and a reviewable PR by
+morning, with every cell that *can* be observed actually observed** — not just
+the easy ones. Run **fully autonomously**: never call `AskUserQuestion` /
+`ExitPlanMode` / block on a prompt mid-run — make the sensible call, document it,
+and keep going. Emit a one-line status at each stage boundary (see
+[[feedback_overnight_pushthrough]]); the final PR body *is* the morning report.
+
+This is more than the standard sweep. Work three passes until the matrix stops
+moving:
+
+1. **Sweep** — assess every cell, then record every `pending-record` cell (the
+   normal dispatcher flow described below).
+
+2. **Unlock — implement what's missing.** Do **not** accept a frozen verdict at
+   face value. For each non-`observed` cell (`blocked-daemon` / `blocked-driver`
+   / `unobservable` / `unknown`), ask: *is the blocker a daemon / parser / driver
+   feature that is feasible to build?* If yes, **build it** — this is the one
+   kind of work the parent does directly (Go code under `core/`, never
+   `replaydata/`, so the iron rule still holds): an adapter parser fix, a new
+   daemon capability, a `Source` / discovery extension, a driver seam. And
+   **empirically probe every `unobservable` verdict** — drive the agent into that
+   edge state and read what actually lands on disk; assessments are sample-based
+   and routinely under-call what's observable. Every feature gets **unit tests
+   AND a live end-to-end check**. Then re-assess + re-record the now-unblocked
+   cells (back through the subagents). Repeat pass 2 until nothing is feasibly
+   unlockable. (Precedent: the antigravity run shipped PID-binding, subagent
+   linking, and three parser fixes this way — moving ~7 cells from frozen to
+   observed — while probing *confirmed* that permission/interrupt states are
+   genuinely unobservable.)
+
+3. **Freeze honestly — but never fake.** A cell stays frozen ONLY when the signal
+   genuinely doesn't exist: the agent lacks the feature, the data isn't persisted
+   anywhere readable (live-API-only / TUI-only), or it needs an upstream change.
+   **Never ship a fragile guess to force a green cell** — e.g. decoding unlabeled
+   protobuf with no ground truth to validate against. The test: *would a reviewer
+   accept this as correct, or is it a plausible guess?* If a guess, freeze it,
+   document the exact blocker, and file a follow-up issue.
+
+Then **deliver**: get the full suite green (`go test ./core/... -race`, `go test
+./tools/onboarding-factory/... -race`, `tools/replay-fixtures.sh`, `of
+validate`), commit in clean logical commits, push, and open / update **one PR**.
+The PR body is the report: cells observed (count + delta), cells frozen (grouped
+by honest reason), features implemented (with their tests), follow-ups filed.
+Update the relevant memory.
+
+**Scope guard.** "Implement everything that can be implemented" means everything
+**feasible and verifiable** — proven by tests + a live run. It does NOT mean
+force-greening the impossible. A cell that is frozen for a real reason, with a
+filed follow-up, is a valid outcome and belongs in the report — that is success,
+not a gap.
 
 ## The four verbs
 
@@ -211,3 +268,8 @@ write verb validates-then-writes atomically and forces the foreign keys
   signal and `record` commits its own recording.
 - **Don't run an isolated recording daemon while production `irrlichd` is up.**
   Use `of record run --attach`; the precheck enforces this.
+- **Don't accept a frozen verdict without probing it (push-through mode).** An
+  `unobservable` / `blocked-*` cell may just need a feature built or an
+  empirical probe — see Overnight push-through mode. But don't swing the other
+  way and **fake green**: never ship a guess (e.g. reverse-engineered unlabeled
+  data) to force a cell observed. Freeze honestly + file a follow-up.
