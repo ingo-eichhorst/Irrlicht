@@ -1,0 +1,81 @@
+{
+  "scenario_id": "multiple-agents-same-workspace",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.0.10",
+    "daemon_version": "0.5.2+9cd5c69.dirty",
+    "confidence": 0.75,
+    "notes": "antigravity coexists with codex in one cwd; each observed independently from its own transcript root with its correct adapter label. Driver wait_turn already ported (DRIVE_ELICITS). Partner switched claudecode->codex: claudecode's hooks POST to hardcoded :7837 so it can't be coexist-recorded on the isolated 7838 daemon; codex is filesystem-observed (~/.codex/sessions) and authed."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "multiple-agents-same-workspace",
+      "agent": "antigravity",
+      "assessed_at": "2026-06-20T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.75,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\nroute: record (driver wait_turn already ported)\n\n## Reasoning\n\n**Agent (yes).** An `agy` CLI session can run in the same cwd as a different coding agent (e.g. claudecode). Antigravity is a standalone native binary writing to its own brain store under `~/.gemini/antigravity-cli/brain/`, fully decoupled from another agent's process and transcript root.\n\n**Daemon (full).** The daemon labels each adapter independently \u2014 disjoint `ProcessMatchers` (antigravity is `ExactName{agy}`; claudecode/codex match their own binaries) and disjoint transcript roots (antigravity tails `~/.gemini/antigravity{,-cli}/brain`, claudecode tails `~/.claude/projects`, codex `~/.codex/sessions`). Per-(adapter, session_id) state and metrics come from independent parsers, so a single --record daemon observing one shared cwd produces two distinct sessions \u2014 one per adapter \u2014 each with its own working\u2192ready arc and no cross-contamination. The antigravity side's arc derives entirely from its own transcript, exactly the adapter-agnostic two-independent-arcs assertion. This scenario asserts NO token/cost cross-checks for the antigravity row beyond correct labeling + independent state, so Antigravity's missing JSONL usage does not weaken it.\n\nNote on Source rooting: the adapter declares the IDE store via `ExtraDirs` rather than rooting at the shared `~/.gemini` parent precisely to avoid colliding with the Gemini CLI adapter's `~/.gemini/tmp` \u2014 so antigravity and a coexisting gemini-cli also stay disjoint. Coexistence labeling is a designed property.\n\n**Driver (gap:wait_turn).** The recipe is a single send + wait_turn (run-cell-multi.sh drives each adapter's own interactive driver concurrently against one shared cwd). The antigravity interactive driver's `wait_turn` (SEAM 2) is unimplemented \u2014 `DRIVE_ELICITS` is only `\"send slash sleep\"`, and `wait_turn` is a stubbed `not_implemented` arm. Without a turn-done poll the driver cannot bracket antigravity's working\u2192ready arc, so the cell's settle phase would validate as missing. SEAM 2 (wait_turn) is already ported (in DRIVE_ELICITS), so this records directly. NOT an observability limit.\n\n## What record must do\n\nPort SEAM 2 (`wait_turn`: poll antigravity's transcript.jsonl for a terminal PLANNER_RESPONSE with no tool_calls \u2014 the parser's turn_done signal), then drive the coexist recipe via run-cell-multi.sh with antigravity + a partner adapter (e.g. claudecode) in one cwd.",
+      "caveats": [
+        "daemon=full is derived from reading the adapter's disjoint ProcessMatcher + transcript roots; it is provisional until record proves the antigravity session is labeled correctly and transitions independently alongside the partner adapter in one shared cwd.",
+        "The partner adapter (claudecode in this recipe) must itself be recordable; this cell stores the antigravity transcript for the replay golden and shares the workspace events.jsonl.",
+        "RECORD CORRECTION (2026-06-20): partner switched claudecode->codex. claudecode's hooks POST to hardcoded :7837, so it cannot be coexist-recorded against the isolated 7838 daemon (precheck refuses). codex is filesystem-observed (~/.codex/sessions, ExactName matcher) and recorded clean alongside antigravity in one shared cwd, each labeled with its own adapter."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/antigravity/agent.go",
+          "note": "ProcessMatcher ExactName{agy}; Source FilesUnderRoot over ~/.gemini/antigravity{,-cli}/brain (IDE via ExtraDirs) \u2014 disjoint from other adapters' matchers/roots"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/antigravity/adapter.go",
+          "note": "ExtraDirs (not rooting at shared ~/.gemini) explicitly avoids colliding with the Gemini CLI adapter's ~/.gemini/tmp \u2014 coexistence is a designed property"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/antigravity/driver-interactive.sh",
+          "note": "DRIVE_ELICITS='send slash sleep'; wait_turn (SEAM 2) is a stubbed not_implemented arm \u2014 must be ported before recording"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "partner_adapter": "codex",
+      "preconditions": [
+        "agy AND codex CLIs on PATH and authenticated (agy via Google OAuth; codex via ~/.codex/auth.json)",
+        "irrlichd is recording \u2014 run-cell-multi.sh isolated coexist mode (its own --record daemon + IRRLICHT_HOME on an alternate port, production keeps running)",
+        "no other agy/codex session is live in the run cwd"
+      ],
+      "setup": [
+        "run-cell-multi.sh creates ONE shared cwd and launches the antigravity and codex interactive drivers concurrently, both pointed at it via IRRLICHT_ONBOARD_CWD",
+        "the isolated daemon observes antigravity via ~/.gemini/antigravity-cli/brain and codex via ~/.codex/sessions \u2014 both keyed off the real $HOME \u2014 labeling each adapter independently",
+        "this cell stores the antigravity transcript for the replay golden; its events.jsonl and expected.jsonl span the whole workspace (both adapters)"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: alpha"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 15
+        }
+      ],
+      "verify": [
+        "events.jsonl contains TWO distinct session_ids from two different adapters (antigravity + codex), both keyed to the same cwd slug",
+        "each session has its own independent working->ready arc; no transition on one is attributed to the other",
+        "no cross-contamination: the daemon never merges or flaps the two adapters' rows; each carries its correct adapter label"
+      ],
+      "settings": {},
+      "timeout_seconds": 240
+    }
+  }
+}

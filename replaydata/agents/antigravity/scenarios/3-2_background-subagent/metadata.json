@@ -1,0 +1,86 @@
+{
+  "scenario_id": "background-subagent",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.0.10",
+    "daemon_version": "0.5.2+79d7f10",
+    "confidence": 0.7,
+    "notes": "agent=yes daemon=full driver=ready — UNBLOCKED by subagent linking (antigravity_subagent.go). agy dispatches a fire-and-forget background subagent (run_subagent 'runs in the background, reports back when done'); the parent finishes its own reply while a detached child keeps working. The child is its own brain/<child>/ conversation (transcript_new), linked via AntigravityParentConvID → parent_linked. Per the unified rule the SESSION stays working (reevaluateParent / hasActiveChildren) even though the parent's own reply reached end_turn; SubagentCount includes the live child; working→ready only after the last child drains. Same daemon mechanism as 3.1, only the timing differs (parent end_turn lands BEFORE child drain). Capable model required."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "background-subagent",
+      "agent": "antigravity",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.7,
+      "body": "## Verdict\n\n**agent=yes.** Background subagents are exactly what `run_subagent` is: the v1.0.10 schema says 'each subagent runs in the BACKGROUND with its own prompt and reports back when done,' and the binary carries `GetSubagents`/`HasSubagents`/`KillSubagent` plus the IDE 'Background Tasks' pane. The parent dispatches one (or several) fire-and-forget children via `invoke_subagent` and FINISHES ITS OWN REPLY (acknowledge + report back) without blocking on results. Requires a capable model (Gemini 3.1 Pro High / 3.5 Flash); GPT-OSS 120B fumbles the invoke_subagent schema.\n\n**daemon=full (UNBLOCKED).** Previously frozen `incapable`. With subagent linking the prerequisites now exist and the SAME daemon mechanism as foreground-subagent applies — the only difference is timing. The background child runs as its own top-level conversation `brain/<child>/.system_generated/logs/transcript.jsonl` → its own session via `FilesUnderRoot`/`sessionIDFromPath` (transcript_new). `AntigravityParentConvID` (antigravity_subagent.go) finds the parent via its `INVOKE_SUBAGENT` step referencing the child conv-id → `parent_linked` (wired in helpers.go:102). The distinguishing observable: the parent's OWN reply reaches end_turn (a terminal `PLANNER_RESPONSE` with no tool_calls) BEFORE the child drains, yet the SESSION stays `working` because `reevaluateParent` holds it on `hasActiveChildren`; `ComputeSubagentSummary` counts the live child. The session transitions `working → ready` ONLY after the last background child drains. LIVE-VERIFIED (the linking mechanism): a spawned subagent linked child.parent_session_id=parent, parent summary total:1 working:1, parent held working.\n\n**driver=ready.** A single `send` (dispatch background child(ren) + report immediately) + `wait_turn` (parent's own reply ends) + a settle `sleep` that holds the child fresh under the SubagentQuietWindow. All implemented in `driver-interactive.sh`.",
+      "caveats": [
+        "daemon=full is derived from the linking code + LIVE-VERIFIED linking note; the held-working-past-parent-end_turn timing for antigravity's BACKGROUND shape is PROVISIONAL until record confirms the parent does NOT go ready while the child is alive (confidence 0.7).",
+        "The background child has no own agy process — it stays pid=0 (transcript-first). Assert ParentSessionID linkage + held-working + subagent summary, NOT a child PID.",
+        "FAITHFULNESS: if the recording shows the parent blocked until the child finished (parent end_turn AFTER child drain), the dispatch ran foreground — re-craft the send to force background + report-immediately, do NOT accept it as background.",
+        "observations omit cost/tokens — antigravity's JSONL carries no usage."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/pkg/transcript/antigravity_subagent.go",
+          "note": "AntigravityParentConvID links the background child to the parent via the parent's INVOKE_SUBAGENT step — the link that enables held-working"
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/helpers.go:102",
+          "note": "deriveParentSession calls AntigravityParentConvID — wiring point; the standard reevaluateParent/hasActiveChildren machinery then holds the parent working"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/antigravity/parser.go:120",
+          "note": "Parent's terminal PLANNER_RESPONSE no-tool would settle it ready — but hasActiveChildren overrides; the recording must confirm the override"
+        },
+        {
+          "kind": "file",
+          "ref": "agy v1.0.10 binary strings",
+          "note": "run_subagent 'runs in the background ... reports back when done'; Background Tasks pane"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "agy CLI on PATH (1.0.10), Google OAuth authenticated; no API key",
+        "A CAPABLE model selected (Gemini 3.1 Pro High or Gemini 3.5 Flash) — GPT-OSS 120B fumbles the invoke_subagent schema",
+        "irrlichd in --record mode with grant-all permission mode (transcripts permission)"
+      ],
+      "setup": [
+        "Driver launches agy under tmux in a fresh workspace cwd; the parent conv-id session binds pid>0 (history.jsonl cwd).",
+        "The single send dispatches a background subagent doing ~15-20s of work and instructs the parent to acknowledge immediately and report back WITHOUT waiting, so the parent's end_turn lands mid-child; the settle sleep holds the child fresh under the SubagentQuietWindow so the daemon doesn't fast-forward a still-writing child out of the held-working window."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Dispatch a background subagent to count the files in this directory and summarize them — do NOT wait for it. As soon as you've dispatched it, reply with exactly: dispatched"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 18
+        }
+      ],
+      "verify": [
+        "the parent conv-id session: ready → working at dispatch",
+        "a background child session appears (transcript_new) and parent_linked binds child → parent",
+        "the parent's own reply reaches end_turn but the SESSION stays working (held by hasActiveChildren) — NO ready transition while the child is alive",
+        "SubagentCount(parent) includes the live background child",
+        "working → ready only after the last background child drains; final state ready"
+      ],
+      "settings": {},
+      "timeout_seconds": 180
+    }
+  }
+}

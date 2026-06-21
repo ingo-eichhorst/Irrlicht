@@ -1,0 +1,44 @@
+{
+  "scenario_id": "user-blocking-plan-mode-approval",
+  "metadata": {
+    "agent_supports": "partial",
+    "daemon_capability": "incapable",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.0.10",
+    "daemon_version": "0.5.2+9cd5c69.dirty",
+    "confidence": 0.8,
+    "notes": "agy has plan mode (PLAN_MODE_ON/OFF in binary), but a plan-approval pause is an in-progress state never persisted to the transcript (all lines status:DONE) and the adapter has no waiting/ExitPlanMode signal. daemon=incapable → frozen."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "user-blocking-plan-mode-approval",
+      "agent": "antigravity",
+      "agent_supports": "partial",
+      "daemon_capability": "incapable",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: partial\ndaemon_capability: incapable\ndriver_capability: ready (n/a — frozen)\n\nRoute: frozen (the plan-approval `waiting` episode is not observable for antigravity).\n\n## What the scenario pins\n\n`ready → working → waiting`; state never entered `ready` between the plan emission and the user reply; after approval `waiting → working → ready`. Final state: `waiting`; the `waiting` episode is user-visible.\n\n## agent_supports: partial\n\nThe agy binary ships plan mode (binary strings: `PLAN_MODE_ON`, `PLAN_MODE_OFF`, `PLAN_MODE_UNSPECIFIED`, `CASCADE_NUX_LOCATION_PLAN_MODE`), so the agent CAN enter plan mode and pause for approval. `partial` because the approval pause is a transient UI/IPC state, not a durable observable surface.\n\n## daemon_capability: incapable\n\nSame structural limit as user-blocking-question. The Antigravity adapter is transcript-first and the parser has NO waiting / ExitPlanMode / plan-approval signal — there is no emission path that yields `waiting`. And the pause itself is never persisted: every line in BOTH transcript.jsonl and transcript_full.jsonl is status:\"DONE\" (verified across all real conversations); a plan awaiting approval is an in-progress (non-DONE) state appended only once resolved. No `PLAN_MODE` / approval marker appears in any recorded transcript. No trace exists → the 3-state model cannot represent the plan-mode pause for this agent.\n\n## driver_capability: n/a\n\nMoot under a frozen route.",
+      "caveats": [
+        "Re-assess if Antigravity persists a plan-pending / approval-pending step to the transcript, or if the adapter gains a plan-mode waiting signal sourced outside the transcript."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/antigravity/parser.go",
+          "note": "no plan-mode / ExitPlanMode / waiting emission path; only working/ready"
+        },
+        {
+          "kind": "file",
+          "ref": "~/.gemini/antigravity-cli/brain/69343e3e-d308-42ff-80a8-d727aead60bb/.system_generated/logs/transcript_full.jsonl",
+          "note": "100% status:\"DONE\"; no PLAN_MODE / approval marker — the pause is never persisted"
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.local/bin/agy",
+          "note": "binary strings: PLAN_MODE_ON / PLAN_MODE_OFF confirm plan mode exists as an agent feature, but it does not surface in the tailed transcript"
+        }
+      ]
+    }
+  }
+}

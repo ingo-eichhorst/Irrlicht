@@ -1,0 +1,44 @@
+{
+  "scenario_id": "user-blocking-question",
+  "metadata": {
+    "agent_supports": "partial",
+    "daemon_capability": "incapable",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.0.10",
+    "daemon_version": "0.5.2+9cd5c69.dirty",
+    "confidence": 0.8,
+    "notes": "agy has an AskQuestion tool, but the filtered transcript records only status:DONE steps — the WAITING/blocking state is never persisted (no STEP_STATUS_WAITING line in either transcript), and the adapter has no user-blocking/PermissionPending signal. daemon=incapable → frozen."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "user-blocking-question",
+      "agent": "antigravity",
+      "agent_supports": "partial",
+      "daemon_capability": "incapable",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: partial\ndaemon_capability: incapable\ndriver_capability: ready (n/a — frozen)\n\nRoute: frozen (irrlicht fundamentally cannot observe the `waiting` episode for antigravity).\n\n## What the scenario pins\n\n`ready → working → waiting`; the `waiting` episode must be USER-VISIBLE (no skip-over); after the user replies, `waiting → working → ready`. Final state: `waiting`.\n\n## agent_supports: partial\n\nThe agy binary ships an AskQuestion tool (binary strings: `AskQuestion`, `askQuestion`, `ask_question`, and the cancel path `AskQuestion cancelled by user`), so the agent CAN pose a blocking question. `partial` (not `yes`) because the blocking/pause is a transient UI/IPC state, not a durable observable feature surface.\n\n## daemon_capability: incapable\n\nThis is the load-bearing finding. The Antigravity adapter is transcript-first and the parser has NO user-blocking / PermissionPending / waiting signal — the state model is purely USER_INPUT→working, PLANNER_RESPONSE(+tool_calls)→working, terminal no-tool PLANNER_RESPONSE→ready. There is no path that emits `waiting`.\n\nMore fundamentally, the blocking state is never PERSISTED to the file the daemon tails. The binary defines a full step-status enum (STEP_STATUS_WAITING, STEP_STATUS_PENDING, STEP_STATUS_GENERATING, STEP_STATUS_INTERRUPTED, …) but these are internal IPC states: every line in BOTH the filtered transcript.jsonl AND the unfiltered transcript_full.jsonl is status:\"DONE\" (verified across all real conversations). An in-flight AskQuestion is an in-progress (non-DONE) state that is only appended once resolved — so a blocking question leaves no `waiting` trace for any parser to read. No trace exists → the 3-state model cannot represent the episode for this agent.\n\n## driver_capability: n/a\n\nMoot under a frozen route.",
+      "caveats": [
+        "Re-assess if Antigravity ever persists non-DONE (WAITING/PENDING) steps to the transcript, or if the adapter gains a user-blocking-tool signal sourced from outside the transcript (e.g. the SQLite store)."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/antigravity/parser.go",
+          "note": "no waiting/PermissionPending/user-blocking emission path; state model is working/ready only"
+        },
+        {
+          "kind": "file",
+          "ref": "~/.gemini/antigravity-cli/brain/69343e3e-d308-42ff-80a8-d727aead60bb/.system_generated/logs/transcript_full.jsonl",
+          "note": "100% status:\"DONE\" even in the unfiltered view — in-progress/blocking states are never persisted"
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.local/bin/agy",
+          "note": "binary strings: AskQuestion tool exists (+ 'AskQuestion cancelled by user'), and a STEP_STATUS_WAITING enum value exists — but it is an internal state, never written to the transcript"
+        }
+      ]
+    }
+  }
+}

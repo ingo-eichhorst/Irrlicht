@@ -1,0 +1,70 @@
+{
+  "scenario_id": "autonomous-loop",
+  "metadata": {
+    "agent_supports": "partial",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.0.10",
+    "daemon_version": "0.5.2+9cd5c69.dirty",
+    "confidence": 0.8,
+    "notes": "agent=partial daemon=full driver=gap:wait_turn — agy has no /goal self-prompting loop; the honest analogue is its within-one-turn multi-tool loop (the 69343e3e sample runs 17+ run_command cycles autonomously), which the daemon sees as ONE continuous working span — the best fit for the spec's strict no-ready-between-iterations bullet. wait_turn is a driver stub."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "autonomous-loop",
+      "agent": "antigravity",
+      "assessed_at": "2026-06-20T00:00:00Z",
+      "agent_supports": "partial",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: partial\ndaemon_capability: full\ndriver_capability: gap:wait_turn\n\n## Reasoning\n\nThe scenario asserts a strict arc: `ready → working` at loop start; state stays `working` for the ENTIRE autonomous run with NO `ready` between internal iterations; `working → ready` when the goal is reached; ≥2 turns.\n\n### agent_supports: partial\n\nagy ships NO built-in autonomous self-prompting loop like Claude Code's `/goal <condition>` (which registers a Stop hook re-prompting after each turn). The binary's `autonomous` strings are a protobuf field (`autonomous,proto3`) and the non-interactive `--print` mode preamble (\"You are in NON-INTERACTIVE mode. … Work autonomously.\") — a per-RUN flag, not a user-triggerable goal loop with iteration tracking. `MaxIterations` appears only in a packed internal symbol blob alongside RPC/tool names (`call_mcp_tool`, `browser_input`, …), with NO user-facing 'reached the maximum iterations / stopping after N' message anywhere in the binary — so there is no surfaced self-re-prompting goal loop.\n\nWhat agy CAN do — and the honest analogue of the autonomous-loop primitive for an agent without native multi-turn autonomy — is an autonomous loop WITHIN a single user turn: with `--dangerously-skip-permissions` (auto-approve) and a multi-step instruction, the model generates and runs its OWN sequential tool cycles with no user prompts between them. The real `69343e3e-...` sample captures this exactly: ONE `USER_INPUT`, then 17+ `PLANNER_RESPONSE(run_command) → RUN_COMMAND result` cycles where the model decides each next step, observes the result, self-corrects, and iterates, before the terminal empty PLANNER_RESPONSE. This is the same relaxation the sibling kiro-cli and codex autonomous-loop cells adopted (agent=partial there too).\n\n### daemon_capability: full — the BEST fit of the siblings for the spec's strict bullet\n\nBecause agy's iterations live inside ONE turn, the daemon observes a SINGLE continuous `working` span across all internal tool cycles, with `ready` ONLY at the very end — exactly the spec's strict reading (\"state stays working for the entire autonomous run — no ready between internal iterations\"). claudecode flickers ready/working per Stop-hook iteration; antigravity does NOT, because `parsePlannerResponse` maps every mid-turn planner step WITH tool_calls to `assistant_message` and every result line to `function_call_output` (both non-settling), and ONLY the terminal empty PLANNER_RESPONSE → `turn_done` → `working → ready`. No permission `waiting` arises under auto-approve. So the observed arc is: session born ready, `ready → working` on the prompt, a continuous `working` span through N internal run_command cycles, then a single `working → ready` at the end — `ready → working → ready` with ≥2 internal cycles and final `ready`. → `daemon=full`.\n\n### driver_capability: gap:wait_turn\n\nThe recipe needs `send` + `wait_turn` + `sleep`. `wait_turn` must block until the terminal empty PLANNER_RESPONSE (NOT return on any mid-turn tool cycle), and it is a driver stub (DRIVE_ELICITS=\"send slash sleep\"). → `driver=gap:wait_turn`. `record` ports the wait_turn seam + the launch_repl session-resolution SEAM before driving. INTERACTIVE recipe.",
+      "caveats": [
+        "agent=partial: agy has no native /goal self-prompting multi-turn loop; the recorded analogue is its within-one-turn multi-tool autonomous loop (seeded by one prompt), the same relaxation as the kiro-cli/codex siblings. The 'autonomous' binary strings are the --print non-interactive flag + a protobuf field, not a goal loop; MaxIterations is an internal symbol with no user-facing limit message.",
+        "Tokens/cost not in the antigravity JSONL; observations assert tokens_nonzero:false, cost_nonzero:false. There is no goal_status/iteration-count to surface as an 'iteration N/M' counter — not an agy construct, same as kiro-cli/codex; not a spec-required observable.",
+        "daemon=full is the best sibling fit for the strict no-ready-between-iterations bullet because the loop is intra-turn (one continuous working span). Provisional on emission — record promotes provisional→settled.",
+        "driver=gap:wait_turn: wait_turn (must not return on a mid-turn tool cycle) is a driver stub; record ports it + the launch_repl session-resolution SEAM first."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "~/.gemini/antigravity-cli/brain/69343e3e-d308-42ff-80a8-d727aead60bb/.system_generated/logs/transcript.jsonl",
+          "note": "Real autonomous-loop analogue: ONE USER_INPUT then 17+ PLANNER_RESPONSE(run_command)→RUN_COMMAND result cycles (self-correcting, no user prompts between) before the terminal empty PLANNER_RESPONSE — an intra-turn autonomous loop."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/antigravity/parser.go",
+          "note": "Mid-turn planner-with-tool → assistant_message and result → function_call_output are both NON-settling; only the terminal empty PLANNER_RESPONSE settles to ready → one continuous working span across internal iterations."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.local/bin/agy",
+          "note": "Binary strings: 'autonomous' = protobuf field + the --print non-interactive 'Work autonomously' preamble (a per-run flag, not a goal loop); MaxIterations is an internal symbol with no user-facing 'reached maximum iterations' message; no /goal command."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/antigravity/driver-interactive.sh",
+          "note": "DRIVE_ELICITS=\"send slash sleep\"; wait_turn() is a stub → driver=gap:wait_turn."
+        }
+      ]
+    },
+    "recipe": {
+      "timeout_seconds": 240,
+      "settings": {},
+      "script": [
+        {
+          "type": "send",
+          "text": "Run these three shell commands one at a time, in order, each in its own step using your run_command tool, checking the output before moving on: `echo step-one`, then `echo step-two`, then `echo step-three`. Work through all three autonomously without asking me anything in between, then reply with exactly the word: done"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        }
+      ]
+    }
+  }
+}

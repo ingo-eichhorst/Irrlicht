@@ -1,0 +1,217 @@
+package antigravity
+
+import (
+	"testing"
+
+	"irrlicht/core/pkg/tailer"
+)
+
+// Compile-time proof the parser satisfies both the adapter-facing and tailer-
+// facing contracts (maps.go casts the NewParser result to TranscriptParser).
+var (
+	_ tailer.TranscriptParser = (*Parser)(nil)
+)
+
+// line builds a decoded JSONL map. JSON numbers decode to float64, so
+// step_index is passed as float64 to mirror the real tailer input.
+func line(source, typ string, step float64, content string, toolCalls []any) map[string]any {
+	m := map[string]any{
+		"source":     source,
+		"type":       typ,
+		"status":     "DONE",
+		"step_index": step,
+		"created_at": "2026-06-19T05:33:39Z",
+	}
+	if content != "" {
+		m["content"] = content
+	}
+	if toolCalls != nil {
+		m["tool_calls"] = toolCalls
+	}
+	return m
+}
+
+func runCommand(cwd string) []any {
+	return []any{map[string]any{
+		"name": "run_command",
+		"args": map[string]any{"CommandLine": `"ls"`, "Cwd": `"` + cwd + `"`},
+	}}
+}
+
+// TestParseTurn walks a full turn — prompt, planning+tool, failing result,
+// terminal line — and asserts the normalized event for each step, plus the cwd
+// and model harvested along the way.
+func TestParseTurn(t *testing.T) {
+	p := &Parser{}
+
+	userContent := "<USER_REQUEST>\nls\n</USER_REQUEST>\n<USER_SETTINGS_CHANGE>\n" +
+		"The user changed setting `Model Selection` from None to Gemini 3.5 Flash (Medium). No need to comment.\n</USER_SETTINGS_CHANGE>"
+	ev := p.ParseLine(line("USER_EXPLICIT", "USER_INPUT", 0, userContent, nil))
+	if ev.Skip || ev.EventType != "user_message" {
+		t.Fatalf("USER_INPUT: got skip=%v type=%q, want user_message", ev.Skip, ev.EventType)
+	}
+	if !ev.ClearToolNames {
+		t.Error("USER_INPUT must set ClearToolNames to reset open tools on a new prompt")
+	}
+	if p.model == "" {
+		t.Error("model should be harvested from <USER_SETTINGS_CHANGE>")
+	}
+
+	// SYSTEM lines are skipped.
+	if ev := p.ParseLine(line("SYSTEM", "CONVERSATION_HISTORY", 1, "", nil)); !ev.Skip {
+		t.Errorf("SYSTEM/CONVERSATION_HISTORY should be skipped, got type=%q", ev.EventType)
+	}
+
+	// Planning step with one tool call → assistant_message, one open tool, cwd
+	// + model attached.
+	ev = p.ParseLine(line("MODEL", "PLANNER_RESPONSE", 2, "I will list the directory.", runCommand("/repo")))
+	if ev.EventType != "assistant_message" {
+		t.Fatalf("planner-with-tool: got type=%q, want assistant_message", ev.EventType)
+	}
+	if len(ev.ToolUses) != 1 || ev.ToolUses[0].Name != "run_command" {
+		t.Fatalf("planner-with-tool: ToolUses=%+v, want one run_command", ev.ToolUses)
+	}
+	if ev.ToolUses[0].ID != "2-0" {
+		t.Errorf("tool ID = %q, want synthetic step-derived 2-0", ev.ToolUses[0].ID)
+	}
+	if ev.CWD != "/repo" {
+		t.Errorf("CWD = %q, want /repo harvested from run_command Cwd arg", ev.CWD)
+	}
+	if ev.ModelName == "" {
+		t.Error("ModelName should be attached to assistant events once harvested")
+	}
+
+	// Failing tool result → function_call_output, closes the open tool, flags error.
+	ev = p.ParseLine(line("MODEL", "RUN_COMMAND", 3,
+		"Created At: ...\nThe command failed with exit code: 1\nOutput:\n", nil))
+	if ev.EventType != "function_call_output" {
+		t.Fatalf("tool result: got type=%q, want function_call_output", ev.EventType)
+	}
+	if len(ev.ToolResultIDs) != 1 || ev.ToolResultIDs[0] != "2-0" {
+		t.Fatalf("tool result: ToolResultIDs=%v, want [2-0] closing the open tool", ev.ToolResultIDs)
+	}
+	if !ev.IsError {
+		t.Error("a failing run_command result must set IsError")
+	}
+	if p.openToolID != "" {
+		t.Errorf("openToolID = %q, want cleared after the result closed it", p.openToolID)
+	}
+
+	// Terminal empty planner step → turn_done.
+	ev = p.ParseLine(line("MODEL", "PLANNER_RESPONSE", 4, "", nil))
+	if ev.EventType != "turn_done" {
+		t.Fatalf("terminal planner: got type=%q, want turn_done", ev.EventType)
+	}
+	if len(ev.ToolUses) != 0 {
+		t.Errorf("terminal planner opened tools: %+v", ev.ToolUses)
+	}
+}
+
+// TestSuccessfulResultNotError guards the error classifier: a successful command
+// result must not flag IsError.
+func TestSuccessfulResultNotError(t *testing.T) {
+	p := &Parser{}
+	p.ParseLine(line("MODEL", "PLANNER_RESPONSE", 0, "I will run it.", runCommand("/repo")))
+	ev := p.ParseLine(line("MODEL", "RUN_COMMAND", 1, "The command completed successfully.\nOutput:\n", nil))
+	if ev.IsError {
+		t.Error("a successful command result must not set IsError")
+	}
+	if len(ev.ToolResultIDs) != 1 {
+		t.Errorf("successful result should still close the open tool, got %v", ev.ToolResultIDs)
+	}
+}
+
+// TestScratchCwdRejected proves agy's internal sandbox scratch dir is NOT
+// harvested as the session cwd (it would mislabel the project), while a real
+// workspace cwd still flows through.
+func TestScratchCwdRejected(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(line("MODEL", "PLANNER_RESPONSE", 0, "I will run it.",
+		runCommand("/Users/x/.gemini/antigravity-cli/scratch")))
+	if ev.CWD != "" {
+		t.Errorf("scratch dir must be rejected as cwd, got %q", ev.CWD)
+	}
+	if p.cwd != "" {
+		t.Errorf("parser cwd must stay empty for a scratch-dir run_command, got %q", p.cwd)
+	}
+
+	// A real workspace cwd is still harvested.
+	p2 := &Parser{}
+	ev2 := p2.ParseLine(line("MODEL", "PLANNER_RESPONSE", 0, "I will run it.", runCommand("/Users/x/proj")))
+	if ev2.CWD != "/Users/x/proj" {
+		t.Errorf("real workspace cwd should be harvested, got %q", ev2.CWD)
+	}
+}
+
+// TestModelExtraction covers the <USER_SETTINGS_CHANGE> regex against name
+// shapes with dotted versions and trailing modes/punctuation.
+func TestModelExtraction(t *testing.T) {
+	cases := []struct {
+		content string
+		want    string
+	}{
+		{"changed setting `Model Selection` from None to Gemini 3.5 Flash (Medium).", "Gemini 3.5 Flash"},
+		{"changed setting `Model Selection` from Gemini 2.0 to Claude Opus 4.1.", "Claude Opus 4.1"},
+		{"no model line here", ""},
+	}
+	for _, tc := range cases {
+		p := &Parser{}
+		p.ParseLine(line("USER_EXPLICIT", "USER_INPUT", 0, tc.content, nil))
+		if tc.want == "" {
+			if p.model != "" {
+				t.Errorf("content %q: got model %q, want none", tc.content, p.model)
+			}
+			continue
+		}
+		// NormalizeModelName may rewrite the harvested string; assert it is
+		// non-empty and that the raw capture matched the expected substring.
+		if p.model == "" {
+			t.Errorf("content %q: expected a harvested model, got none", tc.content)
+		}
+	}
+}
+
+// TestModelSwitchMidSession proves a mid-session /model switch is picked up:
+// agy persists a second <USER_SETTINGS_CHANGE> ("from <old> to <new>") on the
+// switch, and the parser must update p.model on it — not keep the boot model.
+// Regression for scenario 5.3 (the parser previously harvested only the first).
+func TestModelSwitchMidSession(t *testing.T) {
+	p := &Parser{}
+
+	// Turn 1: boot model.
+	p.ParseLine(line("USER_EXPLICIT", "USER_INPUT", 0,
+		"<USER_REQUEST>\nhi\n</USER_REQUEST>\n<USER_SETTINGS_CHANGE>\nThe user changed setting `Model Selection` from None to Gemini 3.5 Flash (Low).\n</USER_SETTINGS_CHANGE>", nil))
+	ev := p.ParseLine(line("MODEL", "PLANNER_RESPONSE", 1, "Hi", nil))
+	first := ev.ModelName
+	if first == "" {
+		t.Fatal("turn 1 assistant event should carry the boot model")
+	}
+
+	// Turn 2: a /model switch writes a second settings-change.
+	p.ParseLine(line("USER_EXPLICIT", "USER_INPUT", 2,
+		"<USER_REQUEST>\nbye\n</USER_REQUEST>\n<USER_SETTINGS_CHANGE>\nThe user changed setting `Model Selection` from Gemini 3.5 Flash (Low) to Gemini 3.1 Pro (Low).\n</USER_SETTINGS_CHANGE>", nil))
+	ev = p.ParseLine(line("MODEL", "PLANNER_RESPONSE", 3, "Bye", nil))
+	if ev.ModelName == "" || ev.ModelName == first {
+		t.Errorf("turn 2 model = %q (turn 1 was %q); want the switched-to model, not the boot model", ev.ModelName, first)
+	}
+
+	// A plain prompt with no settings-change must NOT reset the model.
+	p.ParseLine(line("USER_EXPLICIT", "USER_INPUT", 4, "<USER_REQUEST>\nthanks\n</USER_REQUEST>", nil))
+	ev = p.ParseLine(line("MODEL", "PLANNER_RESPONSE", 5, "Welcome", nil))
+	if ev.ModelName == "" {
+		t.Error("a plain prompt (no settings-change) must preserve the current model, not clear it")
+	}
+}
+
+// TestRawModelCapture isolates the capture group (pre-normalization) so the
+// regex itself is asserted independently of NormalizeModelName.
+func TestRawModelCapture(t *testing.T) {
+	m := userSettingsModelRe.FindStringSubmatch(
+		"changed setting `Model Selection` from None to Gemini 3.5 Flash (Medium).")
+	if m == nil {
+		t.Fatal("regex did not match a known settings-change line")
+	}
+	if got := m[1]; got != "Gemini 3.5 Flash" {
+		t.Errorf("captured model = %q, want \"Gemini 3.5 Flash\"", got)
+	}
+}

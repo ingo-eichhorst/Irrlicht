@@ -1,0 +1,113 @@
+{
+  "scenario_id": "multiple-sessions-same-cwd",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.0.10",
+    "daemon_version": "0.5.2+9cd5c69.dirty",
+    "confidence": 0.75,
+    "notes": "two agy in one cwd = two independent conv-id transcripts/sessions; daemon keeps them DISTINCT (unique <conv-id> dirs), never merges. Transcript-first: conv-id sessions are pid=0 (no PID binding/disambiguation). Driver start_session/session/wait_turn ported; recorded clean (two distinct session_ids, 7/7 phases)."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "multiple-sessions-same-cwd",
+      "agent": "antigravity",
+      "assessed_at": "2026-06-20T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.75,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\nroute: record (driver gap ported)\n\n## Reasoning\n\n**Agent (yes).** Two `agy` CLI processes can run concurrently in the same cwd. `agy` is a standalone native binary with 1 process per conversation, and each conversation gets its own independent top-level transcript dir under `~/.gemini/antigravity-cli/brain/<conv-id>/` \u2014 confirmed by multiple sibling conv dirs in the real store. Nothing prevents two from sharing a working directory.\n\n**Daemon (full).** This scenario is the heart of the adapter's transcript-first design and it handles it correctly:\n\n- `sessionIDFromPath` mints exactly one session per `<conv-id>` transcript, so two concurrent agy in the same cwd yield two DISTINCT `session_id`s with independent working\u2192ready arcs derived purely from their own transcripts (`adapter.go`).\n- Distinctness is STRUCTURAL and transcript-first: a conv-id session never binds a PID (pid=0 \u2014 agy reports its sandbox scratch dir as the run_command cwd and most turns carry no cwd, so the conv-id transcript session has no cwd and no PID). The two rows stay distinct because their `<conv-id>` dirs are unique, not via any PID disambiguation. (A separate proc-<pid> session minted by the `agy` scanner does NOT merge with a conv-id session \u2014 record confirmed the conv-id sessions alone carry the lifecycle arcs.)\n- State transitions are per-session (parser is per-conversation), so a turn in one session never moves the other \u2014 exactly the no-cross-contamination assertion.\n\nThe scenario's assertions (two distinct session_ids + PIDs, independent arcs, stable binding) all map to events the adapter produces. Crucially, this scenario asserts NO token/cost metrics \u2014 only lifecycle + distinctness + binding \u2014 so the fact that Antigravity omits usage from the JSONL does not weaken the verdict.\n\n**Driver (gap:start_session).** The recipe needs three step types the scaffolded `driver-interactive.sh` does NOT yet elicit: `start_session` (launch the 2nd concurrent agy), `session` (route later steps back to session 1), and `wait_turn` (the turn-done poll). The driver's `DRIVE_ELICITS` is only `\"send slash sleep\"`; `wait_turn`, `start_session`, and `session` are present as arms but stubbed (`not_implemented`), and `wait_turn` (SEAM 2) is unimplemented. These were ported from the codex slot-model reference driver (commit teaching antigravity the start_session + session step types) and recorded clean. NOT an observability limit.\n\n## What record must do\n\nPort SEAM 2 (`wait_turn` \u2014 poll the transcript for a terminal PLANNER_RESPONSE with no tool_calls, the parser's turn_done signal) and the slot-model `start_session`/`session` arms (alloc_slot/load_slot), then drive the two-session recipe.",
+      "caveats": [
+        "daemon=full is derived from reading the adapter (transcript-first one-session-per-conv + cwd PID disambiguation); it is provisional until record proves two concurrent agy in one cwd produce two distinct, independent, non-flapping session rows.",
+        "wait_turn (SEAM 2) is unimplemented in the scaffolded driver \u2014 the same gap affects every script recipe for this column; record ports it once.",
+        "RECORD CORRECTION (2026-06-20): the assessment's 'highest-unclaimed-PID disambiguation' premise is WRONG for antigravity. The live recording (conv-ids a42452a7 + fffe1aa0 in one cwd) showed two distinct transcript-first sessions, each pid=0 with arcs derived purely from its own <conv-id> transcript ('new session created' / 'force ready->working on first activity' / 'agent finished turn -> ready' \u2014 no pid_discovered/process_exited). Distinctness is structural (unique conv-id dirs), not PID-based. 7/7 phases passed."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/antigravity/adapter.go",
+          "note": "sessionIDFromPath mints one session per <conv-id> transcript; two concurrent agy in one cwd => two distinct session_ids"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/antigravity/pid.go",
+          "note": "DiscoverPID matches agy by name+cwd; highest-unclaimed PID disambiguator keeps the two same-cwd sessions' bindings stable (lowest-PID fallback)"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/antigravity/driver-interactive.sh",
+          "note": "DRIVE_ELICITS='send slash sleep'; wait_turn (SEAM 2), start_session, and session are stubbed (not_implemented) \u2014 must be ported before recording"
+        },
+        {
+          "kind": "file",
+          "ref": "~/.gemini/antigravity-cli/brain/",
+          "note": "Multiple sibling conv dirs each with its own transcript.jsonl \u2014 confirms one independent transcript per conversation"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "agy CLI on PATH and authenticated via Google OAuth (oauth_creds.json under ~/.gemini)",
+        "irrlichd is recording (isolated mode spawns its own --record daemon, or --attach against a --record daemon)",
+        "no other agy session is live in the run cwd"
+      ],
+      "setup": [
+        "Driver auto-starts session 1 (slot 1) in <staging>/cwd via `agy`",
+        "The start_session step launches session 2 (slot 2) in the SAME cwd as a separate agy process (separate conversation/transcript)",
+        "Steps carrying {\"session\":1} route send/wait_turn back to session 1 while session 2 stays alive"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: alpha"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "start_session"
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: bravo"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: alpha2",
+          "session": 1
+        },
+        {
+          "type": "wait_turn",
+          "session": 1
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        }
+      ],
+      "verify": [
+        "events.jsonl contains 2 distinct antigravity session_ids (two <conv-id> dirs), both keyed to the same cwd slug",
+        "each session_id has its own independent working->ready arc; no transition on one is attributed to the other",
+        "session 1 shows TWO working->ready arcs (turn1 + the post-start_session re-drive); session 2 shows ONE",
+        "no state flapping: the daemon never swaps the PID-to-session binding between the two rows"
+      ],
+      "settings": {},
+      "timeout_seconds": 240
+    }
+  }
+}

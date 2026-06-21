@@ -1,0 +1,70 @@
+{
+  "scenario_id": "basic-turn",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.0.10",
+    "daemon_version": "0.5.2+9cd5c69.dirty",
+    "confidence": 0.8,
+    "notes": "agent=yes daemon=full driver=ready — smallest round-trip; parser emits user_message→working and a terminal empty PLANNER_RESPONSE→ready, but the interactive driver's wait_turn is a stub."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "basic-turn",
+      "agent": "antigravity",
+      "assessed_at": "2026-06-20T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Reasoning\n\nbasic-turn is the smallest round-trip: one user prompt, one assistant reply, no tool use, asserting the `ready \u2192 working \u2192 ready` arc with `TotalTokens > 0` after the turn.\n\n### agent_supports: yes\n\nThe `agy` CLI (v1.0.10, native binary at ~/.local/bin/agy) runs a plain conversational round-trip out of the box. The four real sample conversations under `~/.gemini/antigravity-cli/brain/` each open with a `USER_EXPLICIT/USER_INPUT` line (the `<USER_REQUEST>` prompt) and close with a terminal `MODEL/PLANNER_RESPONSE` carrying no `tool_calls` \u2014 exactly the basic-turn shape. The model (`Gemini 3.5 Flash`) is harvested from the `<USER_SETTINGS_CHANGE>` block on the first turn. No special mode is needed; `agy --print` (headless) and the interactive REPL both run a single prompt\u2192reply turn.\n\n### daemon_capability: full\n\nSource = `FilesUnderRoot{Dir: .gemini/antigravity-cli/brain, ExtraDirs: [.gemini/antigravity/brain], SessionIDFromPath, JSONLineParser{Parser}}` (`core/adapters/inbound/agents/antigravity/agent.go`). Walking the user-observable lifecycle signal against `parser.go`:\n\n1. **`ready \u2192 working \u2192 ready`** \u2014 observed correctly. `parseUserInput` emits a `user_message` event for the opening `USER_INPUT` line (and sets `ClearToolNames`), driving `ready \u2192 working`. The turn's terminal line is a `MODEL/PLANNER_RESPONSE` with NO `tool_calls`, which `parsePlannerResponse` reclassifies as `EventType = \"turn_done\"` (parser.go ~L113-118), the authoritative settle to `ready`. For a tool-free turn the topology is exactly `ready \u2192 working \u2192 ready`, final state `ready`, zero tool calls \u2014 matching `Tool calls: \u2264 0`. The session_id is the `<conv-id>` directory (SessionIDFromPath); the transcript is written from the first line, so the session is born directly in `ready` (single-birth, like claudecode/kiro-cli \u2014 NO transient `proc-<PID>` presession row, unlike codex).\n\n2. **`TotalTokens > 0`** \u2014 NOT observable for antigravity, and this is NOT a daemon bug. Tokens/cost are not in the JSONL transcript at all (they live in a per-conversation SQLite protobuf store); the parser docstring states plainly \"Tokens/cost are not in the JSONL \u2026 so the parser surfaces no usage\" (parser.go ~L30-33). Per the caveats-over-downgrades rule, the canonical STATE arc is fully met \u2192 daemon stays `full`, and the token gap is a caveat. This mirrors the sibling kiro-cli basic-turn cell exactly (sidecar-only metrics; `tokens_nonzero:false, cost_nonzero:false`); the claudecode/codex siblings also note `TotalTokens > 0` is not expressible in the phase DSL.\n\nBoth halves resolve cleanly: the lifecycle arc is emitted today \u2192 `daemon=full`.\n\n### driver_capability: ready\n\nThe interactive driver (`replaydata/agents/antigravity/driver-interactive.sh`) is a scaffold: its header documents that `DRIVE_ELICITS=\"send slash sleep\"` is the authoritative semantic list of genuinely-ported primitives, and the `wait_turn()` function is a stub (`not_implemented wait_turn` \u2014 driver-interactive.sh ~L168-170). The basic-turn recipe needs `send` + `wait_turn` (block until the terminal empty PLANNER_RESPONSE) + a trailing `sleep`. `wait_turn` is not ported, so the recipe needs a step type the driver lacks \u2192 `driver=ready`. This is TOOLING work, not an observability limit: `record` ports the `wait_turn` seam (the turn-done poll over the transcript's terminal empty PLANNER_RESPONSE) plus the launch_repl session-id/transcript-path resolution SEAM (also a documented TODO), then drives. An INTERACTIVE recipe is required: a headless `agy --print` run exits at turn completion, before the daemon can observe the terminal `working \u2192 ready` edge \u2014 the same shape that keeps the claudecode/codex/gemini-cli/kiro-cli basic-turn cells interactive.\n\n## What irrlicht does NOT see (narrow)\n\n`TotalTokens > 0` has no observable source in the antigravity transport (tokens live only in the per-conversation SQLite protobuf store the parser does not read) \u2014 asserted false in the observations vector, not a daemon bug.",
+      "caveats": [
+        "Tokens/cost are NOT in the antigravity JSONL (they live in a per-conversation SQLite protobuf store the parser does not read), so the scenario's TotalTokens > 0 criterion is not observable; observations assert tokens_nonzero:false, cost_nonzero:false. Same as the sibling kiro-cli cell. NOT a daemon bug \u2014 the lifecycle arc is fully observed.",
+        "Model IS observable for antigravity (harvested from the <USER_SETTINGS_CHANGE> block \u2014 'Gemini 3.5 Flash' in the live samples), unlike kiro-cli's empty model. But the exact NormalizeModelName output is provisional; left out of observations for record to settle from the recording.",
+        "Provisional on emission: daemon=full for the lifecycle arc is grounded in the parser read + four real sample transcripts under ~/.gemini/antigravity-cli/brain/, not yet a live recording. The terminal empty-PLANNER_RESPONSE turn_done and the single-birth shape are confirmed in the samples; record promotes provisional\u2192settled.",
+        "driver=gap:wait_turn: the interactive driver is a scaffold (DRIVE_ELICITS='send slash sleep'); wait_turn and the launch_repl session-id/transcript-path resolution are stubs. record ports both before driving."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/antigravity/parser.go",
+          "note": "parseUserInput \u2192 user_message (ready\u2192working, ClearToolNames); parsePlannerResponse with NO tool_calls \u2192 turn_done (~L113-118, working\u2192ready); docstring ~L30-33: tokens/cost are NOT in the JSONL (per-conversation SQLite protobuf store), parser surfaces no usage."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/antigravity/agent.go",
+          "note": "Source = FilesUnderRoot{Dir:.gemini/antigravity-cli/brain, ExtraDirs:[.gemini/antigravity/brain], SessionIDFromPath, JSONLineParser}; ExactName{agy}; PIDForSession=DiscoverPID (optional CLI liveness enrichment)."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.gemini/antigravity-cli/brain/752dfc36-4542-4759-a055-7e761b5cf6b6/.system_generated/logs/transcript.jsonl",
+          "note": "Real sample: USER_EXPLICIT/USER_INPUT opens, terminal MODEL/PLANNER_RESPONSE with content:null and no tool_calls closes \u2192 the basic-turn shape; <USER_SETTINGS_CHANGE> records model 'Gemini 3.5 Flash'."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/antigravity/driver-interactive.sh",
+          "note": "DRIVE_ELICITS=\"send slash sleep\" (authoritative ported-primitive list per the header); wait_turn() is a stub (not_implemented wait_turn, ~L168-170); launch_repl has a TODO SEAM to resolve session_id+transcript path \u2192 driver=gap:wait_turn."
+        }
+      ]
+    },
+    "recipe": {
+      "timeout_seconds": 120,
+      "settings": {},
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        }
+      ]
+    }
+  }
+}

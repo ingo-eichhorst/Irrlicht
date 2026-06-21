@@ -1,0 +1,52 @@
+{
+  "scenario_id": "task-list",
+  "metadata": {
+    "agent_supports": "no",
+    "daemon_capability": "n/a",
+    "driver_capability": "n/a",
+    "agent_cli_version": "1.0.10",
+    "daemon_version": "0.5.2+9cd5c69.dirty",
+    "confidence": 0.85,
+    "notes": "agent_supports: no\ndaemon_capability: n/a; driver_capability: n/a\napplicable: no — agy ships no todo/task-list tool; the antigravity parser has no TodoReconciler path, so the session `tasks` field cannot be populated."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "task-list",
+      "agent": "antigravity",
+      "assessed_at": "2026-06-20T00:00:00Z",
+      "agent_supports": "no",
+      "daemon_capability": "n/a",
+      "driver_capability": "n/a",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: no\ndaemon_capability: n/a; driver_capability: n/a\napplicable: no\n\n## Reasoning\n\nThe `task-list` scenario exercises the task-list-management primitive: the agent maintains a todo/task list inside its OWN session (no child sessions), walking three items `pending → in_progress → completed`, with those items surfacing in the session API's `tasks` field while `SubagentCount` stays 0. The canonical reference implementations are Claude Code's `TaskCreate`/`TaskUpdate` and OpenCode/gemini-cli's whole-list-replace todo tool (`todowrite`/`write_todos`).\n\n### agent_supports: no\n\nThe `agy` CLI (v1.0.10) ships **no built-in todo/task-list tool**:\n\n- A whole-token binary scan of `~/.local/bin/agy` for `write_todos`, `update_todos`, `set_tasks`, `todo_write`, `task_list`, `create_task`, `update_plan`, `write_plan` returned ZERO hits.\n- The actually-emitted tool universe across the four real sample conversations under `~/.gemini/antigravity-cli/brain/` is only `run_command` and `list_dir`. The full tool registry surfaced in the binary strings is `run_command`, `list_dir`, `read_file`, `write_file`, `edit_file`, `view_file`, `grep_search`, `create_file`, `replace`, `search` — a file/shell toolset with NO todo/task tool.\n- There IS a `/tasks` slash command in the binary strings, but that is the IDE/REPL's view of background/long-running task EXECUTION, not a model-driven todo-list tool the agent walks pending→in_progress→completed; it does not write task items to the transcript, and no transcript line in any sample carries a task-list payload.\n\nNo built-in path lets the agent maintain and walk a three-item todo list, so `agent_supports: no`, which freezes the cell regardless of the daemon question.\n\n### daemon_capability: n/a; driver_capability: n/a\n\nIndependently, irrlicht's antigravity parser cannot populate the `tasks` field even if a task tool existed. The session `tasks` field is fed exclusively by the tailer's `TaskCreate`/`TaskUpdate` deltas + `TaskSnapshot`, which are produced via `core/pkg/tailer/todo_reconciler.go` — and only the claudecode, gemini-cli, and opencode parsers call it (its docstring lists exactly those agents' whole-list todo tools). The antigravity parser (`core/adapters/inbound/agents/antigravity/parser.go`) does NOT reference `TodoReconciler` at all; it emits only `user_message`/`assistant_message`/`function_call_output`/`turn_done` with generic `ToolUse{ID,Name}`. So even if agy emitted a todo tool, irrlicht would record it as an opaque tool use and the `tasks` field would stay empty — the load-bearing assertion (three items in `tasks` with subject + status) is unobservable. The route is frozen on the agent pillar; the daemon/driver pillars are n/a.",
+      "caveats": [
+        "agy has a /tasks slash command (background/long-running task EXECUTION view in the REPL), but it is NOT a model-driven todo-list tool the agent walks pending→in_progress→completed, and it writes no task-list line to the transcript — distinct from the scenario's primitive.",
+        "Even if a future agy version added a todo tool, the antigravity parser has no TodoReconciler path, so the daemon `tasks` field would stay empty — a second, independent block."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/antigravity/parser.go",
+          "note": "No TodoReconciler reference; emits user_message/assistant_message/function_call_output/turn_done with generic ToolUse{ID,Name} only — no TaskCreate/TaskUpdate/TaskSnapshot path, so the daemon `tasks` field cannot be populated for antigravity."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/todo_reconciler.go",
+          "note": "Docstring: the session tasks field is fed from whole-list todo snapshots produced ONLY by opencode (todowrite), gemini-cli (write_todos), codex (update_plan); the antigravity parser is not among the callers."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.local/bin/agy",
+          "note": "Binary scan (v1.0.10): whole-token grep for write_todos/update_todos/set_tasks/todo_write/task_list/create_task/update_plan/write_plan returned ZERO hits; tool registry strings = run_command/list_dir/read_file/write_file/edit_file/view_file/grep_search/create_file/replace/search — no todo/task tool."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.gemini/antigravity-cli/brain/69343e3e-d308-42ff-80a8-d727aead60bb/.system_generated/logs/transcript.jsonl",
+          "note": "Real 39-line agentic sample: only list_dir + run_command tool calls across the whole session; no task-list/todo tool line ever appears."
+        }
+      ]
+    },
+    "recipe": null
+  }
+}

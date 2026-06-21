@@ -1,0 +1,87 @@
+{
+  "scenario_id": "foreground-subagent",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.0.10",
+    "daemon_version": "0.5.2+79d7f10",
+    "confidence": 0.75,
+    "notes": "agent=yes daemon=full driver=ready — UNBLOCKED by subagent linking (antigravity_subagent.go). agy spawns a subagent via define_subagent + invoke_subagent; the child runs as its OWN top-level conversation brain/<child>/, discovered as its own session (transcript_new). AntigravityParentConvID scans sibling brain transcripts for the parent whose INVOKE_SUBAGENT step references the child's conversationId and emits parent_linked binding child→parent (wired in helpers.go deriveParentSession L102). The parent's subagent summary counts the child and the parent is held working while the child runs. Use a capable model (Gemini 3.1 Pro High / 3.5 Flash) — GPT-OSS 120B fumbles the invoke_subagent schema."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "foreground-subagent",
+      "agent": "antigravity",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.75,
+      "body": "## Verdict\n\n**agent=yes.** `agy` v1.0.10 carries the `run_subagent` tool ('invokes one or more subagents by name with a single tool call; each runs with its own prompt and reports back when done') plus `define_subagent`/`invoke_subagent` and the `GetSubagents`/`HasSubagents`/`KillSubagent`/`SubagentSpec` symbols. A parent spawns a subagent via `define_subagent` + `invoke_subagent` (args.Subagents=[{TypeName,Role,Prompt}]) → an `INVOKE_SUBAGENT` result carrying the child `conversationId` → a new `brain/<child>/` dir. In the foreground shape the parent waits for the child to finish, then continues. Requires a CAPABLE model (Gemini 3.1 Pro High or 3.5 Flash); GPT-OSS 120B fumbles the invoke_subagent schema.\n\n**daemon=full (UNBLOCKED).** Previously frozen `incapable` on the (correct-at-the-time) finding that a subagent left no separate transcript and the adapter declared no parent link. Both halves are now resolved: (1) a subagent runs as its OWN top-level conversation `brain/<child>/.system_generated/logs/transcript.jsonl`, which `FilesUnderRoot` + `sessionIDFromPath` (adapter.go) mints as its own session — the fswatcher emits `transcript_new` for the child. (2) `AntigravityParentConvID` (antigravity_subagent.go) derives the link: the parent runs as its own conversation and writes an `INVOKE_SUBAGENT` step whose content carries `\"conversationId\": \"<child>\"`; the resolver scans the most-recently-active sibling brain transcripts (windowed to the child's birth, tail-read) for the one referencing the child's conv-id and returns it as the parent. This is wired into the session detector's parent-derivation chain via `deriveParentSession` (helpers.go:102), so the detector emits `parent_linked` binding `child.session_id → parent.session_id`. The standard subagent machinery then applies: `ComputeSubagentSummary` counts the live child (SubagentCount(parent)=1), `reevaluateParent` holds the parent `working` while it has an active child, and the parent settles `working → ready` only after the child ends. LIVE-VERIFIED: a spawned subagent linked child.parent_session_id=parent, parent summary total:1 working:1, parent held working.\n\n**driver=ready.** The recipe is a single `send` (the spawn prompt) + `wait_turn` + a settle `sleep`. All implemented in `driver-interactive.sh` (`send`→send_text, `wait_turn`→turn-count poll, `sleep`). No `keys`/`interrupt`/`sigkill` needed here.",
+      "caveats": [
+        "daemon=full is derived from reading the linking code + the LIVE-VERIFIED note, not yet a committed recording; the parent_linked emission + held-working window are PROVISIONAL until record promotes them. confidence 0.75 reflects this.",
+        "The child runs inside the parent's invoke and has no own agy process, so the child session stays pid=0 (transcript-first; first-class for this adapter). Assert ParentSessionID linkage + subagent summary, NOT a child PID.",
+        "AntigravityParentConvID relies on the parent's INVOKE_SUBAGENT line being on disk before the child session is created (the detector's processing latency guarantees this per the antigravity_subagent.go doc); the recording must confirm parent_linked actually fires.",
+        "observations omit cost/tokens — antigravity's JSONL carries no usage."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/pkg/transcript/antigravity_subagent.go",
+          "note": "AntigravityParentConvID scans sibling brain transcripts for the parent whose INVOKE_SUBAGENT step references the child's conversationId — the link that flips this cell"
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/helpers.go:102",
+          "note": "deriveParentSession calls AntigravityParentConvID — the wiring point into the parent-derivation chain"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/antigravity/adapter.go",
+          "note": "FilesUnderRoot + sessionIDFromPath mints the child's own brain/<child>/transcript.jsonl as a session → transcript_new for the child"
+        },
+        {
+          "kind": "file",
+          "ref": "agy v1.0.10 binary strings",
+          "note": "run_subagent / define_subagent / invoke_subagent / GetSubagents / SubagentSpec — the foreground-subagent feature"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "agy CLI on PATH (1.0.10), Google OAuth authenticated; no API key",
+        "A CAPABLE model selected (Gemini 3.1 Pro High or Gemini 3.5 Flash via /model) — GPT-OSS 120B fumbles the invoke_subagent schema",
+        "irrlichd in --record mode with grant-all permission mode (transcripts permission)",
+        "A small file in the workspace cwd for the child to read"
+      ],
+      "setup": [
+        "Driver launches agy under tmux in a fresh workspace cwd; the parent conv-id session binds pid>0 (history.jsonl cwd).",
+        "The single send instructs the parent to spawn ONE subagent that reads a file and reports back, then the parent replies 'done' once the child finishes (foreground: parent waits)."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Use a subagent to read the file ./note.txt and report its first line back to me. Wait for the subagent to finish, then reply with exactly: done"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 10
+        }
+      ],
+      "verify": [
+        "the parent conv-id session: ready → working at spawn",
+        "a child session appears (transcript_new for brain/<child>/transcript.jsonl)",
+        "parent_linked binds child.session_id → parent.session_id (ParentSessionID = parent)",
+        "SubagentCount(parent) = 1 while the child is alive; parent held working until the child ends",
+        "parent: working → ready only after the last child ends; final state ready"
+      ],
+      "settings": {},
+      "timeout_seconds": 180
+    }
+  }
+}

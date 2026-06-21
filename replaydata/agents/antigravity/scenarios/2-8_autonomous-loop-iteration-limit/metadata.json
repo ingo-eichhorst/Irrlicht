@@ -1,0 +1,70 @@
+{
+  "scenario_id": "autonomous-loop-iteration-limit",
+  "metadata": {
+    "agent_supports": "partial",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.0.10",
+    "daemon_version": "0.5.2+9cd5c69.dirty",
+    "confidence": 0.8,
+    "notes": "agent=partial daemon=full driver=gap:wait_turn — agy has NEITHER a native self-prompting loop NOR a surfaced per-turn iteration cap; the bound is modeled in the prompt and the agent self-terminates. Daemon sees one continuous working span then a single terminal working→ready, and the distinguishing assertion is the terminal idle dwell in ready. wait_turn is a driver stub."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "autonomous-loop-iteration-limit",
+      "agent": "antigravity",
+      "assessed_at": "2026-06-20T00:00:00Z",
+      "agent_supports": "partial",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: partial\ndaemon_capability: full\ndriver_capability: gap:wait_turn\n\n## Reasoning\n\nThis cell is the termination twin of the antigravity `autonomous-loop` cell (agent=partial — no native self-prompting loop; the loop is INTERNAL to one user turn). The scenario asserts only the graceful-termination SHAPE: a loop runs a few iterations, STOPS at its limit, and the session resolves to `ready` cleanly rather than sticking in `working` (acceptance: `working → ready`; reaches `ready` even though the agent didn't fully succeed; does not stick in `working`; final `ready`; ≥2 turns).\n\n### agent_supports: partial — for TWO compounding reasons\n\nFirst, as in the autonomous-loop sibling, agy ships NO built-in autonomous self-prompting loop: no `/goal`, no goal-status re-prompt; the binary's `autonomous` strings are the `--print` non-interactive preamble + a protobuf field, not a goal loop. Second — specific to THIS scenario — agy has NO surfaced per-turn ITERATION CAP that halts a chat loop with a distinct cap-hit signal. `MaxIterations` appears only as an internal symbol in a packed blob alongside RPC/tool names (`call_mcp_tool`, `browser_input`, …); there is NO user-facing 'reached the maximum iterations / stopping after N' message, and no termination reason variant for a cap-hit anywhere in the binary. The only limit-sentence is a token budget (`checkpoint prompt itself has exceeded the MaxTokenLimit`), not an iteration cap. So agy cannot enforce or signal its own max-iteration cap in a session.\n\nWhat agy CAN model — and what 2.8's essence targets for an adapter without native autonomy or a native cap — is the graceful-termination shape: a bounded internal loop runs a few tool cycles within one user turn and then STOPS, with the session settling to `ready` and DWELLING there with no spurious post-limit `working` flip. The loop is INTERNAL to one seeded multi-step prompt (the 69343e3e sample shows the intra-turn run_command loop). The 'iteration limit' is modeled by asking the agent for a small, EXPLICITLY-BOUNDED number of sequential steps ('do exactly N steps, then stop'): the agent works through its self-imposed cap and ends in a terminal empty PLANNER_RESPONSE. This mirrors the kiro-cli and codex iteration-limit siblings (both partial; both model the cap externally because neither has a native one).\n\n### daemon=full\n\nObservability identical to the autonomous-loop sibling, and the best of the iteration-limit siblings for the spec's strict bullet: because agy's iterations live inside ONE turn, the daemon observes a SINGLE continuous `working` span across all internal tool cycles, then exactly one `working → ready` at the cap (the terminal empty PLANNER_RESPONSE). `parsePlannerResponse` maps every mid-turn planner-with-tool step to `assistant_message` (non-settling) and every result to `function_call_output` (non-settling); only the terminal empty PLANNER_RESPONSE → `turn_done` → `working → ready`. The cap-hit observable IS that single terminal transition. The DISTINGUISHING assertion vs the autonomous-loop sibling is the terminal idle DWELL: after the terminal `working → ready`, a long trailing idle window during which the state DWELLS in `ready` with the invariant of NO further `state_transition` to `working` — proving the loop stopped at its limit and did not stick in working or spuriously re-prompt. No `waiting` arises under auto-approve. → `daemon=full`.\n\n### driver_capability: gap:wait_turn\n\nThe recipe needs `send` + `wait_turn` + a long trailing `sleep` (the dwell). `wait_turn` must block until the terminal empty PLANNER_RESPONSE (NOT a mid-turn cycle), and it is a driver stub (DRIVE_ELICITS=\"send slash sleep\"). → `driver=gap:wait_turn`. `record` ports the wait_turn seam + the launch_repl session-resolution SEAM before driving. INTERACTIVE recipe (the REPL must stay open through the dwell window so the daemon observes the session HOLD ready).",
+      "caveats": [
+        "agent=partial for two reasons: agy has no native self-prompting loop AND no surfaced per-turn iteration cap (MaxIterations is an internal symbol with no user-facing cap-hit message; the only limit sentence is a token budget). The cap is modeled in the prompt ('do exactly N steps then stop') and the agent self-terminates — same relaxation as the kiro-cli/codex siblings.",
+        "Tokens/cost not in the antigravity JSONL; observations assert tokens_nonzero:false, cost_nonzero:false. No iteration-count/goal_status to surface as a cap counter — not an agy construct; not a spec-required observable.",
+        "The distinguishing observable is the TERMINAL IDLE DWELL in ready after the single terminal working→ready — proving graceful termination, not stuck-working. Provisional on emission; record settles it.",
+        "driver=gap:wait_turn: wait_turn (must not return on a mid-turn cycle) is a driver stub; record ports it + the launch_repl session-resolution SEAM first."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "~/.local/bin/agy",
+          "note": "Binary scan: no /goal; 'autonomous' = --print preamble + protobuf field; MaxIterations is an internal symbol in a packed RPC/tool blob with NO user-facing 'reached maximum iterations' message and no cap-hit termination reason; the only limit sentence is 'checkpoint prompt itself has exceeded the MaxTokenLimit' (token budget, not an iteration cap)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/antigravity/parser.go",
+          "note": "Mid-turn planner-with-tool → assistant_message and result → function_call_output are non-settling; ONLY the terminal empty PLANNER_RESPONSE → turn_done → working→ready — the cap-hit observable is that single terminal transition; the session then dwells in ready."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.gemini/antigravity-cli/brain/69343e3e-d308-42ff-80a8-d727aead60bb/.system_generated/logs/transcript.jsonl",
+          "note": "Real intra-turn loop sample (17+ run_command cycles in one turn then terminal empty PLANNER_RESPONSE) — confirms the bounded-internal-loop shape the iteration-limit cell relies on."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/antigravity/driver-interactive.sh",
+          "note": "DRIVE_ELICITS=\"send slash sleep\"; wait_turn() is a stub → driver=gap:wait_turn."
+        }
+      ]
+    },
+    "recipe": {
+      "timeout_seconds": 240,
+      "settings": {},
+      "script": [
+        {
+          "type": "send",
+          "text": "We are running a small iterative loop with a hard limit of exactly 2 iterations. Iteration 1: run `echo iteration-1` with your run_command tool. Iteration 2: run `echo iteration-2`. That is the iteration limit — after iteration 2, STOP. Do exactly these two steps one at a time, checking each output before the next, work through both autonomously without asking me anything, and do NOT run any further iterations. When you have reached the limit, reply with exactly the word: done"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 10
+        }
+      ]
+    }
+  }
+}

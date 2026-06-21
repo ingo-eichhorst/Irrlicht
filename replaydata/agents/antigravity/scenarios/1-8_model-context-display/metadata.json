@@ -1,0 +1,55 @@
+{
+  "scenario_id": "model-context-display",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "incapable",
+    "driver_capability": "gap:wait_turn",
+    "agent_cli_version": "1.0.10",
+    "daemon_version": "0.5.2+9cd5c69.dirty",
+    "confidence": 0.85,
+    "notes": "agent=yes daemon=incapable — model_name IS observable (Gemini 3.5 Flash, harvested from <USER_SETTINGS_CHANGE>), but context_utilization/context_window/cost are NOT: antigravity's JSONL carries no tokens (they live in the per-conversation SQLite protobuf), no MetricsReader."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "model-context-display",
+      "agent": "antigravity",
+      "agent_supports": "yes",
+      "daemon_capability": "incapable",
+      "driver_capability": "gap:wait_turn",
+      "confidence": 0.85,
+      "body": "## Verdict\n\n**agent=yes.** `agy` displays both metrics in its own TUI: the footer shows the model chip ('Gemini 3.5 Flash (Low)', observed live) and the palette has `/context` (Visualize current context usage) and `/credits` (remaining G1 credits). The model can also be set with `--model` or `/model`.\n\n**daemon=incapable.** The scenario asserts THREE observable metrics after one trivial turn: model_name (non-empty/not unknown), context_utilization_percentage (> 0), and context_window (> 0). Only model_name is observable from what the daemon tails. The parser harvests the model from the `<USER_SETTINGS_CHANGE>` block ('Gemini 3.5 Flash', `parser.go:84`) and attaches it to assistant events — model_name works. BUT tokens/cost/context are NOT in the filtered transcript.jsonl: the parser's own contract (`parser.go:30-33`) states 'Tokens/cost are not in the JSONL (they live in the per-conversation SQLite protobuf store), so the parser surfaces no usage'. There is no MetricsReader on the adapter (grep confirms zero token/usage emission). With zero tokens flowing, `accumulateTokens` never runs, so context_utilization stays 0, total tokens stay 0, and cost (derived via EstimateCostUSD from tokens) stays 0. The model chip's TUI `/context` value is rendered client-side and never written to the watched JSONL, so it leaves no trace for the daemon. Two of the three required metrics (utilization, window-utilization) and the sibling cells' cost_nonzero/tokens_nonzero observations are unobservable for architectural reasons (the usage data lives in a store the adapter deliberately does not read).\n\n**Why incapable, not bug:** this is not a mis-handled trace — there is NO token trace in the watched transcript at all (the usage is in the SQLite protobuf, an unparsed store). The 3-metric scenario cannot be satisfied; the cell is frozen until a MetricsReader over the SQLite store is built (a v2 adapter feature, out of scope per the column's prerequisites).\n\n**driver=gap:wait_turn** is moot for a frozen cell — the recipe is the standard send+wait_turn, but the daemon can't observe the asserted metrics regardless of driver readiness.",
+      "caveats": [
+        "model_name ALONE is fully observable (the agent's own normalized label, harvested from <USER_SETTINGS_CHANGE>: 'Gemini 3.5 Flash', which the capacity layer aliases the parenthetical/dash forms to gemini-3.5-flash). If the scenario is ever split so model-only is a separate assertion, that sub-cell would be daemon=full.",
+        "context_window could in principle be derived from the capacity table for the resolved model EVEN without per-turn tokens — but context_utilization_percentage and cost require the token counts that antigravity does not write to the JSONL, so the scenario as a whole stays unobservable.",
+        "Unblock path: build an antigravity MetricsReader that reads the per-conversation SQLite protobuf usage store (the adapter's metadata.json already names this as a deferred v1 limitation). That is a daemon/adapter feature, not a driver gap."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/antigravity/parser.go:30",
+          "note": "parser contract: tokens/cost are NOT in the JSONL (they live in the per-conversation SQLite protobuf); the parser surfaces no usage"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/antigravity/parser.go:84",
+          "note": "model harvested from <USER_SETTINGS_CHANGE> — model_name IS observable"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/antigravity/agent.go",
+          "note": "no MetricsReader declared on the adapter (token/usage emission absent)"
+        },
+        {
+          "kind": "url",
+          "ref": "agy REPL footer + /context, /credits (live, tmux)",
+          "note": "model chip + context/credits shown in the TUI only — not written to the watched transcript"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "notes": "daemon=incapable — antigravity's JSONL carries no tokens (usage is in the per-conversation SQLite protobuf; no MetricsReader), so context_utilization_percentage>0, context_window>0, and cost are unobservable; only model_name is. The 3-metric scenario cannot be satisfied. No spec phases; this cell is frozen until a SQLite-store MetricsReader is built."
+    }
+  }
+}

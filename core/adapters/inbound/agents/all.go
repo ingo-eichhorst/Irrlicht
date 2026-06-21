@@ -2,6 +2,7 @@ package agents
 
 import (
 	"irrlicht/core/adapters/inbound/agents/aider"
+	"irrlicht/core/adapters/inbound/agents/antigravity"
 	"irrlicht/core/adapters/inbound/agents/claudecode"
 	"irrlicht/core/adapters/inbound/agents/codex"
 	"irrlicht/core/adapters/inbound/agents/geminicli"
@@ -25,5 +26,6 @@ func All() []agent.Agent {
 		opencode.Agent(),
 		kirocli.Agent(),
 		geminicli.Agent(),
+		antigravity.Agent(),
 	}
 }

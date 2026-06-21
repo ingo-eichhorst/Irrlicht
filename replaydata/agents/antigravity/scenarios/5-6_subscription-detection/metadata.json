@@ -1,0 +1,49 @@
+{
+  "scenario_id": "subscription-detection",
+  "metadata": {
+    "agent_supports": "no",
+    "daemon_capability": "incapable",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.0.10",
+    "daemon_version": "0.3.13+dev",
+    "confidence": 0.78,
+    "notes": "agent=no daemon=incapable driver=n/a — Google OAuth login carries no plan/subscription identifier the transcript surfaces, and antigravity has no statusline/hook channel to deliver a RateLimitSnapshot; nothing distinguishes a subscription from a non-subscription session in the tailed Source (route frozen)."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "subscription-detection",
+      "agent": "antigravity",
+      "agent_supports": "no",
+      "daemon_capability": "incapable",
+      "driver_capability": "ready",
+      "confidence": 0.78,
+      "body": "## Verdict\n\n**agent=no** — Antigravity authenticates via Google OAuth (login-with-Google, no API key). The scenario's user-observable point is a *subscription* (Pro/Max plan, or Codex `PlanType:\"plus\"`) being detected as such. `agy` exposes no plan/subscription identifier: there is no `rate_limits` block, no `PlanType`, and no `Credits` surface — neither in the transcript JSONL nor in any hook payload. The binary-strings scan surfaces `statusline`/`UsageBattle`/`Usage` UI panels but no plan-tier string the CLI emits to a file or POST. So there is no subscription signal for the agent to produce in the first place.\n\n**daemon=incapable** — Even setting agent aside, the daemon has no `RateLimitSnapshot` ingestion path for antigravity: no statusLine hook (unlike claudecode, whose hook POSTs `rate_limits`), no MetricsReader. The acceptance criterion (`RateLimitSnapshot` non-nil with ≥1 Window) can never be met. Mirrors the sibling gemini-cli 5.6 (daemon=incapable: tier/quota billing leaves no transcript trace), with antigravity also lacking the free/paid tier discriminator gemini-cli at least tracks internally.\n\n**driver=ready** — Not the binding constraint; recorded as ready since no special step is needed.\n\nUnblock path: only if antigravity gained a plan-tier signal AND a daemon ingestion channel for it.",
+      "caveats": [
+        "Google OAuth identity ≠ a subscription tier the CLI exposes; no Pro/Max/plus string is emitted to any tailed surface.",
+        "API-key/Bedrock/Vertex variant is irrelevant — antigravity is OAuth-only here."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/antigravity/agent.go",
+          "note": "no hook installer, no MetricsReader, no RateLimitSnapshot path — only the JSONL transcripts Permission"
+        },
+        {
+          "kind": "file",
+          "ref": "~/.local/bin/agy (strings scan)",
+          "note": "no plan/subscription/tier identifier string emitted to a file or POST; statusline/UsageBattle are UI panels only"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/gemini-cli/scenarios/5-6_subscription-detection/metadata.json",
+          "note": "sibling Gemini-family verdict: daemon=incapable for tier/quota billing"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "reason": "frozen (agent=no / daemon=incapable): Google OAuth carries no subscription-tier signal the agent emits, and the daemon has no RateLimitSnapshot ingestion path for antigravity."
+    }
+  }
+}

@@ -1,0 +1,94 @@
+{
+  "scenario_id": "synchronous-slash-command",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.0.10",
+    "daemon_version": "0.5.2+9cd5c69.dirty",
+    "confidence": 0.85,
+    "notes": "agent=yes daemon=full driver=ready — agy no-LLM slash commands (/help, /model) are recorded in history.jsonl, NOT the transcript, so the tailed transcript gets no line and the session stays ready across the slash window. wait_turn + keys (Escape to dismiss the /help overlay) ported; recorded live."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "synchronous-slash-command",
+      "agent": "antigravity",
+      "assessed_at": "2026-06-20T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: gap:wait_turn\n\n## Reasoning\n\nThe scenario asserts the session stays `ready` throughout a no-LLM slash-command window — no `→ working` transition for the slash command itself — then a tiny normal prompt proves the session is still alive.\n\n### agent_supports: yes\n\nThe `agy` REPL has synchronous no-LLM slash commands. The live `~/.gemini/antigravity-cli/history.jsonl` records `/model` and `/permissions` invocations, each tagged `\"type\":\"slash_command\"` with a `display` of the literal command and the owning `conversationId`. The binary strings list the slash set: `/model`, `/permissions`, `/help`, `/clear`, `/new`, `/resume`, `/mcp`, `/memory`, `/agents`, `/tasks`, `/exit`, `/quit`, `/logout`. `/help` and `/model` (with no argument — opening the picker) are local, no-LLM commands — exactly the scenario's premise.\n\n### daemon_capability: full\n\nThe load-bearing observable is the ABSENCE of a `working` transition for the slash command. The antigravity Source tails `transcript.jsonl` (the filtered conversation transcript). Critically, agy slash commands are NOT written to that transcript — they are recorded in a SEPARATE `history.jsonl` (sibling, not under the conversation's `.system_generated/logs/`), which the adapter does not watch (its Source roots at `<brain>/<conv-id>/.system_generated/logs/transcript.jsonl` via SessionIDFromPath, and that path-shape check rejects any other file). So a no-LLM `/help` or `/model` appends ZERO lines to the tailed transcript → the tailer fires no event → no `user_message`, hence no `ready → working` transition for the slash itself. The session HOLDS `ready` across the slash window, which is exactly the spec invariant. A warm-up real turn (a plain prompt) is needed first so the conversation's transcript exists for the daemon to bind a session; a trailing real 'alive' prompt drives a second `working → ready` cycle proving liveness. Both real turns arc `ready → working → ready` via the parser's user_message / terminal-empty-PLANNER_RESPONSE path. → `daemon=full`.\n\n### driver_capability: gap:wait_turn\n\nThe driver DOES implement the `slash` step (it's in DRIVE_ELICITS=\"send slash sleep\", delivered to the live REPL via tmux send-keys — NOT a `keys` gap), AND `/model`/`/help` are inline/no-arg commands, so the slash window itself is drivable. BUT the recipe's warm-up + 'alive' real turns each need `wait_turn` to block until turn-done, and `wait_turn()` is a driver stub. So the recipe needs a step type the driver lacks → `driver=gap:wait_turn`. `record` ports the wait_turn seam + the launch_repl session-resolution SEAM before driving. INTERACTIVE recipe (the REPL must stay open across the slash window so the daemon observes the session HOLD ready).",
+      "caveats": [
+        "Tokens/cost not in the antigravity JSONL; observations assert tokens_nonzero:false, cost_nonzero:false. Not a daemon bug.",
+        "The slash window's no-working invariant rests on agy slash commands being recorded in history.jsonl (verified live: /model, /permissions tagged type:slash_command) and NOT in the tailed transcript.jsonl. If a future agy version logged a slash into the conversation transcript it could change this — record settles it.",
+        "Pick a no-LLM slash: /help and a bare /model (picker) append nothing. AVOID /clear, /new (session lifecycle) and /resume. /model with an inline model id would be a /model <id> slash step (model-switch), not this scenario.",
+        "driver=gap:wait_turn: the `slash` step IS ported (not a keys gap), but the warm-up/alive real turns need the stubbed wait_turn; record ports it + the launch_repl session-resolution SEAM first.",
+        "DRIVER: /help opens a full-screen help overlay that swallows subsequent keystrokes; the recipe sends Escape (a keys step) to dismiss it before the alive prompt. Escape produces no transcript line, so the no-working invariant across the slash window holds."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "~/.gemini/antigravity-cli/history.jsonl",
+          "note": "Live: /model and /permissions recorded here as {\"display\":\"/model\",\"type\":\"slash_command\",\"conversationId\":...} — slash commands live in history.jsonl, NOT the tailed transcript.jsonl."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/antigravity/adapter.go",
+          "note": "Source roots at <brain>/<conv-id>/.system_generated/logs/transcript.jsonl via sessionIDFromPath; the path-shape check returns \"\" for any other file, so history.jsonl is not watched — a slash appends nothing to the tailed transcript → no tailer event → session holds ready."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.local/bin/agy",
+          "note": "Binary strings list the slash set /model /permissions /help /clear /new /resume /mcp /memory /agents /tasks /exit /quit /logout; /help and bare /model are local no-LLM commands."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/antigravity/driver-interactive.sh",
+          "note": "DRIVE_ELICITS=\"send slash sleep\" — slash IS ported (tmux send-keys to the live REPL, not a keys gap); wait_turn() is a stub → driver=gap:wait_turn for the warm-up/alive real turns."
+        }
+      ]
+    },
+    "recipe": {
+      "timeout_seconds": 180,
+      "settings": {},
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: warm"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        },
+        {
+          "type": "slash",
+          "text": "/help"
+        },
+        {
+          "type": "keys",
+          "keys": "Escape"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: alive"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        }
+      ]
+    }
+  }
+}

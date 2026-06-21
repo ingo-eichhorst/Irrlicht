@@ -1,0 +1,49 @@
+{
+  "scenario_id": "cloud-background-agent",
+  "metadata": {
+    "agent_supports": "no",
+    "daemon_capability": "n/a",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.0.10",
+    "daemon_version": "0.5.2+9cd5c69.dirty",
+    "confidence": 0.8,
+    "notes": "agent=no — agy's 'background agent' is an internal post-conversation KB-extraction agent, not a user-launched cloud/remote coding session."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "cloud-background-agent",
+      "agent": "antigravity",
+      "agent_supports": "no",
+      "daemon_capability": "n/a",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\n**agent=no.** This scenario asserts a user-launched cloud/remote agent run that appears with PID=0/absent and disappears when the remote run completes. The `agy` CLI has no such first-party cloud/remote-session variant. The binary DOES contain a 'Background Agent Restrictions' system prompt — but reading it (strings dump) shows it is an INTERNAL agent that 'runs automatically after conversations to extract and preserve knowledge' into a local knowledge base, with NO user interaction and a restricted tool set. That is a behind-the-scenes KB-extraction worker, not a user-launched remote coding session, so it does not satisfy the scenario's PID-0 remote-session lifecycle (same disposition as the gemini-cli sibling, where A2A remote subagents exist but the orchestrating session stays local). The CLOUD_* strings in the binary are GCP env-detection constants, not a launch surface. `agy --tasks`/`/schedule` are LOCAL background tasks/timers, not cloud runs.\n\n**daemon=n/a.** No cloud-session feature → no remote feed to observe → n/a (frozen). Note: were agy to ship a hosted/remote variant, daemon_capability would become INCAPABLE rather than n/a, because the FilesUnderRoot Source watches only local ~/.gemini/antigravity{,-cli}/brain transcripts — a PID-less, file-less cloud run would leave no trace under the watch.\n\n**driver=ready** is moot for a frozen cell.",
+      "caveats": [
+        "The 'background agent' term is real but denotes Antigravity's internal post-conversation knowledge-extraction agent (a behind-the-scenes worker), not a user-facing cloud coding session.",
+        "If Antigravity ships a hosted/Cloud-Run remote agent variant in the future, the verdict flips to agent=yes daemon=incapable (no local transcript trace), not agent=yes daemon=full — the local Source cannot tail a remote feed."
+      ],
+      "sources": [
+        {
+          "kind": "url",
+          "ref": "agy binary strings — 'Background Agent Restrictions' block",
+          "note": "internal post-conversation KB-extraction agent (no user interaction, restricted tools); not a user-launched cloud session"
+        },
+        {
+          "kind": "url",
+          "ref": "agy --help",
+          "note": "no cloud/remote launch subcommand or flag"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/antigravity/agent.go:39",
+          "note": "Source is FilesUnderRoot over local brain stores — a remote feed would leave no trace (incapable, not full, if ever shipped)"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "notes": "agent_supports=no — agy has no user-launched cloud/remote agent variant ('background agent' is an internal KB-extraction worker). No recipe; this cell is frozen."
+    }
+  }
+}

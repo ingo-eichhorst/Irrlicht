@@ -1,0 +1,105 @@
+{
+  "scenario_id": "long-idle-live-session",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.0.10",
+    "daemon_version": "0.5.2+79d7f10",
+    "confidence": 0.8,
+    "notes": "agent=yes daemon=full driver=ready — UNBLOCKED by PID binding via history.jsonl (antigravity_cwd.go). The conv-id session now resolves its real workspace cwd from ~/.gemini/antigravity-cli/history.jsonl (keyed by conversationId), so DiscoverPID matches the live agy process and binds pid>0. The readyTTL sweep skips ready sessions whose pid>0 process is alive (pid_manager.go:790-794), so the bound session survives a long idle and resumes on the next prompt. Recording uses IRRLICHT_READY_SESSION_TTL=15s. RECORDING CORRECTION (2026-06-20): agy writes the conversationId↔workspace pairing into history.jsonl only on the conversation's SECOND prompt; the first-prompt line has workspace but no conversationId. So the bind cannot land until turn 2. The recipe now warms up with two turns before idling so the pid>0 bind is established BEFORE the idle window (the assessment's caveat #3 anticipated this). The pid-liveness hold then holds the session through the >15s idle as designed."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "long-idle-live-session",
+      "agent": "antigravity",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\n**agent=yes.** `agy`'s interactive REPL stays alive between turns and resumes on the next prompt — the single native `agy` process (1 process ↔ 1 conversation, agent.go:38) outlives the turn and accepts a second prompt that appends to the same `<conv-id>/.system_generated/logs/transcript.jsonl`. No tool calls are needed (≤0 per the scenario), and `parseUserInput` re-opens the turn on the next `USER_INPUT` (parser.go:64).\n\n**daemon=full (UNBLOCKED).** The cell was previously frozen (`daemon=bug`) because the conv-id session never bound a PID: `DiscoverPID` matches an agy process by cwd, but agy records only its sandbox scratch dir in the transcript body (run_command Cwd), so the match never landed and the session stayed pid=0 — and the readyTTL sweep deletes pid=0 ready sessions on idle (pid_manager.go:796). The new `ExtractCWDFromAntigravityHistory` (antigravity_cwd.go), wired into the git adapter's `GetCWDFromTranscript` (adapter.go:154), resolves the REAL launch workspace from the sibling `history.jsonl` keyed by `conversationId`. With a real cwd, `DiscoverPID` (pid.go:33) matches the live agy process and binds pid>0 to the conv-id session. The readyTTL sweep then SKIPS the session while its process is alive: `if snap.pid > 0 { if syscall.Kill(snap.pid, 0) == nil { continue } }` (pid_manager.go:790-794). So the session persists in `ready` past readyTTL and `ready → working` resumes on the next `USER_INPUT`; the terminal `MODEL/PLANNER_RESPONSE` with no tool_calls settles it back to `ready` (parser.go:120). LIVE-VERIFIED: a bound session stayed ready+bound across an idle window while agy ran.\n\n**driver=ready.** The recipe is two `send`+`wait_turn` turns wrapped around a `sleep` longer than the 15s TTL. All three step types are implemented in `driver-interactive.sh` (`send`→send_text, `wait_turn`→turn-count poll L292, `sleep` L494). Only `interrupt`/`reset_session` are stubbed, and neither is used here.",
+      "caveats": [
+        "Antigravity emits no explicit end-of-turn marker; the daemon infers turn_done from a terminal MODEL/PLANNER_RESPONSE with no tool_calls (parser.go:120). The no-tool prompts make this inference unambiguous, but the ready-settle remains provisional on emission until the live recording confirms it.",
+        "Recording uses IRRLICHT_READY_SESSION_TTL=15s so a ~20s idle window cleanly exceeds the TTL; the spec asserts duration_at_least_ms (a floor), so production 30-min idles are by definition still passing.",
+        "PID binding depends on history.jsonl carrying the conv-id's workspace entry; the index is written lazily and the resolver retries on the next activity refresh (antigravity_cwd.go doc). The recording must confirm the bind landed before the idle window.",
+        "observations omit cost/tokens — antigravity's JSONL carries no usage (tokens live in the per-conversation SQLite protobuf store the parser does not read)."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/pkg/transcript/antigravity_cwd.go",
+          "note": "ExtractCWDFromAntigravityHistory resolves the real workspace cwd from history.jsonl keyed by conversationId — the bind that flips this cell"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/outbound/git/adapter.go:154",
+          "note": "GetCWDFromTranscript calls ExtractCWDFromAntigravityHistory — the wiring point"
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/pid_manager.go:790",
+          "note": "readyTTL sweep SKIPS a ready session whose pid>0 process is alive (syscall.Kill(pid,0)==nil → continue) — the liveness hold"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/antigravity/parser.go:64",
+          "note": "USER_INPUT re-opens the turn → working on the next prompt; terminal PLANNER_RESPONSE no-tool → turn_done → ready"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "agy CLI on PATH (1.0.10), Google OAuth authenticated; no API key",
+        "irrlichd running with IRRLICHT_READY_SESSION_TTL=15s (default 30 min would force a 32+ min recording)",
+        "irrlichd in --record mode with grant-all permission mode (transcripts permission)",
+        "history.jsonl must carry the conv-id's workspace entry so the conv-id session binds pid>0 before the idle window"
+      ],
+      "setup": [
+        "Driver launches agy under tmux in a fresh, real workspace cwd. agy writes the conversationId↔workspace pairing into history.jsonl only on the SECOND prompt of a conversation (the first-prompt line carries workspace but no conversationId — LIVE-VERIFIED 2026-06-20). So the recipe sends a warm-up turn 1 + turn 2 BEFORE idling: turn 2 makes history.jsonl carry the conv-id, the next activity refresh re-resolves the real cwd (RefreshOnActivity → ExtractCWDFromAntigravityHistory) and the pid=0 retry (processActivityLocked:408) binds the live agy PID. Only then does the idle window begin.",
+        "The post-bind idle sleep (20s) is ~1.33x the 15s readyTTL — long enough to prove the pid-liveness hold (pid_manager.go:790-794) skips the bound session past TTL."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: warm"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 20
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: alive"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        }
+      ],
+      "verify": [
+        "after the warm-up (turns 1-2) the agy session binds pid>0 (cwd resolved via history.jsonl once the conv-id pairing is written on turn 2)",
+        "no transcript_removed for the session during the 20s idle window (not swept while agy is alive)",
+        "no state_transition to working/waiting during the idle window (state stays ready)",
+        "after the resume send: ready → working → ready for the SAME session",
+        "final session state is ready"
+      ],
+      "settings": {},
+      "timeout_seconds": 120
+    }
+  }
+}

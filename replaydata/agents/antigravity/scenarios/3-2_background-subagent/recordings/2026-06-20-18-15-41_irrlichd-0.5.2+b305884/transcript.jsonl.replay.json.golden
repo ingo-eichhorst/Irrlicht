@@ -1,0 +1,108 @@
+{
+  "schema_version": 1,
+  "source_transcript": "",
+  "generated_at": "0001-01-01T00:00:00Z",
+  "settings": {
+    "adapter": "antigravity",
+    "debounce_window": 2000000000,
+    "flicker_max_duration": 10000000000
+  },
+  "summary": {
+    "total_events": 11,
+    "consumed_events": 11,
+    "total_transitions": 5,
+    "first_event_time": "2026-06-20T16:15:41Z",
+    "last_event_time": "2026-06-20T16:15:56Z",
+    "wall_clock_session_duration": 15000000000,
+    "state_durations": {
+      "ready": 11000000000,
+      "working": 4000000000
+    },
+    "flicker_count": 1,
+    "flickers_by_category": {
+      "working_between_ready": 1
+    },
+    "flickers_by_reason": {
+      "force ready→working on first activity": 1
+    },
+    "model_name": "Gemini 3.1 Pro"
+  },
+  "transitions": [
+    {
+      "index": 0,
+      "event_index": -1,
+      "virtual_time": "2026-06-20T16:15:41Z",
+      "cause": "init",
+      "prev_state": "",
+      "new_state": "ready",
+      "reason": "initial state",
+      "last_event_type": "",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 1,
+      "event_index": 3,
+      "virtual_time": "2026-06-20T16:15:41Z",
+      "cause": "debounce_coalesce",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "assistant_message",
+      "has_open_tool": true,
+      "open_tool_names": [
+        "invoke_subagent"
+      ],
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 2,
+      "event_index": 7,
+      "virtual_time": "2026-06-20T16:15:45Z",
+      "cause": "debounce_coalesce",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "turn_done",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "dispatched"
+    },
+    {
+      "index": 3,
+      "event_index": 10,
+      "virtual_time": "2026-06-20T16:15:56Z",
+      "cause": "debounce_coalesce",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "turn_done",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "…irectory:\n\n- **Total Files**: 5 files (0 subdirectories)\n- **File Breakdown**…"
+    },
+    {
+      "index": 4,
+      "event_index": 10,
+      "virtual_time": "2026-06-20T16:15:56Z",
+      "cause": "debounce_coalesce",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "turn_done",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "…irectory:\n\n- **Total Files**: 5 files (0 subdirectories)\n- **File Breakdown**…"
+    }
+  ]
+}

@@ -41,10 +41,13 @@ func TestBuildAgentWatchers_PerSourceVariant(t *testing.T) {
 			if scanners != 1 {
 				t.Errorf("%s: got %d process scanners, want 1", a.Identity.Name, scanners)
 			}
-			switch a.Source.(type) {
+			switch s := a.Source.(type) {
 			case agent.FilesUnderRoot:
-				if fswatchers != 1 || stores != 0 {
-					t.Errorf("%s (FilesUnderRoot): fswatchers=%d stores=%d, want 1/0", a.Identity.Name, fswatchers, stores)
+				// One fswatcher per root: the primary Dir plus any ExtraDirs
+				// (Antigravity watches both the CLI and IDE brain stores).
+				wantFs := 1 + len(s.ExtraDirs)
+				if fswatchers != wantFs || stores != 0 {
+					t.Errorf("%s (FilesUnderRoot): fswatchers=%d stores=%d, want %d/0", a.Identity.Name, fswatchers, stores, wantFs)
 				}
 			case agent.ProcessOwnedStore:
 				if stores != 1 || fswatchers != 0 {

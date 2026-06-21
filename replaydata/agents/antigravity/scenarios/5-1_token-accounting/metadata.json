@@ -1,0 +1,54 @@
+{
+  "scenario_id": "token-accounting",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "incapable",
+    "driver_capability": "gap:wait_turn",
+    "agent_cli_version": "1.0.10",
+    "daemon_version": "0.3.13+dev",
+    "confidence": 0.85,
+    "notes": "agent=yes daemon=incapable driver=gap:wait_turn — tokens/cost/cache live ONLY in the per-conversation SQLite protobuf store; the transcript JSONL the daemon tails carries no usage keys and the v1 adapter ships no MetricsReader → no token signal can reach events.jsonl (route frozen)."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "token-accounting",
+      "agent": "antigravity",
+      "agent_supports": "yes",
+      "daemon_capability": "incapable",
+      "driver_capability": "gap:wait_turn",
+      "confidence": 0.85,
+      "body": "## Verdict\n\n**agent=yes** — `agy` does per-turn token accounting; the figures are persisted to the per-conversation SQLite store (`~/.gemini/antigravity-cli/conversations/<conv-id>.db`), encoded as protobuf blobs in the `gen_metadata.data` / `steps.metadata` columns.\n\n**daemon=incapable** — The token signal NEVER reaches the Source the daemon tails. Verified across all four sample transcripts on this machine: `grep -iE '\"tokens\"|\"usage\"|\"cost\"|\"cache\"'` over every `transcript.jsonl` under `~/.gemini/antigravity-cli/brain/` returns ZERO hits — the JSONL envelope is `{step_index,source,type,status,created_at,content,tool_calls,thinking}` only. The parser doc-comment states it plainly: *\"Tokens/cost are not in the JSONL (they live in the per-conversation SQLite protobuf store), so the parser surfaces no usage.\"* The DB columns that hold them are opaque protobuf `blob`s and the v1 adapter declares NO MetricsReader (only the `transcripts` Permission over the JSONL), so `TotalTokens`/`CacheReadTokens`/`PerTurnContribution` can never be emitted. This is an architecture limit (no trace in the tailed Source), not a parser bug.\n\n**driver=gap:wait_turn** — Moot given the freeze, but recorded for accuracy: the multi-turn recipe needs `wait_turn`, which the antigravity interactive driver stubs (`not_implemented wait_turn`; `DRIVE_ELICITS=\"send slash sleep\"`).\n\nUnblock path: ship a MetricsReader that opens the SQLite store and decodes the protobuf usage blobs; re-assess afterward.",
+      "caveats": [
+        "If a future MetricsReader decodes the SQLite gen_metadata protobuf, daemon would become full and the cell un-freezes.",
+        "Cache-read assertion (fresh input=0 on a cached turn) has no transcript surface at all on antigravity."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/antigravity/parser.go",
+          "note": "doc-comment: tokens/cost not in JSONL, live in SQLite protobuf store; parser surfaces no usage"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/antigravity/agent.go",
+          "note": "only Permission is transcripts (JSONL); no MetricsReader declared"
+        },
+        {
+          "kind": "file",
+          "ref": "~/.gemini/antigravity-cli/brain/*/.system_generated/logs/transcript.jsonl",
+          "note": "grep for tokens|usage|cost|cache across all sample transcripts → zero hits"
+        },
+        {
+          "kind": "file",
+          "ref": "~/.gemini/antigravity-cli/conversations/<conv-id>.db",
+          "note": ".schema shows gen_metadata.data + steps.metadata as opaque protobuf blob columns"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "reason": "frozen (daemon=incapable): token/cost/cache figures live only in the SQLite protobuf store; the tailed transcript JSONL carries no usage signal and the v1 adapter has no MetricsReader. No recording can satisfy the token assertions."
+    }
+  }
+}

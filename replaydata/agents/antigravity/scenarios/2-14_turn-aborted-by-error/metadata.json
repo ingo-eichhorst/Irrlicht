@@ -1,0 +1,49 @@
+{
+  "scenario_id": "turn-aborted-by-error",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "incapable",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.0.10",
+    "daemon_version": "0.5.2+9cd5c69.dirty",
+    "confidence": 0.7,
+    "notes": "Model-call abort: no error-epilogue written to the filtered transcript (no Bucket-A path like claudecode's mock-anthropic), no structural abort marker in samples, and the daemon has NO inactivity sweep on working — so an interactive agy turn that dies leaves the session stuck in working. daemon=incapable → frozen."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "turn-aborted-by-error",
+      "agent": "antigravity",
+      "agent_supports": "yes",
+      "daemon_capability": "incapable",
+      "driver_capability": "ready",
+      "confidence": 0.7,
+      "body": "## Verdict\n\n**agent=yes.** agy turns can abort — the binary carries `ABORTED`/`Aborted`, `INTERRUPTED`/`Interrupted`, `AbortedError`, `aborted after`, and `500 Internal Server Error` handling — so a model-call failure mid-turn is a real condition.\n\n**daemon=incapable.** The scenario asserts `ready → working → ready` where the working→ready resolution comes 'within one sweep interval after the agent gives up' WITHOUT a normal turn-end signal. Three things block observing this on antigravity:\n\n1. **No error epilogue (no Bucket A).** claudecode's cell works because its runtime writes a synthesized `API Error` assistant message with a terminal stop_reason that IsAgentDone() picks up — and it can be FORCED via a mock Anthropic endpoint (mock-anthropic-5xx). antigravity talks to Google's backend over OAuth; no sampled transcript contains an error-epilogue line, and the only settling step the parser knows is an empty terminal `PLANNER_RESPONSE`. A failed model call writes no such terminal line, so the parser never settles to ready.\n\n2. **No working-state inactivity sweep.** The daemon removed the stale-tool timer (PR #106) and has no inactivity sweep on `working` — confirmed by the sibling gemini-cli parser comment (`no inactivity sweep on 'working'`). So a session whose turn silently died has nothing to transition it back to ready (claudecode's documented Bucket B). The only resolution is `process_exited` from the PID-liveness sweep — but for an INTERACTIVE agy REPL the process stays alive after a failed turn, so even that path doesn't fire.\n\n3. **No structural abort marker.** No sampled transcript carries any non-DONE status or ERROR/ABORT/CANCEL step in the filtered view; the `commandFailed` IsError path is a TOOL-result failure (a non-settling `function_call_output`), NOT a turn abort, so it does not resolve the turn either.\n\nNet: an aborted antigravity turn leaves the session stuck in `working` with no observable resolution — the 3-state model cannot represent the recovery. This is `incapable`, not `bug` (no trace exists to mis-handle) and not a driver gap.\n\n**driver=ready (moot).** The driver could send a prompt; the cell is frozen on the daemon pillar regardless.",
+      "caveats": [
+        "Recording is ALSO blocked even if the daemon could observe it: antigravity uses Google OAuth with no API key / base-url override, so the claudecode mock-server approach (mock-anthropic-5xx) cannot inject a 5xx into agy's backend. There is no out-of-band way to force a model-call abort.",
+        "If agy is later found to write an error epilogue to the FILTERED transcript on a model-call failure (Bucket A), re-assess — that would flip daemon to full. No such line exists in any sample today."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.local/bin/agy",
+          "note": "strings: ABORTED/INTERRUPTED/AbortedError/'500 Internal Server Error' — the agent can abort, but no evidence of a transcript error-epilogue"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/parser.go",
+          "note": "comment: 'no inactivity sweep on working' — confirms the daemon cannot self-resolve a stuck working state (post-#106)"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/antigravity/parser.go",
+          "note": "only an empty terminal PLANNER_RESPONSE settles to ready; commandFailed → IsError is a non-settling tool-result, not a turn abort; SYSTEM lines skipped"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "reason": "daemon=incapable (frozen): an aborted agy turn writes no settling epilogue, the daemon has no working-state inactivity sweep, and an interactive REPL process stays alive so process_exited never fires — the working→ready recovery is unobservable. Recording is also blocked: Google OAuth has no API-key/base-url hook to inject a 5xx (the claudecode mock approach does not translate)."
+    }
+  }
+}

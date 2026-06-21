@@ -1,0 +1,98 @@
+{
+  "scenario_id": "task-estimate-marker",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.0.10",
+    "daemon_version": "0.3.13+dev",
+    "confidence": 0.72,
+    "notes": "agent=yes daemon=full driver=gap:wait_turn — agy loads AGENTS.md as its instruction file and the parser feeds full PLANNER_RESPONSE assistant text to tailer.ScanTaskEstimate, so a fenced irrlicht-eta marker surfaces TaskEstimate; the driver still stubs wait_turn, so record ports the turn-done poll first (route driver-gap)."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "task-estimate-marker",
+      "agent": "antigravity",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.72,
+      "body": "## Verdict\n\n**agent=yes** — `agy` loads a persistent instruction file: the binary's own customization prompt states *'Append rules to the AGENTS.md file in one of the customization roots'* (Global Customizations Root for global rules, Workspace Customizations Root for project-scoped). So an AGENTS.md rule instructing the agent to emit a fenced `<!-- {\"marker\":\"irrlicht-eta\",...} -->` marker in its transcript-visible text is a supported path. Emission is model-discretion (soft), so confidence is mid-band.\n\n**daemon=full** — The parser feeds the assistant content of each `PLANNER_RESPONSE` straight to the shared `tailer.ScanTaskEstimate(content, ev.Timestamp)` and sets `ev.TaskEstimate` when a marker is found (parser.go parsePlannerResponse). The shared ForecastTaskCompletion then projects `task_completion_eta` at the measured rate. So a marker in agy's transcript-visible text surfaces `TaskEstimate {total_rounds, completed_rounds, updated_at}` on SessionMetrics while working, suppressed at ready — exactly the scenario. Mirrors sibling gemini-cli 5.8 (daemon=full). (PROVISIONAL on two emission facts record settles: (1) whether agy strips HTML comments from AGENTS.md at injection — fence the example regardless; (2) whether agy actually re-emits the marker each turn. The parser handling is proven by code; the AGENTS.md round-trip + emission are not confirmable from docs.)\n\n**driver=gap:wait_turn** — The multi-turn marker recipe needs `wait_turn` between rounds, stubbed in the antigravity driver (`DRIVE_ELICITS=\"send slash sleep\"`). record ports the turn-done poll first, then drives the ≥5-phase task.\n\nPREREQ: the irrlicht-eta rule must be placed in AGENTS.md in a customization root the per-run cwd inherits (fenced marker example). cost/tokens observations omitted (SQLite-only).",
+      "caveats": [
+        "Emission is model-discretion (soft) and agy emission is unverified — record settles it.",
+        "Unconfirmed whether agy strips bare HTML comments from AGENTS.md at injection — fence the marker example regardless.",
+        "cost/tokens observations omitted: usage is SQLite-protobuf only."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/antigravity/parser.go",
+          "note": "parsePlannerResponse calls tailer.ScanTaskEstimate on full assistant content and sets ev.TaskEstimate"
+        },
+        {
+          "kind": "file",
+          "ref": "~/.local/bin/agy (strings scan)",
+          "note": "instruction file is AGENTS.md: 'Append rules to the AGENTS.md file in one of the customization roots' (Global / Workspace)"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/gemini-cli/scenarios/5-8_task-estimate-marker/metadata.json",
+          "note": "sibling Gemini-family: daemon=full via the same shared ScanTaskEstimate path"
+        }
+      ]
+    },
+    "recipe": {
+      "timeout_seconds": 600,
+      "settings": {},
+      "script": [
+        {
+          "type": "send",
+          "text": "Plan a 5-phase refactoring task: list the 5 phase names in one short sentence each. At the very END of this reply, output this exact line verbatim, character for character, as a literal HTML comment on its own line (NOT inside a code block, do not describe it, just print it): <!-- {\"marker\":\"irrlicht-eta\",\"total_rounds\":5,\"completed_rounds\":0} -->"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "send",
+          "text": "Now do phase 1 of the plan (just a one-paragraph summary of the work). At the very END of this reply, output this exact line verbatim, character for character, as a literal HTML comment on its own line (NOT inside a code block, do not describe it, just print it): <!-- {\"marker\":\"irrlicht-eta\",\"total_rounds\":5,\"completed_rounds\":1} -->"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "send",
+          "text": "Now do phase 2 of the plan (just a one-paragraph summary of the work). At the very END of this reply, output this exact line verbatim, character for character, as a literal HTML comment on its own line (NOT inside a code block, do not describe it, just print it): <!-- {\"marker\":\"irrlicht-eta\",\"total_rounds\":5,\"completed_rounds\":2} -->"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "send",
+          "text": "Now do phase 3 of the plan (just a one-paragraph summary of the work). At the very END of this reply, output this exact line verbatim, character for character, as a literal HTML comment on its own line (NOT inside a code block, do not describe it, just print it): <!-- {\"marker\":\"irrlicht-eta\",\"total_rounds\":5,\"completed_rounds\":3} -->"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "send",
+          "text": "Now do phase 4 of the plan (just a one-paragraph summary of the work). At the very END of this reply, output this exact line verbatim, character for character, as a literal HTML comment on its own line (NOT inside a code block, do not describe it, just print it): <!-- {\"marker\":\"irrlicht-eta\",\"total_rounds\":5,\"completed_rounds\":4} -->"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "send",
+          "text": "Now do phase 5 of the plan (just a one-paragraph summary of the work). This is the final phase. At the very END of this reply, output this exact line verbatim, character for character, as a literal HTML comment on its own line (NOT inside a code block, do not describe it, just print it): <!-- {\"marker\":\"irrlicht-eta\",\"total_rounds\":5,\"completed_rounds\":5} -->"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 30
+        }
+      ]
+    }
+  }
+}

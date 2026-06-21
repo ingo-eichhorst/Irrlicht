@@ -1,0 +1,49 @@
+{
+  "scenario_id": "tool-gate-permission-prompt",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "incapable",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.0.10",
+    "daemon_version": "0.5.2+9cd5c69.dirty",
+    "confidence": 0.8,
+    "notes": "agy has an internal approval_request path, but a tool-gate permission prompt is an in-progress state never persisted to the transcript (all lines status:DONE) and the adapter has no PermissionPending signal. daemon=incapable → frozen. Matches codex/gemini-cli 2.19 (incapable)."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "tool-gate-permission-prompt",
+      "agent": "antigravity",
+      "agent_supports": "yes",
+      "daemon_capability": "incapable",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: incapable\ndriver_capability: ready (n/a — frozen)\n\nRoute: frozen (the permission-prompt `waiting` episode is not observable for antigravity).\n\n## What the scenario pins\n\n`ready → working → waiting`; after the prompt resolves `waiting → working → ready`; a delayed post-tool hook arriving after `→ ready` does NOT bounce state. Final state: `waiting`; the `waiting` episode is user-visible.\n\n## agent_supports: yes\n\nThe agy binary has a tool-approval path (binary strings: `approval_request`), and tools like run_command can be gated before execution, so the agent CAN open a permission prompt.\n\n## daemon_capability: incapable\n\nThe canonical claudecode cell validates the rule-0 PermissionPending→waiting gate, which is hook-driven. Antigravity has NO such hook and NO PermissionPending input: the adapter is transcript-first and the parser has no waiting / permission emission path. And the prompt itself is never persisted: every line in BOTH transcript.jsonl and transcript_full.jsonl is status:\"DONE\" (verified across all real conversations) — a tool awaiting approval is an in-progress (non-DONE) state appended only once resolved. No approval_request / waiting marker appears in any recorded transcript. No trace exists → the 3-state model cannot represent the gate for this agent. This matches the codex and gemini-cli 2.19 verdicts (both daemon=incapable, frozen).\n\n## driver_capability: n/a\n\nMoot under a frozen route.",
+      "caveats": [
+        "Re-assess if Antigravity persists a permission-pending / approval-pending step to the transcript, or if the adapter gains a permission signal sourced outside the transcript (hook or SQLite store)."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/antigravity/parser.go",
+          "note": "no PermissionPending / waiting emission path; the parser only knows working/ready"
+        },
+        {
+          "kind": "file",
+          "ref": "~/.gemini/antigravity-cli/brain/69343e3e-d308-42ff-80a8-d727aead60bb/.system_generated/logs/transcript_full.jsonl",
+          "note": "100% status:\"DONE\"; no approval_request marker — the prompt is never persisted"
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.local/bin/agy",
+          "note": "binary strings: approval_request exists internally, but it never reaches the tailed transcript"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/codex/scenarios/2-15_shell-escape-command/../../codex/scenarios",
+          "note": "sibling codex & gemini-cli 2.19 cells are both daemon=incapable/frozen for the same transcript-only-no-permission-signal reason"
+        }
+      ]
+    }
+  }
+}
