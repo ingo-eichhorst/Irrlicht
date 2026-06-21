@@ -176,6 +176,19 @@
         <li>Stage: <strong>alpha</strong></li>
       </ul>
 
+      <h3>Antigravity Adapter</h3>
+
+      <ul>
+        <li><strong>Package:</strong> <code>core/adapters/inbound/agents/antigravity/</code></li>
+        <li>One adapter covers both the <code>agy</code> CLI and the Antigravity IDE &mdash; they write byte-compatible transcripts to sibling brain stores</li>
+        <li><strong>Watches:</strong> <code>transcript.jsonl</code> under <code>~/.gemini/antigravity-cli/brain/&lt;conversation&gt;/.system_generated/logs/</code> (CLI) and <code>~/.gemini/antigravity/brain/&lt;conversation&gt;/.system_generated/logs/</code> (IDE)</li>
+        <li>Discovery is transcript-first: the IDE hosts many conversations in one Electron process with no per-conversation PID, so PID-less sessions are first-class; the <code>agy</code> CLI is a standalone native binary matched by exact name</li>
+        <li>Because the transcript filename is the constant <code>transcript.jsonl</code>, the session id is derived from the conversation directory path</li>
+        <li>Tokens and the canonical model are read from the sibling conversation store <code>~/.gemini/antigravity{,-cli}/conversations/&lt;conversation&gt;.db</code> (not the transcript) so the context bar renders</li>
+        <li><strong>Adapter name:</strong> <code>"antigravity"</code></li>
+        <li>Stage: <strong>alpha</strong></li>
+      </ul>
+
       <h3>Process Scanner</h3>
 
       <ul>

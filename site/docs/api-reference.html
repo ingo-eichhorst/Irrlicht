@@ -258,6 +258,18 @@
       <pre><code># Focus a session's terminal/IDE window
 curl -X POST http://127.0.0.1:7837/api/v1/sessions/52d087d1-.../focus</code></pre>
 
+      <h3>GET /api/v1/relay/publish</h3>
+
+      <p>Reports the daemon&rsquo;s outbound relay-publish state. When publishing is off it returns <code>{"enabled":false}</code>; when on, it returns the live forwarder link state: <code>{"enabled":true,"url":...,"state":...,"daemonId":...,"daemonLabel":...}</code> where <code>state</code> is one of <code>connecting</code> / <code>connected</code> / <code>auth_failed</code> / <code>disconnected</code>. The macOS app polls this to render the &ldquo;Publishing&rdquo; status dot.</p>
+
+      <h3>PUT /api/v1/relay/publish</h3>
+
+      <p>Reconfigures publishing on the running daemon (issue #722): <code>{"enabled":bool,"url":string,"token":string}</code>. The daemon starts, stops, or reconfigures its outbound forwarder live &mdash; no relaunch, no interruption to session monitoring &mdash; and returns the resulting status (same shape as the <code>GET</code>). Idempotent, so the app can re-send the current config freely. <strong>Loopback only</strong> (<code>127.0.0.1</code>): it mutates forwarder config and carries the relay token in its body, the same trust boundary as the other daemon-control endpoints. A standalone/headless daemon instead seeds publishing once at startup from <code>IRRLICHT_RELAY_URL</code> / <code>IRRLICHT_RELAY_TOKEN</code>.</p>
+
+      <pre><code># Turn on publishing to a relay
+curl -X PUT http://127.0.0.1:7837/api/v1/relay/publish \
+  -d '{"enabled":true,"url":"wss://relay.example.com","token":"..."}'</code></pre>
+
       <h3>POST /api/v1/hooks/claudecode</h3>
 
       <p>Receiver for Claude Code hook events (the permission-request integration). Claude Code is configured to POST here on <code>PermissionRequest</code>, <code>PreToolUse</code>, <code>PostToolUse</code>, <code>PostToolUseFailure</code>, and <code>PreCompact</code> events; the daemon uses them to surface user-blocking state (permission gates, <code>AskUserQuestion</code> / <code>ExitPlanMode</code> overlays) and to force <code>working</code> during a manual <code>/compact</code>. Consent-gated behind the <code>hooks</code> permission &mdash; while pending or denied the payload is dropped with <code>200</code>. The session is keyed off the <code>transcript_path</code> filename, not <code>session_id</code>.</p>

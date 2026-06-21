@@ -12,6 +12,41 @@ beyond), see the [Roadmap](https://irrlicht.io/docs/roadmap.html).
 
 ## [Unreleased]
 
+## [0.5.3] — 2026-06-21
+
+### Google Antigravity support, publish your sessions to a remote relay, and a clutch of daemon + adapter fixes.
+
+### Added
+- Google Antigravity adapter — one adapter covers both the `agy` CLI and the Antigravity IDE. Discovery is transcript-first, so PID-less IDE sessions are first-class. (#715)
+- Publish to relay — a macOS toggle that streams this daemon's sessions out to a standalone relay so you can watch them from another machine; pushing outbound means the daemon needs no inbound reachability (works behind NAT). The forwarder hot-reloads, so toggling Publish on/off or editing the URL/token applies to the running daemon with no relaunch and no interruption to session monitoring — and it works whether the app spawned the daemon or adopted an already-running one. (#718, #721, #722, #723)
+- Relay native multi-tenant workspace isolation, so one relay can serve several daemons' sessions kept apart per workspace. (#709, #713)
+
+### Fixed
+- Antigravity: the context bar now renders — tokens and the canonical model are read from the sibling conversation store rather than the transcript. (#719, #720)
+- Claude Code sessions now stay `waiting` across a daemon restart instead of flipping back to `working`. (#705, #706)
+- Brand: the flame gradient is legible on light backgrounds. (#708)
+- Adapters: assistant-text truncation is unified into a single tailer rule, so every adapter truncates long assistant text the same way. (#710)
+
+### Changed
+- Daemon: `buildAgentWatchers` now does an exhaustive `Source → watcher` dispatch so a new source can't silently land without a watcher. (#714)
+- Dashboard: extracted a collapsed-groups store out of the web monolith. (#712)
+- Adapters: share one todo-snapshot reconciler instead of per-adapter copies. (#711)
+
+### Docs
+- onboarding-factory skill gains an overnight push-through mode. (#717)
+- Removed the task-ETA figure from the landing page. (#704)
+
+### Technical appendix
+- **Relay publish hot-reload (#722 / #723).** A new `relay.PublishController` (`core/adapters/outbound/relay/controller.go`) owns the forwarder lifecycle — `Apply(enabled, url, token)` starts, stops, or reconfigures a single forwarder (cancel the ctx + start a fresh `relay.NewForwarder`), idempotent when the effective config is unchanged, mutex-guarded so concurrent PUTs serialize, and a blank URL counts as "off". The controller is always constructed and seeded once at startup from `IRRLICHT_RELAY_URL` / `IRRLICHT_RELAY_TOKEN` so headless/standalone daemons are unchanged. A loopback-only `PUT /api/v1/relay/publish` accepts `{enabled,url,token}` → `Apply` → returns the resulting status (same shape as `GET`). On macOS, `DaemonManager.publishSettingsDidChange()` PUTs the config to the running daemon (via the new `PublishClient`) instead of relaunching, re-syncing on spawn and on adopt; the relay token moves from a spawn-time env var to the loopback PUT body (same 127.0.0.1 trust boundary as every other daemon endpoint). `buildDaemonEnv` strips inherited `IRRLICHT_RELAY_URL` / `IRRLICHT_RELAY_TOKEN` so an app-spawned daemon never self-seeds from a stale value, and the publish PUT retries a few times so a single dropped request can't strand the daemon in the wrong state.
+- **Publish to relay (#718 / #721).** The original macOS toggle, UserDefaults URL + Keychain token, with a `PublishStatusMonitor` poll surfacing the live link state (connecting / connected / auth_failed / disconnected) as a status dot.
+- **Relay multi-tenant workspace isolation (#709 / #713).** The relay keeps each daemon's sessions partitioned per workspace so a single relay can host several daemons without cross-talk.
+- **Antigravity adapter (#715).** One adapter onboards both the `agy` CLI and the Antigravity IDE; discovery is transcript-first so PID=0 sessions are first-class, with a multi-root source over the brain stores and a path-based session id (constant `transcript.jsonl`).
+- **Antigravity context bar (#719 / #720).** Tokens and the canonical model live in a sibling SQLite protobuf (`conversations/<conv>.db`, `gen_metadata`), not the transcript; the adapter reads it on `turn_done` so the context bar renders.
+- **Claude Code waiting-across-restart (#705 / #706).** Session waiting state is preserved across a daemon restart rather than recomputed back to working.
+- **Adapter assistant-text truncation (#710).** Collapsed into one shared tailer rule.
+- **Daemon watcher dispatch (#714).** `buildAgentWatchers` switched to an exhaustive `Source` dispatch so an unmapped source is an explicit gap, not a silent no-op.
+- **Dashboard collapsed-groups store (#712)** and **shared todo-snapshot reconciler (#711)** are internal refactors with no user-visible behavior change.
+
 ## [0.5.2] — 2026-06-19
 
 ### Gemini CLI joins the lineup, the menu bar gets ~3× lighter under load, and context-pressure alerts become configurable.
@@ -1092,7 +1127,8 @@ Four distinct bugs caused long-running Claude Code sessions to bounce between
 - First bundled macOS installer `Irrlicht-0.2.0-mac-installer.pkg` containing
   the daemon, menu bar app, and auto-start LaunchAgent.
 
-[Unreleased]: https://github.com/ingo-eichhorst/Irrlicht/compare/v0.5.2...HEAD
+[Unreleased]: https://github.com/ingo-eichhorst/Irrlicht/compare/v0.5.3...HEAD
+[0.5.3]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.5.3
 [0.5.2]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.5.2
 [0.5.1]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.5.1
 [0.5.0]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.5.0
