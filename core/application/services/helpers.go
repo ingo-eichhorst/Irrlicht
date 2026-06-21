@@ -87,11 +87,11 @@ func cwdMissing(cwd string) bool {
 }
 
 // deriveParentSession tries all known methods to extract a parent session ID.
-// 1. Claude Code path pattern: .../<parent-session-id>/subagents/<agent-id>.jsonl
-// 2. Gemini CLI nested path: .../chats/<parent-uuid>/<child-uuid>.jsonl
-// 3. Pi transcript header: {"type": "session", "parentSession": "..."}
-// 4. Antigravity: scan sibling brain transcripts for the parent that announced
-//    this child's conversationId (the link lives in the parent, not the path).
+//  1. Claude Code path pattern: .../<parent-session-id>/subagents/<agent-id>.jsonl
+//  2. Gemini CLI nested path: .../chats/<parent-uuid>/<child-uuid>.jsonl
+//  3. Pi transcript header: {"type": "session", "parentSession": "..."}
+//  4. Antigravity: scan sibling brain transcripts for the parent that announced
+//     this child's conversationId (the link lives in the parent, not the path).
 func deriveParentSession(transcriptPath string) string {
 	if id := deriveParentSessionID(transcriptPath); id != "" {
 		return id
