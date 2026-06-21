@@ -63,16 +63,18 @@ func Agent() agent.Agent {
 				Key:             PermissionKeyTranscripts,
 				Kind:            permission.KindObserve,
 				Title:           "Read session transcripts",
-				FeatureUnlocked: "Session list, timeline, and state",
-				Touches: "Reads session transcripts under ~/.gemini/antigravity-cli/ " +
-					"and ~/.gemini/antigravity/ and the working directory of running " +
-					"agy processes",
+				FeatureUnlocked: "Session list, timeline, state, and context-window usage",
+				Touches: "Reads session transcripts and conversation stores under " +
+					"~/.gemini/antigravity-cli/ and ~/.gemini/antigravity/ and the " +
+					"working directory of running agy processes",
 				Detail: "Tails transcript.jsonl files under " +
 					"~/.gemini/antigravity{,-cli}/brain/<conversation>/.system_generated/logs/ " +
-					"to derive session state, model, and timeline. Also scans for " +
-					"running agy CLI processes and reads their working directory to " +
-					"bind a session to its process. Read-only — no file is ever " +
-					"modified. Toggling off stops all reading immediately.",
+					"to derive session state, model, and timeline, and reads the sibling " +
+					"conversation store ~/.gemini/antigravity{,-cli}/conversations/<conversation>.db " +
+					"for token counts and the canonical model name (context-window usage). " +
+					"Also scans for running agy CLI processes and reads their working " +
+					"directory to bind a session to its process. Read-only — no file is " +
+					"ever modified. Toggling off stops all reading immediately.",
 			},
 		},
 	}
