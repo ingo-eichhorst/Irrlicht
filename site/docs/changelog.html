@@ -88,6 +88,44 @@
       <h1>Changelog</h1>
       <p class="page-subtitle">All notable changes to Irrlicht, following Keep a Changelog conventions.</p>
 
+      <h2>v0.5.3 <small>(2026-06-21)</small></h2>
+
+      <h3>Google Antigravity support, publish your sessions to a remote relay, and a clutch of daemon + adapter fixes.</h3>
+
+      <h3>Added</h3>
+      <ul>
+        <li><strong>Google Antigravity adapter</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/715" target="_blank" rel="noopener">#715</a>) &mdash; one adapter covers both the <code>agy</code> CLI and the Antigravity IDE. Discovery is transcript-first, so PID-less IDE sessions are first-class.</li>
+        <li><strong>Publish to relay</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/718" target="_blank" rel="noopener">#718</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/721" target="_blank" rel="noopener">#721</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/722" target="_blank" rel="noopener">#722</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/723" target="_blank" rel="noopener">#723</a>) &mdash; a macOS toggle that streams this daemon&rsquo;s sessions out to a standalone relay so you can watch them from another machine; pushing outbound means the daemon needs no inbound reachability (works behind NAT). The forwarder hot-reloads, so toggling Publish on/off or editing the URL/token applies to the running daemon with no relaunch and no interruption to session monitoring &mdash; whether the app spawned the daemon or adopted an already-running one.</li>
+        <li><strong>Relay multi-tenant workspace isolation</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/709" target="_blank" rel="noopener">#709</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/713" target="_blank" rel="noopener">#713</a>) &mdash; one relay can serve several daemons&rsquo; sessions kept apart per workspace.</li>
+      </ul>
+
+      <h3>Fixed</h3>
+      <ul>
+        <li><strong>Antigravity context bar now renders</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/719" target="_blank" rel="noopener">#719</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/720" target="_blank" rel="noopener">#720</a>) &mdash; tokens and the canonical model are read from the sibling conversation store rather than the transcript.</li>
+        <li><strong>Claude Code sessions stay <code>waiting</code> across a daemon restart</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/issues/705" target="_blank" rel="noopener">#705</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/706" target="_blank" rel="noopener">#706</a>) &mdash; instead of flipping back to <code>working</code>.</li>
+        <li><strong>Brand flame gradient legible on light backgrounds</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/708" target="_blank" rel="noopener">#708</a>).</li>
+        <li><strong>Unified assistant-text truncation</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/710" target="_blank" rel="noopener">#710</a>) &mdash; every adapter truncates long assistant text the same way, via one tailer rule.</li>
+      </ul>
+
+      <h3>Changed / Docs</h3>
+      <ul>
+        <li><strong>Exhaustive <code>Source &rarr; watcher</code> dispatch in <code>buildAgentWatchers</code></strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/714" target="_blank" rel="noopener">#714</a>) &mdash; a new source can&rsquo;t silently land without a watcher.</li>
+        <li><strong>Dashboard: extracted a collapsed-groups store</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/712" target="_blank" rel="noopener">#712</a>) and <strong>shared todo-snapshot reconciler</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/711" target="_blank" rel="noopener">#711</a>) &mdash; internal refactors.</li>
+        <li><strong>Docs</strong> &mdash; onboarding-factory skill gains an overnight push-through mode (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/717" target="_blank" rel="noopener">#717</a>); the task-ETA figure was removed from the landing page (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/704" target="_blank" rel="noopener">#704</a>).</li>
+      </ul>
+
+      <h3>Technical appendix</h3>
+      <ul>
+        <li><strong>Relay publish hot-reload (#722, #723)</strong> &mdash; a new <code>relay.PublishController</code> (<code>core/adapters/outbound/relay/controller.go</code>) owns the forwarder lifecycle: <code>Apply(enabled, url, token)</code> starts, stops, or reconfigures a single forwarder (cancel the ctx + start a fresh <code>relay.NewForwarder</code>), idempotent when the effective config is unchanged, mutex-guarded so concurrent PUTs serialize, blank URL counts as &ldquo;off&rdquo;. Always constructed and seeded once at startup from <code>IRRLICHT_RELAY_URL</code> / <code>IRRLICHT_RELAY_TOKEN</code> so headless/standalone daemons are unchanged. A loopback-only <code>PUT /api/v1/relay/publish</code> accepts <code>{enabled,url,token}</code> &rarr; <code>Apply</code> &rarr; returns the resulting status (same shape as <code>GET</code>). On macOS, <code>DaemonManager.publishSettingsDidChange()</code> PUTs the config via a new <code>PublishClient</code> instead of relaunching, re-syncing on spawn and on adopt; the relay token moves from a spawn-time env var to the loopback PUT body (same 127.0.0.1 trust boundary as every other daemon endpoint). <code>buildDaemonEnv</code> strips inherited <code>IRRLICHT_RELAY_URL</code> / <code>IRRLICHT_RELAY_TOKEN</code> so an app-spawned daemon never self-seeds from a stale value, and the PUT retries so a single dropped request can&rsquo;t strand the daemon.</li>
+        <li><strong>Publish to relay (#718, #721)</strong> &mdash; the original macOS toggle (UserDefaults URL + Keychain token) with a <code>PublishStatusMonitor</code> poll surfacing the live link state (connecting / connected / auth_failed / disconnected) as a status dot.</li>
+        <li><strong>Relay multi-tenant workspace isolation (#709, #713)</strong> &mdash; the relay partitions each daemon&rsquo;s sessions per workspace so one relay hosts several daemons without cross-talk.</li>
+        <li><strong>Antigravity adapter (#715)</strong> &mdash; one adapter onboards both the <code>agy</code> CLI and the Antigravity IDE; transcript-first discovery so PID=0 sessions are first-class, a multi-root source over the brain stores, and a path-based session id (constant <code>transcript.jsonl</code>).</li>
+        <li><strong>Antigravity context bar (#719, #720)</strong> &mdash; tokens and the canonical model live in a sibling SQLite protobuf (<code>conversations/&lt;conv&gt;.db</code>, <code>gen_metadata</code>), not the transcript; read on <code>turn_done</code>.</li>
+        <li><strong>Claude Code waiting-across-restart (#705, #706)</strong> &mdash; the waiting state is preserved across a daemon restart rather than recomputed back to working.</li>
+        <li><strong>Adapter assistant-text truncation (#710)</strong> &mdash; collapsed into one shared tailer rule.</li>
+        <li><strong>Daemon watcher dispatch (#714)</strong> &mdash; <code>buildAgentWatchers</code> switched to an exhaustive <code>Source</code> dispatch so an unmapped source is an explicit gap, not a silent no-op.</li>
+      </ul>
+
       <h2>v0.5.2 <small>(2026-06-19)</small></h2>
 
       <h3>Gemini CLI joins the lineup, the menu bar gets ~3&times; lighter under load, and context-pressure alerts become configurable.</h3>
