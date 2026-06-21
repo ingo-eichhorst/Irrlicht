@@ -153,4 +153,15 @@ var modelAliases = map[string]string{
 	"claude-4-6-sonnet-high-fast": "claude-sonnet-4-6",
 	"claude-4-7-opus-xhigh":       "claude-opus-4-7",
 	"claude-4-7-opus-xhigh-fast":  "claude-opus-4-7",
+
+	// Zhipu GLM — codeburn maps "GLM-5.2" to "glm-5p1", which LiteLLM does not
+	// ship (it carries zai.glm-5, with no context window populated yet). Kept
+	// as codeburn's canonical; resolves to a zero-value capacity and logs the
+	// mapping on miss until LiteLLM prices it.
+	"GLM-5.2": "glm-5p1",
+
+	// xAI Grok — codeburn's "grok-build-0.1" canonical isn't in LiteLLM (no
+	// grok-build pricing yet). Zero-value capacity + log on miss until the key
+	// lands upstream.
+	"grok-build": "grok-build-0.1",
 }
