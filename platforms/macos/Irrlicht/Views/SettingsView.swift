@@ -362,8 +362,8 @@ struct SettingsView: View {
                                                     try? await Task.sleep(nanoseconds: 600_000_000)
                                                     guard !Task.isCancelled else { return }
                                                     relayServerURL = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
-                                                    // The daemon's forwarder is wired at startup, so a
-                                                    // URL change needs a relaunch to take effect.
+                                                    // POST the new URL to the running daemon so it
+                                                    // reconfigures its forwarder live (issue #722).
                                                     daemonManager.publishSettingsDidChange()
                                                 }
                                             }
@@ -382,7 +382,8 @@ struct SettingsView: View {
                                             KeychainStore.set(newValue.trimmingCharacters(in: .whitespacesAndNewlines), account: "relayToken")
                                             // Keychain writes don't fire UserDefaults.didChangeNotification,
                                             // so nudge both directions to pick up the new token: the
-                                            // subscribe link reconnects, the daemon relaunches to republish.
+                                            // subscribe link reconnects, and we POST the new token to the
+                                            // daemon so it republishes with it (issue #722).
                                             sessionManager.relayTokenDidChange()
                                             daemonManager.publishSettingsDidChange()
                                         }

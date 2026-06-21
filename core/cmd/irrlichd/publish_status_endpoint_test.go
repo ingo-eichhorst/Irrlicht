@@ -8,10 +8,12 @@ import (
 	"testing"
 
 	"irrlicht/core/adapters/outbound/relay"
+	"irrlicht/core/application/services"
+	"irrlicht/core/domain/session"
 )
 
-// publishStatusPayload mirrors the GET /api/v1/relay/publish response so tests
-// assert its shape independently of the handler's private struct.
+// publishStatusPayload mirrors the GET/PUT /api/v1/relay/publish response so
+// tests assert its shape independently of the handler's private struct.
 type publishStatusPayload struct {
 	Enabled     bool   `json:"enabled"`
 	URL         string `json:"url"`
@@ -21,12 +23,25 @@ type publishStatusPayload struct {
 	DaemonLabel string `json:"daemonLabel"`
 }
 
-// TestPublishStatusEndpoint_Disabled: when publishing is off the forwarder is
-// nil and the endpoint reports enabled=false with no leaked fields.
+// newTestController builds a controller bound to the test's context so any
+// forwarder it starts is torn down at cleanup (no lingering dial goroutines).
+func newTestController(t *testing.T) *relay.PublishController {
+	t.Helper()
+	return relay.NewPublishController(
+		t.Context(),
+		relay.Identity{DaemonID: "d1", DaemonLabel: "lap"},
+		services.NewPushService(),
+		func() ([]*session.SessionState, []relay.AgentInfo) { return nil, nil },
+		nil,
+	)
+}
+
+// TestPublishStatusEndpoint_Disabled: when publishing is off the controller has
+// no forwarder and the endpoint reports enabled=false with no leaked fields.
 func TestPublishStatusEndpoint_Disabled(t *testing.T) {
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/relay/publish", nil)
-	handleGetPublishStatus(nil)(rr, req)
+	handleGetPublishStatus(newTestController(t))(rr, req)
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status: got %d, want 200", rr.Code)
@@ -39,22 +54,25 @@ func TestPublishStatusEndpoint_Disabled(t *testing.T) {
 		t.Fatalf("unmarshal %q: %v", rr.Body.Bytes(), err)
 	}
 	if payload.Enabled {
-		t.Fatalf("nil forwarder must report enabled=false, got %+v", payload)
+		t.Fatalf("no forwarder must report enabled=false, got %+v", payload)
 	}
 	if payload.State != "" || payload.URL != "" {
 		t.Fatalf("disabled response must omit link fields, got %+v", payload)
 	}
 }
 
-// TestPublishStatusEndpoint_Enabled: with a forwarder present the endpoint
-// surfaces its live state and identity. A freshly-built forwarder reports
-// PublishConnecting before it has dialed.
+// TestPublishStatusEndpoint_Enabled: once publishing is enabled the endpoint
+// surfaces the forwarder's URL and identity. State is some live link state — we
+// don't assert which, since the forwarder is dialing concurrently.
 func TestPublishStatusEndpoint_Enabled(t *testing.T) {
-	fwd := relay.NewForwarder("wss://funken.io", relay.Identity{DaemonID: "d1", DaemonLabel: "lap"}, "", nil, nil, nil)
+	c := newTestController(t)
+	// 127.0.0.1:1 refuses fast, so no real relay is needed and the dial loop
+	// stays local; the test context cancels it at cleanup.
+	c.Apply(true, "ws://127.0.0.1:1", "")
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/relay/publish", nil)
-	handleGetPublishStatus(fwd)(rr, req)
+	handleGetPublishStatus(c)(rr, req)
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status: got %d, want 200", rr.Code)
@@ -64,15 +82,56 @@ func TestPublishStatusEndpoint_Enabled(t *testing.T) {
 		t.Fatalf("unmarshal %q: %v", rr.Body.Bytes(), err)
 	}
 	if !payload.Enabled {
-		t.Fatalf("forwarder present must report enabled=true, got %+v", payload)
-	}
-	if payload.State != relay.PublishConnecting {
-		t.Fatalf("state: got %q, want %q", payload.State, relay.PublishConnecting)
+		t.Fatalf("enabled publishing must report enabled=true, got %+v", payload)
 	}
 	if payload.DaemonID != "d1" || payload.DaemonLabel != "lap" {
 		t.Fatalf("identity not surfaced: %+v", payload)
 	}
 	if payload.URL == "" {
 		t.Fatalf("url must be populated, got %+v", payload)
+	}
+}
+
+// TestPublishStatusEndpoint_PutTogglesPublishing: a PUT enabling then disabling
+// publishing flips the reported status, proving the hot-reload path (issue #722)
+// works end-to-end through the HTTP layer with no daemon relaunch.
+func TestPublishStatusEndpoint_PutTogglesPublishing(t *testing.T) {
+	c := newTestController(t)
+	handler := handlePutPublishStatus(c)
+
+	put := func(body string) publishStatusPayload {
+		t.Helper()
+		rr := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPut, "/api/v1/relay/publish", strings.NewReader(body))
+		handler(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("PUT %s: status got %d, want 200", body, rr.Code)
+		}
+		var p publishStatusPayload
+		if err := json.Unmarshal(rr.Body.Bytes(), &p); err != nil {
+			t.Fatalf("unmarshal %q: %v", rr.Body.Bytes(), err)
+		}
+		return p
+	}
+
+	on := put(`{"enabled":true,"url":"ws://127.0.0.1:1","token":""}`)
+	if !on.Enabled || on.URL == "" {
+		t.Fatalf("PUT enabled=true must turn publishing on, got %+v", on)
+	}
+
+	off := put(`{"enabled":false,"url":"ws://127.0.0.1:1","token":""}`)
+	if off.Enabled || off.URL != "" {
+		t.Fatalf("PUT enabled=false must turn publishing off, got %+v", off)
+	}
+}
+
+// TestPublishStatusEndpoint_PutRejectsBadBody: a malformed body is a 400, not a
+// silent no-op that the caller mistakes for success.
+func TestPublishStatusEndpoint_PutRejectsBadBody(t *testing.T) {
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/relay/publish", strings.NewReader("not json"))
+	handlePutPublishStatus(newTestController(t))(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("malformed body: status got %d, want 400", rr.Code)
 	}
 }

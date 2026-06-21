@@ -38,81 +38,39 @@ final class DaemonManagerTests: XCTestCase {
         XCTAssertFalse(manager.daemonRunning)
     }
 
-    // MARK: - Relay-publish env wiring (issue #718)
+    // MARK: - Daemon launch env (issue #722)
 
-    func testBuildDaemonEnvPublishOnWithToken() {
+    func testBuildDaemonEnvSetsBindAddrAndPreservesBase() {
         let env = DaemonManager.buildDaemonEnv(
             base: ["PATH": "/usr/bin"],
-            bindAddr: "127.0.0.1:7837",
-            publishEnabled: true,
-            relayURL: "wss://funken.io",
-            relayToken: "tok"
+            bindAddr: "127.0.0.1:7838"
         )
-        XCTAssertEqual(env["IRRLICHT_BIND_ADDR"], "127.0.0.1:7837")
-        XCTAssertEqual(env["IRRLICHT_RELAY_URL"], "wss://funken.io")
-        XCTAssertEqual(env["IRRLICHT_RELAY_TOKEN"], "tok")
+        XCTAssertEqual(env["IRRLICHT_BIND_ADDR"], "127.0.0.1:7838")
         XCTAssertEqual(env["PATH"], "/usr/bin", "base environment must be preserved")
     }
 
-    func testBuildDaemonEnvPublishOnWithoutTokenStripsInheritedToken() {
-        // Publishing on, but no token configured: an inherited IRRLICHT_RELAY_TOKEN
-        // must not leak through (no-auth relay, or token cleared in Settings).
+    func testBuildDaemonEnvNoLongerLayersRelayPublishVars() {
+        // Relay publishing now travels over loopback (issue #722), not launch
+        // env: buildDaemonEnv must not inject IRRLICHT_RELAY_* of its own. An
+        // inherited value is left untouched (the app's own environment), but the
+        // builder adds nothing.
         let env = DaemonManager.buildDaemonEnv(
-            base: ["IRRLICHT_RELAY_TOKEN": "stale"],
-            bindAddr: "127.0.0.1:7837",
-            publishEnabled: true,
-            relayURL: "wss://funken.io",
-            relayToken: ""
-        )
-        XCTAssertEqual(env["IRRLICHT_RELAY_URL"], "wss://funken.io")
-        XCTAssertNil(env["IRRLICHT_RELAY_TOKEN"])
-    }
-
-    func testBuildDaemonEnvPublishOffStripsInheritedVars() {
-        // Toggling publish off must truly stop forwarding even if the app was
-        // launched with the relay vars already set in its environment.
-        let env = DaemonManager.buildDaemonEnv(
-            base: ["IRRLICHT_RELAY_URL": "wss://stale", "IRRLICHT_RELAY_TOKEN": "stale"],
-            bindAddr: "127.0.0.1:7837",
-            publishEnabled: false,
-            relayURL: "wss://funken.io",
-            relayToken: "tok"
+            base: [:],
+            bindAddr: "127.0.0.1:7837"
         )
         XCTAssertNil(env["IRRLICHT_RELAY_URL"])
         XCTAssertNil(env["IRRLICHT_RELAY_TOKEN"])
-        XCTAssertEqual(env["IRRLICHT_BIND_ADDR"], "127.0.0.1:7837")
     }
 
-    func testBuildDaemonEnvEmptyURLActsAsOff() {
-        let env = DaemonManager.buildDaemonEnv(
-            base: [:],
-            bindAddr: "127.0.0.1:7837",
-            publishEnabled: true,
-            relayURL: "   ",
-            relayToken: "tok"
-        )
-        XCTAssertNil(env["IRRLICHT_RELAY_URL"], "enabled with a blank URL must not activate the forwarder")
-        XCTAssertNil(env["IRRLICHT_RELAY_TOKEN"])
-    }
-
-    func testBuildDaemonEnvTrimsURLAndToken() {
-        let env = DaemonManager.buildDaemonEnv(
-            base: [:],
-            bindAddr: "127.0.0.1:7837",
-            publishEnabled: true,
-            relayURL: "  wss://funken.io  ",
-            relayToken: "  tok  "
-        )
-        XCTAssertEqual(env["IRRLICHT_RELAY_URL"], "wss://funken.io")
-        XCTAssertEqual(env["IRRLICHT_RELAY_TOKEN"], "tok")
-    }
-
-    func testPublishSettingsDidChangeIsSafeWithoutOwnedDaemon() {
-        // Under xctest there's no daemon binary, so no app-owned process: the
-        // relaunch path must be a safe no-op (and idempotent), never a crash.
+    func testPublishSettingsDidChangeDoesNotRelaunchDaemon() {
+        // The toggle now POSTs to the running daemon instead of relaunching it.
+        // Under xctest there's no daemon binary and no app-owned process, so the
+        // call must be a safe fire-and-forget no-op — never spawn or crash.
+        XCTAssertNil(manager.currentProcessForTesting, "precondition: no app-owned daemon")
         manager.publishSettingsDidChange()
         manager.publishSettingsDidChange()
-        XCTAssertFalse(manager.daemonRunning)
+        XCTAssertFalse(manager.daemonRunning, "publishSettingsDidChange must not launch a daemon")
+        XCTAssertNil(manager.currentProcessForTesting, "publishSettingsDidChange must not spawn a process")
     }
 
     // MARK: - Bundle Path Tests

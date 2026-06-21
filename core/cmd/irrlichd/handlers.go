@@ -236,34 +236,66 @@ func handleGetAgents(allAgents []agent.Agent) http.HandlerFunc {
 	}
 }
 
+// publishStatusResp is the shared shape of the GET and PUT
+// /api/v1/relay/publish responses: {"enabled":false} when publishing is off,
+// otherwise the forwarder's live link state.
+type publishStatusResp struct {
+	Enabled     bool   `json:"enabled"`
+	URL         string `json:"url,omitempty"`
+	State       string `json:"state,omitempty"`
+	LastError   string `json:"lastError,omitempty"`
+	DaemonID    string `json:"daemonId,omitempty"`
+	DaemonLabel string `json:"daemonLabel,omitempty"`
+}
+
+// writePublishStatus encodes the controller's current publish state as JSON.
+func writePublishStatus(w http.ResponseWriter, controller *relay.PublishController) {
+	w.Header().Set("Content-Type", "application/json")
+	enabled, s := controller.Status()
+	if !enabled {
+		json.NewEncoder(w).Encode(publishStatusResp{Enabled: false})
+		return
+	}
+	json.NewEncoder(w).Encode(publishStatusResp{
+		Enabled:     true,
+		URL:         s.URL,
+		State:       s.State,
+		LastError:   s.LastError,
+		DaemonID:    s.DaemonID,
+		DaemonLabel: s.DaemonLabel,
+	})
+}
+
 // handleGetPublishStatus serves the daemon → relay forwarder's live link state
 // so the macOS app can show a publish-connection indicator (issue #718). The
-// forwarder runs only when publishing is enabled (IRRLICHT_RELAY_URL set); when
-// it is off, fwd is nil and the endpoint reports {"enabled":false}.
-func handleGetPublishStatus(fwd *relay.Forwarder) http.HandlerFunc {
-	type publishStatusResp struct {
-		Enabled     bool   `json:"enabled"`
-		URL         string `json:"url,omitempty"`
-		State       string `json:"state,omitempty"`
-		LastError   string `json:"lastError,omitempty"`
-		DaemonID    string `json:"daemonId,omitempty"`
-		DaemonLabel string `json:"daemonLabel,omitempty"`
+// forwarder runs only while publishing is enabled; when it is off the controller
+// reports {"enabled":false}.
+func handleGetPublishStatus(controller *relay.PublishController) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writePublishStatus(w, controller)
+	}
+}
+
+// handlePutPublishStatus reconfigures publishing on the running daemon (issue
+// #722): the macOS app PUTs {enabled,url,token} when its publish settings change
+// instead of relaunching the daemon. Apply is idempotent, so the app can POST on
+// every nudge. Responds with the resulting status (same shape as GET) so the
+// caller sees the effect immediately. Registered loopback-only in main.go — it
+// mutates forwarder config and carries the relay token in its body.
+func handlePutPublishStatus(controller *relay.PublishController) http.HandlerFunc {
+	type publishConfigReq struct {
+		Enabled bool   `json:"enabled"`
+		URL     string `json:"url"`
+		Token   string `json:"token"`
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		if fwd == nil {
-			json.NewEncoder(w).Encode(publishStatusResp{Enabled: false})
+		var req publishConfigReq
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid JSON body", http.StatusBadRequest)
 			return
 		}
-		s := fwd.Status()
-		json.NewEncoder(w).Encode(publishStatusResp{
-			Enabled:     true,
-			URL:         s.URL,
-			State:       s.State,
-			LastError:   s.LastError,
-			DaemonID:    s.DaemonID,
-			DaemonLabel: s.DaemonLabel,
-		})
+		controller.Apply(req.Enabled, req.URL, req.Token)
+		writePublishStatus(w, controller)
 	}
 }
 
