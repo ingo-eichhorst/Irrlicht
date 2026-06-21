@@ -182,6 +182,10 @@ func main() {
 	// session event out to a standalone irrlichtrelay, so remote clients see
 	// this daemon's sessions through the relay. Pushing out means the daemon
 	// needs no inbound reachability (works behind NAT). No-op when unset.
+	// publishForwarder is non-nil only while publishing is enabled; the
+	// /api/v1/relay/publish handler (registered after the mux is built) reports
+	// its live link state, or {"enabled":false} when this stays nil.
+	var publishForwarder *relay.Forwarder
 	if relayURL := os.Getenv("IRRLICHT_RELAY_URL"); relayURL != "" {
 		home, _ := os.UserHomeDir()
 		identity, err := relay.LoadOrCreateIdentity(dataDir(home))
@@ -208,6 +212,7 @@ func main() {
 			return sessions, infos
 		}
 		fwd := relay.NewForwarder(relayURL, identity, relayToken, push, snapshot, logger)
+		publishForwarder = fwd
 		relayCtx, relayCancel := context.WithCancel(context.Background())
 		defer relayCancel()
 		go fwd.Run(relayCtx)
@@ -267,6 +272,7 @@ func main() {
 	mux.HandleFunc("GET /api/v1/sessions/stream", hub.ServeWS)
 	mux.HandleFunc("GET /api/v1/agents", handleGetAgents(allAgents))
 	mux.HandleFunc("GET /api/v1/version", handleGetVersion(Version))
+	mux.HandleFunc("GET /api/v1/relay/publish", handleGetPublishStatus(publishForwarder))
 
 	// pprof debug endpoints for runtime profiling (localhost only).
 	mux.HandleFunc("GET /debug/pprof/", localhostOnly(pprof.Index))

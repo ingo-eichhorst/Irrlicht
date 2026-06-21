@@ -17,6 +17,102 @@ final class DaemonManager: ObservableObject {
 
     private let logger = Logger(subsystem: "io.irrlicht.app", category: "DaemonManager")
 
+    /// Last publish config the running daemon was launched with, so a settings
+    /// nudge relaunches only when the effective config actually changed.
+    private var lastPublishConfig = ""
+
+    // MARK: - Relay publish settings
+
+    /// Relay-publish settings (issue #718). URL + enabled flag live in
+    /// UserDefaults (shared with the relay *subscribe* direction); the token
+    /// lives in the Keychain — same store the subscribe path uses.
+    private var publishEnabled: Bool { UserDefaults.standard.bool(forKey: "publishToRelay") }
+    // Trimmed at the source so the change-detection signature and the launched
+    // env derive from identical values (buildDaemonEnv trims again defensively
+    // for its standalone callers/tests).
+    private var relayURL: String {
+        (UserDefaults.standard.string(forKey: "relayServerURL") ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    private var relayToken: String {
+        KeychainStore.get(account: "relayToken").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Signature of the publish-relevant settings. The token is reduced to a
+    /// hash so the plaintext secret isn't retained, while a token change still
+    /// shows up as a different signature.
+    private var publishConfigSignature: String {
+        let token = relayToken
+        return "\(publishEnabled)|\(relayURL)|\(token.isEmpty ? "none" : String(token.hashValue))"
+    }
+
+    /// Builds the daemon's launch environment from a base (the app's own
+    /// environment) plus the relay-publish settings. When publishing is on with
+    /// a non-empty URL it sets `IRRLICHT_RELAY_URL` (which activates the daemon's
+    /// outbound forwarder) and, when a token is present, `IRRLICHT_RELAY_TOKEN`.
+    /// When publishing is off it strips both, so a value inherited from the
+    /// app's own environment can't silently keep forwarding on. `bindAddr` is
+    /// always set so the daemon listens on the port the app connects to.
+    static func buildDaemonEnv(
+        base: [String: String],
+        bindAddr: String,
+        publishEnabled: Bool,
+        relayURL: String,
+        relayToken: String
+    ) -> [String: String] {
+        var env = base
+        env["IRRLICHT_BIND_ADDR"] = bindAddr
+        let url = relayURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        let token = relayToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        if publishEnabled && !url.isEmpty {
+            env["IRRLICHT_RELAY_URL"] = url
+            if token.isEmpty {
+                env.removeValue(forKey: "IRRLICHT_RELAY_TOKEN")
+            } else {
+                env["IRRLICHT_RELAY_TOKEN"] = token
+            }
+        } else {
+            env.removeValue(forKey: "IRRLICHT_RELAY_URL")
+            env.removeValue(forKey: "IRRLICHT_RELAY_TOKEN")
+        }
+        return env
+    }
+
+    /// Called by Settings when a publish-relevant setting changes (the toggle,
+    /// the relay URL, or the Keychain token — the last fires no UserDefaults
+    /// notification, so Settings nudges us explicitly). Relaunches the embedded
+    /// daemon so its startup-wired forwarder picks up the new env, but only when
+    /// the effective config actually changed.
+    func publishSettingsDidChange() {
+        let sig = publishConfigSignature
+        guard sig != lastPublishConfig else { return }
+        lastPublishConfig = sig
+        relaunch()
+    }
+
+    /// Relaunches the embedded daemon to apply changed launch settings. Only a
+    /// daemon this app spawned is relaunched; an external or custom-port dev
+    /// daemon the app didn't start is left untouched (its env is owned wherever
+    /// it was launched). The crash-restart path is not triggered:
+    /// terminateProcess() clears `process`, and the terminationHandler restarts
+    /// only when the terminated process is still the current one.
+    private func relaunch() {
+        guard process != nil else {
+            logger.info("Publish settings changed but no app-owned daemon to relaunch")
+            return
+        }
+        logger.info("Relaunching embedded daemon to apply relay-publish settings")
+        terminateProcess()
+        healthTask?.cancel()
+        healthTask = Task { [weak self] in
+            // Brief grace so the listening socket frees before the new daemon binds.
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            guard let self, !Task.isCancelled else { return }
+            self.restartCount = 0
+            self.spawnDaemon()
+        }
+    }
+
     // MARK: - Public
 
     func start() {
@@ -110,16 +206,25 @@ final class DaemonManager: ObservableObject {
         proc.standardOutput = FileHandle.nullDevice
         proc.standardError = FileHandle.nullDevice
         // Bind the same port the app connects to. Inherits the app's
-        // environment so IRRLICHT_HOME (if set for a dev instance) propagates.
-        var env = ProcessInfo.processInfo.environment
-        env["IRRLICHT_BIND_ADDR"] = "127.0.0.1:\(DaemonEndpoint.port)"
-        proc.environment = env
+        // environment so IRRLICHT_HOME (if set for a dev instance) propagates,
+        // then layers on the relay-publish env from Settings (issue #718).
+        proc.environment = Self.buildDaemonEnv(
+            base: ProcessInfo.processInfo.environment,
+            bindAddr: "127.0.0.1:\(DaemonEndpoint.port)",
+            publishEnabled: publishEnabled,
+            relayURL: relayURL,
+            relayToken: relayToken
+        )
 
         proc.terminationHandler = { [weak self] terminated in
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.daemonRunning = false
 
+                // An intentional stop or relaunch clears or replaces `process`
+                // before the handler runs, so treat this as a crash worth
+                // restarting only when the terminated process is still current.
+                guard self.process === terminated else { return }
                 // Only restart if we haven't been told to stop.
                 guard self.healthTask != nil, !Task.isCancelled else { return }
 
@@ -135,6 +240,9 @@ final class DaemonManager: ObservableObject {
             process = proc
             daemonRunning = true
             restartCount = 0
+            // Record the publish config this daemon launched with, so a later
+            // settings nudge relaunches only on an actual change.
+            lastPublishConfig = publishConfigSignature
             logger.info("Spawned embedded daemon (pid \(proc.processIdentifier))")
         } catch {
             logger.error("Failed to launch daemon: \(error.localizedDescription)")

@@ -10,6 +10,7 @@ struct SettingsView: View {
     var onReviewPermissions: () -> Void = {}
     @EnvironmentObject var updateManager: UpdateManager
     @EnvironmentObject var sessionManager: SessionManager
+    @EnvironmentObject var daemonManager: DaemonManager
     @AppStorage("debugMode") private var debugMode: Bool = false
     @AppStorage("showCostDisplay") private var showCostDisplay: Bool = false
     @AppStorage("showQuotaForecast") private var showQuotaForecast: Bool = true
@@ -27,9 +28,15 @@ struct SettingsView: View {
     // Sources (multi-source): mirror the web dashboard's keys.
     @AppStorage("useLocalDaemon") private var useLocalDaemon: Bool = true
     @AppStorage("useRelayServer") private var useRelayServer: Bool = false
+    // Publish direction (issue #718): forward this Mac's sessions to the relay.
+    // Independent of useRelayServer (subscribe); both share relayServerURL + the
+    // Keychain token.
+    @AppStorage("publishToRelay") private var publishToRelay: Bool = false
     @AppStorage("relayServerURL") private var relayServerURL: String = ""
     @State private var relayURLDraft: String = ""
     @State private var relayURLDebounceTask: Task<Void, Never>? = nil
+    // Live publish-link state, polled from the daemon's /api/v1/relay/publish.
+    @StateObject private var publishStatus = PublishStatusMonitor()
     // Set just before a programmatic reconcile of taskEtaActivation so the
     // .onChange it triggers is swallowed instead of re-POSTing to the daemon.
     @State private var taskEtaReconciling = false
@@ -335,7 +342,15 @@ struct SettingsView: View {
                                     info: "Also connect to a relay to see sessions from other machines."
                                 )
 
-                                if useRelayServer {
+                                LeadingToggle(
+                                    isOn: $publishToRelay,
+                                    label: "Publish to relay",
+                                    info: "Forward this Mac's sessions to the relay so machines signed in with a token from the same account can see them. Keeps serving locally too."
+                                )
+
+                                // URL + token are shared by both directions: show
+                                // them whenever either subscribe or publish is on.
+                                if useRelayServer || publishToRelay {
                                     HStack(spacing: 6) {
                                         TextField("ws://localhost:7839", text: $relayURLDraft)
                                             .textFieldStyle(.roundedBorder)
@@ -347,12 +362,17 @@ struct SettingsView: View {
                                                     try? await Task.sleep(nanoseconds: 600_000_000)
                                                     guard !Task.isCancelled else { return }
                                                     relayServerURL = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                                                    // The daemon's forwarder is wired at startup, so a
+                                                    // URL change needs a relaunch to take effect.
+                                                    daemonManager.publishSettingsDidChange()
                                                 }
                                             }
-                                        Circle()
-                                            .fill(sessionManager.relayConnectionState.dotColor)
-                                            .frame(width: 8, height: 8)
-                                            .tooltip(sessionManager.relayConnectionState.shortLabel)
+                                        if useRelayServer {
+                                            Circle()
+                                                .fill(sessionManager.relayConnectionState.dotColor)
+                                                .frame(width: 8, height: 8)
+                                                .tooltip("Subscribe: \(sessionManager.relayConnectionState.shortLabel)")
+                                        }
                                     }
                                     SecureField("Relay token (leave empty if the relay has no auth)", text: $relayTokenDraft)
                                         .textFieldStyle(.roundedBorder)
@@ -361,20 +381,50 @@ struct SettingsView: View {
                                         .onChange(of: relayTokenDraft) { newValue in
                                             KeychainStore.set(newValue.trimmingCharacters(in: .whitespacesAndNewlines), account: "relayToken")
                                             // Keychain writes don't fire UserDefaults.didChangeNotification,
-                                            // so nudge the relay to reconnect with the new token.
+                                            // so nudge both directions to pick up the new token: the
+                                            // subscribe link reconnects, the daemon relaunches to republish.
                                             sessionManager.relayTokenDidChange()
+                                            daemonManager.publishSettingsDidChange()
                                         }
+
+                                    if publishToRelay {
+                                        HStack(spacing: 6) {
+                                            Circle()
+                                                .fill(publishStatus.state.dotColor)
+                                                .frame(width: 8, height: 8)
+                                            Text("Publishing — \(publishStatus.state.label)")
+                                                .font(.caption)
+                                                .foregroundColor(.secondary)
+                                            Spacer()
+                                        }
+                                    }
+
+                                    Text("Publish and subscribe must use tokens from the same account to see each other's sessions.")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
                                 }
                             }
                             .onAppear {
                                 relayURLDraft = relayServerURL
                                 relayTokenDraft = KeychainStore.get(account: "relayToken")
+                                if publishToRelay { publishStatus.start() }
+                            }
+                            .onDisappear {
+                                publishStatus.stop()
                             }
                             .onChange(of: useRelayServer) { on in
                                 if on && relayURLDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                                     relayURLDraft = "ws://localhost:7839"
                                 }
                                 commitRelayURL()
+                            }
+                            .onChange(of: publishToRelay) { on in
+                                if on && relayURLDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                    relayURLDraft = "ws://localhost:7839"
+                                }
+                                commitRelayURL()
+                                daemonManager.publishSettingsDidChange()
+                                if on { publishStatus.start() } else { publishStatus.stop() }
                             }
 
                             CLIToolSection()

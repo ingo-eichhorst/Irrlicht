@@ -51,6 +51,10 @@ func newTestRelay(t *testing.T) *testRelay {
 			return
 		}
 		tr.conns <- c
+		// Mirror the real relay: acknowledge the daemon's hello so the forwarder
+		// declares the link up and proceeds to send its snapshot. (The forwarder
+		// now waits for this reply before sending the snapshot.)
+		_ = c.WriteJSON(HelloAck{Type: MsgHelloAck, AcceptedVersion: ProtocolVersion})
 		for {
 			_, data, err := c.ReadMessage()
 			if err != nil {
@@ -238,6 +242,73 @@ func TestForwarderSendsToken(t *testing.T) {
 	if hello.Token != "s3cr3t-token" {
 		t.Fatalf("hello.Token = %q, want the configured token", hello.Token)
 	}
+}
+
+// waitForState polls f.Status() until it reaches want, failing the test if it
+// doesn't within a generous deadline.
+func waitForState(t *testing.T, f *Forwarder, want string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if f.Status().State == want {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	s := f.Status()
+	t.Fatalf("forwarder did not reach state %q (last state %q, lastError %q)", want, s.State, s.LastError)
+}
+
+// TestForwarderStatusConnected verifies the forwarder reports PublishConnected
+// once the relay has acked its hello and it has sent its snapshot, with the
+// identity carried through to Status().
+func TestForwarderStatusConnected(t *testing.T) {
+	tr := newTestRelay(t)
+	bc := newFakeBroadcaster()
+	snap := func() ([]*session.SessionState, []AgentInfo) { return nil, nil }
+	f := NewForwarder(tr.url, Identity{DaemonID: "d1", DaemonLabel: "lap"}, "", bc, snap, nil)
+	go f.Run(t.Context())
+
+	tr.next(t) // hello
+	tr.next(t) // daemon_snapshot — only sent after the ack was read
+
+	waitForState(t, f, PublishConnected)
+	if s := f.Status(); s.DaemonID != "d1" || s.DaemonLabel != "lap" || s.URL == "" || s.LastError != "" {
+		t.Fatalf("unexpected status: %+v", s)
+	}
+}
+
+// TestForwarderStatusAuthFailed verifies a relay that rejects the token with a
+// CloseRevoked (4401) close moves the forwarder to PublishAuthFailed — the
+// distinct state that lets the app show a "bad token" indicator rather than a
+// generic reconnecting one.
+func TestForwarderStatusAuthFailed(t *testing.T) {
+	up := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := up.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		// Reject like an auth-enabled relay handed a bad/revoked token.
+		_ = c.WriteControl(
+			websocket.CloseMessage,
+			websocket.FormatCloseMessage(CloseRevoked, "unauthorized"),
+			time.Now().Add(time.Second),
+		)
+		// Complete the close handshake so the forwarder reliably reads the close
+		// frame (and its 4401 code) before the TCP teardown.
+		_, _, _ = c.ReadMessage()
+		_ = c.Close()
+	}))
+	defer srv.Close()
+
+	bc := newFakeBroadcaster()
+	f := NewForwarder("ws"+strings.TrimPrefix(srv.URL, "http"), Identity{DaemonID: "d1"}, "bad-token", bc, nil, nil)
+	f.minBackoff = 10 * time.Millisecond
+	f.maxBackoff = 20 * time.Millisecond
+	go f.Run(t.Context())
+
+	waitForState(t, f, PublishAuthFailed)
 }
 
 // TestLoadDaemonToken covers env-var precedence and the tokens.json fallback.

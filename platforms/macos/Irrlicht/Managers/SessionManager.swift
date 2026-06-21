@@ -204,6 +204,8 @@ class SessionManager: ObservableObject {
             // web dashboard's enableLocalSource / enableRelaySource / relayUrl).
             "useLocalDaemon": true,
             "useRelayServer": false,
+            // Publish direction (issue #718): off by default; shares relayServerURL.
+            "publishToRelay": false,
             "relayServerURL": "",
             // Context-fill alert threshold (#689): default 80% preserves the
             // historical first-alert point for existing users.
