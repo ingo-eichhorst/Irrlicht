@@ -177,46 +177,45 @@ func main() {
 	// during replay without duplicating the construction.
 	allAgents := agents.All()
 
-	// Outbound relay forwarder (opt-in via IRRLICHT_RELAY_URL): subscribe to
-	// the same push broadcaster the local WebSocket uses and push every
-	// session event out to a standalone irrlichtrelay, so remote clients see
-	// this daemon's sessions through the relay. Pushing out means the daemon
-	// needs no inbound reachability (works behind NAT). No-op when unset.
-	// publishForwarder is non-nil only while publishing is enabled; the
-	// /api/v1/relay/publish handler (registered after the mux is built) reports
-	// its live link state, or {"enabled":false} when this stays nil.
-	var publishForwarder *relay.Forwarder
-	if relayURL := os.Getenv("IRRLICHT_RELAY_URL"); relayURL != "" {
-		home, _ := os.UserHomeDir()
-		identity, err := relay.LoadOrCreateIdentity(dataDir(home))
+	// Outbound relay publishing: subscribe to the same push broadcaster the
+	// local WebSocket uses and push every session event out to a standalone
+	// irrlichtrelay, so remote clients see this daemon's sessions through the
+	// relay. Pushing out means the daemon needs no inbound reachability (works
+	// behind NAT). The PublishController owns the forwarder's lifecycle so the
+	// macOS app can start/stop/reconfigure publishing live over the loopback
+	// PUT /api/v1/relay/publish — no daemon relaunch (issue #722). The
+	// controller is always constructed (so the endpoint can turn publishing on
+	// later); it is seeded once below from IRRLICHT_RELAY_URL /
+	// IRRLICHT_RELAY_TOKEN so headless/standalone daemons keep working as before.
+	relayBaseCtx, relayBaseCancel := context.WithCancel(context.Background())
+	defer relayBaseCancel()
+	relayHome, _ := os.UserHomeDir()
+	relayIdentity, err := relay.LoadOrCreateIdentity(dataDir(relayHome))
+	if err != nil {
+		logger.LogError("startup", "", fmt.Sprintf("relay identity persistence failed (using ephemeral id): %v", err))
+	}
+	relaySnapshot := func() ([]*session.SessionState, []relay.AgentInfo) {
+		sessions, err := cachedRepo.ListAll()
 		if err != nil {
-			logger.LogError("startup", "", fmt.Sprintf("relay identity persistence failed (using ephemeral id): %v", err))
+			sessions = nil
 		}
-		// Bearer token for an auth-enabled relay: IRRLICHT_RELAY_TOKEN or
-		// <dataDir>/relay-token.json (mode 0600). Empty against a no-auth relay.
-		relayToken := relay.LoadDaemonToken(dataDir(home))
-		snapshot := func() ([]*session.SessionState, []relay.AgentInfo) {
-			sessions, err := cachedRepo.ListAll()
-			if err != nil {
-				sessions = nil
-			}
-			infos := make([]relay.AgentInfo, 0, len(allAgents))
-			for _, a := range allAgents {
-				infos = append(infos, relay.AgentInfo{
-					Name:         a.Identity.Name,
-					DisplayName:  a.Identity.DisplayName,
-					IconSVGLight: a.Identity.IconSVGLight,
-					IconSVGDark:  a.Identity.IconSVGDark,
-				})
-			}
-			return sessions, infos
+		infos := make([]relay.AgentInfo, 0, len(allAgents))
+		for _, a := range allAgents {
+			infos = append(infos, relay.AgentInfo{
+				Name:         a.Identity.Name,
+				DisplayName:  a.Identity.DisplayName,
+				IconSVGLight: a.Identity.IconSVGLight,
+				IconSVGDark:  a.Identity.IconSVGDark,
+			})
 		}
-		fwd := relay.NewForwarder(relayURL, identity, relayToken, push, snapshot, logger)
-		publishForwarder = fwd
-		relayCtx, relayCancel := context.WithCancel(context.Background())
-		defer relayCancel()
-		go fwd.Run(relayCtx)
-		logger.LogInfo("startup", "", fmt.Sprintf("relay forwarder enabled → %s (daemon %q / %s)", relayURL, identity.DaemonLabel, identity.DaemonID))
+		return sessions, infos
+	}
+	publishController := relay.NewPublishController(relayBaseCtx, relayIdentity, push, relaySnapshot, logger)
+	// Seed from the env opt-in (backward compatible with the pre-#722 path).
+	// Bearer token for an auth-enabled relay: IRRLICHT_RELAY_TOKEN or
+	// <dataDir>/relay-token.json (mode 0600). Empty against a no-auth relay.
+	if relayURL := os.Getenv("IRRLICHT_RELAY_URL"); relayURL != "" {
+		publishController.Apply(true, relayURL, relay.LoadDaemonToken(dataDir(relayHome)))
 	}
 
 	// Shared adapters for SessionDetector.
@@ -272,7 +271,10 @@ func main() {
 	mux.HandleFunc("GET /api/v1/sessions/stream", hub.ServeWS)
 	mux.HandleFunc("GET /api/v1/agents", handleGetAgents(allAgents))
 	mux.HandleFunc("GET /api/v1/version", handleGetVersion(Version))
-	mux.HandleFunc("GET /api/v1/relay/publish", handleGetPublishStatus(publishForwarder))
+	mux.HandleFunc("GET /api/v1/relay/publish", handleGetPublishStatus(publishController))
+	// PUT reconfigures publishing on the running daemon (issue #722). Loopback
+	// only: it mutates forwarder config and carries the relay token in its body.
+	mux.HandleFunc("PUT /api/v1/relay/publish", localhostOnly(handlePutPublishStatus(publishController)))
 
 	// pprof debug endpoints for runtime profiling (localhost only).
 	mux.HandleFunc("GET /debug/pprof/", localhostOnly(pprof.Index))
