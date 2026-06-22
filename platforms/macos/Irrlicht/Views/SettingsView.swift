@@ -769,6 +769,10 @@ private struct NotificationEventRow: View {
         let installed = await Task.detached(priority: .userInitiated) {
             voice.isInstalled
         }.value
+        // The detached task outlives `.task(id:)` cancellation, so a selection
+        // change mid-flight could otherwise let this stale result overwrite the
+        // newer one. Drop it if our task was cancelled.
+        guard !Task.isCancelled else { return }
         voiceToInstall = installed ? nil : voice
     }
 
