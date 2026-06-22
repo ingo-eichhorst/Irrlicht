@@ -474,66 +474,82 @@ func (d *SessionDetector) EnqueueTerminalUISignal(sessionID string, ui backchann
 }
 
 // handleTerminalUISignal folds a rendered-terminal UI edge into the session
-// lifecycle. It runs on the event-loop goroutine, so it mutates state alongside
-// processActivity without a second writer. A trust dialog on screen forces
+// lifecycle. It runs on the event-loop goroutine, but the load-modify-save runs
+// under WithSessionStateLock — the same lock processActivity and the async
+// PID-discovery path (assignPIDLocked) take — so a concurrent PID assignment
+// can't clobber the transition (or vice versa). A trust dialog on screen forces
 // waiting (a state the transcript never records, and that needs no hook); when
-// it clears, the session re-classifies from its current metrics — the
-// transcript/process observers remain authoritative for everything else.
+// it clears, the session re-classifies — the transcript/process observers
+// remain authoritative for everything else.
 func (d *SessionDetector) handleTerminalUISignal(sig terminalUISignal) {
-	state, err := d.repo.Load(sig.sessionID)
-	if err != nil {
-		return // session gone since the signal was queued
-	}
+	d.pidMgr.WithSessionStateLock(func() {
+		state, err := d.repo.Load(sig.sessionID)
+		if err != nil {
+			return // session gone since the signal was queued
+		}
 
-	var newState, reason string
-	switch sig.ui {
-	case backchannel.UIKindTrustDialog:
-		// Rising edge. Already waiting (e.g. the claudecode hook beat us to it)
-		// means nothing to do — no double-count.
-		if state.State == session.StateWaiting {
-			return
+		var newState, reason string
+		switch sig.ui {
+		case backchannel.UIKindTrustDialog:
+			// Rising edge. Already waiting (e.g. the claudecode hook beat us to
+			// it) means nothing to do — no double-count.
+			if state.State == session.StateWaiting {
+				return
+			}
+			newState, reason = session.StateWaiting, TerminalUIDetectedReason
+		default:
+			// Clearing edge. Only undo a waiting we are responsible for.
+			if state.State != session.StateWaiting {
+				return
+			}
+			// Re-classify from a WORKING base, not from the current waiting
+			// state: ClassifyState is a no-op when called with currentState ==
+			// waiting and nil/ambiguous metrics, which would strand the session
+			// in waiting forever once the dialog we forced is gone. From a
+			// working base it re-derives ready/working from the metrics, while a
+			// genuine transcript reason to keep waiting (an open user-blocking
+			// tool, a question cue) still routes back to waiting — in which case
+			// newState == waiting and we leave it untouched below.
+			newState, reason = ClassifyState(session.StateWorking, state.Metrics)
+			if newState == state.State {
+				return // transcript independently keeps it waiting — leave it
+			}
+			if reason == "" {
+				reason = TerminalUIClearedReason
+			}
+		}
+
+		// Record only once we are actually acting, so a no-op edge never inflates
+		// the lifecycle log (the rising edge returns above without recording too).
+		uiReason := TerminalUIClearedReason
+		if sig.ui == backchannel.UIKindTrustDialog {
+			uiReason = TerminalUIDetectedReason
 		}
 		d.record(lifecycle.Event{
 			Kind: lifecycle.KindUIDetected, SessionID: sig.sessionID,
-			Adapter: state.Adapter, UIKind: string(sig.ui), Reason: TerminalUIDetectedReason,
+			Adapter: state.Adapter, UIKind: string(sig.ui), Reason: uiReason,
 		})
-		newState, reason = session.StateWaiting, TerminalUIDetectedReason
-	default:
-		// Clearing edge. Only act when we are the reason the session is waiting;
-		// if a transcript event already moved it on, leave it alone.
-		if state.State != session.StateWaiting {
+
+		now := time.Now().Unix()
+		d.record(lifecycle.Event{
+			Kind: lifecycle.KindStateTransition, SessionID: sig.sessionID,
+			PrevState: state.State, NewState: newState, Reason: reason,
+		})
+		state.State = newState
+		state.UpdatedAt = now
+		switch newState {
+		case session.StateWaiting:
+			state.WaitingStartTime = &now
+		case session.StateWorking:
+			state.WaitingStartTime = nil
+		}
+		if err := d.repo.Save(state); err != nil {
+			d.log.LogError("session-detector", sig.sessionID,
+				fmt.Sprintf("failed to save terminal-UI update: %v", err))
 			return
 		}
-		d.record(lifecycle.Event{
-			Kind: lifecycle.KindUIDetected, SessionID: sig.sessionID,
-			Adapter: state.Adapter, Reason: TerminalUIClearedReason,
-		})
-		newState, _ = ClassifyState(state.State, state.Metrics)
-		reason = TerminalUIClearedReason
-		if newState == state.State {
-			return // metrics still say waiting — nothing changed
-		}
-	}
-
-	now := time.Now().Unix()
-	d.record(lifecycle.Event{
-		Kind: lifecycle.KindStateTransition, SessionID: sig.sessionID,
-		PrevState: state.State, NewState: newState, Reason: reason,
+		d.broadcast(outbound.PushTypeUpdated, state)
 	})
-	state.State = newState
-	state.UpdatedAt = now
-	switch newState {
-	case session.StateWaiting:
-		state.WaitingStartTime = &now
-	case session.StateWorking:
-		state.WaitingStartTime = nil
-	}
-	if err := d.repo.Save(state); err != nil {
-		d.log.LogError("session-detector", sig.sessionID,
-			fmt.Sprintf("failed to save terminal-UI update: %v", err))
-		return
-	}
-	d.broadcast(outbound.PushTypeUpdated, state)
 }
 
 // handleTranscriptEvent dispatches a transcript event to the appropriate handler.

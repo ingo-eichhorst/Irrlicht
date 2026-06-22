@@ -7,6 +7,7 @@ import (
 	"irrlicht/core/domain/backchannel"
 	"irrlicht/core/domain/lifecycle"
 	"irrlicht/core/domain/session"
+	"irrlicht/core/ports/outbound"
 )
 
 // --- fakes shared by the observer + fusion tests ---
@@ -149,11 +150,19 @@ func TestObserverGates(t *testing.T) {
 
 // --- fusion (handleTerminalUISignal applies state on the single writer) ---
 
+// newFusionDetector builds a real SessionDetector (so handleTerminalUISignal's
+// WithSessionStateLock has a live pidMgr) wired to repo and a capturing
+// recorder. git/metrics/pw/broadcaster are nil — the handler never touches them.
+func newFusionDetector(repo outbound.SessionRepository) (*SessionDetector, *captureRecorder) {
+	rec := &captureRecorder{}
+	d := NewSessionDetector(nil, nil, repo, bcNopLog{}, nil, nil, nil, "", 0, nil, nil, nil)
+	d.SetRecorder(rec)
+	return d, rec
+}
+
 func TestHandleTerminalUISignal_RisingForcesWaiting(t *testing.T) {
 	st := &session.SessionState{SessionID: "s", Adapter: "claude-code", State: session.StateWorking}
-	repo := newUIRepo(st)
-	rec := &captureRecorder{}
-	d := &SessionDetector{repo: repo, log: bcNopLog{}, recorder: rec}
+	d, rec := newFusionDetector(newUIRepo(st))
 
 	d.handleTerminalUISignal(terminalUISignal{sessionID: "s", ui: backchannel.UIKindTrustDialog})
 
@@ -173,8 +182,7 @@ func TestHandleTerminalUISignal_RisingForcesWaiting(t *testing.T) {
 
 func TestHandleTerminalUISignal_AlreadyWaitingNoOp(t *testing.T) {
 	st := &session.SessionState{SessionID: "s", Adapter: "claude-code", State: session.StateWaiting}
-	rec := &captureRecorder{}
-	d := &SessionDetector{repo: newUIRepo(st), log: bcNopLog{}, recorder: rec}
+	d, rec := newFusionDetector(newUIRepo(st))
 
 	d.handleTerminalUISignal(terminalUISignal{sessionID: "s", ui: backchannel.UIKindTrustDialog})
 
@@ -185,14 +193,13 @@ func TestHandleTerminalUISignal_AlreadyWaitingNoOp(t *testing.T) {
 
 func TestHandleTerminalUISignal_ClearingReclassifies(t *testing.T) {
 	// Dialog cleared while metrics show nothing pending → reclassify out of
-	// waiting. ClassifyState from waiting with empty metrics lands on ready.
+	// waiting. Re-classifying from a working base with empty metrics lands on
+	// working (the agent resumes); a later transcript event refines it.
 	st := &session.SessionState{
 		SessionID: "s", Adapter: "claude-code", State: session.StateWaiting,
 		Metrics: &session.SessionMetrics{},
 	}
-	repo := newUIRepo(st)
-	rec := &captureRecorder{}
-	d := &SessionDetector{repo: repo, log: bcNopLog{}, recorder: rec}
+	d, rec := newFusionDetector(newUIRepo(st))
 
 	d.handleTerminalUISignal(terminalUISignal{sessionID: "s", ui: backchannel.UIKindNone})
 
@@ -204,12 +211,26 @@ func TestHandleTerminalUISignal_ClearingReclassifies(t *testing.T) {
 	}
 }
 
+func TestHandleTerminalUISignal_ClearingWithNilMetricsDoesNotStrand(t *testing.T) {
+	// Regression: a session with nil Metrics (e.g. discovered before any
+	// transcript) must not be stranded in waiting once the dialog clears.
+	// ClassifyState(waiting, nil) is a no-op; re-classifying from a working base
+	// avoids the trap and moves the session out of waiting.
+	st := &session.SessionState{SessionID: "s", Adapter: "claude-code", State: session.StateWaiting}
+	d, _ := newFusionDetector(newUIRepo(st))
+
+	d.handleTerminalUISignal(terminalUISignal{sessionID: "s", ui: backchannel.UIKindNone})
+
+	if st.State == session.StateWaiting {
+		t.Fatal("nil-metrics clearing edge: session stranded in waiting")
+	}
+}
+
 func TestHandleTerminalUISignal_ClearingWhileWorkingNoOp(t *testing.T) {
 	// A transcript event already moved the session to working before the
 	// clearing edge arrives: leave it alone.
 	st := &session.SessionState{SessionID: "s", Adapter: "claude-code", State: session.StateWorking}
-	rec := &captureRecorder{}
-	d := &SessionDetector{repo: newUIRepo(st), log: bcNopLog{}, recorder: rec}
+	d, rec := newFusionDetector(newUIRepo(st))
 
 	d.handleTerminalUISignal(terminalUISignal{sessionID: "s", ui: backchannel.UIKindNone})
 
