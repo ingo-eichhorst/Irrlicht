@@ -40,26 +40,33 @@ type runner func(ctx context.Context, c command) error
 // Controller implements outbound.AgentController over terminal-backend scripting.
 type Controller struct {
 	repo   outbound.SessionRepository
+	push   outbound.PushBroadcaster
 	logger outbound.Logger
 	run    runner
 }
 
-// NewController constructs a Controller backed by real shell-outs.
-func NewController(repo outbound.SessionRepository, logger outbound.Logger) *Controller {
-	return &Controller{repo: repo, logger: logger, run: execRunner}
+// NewController constructs a Controller. push is used to delegate
+// AppleScript-only backends (iTerm2/Terminal.app) to the macOS app, which holds
+// the Automation TCC grant the daemon lacks.
+func NewController(repo outbound.SessionRepository, push outbound.PushBroadcaster, logger outbound.Logger) *Controller {
+	return &Controller{repo: repo, push: push, logger: logger, run: execRunner}
 }
 
 // SendInput injects data into the session's terminal as if typed.
 func (c *Controller) SendInput(sessionID string, data []byte) error {
-	l, err := c.launcher(sessionID)
+	state, err := c.loadState(sessionID)
 	if err != nil {
 		return err
 	}
+	l := state.Launcher
 	switch resolveBackend(l) {
 	case backendTmux:
 		return c.exec(tmuxInput(l, data))
 	case backendKitty:
 		return c.exec(kittyInput(l, data))
+	case backendAppleScript:
+		c.broadcastInput(state, outbound.InputActionInput, string(data))
+		return nil
 	default:
 		return fmt.Errorf("control: session %s has no controllable backend", sessionID)
 	}
@@ -67,35 +74,53 @@ func (c *Controller) SendInput(sessionID string, data []byte) error {
 
 // Interrupt delivers an interrupt (Ctrl-C) to the session.
 func (c *Controller) Interrupt(sessionID string) error {
-	l, err := c.launcher(sessionID)
+	state, err := c.loadState(sessionID)
 	if err != nil {
 		return err
 	}
+	l := state.Launcher
 	switch resolveBackend(l) {
 	case backendTmux:
 		return c.exec(tmuxInterrupt(l))
 	case backendKitty:
 		return c.exec(kittyInterrupt(l))
+	case backendAppleScript:
+		c.broadcastInput(state, outbound.InputActionInterrupt, "")
+		return nil
 	default:
 		return fmt.Errorf("control: session %s has no controllable backend", sessionID)
 	}
 }
 
-// Controllable reports whether the session has a usable CLI-backend target.
+// Controllable reports whether the session has a usable backend target.
 func (c *Controller) Controllable(sessionID string) bool {
-	l, err := c.launcher(sessionID)
+	state, err := c.loadState(sessionID)
 	if err != nil {
 		return false
 	}
-	return resolveBackend(l) != backendNone
+	return resolveBackend(state.Launcher) != backendNone
 }
 
-func (c *Controller) launcher(sessionID string) (*session.Launcher, error) {
+// broadcastInput asks the macOS app to perform the action on an AppleScript
+// backend. Fire-and-forget, like the Focus push: the daemon can't confirm the
+// app acted, and an absent app simply means nothing happens.
+func (c *Controller) broadcastInput(state *session.SessionState, action, data string) {
+	if c.push == nil {
+		return
+	}
+	c.push.Broadcast(outbound.PushMessage{
+		Type:    outbound.PushTypeInputRequested,
+		Session: state,
+		Input:   &outbound.InputRequest{Action: action, Data: data},
+	})
+}
+
+func (c *Controller) loadState(sessionID string) (*session.SessionState, error) {
 	state, err := c.repo.Load(sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("control: load session %s: %w", sessionID, err)
 	}
-	return state.Launcher, nil
+	return state, nil
 }
 
 func (c *Controller) exec(cmd command) error {
@@ -128,11 +153,17 @@ const (
 	backendNone backend = iota
 	backendTmux
 	backendKitty
+	// backendAppleScript covers iTerm2/Terminal.app — scripted by the macOS
+	// app (which has the Automation TCC grant), not the daemon, via a
+	// PushTypeInputRequested message.
+	backendAppleScript
 )
 
 // resolveBackend picks the backend to script for a launcher. tmux wins when a
-// pane is known (it is the most robust, TCC-free, relay-reachable target);
-// kitty is used when its remote-control socket and window id are both present.
+// pane is known (most robust, TCC-free, relay-reachable); kitty next (its
+// remote-control socket + window id); then the AppleScript hosts, which the
+// daemon delegates to the macOS app. A session in tmux *inside* iTerm resolves
+// to tmux, because tmux owns the pty.
 func resolveBackend(l *session.Launcher) backend {
 	if l == nil {
 		return backendNone
@@ -143,7 +174,22 @@ func resolveBackend(l *session.Launcher) backend {
 	if l.KittyListenOn != "" && l.KittyWindowID != "" {
 		return backendKitty
 	}
+	if isAppleScriptHost(l) {
+		return backendAppleScript
+	}
 	return backendNone
+}
+
+// isAppleScriptHost reports whether the launcher is an iTerm2/Terminal.app
+// session the macOS app can target (and thus we have the id/tty to address).
+func isAppleScriptHost(l *session.Launcher) bool {
+	switch l.TermProgram {
+	case "iTerm.app":
+		return l.ITermSessionID != ""
+	case "Apple_Terminal":
+		return l.TTY != ""
+	}
+	return false
 }
 
 // tmuxInput builds the send-keys command that types data into the pane. `-l`

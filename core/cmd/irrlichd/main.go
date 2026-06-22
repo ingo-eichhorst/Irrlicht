@@ -574,7 +574,7 @@ func main() {
 	// localhostOnly + a Sec-Fetch-Site guard on the mutating verbs, since
 	// injected input drives a live agent.
 	backchannelStore := filesystem.NewBackchannelStore(dataDir(home))
-	controlController := control.NewController(cachedRepo, logger)
+	controlController := control.NewController(cachedRepo, push, logger)
 	inputService = services.NewInputService(cachedRepo, controlController, permService, backchannelStore.Enabled, logger)
 	mux.HandleFunc("/api/v1/activation/backchannel",
 		localhostOnly(activationhandler.NewBackchannelHandler(backchannelStore, logger)))

@@ -970,6 +970,37 @@ class SessionManager: ObservableObject {
         }
     }
 
+    /// Sends text into a controllable session's terminal (backchannel, #724).
+    /// Returns true on 200. Gated daemon-side by toggle + consent + backend.
+    func sendInput(sessionId: String, text: String) async -> Bool {
+        guard let url = URL(string: "\(DaemonEndpoint.httpBase)/api/v1/sessions/\(sessionId)/input") else { return false }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        do {
+            request.httpBody = try JSONEncoder().encode(["data": text])
+            let (_, response) = try await URLSession.shared.data(for: request)
+            return (response as? HTTPURLResponse)?.statusCode == 200
+        } catch {
+            print("⌨️ sendInput failed: \(error.localizedDescription)")
+            return false
+        }
+    }
+
+    /// Delivers an interrupt (Ctrl-C) to a controllable session (#724).
+    func interruptSession(sessionId: String) async -> Bool {
+        guard let url = URL(string: "\(DaemonEndpoint.httpBase)/api/v1/sessions/\(sessionId)/interrupt") else { return false }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            return (response as? HTTPURLResponse)?.statusCode == 200
+        } catch {
+            print("⌨️ interrupt failed: \(error.localizedDescription)")
+            return false
+        }
+    }
+
     private func hydrateSessions() async {
         // The Local source feeds sessionMap/localApiGroups from the local
         // daemon's REST API. When Local is disabled this must not run, or the
@@ -1030,6 +1061,10 @@ class SessionManager: ObservableObject {
         let generations: [String: UInt64]?
         let bucketGenerations: [String: UInt64]?
 
+        // input_requested payload (#724): the daemon asking us to inject into
+        // an AppleScript-only backend (iTerm2/Terminal.app).
+        let input: InputRequestPayload?
+
         enum CodingKeys: String, CodingKey {
             case type
             case session
@@ -1041,7 +1076,14 @@ class SessionManager: ObservableObject {
             case priority
             case generations
             case bucketGenerations = "bucket_generations"
+            case input
         }
+    }
+
+    /// Payload of a PushTypeInputRequested message.
+    struct InputRequestPayload: Decodable {
+        let action: String   // "input" | "interrupt"
+        let data: String?
     }
 
     /// Last stamped push `seq` received on the stream. 0 = fresh cursor
@@ -1109,6 +1151,14 @@ class SessionManager: ObservableObject {
                 if let session = envelope.session {
                     DispatchQueue.main.async {
                         SessionLauncher.jump(session)
+                    }
+                }
+            case "input_requested":
+                // The daemon can't script iTerm2/Terminal.app directly (no
+                // Automation TCC grant); it delegates the injection to us (#724).
+                if let session = envelope.session, let input = envelope.input {
+                    DispatchQueue.main.async {
+                        SessionInputActivator.inject(session, action: input.action, data: input.data ?? "")
                     }
                 }
             case "history_snapshot":

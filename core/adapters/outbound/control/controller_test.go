@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"irrlicht/core/domain/session"
+	"irrlicht/core/ports/outbound"
 )
 
 type fakeRepo struct {
@@ -17,6 +18,12 @@ func (r *fakeRepo) Load(_ string) (*session.SessionState, error) { return r.stat
 func (r *fakeRepo) Save(_ *session.SessionState) error           { return nil }
 func (r *fakeRepo) Delete(_ string) error                        { return nil }
 func (r *fakeRepo) ListAll() ([]*session.SessionState, error)    { return nil, nil }
+
+type fakePush struct{ msgs []outbound.PushMessage }
+
+func (p *fakePush) Broadcast(m outbound.PushMessage)        { p.msgs = append(p.msgs, m) }
+func (p *fakePush) Subscribe() chan outbound.PushMessage    { return make(chan outbound.PushMessage) }
+func (p *fakePush) Unsubscribe(_ chan outbound.PushMessage) {}
 
 type nopLog struct{}
 
@@ -36,7 +43,10 @@ func TestResolveBackend(t *testing.T) {
 		{"tmux wins over kitty", &session.Launcher{TmuxPane: "%3", KittyListenOn: "unix:/x", KittyWindowID: "12"}, backendTmux},
 		{"kitty both fields", &session.Launcher{KittyListenOn: "unix:/x", KittyWindowID: "12"}, backendKitty},
 		{"kitty missing window", &session.Launcher{KittyListenOn: "unix:/x"}, backendNone},
-		{"plain terminal (no target)", &session.Launcher{TermProgram: "Apple_Terminal", TTY: "/dev/ttys001"}, backendNone},
+		{"iterm session", &session.Launcher{TermProgram: "iTerm.app", ITermSessionID: "w0t0p0:UUID"}, backendAppleScript},
+		{"terminal.app by tty", &session.Launcher{TermProgram: "Apple_Terminal", TTY: "/dev/ttys001"}, backendAppleScript},
+		{"iterm without session id", &session.Launcher{TermProgram: "iTerm.app"}, backendNone},
+		{"unsupported host (vscode)", &session.Launcher{TermProgram: "vscode"}, backendNone},
 	}
 	for _, c := range cases {
 		if got := resolveBackend(c.l); got != c.want {
@@ -93,7 +103,7 @@ func TestControllerDelegatesToBackend(t *testing.T) {
 		SessionID: "abc",
 		Launcher:  &session.Launcher{TmuxPane: "%3"},
 	}}
-	c := NewController(repo, nopLog{})
+	c := NewController(repo, &fakePush{}, nopLog{})
 	var ran command
 	c.run = func(_ context.Context, cmd command) error { ran = cmd; return nil }
 
@@ -108,14 +118,40 @@ func TestControllerDelegatesToBackend(t *testing.T) {
 	}
 }
 
+func TestControllerAppleScriptBroadcasts(t *testing.T) {
+	repo := &fakeRepo{state: &session.SessionState{
+		SessionID: "abc",
+		Launcher:  &session.Launcher{TermProgram: "iTerm.app", ITermSessionID: "w0t0p0:UUID"},
+	}}
+	push := &fakePush{}
+	c := NewController(repo, push, nopLog{})
+	c.run = func(_ context.Context, _ command) error {
+		t.Fatal("AppleScript backend must not shell out")
+		return nil
+	}
+
+	if !c.Controllable("abc") {
+		t.Fatal("iTerm2 session should be controllable via the app")
+	}
+	if err := c.SendInput("abc", []byte("hi")); err != nil {
+		t.Fatalf("SendInput: %v", err)
+	}
+	if len(push.msgs) != 1 || push.msgs[0].Type != outbound.PushTypeInputRequested {
+		t.Fatalf("expected one input_requested broadcast, got %v", push.msgs)
+	}
+	if push.msgs[0].Input == nil || push.msgs[0].Input.Action != outbound.InputActionInput || push.msgs[0].Input.Data != "hi" {
+		t.Errorf("unexpected input payload: %+v", push.msgs[0].Input)
+	}
+}
+
 func TestControllerNoBackend(t *testing.T) {
 	repo := &fakeRepo{state: &session.SessionState{
 		SessionID: "abc",
-		Launcher:  &session.Launcher{TermProgram: "Apple_Terminal", TTY: "/dev/ttys001"},
+		Launcher:  &session.Launcher{TermProgram: "vscode"}, // no scriptable target
 	}}
-	c := NewController(repo, nopLog{})
+	c := NewController(repo, &fakePush{}, nopLog{})
 	if c.Controllable("abc") {
-		t.Error("plain Terminal.app (no CLI backend target) should not be controllable in phase 1")
+		t.Error("a session with no scriptable backend target should not be controllable")
 	}
 	if err := c.SendInput("abc", []byte("x")); err == nil {
 		t.Error("expected error sending to a session with no controllable backend")
