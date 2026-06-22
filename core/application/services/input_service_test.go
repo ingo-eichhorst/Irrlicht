@@ -20,7 +20,7 @@ func (f *fakeController) SendInput(_ string, data []byte) error {
 	f.sentData = data
 	return f.sendErr
 }
-func (f *fakeController) Interrupt(_ string) error { f.interrupted = true; return nil }
+func (f *fakeController) Interrupt(_ string) error   { f.interrupted = true; return nil }
 func (f *fakeController) Controllable(_ string) bool { return f.controllable }
 
 type fakeConsent struct{ granted bool }
