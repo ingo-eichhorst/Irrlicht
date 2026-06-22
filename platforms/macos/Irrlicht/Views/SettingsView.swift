@@ -693,6 +693,12 @@ private struct NotificationEventRow: View {
     let onImportError: (String) -> Void
 
     @State private var selection: SoundChoice = .default
+    /// The non-default speak voice that isn't installed yet, if any — drives the
+    /// "Install voice…" affordance. Resolved off the main thread (#729): the
+    /// equivalent `SpokenVoice.isInstalled` check enumerates system voices via
+    /// the TextToSpeech subsystem, which is far too slow to run from `body` on
+    /// every render (it pegged the CPU and dropped Settings to ~2fps).
+    @State private var voiceToInstall: SpokenVoice?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -731,15 +737,13 @@ private struct NotificationEventRow: View {
                 .tooltip("Preview")
             }
 
-            if case .speak(let voice) = selection,
-               voice != .default,
-               !voice.isInstalled {
+            if let voiceToInstall {
                 Button {
                     Self.openSpokenContentSettings()
                 } label: {
                     HStack(spacing: 4) {
                         Image(systemName: "arrow.down.circle")
-                        Text("Install \(voice.displayName) in System Settings")
+                        Text("Install \(voiceToInstall.displayName) in System Settings")
                     }
                     .font(.caption)
                 }
@@ -749,6 +753,23 @@ private struct NotificationEventRow: View {
             }
         }
         .onAppear { loadFromDefaults() }
+        .task(id: selection) { await refreshVoiceInstallState() }
+    }
+
+    /// Resolve whether the selected speak-voice needs installing, off the main
+    /// thread. `SpokenVoice.isInstalled` calls `AVSpeechSynthesisVoice.speechVoices()`
+    /// — expensive enough that running it from `body` dropped Settings to ~2fps and
+    /// pegged the CPU (#729). Re-runs whenever the selection changes, so the
+    /// affordance also stays correct after the user installs a voice.
+    private func refreshVoiceInstallState() async {
+        guard case .speak(let voice) = selection, voice != .default else {
+            voiceToInstall = nil
+            return
+        }
+        let installed = await Task.detached(priority: .userInitiated) {
+            voice.isInstalled
+        }.value
+        voiceToInstall = installed ? nil : voice
     }
 
     private static func openSpokenContentSettings() {
