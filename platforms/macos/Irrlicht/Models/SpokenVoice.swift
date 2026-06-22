@@ -52,6 +52,12 @@ enum SpokenVoice: String, CaseIterable {
     /// quality. Drives the "Install voice…" affordance in Settings.
     /// `.default` always reports `true` because the system-language voice
     /// is always available.
+    ///
+    /// - Important: calls `AVSpeechSynthesisVoice.speechVoices()`, which boots
+    ///   the TextToSpeech/AXSpeech subsystem and does per-voice ICU locale work.
+    ///   It is far too slow for a SwiftUI `body` — doing so dropped the Settings
+    ///   panel to ~2fps (issue #729). Resolve it off the main thread (e.g. a
+    ///   `.task` + `Task.detached`) and render from cached state; never in `body`.
     var isInstalled: Bool {
         guard canonicalName != nil else { return true }
         return AVSpeechSynthesisVoice.speechVoices().contains { matches(installedName: $0.name) }
