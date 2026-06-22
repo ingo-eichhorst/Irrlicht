@@ -13,6 +13,7 @@ const (
 	PermissionKeyStatusline   = "statusline"
 	PermissionKeyTranscripts  = "transcripts"
 	PermissionKeyInstructions = "instructions"
+	PermissionKeyControl      = "control"
 )
 
 // Claude Code mascot — pixel-art rectangular creature with eyes and legs.
@@ -49,6 +50,10 @@ func Agent() agent.Agent {
 			Parser: agent.JSONLineParser{
 				NewParser: func() agent.LineParser { return &Parser{} },
 			},
+		},
+		Control: agent.Control{
+			SupportsInput: true,
+			Interrupt:     agent.InterruptCtrlC,
 		},
 		Permissions: []agent.Permission{
 			{
@@ -109,6 +114,24 @@ func Agent() agent.Agent {
 					"(also available via the macOS Settings toggle).",
 				Apply:  func() error { _, err := EnsureTaskEtaBlockInstalled(); return err },
 				Remove: func() error { _, err := UninstallTaskEtaBlock(); return err },
+			},
+			{
+				Key:             PermissionKeyControl,
+				Kind:            permission.KindModify,
+				Title:           "Send input to sessions",
+				FeatureUnlocked: "Reply to prompts, interrupt turns, and run event→action rules (backchannel)",
+				Touches:         "Sends the text you submit into the controlling terminal of a discovered claude session, via its terminal backend (e.g. tmux send-keys)",
+				Detail: "When granted — and only while the Backchannel beta toggle is " +
+					"on — the daemon may forward text you submit and interrupt " +
+					"signals into a running claude session it discovered, by " +
+					"scripting the terminal backend that owns it (tmux/kitty/…). " +
+					"Input is injected exactly as if you typed it. Only sessions " +
+					"with a controllable terminal backend are affected; nothing is " +
+					"sent unless you (or a rule you configured) send it. Granting " +
+					"changes nothing on disk; toggling off stops all forwarding " +
+					"immediately.",
+				// Apply/Remove intentionally nil — granting only gates whether
+				// InputService forwards; it modifies no user file.
 			},
 		},
 	}

@@ -1,0 +1,219 @@
+package services
+
+import (
+	"context"
+	"sync"
+	"time"
+
+	"irrlicht/core/domain/backchannel"
+	"irrlicht/core/domain/session"
+	"irrlicht/core/ports/outbound"
+)
+
+// maxActionsPerSessionPerMinute is a global backstop against a misconfigured
+// or oscillating rule spamming a session, independent of per-rule cooldowns.
+const maxActionsPerSessionPerMinute = 6
+
+// ruleSource supplies the current rule set (satisfied by the filesystem
+// rules store).
+type ruleSource interface {
+	Rules() []backchannel.Rule
+}
+
+// inputForwarder is the write path a fired rule uses (satisfied by
+// *InputService, which re-checks the master-toggle + consent + controllability
+// on every call).
+type inputForwarder interface {
+	SendInput(sessionID string, data []byte) error
+	Interrupt(sessionID string) error
+}
+
+// BackchannelEngine fires event→action rules when a session crosses a
+// configured lifecycle edge (issue #724). It consumes the push stream as a
+// read-only observer; every fire flows through InputService, so a disabled
+// backchannel or missing consent makes rules inert regardless of this engine.
+//
+// Safety: triggers are edge-detected (fire once per transition, not while in a
+// state), context-pressure fires only on the rising crossing (inherent
+// hysteresis via prevUtil), each rule has a per-session cooldown, and a global
+// per-session per-minute cap backstops oscillation. Actions run off the
+// consume loop so a slow backend can't make the engine miss other messages.
+type BackchannelEngine struct {
+	rules   ruleSource
+	input   inputForwarder
+	push    outbound.PushBroadcaster
+	enabled func() bool
+	logger  outbound.Logger
+	now     func() time.Time
+
+	mu        sync.Mutex
+	prevState map[string]string      // sessionID → last observed state
+	prevUtil  map[string]float64     // sessionID → last observed context utilization
+	seen      map[string]bool        // sessionID → observed at least once (baseline)
+	lastFired map[string]time.Time   // ruleID\x00sessionID → last fire time
+	recent    map[string][]time.Time // sessionID → recent fire times (global cap)
+}
+
+// NewBackchannelEngine constructs an engine. enabled reports the backchannel
+// master-toggle (firing is suppressed when off, but edge bookkeeping continues
+// so re-enabling never causes a spurious fire).
+func NewBackchannelEngine(rules ruleSource, input inputForwarder, push outbound.PushBroadcaster, enabled func() bool, logger outbound.Logger) *BackchannelEngine {
+	return &BackchannelEngine{
+		rules:     rules,
+		input:     input,
+		push:      push,
+		enabled:   enabled,
+		logger:    logger,
+		now:       time.Now,
+		prevState: map[string]string{},
+		prevUtil:  map[string]float64{},
+		seen:      map[string]bool{},
+		lastFired: map[string]time.Time{},
+		recent:    map[string][]time.Time{},
+	}
+}
+
+// Run subscribes to the push stream and evaluates rules until ctx is cancelled.
+func (e *BackchannelEngine) Run(ctx context.Context) {
+	ch := e.push.Subscribe()
+	defer e.push.Unsubscribe(ch)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case msg, ok := <-ch:
+			if !ok {
+				return
+			}
+			if msg.Type != outbound.PushTypeUpdated && msg.Type != outbound.PushTypeCreated {
+				continue
+			}
+			for _, r := range e.evaluate(msg.Session) {
+				go e.runActions(r, msg.Session.SessionID)
+			}
+		}
+	}
+}
+
+// evaluate updates edge bookkeeping for the session and returns the rules that
+// should fire now (cooldown + global-cap accounting applied). Pure of any I/O
+// so the trigger/cooldown/hysteresis logic is unit-testable.
+func (e *BackchannelEngine) evaluate(s *session.SessionState) []backchannel.Rule {
+	if s == nil || s.SessionID == "" {
+		return nil
+	}
+	sid := s.SessionID
+	cur := s.State
+	util := 0.0
+	if s.Metrics != nil {
+		util = s.Metrics.ContextUtilization
+	}
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	prev := e.prevState[sid]
+	prevUtil := e.prevUtil[sid]
+	firstSight := !e.seen[sid]
+	e.prevState[sid] = cur
+	e.prevUtil[sid] = util
+	e.seen[sid] = true
+
+	// First observation establishes the baseline; never fire on it (otherwise
+	// a session already in `waiting` or already high-pressure would fire the
+	// instant the daemon sees it).
+	if firstSight {
+		return nil
+	}
+
+	now := e.now()
+	var fire []backchannel.Rule
+	for _, r := range e.rules.Rules() {
+		if !r.Enabled {
+			continue
+		}
+		if r.Adapter != "" && r.Adapter != s.Adapter {
+			continue
+		}
+		if !triggered(r.Trigger, prev, cur, prevUtil, util) {
+			continue
+		}
+		// Firing is gated on the master-toggle here (after bookkeeping, so a
+		// later enable doesn't replay a stale edge).
+		if e.enabled == nil || !e.enabled() {
+			continue
+		}
+		key := r.ID + "\x00" + sid
+		if last, ok := e.lastFired[key]; ok && now.Sub(last) < time.Duration(r.Cooldown())*time.Second {
+			continue
+		}
+		if e.overCapLocked(sid, now) {
+			e.logger.LogInfo("backchannel", sid, "rule "+r.ID+" suppressed: per-session action cap reached")
+			continue
+		}
+		e.lastFired[key] = now
+		e.recordFireLocked(sid, now)
+		fire = append(fire, r)
+	}
+	return fire
+}
+
+// triggered reports whether a trigger matches this transition. State triggers
+// fire on the edge into the state; context_pressure fires on the rising
+// crossing of the threshold (hysteresis is inherent in prevUtil→util).
+func triggered(t backchannel.Trigger, prev, cur string, prevUtil, util float64) bool {
+	switch t.Event {
+	case backchannel.EventWaiting, backchannel.EventReady, backchannel.EventWorking:
+		return cur == t.Event && prev != cur
+	case backchannel.EventContextPressure:
+		th := t.PressureThreshold()
+		return prevUtil < th && util >= th
+	default:
+		return false
+	}
+}
+
+// runActions executes a fired rule's actions in order, stopping on the first
+// failure. Each call re-passes InputService's gates.
+func (e *BackchannelEngine) runActions(r backchannel.Rule, sid string) {
+	for _, a := range r.Actions {
+		var err error
+		switch a.Kind {
+		case backchannel.ActionInput:
+			err = e.input.SendInput(sid, []byte(a.Data))
+		case backchannel.ActionInterrupt:
+			err = e.input.Interrupt(sid)
+		default:
+			continue
+		}
+		if err != nil {
+			e.logger.LogError("backchannel", sid, "rule "+r.ID+" "+a.Kind+" failed: "+err.Error())
+			return
+		}
+		e.logger.LogInfo("backchannel", sid, "rule "+r.ID+" fired "+a.Kind)
+	}
+}
+
+// overCapLocked reports whether the session already hit the per-minute action
+// cap. Caller holds e.mu.
+func (e *BackchannelEngine) overCapLocked(sid string, now time.Time) bool {
+	return len(e.prune(sid, now)) >= maxActionsPerSessionPerMinute
+}
+
+// recordFireLocked appends a fire timestamp. Caller holds e.mu.
+func (e *BackchannelEngine) recordFireLocked(sid string, now time.Time) {
+	e.recent[sid] = append(e.prune(sid, now), now)
+}
+
+// prune drops fire timestamps older than one minute and returns the survivors.
+func (e *BackchannelEngine) prune(sid string, now time.Time) []time.Time {
+	cutoff := now.Add(-time.Minute)
+	kept := e.recent[sid][:0]
+	for _, t := range e.recent[sid] {
+		if t.After(cutoff) {
+			kept = append(kept, t)
+		}
+	}
+	e.recent[sid] = kept
+	return kept
+}

@@ -16,6 +16,9 @@ struct SettingsView: View {
     @AppStorage("showQuotaForecast") private var showQuotaForecast: Bool = true
     @AppStorage("launchAtLogin") private var launchAtLogin: Bool = true
     @AppStorage("taskEtaActivation") private var taskEtaActivation: Bool = false
+    // Backchannel master toggle (issue #724): gates input injection + the
+    // event→action rule editor. Default OFF; daemon is the source of truth.
+    @AppStorage("backchannelActivation") private var backchannelActivation: Bool = false
     // Advanced Settings disclosure state (#694) — collapsed by default; the
     // power-user / still-maturing controls (debug, task-eta, sources, CLI tool)
     // live under it.
@@ -40,6 +43,8 @@ struct SettingsView: View {
     // Set just before a programmatic reconcile of taskEtaActivation so the
     // .onChange it triggers is swallowed instead of re-POSTing to the daemon.
     @State private var taskEtaReconciling = false
+    // Same reconcile guard for the backchannel toggle.
+    @State private var backchannelReconciling = false
     // Relay bearer token lives in the Keychain (not @AppStorage); this draft
     // mirrors it for the field, loaded on appear and written on change.
     @State private var relayTokenDraft: String = ""
@@ -319,6 +324,39 @@ struct SettingsView: View {
                                         taskEtaActivation = actual
                                     }
                                 }
+                            }
+
+                            // Backchannel (issue #724): control discovered agents via
+                            // their terminal backend. Default OFF; the daemon is the
+                            // source of truth (mirrors the task-eta reconcile pattern).
+                            // The rule editor appears only while this is on.
+                            LeadingToggle(
+                                isOn: $backchannelActivation,
+                                label: "Backchannel (control sessions)",
+                                info: "Let Irrlicht send input/interrupts into a running session via its terminal backend (tmux, kitty, …), and run event→action rules. Off by default; each agent still needs the \"control\" permission granted.",
+                                beta: true
+                            )
+                            .onChange(of: backchannelActivation) { newValue in
+                                if backchannelReconciling { backchannelReconciling = false; return }
+                                Task {
+                                    if let actual = await BackchannelActivationClient.set(enabled: newValue), actual != newValue {
+                                        backchannelReconciling = true
+                                        backchannelActivation = actual
+                                    }
+                                }
+                            }
+                            .onAppear {
+                                Task {
+                                    if let actual = await BackchannelActivationClient.status(), actual != backchannelActivation {
+                                        backchannelReconciling = true
+                                        backchannelActivation = actual
+                                    }
+                                }
+                            }
+
+                            if backchannelActivation {
+                                BackchannelRulesView()
+                                    .padding(.leading, 16)
                             }
 
                             VStack(alignment: .leading, spacing: 8) {

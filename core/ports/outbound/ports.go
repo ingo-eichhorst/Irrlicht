@@ -257,3 +257,24 @@ type ProcessObserver interface {
 	// empty/nil map (not an error) when the env is unreadable.
 	EnvOf(pid int) (map[string]string, error)
 }
+
+// AgentController writes back to a discovered, externally-launched agent
+// session through whatever terminal backend owns its pty (tmux, kitty,
+// iTerm2/Terminal.app, …). It is the write counterpart to the read-only
+// observation seams: the daemon never owns the agent process, it scripts the
+// backend that does, keyed off the session's already-captured session.Launcher
+// (issue #724, the "backchannel"). The concrete implementation lives in
+// adapters/outbound/control. Consent and the backchannel master-toggle are
+// enforced upstream by InputService — implementations just inject.
+type AgentController interface {
+	// SendInput injects data into the session's terminal as if typed.
+	// Returns a non-nil error when the backend command fails; callers that
+	// want a "not controllable" verdict consult Controllable first.
+	SendInput(sessionID string, data []byte) error
+	// Interrupt delivers an interrupt (e.g. Ctrl-C) to the session.
+	Interrupt(sessionID string) error
+	// Controllable reports whether the session has a usable backend target
+	// for a supported terminal backend. It does not consider consent or the
+	// master-toggle — those are InputService's concern.
+	Controllable(sessionID string) bool
+}

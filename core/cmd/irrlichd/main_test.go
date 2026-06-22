@@ -50,7 +50,7 @@ func newTestStack(t *testing.T) (*httptest.Server, *filesystem.SessionRepository
 	orchMonitor := services.NewOrchestratorMonitor(nil, push, nil)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/v1/sessions", handleGetSessions(repo, orchMonitor, nil))
+	mux.HandleFunc("GET /api/v1/sessions", handleGetSessions(repo, orchMonitor, nil, nil))
 	mux.HandleFunc("GET /api/v1/agents", handleGetAgents(testAgents()))
 	mux.HandleFunc("GET /api/v1/version", handleGetVersion("test"))
 	mux.HandleFunc("GET /state", handleGetState(repo))
@@ -369,7 +369,7 @@ func TestHandleGetSessions_AttachesGroupCosts(t *testing.T) {
 	orchMonitor := services.NewOrchestratorMonitor(nil, push, nil)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/v1/sessions", handleGetSessions(repo, orchMonitor, tracker))
+	mux.HandleFunc("GET /api/v1/sessions", handleGetSessions(repo, orchMonitor, tracker, nil))
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
@@ -443,7 +443,7 @@ func TestHandleGetSessions_AttachesProviderCosts(t *testing.T) {
 	push := services.NewPushService()
 	orchMonitor := services.NewOrchestratorMonitor(nil, push, nil)
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/v1/sessions", handleGetSessions(repo, orchMonitor, tracker))
+	mux.HandleFunc("GET /api/v1/sessions", handleGetSessions(repo, orchMonitor, tracker, nil))
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 

@@ -22,9 +22,11 @@ import (
 	"irrlicht/core/adapters/inbound/agents/agentwiring"
 	"irrlicht/core/adapters/inbound/agents/claudecode"
 	"irrlicht/core/adapters/inbound/agents/processlifecycle"
+	backchannelhandler "irrlicht/core/adapters/inbound/backchannel"
 	gastownadapter "irrlicht/core/adapters/inbound/orchestrators/gastown"
 	permissionshandler "irrlicht/core/adapters/inbound/permissions"
 	sessionshandler "irrlicht/core/adapters/inbound/sessions"
+	"irrlicht/core/adapters/outbound/control"
 	"irrlicht/core/adapters/outbound/filesystem"
 	"irrlicht/core/adapters/outbound/git"
 	"irrlicht/core/adapters/outbound/gtbin"
@@ -426,7 +428,12 @@ func main() {
 	}
 
 	// Register API endpoints (after orchMonitor is available).
-	mux.HandleFunc("GET /api/v1/sessions", handleGetSessions(cachedRepo, orchMonitor, costTracker))
+	// inputService is built later (it needs permService); the closure resolves
+	// it at request time, so a session reports controllable only once the
+	// backchannel control stack below is wired.
+	var inputService *services.InputService
+	mux.HandleFunc("GET /api/v1/sessions", handleGetSessions(cachedRepo, orchMonitor, costTracker,
+		func(sessionID string) bool { return inputService != nil && inputService.Controllable(sessionID) }))
 
 	focusService := services.NewFocusService(cachedRepo, push, logger)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/focus", sessionshandler.NewFocusHandler(focusService, logger))
@@ -559,6 +566,32 @@ func main() {
 		localhostOnly(activationhandler.NewHandler(permService,
 			claudecode.AdapterName, claudecode.PermissionKeyInstructions, logger)))
 
+	// Backchannel (issue #724): control discovered agents by scripting their
+	// terminal backend. A default-OFF master toggle gates the whole capability;
+	// the per-adapter "control" consent and a usable backend target gate each
+	// write. InputService enforces the order (toggle → consent → controllable)
+	// for both the manual HTTP path and (later) the event→action rule engine.
+	// localhostOnly + a Sec-Fetch-Site guard on the mutating verbs, since
+	// injected input drives a live agent.
+	backchannelStore := filesystem.NewBackchannelStore(dataDir(home))
+	controlController := control.NewController(cachedRepo, logger)
+	inputService = services.NewInputService(cachedRepo, controlController, permService, backchannelStore.Enabled, logger)
+	mux.HandleFunc("/api/v1/activation/backchannel",
+		localhostOnly(activationhandler.NewBackchannelHandler(backchannelStore, logger)))
+	mux.HandleFunc("POST /api/v1/sessions/{id}/input",
+		localhostOnly(sessionshandler.NewInputHandler(inputService, logger)))
+	mux.HandleFunc("POST /api/v1/sessions/{id}/interrupt",
+		localhostOnly(sessionshandler.NewInterruptHandler(inputService, logger)))
+
+	// Backchannel rules (issue #724): event→action automations (e.g.
+	// context_pressure → /compact). The engine consumes the push stream and
+	// fires through inputService, so the same toggle+consent+controllable
+	// gates apply. Started under detectorCtx below.
+	backchannelRules := filesystem.NewBackchannelRulesStore(dataDir(home))
+	backchannelEngine := services.NewBackchannelEngine(backchannelRules, inputService, push, backchannelStore.Enabled, logger)
+	mux.HandleFunc("/api/v1/backchannel/rules",
+		localhostOnly(backchannelhandler.NewRulesHandler(backchannelRules, logger)))
+
 	// Hook receiver: Claude Code PermissionRequest/PostToolUse events.
 	// The detector satisfies claudecode.HookTarget via HandlePermissionHook.
 	// Consent-gated: hooks installed by a pre-consent daemon keep firing
@@ -610,6 +643,10 @@ func main() {
 				logger.LogError("session-detector", "", fmt.Sprintf("detector error: %v", err))
 			}
 		}()
+
+		// Backchannel rule engine: consumes the push stream and fires
+		// event→action rules through inputService (issue #724).
+		go backchannelEngine.Run(detectorCtx)
 
 		// Exercise granted permissions (re-apply hook/statusline installs,
 		// start watchers) and launch the detection poller. Effects run

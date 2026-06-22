@@ -3,9 +3,9 @@ package agent
 import "irrlicht/core/domain/permission"
 
 // Agent is the registration record each inbound agent adapter exports.
-// It collapses identity, process recognition, session source, and
-// consent-gated permissions into four orthogonal axes. Each adapter
-// package's Agent() constructor returns one value; the daemon wires
+// It collapses identity, process recognition, session source, write-back
+// control, and consent-gated permissions into five orthogonal axes. Each
+// adapter package's Agent() constructor returns one value; the daemon wires
 // per-adapter behavior off it via the map projections in
 // core/adapters/inbound/agents (Parsers, PIDDiscoverers, ProcessNames,
 // SubagentCounters, MetricsProviders) and the Source-variant dispatch
@@ -14,8 +14,38 @@ type Agent struct {
 	Identity    Identity
 	Process     Process
 	Source      Source
+	Control     Control
 	Permissions []Permission
 }
+
+// Control declares whether and how the daemon may write back to a discovered
+// session of this agent through its terminal backend (issue #724, the
+// "backchannel"). The zero value means not controllable — an adapter must opt
+// in. Controllability also requires a usable backend target on the session's
+// Launcher and the user's consent; this axis only states the agent *can* take
+// interactive input.
+type Control struct {
+	// SupportsInput is true for agents that read from an interactive TUI/REPL
+	// (claude, codex, …) and false for non-interactive/headless ones
+	// (opencode's process-owned store), which can never be driven by injected
+	// keystrokes.
+	SupportsInput bool
+	// Interrupt is how an interrupt is delivered to this agent.
+	Interrupt InterruptMethod
+}
+
+// InterruptMethod is how the daemon interrupts a running turn.
+type InterruptMethod int
+
+const (
+	// InterruptNone means interrupts are not supported.
+	InterruptNone InterruptMethod = iota
+	// InterruptCtrlC delivers an ETX (Ctrl-C) into the terminal backend.
+	InterruptCtrlC
+	// InterruptSignal delivers SIGINT to the agent's process (reserved for a
+	// future non-backend path).
+	InterruptSignal
+)
 
 // Permission declares one consent-gated capability of an adapter: what
 // it touches, what feature it unlocks, and (for modify-kind entries) how
