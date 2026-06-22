@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 
+	"irrlicht/core/adapters/outbound/httputil"
 	services "irrlicht/core/application/services"
 	"irrlicht/core/ports/outbound"
 )
@@ -95,7 +96,7 @@ func NewInterruptHandler(target inputTarget, log outbound.Logger) http.HandlerFu
 // omit the header → allowed. Mirrors activation/handler.go. Returns true when
 // the request was rejected (handler should stop).
 func rejectCrossOrigin(w http.ResponseWriter, r *http.Request) bool {
-	if site := r.Header.Get("Sec-Fetch-Site"); site == "cross-site" || site == "same-site" {
+	if httputil.IsCrossOriginBrowserRequest(r) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return true
 	}

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"irrlicht/core/adapters/outbound/httputil"
 	"irrlicht/core/ports/outbound"
 )
 
@@ -31,7 +32,7 @@ func NewToggleHandler(toggle Toggle, field string, log outbound.Logger) http.Han
 		case http.MethodGet:
 			// fall through to the state reply
 		case http.MethodPost, http.MethodDelete:
-			if site := r.Header.Get("Sec-Fetch-Site"); site == "cross-site" || site == "same-site" {
+			if httputil.IsCrossOriginBrowserRequest(r) {
 				http.Error(w, "forbidden", http.StatusForbidden)
 				return
 			}

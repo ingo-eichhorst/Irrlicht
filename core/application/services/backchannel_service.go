@@ -50,7 +50,6 @@ type BackchannelEngine struct {
 	mu        sync.Mutex
 	prevState map[string]string      // sessionID → last observed state
 	prevUtil  map[string]float64     // sessionID → last observed context utilization
-	seen      map[string]bool        // sessionID → observed at least once (baseline)
 	lastFired map[string]time.Time   // ruleID\x00sessionID → last fire time
 	recent    map[string][]time.Time // sessionID → recent fire times (global cap)
 }
@@ -68,7 +67,6 @@ func NewBackchannelEngine(rules ruleSource, input inputForwarder, push outbound.
 		now:       time.Now,
 		prevState: map[string]string{},
 		prevUtil:  map[string]float64{},
-		seen:      map[string]bool{},
 		lastFired: map[string]time.Time{},
 		recent:    map[string][]time.Time{},
 	}
@@ -119,17 +117,16 @@ func (e *BackchannelEngine) evaluate(s *session.SessionState) []backchannel.Rule
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	prev := e.prevState[sid]
+	prev, seen := e.prevState[sid]
 	prevUtil := e.prevUtil[sid]
-	firstSight := !e.seen[sid]
 	e.prevState[sid] = cur
 	e.prevUtil[sid] = util
-	e.seen[sid] = true
 
 	// First observation establishes the baseline; never fire on it (otherwise
 	// a session already in `waiting` or already high-pressure would fire the
-	// instant the daemon sees it).
-	if firstSight {
+	// instant the daemon sees it). Membership in prevState is the baseline
+	// marker — a real session's State is never the empty string.
+	if !seen {
 		return nil
 	}
 
@@ -174,7 +171,6 @@ func (e *BackchannelEngine) forget(sessionID string) {
 	defer e.mu.Unlock()
 	delete(e.prevState, sessionID)
 	delete(e.prevUtil, sessionID)
-	delete(e.seen, sessionID)
 	delete(e.recent, sessionID)
 	suffix := "\x00" + sessionID
 	for k := range e.lastFired {

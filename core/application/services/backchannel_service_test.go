@@ -160,11 +160,10 @@ func TestForget_EvictsSessionState(t *testing.T) {
 	e.forget("s1")
 
 	e.mu.Lock()
-	_, seen := e.seen["s1"]
 	leftovers := len(e.prevState) + len(e.prevUtil) + len(e.lastFired) + len(e.recent)
 	e.mu.Unlock()
-	if seen || leftovers != 0 {
-		t.Fatalf("forget left state behind: seen=%v leftovers=%d", seen, leftovers)
+	if leftovers != 0 {
+		t.Fatalf("forget left state behind: leftovers=%d", leftovers)
 	}
 
 	// After eviction the session is first-sight again, so an already-waiting

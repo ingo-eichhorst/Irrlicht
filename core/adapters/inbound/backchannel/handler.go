@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"irrlicht/core/adapters/outbound/httputil"
 	"irrlicht/core/domain/backchannel"
 	"irrlicht/core/ports/outbound"
 )
@@ -35,7 +36,7 @@ func NewRulesHandler(store rulesStore, log outbound.Logger) http.HandlerFunc {
 		case http.MethodGet:
 			// fall through to the reply
 		case http.MethodPut:
-			if site := r.Header.Get("Sec-Fetch-Site"); site == "cross-site" || site == "same-site" {
+			if httputil.IsCrossOriginBrowserRequest(r) {
 				http.Error(w, "forbidden", http.StatusForbidden)
 				return
 			}

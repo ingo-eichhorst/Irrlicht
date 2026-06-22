@@ -267,7 +267,10 @@ func (f *Forwarder) runOnce(ctx context.Context) error {
 				return
 			}
 			if FrameType(data) == MsgControl {
-				f.handleControl(data)
+				// Dispatch off the read pump: handleControl shells out to the
+				// terminal backend (≤2s), and blocking here would delay reading
+				// the next frame, including a mid-stream revoke close.
+				go f.handleControl(data)
 			}
 		}
 	}()
