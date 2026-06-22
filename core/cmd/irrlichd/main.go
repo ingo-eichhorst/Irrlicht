@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -241,12 +242,16 @@ func main() {
 	relayControlEnabled := func() bool {
 		return relayControlStore.Enabled() || os.Getenv("IRRLICHT_RELAY_CONTROL") == "on"
 	}
-	var inputService *services.InputService
+	// inputService is published once the consent stack is built (below). It's
+	// read concurrently by the HTTP handlers and the relay forwarder, so it's an
+	// atomic.Pointer rather than a plain var: those readers start (Serve / the
+	// env-seeded forwarder) before the assignment.
+	var inputService atomic.Pointer[services.InputService]
 	relayControl := lazyControl{resolve: func() relay.ControlHandler {
-		if inputService == nil {
-			return nil
+		if s := inputService.Load(); s != nil {
+			return s
 		}
-		return inputService
+		return nil
 	}}
 	publishController := relay.NewPublishController(relayBaseCtx, relayIdentity, push, relaySnapshot, relayControl, relayControlEnabled, logger)
 	// Seed from the env opt-in (backward compatible with the pre-#722 path).
@@ -468,7 +473,12 @@ func main() {
 	// in the backchannel block below, so this closure resolves it at request
 	// time — a session reports controllable only once that wiring runs.
 	mux.HandleFunc("GET /api/v1/sessions", handleGetSessions(cachedRepo, orchMonitor, costTracker,
-		func(sessionID string) bool { return inputService != nil && inputService.Controllable(sessionID) }))
+		func(sessionID string) bool {
+			if s := inputService.Load(); s != nil {
+				return s.Controllable(sessionID)
+			}
+			return false
+		}))
 
 	focusService := services.NewFocusService(cachedRepo, push, logger)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/focus", sessionshandler.NewFocusHandler(focusService, logger))
@@ -610,7 +620,8 @@ func main() {
 	// injected input drives a live agent.
 	backchannelStore := filesystem.NewBackchannelStore(dataDir(home))
 	controlController := control.NewController(cachedRepo, push, logger)
-	inputService = services.NewInputService(cachedRepo, controlController, permService, backchannelStore.Enabled, logger)
+	in := services.NewInputService(cachedRepo, controlController, permService, backchannelStore.Enabled, logger)
+	inputService.Store(in) // publish to the HTTP/forwarder readers (see decl above)
 	mux.HandleFunc("/api/v1/activation/backchannel",
 		localhostOnly(activationhandler.NewBackchannelHandler(backchannelStore, logger)))
 	// Remote-control toggle (#724): default OFF; gates whether the relay
@@ -618,16 +629,16 @@ func main() {
 	mux.HandleFunc("/api/v1/activation/relay-control",
 		localhostOnly(activationhandler.NewToggleHandler(relayControlStore, "relay_control_enabled", logger)))
 	mux.HandleFunc("POST /api/v1/sessions/{id}/input",
-		localhostOnly(sessionshandler.NewInputHandler(inputService, logger)))
+		localhostOnly(sessionshandler.NewInputHandler(in, logger)))
 	mux.HandleFunc("POST /api/v1/sessions/{id}/interrupt",
-		localhostOnly(sessionshandler.NewInterruptHandler(inputService, logger)))
+		localhostOnly(sessionshandler.NewInterruptHandler(in, logger)))
 
 	// Backchannel rules (issue #724): event→action automations (e.g.
 	// context_pressure → /compact). The engine consumes the push stream and
 	// fires through inputService, so the same toggle+consent+controllable
 	// gates apply. Started under detectorCtx below.
 	backchannelRules := filesystem.NewBackchannelRulesStore(dataDir(home))
-	backchannelEngine := services.NewBackchannelEngine(backchannelRules, inputService, push, backchannelStore.Enabled, logger)
+	backchannelEngine := services.NewBackchannelEngine(backchannelRules, in, push, backchannelStore.Enabled, logger)
 	mux.HandleFunc("/api/v1/backchannel/rules",
 		localhostOnly(backchannelhandler.NewRulesHandler(backchannelRules, logger)))
 

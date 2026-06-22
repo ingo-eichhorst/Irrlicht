@@ -147,6 +147,33 @@ func TestEvaluate_GlobalCap(t *testing.T) {
 	}
 }
 
+func TestForget_EvictsSessionState(t *testing.T) {
+	on := true
+	clk := time.Unix(1000, 0)
+	e := newEngine([]backchannel.Rule{waitingRule()}, &on, &clk)
+
+	e.evaluate(sess("working", 0)) // baseline
+	if len(e.evaluate(sess("waiting", 0))) != 1 {
+		t.Fatal("first waiting edge should fire")
+	}
+
+	e.forget("s1")
+
+	e.mu.Lock()
+	_, seen := e.seen["s1"]
+	leftovers := len(e.prevState) + len(e.prevUtil) + len(e.lastFired) + len(e.recent)
+	e.mu.Unlock()
+	if seen || leftovers != 0 {
+		t.Fatalf("forget left state behind: seen=%v leftovers=%d", seen, leftovers)
+	}
+
+	// After eviction the session is first-sight again, so an already-waiting
+	// observation must NOT fire (no stale edge replay).
+	if got := e.evaluate(sess("waiting", 0)); got != nil {
+		t.Fatalf("post-forget first sight must not fire, got %d", len(got))
+	}
+}
+
 func TestEvaluate_AdapterScope(t *testing.T) {
 	on := true
 	clk := time.Unix(1000, 0)

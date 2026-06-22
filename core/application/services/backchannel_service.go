@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"time"
 
@@ -85,6 +86,12 @@ func (e *BackchannelEngine) Run(ctx context.Context) {
 			if !ok {
 				return
 			}
+			if msg.Type == outbound.PushTypeDeleted {
+				if msg.Session != nil {
+					e.forget(msg.Session.SessionID)
+				}
+				continue
+			}
 			if msg.Type != outbound.PushTypeUpdated && msg.Type != outbound.PushTypeCreated {
 				continue
 			}
@@ -156,6 +163,25 @@ func (e *BackchannelEngine) evaluate(s *session.SessionState) []backchannel.Rule
 		fire = append(fire, r)
 	}
 	return fire
+}
+
+// forget drops all per-session bookkeeping when a session ends, so the maps
+// don't grow unbounded over a long-lived daemon cycling through many sessions
+// (PR #731 review). Keyed-by-(rule,session) cooldown entries are matched by
+// their session suffix.
+func (e *BackchannelEngine) forget(sessionID string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	delete(e.prevState, sessionID)
+	delete(e.prevUtil, sessionID)
+	delete(e.seen, sessionID)
+	delete(e.recent, sessionID)
+	suffix := "\x00" + sessionID
+	for k := range e.lastFired {
+		if strings.HasSuffix(k, suffix) {
+			delete(e.lastFired, k)
+		}
+	}
 }
 
 // triggered reports whether a trigger matches this transition. State triggers
