@@ -5,11 +5,17 @@ import UserNotifications
 
 struct SettingsView: View {
     @Binding var isPresented: Bool
-    /// Opens the permission wizard in review mode (issue #570). Wired by
-    /// SessionListView, which owns the panel-body swap.
-    var onReviewPermissions: () -> Void = {}
+    /// Swaps the panel body to the permission wizard in review mode (issue #570).
+    /// A binding (not a closure) so SettingsView's inputs stay diff-stable — the
+    /// parent re-renders every WebSocket tick, and a fresh closure each time would
+    /// defeat SwiftUI's render-skip and re-evaluate this whole view (issue #729).
+    @Binding var showPermissionsReview: Bool
     @EnvironmentObject var updateManager: UpdateManager
-    @EnvironmentObject var sessionManager: SessionManager
+    /// Plain, non-observing reference: SettingsView only calls
+    /// `relayTokenDidChange()` and feeds the relay status dot subview. Observing
+    /// SessionManager here (it was an @EnvironmentObject) made this static form
+    /// re-render on every session/history push — the ~2fps storm in issue #729.
+    let sessionManager: SessionManager
     @EnvironmentObject var daemonManager: DaemonManager
     @AppStorage("debugMode") private var debugMode: Bool = false
     @AppStorage("showCostDisplay") private var showCostDisplay: Bool = false
@@ -140,7 +146,8 @@ struct SettingsView: View {
                             Spacer()
                         }
                         Button("Review agent permissions…") {
-                            onReviewPermissions()
+                            isPresented = false
+                            showPermissionsReview = true
                         }
                         .controlSize(.small)
                         .tooltip("Open the per-agent permission toggles")
@@ -368,10 +375,7 @@ struct SettingsView: View {
                                                 }
                                             }
                                         if useRelayServer {
-                                            Circle()
-                                                .fill(sessionManager.relayConnectionState.dotColor)
-                                                .frame(width: 8, height: 8)
-                                                .tooltip("Subscribe: \(sessionManager.relayConnectionState.shortLabel)")
+                                            RelaySubscribeStatusDot(sessionManager: sessionManager)
                                         }
                                     }
                                     SecureField("Relay token (leave empty if the relay has no auth)", text: $relayTokenDraft)
@@ -527,6 +531,22 @@ struct SettingsView: View {
     }
 }
 
+/// Live relay-subscribe connection dot. Isolated into its own @ObservedObject
+/// view so it stays reactive while the parent SettingsView holds SessionManager
+/// only as a non-observing reference — only this 8pt dot repaints per push, not
+/// the whole settings form (issue #729). Rendered only when Advanced → Sources
+/// is expanded and "Relay server" is on.
+private struct RelaySubscribeStatusDot: View {
+    @ObservedObject var sessionManager: SessionManager
+
+    var body: some View {
+        Circle()
+            .fill(sessionManager.relayConnectionState.dotColor)
+            .frame(width: 8, height: 8)
+            .tooltip("Subscribe: \(sessionManager.relayConnectionState.shortLabel)")
+    }
+}
+
 /// Settings subsection for putting the bundle-embedded irrlicht-ls CLI on
 /// PATH (#608). Consent-first: the link is only created when the user clicks
 /// the button — installers handle the automatic path; this covers DMG
@@ -673,6 +693,12 @@ private struct NotificationEventRow: View {
     let onImportError: (String) -> Void
 
     @State private var selection: SoundChoice = .default
+    /// The non-default speak voice that isn't installed yet, if any — drives the
+    /// "Install voice…" affordance. Resolved off the main thread (#729): the
+    /// equivalent `SpokenVoice.isInstalled` check enumerates system voices via
+    /// the TextToSpeech subsystem, which is far too slow to run from `body` on
+    /// every render (it pegged the CPU and dropped Settings to ~2fps).
+    @State private var voiceToInstall: SpokenVoice?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -711,15 +737,13 @@ private struct NotificationEventRow: View {
                 .tooltip("Preview")
             }
 
-            if case .speak(let voice) = selection,
-               voice != .default,
-               !voice.isInstalled {
+            if let voiceToInstall {
                 Button {
                     Self.openSpokenContentSettings()
                 } label: {
                     HStack(spacing: 4) {
                         Image(systemName: "arrow.down.circle")
-                        Text("Install \(voice.displayName) in System Settings")
+                        Text("Install \(voiceToInstall.displayName) in System Settings")
                     }
                     .font(.caption)
                 }
@@ -729,6 +753,27 @@ private struct NotificationEventRow: View {
             }
         }
         .onAppear { loadFromDefaults() }
+        .task(id: selection) { await refreshVoiceInstallState() }
+    }
+
+    /// Resolve whether the selected speak-voice needs installing, off the main
+    /// thread. `SpokenVoice.isInstalled` calls `AVSpeechSynthesisVoice.speechVoices()`
+    /// — expensive enough that running it from `body` dropped Settings to ~2fps and
+    /// pegged the CPU (#729). Re-runs whenever the selection changes, so the
+    /// affordance also stays correct after the user installs a voice.
+    private func refreshVoiceInstallState() async {
+        guard case .speak(let voice) = selection, voice != .default else {
+            voiceToInstall = nil
+            return
+        }
+        let installed = await Task.detached(priority: .userInitiated) {
+            voice.isInstalled
+        }.value
+        // The detached task outlives `.task(id:)` cancellation, so a selection
+        // change mid-flight could otherwise let this stale result overwrite the
+        // newer one. Drop it if our task was cancelled.
+        guard !Task.isCancelled else { return }
+        voiceToInstall = installed ? nil : voice
     }
 
     private static func openSpokenContentSettings() {

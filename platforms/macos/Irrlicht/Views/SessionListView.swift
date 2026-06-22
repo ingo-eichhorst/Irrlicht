@@ -249,10 +249,8 @@ struct SessionListView: View {
             if showSettings {
                 SettingsView(
                     isPresented: $showSettings,
-                    onReviewPermissions: {
-                        showSettings = false
-                        showPermissionsReview = true
-                    }
+                    showPermissionsReview: $showPermissionsReview,
+                    sessionManager: sessionManager
                 )
             } else if showPermissionsReview {
                 PermissionWizardView(mode: .review, onClose: { showPermissionsReview = false })
