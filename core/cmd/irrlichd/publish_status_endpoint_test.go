@@ -33,6 +33,8 @@ func newTestController(t *testing.T) *relay.PublishController {
 		services.NewPushService(),
 		func() ([]*session.SessionState, []relay.AgentInfo) { return nil, nil },
 		nil,
+		nil,
+		nil,
 	)
 }
 

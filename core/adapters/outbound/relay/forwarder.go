@@ -2,6 +2,7 @@ package relay
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math/rand"
 	"strings"
@@ -70,17 +71,29 @@ func normalizeRelayURL(raw string) string {
 // reconciles its cache without waiting for the next per-session delta.
 type SnapshotFunc func() ([]*session.SessionState, []AgentInfo)
 
+// ControlHandler dispatches an inbound relay control frame into the daemon's
+// local control path. Satisfied by *services.InputService, which re-checks the
+// backchannel toggle + per-agent consent + controllability — so a relayed
+// request is gated exactly like a local one (remote is doubly gated: this plus
+// the relay-control toggle below). Defined here to avoid importing services.
+type ControlHandler interface {
+	SendInput(sessionID string, data []byte) error
+	Interrupt(sessionID string) error
+}
+
 // Forwarder subscribes to the daemon's push broadcaster and pushes every
 // session event out to a relay server over a WebSocket, reconnecting with
 // exponential backoff. Pushing out (rather than accepting inbound) means the
 // daemon needs no reachable address — it works behind NAT.
 type Forwarder struct {
-	url      string
-	identity Identity
-	token    string
-	push     outbound.PushBroadcaster
-	snapshot SnapshotFunc
-	logger   outbound.Logger
+	url            string
+	identity       Identity
+	token          string
+	push           outbound.PushBroadcaster
+	snapshot       SnapshotFunc
+	control        ControlHandler
+	controlEnabled func() bool
+	logger         outbound.Logger
 
 	dialer     *websocket.Dialer
 	minBackoff time.Duration
@@ -93,18 +106,23 @@ type Forwarder struct {
 
 // NewForwarder builds a Forwarder targeting relayURL. push and snapshot are
 // required; logger may be nil. token is sent in the hello for an auth-enabled
-// relay and may be empty (a no-auth relay ignores it).
-func NewForwarder(relayURL string, id Identity, token string, push outbound.PushBroadcaster, snapshot SnapshotFunc, logger outbound.Logger) *Forwarder {
+// relay and may be empty (a no-auth relay ignores it). control + controlEnabled
+// gate inbound remote control (issue #724): a control frame is dispatched only
+// when controlEnabled() reports the relay-control toggle on; both may be nil to
+// disable remote control entirely.
+func NewForwarder(relayURL string, id Identity, token string, push outbound.PushBroadcaster, snapshot SnapshotFunc, control ControlHandler, controlEnabled func() bool, logger outbound.Logger) *Forwarder {
 	return &Forwarder{
-		url:        normalizeRelayURL(relayURL),
-		identity:   id,
-		token:      token,
-		push:       push,
-		snapshot:   snapshot,
-		logger:     logger,
-		dialer:     websocket.DefaultDialer,
-		minBackoff: time.Second,
-		maxBackoff: 30 * time.Second,
+		url:            normalizeRelayURL(relayURL),
+		identity:       id,
+		token:          token,
+		push:           push,
+		snapshot:       snapshot,
+		control:        control,
+		controlEnabled: controlEnabled,
+		logger:         logger,
+		dialer:         websocket.DefaultDialer,
+		minBackoff:     time.Second,
+		maxBackoff:     30 * time.Second,
 		// The forwarder is created only when publishing is enabled and Run()
 		// dials immediately, so "connecting" is the truthful initial state for a
 		// status read that races ahead of the first dial.
@@ -238,14 +256,18 @@ func (f *Forwarder) runOnce(ctx context.Context) error {
 	f.setState(PublishConnected, "")
 	f.logInfo(fmt.Sprintf("connected to relay %s as %q (%s)", f.url, f.identity.DaemonLabel, f.identity.DaemonID))
 
-	// Read pump: surface the relay closing the socket (and drain control
-	// frames / a mid-stream revoke close).
+	// Read pump: dispatch inbound control frames (issue #724) and surface the
+	// relay closing the socket (incl. a mid-stream revoke close).
 	readErr := make(chan error, 1)
 	go func() {
 		for {
-			if _, _, err := conn.ReadMessage(); err != nil {
+			_, data, err := conn.ReadMessage()
+			if err != nil {
 				readErr <- err
 				return
+			}
+			if FrameType(data) == MsgControl {
+				f.handleControl(data)
 			}
 		}
 	}()
@@ -276,6 +298,33 @@ func (f *Forwarder) runOnce(ctx context.Context) error {
 	}
 }
 
+// handleControl dispatches an inbound relay control frame into the daemon's
+// local control path, but only when the relay-control toggle is on (issue
+// #724). The InputService it delegates to re-checks the backchannel toggle +
+// per-agent consent + controllability, so this is the outer of the two remote
+// gates. A toggle-off daemon silently drops the frame.
+func (f *Forwarder) handleControl(data []byte) {
+	if f.control == nil || f.controlEnabled == nil || !f.controlEnabled() {
+		return
+	}
+	var ctrl Control
+	if json.Unmarshal(data, &ctrl) != nil || ctrl.SessionID == "" {
+		return
+	}
+	var err error
+	switch ctrl.Action {
+	case ControlActionInput:
+		err = f.control.SendInput(ctrl.SessionID, []byte(ctrl.Data))
+	case ControlActionInterrupt:
+		err = f.control.Interrupt(ctrl.SessionID)
+	default:
+		return
+	}
+	if err != nil {
+		f.logError(fmt.Sprintf("relay control %s for %s rejected: %v", ctrl.Action, ctrl.SessionID, err))
+	}
+}
+
 func (f *Forwarder) snapshotState() ([]*session.SessionState, []AgentInfo) {
 	if f.snapshot == nil {
 		return nil, nil
@@ -291,7 +340,8 @@ func (f *Forwarder) snapshotState() ([]*session.SessionState, []AgentInfo) {
 // re-fetch (and potentially re-open) their LOCAL wizard on this host's churn.
 func shouldForward(msg outbound.PushMessage) bool {
 	return msg.Type != outbound.PushTypeFocusRequested &&
-		msg.Type != outbound.PushTypePermissionsUpdated
+		msg.Type != outbound.PushTypePermissionsUpdated &&
+		msg.Type != outbound.PushTypeInputRequested
 }
 
 // jitter returns a random duration in [0, d/2] to spread reconnect attempts.

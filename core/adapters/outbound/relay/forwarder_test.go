@@ -93,7 +93,7 @@ func TestForwarderHelloSnapshotAndPush(t *testing.T) {
 		return []*session.SessionState{{SessionID: "s1", State: "working"}},
 			[]AgentInfo{{Name: "claude-code", DisplayName: "Claude Code"}}
 	}
-	f := NewForwarder(tr.url, Identity{DaemonID: "d-123", DaemonLabel: "laptop"}, "", bc, snap, nil)
+	f := NewForwarder(tr.url, Identity{DaemonID: "d-123", DaemonLabel: "laptop"}, "", bc, snap, nil, nil, nil)
 	go f.Run(t.Context())
 
 	var hello Hello
@@ -122,7 +122,7 @@ func TestForwarderHelloSnapshotAndPush(t *testing.T) {
 func TestForwarderFiltersFocusRequested(t *testing.T) {
 	tr := newTestRelay(t)
 	bc := newFakeBroadcaster()
-	f := NewForwarder(tr.url, Identity{DaemonID: "d1"}, "", bc, nil, nil)
+	f := NewForwarder(tr.url, Identity{DaemonID: "d1"}, "", bc, nil, nil, nil, nil)
 	go f.Run(t.Context())
 
 	tr.next(t) // hello
@@ -143,7 +143,7 @@ func TestForwarderFiltersFocusRequested(t *testing.T) {
 func TestForwarderReconnects(t *testing.T) {
 	tr := newTestRelay(t)
 	bc := newFakeBroadcaster()
-	f := NewForwarder(tr.url, Identity{DaemonID: "d1"}, "", bc, nil, nil)
+	f := NewForwarder(tr.url, Identity{DaemonID: "d1"}, "", bc, nil, nil, nil, nil)
 	f.minBackoff = 10 * time.Millisecond
 	f.maxBackoff = 20 * time.Millisecond
 	go f.Run(t.Context())
@@ -231,7 +231,7 @@ func TestForwarderSendsToken(t *testing.T) {
 	tr := newTestRelay(t)
 	bc := newFakeBroadcaster()
 	snap := func() ([]*session.SessionState, []AgentInfo) { return nil, nil }
-	f := NewForwarder(tr.url, Identity{DaemonID: "d1"}, "s3cr3t-token", bc, snap, nil)
+	f := NewForwarder(tr.url, Identity{DaemonID: "d1"}, "s3cr3t-token", bc, snap, nil, nil, nil)
 	go f.Run(t.Context())
 
 	var hello Hello
@@ -266,7 +266,7 @@ func TestForwarderStatusConnected(t *testing.T) {
 	tr := newTestRelay(t)
 	bc := newFakeBroadcaster()
 	snap := func() ([]*session.SessionState, []AgentInfo) { return nil, nil }
-	f := NewForwarder(tr.url, Identity{DaemonID: "d1", DaemonLabel: "lap"}, "", bc, snap, nil)
+	f := NewForwarder(tr.url, Identity{DaemonID: "d1", DaemonLabel: "lap"}, "", bc, snap, nil, nil, nil)
 	go f.Run(t.Context())
 
 	tr.next(t) // hello
@@ -303,7 +303,7 @@ func TestForwarderStatusAuthFailed(t *testing.T) {
 	defer srv.Close()
 
 	bc := newFakeBroadcaster()
-	f := NewForwarder("ws"+strings.TrimPrefix(srv.URL, "http"), Identity{DaemonID: "d1"}, "bad-token", bc, nil, nil)
+	f := NewForwarder("ws"+strings.TrimPrefix(srv.URL, "http"), Identity{DaemonID: "d1"}, "bad-token", bc, nil, nil, nil, nil)
 	f.minBackoff = 10 * time.Millisecond
 	f.maxBackoff = 20 * time.Millisecond
 	go f.Run(t.Context())

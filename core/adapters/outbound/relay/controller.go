@@ -20,11 +20,13 @@ import (
 // forwarder's context and starts a fresh one — the forwarder is already
 // ctx-cancelable, so this reuses its existing shutdown path.
 type PublishController struct {
-	parentCtx context.Context
-	identity  Identity
-	push      outbound.PushBroadcaster
-	snapshot  SnapshotFunc
-	logger    outbound.Logger
+	parentCtx      context.Context
+	identity       Identity
+	push           outbound.PushBroadcaster
+	snapshot       SnapshotFunc
+	control        ControlHandler
+	controlEnabled func() bool
+	logger         outbound.Logger
 
 	mu     sync.Mutex
 	fwd    *Forwarder         // non-nil only while publishing is enabled
@@ -37,13 +39,17 @@ type PublishController struct {
 // bounds every forwarder it starts, so cancelling it (on daemon shutdown)
 // stops publishing. identity, push, and snapshot are the forwarder
 // dependencies that never change across reconfigures; logger may be nil.
-func NewPublishController(parentCtx context.Context, id Identity, push outbound.PushBroadcaster, snapshot SnapshotFunc, logger outbound.Logger) *PublishController {
+// control + controlEnabled gate inbound remote control (issue #724) and flow to
+// every forwarder this controller starts; both may be nil to disable it.
+func NewPublishController(parentCtx context.Context, id Identity, push outbound.PushBroadcaster, snapshot SnapshotFunc, control ControlHandler, controlEnabled func() bool, logger outbound.Logger) *PublishController {
 	return &PublishController{
-		parentCtx: parentCtx,
-		identity:  id,
-		push:      push,
-		snapshot:  snapshot,
-		logger:    logger,
+		parentCtx:      parentCtx,
+		identity:       id,
+		push:           push,
+		snapshot:       snapshot,
+		control:        control,
+		controlEnabled: controlEnabled,
+		logger:         logger,
 	}
 }
 
@@ -82,7 +88,7 @@ func (c *PublishController) Apply(enabled bool, url, token string) {
 	if c.cancel != nil {
 		c.cancel()
 	}
-	fwd := NewForwarder(url, c.identity, token, c.push, c.snapshot, c.logger)
+	fwd := NewForwarder(url, c.identity, token, c.push, c.snapshot, c.control, c.controlEnabled, c.logger)
 	ctx, cancel := context.WithCancel(c.parentCtx)
 	c.fwd = fwd
 	c.cancel = cancel

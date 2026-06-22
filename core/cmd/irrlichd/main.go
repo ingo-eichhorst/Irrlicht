@@ -49,6 +49,26 @@ import (
 // Version is injected at build time via -ldflags "-X main.Version=x.y.z".
 var Version = "dev"
 
+// lazyControl adapts the daemon's InputService to relay.ControlHandler with a
+// late binding: the publish controller is constructed during relay setup, which
+// precedes the consent stack that builds InputService. resolve returns nil
+// until then; a control frame that races startup is rejected, not panicked.
+type lazyControl struct{ resolve func() relay.ControlHandler }
+
+func (l lazyControl) SendInput(id string, d []byte) error {
+	if h := l.resolve(); h != nil {
+		return h.SendInput(id, d)
+	}
+	return fmt.Errorf("relay control: input service not ready")
+}
+
+func (l lazyControl) Interrupt(id string) error {
+	if h := l.resolve(); h != nil {
+		return h.Interrupt(id)
+	}
+	return fmt.Errorf("relay control: input service not ready")
+}
+
 const (
 	defaultBindAddr = "127.0.0.1:7837"
 	tcpPort         = 7837
@@ -212,7 +232,23 @@ func main() {
 		}
 		return sessions, infos
 	}
-	publishController := relay.NewPublishController(relayBaseCtx, relayIdentity, push, relaySnapshot, logger)
+	// Remote control (#724): the relay-control toggle (default OFF, env opt-in
+	// IRRLICHT_RELAY_CONTROL=on) gates whether the forwarder acts on inbound
+	// control frames. inputService is built later (consent stack); lazyControl
+	// binds to it once ready. Remote stays doubly gated — this toggle plus the
+	// backchannel toggle + per-agent consent re-checked inside InputService.
+	relayControlStore := filesystem.NewRelayControlStore(dataDir(relayHome))
+	relayControlEnabled := func() bool {
+		return relayControlStore.Enabled() || os.Getenv("IRRLICHT_RELAY_CONTROL") == "on"
+	}
+	var inputService *services.InputService
+	relayControl := lazyControl{resolve: func() relay.ControlHandler {
+		if inputService == nil {
+			return nil
+		}
+		return inputService
+	}}
+	publishController := relay.NewPublishController(relayBaseCtx, relayIdentity, push, relaySnapshot, relayControl, relayControlEnabled, logger)
 	// Seed from the env opt-in (backward compatible with the pre-#722 path).
 	// Bearer token for an auth-enabled relay: IRRLICHT_RELAY_TOKEN or
 	// <dataDir>/relay-token.json (mode 0600). Empty against a no-auth relay.
@@ -427,11 +463,10 @@ func main() {
 		return nil
 	}
 
-	// Register API endpoints (after orchMonitor is available).
-	// inputService is built later (it needs permService); the closure resolves
-	// it at request time, so a session reports controllable only once the
-	// backchannel control stack below is wired.
-	var inputService *services.InputService
+	// Register API endpoints (after orchMonitor is available). inputService is
+	// declared up in the relay block (lazyControl binds to it); it's assigned
+	// in the backchannel block below, so this closure resolves it at request
+	// time — a session reports controllable only once that wiring runs.
 	mux.HandleFunc("GET /api/v1/sessions", handleGetSessions(cachedRepo, orchMonitor, costTracker,
 		func(sessionID string) bool { return inputService != nil && inputService.Controllable(sessionID) }))
 
@@ -578,6 +613,10 @@ func main() {
 	inputService = services.NewInputService(cachedRepo, controlController, permService, backchannelStore.Enabled, logger)
 	mux.HandleFunc("/api/v1/activation/backchannel",
 		localhostOnly(activationhandler.NewBackchannelHandler(backchannelStore, logger)))
+	// Remote-control toggle (#724): default OFF; gates whether the relay
+	// forwarder acts on inbound control frames (the outer remote gate).
+	mux.HandleFunc("/api/v1/activation/relay-control",
+		localhostOnly(activationhandler.NewToggleHandler(relayControlStore, "relay_control_enabled", logger)))
 	mux.HandleFunc("POST /api/v1/sessions/{id}/input",
 		localhostOnly(sessionshandler.NewInputHandler(inputService, logger)))
 	mux.HandleFunc("POST /api/v1/sessions/{id}/interrupt",
