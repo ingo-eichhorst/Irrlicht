@@ -1,0 +1,4 @@
+{"notes":"Injected input + interrupt via the session's terminal backend; gated by backchannel toggle + control consent. tmux is the headless-automatable environment (TestBackchannelE2E); kitty/iTerm2/Terminal.app share the same InputService/Controller seam.","scenario_id":"backchannel-control","schema_version":1,"source":"#724 backchannel control"}
+{"phase":"session_birth","expected_state":"ready","relative_to":"start","max_delay_ms":1500,"text":"Session appears in ready"}
+{"phase":"injected_turn","expected_state":"working","relative_to":"session_birth","text":"Backchannel-injected input drives ready -> working"}
+{"phase":"settle","expected_state":"ready","relative_to":"injected_turn","text":"Turn completes; working -> ready"}

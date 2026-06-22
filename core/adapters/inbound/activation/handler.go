@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"irrlicht/core/adapters/outbound/httputil"
 	services "irrlicht/core/application/services"
 	"irrlicht/core/ports/outbound"
 )
@@ -44,13 +45,10 @@ func NewHandler(target consentTarget, agentName, permKey string, log outbound.Lo
 		case http.MethodGet:
 			// fall through to the state reply
 		case http.MethodPost, http.MethodDelete:
-			// localhostOnly is not enough for the mutating verbs: a
-			// safelisted cross-origin POST from any webpage the user visits
-			// reaches loopback without a CORS preflight and would rewrite
-			// ~/.claude/CLAUDE.md. Browsers stamp Sec-Fetch-Site; reject the
-			// cross-origin values. Non-browser clients (the macOS URLSession
-			// client, curl) omit the header → allowed.
-			if site := r.Header.Get("Sec-Fetch-Site"); site == "cross-site" || site == "same-site" {
+			// localhostOnly is not enough for the mutating verbs: a safelisted
+			// cross-origin POST from a webpage the user visits reaches loopback
+			// without a CORS preflight and would rewrite ~/.claude/CLAUDE.md.
+			if httputil.IsCrossOriginBrowserRequest(r) {
 				http.Error(w, "forbidden", http.StatusForbidden)
 				return
 			}

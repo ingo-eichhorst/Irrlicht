@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -22,9 +23,11 @@ import (
 	"irrlicht/core/adapters/inbound/agents/agentwiring"
 	"irrlicht/core/adapters/inbound/agents/claudecode"
 	"irrlicht/core/adapters/inbound/agents/processlifecycle"
+	backchannelhandler "irrlicht/core/adapters/inbound/backchannel"
 	gastownadapter "irrlicht/core/adapters/inbound/orchestrators/gastown"
 	permissionshandler "irrlicht/core/adapters/inbound/permissions"
 	sessionshandler "irrlicht/core/adapters/inbound/sessions"
+	"irrlicht/core/adapters/outbound/control"
 	"irrlicht/core/adapters/outbound/filesystem"
 	"irrlicht/core/adapters/outbound/git"
 	"irrlicht/core/adapters/outbound/gtbin"
@@ -46,6 +49,26 @@ import (
 
 // Version is injected at build time via -ldflags "-X main.Version=x.y.z".
 var Version = "dev"
+
+// lazyControl adapts the daemon's InputService to relay.ControlHandler with a
+// late binding: the publish controller is constructed during relay setup, which
+// precedes the consent stack that builds InputService. resolve returns nil
+// until then; a control frame that races startup is rejected, not panicked.
+type lazyControl struct{ resolve func() relay.ControlHandler }
+
+func (l lazyControl) SendInput(id string, d []byte) error {
+	if h := l.resolve(); h != nil {
+		return h.SendInput(id, d)
+	}
+	return fmt.Errorf("relay control: input service not ready")
+}
+
+func (l lazyControl) Interrupt(id string) error {
+	if h := l.resolve(); h != nil {
+		return h.Interrupt(id)
+	}
+	return fmt.Errorf("relay control: input service not ready")
+}
 
 const (
 	defaultBindAddr = "127.0.0.1:7837"
@@ -210,7 +233,27 @@ func main() {
 		}
 		return sessions, infos
 	}
-	publishController := relay.NewPublishController(relayBaseCtx, relayIdentity, push, relaySnapshot, logger)
+	// Remote control (#724): the relay-control toggle (default OFF, env opt-in
+	// IRRLICHT_RELAY_CONTROL=on) gates whether the forwarder acts on inbound
+	// control frames. inputService is built later (consent stack); lazyControl
+	// binds to it once ready. Remote stays doubly gated — this toggle plus the
+	// backchannel toggle + per-agent consent re-checked inside InputService.
+	relayControlStore := filesystem.NewRelayControlStore(dataDir(relayHome))
+	relayControlEnabled := func() bool {
+		return relayControlStore.Enabled() || os.Getenv("IRRLICHT_RELAY_CONTROL") == "on"
+	}
+	// inputService is published once the consent stack is built (below). It's
+	// read concurrently by the HTTP handlers and the relay forwarder, so it's an
+	// atomic.Pointer rather than a plain var: those readers start (Serve / the
+	// env-seeded forwarder) before the assignment.
+	var inputService atomic.Pointer[services.InputService]
+	relayControl := lazyControl{resolve: func() relay.ControlHandler {
+		if s := inputService.Load(); s != nil {
+			return s
+		}
+		return nil
+	}}
+	publishController := relay.NewPublishController(relayBaseCtx, relayIdentity, push, relaySnapshot, relayControl, relayControlEnabled, logger)
 	// Seed from the env opt-in (backward compatible with the pre-#722 path).
 	// Bearer token for an auth-enabled relay: IRRLICHT_RELAY_TOKEN or
 	// <dataDir>/relay-token.json (mode 0600). Empty against a no-auth relay.
@@ -425,8 +468,17 @@ func main() {
 		return nil
 	}
 
-	// Register API endpoints (after orchMonitor is available).
-	mux.HandleFunc("GET /api/v1/sessions", handleGetSessions(cachedRepo, orchMonitor, costTracker))
+	// Register API endpoints (after orchMonitor is available). inputService is
+	// declared up in the relay block (lazyControl binds to it); it's assigned
+	// in the backchannel block below, so this closure resolves it at request
+	// time — a session reports controllable only once that wiring runs.
+	mux.HandleFunc("GET /api/v1/sessions", handleGetSessions(cachedRepo, orchMonitor, costTracker,
+		func(sessionID string) bool {
+			if s := inputService.Load(); s != nil {
+				return s.Controllable(sessionID)
+			}
+			return false
+		}))
 
 	focusService := services.NewFocusService(cachedRepo, push, logger)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/focus", sessionshandler.NewFocusHandler(focusService, logger))
@@ -559,6 +611,37 @@ func main() {
 		localhostOnly(activationhandler.NewHandler(permService,
 			claudecode.AdapterName, claudecode.PermissionKeyInstructions, logger)))
 
+	// Backchannel (issue #724): control discovered agents by scripting their
+	// terminal backend. A default-OFF master toggle gates the whole capability;
+	// the per-adapter "control" consent and a usable backend target gate each
+	// write. InputService enforces the order (toggle → consent → controllable)
+	// for both the manual HTTP path and (later) the event→action rule engine.
+	// localhostOnly + a Sec-Fetch-Site guard on the mutating verbs, since
+	// injected input drives a live agent.
+	backchannelStore := filesystem.NewBackchannelStore(dataDir(home))
+	controlController := control.NewController(cachedRepo, push, logger)
+	in := services.NewInputService(cachedRepo, controlController, permService, backchannelStore.Enabled, logger)
+	inputService.Store(in) // publish to the HTTP/forwarder readers (see decl above)
+	mux.HandleFunc("/api/v1/activation/backchannel",
+		localhostOnly(activationhandler.NewBackchannelHandler(backchannelStore, logger)))
+	// Remote-control toggle (#724): default OFF; gates whether the relay
+	// forwarder acts on inbound control frames (the outer remote gate).
+	mux.HandleFunc("/api/v1/activation/relay-control",
+		localhostOnly(activationhandler.NewToggleHandler(relayControlStore, "relay_control_enabled", logger)))
+	mux.HandleFunc("POST /api/v1/sessions/{id}/input",
+		localhostOnly(sessionshandler.NewInputHandler(in, logger)))
+	mux.HandleFunc("POST /api/v1/sessions/{id}/interrupt",
+		localhostOnly(sessionshandler.NewInterruptHandler(in, logger)))
+
+	// Backchannel rules (issue #724): event→action automations (e.g.
+	// context_pressure → /compact). The engine consumes the push stream and
+	// fires through inputService, so the same toggle+consent+controllable
+	// gates apply. Started under detectorCtx below.
+	backchannelRules := filesystem.NewBackchannelRulesStore(dataDir(home))
+	backchannelEngine := services.NewBackchannelEngine(backchannelRules, in, push, backchannelStore.Enabled, logger)
+	mux.HandleFunc("/api/v1/backchannel/rules",
+		localhostOnly(backchannelhandler.NewRulesHandler(backchannelRules, logger)))
+
 	// Hook receiver: Claude Code PermissionRequest/PostToolUse events.
 	// The detector satisfies claudecode.HookTarget via HandlePermissionHook.
 	// Consent-gated: hooks installed by a pre-consent daemon keep firing
@@ -610,6 +693,10 @@ func main() {
 				logger.LogError("session-detector", "", fmt.Sprintf("detector error: %v", err))
 			}
 		}()
+
+		// Backchannel rule engine: consumes the push stream and fires
+		// event→action rules through inputService (issue #724).
+		go backchannelEngine.Run(detectorCtx)
 
 		// Exercise granted permissions (re-apply hook/statusline installs,
 		// start watchers) and launch the detection poller. Effects run

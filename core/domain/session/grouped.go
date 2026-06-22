@@ -33,6 +33,12 @@ type Agent struct {
 	WorkerName  string   `json:"worker_name,omitempty"`
 	WorkerID    string   `json:"worker_id,omitempty"`
 	Children    []*Agent `json:"children,omitempty"`
+
+	// Controllable is true when the daemon would currently accept an
+	// input/interrupt for this session — backchannel toggle on, "control"
+	// consent granted, and a usable terminal backend present (issue #724).
+	// Live/derived, never persisted; set by the HTTP handler, not buildAgent.
+	Controllable bool `json:"controllable,omitempty"`
 }
 
 // workerInfo holds orchestrator metadata for a matched session.

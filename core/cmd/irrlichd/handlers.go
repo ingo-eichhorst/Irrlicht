@@ -51,7 +51,7 @@ func (c *costAttachCache) put(now time.Time, byProject, byProvider map[string]ma
 	c.mu.Unlock()
 }
 
-func handleGetSessions(repo outbound.SessionRepository, orchMonitor *services.OrchestratorMonitor, tracker outbound.CostTracker) http.HandlerFunc {
+func handleGetSessions(repo outbound.SessionRepository, orchMonitor *services.OrchestratorMonitor, tracker outbound.CostTracker, controllable func(sessionID string) bool) http.HandlerFunc {
 	cache := &costAttachCache{}
 	return func(w http.ResponseWriter, r *http.Request) {
 		sessions, err := repo.ListAll()
@@ -67,6 +67,7 @@ func handleGetSessions(repo outbound.SessionRepository, orchMonitor *services.Or
 		// renders for the wrapper just like it does for the donor.
 		services.InheritRateLimits(sessions, "")
 		groups := session.BuildDashboard(sessions, orchMonitor.State("gastown"))
+		annotateControllable(groups, controllable)
 		resp := sessionsResponse{Groups: groups}
 		if tracker != nil {
 			byProject, byProvider := costMaps(tracker, cache)
@@ -76,6 +77,36 @@ func handleGetSessions(repo outbound.SessionRepository, orchMonitor *services.Or
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(resp)
 	}
+}
+
+// annotateControllable walks the group tree and marks each agent (and nested
+// child) Controllable per the InputService gate. No-op when fn is nil (tests,
+// or before the backchannel feature is wired).
+func annotateControllable(groups []*session.AgentGroup, fn func(sessionID string) bool) {
+	if fn == nil {
+		return
+	}
+	var walkAgents func(agents []*session.Agent)
+	walkAgents = func(agents []*session.Agent) {
+		for _, a := range agents {
+			if a == nil || a.SessionState == nil {
+				continue
+			}
+			a.Controllable = fn(a.SessionID)
+			walkAgents(a.Children)
+		}
+	}
+	var walkGroups func(gs []*session.AgentGroup)
+	walkGroups = func(gs []*session.AgentGroup) {
+		for _, g := range gs {
+			if g == nil {
+				continue
+			}
+			walkAgents(g.Agents)
+			walkGroups(g.Groups)
+		}
+	}
+	walkGroups(groups)
 }
 
 // costMaps returns the per-project and per-provider trailing-window cost maps,

@@ -1,0 +1,38 @@
+{
+  "scenario_id": "backchannel-control",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "confidence": 0.9
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "backchannel-control",
+      "agent": "gemini-cli",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.9,
+      "body": "gemini-cli is an interactive TUI/REPL that reads typed input from its controlling terminal, so it can receive backchannel-injected text and an interrupt. The adapter declares Control{SupportsInput:true, Interrupt:InterruptCtrlC} and the shared control permission (agent.ControlPermission). The daemon writes back through whichever terminal backend owns the session's pty, resolved from session.Launcher: tmux send-keys / kitty send-text daemon-side, iTerm2/Terminal.app via the macOS app. InputService gates every write (backchannel toggle -> control consent -> controllable). Remotely the same path is reached via the relay control frame, double-gated by the relay-control toggle. Verified end-to-end against a real tmux pane by TestBackchannelE2E_Local/_Remote.",
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/domain/agent/declaration.go",
+          "note": "Control axis + ControlPermission helper"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/outbound/control/controller.go",
+          "note": "tmux/kitty injectors + AppleScript broadcast keyed off Launcher"
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/input_service.go",
+          "note": "toggle->consent->controllable gate"
+        }
+      ]
+    }
+  }
+}

@@ -43,7 +43,9 @@ func Agent() agent.Agent {
 				NewParser: func() agent.LineParser { return &Parser{} },
 			},
 		},
+		Control: agent.Control{SupportsInput: true, Interrupt: agent.InterruptCtrlC},
 		Permissions: []agent.Permission{
+			agent.ControlPermission(),
 			{
 				Key:             PermissionKeyTranscripts,
 				Kind:            permission.KindObserve,

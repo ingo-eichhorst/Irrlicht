@@ -3,9 +3,9 @@ package agent
 import "irrlicht/core/domain/permission"
 
 // Agent is the registration record each inbound agent adapter exports.
-// It collapses identity, process recognition, session source, and
-// consent-gated permissions into four orthogonal axes. Each adapter
-// package's Agent() constructor returns one value; the daemon wires
+// It collapses identity, process recognition, session source, write-back
+// control, and consent-gated permissions into five orthogonal axes. Each
+// adapter package's Agent() constructor returns one value; the daemon wires
 // per-adapter behavior off it via the map projections in
 // core/adapters/inbound/agents (Parsers, PIDDiscoverers, ProcessNames,
 // SubagentCounters, MetricsProviders) and the Source-variant dispatch
@@ -14,7 +14,62 @@ type Agent struct {
 	Identity    Identity
 	Process     Process
 	Source      Source
+	Control     Control
 	Permissions []Permission
+}
+
+// Control declares whether and how the daemon may write back to a discovered
+// session of this agent through its terminal backend (issue #724, the
+// "backchannel"). The zero value means not controllable — an adapter must opt
+// in. Controllability also requires a usable backend target on the session's
+// Launcher and the user's consent; this axis only states the agent *can* take
+// interactive input.
+type Control struct {
+	// SupportsInput is true for agents that read from an interactive TUI/REPL
+	// (claude, codex, …) and false for non-interactive/headless ones
+	// (opencode's process-owned store), which can never be driven by injected
+	// keystrokes.
+	SupportsInput bool
+	// Interrupt is how an interrupt is delivered to this agent.
+	Interrupt InterruptMethod
+}
+
+// InterruptMethod is how the daemon interrupts a running turn.
+type InterruptMethod int
+
+const (
+	// InterruptNone means interrupts are not supported.
+	InterruptNone InterruptMethod = iota
+	// InterruptCtrlC delivers an ETX (Ctrl-C) into the terminal backend.
+	InterruptCtrlC
+	// InterruptSignal delivers SIGINT to the agent's process (reserved for a
+	// future non-backend path).
+	InterruptSignal
+)
+
+// ControlPermissionKey is the consent key gating the backchannel write path.
+// Must match application/services.ControlPermissionKey.
+const ControlPermissionKey = "control"
+
+// ControlPermission is the consent gate for the backchannel write path (issue
+// #724), shared by every adapter that declares Control.SupportsInput. KindModify
+// with nil Apply/Remove: granting only permits InputService to forward input;
+// it writes nothing to disk. The backchannel master-toggle gates it further.
+func ControlPermission() Permission {
+	return Permission{
+		Key:             ControlPermissionKey,
+		Kind:            permission.KindModify,
+		Title:           "Send input to sessions",
+		FeatureUnlocked: "Reply to prompts, interrupt turns, and run event→action rules (backchannel)",
+		Touches:         "Sends text you submit into this agent's controlling terminal via its terminal backend (e.g. tmux send-keys)",
+		Detail: "When granted — and only while the Backchannel beta toggle is on — " +
+			"the daemon may forward text you submit and interrupt signals into a " +
+			"running session of this agent by scripting the terminal backend that " +
+			"owns it (tmux/kitty/…). Input is injected as if you typed it. Only " +
+			"sessions with a controllable terminal backend are affected; nothing is " +
+			"sent unless you (or a rule you configured) send it. Granting changes " +
+			"nothing on disk; toggling off stops all forwarding immediately.",
+	}
 }
 
 // Permission declares one consent-gated capability of an adapter: what

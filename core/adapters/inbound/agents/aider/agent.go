@@ -52,7 +52,9 @@ func Agent() agent.Agent {
 				NewParser: func() agent.RawParser { return &Parser{} },
 			},
 		},
+		Control: agent.Control{SupportsInput: true, Interrupt: agent.InterruptCtrlC},
 		Permissions: []agent.Permission{
+			agent.ControlPermission(),
 			{
 				Key:             PermissionKeyHistory,
 				Kind:            permission.KindObserve,

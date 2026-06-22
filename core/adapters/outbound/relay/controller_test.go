@@ -28,7 +28,7 @@ func TestPublishControllerStartStop(t *testing.T) {
 	tr := newTestRelay(t)
 	bc := newFakeBroadcaster()
 	snap := func() ([]*session.SessionState, []AgentInfo) { return nil, nil }
-	c := NewPublishController(t.Context(), Identity{DaemonID: "d1", DaemonLabel: "lap"}, bc, snap, nil)
+	c := NewPublishController(t.Context(), Identity{DaemonID: "d1", DaemonLabel: "lap"}, bc, snap, nil, nil, nil)
 
 	if enabled, _ := c.Status(); enabled {
 		t.Fatal("a fresh controller must report disabled")
@@ -49,7 +49,7 @@ func TestPublishControllerIdempotent(t *testing.T) {
 	tr := newTestRelay(t)
 	bc := newFakeBroadcaster()
 	snap := func() ([]*session.SessionState, []AgentInfo) { return nil, nil }
-	c := NewPublishController(t.Context(), Identity{DaemonID: "d1"}, bc, snap, nil)
+	c := NewPublishController(t.Context(), Identity{DaemonID: "d1"}, bc, snap, nil, nil, nil)
 
 	c.Apply(true, tr.url, "tok")
 	c.mu.Lock()
@@ -73,7 +73,7 @@ func TestPublishControllerReconfigure(t *testing.T) {
 	tr2 := newTestRelay(t)
 	bc := newFakeBroadcaster()
 	snap := func() ([]*session.SessionState, []AgentInfo) { return nil, nil }
-	c := NewPublishController(t.Context(), Identity{DaemonID: "d1"}, bc, snap, nil)
+	c := NewPublishController(t.Context(), Identity{DaemonID: "d1"}, bc, snap, nil, nil, nil)
 
 	c.Apply(true, tr1.url, "")
 	select {
@@ -94,7 +94,7 @@ func TestPublishControllerReconfigure(t *testing.T) {
 // does not start a forwarder (mirrors the macOS env builder's old semantics).
 func TestPublishControllerEmptyURLActsAsOff(t *testing.T) {
 	bc := newFakeBroadcaster()
-	c := NewPublishController(t.Context(), Identity{DaemonID: "d1"}, bc, nil, nil)
+	c := NewPublishController(t.Context(), Identity{DaemonID: "d1"}, bc, nil, nil, nil, nil)
 	c.Apply(true, "   ", "tok")
 	if enabled, _ := c.Status(); enabled {
 		t.Fatal("enabled with a blank URL must not activate publishing")

@@ -1289,6 +1289,13 @@ struct SessionRowView: View {
                     SessionActionButtons(session: session)
                 }
 
+                // Backchannel control affordance (#724): only when the daemon
+                // says this session is controllable (toggle on + consent + a
+                // usable terminal backend).
+                if session.controllable == true {
+                    SessionControlButton(session: session)
+                }
+
                 // Short model name + adapter icon — grouped so layoutPriority applies to both
                 HStack(spacing: 6) {
                     Text(session.shortModelName)
@@ -1647,6 +1654,59 @@ private struct TaskListView: View {
 }
 
 // MARK: - Session Action Buttons
+
+/// Backchannel control affordance (#724): a keyboard button that opens a
+/// popover to send text or an interrupt into a controllable session. Shown only
+/// when `session.controllable`. The whole-row tap (focus) is unaffected —
+/// SwiftUI gives the button its own tap handling.
+struct SessionControlButton: View {
+    let session: SessionState
+    @EnvironmentObject var sessionManager: SessionManager
+    @State private var showPopover = false
+    @State private var draft = ""
+
+    var body: some View {
+        Button {
+            showPopover.toggle()
+        } label: {
+            Image(systemName: "keyboard")
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
+        }
+        .buttonStyle(.plain)
+        .tooltip("Send input to this session")
+        .accessibilityIdentifier("session-control-\(session.id)")
+        .popover(isPresented: $showPopover, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Send to session").font(.caption).foregroundColor(.secondary)
+                HStack(spacing: 6) {
+                    TextField("text or /command", text: $draft)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 220)
+                        .onSubmit(send)
+                    Button("Send", action: send).disabled(draft.isEmpty)
+                }
+                Button(role: .destructive) {
+                    Task { _ = await sessionManager.interruptSession(sessionId: session.id) }
+                    showPopover = false
+                } label: {
+                    Label("Interrupt (Ctrl-C)", systemImage: "stop.circle")
+                }
+                .buttonStyle(.borderless)
+            }
+            .padding(12)
+        }
+    }
+
+    private func send() {
+        let text = draft
+        guard !text.isEmpty else { return }
+        // Append a return so the line submits (mirrors the tmux send-keys path).
+        Task { _ = await sessionManager.sendInput(sessionId: session.id, text: text + "\r") }
+        draft = ""
+        showPopover = false
+    }
+}
 
 struct SessionActionButtons: View {
     let session: SessionState

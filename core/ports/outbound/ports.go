@@ -16,6 +16,13 @@ type PushMessage struct {
 	Type    string                `json:"type"`
 	Session *session.SessionState `json:"session,omitempty"`
 
+	// Input carries the payload for a PushTypeInputRequested message — the
+	// daemon asking the macOS app to inject text/interrupt into a session
+	// hosted by an AppleScript-only backend (iTerm2/Terminal.app), which the
+	// daemon cannot script directly (no Automation TCC grant). nil for every
+	// other message type.
+	Input *InputRequest `json:"input,omitempty"`
+
 	// Seq is a daemon-global monotonic sequence number stamped by
 	// pushService.Broadcast before fan-out — every subscriber sees the same
 	// Seq for a given message, so a gap in received Seq tells a client it
@@ -43,12 +50,29 @@ type PushMessage struct {
 	BucketGenerations map[string]uint64 `json:"bucket_generations,omitempty"`
 }
 
+// InputRequest is the payload of a PushTypeInputRequested message: the action
+// to perform on the session's terminal and (for input) the bytes to inject.
+type InputRequest struct {
+	Action string `json:"action"`         // "input" | "interrupt"
+	Data   string `json:"data,omitempty"` // bytes to inject for the input action
+}
+
+// InputAction values for InputRequest.Action.
+const (
+	InputActionInput     = "input"
+	InputActionInterrupt = "interrupt"
+)
+
 // Valid PushMessage type constants.
 const (
 	PushTypeCreated        = "session_created"
 	PushTypeUpdated        = "session_updated"
 	PushTypeDeleted        = "session_deleted"
 	PushTypeFocusRequested = "focus_requested"
+	// PushTypeInputRequested asks the macOS app to inject input/interrupt
+	// into a session whose terminal backend the daemon can't script directly
+	// (iTerm2/Terminal.app via AppleScript). Carries Session + Input.
+	PushTypeInputRequested = "input_requested"
 
 	// PushTypeHistorySnapshot delivers the bit-packed 60-bucket history
 	// for one session across all three granularities. Sent on WebSocket
@@ -256,4 +280,25 @@ type ProcessObserver interface {
 	// EnvOf returns the whitelisted launcher env vars of pid. Returns an
 	// empty/nil map (not an error) when the env is unreadable.
 	EnvOf(pid int) (map[string]string, error)
+}
+
+// AgentController writes back to a discovered, externally-launched agent
+// session through whatever terminal backend owns its pty (tmux, kitty,
+// iTerm2/Terminal.app, …). It is the write counterpart to the read-only
+// observation seams: the daemon never owns the agent process, it scripts the
+// backend that does, keyed off the session's already-captured session.Launcher
+// (issue #724, the "backchannel"). The concrete implementation lives in
+// adapters/outbound/control. Consent and the backchannel master-toggle are
+// enforced upstream by InputService — implementations just inject.
+type AgentController interface {
+	// SendInput injects data into the session's terminal as if typed.
+	// Returns a non-nil error when the backend command fails; callers that
+	// want a "not controllable" verdict consult Controllable first.
+	SendInput(sessionID string, data []byte) error
+	// Interrupt delivers an interrupt (e.g. Ctrl-C) to the session.
+	Interrupt(sessionID string) error
+	// Controllable reports whether the session has a usable backend target
+	// for a supported terminal backend. It does not consider consent or the
+	// master-toggle — those are InputService's concern.
+	Controllable(sessionID string) bool
 }

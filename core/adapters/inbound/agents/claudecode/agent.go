@@ -50,6 +50,10 @@ func Agent() agent.Agent {
 				NewParser: func() agent.LineParser { return &Parser{} },
 			},
 		},
+		Control: agent.Control{
+			SupportsInput: true,
+			Interrupt:     agent.InterruptCtrlC,
+		},
 		Permissions: []agent.Permission{
 			{
 				Key:             PermissionKeyTranscripts,
@@ -110,6 +114,7 @@ func Agent() agent.Agent {
 				Apply:  func() error { _, err := EnsureTaskEtaBlockInstalled(); return err },
 				Remove: func() error { _, err := UninstallTaskEtaBlock(); return err },
 			},
+			agent.ControlPermission(),
 		},
 	}
 }

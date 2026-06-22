@@ -9,6 +9,7 @@ import (
 	"errors"
 	"net/http"
 
+	"irrlicht/core/adapters/outbound/httputil"
 	services "irrlicht/core/application/services"
 	"irrlicht/core/ports/outbound"
 )
@@ -49,7 +50,7 @@ func NewAnswerHandler(t target, log outbound.Logger) http.HandlerFunc {
 		// body alone is no defense (a text/plain form can carry one). Same
 		// guard as the activation alias: same-origin (the dashboard) and a
 		// missing header (native clients) pass.
-		if site := r.Header.Get("Sec-Fetch-Site"); site == "cross-site" || site == "same-site" {
+		if httputil.IsCrossOriginBrowserRequest(r) {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}

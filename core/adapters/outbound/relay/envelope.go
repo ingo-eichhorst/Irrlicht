@@ -28,6 +28,18 @@ const (
 	MsgSnapshot       = "snapshot"
 	MsgDaemonStatus   = "daemon_status"
 	MsgPush           = "push"
+	// MsgControl is the first client→relay→daemon (upstream) frame in an
+	// otherwise one-way protocol (issue #724): a client asks a specific daemon
+	// to inject input / interrupt into one of its sessions. The relay routes it
+	// to the addressed daemon within the client's own token-derived workspace;
+	// the daemon re-gates it through the same consent path as a local request.
+	MsgControl = "control"
+)
+
+// Control-frame actions (Control.Action).
+const (
+	ControlActionInput     = "input"
+	ControlActionInterrupt = "interrupt"
 )
 
 // Peer roles announced in a hello.
@@ -110,6 +122,20 @@ type Push struct {
 	Source string               `json:"source"`
 	TS     int64                `json:"ts"`
 	Msg    outbound.PushMessage `json:"msg"`
+}
+
+// Control is an upstream request from a client to drive one session on a
+// specific daemon (issue #724). TargetDaemon selects the daemon within the
+// client's workspace (the relay routes by it, then drops it); the daemon reads
+// SessionID/Action/Data and forwards to its local InputService, which re-checks
+// the backchannel toggle + per-agent consent + controllability. Action is one
+// of the ControlAction* constants; Data carries the bytes for an input action.
+type Control struct {
+	Type         string `json:"type"`
+	TargetDaemon string `json:"target_daemon"`
+	SessionID    string `json:"session_id"`
+	Action       string `json:"action"`
+	Data         string `json:"data,omitempty"`
 }
 
 // AgentInfo is the adapter branding the relay re-serves at /api/v1/agents.

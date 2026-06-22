@@ -17,3 +17,14 @@ func IsLoopbackRequest(r *http.Request) bool {
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
 }
+
+// IsCrossOriginBrowserRequest reports whether the request is a cross-origin
+// browser request, per the Sec-Fetch-Site header. localhostOnly is not enough
+// for mutating loopback routes: a safelisted cross-origin POST from any webpage
+// the user visits reaches loopback without a CORS preflight and could drive a
+// privileged action. Browsers stamp Sec-Fetch-Site; non-browser clients (the
+// macOS URLSession client, curl) omit it and are treated as same-origin.
+func IsCrossOriginBrowserRequest(r *http.Request) bool {
+	site := r.Header.Get("Sec-Fetch-Site")
+	return site == "cross-site" || site == "same-site"
+}
