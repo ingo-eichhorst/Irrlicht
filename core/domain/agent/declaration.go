@@ -47,6 +47,31 @@ const (
 	InterruptSignal
 )
 
+// ControlPermissionKey is the consent key gating the backchannel write path.
+// Must match application/services.ControlPermissionKey.
+const ControlPermissionKey = "control"
+
+// ControlPermission is the consent gate for the backchannel write path (issue
+// #724), shared by every adapter that declares Control.SupportsInput. KindModify
+// with nil Apply/Remove: granting only permits InputService to forward input;
+// it writes nothing to disk. The backchannel master-toggle gates it further.
+func ControlPermission() Permission {
+	return Permission{
+		Key:             ControlPermissionKey,
+		Kind:            permission.KindModify,
+		Title:           "Send input to sessions",
+		FeatureUnlocked: "Reply to prompts, interrupt turns, and run event→action rules (backchannel)",
+		Touches:         "Sends text you submit into this agent's controlling terminal via its terminal backend (e.g. tmux send-keys)",
+		Detail: "When granted — and only while the Backchannel beta toggle is on — " +
+			"the daemon may forward text you submit and interrupt signals into a " +
+			"running session of this agent by scripting the terminal backend that " +
+			"owns it (tmux/kitty/…). Input is injected as if you typed it. Only " +
+			"sessions with a controllable terminal backend are affected; nothing is " +
+			"sent unless you (or a rule you configured) send it. Granting changes " +
+			"nothing on disk; toggling off stops all forwarding immediately.",
+	}
+}
+
 // Permission declares one consent-gated capability of an adapter: what
 // it touches, what feature it unlocks, and (for modify-kind entries) how
 // to apply and undo the modification. The daemon exercises nothing — no

@@ -1,0 +1,33 @@
+{
+  "scenario_id": "backchannel-control",
+  "metadata": {
+    "agent_supports": "no",
+    "daemon_capability": "n.a.",
+    "driver_capability": "n.a.",
+    "confidence": 0.85
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "backchannel-control",
+      "agent": "antigravity",
+      "agent_supports": "no",
+      "daemon_capability": "n.a.",
+      "driver_capability": "n.a.",
+      "confidence": 0.85,
+      "body": "antigravity is transcript-first and frequently runs with PID=0 (cloud/IDE-hosted) with no local controlling terminal to script. With no scriptable backend on the session's Launcher, Controllable() is false; the adapter declares no Control axis. Backchannel control does not apply.",
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/antigravity/agent.go",
+          "note": "no Control axis declared"
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/input_service.go",
+          "note": "Controllable requires a scriptable backend + control consent"
+        }
+      ]
+    }
+  }
+}

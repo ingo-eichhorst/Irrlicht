@@ -1,0 +1,1 @@
+{"notes":"Not applicable: opencode has no interactive terminal to inject into (agent_supports: no). No phases — the daemon never marks its sessions controllable.","scenario_id":"backchannel-control","schema_version":1,"source":"#724 backchannel control"}
