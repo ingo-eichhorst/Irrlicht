@@ -302,3 +302,25 @@ type AgentController interface {
 	// master-toggle — those are InputService's concern.
 	Controllable(sessionID string) bool
 }
+
+// TerminalReader reads the rendered terminal screen of a discovered agent
+// session back from whatever multiplexer/kitty backend owns its pty — the read
+// counterpart to AgentController (issue #732, Phase 3 of #724). It surfaces
+// signals that are structurally absent from the transcript (today: the
+// interactive trust/permission dialog) without replacing the transcript/process
+// observers.
+//
+// Snapshot-only and multiplexer/kitty-only: tmux capture-pane and kitty get-text
+// render the screen for us, so the daemon needs no terminal emulator; plain
+// iTerm2/Terminal.app have no daemon-reachable read path and report
+// not-readable. Consent and the backchannel master-toggle are enforced upstream
+// by TerminalObserver — implementations just capture.
+type TerminalReader interface {
+	// CaptureScreen returns the session's rendered terminal screen. Returns a
+	// non-nil error (wrapping ErrNotReadable) when no readable backend hosts
+	// the session.
+	CaptureScreen(sessionID string) ([]byte, error)
+	// Readable reports whether the session has a backend that supports
+	// read-back. It does not consider consent or the master-toggle.
+	Readable(sessionID string) bool
+}

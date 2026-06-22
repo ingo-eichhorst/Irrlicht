@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"irrlicht/core/domain/agent"
+	"irrlicht/core/domain/backchannel"
 	"irrlicht/core/domain/lifecycle"
 	"irrlicht/core/domain/session"
 	"irrlicht/core/ports/inbound"
@@ -187,6 +188,20 @@ type SessionDetector struct {
 	// tests and replay tooling that construct detectors directly are not
 	// consent-managed.
 	consentGate func(adapter string) bool
+
+	// uiSignals carries edge-triggered terminal read-back signals from
+	// TerminalObserver's ticker goroutine into the event loop, so the
+	// resulting state mutation runs on the single writer (like debouncedEvents)
+	// and never races processActivity. Non-blocking sender; a dropped signal is
+	// re-sent on the observer's next poll (issue #732).
+	uiSignals chan terminalUISignal
+}
+
+// terminalUISignal is an edge in a session's rendered-terminal UI state,
+// produced by TerminalObserver and applied on the event-loop goroutine.
+type terminalUISignal struct {
+	sessionID string
+	ui        backchannel.UIKind
 }
 
 // NewSessionDetector creates a SessionDetector with all required
@@ -237,6 +252,7 @@ func NewSessionDetector(
 		bgPIDProbe:        anyLivePID,
 		bgLive:            make(map[string]bool),
 		bgProbing:         make(map[string]bool),
+		uiSignals:         make(chan terminalUISignal, 64),
 	}
 	det.pidMgr = NewPIDManager(
 		pw, repo, log, broadcaster, readyTTL,
@@ -429,10 +445,95 @@ func (d *SessionDetector) Run(ctx context.Context) error {
 			// Coalesced events from debounce timers — process in the event
 			// loop goroutine so processActivity never runs concurrently.
 			d.processActivityWithoutIdentity(ev)
+		case sig := <-d.uiSignals:
+			// Terminal read-back edges (issue #732) — applied here so the
+			// state mutation shares the single writer with processActivity.
+			d.handleTerminalUISignal(sig)
 		case <-refreshTicker.C:
 			d.refreshStaleSessions()
 		}
 	}
+}
+
+// Terminal read-back reasons stamped on the state transitions a UI signal
+// drives (issue #732). The transition history surfaces these verbatim.
+const (
+	TerminalUIDetectedReason = "trust dialog detected (terminal read-back)"
+	TerminalUIClearedReason  = "trust dialog cleared (terminal read-back)"
+)
+
+// EnqueueTerminalUISignal hands an edge-triggered terminal read-back signal to
+// the event loop. Non-blocking: if the buffer is full the signal is dropped and
+// re-sent on the observer's next poll, so a momentary backlog never blocks the
+// observer's ticker. Implements TerminalObserver's sink.
+func (d *SessionDetector) EnqueueTerminalUISignal(sessionID string, ui backchannel.UIKind) {
+	select {
+	case d.uiSignals <- terminalUISignal{sessionID: sessionID, ui: ui}:
+	default:
+	}
+}
+
+// handleTerminalUISignal folds a rendered-terminal UI edge into the session
+// lifecycle. It runs on the event-loop goroutine, so it mutates state alongside
+// processActivity without a second writer. A trust dialog on screen forces
+// waiting (a state the transcript never records, and that needs no hook); when
+// it clears, the session re-classifies from its current metrics — the
+// transcript/process observers remain authoritative for everything else.
+func (d *SessionDetector) handleTerminalUISignal(sig terminalUISignal) {
+	state, err := d.repo.Load(sig.sessionID)
+	if err != nil {
+		return // session gone since the signal was queued
+	}
+
+	var newState, reason string
+	switch sig.ui {
+	case backchannel.UIKindTrustDialog:
+		// Rising edge. Already waiting (e.g. the claudecode hook beat us to it)
+		// means nothing to do — no double-count.
+		if state.State == session.StateWaiting {
+			return
+		}
+		d.record(lifecycle.Event{
+			Kind: lifecycle.KindUIDetected, SessionID: sig.sessionID,
+			Adapter: state.Adapter, UIKind: string(sig.ui), Reason: TerminalUIDetectedReason,
+		})
+		newState, reason = session.StateWaiting, TerminalUIDetectedReason
+	default:
+		// Clearing edge. Only act when we are the reason the session is waiting;
+		// if a transcript event already moved it on, leave it alone.
+		if state.State != session.StateWaiting {
+			return
+		}
+		d.record(lifecycle.Event{
+			Kind: lifecycle.KindUIDetected, SessionID: sig.sessionID,
+			Adapter: state.Adapter, Reason: TerminalUIClearedReason,
+		})
+		newState, _ = ClassifyState(state.State, state.Metrics)
+		reason = TerminalUIClearedReason
+		if newState == state.State {
+			return // metrics still say waiting — nothing changed
+		}
+	}
+
+	now := time.Now().Unix()
+	d.record(lifecycle.Event{
+		Kind: lifecycle.KindStateTransition, SessionID: sig.sessionID,
+		PrevState: state.State, NewState: newState, Reason: reason,
+	})
+	state.State = newState
+	state.UpdatedAt = now
+	switch newState {
+	case session.StateWaiting:
+		state.WaitingStartTime = &now
+	case session.StateWorking:
+		state.WaitingStartTime = nil
+	}
+	if err := d.repo.Save(state); err != nil {
+		d.log.LogError("session-detector", sig.sessionID,
+			fmt.Sprintf("failed to save terminal-UI update: %v", err))
+		return
+	}
+	d.broadcast(outbound.PushTypeUpdated, state)
 }
 
 // handleTranscriptEvent dispatches a transcript event to the appropriate handler.

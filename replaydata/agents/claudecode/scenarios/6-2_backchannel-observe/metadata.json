@@ -1,0 +1,48 @@
+{
+  "scenario_id": "backchannel-observe",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "confidence": 0.85
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "backchannel-observe",
+      "agent": "claudecode",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "claudecode renders interactive trust/permission dialogs only in its TUI (the folder-trust prompt on launch, and per-tool permission prompts). That blocked state never reaches the transcript, and the claudecode hook is the only transcript-path signal for it \u2014 unavailable when the hook is not installed (hooks hard-code port 7837). Read-back (issue #732) captures the rendered screen through the same backend the control path targets \u2014 tmux capture-pane / kitty get-text, resolved from session.Launcher \u2014 recognizes the dialog (backchannel.DetectUI), and TerminalObserver fuses it to a waiting state via the SessionDetector's single writer. It is gated by the same chain as the write path (backchannel toggle -> control consent -> readable backend) and de-duplicated against the hook (no transition when the session is already waiting). Multiplexer/kitty-only: a session hosted only by plain iTerm2/Terminal.app is not readable and surfaces no terminal-derived signal. Proven against a real tmux pane by TestBackchannelObserveE2E_Local, with unit coverage for detection, fusion (rising/clearing edges, no double-count), and the gate.",
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/outbound/control/reader.go",
+          "note": "tmux capture-pane / kitty get-text reader keyed off Launcher"
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/backchannel/uidetect.go",
+          "note": "DetectUI trust-dialog matcher (snapshot-only, no VT100 emulator)"
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/terminal_observer.go",
+          "note": "polls gated+readable sessions, forwards UI edges"
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/session_detector.go",
+          "note": "handleTerminalUISignal fuses the edge to waiting on the single writer"
+        },
+        {
+          "kind": "file",
+          "ref": "core/cmd/irrlichd/backchannel_observe_e2e_test.go",
+          "note": "real-tmux read-back e2e"
+        }
+      ]
+    }
+  }
+}
