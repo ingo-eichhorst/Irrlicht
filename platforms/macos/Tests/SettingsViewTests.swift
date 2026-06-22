@@ -18,9 +18,10 @@ final class SettingsViewTests: XCTestCase {
         // SettingsView requires its environment objects (crashes without
         // them). startingUpdater: false keeps Sparkle from starting its
         // update cycle, which would fail outside an app bundle.
-        let view = SettingsView(isPresented: .constant(true))
+        let view = SettingsView(isPresented: .constant(true),
+                                showPermissionsReview: .constant(false),
+                                sessionManager: SessionManager())
             .environmentObject(UpdateManager(startingUpdater: false))
-            .environmentObject(SessionManager())
             .environmentObject(DaemonManager())
         let hosting = NSHostingView(rootView: view)
         // Pin to dark aqua so NSColor.windowBackgroundColor resolves

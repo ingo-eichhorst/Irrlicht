@@ -5,11 +5,17 @@ import UserNotifications
 
 struct SettingsView: View {
     @Binding var isPresented: Bool
-    /// Opens the permission wizard in review mode (issue #570). Wired by
-    /// SessionListView, which owns the panel-body swap.
-    var onReviewPermissions: () -> Void = {}
+    /// Swaps the panel body to the permission wizard in review mode (issue #570).
+    /// A binding (not a closure) so SettingsView's inputs stay diff-stable — the
+    /// parent re-renders every WebSocket tick, and a fresh closure each time would
+    /// defeat SwiftUI's render-skip and re-evaluate this whole view (issue #729).
+    @Binding var showPermissionsReview: Bool
     @EnvironmentObject var updateManager: UpdateManager
-    @EnvironmentObject var sessionManager: SessionManager
+    /// Plain, non-observing reference: SettingsView only calls
+    /// `relayTokenDidChange()` and feeds the relay status dot subview. Observing
+    /// SessionManager here (it was an @EnvironmentObject) made this static form
+    /// re-render on every session/history push — the ~2fps storm in issue #729.
+    let sessionManager: SessionManager
     @EnvironmentObject var daemonManager: DaemonManager
     @AppStorage("debugMode") private var debugMode: Bool = false
     @AppStorage("showCostDisplay") private var showCostDisplay: Bool = false
@@ -140,7 +146,8 @@ struct SettingsView: View {
                             Spacer()
                         }
                         Button("Review agent permissions…") {
-                            onReviewPermissions()
+                            isPresented = false
+                            showPermissionsReview = true
                         }
                         .controlSize(.small)
                         .tooltip("Open the per-agent permission toggles")
@@ -368,10 +375,7 @@ struct SettingsView: View {
                                                 }
                                             }
                                         if useRelayServer {
-                                            Circle()
-                                                .fill(sessionManager.relayConnectionState.dotColor)
-                                                .frame(width: 8, height: 8)
-                                                .tooltip("Subscribe: \(sessionManager.relayConnectionState.shortLabel)")
+                                            RelaySubscribeStatusDot(sessionManager: sessionManager)
                                         }
                                     }
                                     SecureField("Relay token (leave empty if the relay has no auth)", text: $relayTokenDraft)
@@ -524,6 +528,22 @@ struct SettingsView: View {
                 }
             }
         }
+    }
+}
+
+/// Live relay-subscribe connection dot. Isolated into its own @ObservedObject
+/// view so it stays reactive while the parent SettingsView holds SessionManager
+/// only as a non-observing reference — only this 8pt dot repaints per push, not
+/// the whole settings form (issue #729). Rendered only when Advanced → Sources
+/// is expanded and "Relay server" is on.
+private struct RelaySubscribeStatusDot: View {
+    @ObservedObject var sessionManager: SessionManager
+
+    var body: some View {
+        Circle()
+            .fill(sessionManager.relayConnectionState.dotColor)
+            .frame(width: 8, height: 8)
+            .tooltip("Subscribe: \(sessionManager.relayConnectionState.shortLabel)")
     }
 }
 
