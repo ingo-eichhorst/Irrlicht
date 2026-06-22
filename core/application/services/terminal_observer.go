@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"irrlicht/core/domain/backchannel"
@@ -103,15 +104,17 @@ func (o *TerminalObserver) tick() {
 
 // observe captures one session and forwards a signal only when its UI state
 // changed since the last poll. The gate order mirrors InputService.resolve:
-// consent, then readable backend.
+// consent, then readable backend. A single CaptureScreen does both the
+// readability check (ErrNotReadable, returned without shelling out) and the
+// capture, so the polling path loads the session from the repo only once.
 func (o *TerminalObserver) observe(sessionID, adapter string) {
 	if !o.consent.Granted(adapter, ControlPermissionKey) {
 		return
 	}
-	if !o.reader.Readable(sessionID) {
-		return
-	}
 	screen, err := o.reader.CaptureScreen(sessionID)
+	if errors.Is(err, outbound.ErrNotReadable) {
+		return // not a multiplexer/kitty session — nothing to read
+	}
 	if err != nil {
 		o.logger.LogError("terminal-observer", sessionID, err.Error())
 		return

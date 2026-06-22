@@ -12,10 +12,8 @@
 package control
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"os/exec"
 	"time"
 
 	"irrlicht/core/domain/session"
@@ -33,23 +31,19 @@ type command struct {
 	args []string
 }
 
-// runner executes a command. Overridable in tests; the default shells out with
-// a bounded context.
-type runner func(ctx context.Context, c command) error
-
 // Controller implements outbound.AgentController over terminal-backend scripting.
 type Controller struct {
 	repo   outbound.SessionRepository
 	push   outbound.PushBroadcaster
 	logger outbound.Logger
-	run    runner
+	run    captureRunner
 }
 
 // NewController constructs a Controller. push is used to delegate
 // AppleScript-only backends (iTerm2/Terminal.app) to the macOS app, which holds
 // the Automation TCC grant the daemon lacks.
 func NewController(repo outbound.SessionRepository, push outbound.PushBroadcaster, logger outbound.Logger) *Controller {
-	return &Controller{repo: repo, push: push, logger: logger, run: execRunner}
+	return &Controller{repo: repo, push: push, logger: logger, run: captureRunnerExec}
 }
 
 // SendInput injects data into the session's terminal as if typed.
@@ -123,26 +117,13 @@ func (c *Controller) loadState(sessionID string) (*session.SessionState, error) 
 	return state, nil
 }
 
+// exec runs a write command, discarding the captured stdout the shared runner
+// returns (the write path only cares whether the backend accepted the input).
 func (c *Controller) exec(cmd command) error {
 	ctx, cancel := context.WithTimeout(context.Background(), execTimeout)
 	defer cancel()
-	return c.run(ctx, cmd)
-}
-
-// execRunner is the production runner: a bounded shell-out that surfaces
-// stderr in the error so a misconfigured backend (e.g. kitty remote control
-// off) is diagnosable.
-func execRunner(ctx context.Context, c command) error {
-	var stderr bytes.Buffer
-	cmd := exec.CommandContext(ctx, c.name, c.args...)
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		if stderr.Len() > 0 {
-			return fmt.Errorf("%s: %w: %s", c.name, err, stderr.String())
-		}
-		return fmt.Errorf("%s: %w", c.name, err)
-	}
-	return nil
+	_, err := c.run(ctx, cmd)
+	return err
 }
 
 // backend identifies which terminal backend hosts a session, derived from its

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"irrlicht/core/domain/session"
+	"irrlicht/core/ports/outbound"
 )
 
 func TestCaptureCommandBuilders(t *testing.T) {
@@ -51,8 +52,8 @@ func TestCaptureScreenDispatch(t *testing.T) {
 	}{
 		{"tmux", &session.Launcher{TmuxPane: "%1"}, "tmux", nil},
 		{"kitty", &session.Launcher{KittyListenOn: "unix:/x", KittyWindowID: "9"}, "kitten", nil},
-		{"applescript not readable", &session.Launcher{TermProgram: "iTerm.app", ITermSessionID: "w0t0p0:U"}, "", ErrNotReadable},
-		{"no backend not readable", &session.Launcher{TermProgram: "vscode"}, "", ErrNotReadable},
+		{"applescript not readable", &session.Launcher{TermProgram: "iTerm.app", ITermSessionID: "w0t0p0:U"}, "", outbound.ErrNotReadable},
+		{"no backend not readable", &session.Launcher{TermProgram: "vscode"}, "", outbound.ErrNotReadable},
 	}
 	for _, c := range cases {
 		var ran command

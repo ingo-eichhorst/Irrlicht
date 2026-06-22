@@ -3,7 +3,6 @@ package control
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"os/exec"
 
@@ -11,13 +10,9 @@ import (
 	"irrlicht/core/ports/outbound"
 )
 
-// ErrNotReadable means the session has no terminal backend that supports
-// reading the rendered screen back. Read-back is multiplexer/kitty-only —
-// plain iTerm2/Terminal.app cannot be captured by the daemon (issue #732).
-var ErrNotReadable = errors.New("control: session terminal is not readable")
-
 // captureRunner executes a command and returns its stdout. Overridable in
-// tests; the default shells out with a bounded context.
+// tests; the default shells out with a bounded context. Shared by both the read
+// path (which keeps stdout) and the write Controller (which discards it).
 type captureRunner func(ctx context.Context, c command) ([]byte, error)
 
 // Reader implements outbound.TerminalReader: it captures the rendered terminal
@@ -54,7 +49,7 @@ func (r *Reader) CaptureScreen(sessionID string) ([]byte, error) {
 	case backendKitty:
 		return r.run(kittyCapture(l))
 	default:
-		return nil, ErrNotReadable
+		return nil, outbound.ErrNotReadable
 	}
 }
 

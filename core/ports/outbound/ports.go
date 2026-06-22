@@ -2,6 +2,7 @@ package outbound
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"irrlicht/core/domain/lifecycle"
@@ -317,10 +318,16 @@ type AgentController interface {
 // by TerminalObserver — implementations just capture.
 type TerminalReader interface {
 	// CaptureScreen returns the session's rendered terminal screen. Returns a
-	// non-nil error (wrapping ErrNotReadable) when no readable backend hosts
-	// the session.
+	// non-nil error wrapping ErrNotReadable when no readable backend hosts the
+	// session, so callers can skip such sessions with errors.Is.
 	CaptureScreen(sessionID string) ([]byte, error)
 	// Readable reports whether the session has a backend that supports
 	// read-back. It does not consider consent or the master-toggle.
 	Readable(sessionID string) bool
 }
+
+// ErrNotReadable is returned (wrapped) by TerminalReader.CaptureScreen when the
+// session has no backend that supports read-back — read-back is
+// multiplexer/kitty-only, so plain iTerm2/Terminal.app sessions are not
+// readable (issue #732).
+var ErrNotReadable = errors.New("session terminal is not readable")

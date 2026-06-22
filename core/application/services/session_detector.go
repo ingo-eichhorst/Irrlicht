@@ -488,7 +488,7 @@ func (d *SessionDetector) handleTerminalUISignal(sig terminalUISignal) {
 			return // session gone since the signal was queued
 		}
 
-		var newState, reason string
+		var newState, reason, uiReason string
 		switch sig.ui {
 		case backchannel.UIKindTrustDialog:
 			// Rising edge. Already waiting (e.g. the claudecode hook beat us to
@@ -496,7 +496,7 @@ func (d *SessionDetector) handleTerminalUISignal(sig terminalUISignal) {
 			if state.State == session.StateWaiting {
 				return
 			}
-			newState, reason = session.StateWaiting, TerminalUIDetectedReason
+			newState, reason, uiReason = session.StateWaiting, TerminalUIDetectedReason, TerminalUIDetectedReason
 		default:
 			// Clearing edge. Only undo a waiting we are responsible for.
 			if state.State != session.StateWaiting {
@@ -517,14 +517,11 @@ func (d *SessionDetector) handleTerminalUISignal(sig terminalUISignal) {
 			if reason == "" {
 				reason = TerminalUIClearedReason
 			}
+			uiReason = TerminalUIClearedReason
 		}
 
 		// Record only once we are actually acting, so a no-op edge never inflates
 		// the lifecycle log (the rising edge returns above without recording too).
-		uiReason := TerminalUIClearedReason
-		if sig.ui == backchannel.UIKindTrustDialog {
-			uiReason = TerminalUIDetectedReason
-		}
 		d.record(lifecycle.Event{
 			Kind: lifecycle.KindUIDetected, SessionID: sig.sessionID,
 			Adapter: state.Adapter, UIKind: string(sig.ui), Reason: uiReason,

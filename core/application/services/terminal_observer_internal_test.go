@@ -62,6 +62,9 @@ func (r *uiReader) CaptureScreen(id string) ([]byte, error) {
 	if r.err != nil {
 		return nil, r.err
 	}
+	if !r.readable[id] {
+		return nil, outbound.ErrNotReadable
+	}
 	return []byte(r.screen[id]), nil
 }
 
