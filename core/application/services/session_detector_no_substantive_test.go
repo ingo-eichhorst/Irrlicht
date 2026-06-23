@@ -32,10 +32,18 @@ func TestSessionDetector_Activity_NoSubstantiveActivity_HoldsState(t *testing.T)
 	// Session in ready with a fully-formed prior turn — these metrics would
 	// satisfy the force-bounce predicate (LastEventType != "") if the
 	// short-circuit didn't apply.
+	//
+	// PID is set non-zero: #329's real scenario is a Claude Code session (which
+	// is PID-bound) emitting a post-turn `system/away_summary` recap, so it keeps
+	// the UI-freshness activity bump on a non-substantive pass. A PID==0
+	// transcript-first session (Antigravity IDE) intentionally suppresses that
+	// bump so it can age out — see #735 and
+	// TestSessionDetector_Activity_PID0_NonSubstantiveGrowth_DoesNotBumpUpdatedAt.
 	beforeUpdate := time.Now().Add(-10 * time.Second).Unix()
 	repo.states["away1"] = &session.SessionState{
 		SessionID:      "away1",
 		State:          session.StateReady,
+		PID:            4242,
 		TranscriptPath: "/home/.claude/projects/-Users-test/away1.jsonl",
 		FirstSeen:      time.Now().Unix(),
 		UpdatedAt:      beforeUpdate,
