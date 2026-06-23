@@ -1,8 +1,12 @@
 package main
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -55,6 +59,9 @@ func TestDaemonStartupSmoke(t *testing.T) {
 			},
 		}}
 		assertAgentsEndpoint(t, unixClient, "http://unix/api/v1/agents")
+
+		// 3. Diagnostics bundle (#736): localhost GET returns a valid .tar.gz.
+		assertBundleEndpoint(t, http.DefaultClient, "http://"+d.addr+"/debug/bundle")
 
 		unixClient.CloseIdleConnections()
 		d.shutdown(t)
@@ -210,6 +217,49 @@ func assertAgentsEndpoint(t *testing.T, client *http.Client, url string) {
 		if got[i] != want[i] {
 			t.Fatalf("GET %s agent names = %v, want %v", url, got, want)
 		}
+	}
+}
+
+// assertBundleEndpoint GETs /debug/bundle and verifies it streams a gzip+tar
+// that decodes and contains version.txt — the diagnostics bundle (#736) over
+// the loopback path the reporter's one-line curl uses.
+func assertBundleEndpoint(t *testing.T, client *http.Client, url string) {
+	t.Helper()
+	resp, err := client.Get(url)
+	if err != nil {
+		t.Fatalf("GET %s: %v", url, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET %s: status %d, want 200", url, resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); ct != "application/gzip" {
+		t.Errorf("GET %s: Content-Type = %q, want application/gzip", url, ct)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read %s: %v", url, err)
+	}
+	gz, err := gzip.NewReader(bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("bundle is not valid gzip: %v", err)
+	}
+	tr := tar.NewReader(gz)
+	var hasVersion bool
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("bundle is not a valid tar: %v", err)
+		}
+		if hdr.Name == "version.txt" {
+			hasVersion = true
+		}
+	}
+	if !hasVersion {
+		t.Errorf("bundle from %s missing version.txt", url)
 	}
 }
 
