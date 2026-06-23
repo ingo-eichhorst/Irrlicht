@@ -64,6 +64,15 @@ type PIDManager struct {
 	// launcherEnv reads launcher env from a PID. Optional — nil skips capture.
 	launcherEnv LauncherEnvReader
 
+	// argvExcluders maps adapter name → its Process.ExcludeArgv predicate, and
+	// readArgv reads a live PID's argv. Together they let the liveness sweep
+	// reap a session bound to a still-alive PID that is actually the adapter's
+	// background infra (e.g. Claude Code's --bg-spare pool helper sharing the
+	// session's cwd) rather than the interactive process — the ghost in #727.
+	// Both nil disables the check; installed once at startup via SetInfraReaper.
+	argvExcluders map[string]func([]string) bool
+	readArgv      func(pid int) []string
+
 	// onSessionDeleted is called when a session is deleted so the caller can
 	// clean up its own tracking structures (e.g. projectSessions map).
 	onSessionDeleted func(sessionID string)
@@ -150,6 +159,16 @@ func (pm *PIDManager) SetChildDeletedHandler(fn func(parentID string)) {
 // Nil disables launcher capture.
 func (pm *PIDManager) SetLauncherEnvReader(fn LauncherEnvReader) {
 	pm.launcherEnv = fn
+}
+
+// SetInfraReaper installs the seam the liveness sweep uses to reap a session
+// bound to a still-alive PID that is the adapter's background infrastructure
+// rather than the interactive session (issue #727). excluders maps adapter name
+// → Process.ExcludeArgv; readArgv reads a PID's argv. Both nil (the default, and
+// what tests/demo mode leave) disables the check. Called once at startup.
+func (pm *PIDManager) SetInfraReaper(excluders map[string]func([]string) bool, readArgv func(pid int) []string) {
+	pm.argvExcluders = excluders
+	pm.readArgv = readArgv
 }
 
 // captureLauncher invokes the launcher-env reader if one is installed and
@@ -682,6 +701,7 @@ type livenessSnapshot struct {
 	updatedAt       int64
 	parentSessionID string
 	transcriptPath  string
+	adapter         string
 }
 
 // snapshotLivenessStates reads every session's liveness-relevant fields under
@@ -704,6 +724,7 @@ func (pm *PIDManager) snapshotLivenessStates() []livenessSnapshot {
 			updatedAt:       state.UpdatedAt,
 			parentSessionID: state.ParentSessionID,
 			transcriptPath:  state.TranscriptPath,
+			adapter:         state.Adapter,
 		})
 	}
 	return snaps
@@ -728,6 +749,18 @@ func (pm *PIDManager) CheckPIDLiveness() bool {
 	for _, snap := range snaps {
 		if snap.pid > 0 {
 			if err := syscall.Kill(snap.pid, 0); err == syscall.ESRCH {
+				pm.HandleProcessExit(snap.pid, snap.state.SessionID)
+				foundDead = true
+				continue
+			}
+			// The PID is alive but may be the adapter's background infra (e.g.
+			// Claude Code's --bg-spare pool helper) that discovery mis-bound, not
+			// the interactive session. Such a helper outlives every session, so
+			// the ESRCH path above never fires — reap the ghost here (#727).
+			if pm.isBoundToInfra(snap) {
+				pm.log.LogInfo("session-detector", snap.state.SessionID,
+					fmt.Sprintf("pid %d is %s background infra, not the session — reaping ghost",
+						snap.pid, snap.adapter))
 				pm.HandleProcessExit(snap.pid, snap.state.SessionID)
 				foundDead = true
 			}
@@ -802,6 +835,31 @@ func (pm *PIDManager) CheckPIDLiveness() bool {
 		}
 	}
 	return foundDead
+}
+
+// isBoundToInfra reports whether snap's still-alive bound PID is one of the
+// adapter's background-infra processes (per its Process.ExcludeArgv) rather than
+// the interactive session — AND the session has been inert long enough that
+// reaping cannot interrupt real work. It returns false when no reaper is wired,
+// the adapter declares no ExcludeArgv, the PID's argv is unreadable (never reap
+// on absence of evidence — the ExcludeArgv contract), the session is a subagent
+// (it shares the parent's PID), or either staleness guard fails. The two guards
+// (stale transcript AND stale UpdatedAt) make this strictly narrower than the
+// TTL-branch reap below: a genuinely active session — including one blocked on a
+// permission prompt, which is bound to the real `claude` PID, not infra — is
+// never reaped here.
+func (pm *PIDManager) isBoundToInfra(snap livenessSnapshot) bool {
+	if pm.readArgv == nil || snap.pid <= 0 || snap.parentSessionID != "" {
+		return false
+	}
+	exclude := pm.argvExcluders[snap.adapter]
+	if exclude == nil {
+		return false
+	}
+	if !isStaleTranscript(snap.transcriptPath) || !isStaleUpdatedAt(snap.updatedAt, pm.readyTTL) {
+		return false
+	}
+	return exclude(pm.readArgv(snap.pid))
 }
 
 // isStaleUpdatedAt mirrors SessionState.IsStale on a snapshotted UpdatedAt so

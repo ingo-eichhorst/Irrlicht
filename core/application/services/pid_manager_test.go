@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"irrlicht/core/adapters/inbound/agents/claudecode"
 	"irrlicht/core/application/services"
 	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/session"
@@ -154,6 +155,134 @@ func deadPIDForTest(t *testing.T) int {
 		t.Skipf("dead PID %d was recycled before test could observe it", pid)
 	}
 	return pid
+}
+
+// liveProcessForTest spawns a long-lived child and returns its PID; the process
+// is killed at cleanup. Gives the sweep a PID for which syscall.Kill(pid, 0)
+// succeeds — the infra-ghost signature (alive, but not the real session).
+func liveProcessForTest(t *testing.T) int {
+	t.Helper()
+	cmd := exec.Command("sleep", "30")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start sleep: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	})
+	return cmd.Process.Pid
+}
+
+// newPIDManagerForTestWithInfraReaper wires Fix B's infra-reaper seam (#727):
+// the sweep reaps a session bound to a still-alive PID whose argv the adapter's
+// ExcludeArgv rejects.
+func newPIDManagerForTestWithInfraReaper(repo *mockRepo, readArgv func(int) []string) *services.PIDManager {
+	pm := newPIDManagerForTest(repo)
+	pm.SetInfraReaper(
+		map[string]func([]string) bool{"claude-code": claudecode.IsInfraArgv},
+		readArgv,
+	)
+	return pm
+}
+
+// infraGhostState builds a working claude-code session bound to a live PID with
+// a stale transcript and stale UpdatedAt — the persisted ghost shape from #727
+// (a session mis-bound to a --bg-spare pool helper that outlives it).
+func infraGhostState(t *testing.T, pid int, transcriptMtime time.Time) *session.SessionState {
+	t.Helper()
+	transcript := filepath.Join(t.TempDir(), "ghost.jsonl")
+	writeTranscript(t, transcript, transcriptMtime)
+	return &session.SessionState{
+		SessionID:      "ghost",
+		Adapter:        "claude-code",
+		State:          session.StateWorking,
+		PID:            pid,
+		TranscriptPath: transcript,
+		UpdatedAt:      time.Now().Add(-11 * time.Minute).Unix(), // > 10m readyTTL
+	}
+}
+
+// TestCheckPIDLiveness_GhostBoundToInfra_Reaped is the core #727 fix: a working
+// session bound to a still-alive PID that is Claude Code's --bg-spare pool helper
+// (per the real argv shape: path argv[0] + --bg-spare) is reaped by the sweep
+// even though syscall.Kill on its PID succeeds.
+func TestCheckPIDLiveness_GhostBoundToInfra_Reaped(t *testing.T) {
+	pid := liveProcessForTest(t)
+	repo := newMockRepo()
+	repo.states["ghost"] = infraGhostState(t, pid, time.Now().Add(-10*time.Minute))
+
+	readArgv := func(int) []string {
+		return []string{"/Users/x/.local/share/claude/versions/2.1.185", "--bg-spare", "/tmp/x.claim.sock"}
+	}
+	newPIDManagerForTestWithInfraReaper(repo, readArgv).CheckPIDLiveness()
+
+	if repo.states["ghost"] != nil {
+		t.Fatal("session bound to a live --bg-spare infra PID should be reaped (#727)")
+	}
+}
+
+// TestCheckPIDLiveness_LiveInfraFreshTranscript_NotReaped: even when the bound
+// PID's argv is infra, a fresh transcript means the session is plausibly active
+// — the staleness guard must keep it.
+func TestCheckPIDLiveness_LiveInfraFreshTranscript_NotReaped(t *testing.T) {
+	pid := liveProcessForTest(t)
+	repo := newMockRepo()
+	st := infraGhostState(t, pid, time.Now()) // fresh transcript
+	st.UpdatedAt = time.Now().Unix()          // and fresh UpdatedAt
+	repo.states["ghost"] = st
+
+	readArgv := func(int) []string { return []string{"claude", "--bg-spare", "/tmp/x.sock"} }
+	newPIDManagerForTestWithInfraReaper(repo, readArgv).CheckPIDLiveness()
+
+	if repo.states["ghost"] == nil {
+		t.Fatal("active session (fresh transcript/UpdatedAt) must not be reaped even if its PID looks infra")
+	}
+}
+
+// TestCheckPIDLiveness_LiveSessionRealArgv_NotReaped: a stale session bound to a
+// live PID whose argv is a real interactive `claude` (not infra) must be kept —
+// the bound process IS the session (e.g. a long idle agent / permission prompt).
+func TestCheckPIDLiveness_LiveSessionRealArgv_NotReaped(t *testing.T) {
+	pid := liveProcessForTest(t)
+	repo := newMockRepo()
+	repo.states["ghost"] = infraGhostState(t, pid, time.Now().Add(-10*time.Minute))
+
+	readArgv := func(int) []string { return []string{"claude", "-p", "do the thing"} }
+	newPIDManagerForTestWithInfraReaper(repo, readArgv).CheckPIDLiveness()
+
+	if repo.states["ghost"] == nil {
+		t.Fatal("session bound to a real (non-infra) live claude PID must not be reaped")
+	}
+}
+
+// TestCheckPIDLiveness_NilArgv_NotReaped: an unreadable argv must never trip the
+// reaper — we never reap on absence of evidence (the ExcludeArgv contract).
+func TestCheckPIDLiveness_NilArgv_NotReaped(t *testing.T) {
+	pid := liveProcessForTest(t)
+	repo := newMockRepo()
+	repo.states["ghost"] = infraGhostState(t, pid, time.Now().Add(-10*time.Minute))
+
+	readArgv := func(int) []string { return nil }
+	newPIDManagerForTestWithInfraReaper(repo, readArgv).CheckPIDLiveness()
+
+	if repo.states["ghost"] == nil {
+		t.Fatal("session with unreadable argv must not be reaped (no reap on absence of evidence)")
+	}
+}
+
+// TestCheckPIDLiveness_NoReaperWired_NoChange: with no infra reaper installed
+// (demo mode / pre-Fix-B), a stale working session bound to a live PID is left
+// untouched — the sweep's pre-existing behavior.
+func TestCheckPIDLiveness_NoReaperWired_NoChange(t *testing.T) {
+	pid := liveProcessForTest(t)
+	repo := newMockRepo()
+	repo.states["ghost"] = infraGhostState(t, pid, time.Now().Add(-10*time.Minute))
+
+	newPIDManagerForTest(repo).CheckPIDLiveness() // no SetInfraReaper
+
+	if repo.states["ghost"] == nil {
+		t.Fatal("without an infra reaper the live-PID working session must be kept (pre-Fix-B behavior)")
+	}
 }
 
 // TestSeedAlivePIDs_DeletesWhenCWDMissing is the seed-time half of issue

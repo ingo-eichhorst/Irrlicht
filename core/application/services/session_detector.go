@@ -323,6 +323,14 @@ func (d *SessionDetector) SetLauncherEnvReader(fn LauncherEnvReader) {
 	d.pidMgr.SetLauncherEnvReader(fn)
 }
 
+// SetInfraReaper installs the liveness-sweep seam that reaps a session bound to
+// a still-alive PID which is actually the adapter's background infrastructure
+// (e.g. Claude Code's --bg-spare helper) rather than the session (#727). Both
+// args nil disables the check. Call before Run.
+func (d *SessionDetector) SetInfraReaper(excluders map[string]func([]string) bool, readArgv func(pid int) []string) {
+	d.pidMgr.SetInfraReaper(excluders, readArgv)
+}
+
 // SetConsentGate installs the per-adapter observe-consent check (#570).
 // Call before Run. Production wires PermissionService.ObserveGranted; nil
 // (the default) allows everything.

@@ -31,12 +31,39 @@ func HasLiveProcess(m agent.ProcessMatcher) bool {
 // directory. When multiple processes match, disambiguate selects one.
 // Returns 0, nil when no matching process is found.
 func DiscoverPIDByCWD(processName, cwd string, disambiguate func([]int) int) (int, error) {
+	return DiscoverPIDByCWDExcludingArgv(processName, cwd, disambiguate, nil)
+}
+
+// DiscoverPIDByCWDExcludingArgv is DiscoverPIDByCWD with an extra per-PID argv
+// filter applied before disambiguation. excludeArgv mirrors the adapter's
+// Process.ExcludeArgv predicate (the same one the Scanner runs via argvExcluded):
+// when it returns true the PID is dropped from the candidate set, so a same-name
+// infrastructure process — e.g. Claude Code's `--bg-spare` pre-warmed pool helper,
+// which runs the `claude` binary in the session's cwd — never reaches the
+// disambiguator and is never bound as the session PID (the ghost in #727).
+//
+// argv is read through the same ProcessObserver seam (osProc.ArgvOf); a
+// nil/unreadable argv is passed through to the predicate, which per the
+// ExcludeArgv contract must not exclude on it. A nil excludeArgv disables
+// filtering — the legacy DiscoverPIDByCWD behaviour.
+func DiscoverPIDByCWDExcludingArgv(processName, cwd string, disambiguate func([]int) int, excludeArgv func([]string) bool) (int, error) {
 	if cwd == "" || processName == "" {
 		return 0, nil
 	}
 	pids, err := osProc.FindByName(processName)
 	if err != nil {
 		return 0, fmt.Errorf("find %s processes: %w", processName, err)
+	}
+	if excludeArgv != nil {
+		kept := make([]int, 0, len(pids))
+		for _, pid := range pids {
+			argv, _ := osProc.ArgvOf(pid)
+			if excludeArgv(argv) {
+				continue
+			}
+			kept = append(kept, pid)
+		}
+		pids = kept
 	}
 	return narrowByCWD(pids, cwd, disambiguate), nil
 }

@@ -184,6 +184,13 @@ var pidAlive = func(pid int) bool {
 	return syscall.Kill(pid, 0) == nil
 }
 
-// discoverByCWD is the fallback CWD-matching implementation. It's a package
-// variable so tests can inject a stub in place of the real pgrep+lsof call.
-var discoverByCWD = processlifecycle.DiscoverPIDByCWD
+// discoverByCWD is the fallback CWD-matching implementation, with Claude Code's
+// background infrastructure (daemon run / --bg-pty-host / --bg-spare) dropped by
+// argv (IsInfraArgv). These run the `claude` binary in the session's cwd, so
+// without the filter a long-lived `--bg-spare` pool helper sharing the cwd can be
+// bound as the session PID — and because it outlives every session, the liveness
+// sweep never reaps it (the ghost session in #727). It's a package variable so
+// tests can inject a stub in place of the real pgrep+lsof call.
+var discoverByCWD = func(processName, cwd string, disambiguate func([]int) int) (int, error) {
+	return processlifecycle.DiscoverPIDByCWDExcludingArgv(processName, cwd, disambiguate, IsInfraArgv)
+}

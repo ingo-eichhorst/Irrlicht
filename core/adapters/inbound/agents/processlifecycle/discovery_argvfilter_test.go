@@ -103,3 +103,79 @@ func TestDiscoverExcludingArgv_NilArgvNotExcluded(t *testing.T) {
 		t.Fatalf("got pid %d, want %d (nil argv must not be excluded)", got, nilArgvPID)
 	}
 }
+
+// TestDiscoverByCWDExcludingArgv_DropsBgSpareBeforeDisambiguate is the
+// name-based mirror of the cmdline case above, for claude-code's discovery
+// (which matches by FindByName, not FindByCmdline). A real interactive
+// `claude` session and a long-lived `--bg-spare` pool helper share the
+// session's cwd; the default disambiguator (highest PID) would otherwise bind
+// the spare — the ghost session in #727. The excludeArgv predicate must drop
+// the spare before disambiguation and return the session PID.
+func TestDiscoverByCWDExcludingArgv_DropsBgSpareBeforeDisambiguate(t *testing.T) {
+	const (
+		sessionPID = 100 // interactive `claude` session
+		sparePID   = 400 // `claude --bg-spare ...`, higher PID, same cwd
+	)
+	const cwd = "/Users/x/proj"
+
+	prev := osProc
+	osProc = fakeObserver{
+		pids: []int{sessionPID, sparePID},
+		cwd:  map[int]string{sessionPID: cwd, sparePID: cwd},
+		argv: map[int][]string{
+			sessionPID: {"claude", "--resume", "abc"},
+			sparePID:   {"claude", "--bg-spare", "/tmp/y.sock"},
+		},
+	}
+	defer func() { osProc = prev }()
+
+	var seenByDisambiguate []int
+	disambiguate := func(pids []int) int {
+		seenByDisambiguate = append(seenByDisambiguate, pids...)
+		best := 0
+		for _, p := range pids {
+			if p > best {
+				best = p
+			}
+		}
+		return best
+	}
+
+	got, err := DiscoverPIDByCWDExcludingArgv("claude", cwd, disambiguate, stubInfraFilter)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, p := range seenByDisambiguate {
+		if p == sparePID {
+			t.Errorf("excluded --bg-spare pid %d reached disambiguate (%v)", sparePID, seenByDisambiguate)
+		}
+	}
+	if got != sessionPID {
+		t.Fatalf("got pid %d, want session %d (--bg-spare must be filtered before disambiguation)", got, sessionPID)
+	}
+}
+
+// TestDiscoverByCWDExcludingArgv_NilArgvNotExcluded asserts the name-based
+// variant also honors the nil-argv-never-excludes contract.
+func TestDiscoverByCWDExcludingArgv_NilArgvNotExcluded(t *testing.T) {
+	const nilArgvPID = 100
+	const cwd = "/Users/x/proj"
+
+	prev := osProc
+	osProc = fakeObserver{
+		pids: []int{nilArgvPID},
+		cwd:  map[int]string{nilArgvPID: cwd},
+		argv: map[int][]string{nilArgvPID: nil},
+	}
+	defer func() { osProc = prev }()
+
+	excludeArgv := func(argv []string) bool { return len(argv) > 0 }
+
+	got, err := DiscoverPIDByCWDExcludingArgv("claude", cwd, nil, excludeArgv)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != nilArgvPID {
+		t.Fatalf("got pid %d, want %d (nil argv must not be excluded)", got, nilArgvPID)
+	}
+}

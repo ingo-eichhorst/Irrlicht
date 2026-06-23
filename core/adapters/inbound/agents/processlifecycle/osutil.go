@@ -156,6 +156,19 @@ func ReadLauncherEnv(pid int) *session.Launcher {
 	return l
 }
 
+// ReadArgv returns pid's argument vector (argv[0] is the executable as invoked),
+// or nil when it can't be read (hardened-runtime process, already exited). It
+// wraps the platform ProcessObserver so the services-layer liveness sweep can
+// apply an adapter's ExcludeArgv predicate to a bound PID without importing the
+// observer. Mirrors ReadLauncherEnv's contract: never blocks long, never prompts.
+func ReadArgv(pid int) []string {
+	if pid <= 0 {
+		return nil
+	}
+	argv, _ := osProc.ArgvOf(pid)
+	return argv
+}
+
 // processTTY is the controlling-TTY half of the host-enrichment capability;
 // it is darwin-only (ps-based, osutil_darwin.go) and a no-op stub elsewhere
 // (osutil_linux.go, osutil_other.go). Like the kitty/ancestry helpers, it
