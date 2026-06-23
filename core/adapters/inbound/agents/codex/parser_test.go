@@ -103,6 +103,29 @@ func TestParser_UserMessage(t *testing.T) {
 	if !ev.ClearToolNames {
 		t.Error("expected ClearToolNames=true for user message")
 	}
+	if ev.UserText != "ls" {
+		t.Errorf("UserText = %q, want the prompt 'ls' (heuristic summary)", ev.UserText)
+	}
+}
+
+func TestParser_UserMessage_InstructionsPreambleSkipped(t *testing.T) {
+	// Codex injects its AGENTS.md / <INSTRUCTIONS> preamble as the FIRST
+	// user-role message; it must not become the heuristic task summary (#738).
+	p := &Parser{}
+	ev := p.ParseLine(map[string]interface{}{
+		"type":      "message",
+		"role":      "user",
+		"timestamp": ts(0),
+		"content": []interface{}{
+			map[string]interface{}{"type": "input_text", "text": "# AGENTS.md instructions for /x\n\n<INSTRUCTIONS>\n@AGENTS.md\n</INSTRUCTIONS>"},
+		},
+	})
+	if ev == nil || ev.EventType != "user_message" {
+		t.Fatalf("ev = %+v, want a user_message", ev)
+	}
+	if ev.UserText != "" {
+		t.Errorf("UserText = %q, want empty (injected preamble must not seed the summary)", ev.UserText)
+	}
 }
 
 func TestParser_FunctionCall(t *testing.T) {

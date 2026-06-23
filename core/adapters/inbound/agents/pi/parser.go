@@ -100,6 +100,9 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 							if est := tailer.ScanTaskEstimate(text, ev.Timestamp); est != nil {
 								ev.TaskEstimate = est
 							}
+							if s := tailer.ScanTaskSummary(text, ev.Timestamp); s != nil {
+								ev.TaskSummary = s
+							}
 						}
 					}
 				}
@@ -124,6 +127,7 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 	case "user":
 		ev.EventType = "user_message"
 		ev.ClearToolNames = true
+		ev.UserText = tailer.ExtractUserText(raw) // heuristic summary (#738)
 
 	case "toolResult":
 		ev.EventType = "tool_result"

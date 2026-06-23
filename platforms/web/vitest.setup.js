@@ -3,6 +3,7 @@ document.body.innerHTML = `
   <header></header>
   <button id="theme-toggle"></button>
   <button id="view-mode-cycle">Context</button>
+  <button id="summary-collapse-all"></button>
   <button id="settings-toggle"></button>
   <button id="settings-close"></button>
   <div id="settings-backdrop"></div>

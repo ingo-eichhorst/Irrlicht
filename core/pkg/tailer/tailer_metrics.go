@@ -320,6 +320,12 @@ func (t *TranscriptTailer) computeMetrics() {
 	t.metrics.TaskEstimate = t.lastTaskEstimate
 	t.metrics.TaskEstimateBase = t.firstTaskEstimate
 
+	// The task-summary marker and the heuristic fallback are surfaced the
+	// same way — even on an empty/resume-at-EOF pass, so the summary persists
+	// across daemon restarts before the next marker arrives (issue #738).
+	t.metrics.TaskSummary = t.lastTaskSummary
+	t.metrics.FirstUserText = t.firstUserText
+
 	// Background-process count + output paths share the rate-limit block's
 	// "must run even on an empty pass" property: the open set can be
 	// rehydrated from the ledger after a daemon restart and must surface

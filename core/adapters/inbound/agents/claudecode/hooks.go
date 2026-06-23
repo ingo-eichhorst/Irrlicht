@@ -75,16 +75,21 @@ type HookTarget interface {
 // statusline.go). Nil disables the scan (tests).
 type MarkerTarget interface {
 	IngestTaskEstimate(transcriptPath string, est *session.TaskEstimate)
+	IngestTaskSummary(transcriptPath, text string, observedAt int64)
 }
 
-// scanToolInputForMarker walks the decoded tool_input and scans its string
-// values for a task-estimate marker. The raw JSON can't be scanned directly:
-// inside a JSON string the marker's quotes are escaped (\"marker\") and the
-// captured comment body would not unmarshal. Tool inputs are small, shallow
-// objects — the walk recurses into nested objects/arrays for completeness.
-func scanToolInputForMarker(raw json.RawMessage, observedAt time.Time) *tailer.TaskEstimate {
+// scanToolInput walks the decoded tool_input once, scanning every string value
+// for both an in-band task-estimate marker (#604) and a task-summary marker
+// (#738) — they share the same carrier (e.g. a Bash description), so a single
+// walk picks up both, and they reach the daemon even when the transcript drops
+// the surrounding prose. The raw JSON can't be scanned directly: inside a JSON
+// string the marker's quotes are escaped (\"marker\") and the captured comment
+// body would not unmarshal. Tool inputs are small, shallow objects — the walk
+// recurses into nested objects/arrays for completeness. Latest valid of each
+// wins, matching the transcript scan.
+func scanToolInput(raw json.RawMessage, observedAt time.Time) (*tailer.TaskEstimate, *tailer.TaskSummary) {
 	if len(raw) == 0 {
-		return nil
+		return nil, nil
 	}
 	// Fast reject before decoding. The comment opener survives JSON string
 	// escaping (a backslash-quote doesn't touch "<!--"), but HTML-escaping
@@ -93,19 +98,23 @@ func scanToolInputForMarker(raw json.RawMessage, observedAt time.Time) *tailer.T
 	// raw-string needle below is the escaped opener byte-for-byte.
 	htmlEscapedOpener := `\u003c!--`
 	if s := string(raw); !strings.Contains(s, "<!--") && !strings.Contains(s, htmlEscapedOpener) {
-		return nil
+		return nil, nil
 	}
 	var decoded interface{}
 	if err := json.Unmarshal(raw, &decoded); err != nil {
-		return nil
+		return nil, nil
 	}
 	var est *tailer.TaskEstimate
+	var sum *tailer.TaskSummary
 	var walk func(v interface{})
 	walk = func(v interface{}) {
 		switch val := v.(type) {
 		case string:
 			if found := tailer.ScanTaskEstimate(val, observedAt); found != nil {
 				est = found // latest valid wins, matching the transcript scan
+			}
+			if found := tailer.ScanTaskSummary(val, observedAt); found != nil {
+				sum = found
 			}
 		case map[string]interface{}:
 			for _, child := range val {
@@ -118,7 +127,7 @@ func scanToolInputForMarker(raw json.RawMessage, observedAt time.Time) *tailer.T
 		}
 	}
 	walk(decoded)
-	return est
+	return est, sum
 }
 
 // ConsentGate reports whether the user has granted a permission (issue
@@ -213,7 +222,8 @@ func NewHookHandler(target HookTarget, markers MarkerTarget, gate ConsentGate, l
 			// Bash description), and the payload reaches the daemon even
 			// when the transcript drops the surrounding prose.
 			if markers != nil {
-				if est := scanToolInputForMarker(payload.ToolInput, time.Now()); est != nil {
+				est, sum := scanToolInput(payload.ToolInput, time.Now())
+				if est != nil {
 					log.LogInfo("hook-receiver", sessionID,
 						fmt.Sprintf("task-estimate marker via %s tool input: %d/%d", payload.ToolName, est.CompletedRounds, est.TotalRounds))
 					markers.IngestTaskEstimate(payload.TranscriptPath, &session.TaskEstimate{
@@ -223,6 +233,12 @@ func NewHookHandler(target HookTarget, markers MarkerTarget, gate ConsentGate, l
 						Confidence:      est.Confidence,
 						UpdatedAt:       est.ObservedAt,
 					})
+				}
+				// Task-summary marker (#738) — same carrier, same drop-bypass.
+				if sum != nil {
+					log.LogInfo("hook-receiver", sessionID,
+						fmt.Sprintf("task-summary marker via %s tool input", payload.ToolName))
+					markers.IngestTaskSummary(payload.TranscriptPath, sum.Text, sum.ObservedAt)
 				}
 			}
 			// Only dispatch for user-input tools; reject anything else even

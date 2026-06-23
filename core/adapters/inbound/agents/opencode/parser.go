@@ -194,6 +194,9 @@ func parseTextPart(raw map[string]interface{}, ev *tailer.ParsedEvent) *tailer.P
 	if role == "user" {
 		ev.EventType = "user_message"
 		ev.ClearToolNames = true
+		if text, ok := raw["text"].(string); ok {
+			ev.UserText = text // heuristic summary (#738)
+		}
 		return ev
 	}
 	// Assistant text part.
@@ -203,6 +206,9 @@ func parseTextPart(raw map[string]interface{}, ev *tailer.ParsedEvent) *tailer.P
 		// before the display truncation below drops all but the last 200 runes.
 		if est := tailer.ScanTaskEstimate(text, ev.Timestamp); est != nil {
 			ev.TaskEstimate = est
+		}
+		if s := tailer.ScanTaskSummary(text, ev.Timestamp); s != nil {
+			ev.TaskSummary = s
 		}
 		ev.AssistantText = tailer.TruncateAssistantText(text)
 	}

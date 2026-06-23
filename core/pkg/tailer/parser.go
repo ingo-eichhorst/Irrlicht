@@ -215,6 +215,18 @@ type ParsedEvent struct {
 	// text (issue #558). Latest valid marker wins; the tailer keeps the most
 	// recent one across passes.
 	TaskEstimate *TaskEstimate
+
+	// TaskSummary, when non-nil, is the agent's one-line description of what
+	// the current task is about, parsed from an in-band HTML-comment marker
+	// (issue #738). Latest non-empty marker wins; the tailer keeps the most
+	// recent one across passes.
+	TaskSummary *TaskSummary
+
+	// UserText is the prose of a genuine user prompt on this event (not a
+	// tool result). The tailer captures the FIRST non-empty one as the
+	// heuristic-fallback task summary (issue #738). Adapters that don't set
+	// it simply have no heuristic fallback (the marker still works).
+	UserText string
 }
 
 // RateLimitSnapshot mirrors session.RateLimitSnapshot inside the tailer
@@ -259,6 +271,21 @@ type TaskEstimate struct {
 	Confidence      *float64
 	// ObservedAt is the unix-seconds timestamp of the transcript event the
 	// marker appeared in (replay-deterministic, unlike daemon wall-clock).
+	ObservedAt int64
+}
+
+// TaskSummary mirrors the agent's one-line task description parsed from an
+// in-band marker like
+//
+//	<!-- {"marker":"irrlicht-summary","summary":"Add a logout button"} -->
+//
+// It is the stable companion to TaskEstimate (issue #738): a human-readable
+// "what is this session about" that the UI surfaces in both the waiting and
+// ready states. Wall-clock independent, so it survives replay.
+type TaskSummary struct {
+	Text string
+	// ObservedAt is the unix-seconds timestamp of the transcript event the
+	// marker appeared in (replay-deterministic), used for latest-wins.
 	ObservedAt int64
 }
 
@@ -413,6 +440,12 @@ type LedgerState struct {
 	// stores nil, so the reset survives a restart too.
 	LastTaskEstimate  *TaskEstimate `json:"last_task_estimate,omitempty"`
 	FirstTaskEstimate *TaskEstimate `json:"first_task_estimate,omitempty"`
+	// LastTaskSummary persists the agent's task-summary marker and
+	// FirstUserText persists the heuristic-fallback first user message
+	// (issue #738), both so a daemon restart keeps surfacing the summary
+	// before the next marker/message arrives. A reset stores a nil summary.
+	LastTaskSummary *TaskSummary `json:"last_task_summary,omitempty"`
+	FirstUserText   string       `json:"first_user_text,omitempty"`
 	// ModelName is the last observed model for the session. Persisted so that
 	// applyContribution's fallback (used when a contribution event carries no
 	// model — codex token_count) still routes to the right pricing bucket
@@ -522,6 +555,50 @@ func ExtractAssistantText(raw map[string]interface{}) string {
 	}
 
 	return TruncateAssistantText(strings.Join(parts, " "))
+}
+
+// ExtractUserText extracts the prose of a genuine user prompt from a parsed
+// line, handling the common transcript shapes: a plain string content
+// (message.content or top-level content) or an array of text blocks. It
+// deliberately returns "" for a user line that carries only tool_result
+// blocks (a tool response, not a prompt) so the heuristic-fallback summary
+// (issue #738) is anchored on the real opening prompt, not on tool output.
+// Untruncated — the caller (tailer) cleans and caps.
+func ExtractUserText(raw map[string]interface{}) string {
+	var parts []string
+	collectText := func(arr []interface{}) {
+		for _, item := range arr {
+			if block, ok := item.(map[string]interface{}); ok {
+				switch block["type"] {
+				case "text", "input_text":
+					if text, ok := block["text"].(string); ok && text != "" {
+						parts = append(parts, text)
+					}
+				}
+			}
+		}
+	}
+	// Claude Code: message.content (string or []block).
+	if msg, ok := raw["message"].(map[string]interface{}); ok {
+		switch c := msg["content"].(type) {
+		case string:
+			if c != "" {
+				parts = append(parts, c)
+			}
+		case []interface{}:
+			collectText(c)
+		}
+	}
+	// Codex / others: top-level content (string or []block).
+	switch c := raw["content"].(type) {
+	case string:
+		if c != "" {
+			parts = append(parts, c)
+		}
+	case []interface{}:
+		collectText(c)
+	}
+	return strings.TrimSpace(strings.Join(parts, " "))
 }
 
 // MaxAssistantTextRunes caps the assistant text kept for waiting-state display.

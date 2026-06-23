@@ -432,6 +432,8 @@ struct SessionListView: View {
             .tooltip(displayMode.tooltip)
             .id("mode-cycle-btn")
 
+            summaryCollapseAllButton
+
             statusIndicator
         }
         .padding(.horizontal, IrrSpacing.sp3)
@@ -442,7 +444,30 @@ struct SessionListView: View {
             }
         }
     }
-    
+
+    /// Header control to collapse/expand every session's task-summary block at
+    /// once (issue #738). When nothing is collapsed it collapses all; otherwise
+    /// it expands all.
+    private var summaryCollapseAllButton: some View {
+        let anyCollapsed = !sessionManager.collapsedSummarySessions.isEmpty
+        return Button {
+            if anyCollapsed {
+                sessionManager.collapsedSummarySessions = []
+            } else {
+                sessionManager.collapsedSummarySessions = Set(sessionManager.sessions.map { $0.id })
+            }
+        } label: {
+            Image(systemName: anyCollapsed ? "rectangle.expand.vertical" : "rectangle.compress.vertical")
+                .font(.system(size: 11))
+                .foregroundColor(.secondary)
+                .frame(width: 16)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .tooltip(anyCollapsed ? "Expand all task summaries" : "Collapse all task summaries")
+        .accessibilityIdentifier("summary-collapse-all")
+    }
+
     /// Header slot shown to the left of the session glyphs. Renders one
     /// chip per subscription provider whose sessions have surfaced quota
     /// data (Anthropic, OpenAI, …) — matching mockups 2 and 3 in
@@ -1143,6 +1168,75 @@ struct SessionRowView: View {
         )
     }
 
+    private var summaryCollapsed: Bool {
+        sessionManager.collapsedSummarySessions.contains(session.id)
+    }
+
+    private func toggleSummaryCollapsed() {
+        if sessionManager.collapsedSummarySessions.contains(session.id) {
+            sessionManager.collapsedSummarySessions.remove(session.id)
+        } else {
+            sessionManager.collapsedSummarySessions.insert(session.id)
+        }
+    }
+
+    /// Collapsible "what is this session about" block (issue #738): a one-line
+    /// summary title with a chevron, and — while waiting — the pending question
+    /// beneath it when expanded. Renders only when there's something to show.
+    @ViewBuilder
+    private var summaryBlock: some View {
+        let summary = session.metrics?.taskSummary
+        let question = session.state == .waiting ? session.metrics?.lastAssistantText : nil
+        let hasSummary = (summary?.isEmpty == false)
+        let hasQuestion = (question?.isEmpty == false)
+        if hasSummary || hasQuestion {
+            let collapsed = summaryCollapsed
+            VStack(alignment: .leading, spacing: 2) {
+                Button(action: { toggleSummaryCollapsed() }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: collapsed ? "chevron.right" : "chevron.down")
+                            .font(.system(size: 8))
+                            .foregroundColor(.secondary)
+                            .frame(width: 10)
+                        if let s = summary, !s.isEmpty {
+                            Text(s)
+                                .font(.system(size: 9, weight: .medium))
+                                .foregroundColor(.secondary)
+                                .lineLimit(collapsed ? 1 : nil)
+                                .truncationMode(.tail)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        } else {
+                            Text("Waiting for input")
+                                .font(.system(size: 9, weight: .medium))
+                                .foregroundColor(IrrColors.waiting)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .tooltip(summary ?? "")
+                .accessibilityIdentifier("session-summary-toggle-\(session.id)")
+
+                if !collapsed, let q = question, !q.isEmpty {
+                    Text(q)
+                        .font(.system(size: 9))
+                        .foregroundColor(IrrColors.waiting)
+                        .lineLimit(3)
+                        .truncationMode(.head)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 3)
+                        .background(IrrColors.waitingDim)
+                        .cornerRadius(IrrRadius.sm)
+                        // Surface the full prompt — head-truncation hides the start.
+                        .tooltip(q)
+                }
+            }
+            .padding(.top, 2)
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 6) {
@@ -1317,23 +1411,12 @@ struct SessionRowView: View {
             // Context and 1s/10s/60s doesn't shift row height.
             .frame(minHeight: 16)
 
-            // Waiting question block
-            if session.state == .waiting,
-               let text = session.metrics?.lastAssistantText, !text.isEmpty {
-                Text(text)
-                    .font(.system(size: 9))
-                    .foregroundColor(IrrColors.waiting)
-                    .lineLimit(3)
-                    .truncationMode(.head)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 3)
-                    .background(IrrColors.waitingDim)
-                    .cornerRadius(IrrRadius.sm)
-                    .padding(.top, 2)
-                    // Surface the full prompt — head-truncation hides the start.
-                    .tooltip(text)
-            }
+            // Task summary + waiting question — a single collapsible block
+            // (issue #738). The summary ("what is this session about") shows
+            // in any state; the question shows only while waiting. A small
+            // chevron collapses this one entry; the list header offers a
+            // collapse-all. Default expanded so the info is visible.
+            summaryBlock
 
             // Context pressure alert (configurable threshold, active sessions only — #689)
             if let metrics = session.metrics,

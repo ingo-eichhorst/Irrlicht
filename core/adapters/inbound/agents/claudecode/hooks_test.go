@@ -397,15 +397,23 @@ func TestHookHandler_ConsentGatePassesWhenGranted(t *testing.T) {
 	}
 }
 
-// mockMarkerTarget records IngestTaskEstimate calls for assertions (#604).
+// mockMarkerTarget records IngestTaskEstimate / IngestTaskSummary calls for
+// assertions (#604, #738).
 type mockMarkerTarget struct {
-	mu    sync.Mutex
-	calls []markerCall
+	mu        sync.Mutex
+	calls     []markerCall
+	summaries []summaryCall
 }
 
 type markerCall struct {
 	transcriptPath string
 	est            *session.TaskEstimate
+}
+
+type summaryCall struct {
+	transcriptPath string
+	text           string
+	observedAt     int64
 }
 
 func (m *mockMarkerTarget) IngestTaskEstimate(transcriptPath string, est *session.TaskEstimate) {
@@ -414,10 +422,22 @@ func (m *mockMarkerTarget) IngestTaskEstimate(transcriptPath string, est *sessio
 	m.calls = append(m.calls, markerCall{transcriptPath, est})
 }
 
+func (m *mockMarkerTarget) IngestTaskSummary(transcriptPath, text string, observedAt int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.summaries = append(m.summaries, summaryCall{transcriptPath, text, observedAt})
+}
+
 func (m *mockMarkerTarget) getCalls() []markerCall {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return append([]markerCall{}, m.calls...)
+}
+
+func (m *mockMarkerTarget) getSummaries() []summaryCall {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]summaryCall{}, m.summaries...)
 }
 
 func postHook(t *testing.T, handler http.HandlerFunc, payload hookPayload) *httptest.ResponseRecorder {
@@ -466,6 +486,40 @@ func TestHookHandler_PreToolUse_MarkerInBashDescription(t *testing.T) {
 	}
 }
 
+func TestHookHandler_PreToolUse_SummaryInBashDescription(t *testing.T) {
+	// The #738 carrier: a task-summary marker in a Bash description rides the
+	// PreToolUse payload to the daemon, bypassing the transcript writer.
+	target := &mockTarget{}
+	markers := &mockMarkerTarget{}
+	handler := NewHookHandler(target, markers, nil, mockLogger{})
+
+	rec := postHook(t, handler, hookPayload{
+		TranscriptPath: "/Users/u/.claude/projects/p/sess-sum.jsonl",
+		HookEventName:  "PreToolUse",
+		ToolName:       "Bash",
+		ToolInput:      json.RawMessage(`{"command":"go build ./...","description":"Build core <!-- {\"marker\":\"irrlicht-summary\",\"summary\":\"add the logout button\"} -->"}`),
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	got := markers.getSummaries()
+	if len(got) != 1 {
+		t.Fatalf("got %d IngestTaskSummary calls, want 1", len(got))
+	}
+	if got[0].transcriptPath != "/Users/u/.claude/projects/p/sess-sum.jsonl" {
+		t.Errorf("transcriptPath = %q", got[0].transcriptPath)
+	}
+	if got[0].text != "add the logout button" {
+		t.Errorf("text = %q, want 'add the logout button'", got[0].text)
+	}
+	if got[0].observedAt == 0 {
+		t.Error("observedAt must be stamped at receipt")
+	}
+	if calls := target.getCalls(); len(calls) != 0 {
+		t.Errorf("HandlePermissionHook calls = %d, want 0", len(calls))
+	}
+}
+
 func TestHookHandler_PreToolUse_NoMarkerNoIngest(t *testing.T) {
 	markers := &mockMarkerTarget{}
 	handler := NewHookHandler(&mockTarget{}, markers, nil, mockLogger{})
@@ -485,6 +539,9 @@ func TestHookHandler_PreToolUse_NoMarkerNoIngest(t *testing.T) {
 	})
 	if got := markers.getCalls(); len(got) != 0 {
 		t.Errorf("IngestTaskEstimate calls = %d, want 0", len(got))
+	}
+	if got := markers.getSummaries(); len(got) != 0 {
+		t.Errorf("IngestTaskSummary calls = %d, want 0", len(got))
 	}
 }
 

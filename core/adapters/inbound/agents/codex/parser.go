@@ -205,6 +205,9 @@ func scanCodexTaskEstimate(raw map[string]interface{}, ev *tailer.ParsedEvent) {
 				if est := tailer.ScanTaskEstimate(text, ev.Timestamp); est != nil {
 					ev.TaskEstimate = est
 				}
+				if s := tailer.ScanTaskSummary(text, ev.Timestamp); s != nil {
+					ev.TaskSummary = s
+				}
 			}
 		}
 	}
@@ -236,10 +239,33 @@ func parseCodexMessage(raw map[string]interface{}, ev *tailer.ParsedEvent) bool 
 	case "user", "developer":
 		ev.EventType = "user_message"
 		ev.ClearToolNames = true
+		// Only a real user prompt feeds the heuristic summary (#738). The
+		// "developer" role carries system instructions, and Codex injects its
+		// AGENTS.md / <INSTRUCTIONS> preamble as the FIRST user-role message —
+		// neither is a prompt, and the summary is captured set-once, so skip
+		// both or the summary becomes the preamble.
+		if role == "user" {
+			if text := tailer.ExtractUserText(raw); !isCodexInjectedContext(text) {
+				ev.UserText = text
+			}
+		}
 	default:
 		return false
 	}
 	return true
+}
+
+// isCodexInjectedContext reports whether a user-role message is Codex's
+// injected instructions/environment preamble rather than a real prompt. Codex
+// prepends an "# AGENTS.md instructions for …" / <INSTRUCTIONS> block as the
+// first user message; it must not become the heuristic task summary (#738),
+// mirroring the gemini parser's <session_context> guard.
+func isCodexInjectedContext(text string) bool {
+	t := strings.TrimSpace(text)
+	return strings.HasPrefix(t, "# AGENTS.md instructions for ") ||
+		strings.Contains(t, "<INSTRUCTIONS>") ||
+		strings.Contains(t, "<environment_context>") ||
+		strings.Contains(t, "<user_instructions>")
 }
 
 func parseCodexResponseItem(payload map[string]interface{}, ev *tailer.ParsedEvent) bool {

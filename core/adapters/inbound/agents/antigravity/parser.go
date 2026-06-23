@@ -105,6 +105,12 @@ func (p *Parser) parseUserInput(raw map[string]any, ev *tailer.ParsedEvent) {
 		if m := userSettingsModelRe.FindStringSubmatch(content); m != nil {
 			p.model = tailer.NormalizeModelName(strings.TrimSpace(m[1]))
 		}
+		// Strip the <USER_REQUEST> wrapper Antigravity wraps prompts in, so the
+		// heuristic summary (#738) reads as plain prose.
+		req := strings.TrimSpace(content)
+		req = strings.TrimPrefix(req, "<USER_REQUEST>")
+		req = strings.TrimSuffix(req, "</USER_REQUEST>")
+		ev.UserText = strings.TrimSpace(req)
 	}
 	ev.EventType = "user_message"
 	ev.ClearToolNames = true
@@ -121,6 +127,9 @@ func (p *Parser) parsePlannerResponse(raw map[string]any, ev *tailer.ParsedEvent
 		ev.AssistantText = tailer.TruncateAssistantText(content)
 		if est := tailer.ScanTaskEstimate(content, ev.Timestamp); est != nil {
 			ev.TaskEstimate = est
+		}
+		if s := tailer.ScanTaskSummary(content, ev.Timestamp); s != nil {
+			ev.TaskSummary = s
 		}
 	}
 	if p.model != "" {

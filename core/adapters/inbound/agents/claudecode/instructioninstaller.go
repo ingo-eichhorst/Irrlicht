@@ -1,8 +1,9 @@
-// instructioninstaller.go manages the Irrlicht-managed task-eta emission rule
-// in the user-level Claude Code instruction file ~/.claude/CLAUDE.md
-// (issue #558). The block instructs the agent to periodically emit an in-band
-// task-progress marker; with it in the user-level file every project inherits
-// the rule without per-repo opt-in.
+// instructioninstaller.go manages the Irrlicht-managed emission rules in the
+// user-level Claude Code instruction file ~/.claude/CLAUDE.md: the task-eta
+// progress marker (issue #558) and the task-summary marker (issue #738), each
+// in its own BEGIN/END-delimited block. The blocks instruct the agent to emit
+// in-band markers; with them in the user-level file every project inherits the
+// rules without per-repo opt-in.
 //
 // Like the hook/statusline installers, consent lives in the permission
 // wizard (issue #577): install/uninstall run as the claude-code/instructions
@@ -83,6 +84,38 @@ appended to the ` + "`description`" + ` of the next Bash call you make, or in yo
 response text when no Bash call is coming.
 ` + taskEtaEndSentinel
 
+// Sentinels delimiting the task-summary managed block (issue #738). Distinct
+// from the task-eta pair so both blocks can coexist and be patched/removed
+// independently.
+const (
+	taskSummaryBeginSentinel = "<!-- BEGIN IRRLICHT MANAGED BLOCK (task-summary) -->"
+	taskSummaryEndSentinel   = "<!-- END IRRLICHT MANAGED BLOCK (task-summary) -->"
+)
+
+// managedTaskSummaryBlock instructs the agent to emit a one-line description
+// of the current task so a human scanning sessions can tell what each is
+// about — surfaced in both the waiting and ready states (issue #738). The
+// summary is the stable companion to the task-eta progress marker: emitted
+// once near the start, not churned per phase. The example marker MUST sit
+// inside a fenced code block for the same reason as the task-eta block —
+// Claude Code strips bare HTML comments from CLAUDE.md at injection time. The
+// `+"`description`"+` carrier mirrors the eta block so the marker survives the
+// claude ≥2.1.162 transcript text-drop via the PreToolUse hook.
+const managedTaskSummaryBlock = taskSummaryBeginSentinel + `
+## Task summary marker (managed by Irrlicht)
+
+So a human scanning sessions can tell what each one is about, emit a one-line
+summary of the overall task as a hidden marker, early in the task:
+
+` + "```" + `
+<!-- {"marker":"irrlicht-summary","summary":"<one sentence: what this task is about>"} -->
+` + "```" + `
+
+Emit it once near the start by appending it to the ` + "`description`" + ` of an
+early Bash call (never to the command itself). Re-emit only if the task
+fundamentally changes. Keep it under ~120 characters, plain prose, no secrets.
+` + taskSummaryEndSentinel
+
 // claudeMemoryPath returns the user-level Claude Code instruction file path.
 func claudeMemoryPath() (string, error) {
 	home, err := os.UserHomeDir()
@@ -92,11 +125,11 @@ func claudeMemoryPath() (string, error) {
 	return filepath.Join(home, ".claude", "CLAUDE.md"), nil
 }
 
-// EnsureTaskEtaBlockInstalled writes-or-patches the managed block in
+// ensureBlockInstalled writes-or-patches one managed block in
 // ~/.claude/CLAUDE.md. Creates the file if missing. Idempotent: a
 // byte-identical existing block is a no-op; a stale block is replaced in
 // place; surrounding content is preserved byte-for-byte.
-func EnsureTaskEtaBlockInstalled() (bool, error) {
+func ensureBlockInstalled(beginSentinel, endSentinel, block string) (bool, error) {
 	path, err := claudeMemoryPath()
 	if err != nil {
 		return false, err
@@ -105,17 +138,16 @@ func EnsureTaskEtaBlockInstalled() (bool, error) {
 	if err != nil && !os.IsNotExist(err) {
 		return false, err
 	}
-	patched, changed := patchManagedBlock(string(existing), managedTaskEtaBlock)
+	patched, changed := patchManagedBlock(string(existing), beginSentinel, endSentinel, block)
 	if !changed {
 		return false, nil
 	}
 	return true, writeMemoryFile(path, patched)
 }
 
-// UninstallTaskEtaBlock removes only the managed block from
-// ~/.claude/CLAUDE.md, leaving all other content untouched. No-op when the
-// file or block is absent.
-func UninstallTaskEtaBlock() (bool, error) {
+// uninstallBlock removes one managed block from ~/.claude/CLAUDE.md, leaving
+// all other content untouched. No-op when the file or block is absent.
+func uninstallBlock(beginSentinel, endSentinel string) (bool, error) {
 	path, err := claudeMemoryPath()
 	if err != nil {
 		return false, err
@@ -127,11 +159,54 @@ func UninstallTaskEtaBlock() (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	stripped, changed := removeManagedBlock(string(existing))
+	stripped, changed := removeManagedBlock(string(existing), beginSentinel, endSentinel)
 	if !changed {
 		return false, nil
 	}
 	return true, writeMemoryFile(path, stripped)
+}
+
+// EnsureTaskEtaBlockInstalled writes-or-patches the task-eta managed block.
+func EnsureTaskEtaBlockInstalled() (bool, error) {
+	return ensureBlockInstalled(taskEtaBeginSentinel, taskEtaEndSentinel, managedTaskEtaBlock)
+}
+
+// UninstallTaskEtaBlock removes only the task-eta managed block.
+func UninstallTaskEtaBlock() (bool, error) {
+	return uninstallBlock(taskEtaBeginSentinel, taskEtaEndSentinel)
+}
+
+// EnsureTaskSummaryBlockInstalled writes-or-patches the task-summary managed
+// block (issue #738) — installed alongside the task-eta block under the same
+// instructions permission.
+func EnsureTaskSummaryBlockInstalled() (bool, error) {
+	return ensureBlockInstalled(taskSummaryBeginSentinel, taskSummaryEndSentinel, managedTaskSummaryBlock)
+}
+
+// UninstallTaskSummaryBlock removes only the task-summary managed block.
+func UninstallTaskSummaryBlock() (bool, error) {
+	return uninstallBlock(taskSummaryBeginSentinel, taskSummaryEndSentinel)
+}
+
+// applyInstructionBlocks installs both managed blocks — the grant effect of
+// the instructions permission. Both are installed together so a single toggle
+// governs all irrlicht-managed instruction text. Returns on the first error.
+func applyInstructionBlocks() error {
+	if _, err := EnsureTaskEtaBlockInstalled(); err != nil {
+		return err
+	}
+	_, err := EnsureTaskSummaryBlockInstalled()
+	return err
+}
+
+// removeInstructionBlocks removes both managed blocks — the revoke effect of
+// the instructions permission.
+func removeInstructionBlocks() error {
+	if _, err := UninstallTaskEtaBlock(); err != nil {
+		return err
+	}
+	_, err := UninstallTaskSummaryBlock()
+	return err
 }
 
 // patchManagedBlock returns existing with the managed block inserted or
@@ -144,12 +219,12 @@ func UninstallTaskEtaBlock() (bool, error) {
 //     grows the separator). A stray end-only sentinel is left untouched
 //     rather than guessed at — removeManagedBlock only ever cuts well-formed
 //     pairs, so it can never corrupt user content.
-func patchManagedBlock(existing, block string) (string, bool) {
-	beginIdx := strings.Index(existing, taskEtaBeginSentinel)
+func patchManagedBlock(existing, beginSentinel, endSentinel, block string) (string, bool) {
+	beginIdx := strings.Index(existing, beginSentinel)
 	if beginIdx >= 0 {
 		rest := existing[beginIdx:]
-		if endOff := strings.Index(rest, taskEtaEndSentinel); endOff >= 0 {
-			end := beginIdx + endOff + len(taskEtaEndSentinel)
+		if endOff := strings.Index(rest, endSentinel); endOff >= 0 {
+			end := beginIdx + endOff + len(endSentinel)
 			if existing[beginIdx:end] == block {
 				return existing, false
 			}
@@ -169,16 +244,16 @@ func patchManagedBlock(existing, block string) (string, bool) {
 // install owns so install→uninstall round-trips to the original bytes. A
 // half-block (only one sentinel, or out of order) is a no-op — never guess,
 // never corrupt.
-func removeManagedBlock(existing string) (string, bool) {
-	beginIdx := strings.Index(existing, taskEtaBeginSentinel)
+func removeManagedBlock(existing, beginSentinel, endSentinel string) (string, bool) {
+	beginIdx := strings.Index(existing, beginSentinel)
 	if beginIdx < 0 {
 		return existing, false
 	}
-	endOff := strings.Index(existing[beginIdx:], taskEtaEndSentinel)
+	endOff := strings.Index(existing[beginIdx:], endSentinel)
 	if endOff < 0 {
 		return existing, false
 	}
-	end := beginIdx + endOff + len(taskEtaEndSentinel)
+	end := beginIdx + endOff + len(endSentinel)
 
 	before := existing[:beginIdx]
 	after := existing[end:]

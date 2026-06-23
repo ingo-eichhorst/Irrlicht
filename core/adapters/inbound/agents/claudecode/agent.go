@@ -102,17 +102,17 @@ func Agent() agent.Agent {
 				Key:             PermissionKeyInstructions,
 				Kind:            permission.KindModify,
 				Title:           "Install task-progress rule",
-				FeatureUnlocked: "Task-completion ETA chip from agent-reported progress",
-				Touches:         "Maintains a managed block in ~/.claude/CLAUDE.md",
-				Detail: "Writes an irrlicht-managed block (between BEGIN/END " +
-					"sentinels) to ~/.claude/CLAUDE.md instructing the agent to " +
-					"periodically emit a hidden task-progress marker, which " +
-					"irrlicht reads from the transcript to project a completion " +
-					"ETA. All surrounding file content is preserved " +
-					"byte-for-byte. Toggling off removes exactly this block " +
-					"(also available via the macOS Settings toggle).",
-				Apply:  func() error { _, err := EnsureTaskEtaBlockInstalled(); return err },
-				Remove: func() error { _, err := UninstallTaskEtaBlock(); return err },
+				FeatureUnlocked: "Task-completion ETA chip + task summary from agent-reported markers",
+				Touches:         "Maintains two managed blocks in ~/.claude/CLAUDE.md",
+				Detail: "Writes two irrlicht-managed blocks (each between BEGIN/END " +
+					"sentinels) to ~/.claude/CLAUDE.md instructing the agent to emit " +
+					"hidden markers: a task-progress marker (which irrlicht reads to " +
+					"project a completion ETA) and a one-line task summary (so a human " +
+					"can tell what a session is about). All surrounding file content " +
+					"is preserved byte-for-byte. Toggling off removes exactly these " +
+					"blocks (also available via the macOS Settings toggle).",
+				Apply:  applyInstructionBlocks,
+				Remove: removeInstructionBlocks,
 			},
 			agent.ControlPermission(),
 		},

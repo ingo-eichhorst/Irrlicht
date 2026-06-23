@@ -104,6 +104,7 @@ func (p *Parser) ParseLineRaw(line string) *tailer.ParsedEvent {
 			EventType:      "user_message",
 			AssistantText:  tailer.TruncateAssistantText(text),
 			ClearToolNames: true,
+			UserText:       text, // heuristic summary (#738)
 		}
 	}
 
@@ -177,6 +178,7 @@ func (p *Parser) closeModelCall(m []string) *tailer.ParsedEvent {
 	// markdown transcript carries no timestamps, so the observation time is
 	// wall-clock at parse — same convention as IdleFlush.
 	taskEstimate := tailer.ScanTaskEstimate(text, time.Now())
+	taskSummary := tailer.ScanTaskSummary(text, time.Now())
 
 	return &tailer.ParsedEvent{
 		EventType:     "assistant_message",
@@ -184,6 +186,7 @@ func (p *Parser) closeModelCall(m []string) *tailer.ParsedEvent {
 		AssistantText: tailer.TruncateAssistantText(text),
 		Contribution:  contribution,
 		TaskEstimate:  taskEstimate,
+		TaskSummary:   taskSummary,
 		Tokens: &tailer.TokenSnapshot{
 			Input:  sent,
 			Output: received,

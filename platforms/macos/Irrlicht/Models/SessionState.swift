@@ -336,6 +336,7 @@ struct SessionMetrics: Codable {
     let contextWindowUnknown: Bool? // true when daemon has no LiteLLM pricing for the model — render tokens-only, no percentage
     let estimatedCostUSD: Double?   // estimated session cost in USD (nil if not available)
     let lastAssistantText: String?  // last assistant message text, truncated (~200 chars)
+    let taskSummary: String?        // human-readable "what is this session about" (issue #738)
     let tasks: [SessionTask]?              // Claude Code task list (nil when TaskCreate never called)
     let rateLimit: RateLimitInfo?          // subscription-quota snapshot (nil for API-key / Bedrock / Vertex)
     let rateLimitForecastEta: Date?        // projected wall-clock time when the imminent window hits 100% (nil when unforecastable)
@@ -352,6 +353,7 @@ struct SessionMetrics: Codable {
         case contextWindowUnknown = "context_window_unknown"
         case estimatedCostUSD = "estimated_cost_usd"
         case lastAssistantText = "last_assistant_text"
+        case taskSummary = "task_summary"
         case tasks
         case rateLimit = "rate_limit"
         case rateLimitForecastEta = "rate_limit_forecast_eta"
@@ -370,6 +372,7 @@ struct SessionMetrics: Codable {
         contextWindowUnknown = try c.decodeIfPresent(Bool.self, forKey: .contextWindowUnknown)
         estimatedCostUSD = try c.decodeIfPresent(Double.self, forKey: .estimatedCostUSD)
         lastAssistantText = try c.decodeIfPresent(String.self, forKey: .lastAssistantText)
+        taskSummary = try c.decodeIfPresent(String.self, forKey: .taskSummary)
         tasks = try c.decodeIfPresent([SessionTask].self, forKey: .tasks)
         rateLimit = try c.decodeIfPresent(RateLimitInfo.self, forKey: .rateLimit)
         if let epoch = try c.decodeIfPresent(Double.self, forKey: .rateLimitForecastEta) {
@@ -402,6 +405,7 @@ struct SessionMetrics: Codable {
         contextWindowUnknown: Bool?,
         estimatedCostUSD: Double?,
         lastAssistantText: String?,
+        taskSummary: String? = nil,
         tasks: [SessionTask]?,
         rateLimit: RateLimitInfo? = nil,
         rateLimitForecastEta: Date? = nil,
@@ -417,6 +421,7 @@ struct SessionMetrics: Codable {
         self.contextWindowUnknown = contextWindowUnknown
         self.estimatedCostUSD = estimatedCostUSD
         self.lastAssistantText = lastAssistantText
+        self.taskSummary = taskSummary
         self.tasks = tasks
         self.rateLimit = rateLimit
         self.rateLimitForecastEta = rateLimitForecastEta
@@ -435,6 +440,7 @@ struct SessionMetrics: Codable {
         try c.encodeIfPresent(contextWindowUnknown, forKey: .contextWindowUnknown)
         try c.encodeIfPresent(estimatedCostUSD, forKey: .estimatedCostUSD)
         try c.encodeIfPresent(lastAssistantText, forKey: .lastAssistantText)
+        try c.encodeIfPresent(taskSummary, forKey: .taskSummary)
         try c.encodeIfPresent(tasks, forKey: .tasks)
         try c.encodeIfPresent(rateLimit, forKey: .rateLimit)
         try c.encodeIfPresent(rateLimitForecastEta.map { $0.timeIntervalSince1970 }, forKey: .rateLimitForecastEta)
