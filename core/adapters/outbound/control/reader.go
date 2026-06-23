@@ -53,20 +53,6 @@ func (r *Reader) CaptureScreen(sessionID string) ([]byte, error) {
 	}
 }
 
-// Readable reports whether the session's backend supports read-back.
-func (r *Reader) Readable(sessionID string) bool {
-	state, err := r.repo.Load(sessionID)
-	if err != nil {
-		return false
-	}
-	switch resolveBackend(state.Launcher) {
-	case backendTmux, backendKitty:
-		return true
-	default:
-		return false
-	}
-}
-
 func (r *Reader) run(cmd command) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), execTimeout)
 	defer cancel()

@@ -87,30 +87,8 @@ func TestCaptureScreenDispatch(t *testing.T) {
 	}
 }
 
-func TestReadable(t *testing.T) {
-	cases := []struct {
-		name     string
-		launcher *session.Launcher
-		want     bool
-	}{
-		{"tmux", &session.Launcher{TmuxPane: "%1"}, true},
-		{"kitty", &session.Launcher{KittyListenOn: "unix:/x", KittyWindowID: "9"}, true},
-		{"applescript", &session.Launcher{TermProgram: "iTerm.app", ITermSessionID: "w0t0p0:U"}, false},
-		{"none", &session.Launcher{TermProgram: "vscode"}, false},
-	}
-	for _, c := range cases {
-		r := NewReader(&fakeRepo{state: &session.SessionState{SessionID: "s", Launcher: c.launcher}}, nopLog{})
-		if got := r.Readable("s"); got != c.want {
-			t.Errorf("%s: Readable = %v, want %v", c.name, got, c.want)
-		}
-	}
-}
-
-func TestReadableUnknownSession(t *testing.T) {
+func TestCaptureScreenUnknownSession(t *testing.T) {
 	r := NewReader(&fakeRepo{err: errors.New("not found")}, nopLog{})
-	if r.Readable("missing") {
-		t.Error("Readable on a missing session should be false")
-	}
 	if _, err := r.CaptureScreen("missing"); err == nil {
 		t.Error("CaptureScreen on a missing session should error")
 	}

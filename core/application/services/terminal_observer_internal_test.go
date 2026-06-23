@@ -57,7 +57,6 @@ type uiReader struct {
 	err      error
 }
 
-func (r *uiReader) Readable(id string) bool { return r.readable[id] }
 func (r *uiReader) CaptureScreen(id string) ([]byte, error) {
 	if r.err != nil {
 		return nil, r.err

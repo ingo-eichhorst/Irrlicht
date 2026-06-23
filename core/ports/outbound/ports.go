@@ -319,11 +319,9 @@ type AgentController interface {
 type TerminalReader interface {
 	// CaptureScreen returns the session's rendered terminal screen. Returns a
 	// non-nil error wrapping ErrNotReadable when no readable backend hosts the
-	// session, so callers can skip such sessions with errors.Is.
+	// session, so callers can skip such sessions with errors.Is — it does not
+	// consider consent or the master-toggle.
 	CaptureScreen(sessionID string) ([]byte, error)
-	// Readable reports whether the session has a backend that supports
-	// read-back. It does not consider consent or the master-toggle.
-	Readable(sessionID string) bool
 }
 
 // ErrNotReadable is returned (wrapped) by TerminalReader.CaptureScreen when the

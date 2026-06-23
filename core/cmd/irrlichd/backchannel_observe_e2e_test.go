@@ -57,8 +57,8 @@ func TestBackchannelObserveE2E_Local(t *testing.T) {
 
 	// Sanity: the tmux-hosted session is readable via the real backend.
 	reader := control.NewReader(repo, e2eLog{})
-	if !reader.Readable("e2e") {
-		t.Fatal("tmux-hosted session should be readable")
+	if _, err := reader.CaptureScreen("e2e"); err != nil {
+		t.Fatalf("tmux-hosted session should be readable: %v", err)
 	}
 
 	sink := &captureSink{}
