@@ -642,6 +642,15 @@ func main() {
 	mux.HandleFunc("/api/v1/backchannel/rules",
 		localhostOnly(backchannelhandler.NewRulesHandler(backchannelRules, logger)))
 
+	// Backchannel read-back (issue #732, Phase 3): the read counterpart to the
+	// write path. The observer captures the rendered terminal of controllable
+	// sessions and folds transcript-invisible signals (today: the trust dialog)
+	// into the lifecycle via the detector's single writer. Same gate chain as
+	// inputService — master-toggle + per-adapter "control" consent — so a
+	// disabled backchannel reads nothing. Started under detectorCtx below.
+	terminalReader := control.NewReader(cachedRepo, logger)
+	terminalObserver := services.NewTerminalObserver(cachedRepo, terminalReader, permService, backchannelStore.Enabled, detector, logger)
+
 	// Hook receiver: Claude Code PermissionRequest/PostToolUse events.
 	// The detector satisfies claudecode.HookTarget via HandlePermissionHook.
 	// Consent-gated: hooks installed by a pre-consent daemon keep firing
@@ -697,6 +706,15 @@ func main() {
 		// Backchannel rule engine: consumes the push stream and fires
 		// event→action rules through inputService (issue #724).
 		go backchannelEngine.Run(detectorCtx)
+
+		// Backchannel read-back observer (issue #732): polls controllable
+		// sessions' rendered terminals and folds transcript-invisible UI
+		// signals into the lifecycle. Gated by the same master-toggle+consent.
+		go func() {
+			if err := terminalObserver.Run(detectorCtx); err != nil && err != context.Canceled {
+				logger.LogError("terminal-observer", "", fmt.Sprintf("observer error: %v", err))
+			}
+		}()
 
 		// Exercise granted permissions (re-apply hook/statusline installs,
 		// start watchers) and launch the detection poller. Effects run

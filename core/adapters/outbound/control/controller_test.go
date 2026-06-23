@@ -105,7 +105,7 @@ func TestControllerDelegatesToBackend(t *testing.T) {
 	}}
 	c := NewController(repo, &fakePush{}, nopLog{})
 	var ran command
-	c.run = func(_ context.Context, cmd command) error { ran = cmd; return nil }
+	c.run = func(_ context.Context, cmd command) ([]byte, error) { ran = cmd; return nil, nil }
 
 	if !c.Controllable("abc") {
 		t.Fatal("tmux session should be controllable")
@@ -125,9 +125,9 @@ func TestControllerAppleScriptBroadcasts(t *testing.T) {
 	}}
 	push := &fakePush{}
 	c := NewController(repo, push, nopLog{})
-	c.run = func(_ context.Context, _ command) error {
+	c.run = func(_ context.Context, _ command) ([]byte, error) {
 		t.Fatal("AppleScript backend must not shell out")
-		return nil
+		return nil, nil
 	}
 
 	if !c.Controllable("abc") {
