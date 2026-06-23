@@ -738,7 +738,7 @@
       gap: 4px;
       font-size: 9px;
       font-weight: 600;
-      color: var(--text-secondary, #888);
+      color: var(--muted);
       cursor: pointer;
       overflow: hidden;
     }

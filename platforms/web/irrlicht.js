@@ -905,9 +905,8 @@ import { isSummaryCollapsed, toggleSummaryCollapsed, anySummaryCollapsed, collap
       const branchEl = el.querySelector('.row-branch');
       if (branchEl.textContent !== branch) branchEl.textContent = branch || '\u2014';
 
-      // Waiting question — show last assistant text when waiting
-      // (waiting question now renders in its own row beneath the parent;
-      // see createQuestionRow / render() emit.)
+      // Task summary + waiting question render in their own collapsible row
+      // beneath the parent (see createSummaryRow / render() emit).
 
       // Task progress dots render in a separate row beneath the parent
       // (see createTaskListRow / render() emit). Mirrors TaskListView in

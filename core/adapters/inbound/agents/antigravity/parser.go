@@ -105,7 +105,12 @@ func (p *Parser) parseUserInput(raw map[string]any, ev *tailer.ParsedEvent) {
 		if m := userSettingsModelRe.FindStringSubmatch(content); m != nil {
 			p.model = tailer.NormalizeModelName(strings.TrimSpace(m[1]))
 		}
-		ev.UserText = content // heuristic summary (#738)
+		// Strip the <USER_REQUEST> wrapper Antigravity wraps prompts in, so the
+		// heuristic summary (#738) reads as plain prose.
+		req := strings.TrimSpace(content)
+		req = strings.TrimPrefix(req, "<USER_REQUEST>")
+		req = strings.TrimSuffix(req, "</USER_REQUEST>")
+		ev.UserText = strings.TrimSpace(req)
 	}
 	ev.EventType = "user_message"
 	ev.ClearToolNames = true
