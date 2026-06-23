@@ -12,6 +12,21 @@ import (
 	"irrlicht/core/domain/session"
 )
 
+// appendTranscriptLine appends one line to the transcript at path, failing the
+// test on any I/O error. Used by the refresh-pass tests to grow a transcript
+// between activity events.
+func appendTranscriptLine(t *testing.T, path, line string) {
+	t.Helper()
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatalf("open transcript for append: %v", err)
+	}
+	if _, err := f.WriteString(line); err != nil {
+		t.Fatalf("append transcript: %v", err)
+	}
+	_ = f.Close()
+}
+
 // TestSessionDetector_Activity_FrozenTranscript_DoesNotBumpUpdatedAt is the
 // regression test for issue #667. A gemini-cli session whose process died
 // mid-turn (pid=0, transcript frozen on a function_call_output) stays working,
@@ -96,14 +111,7 @@ func TestSessionDetector_Activity_FrozenTranscript_DoesNotBumpUpdatedAt(t *testi
 	}
 
 	// Pass C — append new bytes, then refresh: bumping must resume.
-	f, err := os.OpenFile(tp, os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		t.Fatalf("open transcript for append: %v", err)
-	}
-	if _, err := f.WriteString("{\"type\":\"assistant\"}\n"); err != nil {
-		t.Fatalf("append transcript: %v", err)
-	}
-	_ = f.Close()
+	appendTranscriptLine(t, tp, "{\"type\":\"assistant\"}\n")
 
 	tw.ch <- activity()
 	waitForCondition(func() bool { return repo.eventCountOf("gem") == 2 }, 2*time.Second)
@@ -180,20 +188,10 @@ func TestSessionDetector_Activity_PID0_NonSubstantiveGrowth_DoesNotBumpUpdatedAt
 	activity := func() agent.Event {
 		return agent.Event{Type: agent.EventActivity, SessionID: "agy", TranscriptPath: tp, Terminal: true}
 	}
-	appendLine := func(s string) {
-		f, err := os.OpenFile(tp, os.O_APPEND|os.O_WRONLY, 0o644)
-		if err != nil {
-			t.Fatalf("open transcript for append: %v", err)
-		}
-		if _, err := f.WriteString(s); err != nil {
-			t.Fatalf("append transcript: %v", err)
-		}
-		_ = f.Close()
-	}
 
 	// Pass A — a real agent event grew the transcript: UpdatedAt and EventCount bump.
 	substantive.Store(true)
-	appendLine("{\"source\":\"USER_EXPLICIT\",\"type\":\"USER_INPUT\"}\n")
+	appendTranscriptLine(t, tp, "{\"source\":\"USER_EXPLICIT\",\"type\":\"USER_INPUT\"}\n")
 	tw.ch <- activity()
 	waitForCondition(func() bool { return repo.eventCountOf("agy") == 1 }, 2*time.Second)
 	if got := repo.eventCountOf("agy"); got != 1 {
@@ -209,7 +207,7 @@ func TestSessionDetector_Activity_PID0_NonSubstantiveGrowth_DoesNotBumpUpdatedAt
 	// age out. This is the #735 regression: before the fix, byte growth bumped
 	// UpdatedAt here and pinned the session perpetually fresh.
 	substantive.Store(false)
-	appendLine("{\"source\":\"SYSTEM\",\"type\":\"CONVERSATION_HISTORY\"}\n")
+	appendTranscriptLine(t, tp, "{\"source\":\"SYSTEM\",\"type\":\"CONVERSATION_HISTORY\"}\n")
 	savesBefore := repo.savesCount()
 	tw.ch <- activity()
 	waitForCondition(func() bool { return repo.savesCount() > savesBefore }, 2*time.Second)
@@ -222,7 +220,7 @@ func TestSessionDetector_Activity_PID0_NonSubstantiveGrowth_DoesNotBumpUpdatedAt
 
 	// Pass C — a real agent event again: bumping resumes.
 	substantive.Store(true)
-	appendLine("{\"source\":\"MODEL\",\"type\":\"RUN_COMMAND\"}\n")
+	appendTranscriptLine(t, tp, "{\"source\":\"MODEL\",\"type\":\"RUN_COMMAND\"}\n")
 	tw.ch <- activity()
 	waitForCondition(func() bool { return repo.eventCountOf("agy") == 2 }, 2*time.Second)
 	if got := repo.eventCountOf("agy"); got != 2 {

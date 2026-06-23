@@ -2,6 +2,7 @@ package services_test
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 
@@ -39,11 +40,17 @@ func TestSessionDetector_Activity_NoSubstantiveActivity_HoldsState(t *testing.T)
 	// transcript-first session (Antigravity IDE) intentionally suppresses that
 	// bump so it can age out — see #735 and
 	// TestSessionDetector_Activity_PID0_NonSubstantiveGrowth_DoesNotBumpUpdatedAt.
+	//
+	// Use this process's own (live) PID, not an arbitrary literal: the
+	// SweepDeadPIDs goroutine's CheckPIDLiveness reaps any pid>0 whose
+	// syscall.Kill(pid,0) returns ESRCH, and that branch is not readyTTL-gated.
+	// A dead literal would let a sweep tick delete away1 mid-test and nil-panic
+	// the post-cancel Load; a live PID is never reaped.
 	beforeUpdate := time.Now().Add(-10 * time.Second).Unix()
 	repo.states["away1"] = &session.SessionState{
 		SessionID:      "away1",
 		State:          session.StateReady,
-		PID:            4242,
+		PID:            os.Getpid(),
 		TranscriptPath: "/home/.claude/projects/-Users-test/away1.jsonl",
 		FirstSeen:      time.Now().Unix(),
 		UpdatedAt:      beforeUpdate,
