@@ -1,8 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -401,6 +405,41 @@ func handleGetState(repo outbound.SessionRepository) http.HandlerFunc {
 		enc.SetIndent("", "  ")
 		enc.Encode(resp)
 	}
+}
+
+// handleDiagnosticsBundle serves the diagnostics bundle (#736) as a gzip+tar
+// download. Must be wrapped in localhostOnly by the caller — the bundle carries
+// session paths and (pre-redaction) process argv. The bundle is bounded, so it
+// builds in memory: a build failure returns a clean 500 rather than a truncated
+// download.
+func handleDiagnosticsBundle(svc *services.DiagnosticsService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var buf bytes.Buffer
+		if err := svc.WriteBundle(&buf); err != nil {
+			http.Error(w, "failed to build diagnostics bundle", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/gzip")
+		w.Header().Set("Content-Disposition",
+			fmt.Sprintf(`attachment; filename="irrlicht-diag-%s.tar.gz"`, fileSafe(Version)))
+		w.Header().Set("Content-Length", strconv.Itoa(buf.Len()))
+		_, _ = w.Write(buf.Bytes())
+	}
+}
+
+// fileSafe makes a version string safe for use in a download filename.
+func fileSafe(s string) string {
+	if s == "" {
+		return "unknown"
+	}
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '.', r == '_', r == '-':
+			return r
+		default:
+			return '-'
+		}
+	}, s)
 }
 
 // localhostOnly wraps an HTTP handler to reject requests not originating from

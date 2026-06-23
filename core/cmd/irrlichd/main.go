@@ -146,6 +146,11 @@ func main() {
 		os.Exit(0)
 	}
 
+	if hasFlag("--diagnose") {
+		runDiagnose()
+		os.Exit(0)
+	}
+
 	recordEnabled := hasFlag("--record") || os.Getenv("IRRLICHT_RECORD") == "1"
 
 	logger, err := logging.New()
@@ -325,6 +330,13 @@ func main() {
 	mux.HandleFunc("GET /debug/pprof/profile", localhostOnly(pprof.Profile))
 	mux.HandleFunc("GET /debug/pprof/symbol", localhostOnly(pprof.Symbol))
 	mux.HandleFunc("GET /debug/pprof/trace", localhostOnly(pprof.Trace))
+
+	// Diagnostics bundle (issue #736): a redacted .tar.gz of session state,
+	// per-PID liveness, trimmed logs, and config for bug reports. Localhost
+	// only — it carries session paths and (pre-redaction) process argv. Reads
+	// fsRepo directly for a fresh, uncached snapshot.
+	diagSvc := buildDiagnostics(fsRepo, allAgents, cfg)
+	mux.HandleFunc("GET /debug/bundle", localhostOnly(handleDiagnosticsBundle(diagSvc)))
 
 	// Ensure web assets are served with correct Content-Type regardless of the
 	// host OS mime.types database (absent on stripped Linux images). Go's
@@ -845,6 +857,76 @@ func stateStoreDir(sub string) string {
 	return ""
 }
 
+// resolveSessionRepo resolves the on-disk session store, honoring IRRLICHT_HOME
+// for both the instances dir and the per-session ledger dir. It performs no
+// pruning or sweeps — the daemon layers those on at startup; --diagnose must
+// not mutate state. Shared so a diagnostics snapshot reads exactly the stores
+// the daemon writes (no IRRLICHT_HOME drift between the two paths).
+func resolveSessionRepo() (*filesystem.SessionRepository, error) {
+	if dir := stateStoreDir("sessions"); dir != "" {
+		metrics.SetLedgerDir(dir)
+	}
+	if dir := stateStoreDir("instances"); dir != "" {
+		return filesystem.NewWithDir(dir), nil
+	}
+	return filesystem.New()
+}
+
+// buildDiagnostics constructs the diagnostics bundle service (issue #736) from
+// the daemon's resolved stores. Shared by the GET /debug/bundle handler and the
+// --diagnose CLI so both snapshot the exact same locations. fsRepo supplies both
+// the (uncached) session list and the instances dir; ledger and log dirs honor
+// IRRLICHT_HOME via the same accessors the daemon writes through.
+func buildDiagnostics(fsRepo *filesystem.SessionRepository, allAgents []agent.Agent, cfg config.Config) *services.DiagnosticsService {
+	home, _ := os.UserHomeDir()
+	ledgerDir, _ := metrics.LedgerDir()
+	logsDir, _ := logging.LogDir()
+	return services.NewDiagnosticsService(
+		fsRepo,
+		processlifecycle.Observer(),
+		processlifecycle.IsAlive,
+		allAgents,
+		claudecode.AdapterName,
+		cfg,
+		Version,
+		services.DiagnosticsPaths{
+			Home:            home,
+			InstancesDir:    fsRepo.InstancesDir(),
+			LedgerDir:       ledgerDir,
+			LogsDir:         logsDir,
+			PermissionsFile: filepath.Join(dataDir(home), "permissions.json"),
+		},
+	)
+}
+
+// runDiagnose writes a diagnostics bundle to the current directory and exits.
+// For headless / curl-only installs that can't hit GET /debug/bundle. It
+// resolves the same stores the daemon would (honoring IRRLICHT_HOME) without
+// starting the daemon.
+func runDiagnose() {
+	fsRepo, err := resolveSessionRepo()
+	if err != nil {
+		log.Fatalf("diagnose: init session repo: %v", err)
+	}
+	cfg := config.Default()
+	if v := os.Getenv("IRRLICHT_MAX_SESSION_AGE"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.MaxSessionAge = d
+		}
+	}
+	const out = "irrlicht-diag.tar.gz"
+	f, err := os.Create(out)
+	if err != nil {
+		log.Fatalf("diagnose: create %s: %v", out, err)
+	}
+	defer f.Close()
+	if err := buildDiagnostics(fsRepo, agents.All(), cfg).WriteBundle(f); err != nil {
+		log.Fatalf("diagnose: write bundle: %v", err)
+	}
+	abs, _ := filepath.Abs(out)
+	fmt.Printf("Wrote diagnostics bundle to %s\n", abs)
+}
+
 // socketPath returns the Unix socket path for irrlichd. It routes through
 // dataDir so the IRRLICHT_HOME override is honored even when os.UserHomeDir()
 // fails (dataDir maps an empty home to /tmp/irrlicht when no override is set).
@@ -933,22 +1015,12 @@ const costAttachTTL = 5 * time.Second
 // (returned as the outbound.SessionRepository interface since the concrete
 // cached type is unexported).
 func initSessionStorage(logger outbound.Logger, cfg config.Config) (*filesystem.SessionRepository, outbound.SessionRepository) {
-	// Honor IRRLICHT_HOME for full isolation: a dev/test daemon must not prune
-	// or mutate the production session store. Ledgers route through the same
-	// override (set before the orphan-ledger sweep below reads LedgerDir).
-	if dir := stateStoreDir("sessions"); dir != "" {
-		metrics.SetLedgerDir(dir)
-	}
-	var fsRepo *filesystem.SessionRepository
-	if dir := stateStoreDir("instances"); dir != "" {
-		fsRepo = filesystem.NewWithDir(dir)
-	} else {
-		var err error
-		fsRepo, err = filesystem.New()
-		if err != nil {
-			logger.LogError("startup", "", fmt.Sprintf("failed to init filesystem repo: %v", err))
-			os.Exit(1)
-		}
+	// Resolve the store (IRRLICHT_HOME-aware) then layer the daemon's startup
+	// pruning/sweeps on top — see resolveSessionRepo, shared with --diagnose.
+	fsRepo, err := resolveSessionRepo()
+	if err != nil {
+		logger.LogError("startup", "", fmt.Sprintf("failed to init filesystem repo: %v", err))
+		os.Exit(1)
 	}
 
 	pruned, err := fsRepo.PruneStale(cfg.MaxSessionAge)

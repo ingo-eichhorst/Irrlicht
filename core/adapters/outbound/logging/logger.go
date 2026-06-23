@@ -37,13 +37,24 @@ type structuredLogger struct {
 	mu          sync.Mutex
 }
 
-// New creates a structuredLogger writing to the default Irrlicht log directory.
-func New() (*structuredLogger, error) {
+// LogDir returns the directory the daemon writes its event logs to. Exposed
+// so the diagnostics bundle (#736) reads from the exact directory New() writes
+// to. Not IRRLICHT_HOME-aware — logs always live under Application Support,
+// matching the daemon's own behavior.
+func LogDir() (string, error) {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get home directory: %w", err)
+		return "", fmt.Errorf("failed to get home directory: %w", err)
 	}
-	logsDir := filepath.Join(homeDir, appSupportDir, "logs")
+	return filepath.Join(homeDir, appSupportDir, "logs"), nil
+}
+
+// New creates a structuredLogger writing to the default Irrlicht log directory.
+func New() (*structuredLogger, error) {
+	logsDir, err := LogDir()
+	if err != nil {
+		return nil, err
+	}
 	if err := os.MkdirAll(logsDir, 0700); err != nil {
 		return nil, fmt.Errorf("failed to create logs directory: %w", err)
 	}
