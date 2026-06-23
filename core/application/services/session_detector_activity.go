@@ -428,6 +428,23 @@ func (d *SessionDetector) processActivityLocked(id agent.Identity, state *sessio
 		}
 	}
 
+	// Extend the #667 byte-growth suppression above to a second ghost shape. A
+	// PID==0 session is transcript-first — discovered from its on-disk transcript
+	// with no agent process to liveness-check (an Antigravity IDE conversation is
+	// the canonical case). Its transcript can be a system log that keeps appending
+	// SYSTEM steps (CONVERSATION_HISTORY/CHECKPOINT, all parsed Skip=true) after
+	// the agent stopped, so #667's size check stays true and re-bumps UpdatedAt
+	// forever — now-UpdatedAt never crosses readyTTL and the PID==0 sweep
+	// (PIDManager.CheckPIDLiveness) can never reap it (issue #735). When this pass
+	// consumed only non-substantive lines, treat it as no growth so it ages out
+	// like a dead-process session (see TestCheckPIDLiveness_DeadProcessWorking_Reaped).
+	// Scoped to PID==0: a PID-bound session is reaped by process liveness instead,
+	// and keeps the activity bump for noisy post-turn recaps so its "last activity"
+	// stays fresh (issue #329).
+	if state.PID == 0 && state.Metrics != nil && state.Metrics.NoSubstantiveActivity {
+		transcriptGrew = false
+	}
+
 	// Probe Bash background-process liveness (run_in_background). Must run
 	// after RefreshOnActivity (which recomputes metrics, clearing the flag)
 	// and before ClassifyState (whose IsAgentDone check reads it). Gated on
