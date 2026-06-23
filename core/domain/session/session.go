@@ -635,7 +635,10 @@ func (s *subagentSummary) Equal(o *subagentSummary) bool {
 //
 // TermProgram is the primary identifier; clients map it to a platform-native
 // activator (e.g. the macOS menu-bar app derives an app bundle ID from it).
-// Keeping that derivation client-side avoids persisting redundant state.
+// Keeping that derivation client-side avoids persisting redundant state. The
+// exception is HostBundleID: when no curated TermProgram matches, the daemon
+// resolves the host bundle id by process ancestry (which the client can't do)
+// and carries it here.
 type Launcher struct {
 	TermProgram    string `json:"term_program,omitempty"`     // $TERM_PROGRAM (e.g. iTerm.app, Apple_Terminal, vscode, cursor, ghostty, WezTerm, Hyper)
 	ITermSessionID string `json:"iterm_session_id,omitempty"` // $ITERM_SESSION_ID

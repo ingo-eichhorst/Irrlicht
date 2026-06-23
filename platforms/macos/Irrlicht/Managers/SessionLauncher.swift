@@ -46,7 +46,9 @@ enum SessionLauncher {
     /// work themselves.
     static func jump(_ session: SessionState) {
         guard let activator = resolveActivator(for: session.launcher) else {
-            logger.info("no activator or host bundle id for session \(session.id, privacy: .public)")
+            let tp = session.launcher?.termProgram ?? "nil"
+            let bid = session.launcher?.hostBundleID ?? "nil"
+            logger.info("no activator for session \(session.id, privacy: .public) (term_program=\(tp, privacy: .public), host_bundle_id=\(bid, privacy: .public))")
             return
         }
         _ = activator.activate(session)
