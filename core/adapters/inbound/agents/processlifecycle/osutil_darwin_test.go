@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 )
@@ -252,6 +253,51 @@ func TestTermProgramForAppPath(t *testing.T) {
 		if got := termProgramForAppPath(tc.in); got != tc.want {
 			t.Errorf("termProgramForAppPath(%q): got %q, want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+func TestTopLevelAppPath(t *testing.T) {
+	tests := []struct {
+		name, in, want string
+	}{
+		// Real top-level apps: the wrapping .app is not nested.
+		{"obsidian main", "/Applications/Obsidian.app/Contents/MacOS/Obsidian", "/Applications/Obsidian.app"},
+		{"vscode main", "/Applications/Visual Studio Code.app/Contents/MacOS/Code", "/Applications/Visual Studio Code.app"},
+		{"iterm", "/Applications/iTerm.app/Contents/MacOS/iTerm2", "/Applications/iTerm.app"},
+		{"user-dir app", "/Users/ingo/Applications/GoLand.app/Contents/MacOS/goland", "/Users/ingo/Applications/GoLand.app"},
+		// Electron helper: wrapping .app sits inside Contents/Frameworks — skip.
+		{"obsidian renderer helper", "/Applications/Obsidian.app/Contents/Frameworks/Obsidian Helper (Renderer).app/Contents/MacOS/Obsidian Helper (Renderer)", ""},
+		{"vscode code helper", "/Applications/Visual Studio Code.app/Contents/Frameworks/Code Helper.app/Contents/MacOS/Code Helper", ""},
+		// Framework-embedded interpreter (the ghostty-terminal Python PTY
+		// helper): wrapping .app sits inside a .framework — skip, even though
+		// the outer Xcode.app and inner Python.app are both real GUI bundles.
+		{"python in xcode framework", "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python", ""},
+		// Not the main executable of a bundle: no .app/Contents/MacOS/ marker.
+		{"resources binary", "/Applications/Obsidian.app/Contents/Resources/helper", ""},
+		{"plain shell", "/bin/zsh", ""},
+		{"versioned binary", "/Users/ingo/.local/share/claude/versions/2.1.114", ""},
+		{"app-like fragment", "/tmp/not.appended/bin/thing", ""},
+		{"empty", "", ""},
+	}
+	for _, tc := range tests {
+		if got := topLevelAppPath(tc.in); got != tc.want {
+			t.Errorf("%s: topLevelAppPath(%q) = %q, want %q", tc.name, tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestResolveHostBundleIDFromAncestry_Self walks the ancestry of the running
+// test binary. We don't know what launched the developer's `go test`, so we
+// only assert the helper returns cleanly — a plausibly-shaped bundle id (it
+// contains a dot) or "" — never errors or panics. The deterministic path
+// logic is covered by TestTopLevelAppPath.
+func TestResolveHostBundleIDFromAncestry_Self(t *testing.T) {
+	bid, hostPID := resolveHostBundleIDFromAncestry(os.Getpid())
+	if bid == "" {
+		return // no top-level .app ancestor (e.g. CI/tmux/ssh) — valid.
+	}
+	if !strings.Contains(bid, ".") || hostPID <= 1 {
+		t.Errorf("resolveHostBundleIDFromAncestry = (%q, %d); want a dotted bundle id and a real host PID", bid, hostPID)
 	}
 }
 

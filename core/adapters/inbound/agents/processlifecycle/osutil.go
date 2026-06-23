@@ -128,6 +128,15 @@ func ReadLauncherEnv(pid int) *session.Launcher {
 	if l.TermProgram == "" {
 		l.TermProgram, _ = ancestry()
 	}
+	// Generic host fallback: when no curated host matched (TermProgram still
+	// empty), resolve the first top-level `.app` ancestor's bundle id so the
+	// client can bring an embedded-terminal GUI host (e.g. Obsidian) to the
+	// front without a per-app registry entry. Purely additive — it only runs
+	// on a map miss, so every curated host keeps its exact behavior. Darwin-
+	// only; other platforms return "" and this is a no-op.
+	if l.TermProgram == "" {
+		l.HostBundleID, _ = resolveHostBundleIDFromAncestry(pid)
+	}
 	// Back-fill kitty fields for sessions whose own env is unreadable
 	// (Apple-signed agents like `pi`, hardened-runtime binaries). If kitty
 	// is the host per ancestry walk but env yielded no kitty signals,

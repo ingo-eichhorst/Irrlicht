@@ -635,7 +635,10 @@ func (s *subagentSummary) Equal(o *subagentSummary) bool {
 //
 // TermProgram is the primary identifier; clients map it to a platform-native
 // activator (e.g. the macOS menu-bar app derives an app bundle ID from it).
-// Keeping that derivation client-side avoids persisting redundant state.
+// Keeping that derivation client-side avoids persisting redundant state. The
+// exception is HostBundleID: when no curated TermProgram matches, the daemon
+// resolves the host bundle id by process ancestry (which the client can't do)
+// and carries it here.
 type Launcher struct {
 	TermProgram    string `json:"term_program,omitempty"`     // $TERM_PROGRAM (e.g. iTerm.app, Apple_Terminal, vscode, cursor, ghostty, WezTerm, Hyper)
 	ITermSessionID string `json:"iterm_session_id,omitempty"` // $ITERM_SESSION_ID
@@ -647,6 +650,7 @@ type Launcher struct {
 	KittyListenOn  string `json:"kitty_listen_on,omitempty"`  // $KITTY_LISTEN_ON — kitty remote-control socket path
 	KittyWindowID  string `json:"kitty_window_id,omitempty"`  // $KITTY_WINDOW_ID — kitty window identifier
 	KittyPID       int    `json:"kitty_pid,omitempty"`        // $KITTY_PID — kitty.app process id (lets the activator target this specific instance when multiple kitties run)
+	HostBundleID   string `json:"host_bundle_id,omitempty"`   // CFBundleIdentifier of the host app resolved by process-ancestry when no curated TermProgram matched (e.g. md.obsidian for an in-Obsidian terminal). Unlike TermProgram, this is derived server-side because the client has no map for arbitrary embedded-terminal hosts; the client builds a generic title-match activator from it.
 }
 
 // IsEmpty reports whether the launcher carries no identifying information
@@ -656,7 +660,8 @@ func (l *Launcher) IsEmpty() bool {
 	return l == nil || (l.TermProgram == "" && l.ITermSessionID == "" &&
 		l.TermSessionID == "" && l.TmuxPane == "" &&
 		l.TmuxSocket == "" && l.VSCodePID == 0 && l.TTY == "" &&
-		l.KittyListenOn == "" && l.KittyWindowID == "" && l.KittyPID == 0)
+		l.KittyListenOn == "" && l.KittyWindowID == "" && l.KittyPID == 0 &&
+		l.HostBundleID == "")
 }
 
 // SessionState represents the current state of a Claude Code or Copilot session.

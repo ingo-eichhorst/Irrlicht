@@ -374,6 +374,24 @@ func TestSessionState_LauncherJSONRoundTrip(t *testing.T) {
 		t.Errorf("launcher round-trip mismatch: %+v", out.Launcher)
 	}
 
+	// Generic host fallback: only HostBundleID set (e.g. an in-Obsidian
+	// terminal where no curated TermProgram matched). IsEmpty must keep it.
+	generic := &Launcher{HostBundleID: "md.obsidian"}
+	if generic.IsEmpty() {
+		t.Error("launcher with only HostBundleID should not be empty")
+	}
+	gdata, err := json.Marshal(&SessionState{SessionID: "obs", State: StateWorking, Launcher: generic})
+	if err != nil {
+		t.Fatalf("marshal generic: %v", err)
+	}
+	var gout SessionState
+	if err := json.Unmarshal(gdata, &gout); err != nil {
+		t.Fatalf("unmarshal generic: %v", err)
+	}
+	if gout.Launcher == nil || gout.Launcher.HostBundleID != "md.obsidian" {
+		t.Errorf("host_bundle_id lost in round-trip: %+v", gout.Launcher)
+	}
+
 	// Without Launcher — backwards compat with pre-170 session JSON files.
 	legacy := []byte(`{"session_id":"xyz","state":"ready","pid":99}`)
 	var legacyOut SessionState
