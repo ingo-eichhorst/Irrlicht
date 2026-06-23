@@ -84,6 +84,22 @@ func ProcessNames(agents []agent.Agent) map[string]string {
 	return m
 }
 
+// ArgvExcluders produces the adapter-name → Process.ExcludeArgv map consumed by
+// the liveness sweep's infra re-validation: a session bound to a still-alive PID
+// whose argv the adapter rejects (e.g. Claude Code's --bg-spare pool helper) is a
+// ghost and must be reaped (#727). Only adapters that declare a non-nil
+// Process.ExcludeArgv appear (today: claude-code); the rest get no entry, so the
+// sweep leaves their sessions untouched.
+func ArgvExcluders(agents []agent.Agent) map[string]func([]string) bool {
+	m := make(map[string]func([]string) bool)
+	for _, a := range agents {
+		if a.Process.ExcludeArgv != nil {
+			m[a.Identity.Name] = a.Process.ExcludeArgv
+		}
+	}
+	return m
+}
+
 // SubagentCounters produces the adapter-name → SubagentCounter map
 // consumed by metrics.Adapter. Only adapters whose LineParser implements
 // agent.SubagentCounter (currently: claudecode) appear in the map.

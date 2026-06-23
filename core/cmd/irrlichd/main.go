@@ -537,6 +537,14 @@ func main() {
 		}
 		return processlifecycle.ReadLauncherEnv(pid)
 	})
+	// Let the liveness sweep reap a session bound to a still-alive PID that is
+	// the adapter's background infra rather than the session — Claude Code's
+	// --bg-spare pool helper outlives every session, so a mis-bound session
+	// would otherwise never be reaped (#727). Demo mode never tracks live
+	// processes, so leave the reaper unwired there.
+	if !demoMode {
+		detector.SetInfraReaper(agents.ArgvExcluders(allAgents), processlifecycle.ReadArgv)
+	}
 	// Consent gate for the detector's own transcript reads (startup seed +
 	// stale-working refresh of PERSISTED sessions) — the watcher pipeline
 	// is gated by construction, but these two paths read repo-listed
