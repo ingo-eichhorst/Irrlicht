@@ -45,20 +45,31 @@ enum SessionLauncher {
     /// Safe to call on the main thread — activators dispatch any blocking
     /// work themselves.
     static func jump(_ session: SessionState) {
-        guard let tp = session.launcher?.termProgram else {
-            logger.info("no launcher for session \(session.id, privacy: .public)")
+        guard let activator = resolveActivator(for: session.launcher) else {
+            logger.info("no activator or host bundle id for session \(session.id, privacy: .public)")
             return
         }
-        guard let base = activators.first(where: { $0.termProgram == tp }) else {
-            logger.info("no activator for term program \(tp, privacy: .public)")
-            return
-        }
-        // Wrap with TmuxActivator when the session lives inside a tmux pane
-        // so the correct pane is selected before the host window is raised.
-        let activator: HostActivator = session.launcher?.tmuxPane != nil
-            ? TmuxActivator(inner: base)
-            : base
         _ = activator.activate(session)
+    }
+
+    /// Selects the activator for a launcher without performing activation
+    /// (exposed for tests). A registered activator keyed by `term_program`
+    /// wins; otherwise a generic `AXTitleMatchActivator` built from the
+    /// daemon-resolved host bundle id handles embedded-terminal hosts that
+    /// have no registry entry (e.g. a terminal inside Obsidian) — bringing the
+    /// host app/window to the front, not a specific pane. The result is wrapped
+    /// in `TmuxActivator` when the session lives in a tmux pane so the correct
+    /// pane is selected before the host window is raised.
+    static func resolveActivator(for launcher: Launcher?) -> HostActivator? {
+        var base: HostActivator?
+        if let tp = launcher?.termProgram {
+            base = activators.first(where: { $0.termProgram == tp })
+        }
+        if base == nil, let bundleID = launcher?.hostBundleID, !bundleID.isEmpty {
+            base = AXTitleMatchActivator(termProgram: launcher?.termProgram ?? "", bundleID: bundleID)
+        }
+        guard let base = base else { return nil }
+        return launcher?.tmuxPane != nil ? TmuxActivator(inner: base) : base
     }
 
     /// Returns the macOS bundle ID for a `$TERM_PROGRAM` value, or nil

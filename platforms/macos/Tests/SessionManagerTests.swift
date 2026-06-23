@@ -382,6 +382,34 @@ final class SessionManagerTests: XCTestCase {
         XCTAssertNil(SessionLauncher.bundleID(for: "unknown-terminal"))
     }
 
+    // The generic host fallback (issue #728): when the daemon resolved a host
+    // bundle id by process ancestry (e.g. a terminal embedded in Obsidian) and
+    // no curated term_program matched, the launcher dispatches to a runtime
+    // AXTitleMatchActivator built from that bundle id. Also pins the
+    // host_bundle_id wire contract and the curated-host precedence.
+    func testResolveActivatorGenericHostBundleIDFallback() throws {
+        func launcher(_ json: String) throws -> Launcher {
+            try JSONDecoder().decode(Launcher.self, from: Data(json.utf8))
+        }
+
+        // Wire contract: host_bundle_id decodes onto hostBundleID.
+        let obsidian = try launcher(#"{"host_bundle_id":"md.obsidian"}"#)
+        XCTAssertEqual(obsidian.hostBundleID, "md.obsidian")
+
+        // No curated term_program → generic title-match activator on that bundle.
+        let generic = SessionLauncher.resolveActivator(for: obsidian)
+        XCTAssertTrue(generic is AXTitleMatchActivator)
+        XCTAssertEqual(generic?.bundleID, "md.obsidian")
+
+        // Curated host wins even when a host_bundle_id is also present.
+        let iterm = try launcher(#"{"term_program":"iTerm.app","host_bundle_id":"md.obsidian"}"#)
+        XCTAssertEqual(SessionLauncher.resolveActivator(for: iterm)?.bundleID, "com.googlecode.iterm2")
+
+        // Nothing identifying → no activator (silent no-op, as before).
+        XCTAssertNil(SessionLauncher.resolveActivator(for: try launcher("{}")))
+        XCTAssertNil(SessionLauncher.resolveActivator(for: nil))
+    }
+
     func testJetBrainsActivatorRunningBundleIDIsNilOrKnown() {
         let bid = JetBrainsActivator.runningBundleID()
         guard let bid else { return } // no IDE running — nothing to assert

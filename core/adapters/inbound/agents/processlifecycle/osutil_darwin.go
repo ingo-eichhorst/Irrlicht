@@ -90,6 +90,60 @@ func resolveHostFromAncestry(pid int) (termProgram string, hostPID int) {
 	return "", 0
 }
 
+// bundleIDForAppPath returns the CFBundleIdentifier of the application bundle
+// at appPath (".../<App>.app"), or "" when it can't be read. Uses `plutil`,
+// which ships with macOS and reads both XML and binary Info.plists; bundles
+// under /Applications are world-readable so this needs no TCC consent. Same
+// bounded 2-second exec ceiling as the sibling ps helpers.
+func bundleIDForAppPath(appPath string) string {
+	if appPath == "" {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	plist := appPath + "/Contents/Info.plist"
+	out, err := exec.CommandContext(ctx, "plutil", "-extract", "CFBundleIdentifier", "raw", "-o", "-", plist).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// resolveHostBundleIDFromAncestry walks the parent-process chain of pid and
+// returns the CFBundleIdentifier of the first top-level application bundle it
+// finds, plus that app's PID. It is the generic fallback used when the curated
+// termProgramByAppName map matches no ancestor — it lets the UI bring an
+// embedded-terminal GUI host (e.g. Obsidian) to the front without a per-app
+// registry entry. Returns ("", 0) when no top-level app appears within
+// maxAncestry levels.
+//
+// The walk starts at pid's *parent*: the agent runs inside the host and is
+// never the host itself, and an agent whose own binary lives in a top-level
+// bundle (e.g. ClaudeCode.app) must not be mistaken for it.
+func resolveHostBundleIDFromAncestry(pid int) (bundleID string, hostPID int) {
+	ppid, _, err := readProcInfo(pid)
+	if err != nil || ppid <= 1 {
+		return "", 0
+	}
+	cur := ppid
+	for i := 0; i < maxAncestry && cur > 1; i++ {
+		pp, cmd, err := readProcInfo(cur)
+		if err != nil {
+			return "", 0
+		}
+		if appPath := topLevelAppPath(cmd); appPath != "" {
+			if bid := bundleIDForAppPath(appPath); bid != "" {
+				return bid, cur
+			}
+		}
+		if pp == cur || pp <= 1 {
+			return "", 0
+		}
+		cur = pp
+	}
+	return "", 0
+}
+
 // resolveTermProgramFromAncestry is a thin wrapper that discards the host
 // PID. Kept for the existing call site that only cares whether kitty (or any
 // other host) appears in the chain; callers that also need the host PID

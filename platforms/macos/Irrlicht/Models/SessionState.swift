@@ -583,6 +583,11 @@ struct Launcher: Codable, Hashable {
     let kittyListenOn: String?
     let kittyWindowID: String?
     let kittyPID: Int?
+    /// CFBundleIdentifier of the host app the daemon resolved by process
+    /// ancestry when no curated `termProgram` matched (e.g. `md.obsidian` for a
+    /// terminal embedded in Obsidian). Lets `SessionLauncher` build a generic
+    /// title-match activator for hosts that have no registry entry.
+    let hostBundleID: String?
 
     enum CodingKeys: String, CodingKey {
         case termProgram    = "term_program"
@@ -594,6 +599,7 @@ struct Launcher: Codable, Hashable {
         case kittyListenOn  = "kitty_listen_on"
         case kittyWindowID  = "kitty_window_id"
         case kittyPID       = "kitty_pid"
+        case hostBundleID   = "host_bundle_id"
     }
 }
 

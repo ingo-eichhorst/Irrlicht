@@ -63,3 +63,35 @@ func termProgramForAppPath(cmdPath string) string {
 	appName := filepath.Base(head)
 	return termProgramByAppName[appName]
 }
+
+// topLevelAppPath returns the path of the top-level application bundle whose
+// main executable is cmdPath, or "" when cmdPath is not the main executable of
+// a real top-level `.app`. It backs the generic host fallback (for embedded
+// terminals whose host isn't in termProgramByAppName, e.g. Obsidian).
+//
+// "Top-level" means the `.app` that directly wraps the executable
+// (`<App>.app/Contents/MacOS/<binary>`) is NOT itself nested inside another
+// `.app`, a `.framework`, or a `Contents/Frameworks/` directory. That nesting
+// test is what rejects the two ancestors a naive walk would wrongly latch onto:
+//   - Electron helper processes — `Foo.app/Contents/Frameworks/Foo Helper.app/...`
+//   - framework-embedded interpreters — a Python PTY helper at
+//     `Xcode.app/.../Python3.framework/.../Python.app/...`
+//
+// Neither is the GUI app a click should bring forward, so both return "" and
+// the ancestry walk continues to the real owner. (termProgramForAppPath keys
+// off the *first* `.app/` instead, which is correct for curated hosts because
+// the map only matches known top-level apps.)
+func topLevelAppPath(cmdPath string) string {
+	const marker = ".app/Contents/MacOS/"
+	idx := strings.Index(cmdPath, marker)
+	if idx < 0 {
+		return ""
+	}
+	prefix := cmdPath[:idx] // everything up to (not including) the wrapping ".app"
+	if strings.Contains(prefix, ".app/") ||
+		strings.Contains(prefix, ".framework/") ||
+		strings.Contains(prefix, "Contents/Frameworks/") {
+		return ""
+	}
+	return cmdPath[:idx+len(".app")]
+}

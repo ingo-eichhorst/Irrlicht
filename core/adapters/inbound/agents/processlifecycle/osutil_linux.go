@@ -37,8 +37,9 @@ func processTTY(pid int) string { return "" }
 // resolveTermProgramFromAncestry / resolveHostFromAncestry are darwin-only
 // fallbacks for hardened-runtime processes that hide env from sysctl. Linux
 // reads /proc/<pid>/environ directly, so these stubs are unused.
-func resolveTermProgramFromAncestry(pid int) string           { return "" }
-func resolveHostFromAncestry(pid int) (term string, host int) { return "", 0 }
+func resolveTermProgramFromAncestry(pid int) string                       { return "" }
+func resolveHostFromAncestry(pid int) (term string, host int)             { return "", 0 }
+func resolveHostBundleIDFromAncestry(pid int) (bundleID string, host int) { return "", 0 }
 
 // Stubs for the kitty "no readable env" enrichment helpers. Linux can read
 // /proc/<pid>/environ for any process the user owns, so the back-fill path
