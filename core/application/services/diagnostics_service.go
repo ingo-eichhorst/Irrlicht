@@ -7,12 +7,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -27,10 +25,6 @@ import (
 // predictable while preserving the newest activity (the tail), which is what a
 // fresh bug report needs.
 const maxBundleLogBytes = 10 * 1024 * 1024
-
-// defaultAdapterName is the adapter a session with an empty Adapter belongs to
-// (Claude Code, for backwards compatibility — see session.SessionState.Adapter).
-const defaultAdapterName = "claude-code"
 
 // DiagnosticsPaths are the resolved, IRRLICHT_HOME-aware locations the bundle
 // reads from. The daemon computes them once at wiring time so the service stays
@@ -48,56 +42,42 @@ type DiagnosticsPaths struct {
 // GET /debug/bundle endpoint and the irrlichd --diagnose CLI. All file paths
 // are injected via DiagnosticsPaths; the service performs no path resolution.
 type DiagnosticsService struct {
-	repo    outbound.SessionRepository
-	obs     outbound.ProcessObserver
-	isAlive func(int) bool
-	agents  []agent.Agent
-	cfg     config.Config
-	version string
-	paths   DiagnosticsPaths
-	now     func() time.Time
+	repo           outbound.SessionRepository
+	obs            outbound.ProcessObserver
+	isAlive        func(int) bool
+	agents         []agent.Agent
+	defaultAdapter string // adapter a session with an empty Adapter belongs to
+	cfg            config.Config
+	version        string
+	paths          DiagnosticsPaths
 }
 
 // NewDiagnosticsService wires the service. isAlive is the per-PID liveness probe
 // (processlifecycle.IsAlive in production); agents supply both the process
 // matchers (for the full landscape) and the per-adapter infra-argv predicates
-// (for the ghost-session diagnosis).
+// (for the ghost-session diagnosis). defaultAdapter is the adapter an
+// empty-Adapter session belongs to (claudecode.AdapterName), injected so the
+// application layer needn't import the inbound adapter.
 func NewDiagnosticsService(
 	repo outbound.SessionRepository,
 	obs outbound.ProcessObserver,
 	isAlive func(int) bool,
 	agents []agent.Agent,
+	defaultAdapter string,
 	cfg config.Config,
 	version string,
 	paths DiagnosticsPaths,
 ) *DiagnosticsService {
 	return &DiagnosticsService{
-		repo:    repo,
-		obs:     obs,
-		isAlive: isAlive,
-		agents:  agents,
-		cfg:     cfg,
-		version: version,
-		paths:   paths,
-		now:     time.Now,
+		repo:           repo,
+		obs:            obs,
+		isAlive:        isAlive,
+		agents:         agents,
+		defaultAdapter: defaultAdapter,
+		cfg:            cfg,
+		version:        version,
+		paths:          paths,
 	}
-}
-
-// HandleBundle serves the bundle over HTTP. It must be wrapped in localhostOnly
-// by the caller — the bundle carries session paths and (pre-redaction) argv.
-// The bundle is bounded, so it is built in memory: a build failure returns a
-// clean 500 instead of a truncated download.
-func (s *DiagnosticsService) HandleBundle(w http.ResponseWriter, r *http.Request) {
-	var buf bytes.Buffer
-	if err := s.WriteBundle(&buf); err != nil {
-		http.Error(w, "failed to build diagnostics bundle", http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "application/gzip")
-	w.Header().Set("Content-Disposition",
-		fmt.Sprintf(`attachment; filename="irrlicht-diag-%s.tar.gz"`, fileSafe(s.version)))
-	w.Header().Set("Content-Length", strconv.Itoa(buf.Len()))
-	_, _ = w.Write(buf.Bytes())
 }
 
 // WriteBundle writes the gzip+tar bundle to w. Per-artifact failures are
@@ -107,9 +87,9 @@ func (s *DiagnosticsService) HandleBundle(w http.ResponseWriter, r *http.Request
 func (s *DiagnosticsService) WriteBundle(w io.Writer) error {
 	gz := gzip.NewWriter(w)
 	tw := tar.NewWriter(gz)
-	b := &bundleBuilder{tw: tw, red: NewRedactor(s.paths.Home), now: s.now()}
+	b := &bundleBuilder{tw: tw, red: NewRedactor(s.paths.Home), now: time.Now()}
 
-	b.addText("version.txt", s.versionText())
+	b.addText("version.txt", s.versionText(b.now))
 	b.addText("system.txt", systemText())
 	b.addJSON("config.json", s.configView())
 	b.addRawFile("permissions.json", s.paths.PermissionsFile)
@@ -217,23 +197,32 @@ func (s *DiagnosticsService) copyDir(b *bundleBuilder, dir, prefix string, match
 	}
 }
 
-// addLogs writes a single, size-bounded events.log: the newest bytes across
-// events.log and its rotations (events.log.1…5), emitted oldest-first.
+// addLogs writes a single, size-bounded events.log into the bundle.
 func (s *DiagnosticsService) addLogs(b *bundleBuilder) {
-	if s.paths.LogsDir == "" {
-		return
+	if data := gatherTrimmedLog(s.paths.LogsDir, maxBundleLogBytes); data != nil {
+		b.addBytes("events.log", b.red.Bytes(data))
+	}
+}
+
+// gatherTrimmedLog returns at most budget bytes of event log: the newest bytes
+// across events.log and its rotations (events.log.1…5), concatenated
+// oldest-first. The newest file wins the budget first; when a file overflows
+// the remaining budget, only its newest tail (from a line boundary) is kept.
+// Returns nil when logsDir is empty or no log files exist.
+func gatherTrimmedLog(logsDir string, budget int) []byte {
+	if logsDir == "" {
+		return nil
 	}
 	names := []string{"events.log"}
 	for i := 1; i <= 5; i++ {
 		names = append(names, fmt.Sprintf("events.log.%d", i))
 	}
-	budget := maxBundleLogBytes
 	var chunks [][]byte // newest-first
 	for _, n := range names {
 		if budget <= 0 {
 			break
 		}
-		data, err := os.ReadFile(filepath.Join(s.paths.LogsDir, n))
+		data, err := os.ReadFile(filepath.Join(logsDir, n))
 		if err != nil {
 			continue // a missing rotation is normal
 		}
@@ -246,13 +235,13 @@ func (s *DiagnosticsService) addLogs(b *bundleBuilder) {
 		chunks = append(chunks, data)
 	}
 	if len(chunks) == 0 {
-		return
+		return nil
 	}
 	var buf bytes.Buffer
 	for i := len(chunks) - 1; i >= 0; i-- { // oldest-first
 		buf.Write(chunks[i])
 	}
-	b.addBytes("events.log", b.red.Bytes(buf.Bytes()))
+	return buf.Bytes()
 }
 
 // processInfo is the per-PID liveness/argv view shared by liveness.json (bound
@@ -362,15 +351,15 @@ func (s *DiagnosticsService) excluderByAdapter() func(adapter string) func([]str
 	}
 	return func(adapter string) func([]string) bool {
 		if adapter == "" {
-			adapter = defaultAdapterName
+			adapter = s.defaultAdapter
 		}
 		return m[adapter]
 	}
 }
 
-func (s *DiagnosticsService) versionText() string {
+func (s *DiagnosticsService) versionText(now time.Time) string {
 	return fmt.Sprintf("irrlichd version %s\ngenerated %s\n",
-		s.version, s.now().UTC().Format(time.RFC3339))
+		s.version, now.UTC().Format(time.RFC3339))
 }
 
 func systemText() string {
@@ -427,19 +416,4 @@ func tailFromLineBoundary(data []byte, n int) []byte {
 		tail = tail[i+1:]
 	}
 	return tail
-}
-
-// fileSafe makes a version string safe for a download filename.
-func fileSafe(s string) string {
-	if s == "" {
-		return "unknown"
-	}
-	return strings.Map(func(r rune) rune {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '.', r == '_', r == '-':
-			return r
-		default:
-			return '-'
-		}
-	}, s)
 }

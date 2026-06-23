@@ -123,7 +123,7 @@ func buildTestService(t *testing.T) *DiagnosticsService {
 	}}
 	cfg := config.Config{MaxSessionAge: 5 * 24 * time.Hour, ReadySessionTTL: 30 * time.Minute, PermissionMode: "ask"}
 
-	return NewDiagnosticsService(&diagFakeRepo{sessions}, obs, isAlive, agents, cfg, "9.9.9+test", DiagnosticsPaths{
+	return NewDiagnosticsService(&diagFakeRepo{sessions}, obs, isAlive, agents, "claude-code", cfg, "9.9.9+test", DiagnosticsPaths{
 		Home:            home,
 		InstancesDir:    instancesDir,
 		LedgerDir:       ledgerDir,
@@ -235,6 +235,45 @@ func TestProcessesCatchesUnboundInfra(t *testing.T) {
 	}
 	if !found300 {
 		t.Error("unbound infra PID 300 missing from processes.json")
+	}
+}
+
+func TestGatherTrimmedLog(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, content string) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("events.log", "newA\nnewB\nnewC\n") // 15 bytes, newest
+	write("events.log.1", "old1\nold2\n")     // 10 bytes, older rotation
+
+	// Ample budget: every rotation, concatenated oldest-first.
+	if got := string(gatherTrimmedLog(dir, 1000)); got != "old1\nold2\nnewA\nnewB\nnewC\n" {
+		t.Errorf("full gather = %q", got)
+	}
+	// Budget smaller than the newest file: bounded to its tail, trimmed to a
+	// line boundary (no partial leading line), newest wins the budget.
+	if got := string(gatherTrimmedLog(dir, 10)); got != "newC\n" {
+		t.Errorf("trimmed gather = %q, want %q", got, "newC\n")
+	}
+	// Missing dir and unset dir both yield nil (absent logs are not an error).
+	if gatherTrimmedLog(t.TempDir(), 1000) != nil {
+		t.Error("empty dir should yield nil")
+	}
+	if gatherTrimmedLog("", 1000) != nil {
+		t.Error("empty logsDir should yield nil")
+	}
+}
+
+func TestTailFromLineBoundary(t *testing.T) {
+	// Shorter than n → returned whole.
+	if got := string(tailFromLineBoundary([]byte("abc"), 10)); got != "abc" {
+		t.Errorf("short data = %q, want abc", got)
+	}
+	// A single line longer than n with no newline → returned as-is (best effort).
+	if got := string(tailFromLineBoundary([]byte("abcdefghij"), 4)); got != "ghij" {
+		t.Errorf("no-newline tail = %q, want ghij", got)
 	}
 }
 
