@@ -1,4 +1,5 @@
 import { isGroupCollapsed, toggleGroupCollapsed } from './collapsedGroups.js';
+import { isSummaryCollapsed, toggleSummaryCollapsed, anySummaryCollapsed, collapseAllSummaries, expandAllSummaries } from './collapsedSummaries.js';
 
     // --- State ---
     let dashboardGroups = [];
@@ -1117,11 +1118,11 @@ import { isGroupCollapsed, toggleGroupCollapsed } from './collapsedGroups.js';
             if (isActive && (pressure === 'high' || pressure === 'warning' || pressure === 'critical')) {
               items.push({type: 'alert', key: 'al:' + a.session_id, pressure: pressure});
             }
-            // Waiting question — separate row beneath the parent (matches
-            // SessionListView.swift:588-604). Renders only while the
-            // session is in 'waiting' AND has a last_assistant_text.
-            if (a.state === 'waiting' && a.metrics && a.metrics.last_assistant_text) {
-              items.push({type: 'question', key: 'q:' + a.session_id, agent: a, isChild: false});
+            // Task summary + waiting question — collapsible block beneath the
+            // parent (issue #738). Renders when there's a summary (any state)
+            // or a pending question (waiting).
+            if (a.metrics && (a.metrics.task_summary || (a.state === 'waiting' && a.metrics.last_assistant_text))) {
+              items.push({type: 'summary', key: 's:' + a.session_id, agent: a, isChild: false});
             }
             // Task progress dots — separate row beneath the parent so they
             // don't push the meta columns off the session row. Matches the
@@ -1143,7 +1144,7 @@ import { isGroupCollapsed, toggleGroupCollapsed } from './collapsedGroups.js';
             if (item.type === 'group') return createGroupHeader(item.group, item.groupKey, item.depth);
             if (item.type === 'alert') return createAlertRow(item.pressure);
             if (item.type === 'tasks') return createTaskListRow(item.agent, item.isChild);
-            if (item.type === 'question') return createQuestionRow(item.agent, item.isChild);
+            if (item.type === 'summary') return createSummaryRow(item.agent, item.isChild);
             const el = createSessionRow(item.agent, item.isChild);
             el.classList.toggle('nested', !!item.depth);
             paintRowNum(el, item.num);
@@ -1153,7 +1154,7 @@ import { isGroupCollapsed, toggleGroupCollapsed } from './collapsedGroups.js';
             if (item.type === 'group') { updateGroupHeader(el, item.group, item.groupKey, item.depth); return; }
             if (item.type === 'alert') { updateAlertRow(el, item.pressure); return; }
             if (item.type === 'tasks') { updateTaskListRow(el, item.agent); return; }
-            if (item.type === 'question') { updateQuestionRow(el, item.agent); return; }
+            if (item.type === 'summary') { updateSummaryRow(el, item.agent); return; }
             updateSessionRow(el, item.agent, item.isChild);
             paintRowNum(el, item.num);
             el.className = 'session-row' + (item.isChild ? ' child' : '') + (item.depth ? ' nested' : '');
@@ -1183,6 +1184,31 @@ import { isGroupCollapsed, toggleGroupCollapsed } from './collapsedGroups.js';
       })(dashboardGroups);
       updateSummary(all, topLevel);
       renderHeaderTitle();
+      refreshSummaryCollapseAllBtn();
+    }
+
+    // Collect every session id across all groups/sub-groups — backs the
+    // header's collapse-all (issue #738).
+    function allSessionIds() {
+      const ids = [];
+      (function walk(groups) {
+        for (const g of (groups || [])) {
+          for (const a of (g.agents || [])) ids.push(a.session_id);
+          walk(g.groups);
+        }
+      })(dashboardGroups);
+      return ids;
+    }
+
+    // Keep the header collapse-all button's glyph/label in sync with whether
+    // any summary is currently collapsed.
+    function refreshSummaryCollapseAllBtn() {
+      const btn = document.getElementById('summary-collapse-all');
+      if (!btn) return;
+      const collapsedNow = anySummaryCollapsed();
+      btn.textContent = collapsedNow ? '⊞' : '⊟';
+      btn.title = collapsedNow ? 'Expand all task summaries' : 'Collapse all task summaries';
+      btn.setAttribute('aria-label', btn.title);
     }
 
     function createAlertRow(pressure) {
@@ -1242,21 +1268,49 @@ import { isGroupCollapsed, toggleGroupCollapsed } from './collapsedGroups.js';
       el.querySelector('.row-tasks-counter').textContent = done + ' / ' + tasks.length;
     }
 
-    // Waiting question row — shows the assistant's last message when the
-    // session is waiting on the user. Mirrors macOS at
-    // SessionListView.swift:588-604 (waiting-colored text in a padded,
-    // dim, rounded box rendered beneath the parent row).
-    function createQuestionRow(agent, isChild) {
-      return makeRow('row-question-row', '', agent, updateQuestionRow, isChild);
+    // Task summary + waiting question — a single collapsible block beneath the
+    // parent row (issue #738). The summary ("what is this session about") shows
+    // in any state; the question shows only while waiting. A chevron collapses
+    // this one entry; the header offers a collapse-all. Mirrors the macOS
+    // SessionRowView.summaryBlock.
+    function createSummaryRow(agent, isChild) {
+      const el = makeRow('row-summary-row',
+        '<div class="summary-head"><span class="summary-chevron"></span>' +
+        '<span class="summary-title"></span></div>' +
+        '<div class="summary-question"></div>',
+        agent, updateSummaryRow, isChild);
+      el.querySelector('.summary-head').addEventListener('click', () => {
+        if (el._sessionId) { toggleSummaryCollapsed(el._sessionId); render(); }
+      });
+      return el;
     }
-    function updateQuestionRow(el, agent) {
-      const text = (agent.metrics && agent.metrics.last_assistant_text) || '';
-      if (!text || agent.state !== 'waiting') { el.style.display = 'none'; return; }
+    function updateSummaryRow(el, agent) {
+      const summary = (agent.metrics && agent.metrics.task_summary) || '';
+      const question = (agent.state === 'waiting' && agent.metrics && agent.metrics.last_assistant_text) || '';
+      if (!summary && !question) { el.style.display = 'none'; return; }
       el.style.display = '';
-      if (el.dataset.full !== text) {
-        el.dataset.full = text;
-        el.textContent = text;
-        el.title = text;
+      el._sessionId = agent.session_id;
+      const collapsed = isSummaryCollapsed(agent.session_id);
+      el.classList.toggle('collapsed', collapsed);
+      el.querySelector('.summary-chevron').textContent = collapsed ? '▸' : '▾';
+      const titleEl = el.querySelector('.summary-title');
+      const title = summary || 'Waiting for input';
+      if (titleEl.dataset.full !== title) {
+        titleEl.textContent = title;
+        titleEl.title = summary || '';
+        titleEl.dataset.full = title;
+      }
+      titleEl.classList.toggle('no-summary', !summary);
+      const qEl = el.querySelector('.summary-question');
+      if (!collapsed && question) {
+        qEl.style.display = '';
+        if (qEl.dataset.full !== question) {
+          qEl.textContent = question;
+          qEl.title = question;
+          qEl.dataset.full = question;
+        }
+      } else {
+        qEl.style.display = 'none';
       }
     }
 
@@ -2455,6 +2509,11 @@ import { isGroupCollapsed, toggleGroupCollapsed } from './collapsedGroups.js';
     // --- Header controls: theme toggle + display-mode cycle + settings ---
     document.getElementById('theme-toggle').addEventListener('click', toggleTheme);
     document.getElementById('view-mode-cycle').addEventListener('click', cycleDisplayMode);
+    document.getElementById('summary-collapse-all').addEventListener('click', () => {
+      if (anySummaryCollapsed()) expandAllSummaries();
+      else collapseAllSummaries(allSessionIds());
+      render();
+    });
     // Initial paint of the header button state (also sets body.view-history
     // and aligns currentGranularity if restored from localStorage).
     applyDisplayMode();

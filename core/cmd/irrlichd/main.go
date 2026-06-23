@@ -134,14 +134,18 @@ func main() {
 	}
 
 	if hasFlag("--uninstall-task-eta") {
-		modified, err := claudecode.UninstallTaskEtaBlock()
+		etaModified, err := claudecode.UninstallTaskEtaBlock()
 		if err != nil {
 			log.Fatalf("failed to uninstall task-eta block: %v", err)
 		}
-		if modified {
-			fmt.Println("Removed irrlicht task-eta block from ~/.claude/CLAUDE.md")
+		summaryModified, err := claudecode.UninstallTaskSummaryBlock()
+		if err != nil {
+			log.Fatalf("failed to uninstall task-summary block: %v", err)
+		}
+		if etaModified || summaryModified {
+			fmt.Println("Removed irrlicht task-eta/task-summary blocks from ~/.claude/CLAUDE.md")
 		} else {
-			fmt.Println("No irrlicht task-eta block found in ~/.claude/CLAUDE.md")
+			fmt.Println("No irrlicht managed blocks found in ~/.claude/CLAUDE.md")
 		}
 		os.Exit(0)
 	}

@@ -90,6 +90,9 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 					if est := tailer.ScanTaskEstimate(text, ev.Timestamp); est != nil {
 						ev.TaskEstimate = est
 					}
+					if s := tailer.ScanTaskSummary(text, ev.Timestamp); s != nil {
+						ev.TaskSummary = s
+					}
 				}
 			}
 		}

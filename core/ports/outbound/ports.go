@@ -163,6 +163,13 @@ type MetricsCollector interface {
 	// on claude ≥2.1.162. Same no-op-without-tailer semantics as
 	// IngestRateLimit.
 	IngestTaskEstimate(transcriptPath string, est *session.TaskEstimate)
+	// IngestTaskSummary attaches an out-of-band task-summary marker to the
+	// session associated with transcriptPath (#738). Used by the Claude Code
+	// hook receiver for the one-line summary carried in a PreToolUse tool
+	// input (e.g. a Bash description), which bypasses the dropped-text-block
+	// path. observedAt is the marker's unix-seconds timestamp. Same
+	// no-op-without-tailer semantics as IngestRateLimit.
+	IngestTaskSummary(transcriptPath, text string, observedAt int64)
 	// PurgeDeadBackgroundProcs drops the session's tracked background
 	// processes whose output path is in outputs, after the detector's
 	// liveness probe verdicts them dead — they died without a

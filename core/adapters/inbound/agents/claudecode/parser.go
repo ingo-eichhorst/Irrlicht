@@ -416,6 +416,9 @@ func scanMessageContent(raw map[string]interface{}, ev *tailer.ParsedEvent) stri
 				if est := tailer.ScanTaskEstimate(text, ev.Timestamp); est != nil {
 					ev.TaskEstimate = est
 				}
+				if s := tailer.ScanTaskSummary(text, ev.Timestamp); s != nil {
+					ev.TaskSummary = s
+				}
 			}
 		}
 	}
@@ -638,6 +641,7 @@ func applyAssistantText(raw map[string]interface{}, ev *tailer.ParsedEvent, even
 		}
 	case "user", "user_message", "user_input":
 		ev.ClearToolNames = true
+		ev.UserText = tailer.ExtractUserText(raw)
 	}
 }
 

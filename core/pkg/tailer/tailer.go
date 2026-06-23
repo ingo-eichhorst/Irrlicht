@@ -213,6 +213,17 @@ type SessionMetrics struct {
 	// baseline for the completion forecast. Computation-only (the API
 	// surfaces the derived eta, not the baseline).
 	TaskEstimateBase *TaskEstimate `json:"-"`
+
+	// TaskSummary is the most recent agent-emitted task-summary marker
+	// (issue #738) — the one-line "what is this session about". Sporadic like
+	// TaskEstimate; the last one seen persists across passes. Nil when the
+	// session never emitted a summary marker.
+	TaskSummary *TaskSummary `json:"task_summary,omitempty"`
+
+	// FirstUserText is the first user message of the session, truncated. Used
+	// as a daemon-side heuristic fallback for the surfaced task summary when
+	// no marker is present (issue #738) — e.g. agents that don't emit one.
+	FirstUserText string `json:"first_user_text,omitempty"`
 }
 
 // TranscriptTailer monitors transcript files and computes metrics.
@@ -313,6 +324,16 @@ type TranscriptTailer struct {
 	// inflated projections ~2×. Re-anchored when completed_rounds goes
 	// backwards (agent started a new count without a user prompt).
 	firstTaskEstimate *TaskEstimate
+
+	// lastTaskSummary holds the most recent agent-emitted task-summary marker
+	// (issue #738). Sporadic like lastTaskEstimate — the last one seen
+	// persists across markerless passes; cleared on a real user message.
+	lastTaskSummary *TaskSummary
+
+	// firstUserText holds the first user message of the session, captured
+	// once and never overwritten — the heuristic fallback for the surfaced
+	// task summary when no marker is present (issue #738).
+	firstUserText string
 
 	// tasks accumulates the session's task list from TaskCreate / TaskUpdate
 	// tool_use events parsed by the Claude Code adapter.
@@ -440,6 +461,8 @@ func (t *TranscriptTailer) GetLedgerState() LedgerState {
 	// safe under the same marshal-while-locked guarantee as CumByModel.
 	s.LastTaskEstimate = t.lastTaskEstimate
 	s.FirstTaskEstimate = t.firstTaskEstimate
+	s.LastTaskSummary = t.lastTaskSummary
+	s.FirstUserText = t.firstUserText
 	return s
 }
 
@@ -510,6 +533,8 @@ func (t *TranscriptTailer) SetLedgerState(s LedgerState) {
 	}
 	t.lastTaskEstimate = s.LastTaskEstimate
 	t.firstTaskEstimate = s.FirstTaskEstimate
+	t.lastTaskSummary = s.LastTaskSummary
+	t.firstUserText = s.FirstUserText
 }
 
 // TailAndProcess reads new transcript content from the last offset (or from the
@@ -1069,6 +1094,15 @@ func (t *TranscriptTailer) processParsedEvent(parsed *ParsedEvent, sawUserBlocki
 	if parsed.TaskEstimate != nil {
 		t.applyTaskEstimate(parsed.TaskEstimate)
 	}
+	if parsed.TaskSummary != nil {
+		t.applyTaskSummary(parsed.TaskSummary)
+	}
+	// Capture the first user prompt once as the heuristic-fallback summary
+	// (issue #738) — never overwritten, so it describes what the session was
+	// originally about even after many turns.
+	if t.firstUserText == "" && parsed.UserText != "" {
+		t.firstUserText = cleanSummaryText(parsed.UserText)
+	}
 	if parsed.ClearToolNames && len(parsed.ToolResultIDs) == 0 {
 		// A REAL user message (new prompt, ESC, answer) starts a new task or
 		// redirects the current one — the previous estimate no longer
@@ -1079,6 +1113,9 @@ func (t *TranscriptTailer) processParsedEvent(parsed *ParsedEvent, sawUserBlocki
 		// tool call — the chip vanished mid-task until the next marker (#558).
 		t.lastTaskEstimate = nil
 		t.firstTaskEstimate = nil
+		// The summary describes the now-superseded task; clear it so the next
+		// task re-anchors (the agent re-emits, or the heuristic takes over).
+		t.lastTaskSummary = nil
 	}
 
 	t.addMessageEvent(MessageEvent{
@@ -1117,6 +1154,30 @@ func (t *TranscriptTailer) applyTaskEstimate(est *TaskEstimate) {
 // holds the per-tailer lock, mirroring IngestRateLimit.
 func (t *TranscriptTailer) IngestTaskEstimate(est *TaskEstimate) {
 	t.applyTaskEstimate(est)
+}
+
+// applyTaskSummary keeps the latest task-summary marker, shared by the
+// transcript scan and the hook ingest path (#738). A summary observed BEFORE
+// the current latest is dropped so a late hook delivery can't regress a
+// fresher transcript marker. The user-message reset stays in
+// processParsedEvent: it is transcript-line-driven.
+func (t *TranscriptTailer) applyTaskSummary(s *TaskSummary) {
+	if s == nil || s.Text == "" {
+		return
+	}
+	if t.lastTaskSummary != nil && s.ObservedAt < t.lastTaskSummary.ObservedAt {
+		return
+	}
+	t.lastTaskSummary = s
+}
+
+// IngestTaskSummary feeds an out-of-band task-summary marker into the same
+// state as a transcript-scanned one. Used by the Claude Code hook receiver
+// (#738): a marker carried on a Bash description reaches the daemon via a
+// PreToolUse payload, bypassing the transcript writer that drops mid-task
+// text blocks on claude ≥2.1.162. Caller holds the per-tailer lock.
+func (t *TranscriptTailer) IngestTaskSummary(s *TaskSummary) {
+	t.applyTaskSummary(s)
 }
 
 // PurgeBackgroundProcs drops the tracked background processes whose output

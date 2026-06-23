@@ -81,6 +81,12 @@ class SessionManager: ObservableObject {
     /// groups, and (b) collapse state survives apiGroups re-assignments.
     @Published var collapsedGroupNames: Set<String> = []
 
+    /// Session IDs whose task-summary/question block the user has collapsed
+    /// (issue #738). Default-absent → expanded; presence → collapsed. Held
+    /// here (not in the row's local state) so it survives row re-creation and
+    /// a global collapse-all can mutate it.
+    @Published var collapsedSummarySessions: Set<String> = []
+
     /// Timer that periodically re-hydrates sessions so group-level cost
     /// values (which only ride the /api/v1/sessions response) stay fresh —
     /// WebSocket deltas only carry individual session updates.

@@ -205,6 +205,9 @@ func scanCodexTaskEstimate(raw map[string]interface{}, ev *tailer.ParsedEvent) {
 				if est := tailer.ScanTaskEstimate(text, ev.Timestamp); est != nil {
 					ev.TaskEstimate = est
 				}
+				if s := tailer.ScanTaskSummary(text, ev.Timestamp); s != nil {
+					ev.TaskSummary = s
+				}
 			}
 		}
 	}
@@ -236,6 +239,11 @@ func parseCodexMessage(raw map[string]interface{}, ev *tailer.ParsedEvent) bool 
 	case "user", "developer":
 		ev.EventType = "user_message"
 		ev.ClearToolNames = true
+		// Only a real user prompt feeds the heuristic summary (#738) — the
+		// "developer" role carries system/context instructions, not a prompt.
+		if role == "user" {
+			ev.UserText = tailer.ExtractUserText(raw)
+		}
 	default:
 		return false
 	}

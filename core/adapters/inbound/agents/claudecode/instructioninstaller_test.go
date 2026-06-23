@@ -264,7 +264,7 @@ text when no Bash call is coming.
 
 func TestPatchManagedBlock_AppendAddsSingleBlankLine(t *testing.T) {
 	for _, existing := range []string{"content", "content\n", "content\n\n\n"} {
-		got, changed := patchManagedBlock(existing, managedTaskEtaBlock)
+		got, changed := patchManagedBlock(existing, taskEtaBeginSentinel, taskEtaEndSentinel, managedTaskEtaBlock)
 		if !changed {
 			t.Fatalf("append on %q should report changed", existing)
 		}
@@ -279,8 +279,8 @@ func TestPatchManagedBlock_NestedMarkerCommentNotMisparsed(t *testing.T) {
 	// The block contains the marker example — itself an HTML comment. A
 	// second patch must key on the full sentinels and not mistake the inner
 	// comment for a block boundary.
-	once, _ := patchManagedBlock("", managedTaskEtaBlock)
-	twice, changed := patchManagedBlock(once, managedTaskEtaBlock)
+	once, _ := patchManagedBlock("", taskEtaBeginSentinel, taskEtaEndSentinel, managedTaskEtaBlock)
+	twice, changed := patchManagedBlock(once, taskEtaBeginSentinel, taskEtaEndSentinel, managedTaskEtaBlock)
 	if changed {
 		t.Error("re-patch should be a no-op")
 	}
@@ -370,7 +370,7 @@ func TestRemoveManagedBlock_HalfBlockIsNoop(t *testing.T) {
 		"end only":     "x\n" + taskEtaEndSentinel + "\ny\n",
 		"out of order": taskEtaEndSentinel + "\n" + taskEtaBeginSentinel + "\n",
 	} {
-		got, changed := removeManagedBlock(content)
+		got, changed := removeManagedBlock(content, taskEtaBeginSentinel, taskEtaEndSentinel)
 		if changed || got != content {
 			t.Errorf("%s: removeManagedBlock should never touch a half-block (changed=%v)", name, changed)
 		}
@@ -379,7 +379,7 @@ func TestRemoveManagedBlock_HalfBlockIsNoop(t *testing.T) {
 
 func TestPatchManagedBlock_BeginWithoutEndAppendsFresh(t *testing.T) {
 	damaged := "x\n" + taskEtaBeginSentinel + "\ndangling\n"
-	got, changed := patchManagedBlock(damaged, managedTaskEtaBlock)
+	got, changed := patchManagedBlock(damaged, taskEtaBeginSentinel, taskEtaEndSentinel, managedTaskEtaBlock)
 	if !changed {
 		t.Fatal("expected a fresh block appended")
 	}
@@ -388,5 +388,66 @@ func TestPatchManagedBlock_BeginWithoutEndAppendsFresh(t *testing.T) {
 	}
 	if !strings.HasSuffix(got, managedTaskEtaBlock+"\n") {
 		t.Error("fresh well-formed block should be appended at the end")
+	}
+}
+
+func TestEnsureTaskSummaryBlock_CreatesFileIfAbsent(t *testing.T) {
+	home := withTempHome(t)
+	modified, err := EnsureTaskSummaryBlockInstalled()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !modified {
+		t.Fatal("expected modified=true on first install")
+	}
+	content := readFileString(t, memoryPathFor(home))
+	for _, want := range []string{taskSummaryBeginSentinel, taskSummaryEndSentinel, `"marker":"irrlicht-summary"`} {
+		if !strings.Contains(content, want) {
+			t.Errorf("installed file missing %q", want)
+		}
+	}
+}
+
+func TestApplyInstructionBlocks_InstallsBothAndCoexist(t *testing.T) {
+	home := withTempHome(t)
+	if err := applyInstructionBlocks(); err != nil {
+		t.Fatal(err)
+	}
+	content := readFileString(t, memoryPathFor(home))
+	for _, want := range []string{
+		taskEtaBeginSentinel, taskEtaEndSentinel, `"marker":"irrlicht-eta"`,
+		taskSummaryBeginSentinel, taskSummaryEndSentinel, `"marker":"irrlicht-summary"`,
+	} {
+		if !strings.Contains(content, want) {
+			t.Errorf("file missing %q after applyInstructionBlocks", want)
+		}
+	}
+	// Idempotent: re-applying changes nothing.
+	if err := applyInstructionBlocks(); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFileString(t, memoryPathFor(home)); got != content {
+		t.Error("re-applying instruction blocks changed bytes")
+	}
+}
+
+func TestRemoveInstructionBlocks_RoundTripsToOriginal(t *testing.T) {
+	home := withTempHome(t)
+	original := "# My setup\n\nAlways use tabs.\n"
+	path := memoryPathFor(home)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyInstructionBlocks(); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeInstructionBlocks(); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFileString(t, path); got != original {
+		t.Errorf("round-trip changed content:\n%q\nwant\n%q", got, original)
 	}
 }

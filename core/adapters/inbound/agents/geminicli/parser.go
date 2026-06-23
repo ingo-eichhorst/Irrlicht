@@ -282,6 +282,7 @@ func (p *Parser) parseUser(raw map[string]interface{}, ev *tailer.ParsedEvent) b
 
 	ev.EventType = "user_message"
 	ev.ClearToolNames = true
+	ev.UserText = firstText // post-filtered prompt — heuristic summary (#738)
 	return true
 }
 
@@ -294,6 +295,9 @@ func (p *Parser) parseAssistant(raw map[string]interface{}, ev *tailer.ParsedEve
 	ev.AssistantText = tailer.TruncateAssistantText(content)
 	if est := tailer.ScanTaskEstimate(content, ev.Timestamp); est != nil {
 		ev.TaskEstimate = est
+	}
+	if s := tailer.ScanTaskSummary(content, ev.Timestamp); s != nil {
+		ev.TaskSummary = s
 	}
 	if model, _ := raw["model"].(string); model != "" {
 		ev.ModelName = tailer.NormalizeModelName(model)

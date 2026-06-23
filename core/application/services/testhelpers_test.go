@@ -277,6 +277,8 @@ func (m *mockMetrics) IngestRateLimit(path string, snap *session.RateLimitSnapsh
 
 func (m *mockMetrics) IngestTaskEstimate(path string, est *session.TaskEstimate) {}
 
+func (m *mockMetrics) IngestTaskSummary(path, text string, observedAt int64) {}
+
 func (m *mockMetrics) PurgeDeadBackgroundProcs(path string, _ []string) {
 	m.mu.Lock()
 	m.purged = append(m.purged, path)
@@ -327,6 +329,8 @@ func (m *funcMetrics) PruneEntry(path string) {}
 func (m *funcMetrics) IngestRateLimit(path string, snap *session.RateLimitSnapshot) {}
 
 func (m *funcMetrics) IngestTaskEstimate(path string, est *session.TaskEstimate) {}
+
+func (m *funcMetrics) IngestTaskSummary(path, text string, observedAt int64) {}
 
 func (m *funcMetrics) PurgeDeadBackgroundProcs(path string, outputs []string) {
 	m.purgeMu.Lock()

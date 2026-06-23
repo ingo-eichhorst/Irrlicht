@@ -130,6 +130,13 @@ type SessionMetrics struct {
 	// or request when the session is in the waiting state.
 	LastAssistantText string `json:"last_assistant_text,omitempty"`
 
+	// TaskSummary is a human-readable one-line description of what the
+	// session's current task is about (issue #738). Sourced from the agent's
+	// in-band irrlicht-summary marker when present, else a daemon-side
+	// heuristic (the first user message). Surfaced in both the waiting and
+	// ready states so a human can tell what a session was about at a glance.
+	TaskSummary string `json:"task_summary,omitempty"`
+
 	// PermissionMode is the session's permission mode from the JSONL
 	// (e.g. "default", "plan", "bypassPermissions"). Surfaced by the tailer
 	// and carried on session state for UI/telemetry.
@@ -747,6 +754,7 @@ func MergeMetrics(newM, oldM *SessionMetrics) *SessionMetrics {
 		LastWasToolDenial:        newM.LastWasToolDenial,
 		EstimatedCostUSD:         newM.EstimatedCostUSD,
 		LastAssistantText:        newM.LastAssistantText,
+		TaskSummary:              newM.TaskSummary,
 		PermissionMode:           newM.PermissionMode,
 		SubagentCompletions:      newM.SubagentCompletions,
 		AppliedTaskDeltas:        newM.AppliedTaskDeltas,

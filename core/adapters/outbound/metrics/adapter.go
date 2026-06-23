@@ -256,6 +256,24 @@ func (a *Adapter) IngestTaskEstimate(transcriptPath string, est *session.TaskEst
 	lt.mu.Unlock()
 }
 
+// IngestTaskSummary implements ports/outbound.MetricsCollector. Mirrors
+// IngestTaskEstimate: a hook-delivered task-summary marker (#738) reaches the
+// session's tailer when one exists; otherwise no-op.
+func (a *Adapter) IngestTaskSummary(transcriptPath, text string, observedAt int64) {
+	if transcriptPath == "" || text == "" {
+		return
+	}
+	a.mu.Lock()
+	lt, ok := a.tailers[transcriptPath]
+	a.mu.Unlock()
+	if !ok {
+		return
+	}
+	lt.mu.Lock()
+	lt.t.IngestTaskSummary(&tailer.TaskSummary{Text: text, ObservedAt: observedAt})
+	lt.mu.Unlock()
+}
+
 // PurgeDeadBackgroundProcs implements ports/outbound.MetricsCollector. The
 // session detector calls it when its lsof liveness probe finds no live writer
 // on any of the probed output files: those processes died without a

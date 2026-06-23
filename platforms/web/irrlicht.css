@@ -723,17 +723,44 @@
       flex-shrink: 0;
     }
 
-    /* Waiting-question row — assistant's last message rendered beneath
-       the parent when the session is awaiting user input. Mirrors macOS
-       layout at SessionListView.swift:588-604 (waiting-colored text in a
-       padded, dim, rounded box, clamped to 3 lines). */
-    .row-question-row {
+    /* Task summary + waiting question — collapsible block beneath the parent
+       (issue #738). A clickable head (chevron + one-line summary title) and,
+       while waiting and expanded, the pending question in a dim rounded box.
+       Mirrors macOS SessionRowView.summaryBlock. */
+    .row-summary-row {
       margin: 0 10px 4px 24px;
+      font-family: var(--font-mono);
+    }
+    .row-summary-row.child { margin-left: 44px; }
+    .summary-head {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 9px;
+      font-weight: 600;
+      color: var(--text-secondary, #888);
+      cursor: pointer;
+      overflow: hidden;
+    }
+    .summary-chevron {
+      flex-shrink: 0;
+      width: 10px;
+      text-align: center;
+      opacity: 0.7;
+    }
+    .summary-title {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    /* No summary yet (waiting-only) — render the placeholder in waiting color. */
+    .summary-title.no-summary { color: var(--waiting); font-weight: 600; }
+    .summary-question {
+      margin-top: 2px;
       display: -webkit-box;
       -webkit-line-clamp: 3;
       -webkit-box-orient: vertical;
       overflow: hidden;
-      font-family: var(--font-mono);
       font-size: 10px;
       line-height: 1.4;
       color: var(--waiting);
@@ -742,7 +769,6 @@
       border-radius: 4px;
       cursor: default;
     }
-    .row-question-row.child { margin-left: 44px; }
 
     /* Task progress dots — rendered as a separate row beneath the parent
        session row (see .row-tasks-row), mirroring TaskListView in the macOS

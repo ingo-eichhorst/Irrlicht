@@ -75,6 +75,7 @@ type HookTarget interface {
 // statusline.go). Nil disables the scan (tests).
 type MarkerTarget interface {
 	IngestTaskEstimate(transcriptPath string, est *session.TaskEstimate)
+	IngestTaskSummary(transcriptPath, text string, observedAt int64)
 }
 
 // scanToolInputForMarker walks the decoded tool_input and scans its string
@@ -119,6 +120,46 @@ func scanToolInputForMarker(raw json.RawMessage, observedAt time.Time) *tailer.T
 	}
 	walk(decoded)
 	return est
+}
+
+// scanToolInputForSummary walks the decoded tool_input and scans its string
+// values for a task-summary marker (#738) — the summary counterpart to
+// scanToolInputForMarker, so a marker carried on a Bash description reaches
+// the daemon even when the transcript drops the surrounding prose.
+func scanToolInputForSummary(raw json.RawMessage, observedAt time.Time) *tailer.TaskSummary {
+	if len(raw) == 0 {
+		return nil
+	}
+	// Mirror scanToolInputForMarker's fast reject: accept both the raw comment
+	// opener and the unicode-escaped form a HTML-escaping encoder emits.
+	htmlEscapedOpener := `\u003c!--`
+	if s := string(raw); !strings.Contains(s, "<!--") && !strings.Contains(s, htmlEscapedOpener) {
+		return nil
+	}
+	var decoded interface{}
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return nil
+	}
+	var summary *tailer.TaskSummary
+	var walk func(v interface{})
+	walk = func(v interface{}) {
+		switch val := v.(type) {
+		case string:
+			if found := tailer.ScanTaskSummary(val, observedAt); found != nil {
+				summary = found // latest valid wins, matching the transcript scan
+			}
+		case map[string]interface{}:
+			for _, child := range val {
+				walk(child)
+			}
+		case []interface{}:
+			for _, child := range val {
+				walk(child)
+			}
+		}
+	}
+	walk(decoded)
+	return summary
 }
 
 // ConsentGate reports whether the user has granted a permission (issue
@@ -213,7 +254,8 @@ func NewHookHandler(target HookTarget, markers MarkerTarget, gate ConsentGate, l
 			// Bash description), and the payload reaches the daemon even
 			// when the transcript drops the surrounding prose.
 			if markers != nil {
-				if est := scanToolInputForMarker(payload.ToolInput, time.Now()); est != nil {
+				now := time.Now()
+				if est := scanToolInputForMarker(payload.ToolInput, now); est != nil {
 					log.LogInfo("hook-receiver", sessionID,
 						fmt.Sprintf("task-estimate marker via %s tool input: %d/%d", payload.ToolName, est.CompletedRounds, est.TotalRounds))
 					markers.IngestTaskEstimate(payload.TranscriptPath, &session.TaskEstimate{
@@ -223,6 +265,12 @@ func NewHookHandler(target HookTarget, markers MarkerTarget, gate ConsentGate, l
 						Confidence:      est.Confidence,
 						UpdatedAt:       est.ObservedAt,
 					})
+				}
+				// Task-summary marker (#738) — same carrier, same drop-bypass.
+				if sum := scanToolInputForSummary(payload.ToolInput, now); sum != nil {
+					log.LogInfo("hook-receiver", sessionID,
+						fmt.Sprintf("task-summary marker via %s tool input", payload.ToolName))
+					markers.IngestTaskSummary(payload.TranscriptPath, sum.Text, sum.ObservedAt)
 				}
 			}
 			// Only dispatch for user-input tools; reject anything else even

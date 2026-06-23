@@ -82,6 +82,15 @@ func TailerToDomain(m *tailer.SessionMetrics) *session.SessionMetrics {
 	if snippet := session.ExtractQuestionSnippet(result.LastAssistantText); snippet != "" {
 		result.LastAssistantText = snippet
 	}
+	// Task summary (issue #738): the agent's in-band marker wins; the first
+	// user message is the heuristic fallback for agents that emit none. Both
+	// are wall-clock independent, so the selection lives in this shared
+	// plain-copy and surfaces identically in live and replay paths.
+	if m.TaskSummary != nil && m.TaskSummary.Text != "" {
+		result.TaskSummary = m.TaskSummary.Text
+	} else {
+		result.TaskSummary = m.FirstUserText
+	}
 	return result
 }
 
