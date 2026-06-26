@@ -958,12 +958,16 @@ import { isSummaryCollapsed, toggleSummaryCollapsed, anySummaryCollapsed, collap
         bgBadge.style.display = '';
         const detached = !!bg.detached;
         bgBadge.classList.toggle('is-detached', detached);
-        const label = bg.name ? ' (' + bg.name + ')' : '';
+        const name = (bg.name || '').trim();
+        const label = name ? ' (' + name + ')' : '';
         bgBadge.title = detached
           ? 'Detached background agent' + label + ' — no open window; runs in the Claude Code daemon pool'
           : 'Background agent' + label;
-      } else if (bgBadge.style.display !== 'none') {
+        el.classList.add('has-bg');
+      } else {
         bgBadge.style.display = 'none';
+        bgBadge.classList.remove('is-detached');
+        el.classList.remove('has-bg');
       }
 
       // Context bar

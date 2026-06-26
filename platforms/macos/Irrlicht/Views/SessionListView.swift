@@ -1314,7 +1314,8 @@ struct SessionRowView: View {
                 // (detached); a muted moon when a window is still open.
                 if let bg = session.background {
                     let detached = bg.detached ?? false
-                    let label = (bg.name?.isEmpty == false) ? " (\(bg.name!))" : ""
+                    let trimmedName = (bg.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                    let label = trimmedName.isEmpty ? "" : " (\(trimmedName))"
                     Image(systemName: detached ? "moon.zzz.fill" : "moon.fill")
                         .font(.system(size: 9))
                         .foregroundColor(detached ? IrrColors.waiting : .secondary)
@@ -1324,16 +1325,17 @@ struct SessionRowView: View {
                             : "Background agent\(label)")
                 }
 
-                // Branch name — column shrinks when a leading badge is present so
-                // the context-bar column downstream starts at the same x on every row.
-                // Each badge occupies 14pt + 6pt spacing = 20pt; we drop that from
-                // the branch column here.
+                // Branch name — column shrinks by one badge's width (14pt + 6pt
+                // spacing = 20pt) for EACH leading badge present (subagent count
+                // and/or background-agent), so the context-bar column downstream
+                // starts at the same x on every row regardless of how many badges
+                // a row carries.
                 Text(session.gitBranch ?? "—")
                     .font(.system(.caption, design: .monospaced))
                     .foregroundColor(.primary)
                     .lineLimit(1)
                     .truncationMode(.tail)
-                    .frame(width: (activeSubagentCount > 0 || session.background != nil) ? 44 : 64, alignment: .leading)
+                    .frame(width: 64 - CGFloat(20 * ((activeSubagentCount > 0 ? 1 : 0) + (session.background != nil ? 1 : 0))), alignment: .leading)
                     .tooltip(session.gitBranch ?? "—")
 
                 if displayMode == .context {

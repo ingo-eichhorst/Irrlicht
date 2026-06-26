@@ -600,7 +600,13 @@
       min-width: 64px;
       max-width: 220px;
     }
+    /* Each leading badge (subagent count and/or background-agent) drops the
+       branch column by one badge's width (14px + 6px gap = 20px) so the
+       context-bar column downstream lines up across rows regardless of badge
+       count. Both badges present → drop 40px. */
     .session-row.has-sub .row-branch { flex: 1 1 44px; min-width: 44px; }
+    .session-row.has-bg .row-branch { flex: 1 1 44px; min-width: 44px; }
+    .session-row.has-sub.has-bg .row-branch { flex: 1 1 24px; min-width: 24px; }
 
     /* Small subagent count badge — filled circle with running-count number,
        sized to fit alongside the row's mono text. Mirrors macOS at

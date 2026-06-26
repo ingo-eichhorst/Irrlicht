@@ -84,5 +84,11 @@ describe('background-agent badge (#744)', () => {
 
     // Ordinary session: no badge.
     expect(shown(bgBadge('normal'))).toBe(false)
+
+    // Branch column shrinks for bg rows (has-bg) so columns stay aligned;
+    // ordinary rows keep the full-width branch.
+    expect(rowById('bg-detached').classList.contains('has-bg')).toBe(true)
+    expect(rowById('bg-attached').classList.contains('has-bg')).toBe(true)
+    expect(rowById('normal').classList.contains('has-bg')).toBe(false)
   })
 })
