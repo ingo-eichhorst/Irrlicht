@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -37,6 +38,12 @@ func defaultSessionsDir() string {
 type claudeSessionMeta struct {
 	PID       int    `json:"pid"`
 	SessionID string `json:"sessionId"`
+	// Kind is "interactive" for normal sessions and "bg" for background agents
+	// spawned via Agent View (which keep running detached in the daemon pool).
+	Kind string `json:"kind"`
+	// Name is the human-readable label Claude assigns a background agent's job
+	// (e.g. "Add guiding colors to quest cards"); empty for interactive sessions.
+	Name string `json:"name"`
 }
 
 // DiscoverPID finds the Claude Code process owning a session. It prefers an
@@ -173,6 +180,25 @@ func readSessionMeta(path string) (claudeSessionMeta, bool) {
 		return claudeSessionMeta{}, false
 	}
 	return meta, true
+}
+
+// ReadBackgroundMeta reports whether pid owns a Claude background-agent
+// (kind:"bg") session — one started via Agent View that keeps running detached
+// in the `claude daemon run` pool after its window is closed (#744). It reads
+// the same ~/.claude/sessions/<pid>.json registry file DiscoverPID uses and
+// returns (name, true) for a background agent, where name is Claude's
+// human-readable job label (may be ""), or ("", false) for an interactive
+// session, a missing/garbage file, or any other kind. Non-Claude PIDs have no
+// such file, so this is a safe no-op for every other adapter.
+func ReadBackgroundMeta(pid int) (name string, ok bool) {
+	if pid <= 0 || sessionsDir == "" {
+		return "", false
+	}
+	meta, found := readSessionMeta(filepath.Join(sessionsDir, strconv.Itoa(pid)+".json"))
+	if !found || meta.Kind != "bg" {
+		return "", false
+	}
+	return meta.Name, true
 }
 
 // pidAlive returns true if signal 0 can be delivered to pid (i.e. the process

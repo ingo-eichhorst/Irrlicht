@@ -660,6 +660,21 @@ type Launcher struct {
 	HostBundleID   string `json:"host_bundle_id,omitempty"`   // CFBundleIdentifier of the host app resolved by process-ancestry when no curated TermProgram matched (e.g. md.obsidian for an in-Obsidian terminal). Unlike TermProgram, this is derived server-side because the client has no map for arbitrary embedded-terminal hosts; the client builds a generic title-match activator from it.
 }
 
+// BackgroundAgent marks a session as a background agent spawned by the agent's
+// own orchestration (Claude Code Agent View). Such an agent keeps running
+// detached in the `claude daemon run` pool after its window/terminal is closed,
+// so it shows up as a live session with no terminal the user can see (#744).
+// Nil for normal interactive sessions. Clients render a "background" badge when
+// present and emphasize "detached" when the agent has no controlling terminal.
+type BackgroundAgent struct {
+	// Name is Claude's human-readable label for the background job
+	// (e.g. "Add guiding colors to quest cards"); may be empty.
+	Name string `json:"name,omitempty"`
+	// Detached is true when the agent has no controlling terminal — i.e. no
+	// window/tab owns it. Computed by the daemon from the captured Launcher TTY.
+	Detached bool `json:"detached,omitempty"`
+}
+
 // IsEmpty reports whether the launcher carries no identifying information
 // — i.e. every field is zero. Capture helpers use this to decide whether to
 // return nil rather than attach a meaningless struct to the session.
@@ -699,6 +714,10 @@ type SessionState struct {
 	// Captured once when PID is first assigned; nil if env capture failed
 	// or no recognized env vars were present.
 	Launcher *Launcher `json:"launcher,omitempty"`
+
+	// Background marks a detached background agent (e.g. a Claude Code Agent
+	// View bg agent living in the daemon pool). Nil for normal sessions (#744).
+	Background *BackgroundAgent `json:"background,omitempty"`
 
 	// ParentSessionID links a subagent session to its spawning parent session.
 	// Derived from file path or heuristic matching in SessionDetector.

@@ -323,6 +323,13 @@ func (d *SessionDetector) SetLauncherEnvReader(fn LauncherEnvReader) {
 	d.pidMgr.SetLauncherEnvReader(fn)
 }
 
+// SetBackgroundReader installs a reader that flags a session as a detached
+// background agent (e.g. a Claude Code Agent View bg agent) when its PID is
+// first assigned (#744).
+func (d *SessionDetector) SetBackgroundReader(fn BackgroundReader) {
+	d.pidMgr.SetBackgroundReader(fn)
+}
+
 // SetInfraReaper installs the liveness-sweep seam that reaps a session bound to
 // a still-alive PID which is actually the adapter's background infrastructure
 // (e.g. Claude Code's --bg-spare helper) rather than the session (#727). Both

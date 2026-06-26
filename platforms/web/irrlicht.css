@@ -619,6 +619,27 @@
       font-family: var(--font-sans);
     }
 
+    /* Background-agent badge (#744) — a moon glyph marks a Claude Code Agent
+       View background agent running detached in the daemon pool. Square (not the
+       circular subagent badge) and muted; .is-detached turns it amber to
+       emphasize that no open window owns it. */
+    .row-bg-badge {
+      width: 14px;
+      height: 14px;
+      flex: 0 0 14px;
+      border-radius: 3px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--ctx-bar-track);
+      color: var(--muted);
+    }
+    .row-bg-badge svg { display: block; }
+    .row-bg-badge.is-detached {
+      background: var(--waiting);
+      color: #fff;
+    }
+
     .row-spacer { flex: 1 1 auto; min-width: 4px; }
 
     /* Context bar — floor mirrors macOS ContextBar at SessionListView.swift:420

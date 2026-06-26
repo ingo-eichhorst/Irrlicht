@@ -1308,16 +1308,32 @@ struct SessionRowView: View {
                         .tooltip("\(activeSubagentCount) active subagent\(activeSubagentCount == 1 ? "" : "s")")
                 }
 
-                // Branch name — column shrinks when a subagent badge is present so
+                // Background-agent badge (#744) — a moon marks a Claude Code Agent
+                // View background agent running detached in the daemon pool after
+                // its window closed. Amber "zzz" moon when no window owns it
+                // (detached); a muted moon when a window is still open.
+                if let bg = session.background {
+                    let detached = bg.detached ?? false
+                    let label = (bg.name?.isEmpty == false) ? " (\(bg.name!))" : ""
+                    Image(systemName: detached ? "moon.zzz.fill" : "moon.fill")
+                        .font(.system(size: 9))
+                        .foregroundColor(detached ? IrrColors.waiting : .secondary)
+                        .frame(width: 14, height: 14)
+                        .tooltip(detached
+                            ? "Detached background agent\(label) — no open window; runs in the Claude Code daemon pool"
+                            : "Background agent\(label)")
+                }
+
+                // Branch name — column shrinks when a leading badge is present so
                 // the context-bar column downstream starts at the same x on every row.
-                // Badge occupies 14pt + 6pt spacing = 20pt, which is exactly the amount
-                // we drop from the branch column here.
+                // Each badge occupies 14pt + 6pt spacing = 20pt; we drop that from
+                // the branch column here.
                 Text(session.gitBranch ?? "—")
                     .font(.system(.caption, design: .monospaced))
                     .foregroundColor(.primary)
                     .lineLimit(1)
                     .truncationMode(.tail)
-                    .frame(width: activeSubagentCount > 0 ? 44 : 64, alignment: .leading)
+                    .frame(width: (activeSubagentCount > 0 || session.background != nil) ? 44 : 64, alignment: .leading)
                     .tooltip(session.gitBranch ?? "—")
 
                 if displayMode == .context {
