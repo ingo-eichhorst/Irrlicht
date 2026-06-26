@@ -639,8 +639,17 @@ class SessionManager: ObservableObject {
     /// Rebuilds the published `apiGroups` from the local groups plus
     /// client-side groups for relay-only sessions, and refreshes
     /// `groupedSessionIds` (used by the local patch guard) from the local set.
+    ///
+    /// Local-wins name-collapse (#746): a relay group whose project name already
+    /// exists locally is dropped, so a project the local daemon publishes — then
+    /// echoes back via the relay it publishes to — renders once. The collapse
+    /// keys on project *name*, not session_id: the echoed/ghost relay rows carry
+    /// drifted ids that escape `relayGroups()`'s id-only filter. Relay-only
+    /// projects (no local group of that name) still appear.
     private func recomposeApiGroups() {
-        apiGroups = orderedGroups(localApiGroups) + relayGroups()
+        let localNames = Set(localApiGroups.map(\.name))
+        apiGroups = orderedGroups(localApiGroups)
+            + relayGroups().filter { !localNames.contains($0.name) }
         groupedSessionIds = Set(localApiGroups.flatMap { collectSessionIds(from: $0) })
     }
 
