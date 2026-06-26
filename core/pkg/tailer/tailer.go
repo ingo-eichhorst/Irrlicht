@@ -63,6 +63,7 @@ type SessionMetrics struct {
 	CumCacheCreationTokens int64   `json:"cum_cache_creation_tokens,omitempty"`
 	EstimatedCostUSD       float64 `json:"estimated_cost_usd,omitempty"`
 	ModelName              string  `json:"model_name,omitempty"`
+	AgentVersion           string  `json:"agent_version,omitempty"`
 	ContextWindow          int64   `json:"context_window,omitempty"`
 	ContextUtilization     float64 `json:"context_utilization_percentage,omitempty"`
 	PressureLevel          string  `json:"pressure_level,omitempty"` // "safe", "caution", "warning", "critical"
@@ -403,6 +404,7 @@ func (t *TranscriptTailer) GetLedgerState() LedgerState {
 		LastOffset:         t.lastOffset,
 		CumProviderCostUSD: t.cumProviderCostUSD,
 		ModelName:          t.metrics.ModelName,
+		AgentVersion:       t.metrics.AgentVersion,
 		LastEventType:      t.metrics.LastEventType,
 		LastAssistantText:  t.lastAssistantText,
 	}
@@ -464,6 +466,9 @@ func (t *TranscriptTailer) SetLedgerState(s LedgerState) {
 	t.cumProviderCostUSD = s.CumProviderCostUSD
 	if s.ModelName != "" {
 		t.metrics.ModelName = s.ModelName
+	}
+	if s.AgentVersion != "" {
+		t.metrics.AgentVersion = s.AgentVersion
 	}
 	// Restore the classification anchor: a resume-at-EOF pass processes no
 	// events, and IsAgentDone needs the pre-restart event type to recognise

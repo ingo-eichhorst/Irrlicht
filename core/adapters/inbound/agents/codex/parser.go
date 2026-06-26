@@ -174,6 +174,14 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 		return ev
 
 	case "session_meta", "turn_context":
+		// session_meta.payload.cli_version carries the Codex CLI version (e.g.
+		// "0.137.0"). Capture it before skipping — the tailer applies metadata
+		// from Skip=true events too.
+		if payload, ok := raw["payload"].(map[string]interface{}); ok {
+			if v, ok := payload["cli_version"].(string); ok {
+				ev.AgentVersion = v
+			}
+		}
 		ev.Skip = true
 		return ev
 

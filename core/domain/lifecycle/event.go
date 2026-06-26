@@ -55,6 +55,13 @@ const (
 	// capture (pipe-pane + a screen-buffer parser) and is not emitted yet.
 	KindUIDetected    Kind = "ui_detected"
 	KindTerminalFrame Kind = "terminal_frame"
+
+	// Cache-creation regression (issue #374). Emitted once per
+	// (project, regressing_version) pair within a daemon process lifetime when
+	// the detector first finds a working session's median cache-creation per
+	// turn exceeding the project's p25 baseline × threshold. The named
+	// consumer is the ir:agent-releases workflow.
+	KindCacheBloatDetected Kind = "cache_bloat_detected"
 )
 
 // Event is a single recorded lifecycle signal. The Kind field discriminates
@@ -107,4 +114,12 @@ type Event struct {
 	// Terminal-backend read-back (KindUIDetected). The UI state read off the
 	// rendered terminal screen, e.g. "trust_dialog". Empty on the clearing edge.
 	UIKind string `json:"ui_kind,omitempty"`
+
+	// Cache-creation regression (KindCacheBloatDetected, issue #374).
+	Project           string  `json:"project,omitempty"`
+	RegressingVersion string  `json:"regressing_version,omitempty"`
+	PriorVersion      string  `json:"prior_version,omitempty"`
+	DeltaTokens       int64   `json:"delta_tokens,omitempty"`
+	BaselineMedian    float64 `json:"baseline_median,omitempty"`
+	CurrentMedian     float64 `json:"current_median,omitempty"`
 }

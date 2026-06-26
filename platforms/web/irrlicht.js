@@ -813,6 +813,7 @@ import { isGroupCollapsed, toggleGroupCollapsed } from './collapsedGroups.js';
         '<span class="row-sub-badge" style="display:none"></span>' +
         '<span class="row-role-badge" style="display:none"></span>' +
         '<span class="row-origin" style="display:none"></span>' +
+        '<span class="row-cache-bloat" style="display:none">↑</span>' +
         '<span class="row-branch"></span>' +
         '<span class="row-tool" style="display:none"></span>' +
         '<span class="row-ctx-bar"><span class="row-ctx-fill"></span><span class="row-ctx-label"></span></span>' +
@@ -930,6 +931,19 @@ import { isGroupCollapsed, toggleGroupCollapsed } from './collapsedGroups.js';
         originEl.title = daemonLabelFor(sourceIdOf(agent.session_id));
       } else if (originEl.style.display !== 'none') {
         originEl.style.display = 'none';
+      }
+
+      // Cache-creation regression glyph (#374) — an upward arrow marks a
+      // session whose median cache-creation per turn regressed past the project
+      // baseline. Tooltip names the regressing upstream version when attributed.
+      const cacheBloatEl = el.querySelector('.row-cache-bloat');
+      if (cacheBloatEl) {
+        if (metrics.cache_bloat) {
+          cacheBloatEl.style.display = '';
+          cacheBloatEl.title = metrics.cache_bloat_tooltip || 'cache-creation regression';
+        } else if (cacheBloatEl.style.display !== 'none') {
+          cacheBloatEl.style.display = 'none';
+        }
       }
 
       const subBadge = el.querySelector('.row-sub-badge');

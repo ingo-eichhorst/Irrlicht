@@ -1203,6 +1203,20 @@ struct SessionRowView: View {
                         .tooltip(offline ? "\(host) — offline" : host)
                 }
 
+                // Cache-creation regression glyph (#374) — an upward arrow marks
+                // a session whose median cache-creation per turn has regressed
+                // past the project baseline. The tooltip names the regressing
+                // upstream version when the daemon could attribute it.
+                if session.metrics?.cacheBloat == true {
+                    Image(systemName: "arrow.up.circle.fill")
+                        .font(.system(size: 9))
+                        .foregroundColor(.orange)
+                        .frame(width: 14, alignment: .center)
+                        .tooltip(session.metrics?.cacheBloatTooltip?.isEmpty == false
+                            ? session.metrics!.cacheBloatTooltip!
+                            : "cache-creation regression")
+                }
+
                 // Active subagent count badge
                 if activeSubagentCount > 0 {
                     Text("\(activeSubagentCount)")

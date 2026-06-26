@@ -112,6 +112,11 @@ func (t *TranscriptTailer) applyModelMetadata(parsed *ParsedEvent) {
 	if parsed.ContextWindow > 0 {
 		t.contextWindowOverride = parsed.ContextWindow
 	}
+	// AgentVersion is sticky: the transcript exposes it once (header line), so
+	// keep the first non-empty value rather than letting later events blank it.
+	if parsed.AgentVersion != "" && t.metrics.AgentVersion == "" {
+		t.metrics.AgentVersion = parsed.AgentVersion
+	}
 }
 
 // applyTokenSnapshot updates the latest-turn snapshot fields used for

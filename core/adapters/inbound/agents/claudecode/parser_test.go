@@ -10,6 +10,21 @@ import (
 	"irrlicht/core/pkg/tailer"
 )
 
+// TestParser_AgentVersion_Captured pins that the top-level `version` field the
+// Claude Code CLI stamps on user/assistant lines is surfaced on the parsed
+// event for the cache-bloat detector's version attribution (#374).
+func TestParser_AgentVersion_Captured(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(map[string]interface{}{
+		"type":    "user",
+		"version": "2.1.186",
+		"message": map[string]interface{}{"role": "user", "content": "hi"},
+	})
+	if ev == nil || ev.AgentVersion != "2.1.186" {
+		t.Fatalf("expected AgentVersion=2.1.186, got %+v", ev)
+	}
+}
+
 // --- Contribution / cost tests ---
 
 func TestParser_Contribution_RequestIDDedup(t *testing.T) {

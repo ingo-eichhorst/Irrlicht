@@ -541,6 +541,20 @@ func main() {
 	}
 	detector.SetHistoryTracker(historyTracker)
 
+	// Cache-creation regression detector (#374): per-project baseline from the
+	// session repo; findings logged to events.log for the ir:agent-releases
+	// consumer. Self-disables when cacheBloatThreshold <= 0 (the kill switch).
+	detector.SetCacheBloatDetector(services.NewCacheBloatDetector(
+		cachedRepo,
+		services.NewLoggerCacheBloatSink(logger),
+		services.CacheBloatConfig{
+			BaselineDays:       cfg.CacheBloatBaselineDays,
+			Threshold:          cfg.CacheBloatThreshold,
+			VersionDeltaTokens: cfg.CacheBloatVersionDeltaTokens,
+			MinTurns:           cfg.CacheBloatMinTurns,
+		},
+	))
+
 	// PermissionService: single source of truth for consent state (issue
 	// #570). Exercises grants (hook install, watcher start), undoes
 	// revokes, arbitrates wizard answers between the macOS and web UIs,

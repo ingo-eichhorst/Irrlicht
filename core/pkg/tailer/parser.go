@@ -186,7 +186,11 @@ type ParsedEvent struct {
 	TaskSnapshot *[]TaskSnapshotEntry
 
 	// Metadata extracted by the parser.
-	ModelName     string
+	ModelName string
+	// AgentVersion is the upstream agent CLI's version, if the transcript
+	// exposes it (claudecode header `version`, codex `session_meta.cli_version`,
+	// aider `> Aider vX.Y.Z`). Empty otherwise. See issue #374.
+	AgentVersion  string
 	ContextWindow int64
 	// Tokens is the latest-turn snapshot used for context-utilization display.
 	// It is NOT used for cost accumulation — use Contribution for that.
@@ -418,6 +422,11 @@ type LedgerState struct {
 	// model — codex token_count) still routes to the right pricing bucket
 	// after a daemon restart, before the next model-bearing event arrives.
 	ModelName string `json:"model_name,omitempty"`
+	// AgentVersion persists the upstream agent CLI version parsed from the
+	// transcript header so a daemon restart that resumes at LastOffset (zero
+	// new lines, header never re-read) keeps it for the cache-bloat detector's
+	// version attribution. See issue #374.
+	AgentVersion string `json:"agent_version,omitempty"`
 	// LastEventType persists the most recent substantive event type so a
 	// daemon restart that resumes at LastOffset (zero new lines) can still
 	// answer IsAgentDone. Without it, a session persisted as `working` whose
