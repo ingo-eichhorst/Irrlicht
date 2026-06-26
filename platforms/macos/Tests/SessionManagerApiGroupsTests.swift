@@ -375,6 +375,36 @@ final class SessionManagerApiGroupsTests: XCTestCase {
         XCTAssertNil(sut.sessions.first { $0.id == "proc-1234" }?.daemonID, "the surviving row is the local one")
     }
 
+    // MARK: - Relay echo dedupe (#746)
+
+    /// A project present locally that echoes back via the relay (under a drifted
+    /// session_id, so it escapes the id-only filter) renders exactly once — the
+    /// local copy wins; the relay group of the same name is suppressed.
+    func testRelayEcho_sameProjectName_driftedId_collapsesToLocal() {
+        sut.seedLocalApiGroups([AgentGroup(name: "irrlicht", agents: [makeSession(id: "local-1")])])
+        // Relay echoes the same project under a ghost daemon + drifted id.
+        sut.handleRelayMessage(relayPush(source: "ghostDaemon", sessionId: "drifted-9", project: "irrlicht"))
+
+        let irrlicht = sut.apiGroups.filter { $0.name == "irrlicht" }
+        XCTAssertEqual(irrlicht.count, 1, "a project present locally renders exactly once (local-wins)")
+        XCTAssertTrue(
+            irrlicht.first?.agents?.allSatisfy { $0.daemonID == nil } ?? false,
+            "the surviving group is the local copy (no relay daemonID on its rows)"
+        )
+    }
+
+    /// A relay-only project with no local equivalent still appears — the
+    /// name-collapse only suppresses collisions, not genuine remote projects.
+    func testRelayOnly_differentProject_stillAppears() {
+        sut.seedLocalApiGroups([AgentGroup(name: "irrlicht", agents: [makeSession(id: "local-1")])])
+        sut.handleRelayMessage(relayPush(source: "daemonB", sessionId: "remote-1", project: "otherproj"))
+
+        XCTAssertTrue(
+            sut.apiGroups.contains { $0.name == "otherproj" },
+            "a relay-only project with no local equivalent still appears"
+        )
+    }
+
     // MARK: - Origin glyph (#538)
 
     /// A relay session carries a daemonID, and the relay's snapshot label map
