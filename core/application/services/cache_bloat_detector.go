@@ -122,7 +122,7 @@ func (c *CacheBloatDetector) OnActivity(state *session.SessionState) {
 	if !ok {
 		return
 	}
-	baseline, ok := c.computeBaseline(state.ProjectName, state.Adapter)
+	baseline, ok := c.computeBaseline(state.ProjectName, state.Adapter, sid)
 	if !ok || baseline <= 0 {
 		return // cold start: no comparable history yet, can't judge
 	}
@@ -183,8 +183,10 @@ func (c *CacheBloatDetector) snapshot() []*session.SessionState {
 
 // computeBaseline returns the p25 of "cache creation per completed turn" over
 // the project's completed sessions of the same adapter within the lookback
-// window. ok is false when there is no usable history.
-func (c *CacheBloatDetector) computeBaseline(project, adapter string) (float64, bool) {
+// window, excluding the session under evaluation (excludeID) so a bloated
+// session can't raise the baseline it's judged against. ok is false when there
+// is no usable history.
+func (c *CacheBloatDetector) computeBaseline(project, adapter, excludeID string) (float64, bool) {
 	if project == "" {
 		return 0, false
 	}
@@ -192,7 +194,7 @@ func (c *CacheBloatDetector) computeBaseline(project, adapter string) (float64, 
 	cutoff := c.now() - int64(c.cfg.BaselineDays)*secondsPerDay
 	var samples []float64
 	for _, s := range all {
-		if !c.eligible(s, project, adapter, cutoff) {
+		if !c.eligible(s, project, adapter, cutoff) || s.SessionID == excludeID {
 			continue
 		}
 		samples = append(samples, perTurnCacheCreation(s))
@@ -219,7 +221,8 @@ func (c *CacheBloatDetector) attributeVersion(state *session.SessionState, curre
 	}
 	groups := map[string]*group{}
 	for _, s := range all {
-		if !c.eligible(s, state.ProjectName, state.Adapter, cutoff) || s.Metrics.AgentVersion == "" {
+		if !c.eligible(s, state.ProjectName, state.Adapter, cutoff) ||
+			s.SessionID == state.SessionID || s.Metrics.AgentVersion == "" {
 			continue
 		}
 		g := groups[s.Metrics.AgentVersion]

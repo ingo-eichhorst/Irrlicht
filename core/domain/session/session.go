@@ -130,9 +130,10 @@ type SessionMetrics struct {
 	CumCacheReadTokens     int64 `json:"cum_cache_read_tokens,omitempty"`
 	CumCacheCreationTokens int64 `json:"cum_cache_creation_tokens,omitempty"`
 
-	// CompletedTurns counts the working→waiting transitions observed for this
-	// session — i.e. how many agent turns have finished. The cache-bloat
-	// detector (issue #374) uses it both as the per-session denominator for
+	// CompletedTurns counts the finished agent turns for this session — each
+	// rising edge of IsAgentDone (a turn ending in ready, or in waiting on a
+	// question), not just working→waiting. The cache-bloat detector (issue
+	// #374) maintains it and uses it both as the per-session denominator for
 	// "cache creation per turn" and as a variance guard (the rule does not
 	// fire until ≥3 turns). Incremented by the detector on each turn boundary
 	// and persisted so the per-project baseline can be computed over completed

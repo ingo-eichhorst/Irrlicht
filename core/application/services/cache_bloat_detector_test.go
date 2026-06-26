@@ -224,6 +224,52 @@ func TestCacheBloat_BaselineExcludesOldSessions(t *testing.T) {
 	}
 }
 
+// The glyph clears on a later turn boundary once the rolling median drops back
+// under the threshold (the rule is re-evaluated every turn).
+func TestCacheBloat_ClearsWhenMedianDropsBack(t *testing.T) {
+	hist := []*session.SessionState{
+		histSession("proj", "claude-code", "1.0.0", 5, 5000, 3*secondsPerDay),
+		histSession("proj", "claude-code", "1.0.0", 5, 5000, 2*secondsPerDay),
+		histSession("proj", "claude-code", "1.0.0", 5, 5000, 1*secondsPerDay),
+	}
+	d := newDetector(&fakeLister{hist}, &fakeRecorder{}, testCfg())
+
+	live := liveSession("proj", "claude-code", "1.0.0")
+	driveTurns(d, live, 20000, 3) // baseline 5000, median 20000 → trips
+	if !live.Metrics.CacheBloat {
+		t.Fatal("expected glyph to fire after bloated turns")
+	}
+	driveTurns(d, live, 1000, 4) // median falls to 1000 → below 5000×1.4
+	if live.Metrics.CacheBloat {
+		t.Error("glyph should clear once median drops back under threshold")
+	}
+	if live.Metrics.CacheBloatTooltip != "" {
+		t.Errorf("tooltip should clear too, got %q", live.Metrics.CacheBloatTooltip)
+	}
+}
+
+// A bloated prior snapshot of the SAME session must not raise the baseline it's
+// judged against (self-exclusion). With few samples, including it would lift
+// p25 enough to mask the regression.
+func TestCacheBloat_ExcludesSelfFromBaseline(t *testing.T) {
+	selfSnapshot := histSession("proj", "claude-code", "1.0.0", 4, 20000, 1*secondsPerDay)
+	selfSnapshot.SessionID = "live-1" // same id as the live session
+	hist := []*session.SessionState{
+		histSession("proj", "claude-code", "1.0.0", 4, 5000, 2*secondsPerDay), // SID ""
+		selfSnapshot,
+	}
+	d := newDetector(&fakeLister{hist}, &fakeRecorder{}, testCfg())
+
+	live := liveSession("proj", "claude-code", "1.0.0") // SessionID "live-1"
+	driveTurns(d, live, 10000, 3)                       // median 10000
+
+	// Excluding self → baseline p25 = 5000 → trips (10000 > 7000). Including
+	// self (20000) would push p25 to ~8750 → trip needs >12250 → no trip.
+	if !live.Metrics.CacheBloat {
+		t.Error("self snapshot must be excluded from baseline; rule should trip")
+	}
+}
+
 type capturingLogger struct {
 	eventType, sessionID, message string
 	calls                         int
