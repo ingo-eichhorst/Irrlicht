@@ -614,6 +614,13 @@ func (d *SessionDetector) processActivityLocked(id agent.Identity, state *sessio
 				state.WaitingStartTime = nil
 			}
 		}
+
+		// Cache-creation regression detection (#374). Driven every substantive
+		// pass; the detector itself recognises turn boundaries (rising edge of
+		// IsAgentDone) and is a no-op otherwise or when disabled.
+		if d.cacheBloat != nil {
+			d.cacheBloat.OnActivity(state)
+		}
 	}
 
 	// Refresh the unified sub-agent summary (in-process from the adapter

@@ -55,6 +55,12 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 	if cwd := transcript.ExtractCWDFromLine(raw); cwd != "" {
 		ev.CWD = cwd
 	}
+	// The Claude Code CLI stamps its own version on every user/assistant line
+	// (e.g. "2.1.186"). Read it before the early-return paths so it is captured
+	// even from system/user events. The tailer keeps the first non-empty value.
+	if v, ok := raw["version"].(string); ok {
+		ev.AgentVersion = v
+	}
 
 	eventType := resolveEventType(raw)
 

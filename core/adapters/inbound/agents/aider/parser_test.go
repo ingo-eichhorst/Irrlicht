@@ -56,9 +56,28 @@ func TestParser_BaselineHello_FullTurn(t *testing.T) {
 		t.Fatalf("expected at least 3 events (model, user, assistant), got %d", len(events))
 	}
 
-	// First non-nil event: the model declaration (Skip with ModelName).
-	if !events[0].Skip || events[0].ModelName == "" {
-		t.Errorf("first event should be Skip+ModelName, got %+v", events[0])
+	// The version banner emits a Skip event carrying AgentVersion (#374).
+	var verEv *tailer.ParsedEvent
+	for _, e := range events {
+		if e.AgentVersion != "" {
+			verEv = e
+			break
+		}
+	}
+	if verEv == nil || verEv.AgentVersion != "0.86.2" {
+		t.Errorf("expected a Skip event with AgentVersion=0.86.2, got %+v", verEv)
+	}
+
+	// The model declaration is a Skip event carrying ModelName.
+	var modelEv *tailer.ParsedEvent
+	for _, e := range events {
+		if e.ModelName != "" {
+			modelEv = e
+			break
+		}
+	}
+	if modelEv == nil || !modelEv.Skip {
+		t.Errorf("expected a Skip event with ModelName, got %+v", modelEv)
 	}
 
 	// User message.
@@ -192,15 +211,27 @@ func TestParser_EmptyTurn_NoCrash(t *testing.T) {
 }
 
 func TestParser_BlockquoteNoise_Skipped(t *testing.T) {
+	// `> Aider vX.Y.Z` is no longer noise — it emits a version event (#374),
+	// covered by TestParser_AiderVersion_Captured.
 	p := &Parser{}
 	for _, line := range []string{
-		"> Aider v0.86.2",
 		"> Use /help for commands",
 		"> Repo-map can't include /tmp/foo (permission)",
 	} {
 		if ev := p.ParseLineRaw(line); ev != nil {
 			t.Errorf("expected nil for noise line %q, got %+v", line, ev)
 		}
+	}
+}
+
+func TestParser_AiderVersion_Captured(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLineRaw("> Aider v0.86.2")
+	if ev == nil || ev.AgentVersion != "0.86.2" {
+		t.Fatalf("expected AgentVersion=0.86.2, got %+v", ev)
+	}
+	if !ev.Skip {
+		t.Error("version event should be Skip=true (no message-event impact)")
 	}
 }
 

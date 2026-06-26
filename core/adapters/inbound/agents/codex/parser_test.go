@@ -42,6 +42,24 @@ func TestParser_SessionHeader_Skip(t *testing.T) {
 	}
 }
 
+// TestParser_AgentVersion_Captured pins that session_meta.payload.cli_version
+// is surfaced on the parsed event for the cache-bloat detector (#374), even
+// though the event is itself skipped.
+func TestParser_AgentVersion_Captured(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(map[string]interface{}{
+		"type":      "session_meta",
+		"timestamp": ts(0),
+		"payload":   map[string]interface{}{"cli_version": "0.137.0"},
+	})
+	if ev == nil || !ev.Skip {
+		t.Fatalf("session_meta should be skipped, got %+v", ev)
+	}
+	if ev.AgentVersion != "0.137.0" {
+		t.Errorf("expected AgentVersion=0.137.0, got %q", ev.AgentVersion)
+	}
+}
+
 func TestParser_RecordTypeState_Skip(t *testing.T) {
 	p := &Parser{}
 	ev := p.ParseLine(map[string]interface{}{

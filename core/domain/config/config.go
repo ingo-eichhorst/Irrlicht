@@ -3,6 +3,7 @@ package config
 
 import (
 	"os"
+	"strconv"
 	"time"
 )
 
@@ -32,11 +33,32 @@ const (
 	PermissionModeGrantAll = "grant-all"
 )
 
+// Cache-bloat detector defaults (issue #374). The per-project p25 baseline of
+// cache-creation-per-turn is computed over completed sessions in the trailing
+// CacheBloatBaselineDays window; a working session trips the rule when its
+// median cache-creation-per-turn exceeds baseline × CacheBloatThreshold, but
+// not before CacheBloatMinTurns completed turns (variance guard). Version
+// attribution fires only when two versions differ by more than
+// CacheBloatVersionDeltaTokens. A threshold of 0 (or negative) disables the
+// whole rule — the kill switch.
+const (
+	defaultCacheBloatBaselineDays      = 14
+	defaultCacheBloatThreshold         = 1.4
+	defaultCacheBloatVersionDeltaToken = 10000
+	defaultCacheBloatMinTurns          = 3
+)
+
 // Config holds daemon-wide runtime configuration.
 type Config struct {
 	MaxSessionAge   time.Duration
 	ReadySessionTTL time.Duration
 	PermissionMode  string
+
+	// Cache-bloat detector knobs (issue #374), overridable via env vars.
+	CacheBloatBaselineDays       int
+	CacheBloatThreshold          float64
+	CacheBloatVersionDeltaTokens int64
+	CacheBloatMinTurns           int
 }
 
 // Default returns a Config populated with production defaults, with the
@@ -57,5 +79,32 @@ func Default() Config {
 		MaxSessionAge:   defaultMaxSessionAge,
 		ReadySessionTTL: ttl,
 		PermissionMode:  mode,
+
+		CacheBloatBaselineDays:       envInt("IRRLICHT_CACHE_BLOAT_BASELINE_DAYS", defaultCacheBloatBaselineDays),
+		CacheBloatThreshold:          envFloat("IRRLICHT_CACHE_BLOAT_THRESHOLD", defaultCacheBloatThreshold),
+		CacheBloatVersionDeltaTokens: int64(envInt("IRRLICHT_CACHE_BLOAT_VERSION_DELTA", defaultCacheBloatVersionDeltaToken)),
+		CacheBloatMinTurns:           envInt("IRRLICHT_CACHE_BLOAT_MIN_TURNS", defaultCacheBloatMinTurns),
 	}
+}
+
+// envInt reads a non-negative integer env override, falling back to def when
+// unset or unparseable. Negative values are rejected (fall back to def).
+func envInt(key string, def int) int {
+	if raw := os.Getenv(key); raw != "" {
+		if v, err := strconv.Atoi(raw); err == nil && v >= 0 {
+			return v
+		}
+	}
+	return def
+}
+
+// envFloat reads a float env override, falling back to def when unset or
+// unparseable. Zero and negative values are honored (0 = kill switch).
+func envFloat(key string, def float64) float64 {
+	if raw := os.Getenv(key); raw != "" {
+		if v, err := strconv.ParseFloat(raw, 64); err == nil {
+			return v
+		}
+	}
+	return def
 }

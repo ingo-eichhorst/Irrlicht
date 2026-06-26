@@ -103,6 +103,7 @@ type SessionDetector struct {
 	pidMgr         *PIDManager
 	costTracker    outbound.CostTracker    // optional; nil = disabled
 	historyTracker outbound.HistoryTracker // optional; nil = disabled
+	cacheBloat     *CacheBloatDetector     // optional; nil = disabled (#374)
 	metrics        outbound.MetricsCollector
 
 	// projectSessions tracks sessionID → projectDir for pre-session cleanup.
@@ -315,6 +316,14 @@ func (d *SessionDetector) SetCostTracker(c outbound.CostTracker) {
 // state-transition timelines in memory. Pass nil to disable.
 func (d *SessionDetector) SetHistoryTracker(h outbound.HistoryTracker) {
 	d.historyTracker = h
+}
+
+// SetCacheBloatDetector wires the optional cache-creation regression detector
+// (#374). When set, each processActivity pass drives it so it can flag a
+// session whose cache-creation per turn regresses against the project baseline.
+// Pass nil to disable.
+func (d *SessionDetector) SetCacheBloatDetector(c *CacheBloatDetector) {
+	d.cacheBloat = c
 }
 
 // SetLauncherEnvReader installs a reader that captures terminal/IDE identity

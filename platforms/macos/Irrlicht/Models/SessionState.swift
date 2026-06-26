@@ -342,6 +342,8 @@ struct SessionMetrics: Codable {
     let rateLimitForecastEta: Date?        // projected wall-clock time when the imminent window hits 100% (nil when unforecastable)
     let taskEstimate: TaskEstimateInfo?    // agent-authored task progress from the in-band marker (issue #558)
     let taskCompletionEta: Date?           // projected task completion (nil when no marker / no progress yet)
+    let cacheBloat: Bool?                  // cache-creation regression detected for this session (issue #374)
+    let cacheBloatTooltip: String?         // hover text naming the regressing version (empty when no attribution)
 
     enum CodingKeys: String, CodingKey {
         case elapsedSeconds = "elapsed_seconds"
@@ -359,6 +361,8 @@ struct SessionMetrics: Codable {
         case rateLimitForecastEta = "rate_limit_forecast_eta"
         case taskEstimate = "task_estimate"
         case taskCompletionEta = "task_completion_eta"
+        case cacheBloat = "cache_bloat"
+        case cacheBloatTooltip = "cache_bloat_tooltip"
     }
 
     init(from decoder: Decoder) throws {
@@ -390,6 +394,8 @@ struct SessionMetrics: Codable {
         } else {
             taskCompletionEta = nil
         }
+        cacheBloat = try c.decodeIfPresent(Bool.self, forKey: .cacheBloat)
+        cacheBloatTooltip = try c.decodeIfPresent(String.self, forKey: .cacheBloatTooltip)
     }
 
     /// Explicit memberwise initializer for SwiftUI previews and tests that
@@ -410,7 +416,9 @@ struct SessionMetrics: Codable {
         rateLimit: RateLimitInfo? = nil,
         rateLimitForecastEta: Date? = nil,
         taskEstimate: TaskEstimateInfo? = nil,
-        taskCompletionEta: Date? = nil
+        taskCompletionEta: Date? = nil,
+        cacheBloat: Bool? = nil,
+        cacheBloatTooltip: String? = nil
     ) {
         self.elapsedSeconds = elapsedSeconds
         self.totalTokens = totalTokens
@@ -427,6 +435,8 @@ struct SessionMetrics: Codable {
         self.rateLimitForecastEta = rateLimitForecastEta
         self.taskEstimate = taskEstimate
         self.taskCompletionEta = taskCompletionEta
+        self.cacheBloat = cacheBloat
+        self.cacheBloatTooltip = cacheBloatTooltip
     }
 
     func encode(to encoder: Encoder) throws {
@@ -446,6 +456,8 @@ struct SessionMetrics: Codable {
         try c.encodeIfPresent(rateLimitForecastEta.map { $0.timeIntervalSince1970 }, forKey: .rateLimitForecastEta)
         try c.encodeIfPresent(taskEstimate, forKey: .taskEstimate)
         try c.encodeIfPresent(taskCompletionEta.map { $0.timeIntervalSince1970 }, forKey: .taskCompletionEta)
+        try c.encodeIfPresent(cacheBloat, forKey: .cacheBloat)
+        try c.encodeIfPresent(cacheBloatTooltip, forKey: .cacheBloatTooltip)
     }
     
     // Computed properties for UI display

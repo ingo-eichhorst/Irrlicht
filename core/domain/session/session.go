@@ -31,9 +31,18 @@ type MetricsTimelinePoint struct {
 
 // SessionMetrics holds computed performance metrics from transcript analysis.
 type SessionMetrics struct {
-	ElapsedSeconds     int64   `json:"elapsed_seconds"`
-	TotalTokens        int64   `json:"total_tokens"`
-	ModelName          string  `json:"model_name"`
+	ElapsedSeconds int64  `json:"elapsed_seconds"`
+	TotalTokens    int64  `json:"total_tokens"`
+	ModelName      string `json:"model_name"`
+
+	// AgentVersion is the upstream agent CLI's own version (e.g. Claude Code
+	// "2.1.143"), distinct from DaemonVersion (irrlichd's version). Captured
+	// from the transcript by adapters that expose it (claudecode, codex,
+	// aider); empty for adapters whose transcript omits it. The cache-bloat
+	// detector (issue #374) groups a project's completed sessions by this
+	// value to attribute a regression to a specific version.
+	AgentVersion string `json:"agent_version,omitempty"`
+
 	ContextWindow      int64   `json:"context_window,omitempty"`
 	ContextUtilization float64 `json:"context_utilization_percentage"`
 	PressureLevel      string  `json:"pressure_level"`
@@ -120,6 +129,31 @@ type SessionMetrics struct {
 	CumOutputTokens        int64 `json:"cum_output_tokens,omitempty"`
 	CumCacheReadTokens     int64 `json:"cum_cache_read_tokens,omitempty"`
 	CumCacheCreationTokens int64 `json:"cum_cache_creation_tokens,omitempty"`
+
+	// CompletedTurns counts the finished agent turns for this session — each
+	// rising edge of IsAgentDone (a turn ending in ready, or in waiting on a
+	// question), not just working→waiting. The cache-bloat detector (issue
+	// #374) maintains it and uses it both as the per-session denominator for
+	// "cache creation per turn" and as a variance guard (the rule does not
+	// fire until ≥3 turns). Incremented by the detector on each turn boundary
+	// and persisted so the per-project baseline can be computed over completed
+	// sessions.
+	CompletedTurns int `json:"completed_turns,omitempty"`
+
+	// CacheBloat is true when the cache-creation regression detector (issue
+	// #374) has found this working session's median cache-creation per turn
+	// exceeding the project's p25 baseline × threshold. Both UIs render it as
+	// a "↑" glyph on the row. Set by the detector; never derived from the
+	// transcript.
+	CacheBloat bool `json:"cache_bloat,omitempty"`
+
+	// CacheBloatTooltip is the human-readable hover text for the CacheBloat
+	// glyph, composed daemon-side so both UIs stay dumb. When the project's
+	// lookback window contains ≥2 distinct agent versions with a large enough
+	// per-version delta, it names the regressing version, e.g.
+	// "claude-code 2.1.143 +14K cache tokens vs 2.1.98". Empty when no version
+	// attribution is possible (no false attribution).
+	CacheBloatTooltip string `json:"cache_bloat_tooltip,omitempty"`
 
 	// LastCWD is the most recent working directory extracted from the
 	// transcript during metrics parsing. Used to avoid a separate file read.
@@ -738,6 +772,7 @@ func MergeMetrics(newM, oldM *SessionMetrics) *SessionMetrics {
 		ElapsedSeconds:       newM.ElapsedSeconds,
 		TotalTokens:          newM.TotalTokens,
 		ModelName:            newM.ModelName,
+		AgentVersion:         newM.AgentVersion,
 		ContextWindow:        newM.ContextWindow,
 		ContextUtilization:   newM.ContextUtilization,
 		PressureLevel:        newM.PressureLevel,
@@ -767,6 +802,9 @@ func MergeMetrics(newM, oldM *SessionMetrics) *SessionMetrics {
 		CumOutputTokens:          newM.CumOutputTokens,
 		CumCacheReadTokens:       newM.CumCacheReadTokens,
 		CumCacheCreationTokens:   newM.CumCacheCreationTokens,
+		CompletedTurns:           newM.CompletedTurns,
+		CacheBloat:               newM.CacheBloat,
+		CacheBloatTooltip:        newM.CacheBloatTooltip,
 		Tasks:                    newM.Tasks,
 		NoSubstantiveActivity:    newM.NoSubstantiveActivity,
 		SawManualCompactBoundary: newM.SawManualCompactBoundary,
@@ -818,6 +856,25 @@ func MergeMetrics(newM, oldM *SessionMetrics) *SessionMetrics {
 	}
 	if merged.CumCacheCreationTokens == 0 && oldM.CumCacheCreationTokens > 0 {
 		merged.CumCacheCreationTokens = oldM.CumCacheCreationTokens
+	}
+	// AgentVersion appears once in the transcript header — carry it across the
+	// many markerless passes that follow, exactly like ModelName.
+	if merged.AgentVersion == "" && oldM.AgentVersion != "" {
+		merged.AgentVersion = oldM.AgentVersion
+	}
+	// CompletedTurns is incremented by the detector on the SessionState *after*
+	// this merge; the tailer never sets it, so newM always carries 0. Carry the
+	// accumulated count forward or every pass would reset it to zero.
+	if merged.CompletedTurns == 0 && oldM.CompletedTurns > 0 {
+		merged.CompletedTurns = oldM.CompletedTurns
+	}
+	// CacheBloat / CacheBloatTooltip are overlay flags set by the detector on
+	// turn boundaries (newM never carries them). Keep the last verdict sticky
+	// across mid-turn passes so the glyph doesn't flicker; the detector
+	// overwrites it on the next turn boundary.
+	if !merged.CacheBloat && oldM.CacheBloat {
+		merged.CacheBloat = oldM.CacheBloat
+		merged.CacheBloatTooltip = oldM.CacheBloatTooltip
 	}
 	// nil Tasks = "no data yet"; non-nil empty slice = "no tasks" — overwrite only for the latter.
 	if merged.Tasks == nil && oldM.Tasks != nil {

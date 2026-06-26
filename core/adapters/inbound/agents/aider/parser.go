@@ -65,6 +65,8 @@ var (
 	// `> Weak model: …` is intentionally not matched (aider's internal
 	// quick-summary model, not the main turn).
 	modelRE = regexp.MustCompile(`^>\s*(?:Main\s+)?[Mm]odel:\s*(\S+)`)
+	// `> Aider v0.86.2` — the version banner aider prints once at startup.
+	aiderVersionRE = regexp.MustCompile(`^>\s*Aider v(\S+)`)
 	// `> Applied edit to <file>` — file edit tool call
 	appliedEditRE = regexp.MustCompile(`^>\s*Applied edit to\s+`)
 	// `> Running <cmd>` or `> Running shell command:` — shell tool call
@@ -106,6 +108,10 @@ func (p *Parser) ParseLineRaw(line string) *tailer.ParsedEvent {
 			ClearToolNames: true,
 			UserText:       text, // heuristic summary (#738)
 		}
+	}
+
+	if m := aiderVersionRE.FindStringSubmatch(line); m != nil {
+		return &tailer.ParsedEvent{Skip: true, AgentVersion: m[1]}
 	}
 
 	if m := modelRE.FindStringSubmatch(line); m != nil {

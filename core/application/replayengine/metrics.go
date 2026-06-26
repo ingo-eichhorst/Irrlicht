@@ -20,6 +20,7 @@ func TailerToDomain(m *tailer.SessionMetrics) *session.SessionMetrics {
 		ElapsedSeconds:                    m.ElapsedSeconds,
 		TotalTokens:                       m.TotalTokens,
 		ModelName:                         m.ModelName,
+		AgentVersion:                      m.AgentVersion,
 		ContextWindow:                     m.ContextWindow,
 		ContextUtilization:                m.ContextUtilization,
 		PressureLevel:                     m.PressureLevel,
