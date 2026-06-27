@@ -46,10 +46,6 @@ struct BackchannelRule: Codable, Identifiable, Equatable {
     static let presetCatalog: [(id: String, label: String)] = [
         (presetCompact, "Compact"),
     ]
-
-    static func presetLabel(_ id: String) -> String {
-        presetCatalog.first { $0.id == id }?.label ?? id
-    }
 }
 
 /// Thin client for the daemon's backchannel rules endpoint (GET/PUT).
