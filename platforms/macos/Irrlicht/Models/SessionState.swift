@@ -95,6 +95,17 @@ struct RateLimitWindowInfo: Codable, Hashable {
         try c.encode(windowMinutes, forKey: .windowMinutes)
         try c.encode(resetsAt.timeIntervalSince1970, forKey: .resetsAt)
     }
+
+    /// Nominal window length, snapping the Codex server-rounding quirk
+    /// (299→300, 10079→10080) to the canonical 5h / 7d values so callers can
+    /// match on exact minutes.
+    var canonicalWindowMinutes: Int {
+        switch windowMinutes {
+        case 299, 300: return 300
+        case 10079, 10080: return 10080
+        default: return windowMinutes
+        }
+    }
 }
 
 /// Prepaid credits balance, populated only when the user is on the API-key

@@ -182,10 +182,9 @@ struct HistoryView: View {
     private func fetch() async {
         guard !range.isQuota else { return }  // quota spans read the live snapshot, no fetch
         loadFailed = false
-        let cs = range == .custom ? appliedCustomStart : nil
-        let ce = range == .custom ? appliedCustomEnd : nil
         var comps = URLComponents(string: "\(DaemonEndpoint.httpBase)/api/v1/history")
-        comps?.queryItems = range.queryItems(forecast: forecastEnabled, customStart: cs, customEnd: ce)
+        // queryItems ignores the custom bounds unless range == .custom.
+        comps?.queryItems = range.queryItems(forecast: forecastEnabled, customStart: appliedCustomStart, customEnd: appliedCustomEnd)
         guard let url = comps?.url else { return }
         do {
             let (data, resp) = try await URLSession.shared.data(from: url)
@@ -209,17 +208,26 @@ struct HistoryView: View {
     /// subscription session is active or that window isn't present.
     private var quotaWindow: QuotaWindowVM? {
         guard let target = range.windowMinutes else { return nil }
-        var best: (info: RateLimitInfo, eta: Date?)?
-        for s in sessionManager.sessions {
-            guard let rl = s.metrics?.rateLimit else { continue }
-            if best == nil || rl.sampledAt > best!.info.sampledAt {
-                best = (rl, s.metrics?.rateLimitForecastEta)
-            }
-        }
-        guard let best,
-              let w = best.info.windows.first(where: { abs($0.windowMinutes - target) <= 1 })
-        else { return nil }
         let now = Date()
+        // Pick the freshest snapshot carrying this window, preferring one whose
+        // window hasn't already reset — a finished session's pre-rollover
+        // snapshot can have a newer sampledAt yet show a stale window (the same
+        // tiebreak SessionListView's chip buckets use).
+        var best: (info: RateLimitInfo, eta: Date?, window: RateLimitWindowInfo)?
+        for s in sessionManager.sessions {
+            guard let rl = s.metrics?.rateLimit,
+                  let w = rl.windows.first(where: { $0.canonicalWindowMinutes == target })
+            else { continue }
+            if let b = best {
+                let bStale = b.window.resetsAt <= now
+                let wStale = w.resetsAt <= now
+                let fresher = (bStale && !wStale) || (bStale == wStale && rl.sampledAt > b.info.sampledAt)
+                guard fresher else { continue }
+            }
+            best = (rl, s.metrics?.rateLimitForecastEta, w)
+        }
+        guard let best else { return nil }
+        let w = best.window
         let start = w.resetsAt.addingTimeInterval(-Double(w.windowMinutes) * 60)
         return QuotaWindowVM(
             label: range.label,
@@ -239,7 +247,7 @@ struct HistoryView: View {
     /// pace since the window opened. nil when usage is on track to stay under
     /// the cap before reset.
     private func projectedCap(window w: RateLimitWindowInfo, info: RateLimitInfo, eta: Date?, now: Date, start: Date) -> Date? {
-        if let eta, let imm = info.imminentWindow, imm.windowMinutes == w.windowMinutes,
+        if let eta, let imm = info.imminentWindow, imm.canonicalWindowMinutes == w.canonicalWindowMinutes,
            eta > now, eta <= w.resetsAt {
             return eta
         }
@@ -660,23 +668,29 @@ enum HistoryFormat {
     /// `$X.XX`, matching the web `histDollar`.
     static func dollar(_ v: Double) -> String { String(format: "$%.2f", v) }
 
-    /// X-axis tick label: `HH:mm` for sub-day buckets, `M/d` otherwise —
-    /// matching the web `histAxisLabel`. Uses the process timezone (the daemon
-    /// and app are always on the same Mac); snapshot tests pin it for stability.
-    static func axisLabel(_ date: Date, bucketSeconds: Int64) -> String {
+    // Cached formatters — DateFormatter init is expensive and these fire per
+    // axis tick. POSIX-pinned so snapshot tests stay stable; timezone tracks the
+    // process default (daemon + app share one Mac).
+    private static let hourMinute = posix("HH:mm")
+    private static let monthDay = posix("M/d")
+    private static let weekdayClock = posix("EEE h:mm a")
+
+    private static func posix(_ format: String) -> DateFormatter {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
-        f.dateFormat = bucketSeconds < 86_400 ? "HH:mm" : "M/d"
-        return f.string(from: date)
+        f.dateFormat = format
+        return f
     }
 
-    /// Weekday + 12-hour clock, e.g. "Sat 3:15 PM" — for projected-cap and reset
-    /// timestamps. Pinned to POSIX so snapshot tests stay stable.
+    /// X-axis tick label: `HH:mm` for sub-day buckets, `M/d` otherwise —
+    /// matching the web `histAxisLabel`.
+    static func axisLabel(_ date: Date, bucketSeconds: Int64) -> String {
+        (bucketSeconds < 86_400 ? hourMinute : monthDay).string(from: date)
+    }
+
+    /// Weekday + 12-hour clock, e.g. "Sat 3:15 PM" — for projected-cap and reset.
     static func clock(_ date: Date) -> String {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.dateFormat = "EEE h:mm a"
-        return f.string(from: date)
+        weekdayClock.string(from: date)
     }
 }
 
