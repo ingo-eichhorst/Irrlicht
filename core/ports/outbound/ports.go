@@ -254,6 +254,38 @@ type CostSeriesResult struct {
 	TokenSplit    *TokenSplit          `json:"token_split,omitempty"`
 }
 
+// ConcurrencyResult is the reconstruction of concurrent-agent counts over time
+// from lifecycle recordings, returned by ConcurrencyReader.AgentsSeries (issue
+// #751, History tab Phase 3). It parallels CostSeriesResult: BucketStarts holds
+// each bucket's start (unix seconds) and ByKey maps a project to its per-bucket
+// peak concurrency (each slice has len == len(BucketStarts)). PeakByKey is each
+// project's peak concurrency over the whole window (drives the top-projects
+// list). Peak/Average/Current summarize the exact total concurrency across all
+// projects: the window maximum, the time-weighted mean, and the count of
+// sessions still active at End ("now").
+type ConcurrencyResult struct {
+	Start         int64                `json:"start"`
+	End           int64                `json:"end"`
+	BucketSeconds int64                `json:"bucket_seconds"`
+	BucketStarts  []int64              `json:"bucket_starts"`
+	ByKey         map[string][]float64 `json:"by_key"`
+	PeakByKey     map[string]float64   `json:"peak_by_key"`
+	Peak          float64              `json:"peak"`
+	Average       float64              `json:"average"`
+	Current       float64              `json:"current"`
+}
+
+// ConcurrencyReader reconstructs a concurrent-agents time series from the
+// lifecycle recordings irrlichd writes under <dataDir>/recordings when started
+// with --record (issue #751). It is the read-side counterpart to EventRecorder
+// and the recordings analog of CostTracker.CostSeries. Implementations must be
+// safe for concurrent use. AgentsSeries honors SeriesQuery's window, bucket
+// width, and scope filter; the group axis is always project (the only axis
+// recordings carry), so Group is ignored.
+type ConcurrencyReader interface {
+	AgentsSeries(q SeriesQuery) (*ConcurrencyResult, error)
+}
+
 // CostTracker persists per-session cost/token snapshots so clients can query
 // project-level cost totals over a trailing time window (last day/week/…).
 // Implementations must be safe for concurrent use.

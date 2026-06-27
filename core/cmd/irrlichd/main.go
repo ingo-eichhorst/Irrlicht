@@ -497,8 +497,12 @@ func main() {
 		}))
 
 	// History tab analytics (issue #369): trailing/calendar/custom-range cost
-	// series + linear forecast, computed from the cost snapshot files.
-	mux.HandleFunc("GET /api/v1/history", handleGetHistory(costTracker, cachedRepo))
+	// series + linear forecast, computed from the cost snapshot files. #373 adds
+	// chart=yield (per-project productive-vs-reverted spend over sessions). Phase
+	// 3 (#751) adds chart=agents, a concurrent-agents series reconstructed from
+	// the lifecycle recordings (read-only; empty unless --record has been used).
+	concurrencyTracker := filesystem.NewConcurrencyTrackerWithDir(resolveRecordingsDir(sockPath))
+	mux.HandleFunc("GET /api/v1/history", handleGetHistory(costTracker, cachedRepo, concurrencyTracker))
 
 	focusService := services.NewFocusService(cachedRepo, push, logger)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/focus", sessionshandler.NewFocusHandler(focusService, logger))
@@ -726,10 +730,7 @@ func main() {
 	// wins even when IRRLICHT_HOME is set, so test harnesses (e.g. the
 	// onboarding factory's record path) can pin recordings somewhere specific.
 	if recordEnabled {
-		recordingsDir := os.Getenv("IRRLICHT_RECORDINGS_DIR")
-		if recordingsDir == "" {
-			recordingsDir = filepath.Join(filepath.Dir(sockPath), "recordings")
-		}
+		recordingsDir := resolveRecordingsDir(sockPath)
 		rec, err := recorder.NewJSONLRecorder(recordingsDir)
 		if err != nil {
 			logger.LogError("startup", "", fmt.Sprintf("failed to init lifecycle recorder: %v", err))
@@ -897,6 +898,17 @@ func stateStoreDir(sub string) string {
 		return filepath.Join(v, sub)
 	}
 	return ""
+}
+
+// resolveRecordingsDir returns where lifecycle recordings live: the
+// IRRLICHT_RECORDINGS_DIR override when set, else <dir-of-socket>/recordings
+// (IRRLICHT_HOME-relative via sockPath). Shared by the recorder writer and the
+// History tab's read-side concurrency reader (#751) so the two never drift.
+func resolveRecordingsDir(sockPath string) string {
+	if d := os.Getenv("IRRLICHT_RECORDINGS_DIR"); d != "" {
+		return d
+	}
+	return filepath.Join(filepath.Dir(sockPath), "recordings")
 }
 
 // resolveSessionRepo resolves the on-disk session store, honoring IRRLICHT_HOME

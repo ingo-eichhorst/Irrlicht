@@ -2956,7 +2956,7 @@ import { isSummaryCollapsed, toggleSummaryCollapsed, anySummaryCollapsed, collap
       '#5E5CE6', '#FFD60A', '#30D158', '#BF5AF2', '#64D2FF',
     ];
     const RANGE_LABELS = { day: 'Day', week: 'Week', month: 'Month', year: 'Year', 'this-month': 'This Month', custom: 'Custom' };
-    const CHART_LABELS = { cost: 'Cost', tokens: 'Tokens', models: 'Models', providers: 'Providers' };
+    const CHART_LABELS = { cost: 'Cost', tokens: 'Tokens', models: 'Models', providers: 'Providers', agents: 'Agents' };
     // Drilldown order: clicking a contributor scopes to it and re-groups by the
     // next finer axis. A leaf (no entry) makes that contributor non-drillable.
     const DRILL_NEXT = { project: 'branch', branch: 'session', provider: 'model', model: 'session' };
@@ -2974,9 +2974,15 @@ import { isSummaryCollapsed, toggleSummaryCollapsed, anySummaryCollapsed, collap
       if (v >= 1e3) return (v / 1e3).toFixed(1) + 'k';
       return String(Math.round(v));
     }
+    // Integer agent count (concurrency is a whole number of sessions).
+    function histCount(v) { return String(Math.round(Number(v) || 0)); }
     // The value formatter for the active chart — dollars for cost/models/providers,
-    // token counts for tokens.
-    function histValue(v) { return historyState.chart === 'tokens' ? histTokens(v) : histDollar(v); }
+    // token counts for tokens, integer agent counts for agents.
+    function histValue(v) {
+      if (historyState.chart === 'tokens') return histTokens(v);
+      if (historyState.chart === 'agents') return histCount(v);
+      return histDollar(v);
+    }
     function histAxisLabel(ts, bucketSeconds) {
       const d = new Date(ts * 1000);
       if (bucketSeconds < 86400) {
@@ -3028,8 +3034,13 @@ import { isSummaryCollapsed, toggleSummaryCollapsed, anySummaryCollapsed, collap
     function renderHistory() {
       renderHistoryBreadcrumb();
       const isYield = historyState.chart === 'yield';
+      // Yield counts completed sessions; agents are reconstructed from opt-in
+      // recordings — each gets its own empty caption.
       const emptyEl = document.getElementById('history-chart-empty');
-      if (emptyEl) emptyEl.textContent = isYield ? 'no completed sessions in this range yet' : 'no cost data in this range yet';
+      if (emptyEl) emptyEl.textContent =
+        isYield ? 'no completed sessions in this range yet'
+          : historyState.chart === 'agents' ? 'no recordings in this range yet'
+            : 'no cost data in this range yet';
       if (!historyState.data) {
         const wrap = document.getElementById('history-chart-wrap');
         if (wrap) wrap.classList.add('empty');
@@ -3179,6 +3190,32 @@ import { isSummaryCollapsed, toggleSummaryCollapsed, anySummaryCollapsed, collap
       const listEl = document.getElementById('history-contrib');
       const chartLabel = CHART_LABELS[historyState.chart] || 'Total';
       if (titleEl) titleEl.textContent = chartLabel + ' · ' + (RANGE_LABELS[historyState.range] || historyState.range);
+
+      // Agents: the panel summarizes concurrency (peak headline, avg/current
+      // sub-line) and ranks the projects that ran the most agents at once. No
+      // forecast or drilldown — concurrency is reconstructed per project only.
+      if (historyState.chart === 'agents') {
+        const conc = data.concurrency || { peak: 0, average: 0, current: 0 };
+        if (totalEl) totalEl.textContent = histCount(conc.peak) + ' peak';
+        if (fcEl) fcEl.textContent = 'avg ' + (Number(conc.average) || 0).toFixed(1) + ' · now ' + histCount(conc.current);
+        if (!listEl) return;
+        listEl.innerHTML = '';
+        const projects = data.top_contributors || [];
+        if (!projects.length) {
+          appendHistoryEmpty(listEl, 'no agents in this range');
+          return;
+        }
+        projects.forEach((c, i) => {
+          const li = document.createElement('li');
+          const dot = document.createElement('span'); dot.className = 'dot'; dot.style.background = historyColorFor(i);
+          const label = document.createElement('span'); label.className = 'label'; label.textContent = c.label;
+          const val = document.createElement('span'); val.className = 'val'; val.textContent = histCount(c.value);
+          li.append(dot, label, val);
+          listEl.appendChild(li);
+        });
+        return;
+      }
+
       if (totalEl) totalEl.textContent = histValue(data.total);
       if (fcEl) {
         // Forecast is USD-only; the daemon omits it for the tokens chart.
@@ -3486,9 +3523,11 @@ import { isSummaryCollapsed, toggleSummaryCollapsed, anySummaryCollapsed, collap
       if (!b || b.disabled) return;
       const c = b.dataset.chart;
       historyState.chart = c;
-      // models/providers are presets that pin the stacking axis.
+      // models/providers are presets that pin the stacking axis; agents is
+      // reconstructed per project only.
       if (c === 'models') historyState.group = 'model';
       else if (c === 'providers') historyState.group = 'provider';
+      else if (c === 'agents') historyState.group = 'project';
       historyState.scope = null; // a new metric resets any drilldown
       syncHistorySelectors();
       fetchHistory();
@@ -3499,9 +3538,9 @@ import { isSummaryCollapsed, toggleSummaryCollapsed, anySummaryCollapsed, collap
       const b = e.target.closest('button[data-group]');
       if (!b || b.disabled) return;
       historyState.group = b.dataset.group;
-      // Choosing a group explicitly leaves the metric-preset charts so the
-      // chosen axis sticks.
-      if (historyState.chart === 'models' || historyState.chart === 'providers') historyState.chart = 'cost';
+      // Choosing a group explicitly leaves the metric-preset charts (and agents,
+      // which is project-only) so the chosen axis sticks on a cost breakdown.
+      if (historyState.chart === 'models' || historyState.chart === 'providers' || historyState.chart === 'agents') historyState.chart = 'cost';
       historyState.scope = null;
       syncHistorySelectors();
       fetchHistory();
@@ -3537,5 +3576,5 @@ export {
   sessionOrigin, sourceIdOf, localBareIds, isShadowedRemote,
   daemonSessionIds, structureSignature,
   pendingWizardAgents, buildPermissionAnswers, stillPendingForAgents,
-  historyQuery, histTokens, DRILL_NEXT,
+  historyQuery, histTokens, histCount, CHART_LABELS, DRILL_NEXT,
 };

@@ -236,8 +236,9 @@ func providerCostsByProvider(byTf map[string]map[string]float64) map[string]map[
 // History tab (issues #369 / #750). Phase 1 served chart=cost grouped by
 // project; Phase 2 adds the tokens/models/providers chart types and the
 // branch/provider/model/session group axes plus drilldown scoping, all computed
-// from the cost snapshot files via CostTracker.CostSeries. chart=agents remains
-// a Phase 3 (#751) 501 stub.
+// from the cost snapshot files via CostTracker.CostSeries. Phase 3 (#751) adds
+// chart=agents, a concurrent-agents series reconstructed from the lifecycle
+// recordings via ConcurrencyReader.AgentsSeries; chart=state stays a 501 stub.
 
 type historyPoint struct {
 	TS int64 `json:"ts"`
@@ -260,6 +261,16 @@ type historyTokenSplit struct {
 	Input  float64 `json:"input"`
 	Output float64 `json:"output"`
 	Cache  float64 `json:"cache"`
+}
+
+// historyConcurrency is the concurrent-agents summary, present only for
+// chart=agents (#751). Peak is the window's max simultaneous agents, Average the
+// time-weighted mean, Current the count still active at the window's end edge.
+// Drives the agents side panel.
+type historyConcurrency struct {
+	Peak    float64 `json:"peak"`
+	Average float64 `json:"average"`
+	Current float64 `json:"current"`
 }
 
 type historyForecastPoint struct {
@@ -287,6 +298,7 @@ type historyResponse struct {
 	TopContributors []historyContributor `json:"top_contributors"`
 	Forecast        *historyForecast     `json:"forecast,omitempty"`
 	TokenSplit      *historyTokenSplit   `json:"token_split,omitempty"` // chart=tokens only
+	Concurrency     *historyConcurrency  `json:"concurrency,omitempty"` // chart=agents only
 	Scope           string               `json:"scope,omitempty"`       // active drilldown filter "field:value"
 }
 
@@ -330,7 +342,7 @@ type historySessionLister interface {
 // &bucket=&forecast=&forecast_buckets=. Range is a trailing window
 // (day|week|month|year), a calendar shorthand (this-month), or an explicit
 // start&end (unix seconds). Bucket granularity is downsampled at read time.
-func handleGetHistory(tracker outbound.CostTracker, sessions historySessionLister) http.HandlerFunc {
+func handleGetHistory(tracker outbound.CostTracker, sessions historySessionLister, concurrency outbound.ConcurrencyReader) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 
@@ -344,6 +356,10 @@ func handleGetHistory(tracker outbound.CostTracker, sessions historySessionListe
 		case "yield":
 			// implemented (#373) — handled after range resolution below
 		case "agents":
+			// implemented (Phase 3) — handled after range resolution below
+		case "state":
+			// time-in-state is the issue's optional second half (#751); the
+			// reconstruction exists but no chart is wired yet.
 			writeHistoryNotImplemented(w, "chart="+chart, 3)
 			return
 		default:
@@ -365,6 +381,7 @@ func handleGetHistory(tracker outbound.CostTracker, sessions historySessionListe
 
 		// chart picks the measured metric; models/providers are presets that
 		// pin the stacking axis to that dimension (one-click "cost by X").
+		// agents is reconstructed per project only.
 		metric := "cost"
 		switch chart {
 		case "tokens":
@@ -373,6 +390,8 @@ func handleGetHistory(tracker outbound.CostTracker, sessions historySessionListe
 			group = "model"
 		case "providers":
 			group = "provider"
+		case "agents":
+			group = "project"
 		}
 
 		scopeField, scopeValue := parseHistoryScope(q.Get("scope"))
@@ -396,6 +415,33 @@ func handleGetHistory(tracker outbound.CostTracker, sessions historySessionListe
 		}
 
 		bucketSeconds := historyBucketSeconds(q, end-start)
+
+		if chart == "agents" {
+			var cr *outbound.ConcurrencyResult
+			if concurrency != nil {
+				c, err := concurrency.AgentsSeries(outbound.SeriesQuery{
+					Start:         start,
+					End:           end,
+					BucketSeconds: bucketSeconds,
+					Group:         group,
+					ScopeField:    scopeField,
+					ScopeValue:    scopeValue,
+				})
+				if err != nil {
+					http.Error(w, "internal error", http.StatusInternalServerError)
+					return
+				}
+				cr = c
+			}
+			if cr == nil {
+				// No reader (recordings dir unresolved): empty-but-valid payload.
+				cr = &outbound.ConcurrencyResult{Start: start, End: end, BucketSeconds: bucketSeconds, BucketStarts: []int64{}, ByKey: map[string][]float64{}, PeakByKey: map[string]float64{}}
+			}
+			resp := buildAgentsResponse(rangeKey, scopeEcho, cr)
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(resp)
+			return
+		}
 
 		var series *outbound.CostSeriesResult
 		if tracker != nil {
@@ -569,6 +615,60 @@ func buildHistoryResponse(rangeKey, chart, group, scope string, s *outbound.Cost
 	// Forecast projects USD spend; it isn't meaningful for token counts.
 	if chart != "tokens" && historyForecastEnabled(q) && resp.Total > 0 && len(s.BucketStarts) > 0 {
 		resp.Forecast = computeLinearForecast(s.BucketStarts, s.BucketSeconds, resp.Total, historyForecastBuckets(q, len(s.BucketStarts)))
+	}
+	return resp
+}
+
+// buildAgentsResponse flattens a concurrency reconstruction into the history
+// envelope (#751). It reuses the same sparse [{ts,project,value}] series +
+// bucket_starts the cost chart's canvas renderer consumes (so the frontend
+// renderer is shared untouched), ranks top contributors by each project's peak
+// concurrency, and attaches the peak/average/current summary the agents side
+// panel shows. Total carries the exact whole-window peak (the side panel's
+// headline). No forecast or token split — neither is meaningful for a count.
+func buildAgentsResponse(rangeKey, scope string, c *outbound.ConcurrencyResult) historyResponse {
+	resp := historyResponse{
+		Range:           rangeKey,
+		Chart:           "agents",
+		Group:           "project",
+		Start:           c.Start,
+		End:             c.End,
+		BucketSeconds:   c.BucketSeconds,
+		BucketStarts:    c.BucketStarts,
+		Total:           c.Peak,
+		Series:          []historyPoint{},
+		TopContributors: []historyContributor{},
+		Concurrency:     &historyConcurrency{Peak: c.Peak, Average: c.Average, Current: c.Current},
+		Scope:           scope,
+	}
+
+	// Deterministic key order: peak desc, then name.
+	keys := make([]string, 0, len(c.PeakByKey))
+	for k := range c.PeakByKey {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if c.PeakByKey[keys[i]] != c.PeakByKey[keys[j]] {
+			return c.PeakByKey[keys[i]] > c.PeakByKey[keys[j]]
+		}
+		return keys[i] < keys[j]
+	})
+
+	for _, k := range keys {
+		for i, v := range c.ByKey[k] {
+			if i >= len(c.BucketStarts) {
+				break
+			}
+			if v != 0 {
+				resp.Series = append(resp.Series, historyPoint{TS: c.BucketStarts[i], Project: k, Value: v})
+			}
+		}
+	}
+	for i, k := range keys {
+		if i >= 5 {
+			break
+		}
+		resp.TopContributors = append(resp.TopContributors, historyContributor{Label: k, Value: c.PeakByKey[k]})
 	}
 	return resp
 }
