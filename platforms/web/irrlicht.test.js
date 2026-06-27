@@ -26,6 +26,8 @@ import {
   structureSignature,
   historyQuery,
   histTokens,
+  histCount,
+  CHART_LABELS,
   DRILL_NEXT,
 } from './irrlicht.js'
 
@@ -726,5 +728,24 @@ describe('DRILL_NEXT (drilldown axis order)', () => {
     expect(DRILL_NEXT.provider).toBe('model')
     expect(DRILL_NEXT.model).toBe('session')
     expect(DRILL_NEXT.session).toBeUndefined()
+  })
+})
+
+describe('agents chart (#751 Phase 3)', () => {
+  test('chart=agents serializes with project grouping', () => {
+    const q = new URLSearchParams(historyQuery({ range: 'day', chart: 'agents', group: 'project', forecast: true, start: null, end: null, scope: null }))
+    expect(q.get('chart')).toBe('agents')
+    expect(q.get('group')).toBe('project')
+  })
+
+  test('CHART_LABELS includes Agents', () => {
+    expect(CHART_LABELS.agents).toBe('Agents')
+  })
+
+  test('histCount renders an integer agent count', () => {
+    expect(histCount(0)).toBe('0')
+    expect(histCount(2)).toBe('2')
+    expect(histCount(2.6)).toBe('3')
+    expect(histCount(undefined)).toBe('0')
   })
 })

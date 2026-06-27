@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"irrlicht/core/adapters/outbound/filesystem"
+	"irrlicht/core/domain/lifecycle"
+	"irrlicht/core/domain/session"
 )
 
 // seedCostRows appends raw snapshot rows to <dir>/<project>.jsonl in the
@@ -36,7 +38,7 @@ func doHistory(t *testing.T, tracker *filesystem.CostTracker, query string) (*ht
 	t.Helper()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/history?"+query, nil)
 	rec := httptest.NewRecorder()
-	handleGetHistory(tracker, nil)(rec, req)
+	handleGetHistory(tracker, nil, nil)(rec, req)
 	var resp historyResponse
 	if rec.Code == http.StatusOK {
 		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
@@ -111,21 +113,87 @@ func TestHandleGetHistory_CustomRange(t *testing.T) {
 	}
 }
 
-// TestHandleGetHistory_AgentsStub: chart=agents is still Phase 3 (#751).
-func TestHandleGetHistory_AgentsStub(t *testing.T) {
-	tr := filesystem.NewCostTrackerWithDir(filepath.Join(t.TempDir(), "cost"))
+// seedRecording writes lifecycle events to <dir>/<name> in the recorder's JSONL
+// shape, so the concurrency reader reconstructs concurrency from them.
+func seedRecording(t *testing.T, dir, name string, events []lifecycle.Event) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	f, err := os.Create(filepath.Join(dir, name))
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	defer f.Close()
+	enc := json.NewEncoder(f)
+	for _, ev := range events {
+		if err := enc.Encode(ev); err != nil {
+			t.Fatalf("encode: %v", err)
+		}
+	}
+}
+
+// TestHandleGetHistory_AgentsConcurrency: chart=agents now reconstructs a
+// concurrent-agents series from recordings (no more 501), with the peak/average/
+// current summary and top concurrent projects in the side panel.
+func TestHandleGetHistory_AgentsConcurrency(t *testing.T) {
+	recDir := filepath.Join(t.TempDir(), "recordings")
+	now := time.Now().Unix()
+	at := func(sec int64) time.Time { return time.Unix(now-sec, 0) }
+	seedRecording(t, recDir, "run.jsonl", []lifecycle.Event{
+		{Seq: 1, Timestamp: at(3600), Kind: lifecycle.KindTranscriptNew, SessionID: "s1", CWD: "/home/me/projX"},
+		{Seq: 2, Timestamp: at(3500), Kind: lifecycle.KindStateTransition, SessionID: "s1", NewState: session.StateWorking},
+		{Seq: 3, Timestamp: at(1800), Kind: lifecycle.KindStateTransition, SessionID: "s1", NewState: session.StateReady},
+	})
+	cost := filesystem.NewCostTrackerWithDir(filepath.Join(t.TempDir(), "cost"))
+	conc := filesystem.NewConcurrencyTrackerWithDir(recDir)
+
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/history?range=day&chart=agents", nil)
 	rec := httptest.NewRecorder()
-	handleGetHistory(tr, nil)(rec, req)
-	if rec.Code != http.StatusNotImplemented {
-		t.Fatalf("chart=agents: want 501, got %d", rec.Code)
+	handleGetHistory(cost, nil, conc)(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("chart=agents: want 200, got %d (%s)", rec.Code, rec.Body.String())
 	}
-	var body map[string]any
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+	var resp historyResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if body["phase"] != float64(3) {
-		t.Errorf("want phase 3, got %v", body["phase"])
+	if resp.Chart != "agents" || resp.Group != "project" {
+		t.Errorf("envelope: chart=%q group=%q", resp.Chart, resp.Group)
+	}
+	if resp.Concurrency == nil || resp.Concurrency.Peak != 1 {
+		t.Errorf("concurrency summary: want peak 1, got %+v", resp.Concurrency)
+	}
+	if len(resp.TopContributors) != 1 || resp.TopContributors[0].Label != "projX" {
+		t.Errorf("top concurrent projects: want [projX], got %+v", resp.TopContributors)
+	}
+	if resp.Forecast != nil || resp.TokenSplit != nil {
+		t.Errorf("agents chart should carry neither forecast nor token_split, got %+v / %+v", resp.Forecast, resp.TokenSplit)
+	}
+	if len(resp.Series) == 0 {
+		t.Error("want a non-empty concurrency series")
+	}
+}
+
+// TestHandleGetHistory_AgentsEmpty: no recordings (the common case — --record is
+// opt-in) returns a clean empty payload, not an error.
+func TestHandleGetHistory_AgentsEmpty(t *testing.T) {
+	conc := filesystem.NewConcurrencyTrackerWithDir(filepath.Join(t.TempDir(), "recordings"))
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/history?range=day&chart=agents", nil)
+	rec := httptest.NewRecorder()
+	handleGetHistory(nil, nil, conc)(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("empty agents: want 200, got %d", rec.Code)
+	}
+	var resp historyResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Concurrency == nil || resp.Concurrency.Peak != 0 {
+		t.Errorf("want zero concurrency summary, got %+v", resp.Concurrency)
+	}
+	if len(resp.Series) != 0 || resp.Series == nil {
+		t.Errorf("want non-nil empty series, got %+v", resp.Series)
 	}
 }
 
@@ -275,7 +343,7 @@ func TestHandleGetHistory_BadRequests(t *testing.T) {
 	for _, q := range []string{"chart=bogus", "group=bogus", "range=bogus", "start=abc&end=def", "start=2000&end=1000"} {
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/history?"+q, nil)
 		rec := httptest.NewRecorder()
-		handleGetHistory(tr, nil)(rec, req)
+		handleGetHistory(tr, nil, nil)(rec, req)
 		if rec.Code != http.StatusBadRequest {
 			t.Errorf("%q: want 400, got %d", q, rec.Code)
 		}
@@ -285,7 +353,7 @@ func TestHandleGetHistory_BadRequests(t *testing.T) {
 func TestHandleGetHistory_NilTrackerEmpty(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/history?range=week", nil)
 	rec := httptest.NewRecorder()
-	handleGetHistory(nil, nil)(rec, req)
+	handleGetHistory(nil, nil, nil)(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("nil tracker: want 200, got %d", rec.Code)
 	}
