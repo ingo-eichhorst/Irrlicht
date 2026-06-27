@@ -142,16 +142,17 @@ func TaskEstimateFromTasks(tasks []Task) (est, base *TaskEstimate) {
 //  2. Fallback when no usable base exists (single marker so far):
 //     perRound = elapsedAtMarker / CompletedRounds, with the gap since the
 //     marker subtracted from elapsedSeconds.
-//  3. Corpus prior (taskRoundPriorSeconds) when NO round has completed yet
-//     (#753): a real eta appears at the very first marker — total_rounds ×
-//     prior — instead of "estimating…", and the measured rate (1 or 2)
-//     takes over the instant a round lands, so every post-first-round
-//     projection is byte-identical to the pre-#753 model. The earlier
-//     number is shown with a deliberately wide range (UI side) to signal a
-//     population prior rather than a measured rate.
+//  3. Corpus prior (taskRoundPriorSeconds) ONLY when no round has completed
+//     yet (#753): a real eta appears at the very first marker — total_rounds ×
+//     prior — instead of "estimating…". The prior is confined to the
+//     zero-round case, so the instant a round lands the measured rate (1 or 2)
+//     takes over and every post-first-round projection is byte-identical to
+//     the pre-#753 model. The earlier number is shown with a deliberately wide
+//     range (UI side) to signal a population prior rather than a measured rate.
 //
 // This function is the single seam to swap when the estimation approach
-// evolves. Returns nil only when there is no estimate at all.
+// evolves. Returns nil when there is no estimate, or when progress is reported
+// but no rate is measurable (no usable base and no elapsed).
 func ForecastTaskCompletion(est, base *TaskEstimate, elapsedSeconds int64, now time.Time) *time.Time {
 	if est == nil {
 		return nil
@@ -162,7 +163,7 @@ func ForecastTaskCompletion(est, base *TaskEstimate, elapsedSeconds int64, now t
 	if est.UpdatedAt > 0 {
 		anchor = time.Unix(est.UpdatedAt, 0)
 	}
-	perRound := taskRoundPriorSeconds
+	var perRound float64
 	switch {
 	case base != nil && est.CompletedRounds > base.CompletedRounds && est.UpdatedAt > base.UpdatedAt:
 		perRound = float64(est.UpdatedAt-base.UpdatedAt) / float64(est.CompletedRounds-base.CompletedRounds)
@@ -174,6 +175,10 @@ func ForecastTaskCompletion(est, base *TaskEstimate, elapsedSeconds int64, now t
 			}
 		}
 		perRound = float64(elapsedAtMarker) / float64(est.CompletedRounds)
+	case est.CompletedRounds == 0:
+		perRound = taskRoundPriorSeconds
+	default:
+		return nil
 	}
 
 	eta := anchor.Add(time.Duration(float64(remaining) * perRound * float64(time.Second)))

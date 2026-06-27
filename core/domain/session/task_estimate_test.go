@@ -100,18 +100,14 @@ func TestForecastTaskCompletion_PriorBootstrapAtZeroRounds(t *testing.T) {
 	}
 }
 
-func TestForecastTaskCompletion_PriorFallbackWhenRateUnmeasurable(t *testing.T) {
-	// Progress reported but no measurable rate (no base, zero elapsed): fall
-	// back to the prior rather than nil, so the chip keeps showing a number.
+func TestForecastTaskCompletion_PriorConfinedToZeroRounds(t *testing.T) {
+	// The prior seeds ONLY the zero-round case. Once progress is reported but
+	// no rate is measurable (no base, zero elapsed), the projection is nil — as
+	// before #753 — so the prior never leaks into the measured-turns space.
 	marker := time.Date(2026, 6, 3, 12, 0, 0, 0, time.UTC)
 	est := &TaskEstimate{TotalRounds: 10, CompletedRounds: 2, UpdatedAt: marker.Unix()}
-	eta := ForecastTaskCompletion(est, nil, 0, marker)
-	if eta == nil {
-		t.Fatal("unmeasurable rate should fall back to the prior, got nil")
-	}
-	want := marker.Add(time.Duration(8*taskRoundPriorSeconds) * time.Second)
-	if !eta.Equal(want) {
-		t.Errorf("eta = %v, want %v (remaining × prior)", eta, want)
+	if eta := ForecastTaskCompletion(est, nil, 0, marker); eta != nil {
+		t.Errorf("progress with no measurable rate should yield nil, got %v", eta)
 	}
 }
 
