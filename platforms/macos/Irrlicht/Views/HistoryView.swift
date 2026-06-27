@@ -15,7 +15,7 @@ struct HistoryView: View {
 
     @EnvironmentObject var sessionManager: SessionManager
 
-    @State private var range: HistoryRange = .day
+    @State private var range: HistoryRange = .fiveHour
     @State private var forecastEnabled = true
     @State private var customStart = Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date()
     @State private var customEnd = Date()
@@ -80,13 +80,34 @@ struct HistoryView: View {
 
     private var controls: some View {
         VStack(alignment: .leading, spacing: IrrSpacing.sp2) {
-            Picker("", selection: $range) {
-                ForEach(HistoryRange.allCases) { r in
-                    Text(r.shortLabel).tag(r)
+            // Two rows so neither is cramped at 380pt, and the quota/cost split
+            // is explicit. Both Pickers bind to `range`; the row that doesn't
+            // own the current selection simply shows nothing highlighted.
+            HStack(spacing: IrrSpacing.sp2) {
+                Text("Quota")
+                    .font(.caption2).foregroundColor(.secondary)
+                    .frame(width: 40, alignment: .leading)
+                Picker("", selection: $range) {
+                    Text("5h").tag(HistoryRange.fiveHour)
+                    Text("7d").tag(HistoryRange.sevenDay)
                 }
+                .pickerStyle(.segmented)
+                .labelsHidden()
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
+            HStack(spacing: IrrSpacing.sp2) {
+                Text("Cost")
+                    .font(.caption2).foregroundColor(.secondary)
+                    .frame(width: 40, alignment: .leading)
+                Picker("", selection: $range) {
+                    Text("Day").tag(HistoryRange.day)
+                    Text("Wk").tag(HistoryRange.week)
+                    Text("Mo").tag(HistoryRange.month)
+                    Text("Yr").tag(HistoryRange.year)
+                    Text("Custom").tag(HistoryRange.custom)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+            }
 
             if range == .custom {
                 HStack(spacing: IrrSpacing.sp2) {
