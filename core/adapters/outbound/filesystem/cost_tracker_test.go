@@ -455,6 +455,28 @@ func TestCostSeries_SumMatchesWindowTotal(t *testing.T) {
 	}
 }
 
+// TestCostSeries_CapsBucketCount guards against a wide span + tiny bucket
+// forcing an unbounded allocation: the bucket is coarsened so the count stays
+// within maxSeriesBuckets while still covering [start, end).
+func TestCostSeries_CapsBucketCount(t *testing.T) {
+	tr := newTestTracker(t)
+	res, err := tr.CostSeries(0, 2_000_000_000, 1) // naive n would be ~2e9
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.BucketStarts) > maxSeriesBuckets {
+		t.Fatalf("bucket count %d exceeds cap %d", len(res.BucketStarts), maxSeriesBuckets)
+	}
+	if res.BucketSeconds <= 1 {
+		t.Fatalf("bucket should have been coarsened above 1s, got %d", res.BucketSeconds)
+	}
+	// Buckets must still span the whole range.
+	last := res.BucketStarts[len(res.BucketStarts)-1]
+	if last+res.BucketSeconds < 2_000_000_000 {
+		t.Fatalf("buckets do not cover the range: last=%d bucket=%d", last, res.BucketSeconds)
+	}
+}
+
 func TestCostSeries_EmptyAndInvalid(t *testing.T) {
 	tr := newTestTracker(t) // dir does not exist yet
 	res, err := tr.CostSeries(1000, 2000, 100)

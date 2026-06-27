@@ -3001,14 +3001,18 @@ import { isGroupCollapsed, toggleGroupCollapsed } from './collapsedGroups.js';
         for (let c = 0; c < B; c++) baseline[c] += matrix[r][c];
       }
 
-      // Forecast: dashed continuation of the grand-total top edge.
+      // Forecast: a dashed flat line at the projected per-bucket rate, drawn
+      // from the right edge of the data into the future. Anchored at the
+      // forecast's own first value (not grand[B-1]) so an empty trailing bucket
+      // — common for the in-progress current minute — doesn't draw a spurious
+      // dip-and-spike down to the axis.
       if (H > 0) {
         ctx.save();
         ctx.setLineDash([4, 3]);
         ctx.strokeStyle = waiting;
         ctx.lineWidth = 1.5;
         ctx.beginPath();
-        ctx.moveTo(xAt(B - 1), yAt(grand[B - 1] || 0));
+        ctx.moveTo(xAt(B - 1), yAt(fc[0].value));
         for (let k = 0; k < H; k++) ctx.lineTo(xAt(B + k), yAt(fc[k].value));
         ctx.stroke();
         ctx.restore();

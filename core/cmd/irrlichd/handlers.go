@@ -418,9 +418,6 @@ func buildHistoryResponse(rangeKey, chart, group string, s *outbound.CostSeriesR
 		Series:          []historyPoint{},
 		TopContributors: []historyContributor{},
 	}
-	if resp.BucketStarts == nil {
-		resp.BucketStarts = []int64{}
-	}
 
 	// Deterministic project order: total desc, then name.
 	projects := make([]string, 0, len(s.Totals))
@@ -434,14 +431,12 @@ func buildHistoryResponse(rangeKey, chart, group string, s *outbound.CostSeriesR
 		return projects[i] < projects[j]
 	})
 
-	grand := make([]float64, len(s.BucketStarts))
 	for _, p := range projects {
 		resp.Total += s.Totals[p]
 		for i, v := range s.ByProject[p] {
 			if i >= len(s.BucketStarts) {
 				break
 			}
-			grand[i] += v
 			if v != 0 {
 				resp.Series = append(resp.Series, historyPoint{TS: s.BucketStarts[i], Project: p, Value: v})
 			}
@@ -454,8 +449,8 @@ func buildHistoryResponse(rangeKey, chart, group string, s *outbound.CostSeriesR
 		resp.TopContributors = append(resp.TopContributors, historyContributor{Label: p, Value: s.Totals[p]})
 	}
 
-	if historyForecastEnabled(q) && resp.Total > 0 && len(grand) > 0 {
-		resp.Forecast = computeLinearForecast(grand, s.BucketStarts, s.BucketSeconds, resp.Total, historyForecastBuckets(q, len(grand)))
+	if historyForecastEnabled(q) && resp.Total > 0 && len(s.BucketStarts) > 0 {
+		resp.Forecast = computeLinearForecast(s.BucketStarts, s.BucketSeconds, resp.Total, historyForecastBuckets(q, len(s.BucketStarts)))
 	}
 	return resp
 }
@@ -488,47 +483,28 @@ func historyForecastBuckets(q url.Values, n int) int {
 	return h
 }
 
-// computeLinearForecast fits y = a + b·x (least squares) over the per-bucket
-// grand-total series and projects `horizon` future buckets. Projected is the
-// current total plus the (non-negative) projected future spend; basis is
-// "linear" so the UI can label it an estimate.
-func computeLinearForecast(grand []float64, bucketStarts []int64, bucketSeconds int64, currentTotal float64, horizon int) *historyForecast {
-	n := len(grand)
-	var sx, sy, sxx, sxy float64
-	for i, y := range grand {
-		x := float64(i)
-		sx += x
-		sy += y
-		sxx += x * x
-		sxy += x * y
-	}
-	fn := float64(n)
-	var a, b float64
-	if denom := fn*sxx - sx*sx; denom != 0 {
-		b = (fn*sxy - sx*sy) / denom
-		a = (sy - b*sx) / fn
-	} else if fn > 0 {
-		a = sy / fn
-	}
-
+// computeLinearForecast projects future spend by extrapolating the window's
+// mean per-bucket rate (total ÷ bucket count) forward over `horizon` buckets —
+// a linear extrapolation of cumulative spend. It depends only on the total and
+// the elapsed bucket count, not on where in the window the spend landed: the
+// same total yields the same projection whether spend was bursty-early or
+// bursty-late. (A least-squares fit over the sparse, mostly-zero per-bucket
+// deltas does depend on burst position, which made the headline projection
+// swing widely for identical totals.) basis is "linear" so the UI labels it an
+// estimate.
+func computeLinearForecast(bucketStarts []int64, bucketSeconds int64, currentTotal float64, horizon int) *historyForecast {
+	n := len(bucketStarts)
 	fc := &historyForecast{Basis: "linear", HorizonBuckets: horizon, Series: []historyForecastPoint{}}
-	var lastTS int64
-	if n > 0 {
-		lastTS = bucketStarts[n-1]
-	}
-	var future float64
-	for k := 1; k <= horizon; k++ {
-		y := a + b*float64(n-1+k)
-		if y < 0 {
-			y = 0
-		}
-		fc.Series = append(fc.Series, historyForecastPoint{TS: lastTS + int64(k)*bucketSeconds, Value: y})
-		future += y
-	}
-	fc.Projected = currentTotal + future
-	if fc.Projected < currentTotal {
+	if n == 0 {
 		fc.Projected = currentTotal
+		return fc
 	}
+	rate := currentTotal / float64(n) // mean USD per bucket over the window
+	lastTS := bucketStarts[n-1]
+	for k := 1; k <= horizon; k++ {
+		fc.Series = append(fc.Series, historyForecastPoint{TS: lastTS + int64(k)*bucketSeconds, Value: rate})
+	}
+	fc.Projected = currentTotal + rate*float64(horizon)
 	return fc
 }
 
