@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { scenes, FIXED_NOW_SEC } from './fixtures.js'
 import { serializeSessionList } from './serialize.js'
+import { SETUP_BODY } from '../vitest.setup.js'
 
 // Tier 1 of the web visual artifact (issue #757): drive each scene through the
 // REAL irrlicht.js in jsdom, assert the rows render (so a broken render fails
@@ -16,35 +17,9 @@ import { serializeSessionList } from './serialize.js'
 const here = dirname(fileURLToPath(import.meta.url))
 const outDir = join(here, 'out')
 
-// The DOM scaffold irrlicht.js queries at module load (mirrors vitest.setup.js).
-// Re-applied per scene so each fresh import renders into a clean #session-list.
-const SETUP_BODY = `
-  <header></header>
-  <button id="theme-toggle"></button>
-  <button id="view-mode-cycle">Context</button>
-  <button id="summary-collapse-all"></button>
-  <button id="settings-toggle"></button>
-  <button id="settings-close"></button>
-  <div id="settings-backdrop"></div>
-  <div id="settings-providers"></div>
-  <div id="session-list"></div>
-  <div id="app-version"></div>
-  <div id="empty-state"></div>
-  <div id="ws-dot" class="ws-dot"></div>
-  <span id="ws-label"></span>
-  <div id="quota-chips"></div>
-  <div id="app-state-icons"></div>
-  <div id="gt-container" style="display:none"></div>
-  <div id="connection-banner"></div>
-  <div id="settings-perm-note"></div>
-  <button id="settings-review-permissions"></button>
-  <div id="permissions-backdrop">
-    <h2 id="permissions-title"></h2>
-    <p id="permissions-intro"></p>
-    <div id="permissions-body"></div>
-    <button id="permissions-apply"></button>
-  </div>
-`
+// SETUP_BODY (the DOM scaffold irrlicht.js queries at module load) is imported
+// from vitest.setup.js — the single source of truth — and re-applied per scene
+// so each fresh import renders into a clean #session-list.
 
 function makeFetch(sessionsPayload) {
   return (url) => {
