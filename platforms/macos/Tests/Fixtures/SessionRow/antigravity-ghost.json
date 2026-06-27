@@ -1,0 +1,25 @@
+{
+  "type": "session_updated",
+  "session": {
+    "version": 1,
+    "session_id": "proc-0",
+    "state": "ready",
+    "adapter": "antigravity",
+    "model": "gemini-3-pro",
+    "cwd": "/Users/test/projects/app",
+    "project_name": "app",
+    "first_seen": 1700000000,
+    "updated_at": 1700000033,
+    "event_count": 2,
+    "last_event": "assistant",
+    "pid": 0,
+    "metrics": {
+      "elapsed_seconds": 33,
+      "total_tokens": 0,
+      "model_name": "gemini-3-pro",
+      "context_window": 1000000,
+      "context_utilization_percentage": 0,
+      "pressure_level": "safe"
+    }
+  }
+}

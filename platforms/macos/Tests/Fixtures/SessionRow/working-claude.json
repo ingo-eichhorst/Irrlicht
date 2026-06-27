@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "session_id": "00000000-0000-0000-0000-000000000001",
+  "state": "working",
+  "adapter": "claude-code",
+  "model": "claude-sonnet-4-6",
+  "cwd": "/Users/test/projects/app",
+  "git_branch": "main",
+  "project_name": "app",
+  "first_seen": 1700000000,
+  "updated_at": 1700000100,
+  "event_count": 42,
+  "last_event": "assistant",
+  "pid": 12345,
+  "metrics": {
+    "elapsed_seconds": 300,
+    "total_tokens": 120000,
+    "model_name": "claude-sonnet-4-6",
+    "context_window": 200000,
+    "context_utilization_percentage": 60,
+    "pressure_level": "warning"
+  }
+}

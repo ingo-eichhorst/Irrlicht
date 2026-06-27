@@ -9,6 +9,8 @@ final class SessionRowSnapshotTests: XCTestCase {
     private var originalDisplayMode: Any?
     private var originalDebugMode: Any?
     private var originalShowCost: Any?
+    private var originalThresholdValue: Any?
+    private var originalThresholdUnit: Any?
     private var originalUserIntent: Any?
 
     override func setUp() async throws {
@@ -19,21 +21,27 @@ final class SessionRowSnapshotTests: XCTestCase {
         originalDisplayMode = defaults.object(forKey: "displayMode")
         originalDebugMode = defaults.object(forKey: "debugMode")
         originalShowCost = defaults.object(forKey: "showCostDisplay")
+        originalThresholdValue = defaults.object(forKey: ContextPressureThreshold.valueKey)
+        originalThresholdUnit = defaults.object(forKey: ContextPressureThreshold.unitKey)
         originalUserIntent = defaults.object(forKey: "userIntentDisplay")
         defaults.set("context", forKey: "displayMode")
         defaults.set(false, forKey: "debugMode")
         defaults.set(false, forKey: "showCostDisplay")
         defaults.set(false, forKey: "userIntentDisplay")
+        // Pin the context-pressure threshold so the alert snapshot is independent
+        // of the developer's Settings (issue #689 made it configurable).
+        defaults.set(80, forKey: ContextPressureThreshold.valueKey)
+        defaults.set(ContextPressureThreshold.Unit.percent.rawValue, forKey: ContextPressureThreshold.unitKey)
         sessionManager = SessionManager()
     }
 
     override func tearDown() async throws {
-        let defaults = UserDefaults.standard
         restore(key: "displayMode", value: originalDisplayMode)
         restore(key: "debugMode", value: originalDebugMode)
         restore(key: "showCostDisplay", value: originalShowCost)
+        restore(key: ContextPressureThreshold.valueKey, value: originalThresholdValue)
+        restore(key: ContextPressureThreshold.unitKey, value: originalThresholdUnit)
         restore(key: "userIntentDisplay", value: originalUserIntent)
-        _ = defaults
         try await super.tearDown()
     }
 
@@ -45,29 +53,57 @@ final class SessionRowSnapshotTests: XCTestCase {
         }
     }
 
+    // A fixed, far-past instant: anything timestamped here reads as "stale" to
+    // the ETA chip (age > 180s) regardless of when the test runs, so progress
+    // snapshots are time-invariant.
+    private static let stalePast = Date(timeIntervalSince1970: 1_700_000_000)
+
     private func makeMetrics(
         tokens: Int64 = 45_000,
         pressure: String = "safe",
         lastText: String? = nil,
-        summary: String? = nil
+        utilization: Double = 4.5,
+        contextWindowUnknown: Bool? = nil,
+        summary: String? = nil,
+        tasks: [SessionTask]? = nil,
+        taskEstimate: TaskEstimateInfo? = nil,
+        taskCompletionEta: Date? = nil,
+        cacheBloat: Bool? = nil,
+        cacheBloatTooltip: String? = nil
     ) -> SessionMetrics {
         SessionMetrics(
             elapsedSeconds: 0,
             totalTokens: tokens,
             modelName: "claude-opus-4-7",
             contextWindow: 1_000_000,
-            contextUtilization: 4.5,
+            contextUtilization: utilization,
             pressureLevel: pressure,
-            contextWindowUnknown: nil,
+            contextWindowUnknown: contextWindowUnknown,
             estimatedCostUSD: nil,
             lastAssistantText: lastText,
             taskSummary: summary,
-            tasks: nil
+            tasks: tasks,
+            taskEstimate: taskEstimate,
+            taskCompletionEta: taskCompletionEta,
+            cacheBloat: cacheBloat,
+            cacheBloatTooltip: cacheBloatTooltip
         )
     }
 
-    private func makeSession(state: SessionState.State, metrics: SessionMetrics?) -> SessionState {
-        SessionState(
+    private func makeSession(
+        state: SessionState.State,
+        metrics: SessionMetrics?,
+        pid: Int? = nil,
+        adapter: String? = nil,
+        background: BackgroundAgent? = nil,
+        subagents: SubagentSummary? = nil,
+        role: String? = nil,
+        roleIcon: String? = nil,
+        workerName: String? = nil,
+        workerID: String? = nil,
+        daemonID: String? = nil
+    ) -> SessionState {
+        var session = SessionState(
             id: "sess_row_test",
             state: state,
             model: "claude-opus-4-7",
@@ -79,8 +115,20 @@ final class SessionRowSnapshotTests: XCTestCase {
             updatedAt: Date(timeIntervalSince1970: 1_700_000_000),
             eventCount: 5,
             lastEvent: "UserPromptSubmit",
-            metrics: metrics
+            metrics: metrics,
+            pid: pid,
+            subagents: subagents,
+            adapter: adapter,
+            role: role,
+            roleIcon: roleIcon,
+            workerName: workerName,
+            workerID: workerID,
+            background: background
         )
+        // daemonID is stamped after construction by SessionManager from the relay
+        // envelope; mirror that here so the relay cloud indicator can render.
+        session.daemonID = daemonID
+        return session
     }
 
     private func host(_ session: SessionState, height: CGFloat = 48) -> NSView {
@@ -100,6 +148,31 @@ final class SessionRowSnapshotTests: XCTestCase {
         hosting.layoutSubtreeIfNeeded()
         return hosting
     }
+
+    /// Decodes a daemon-shaped session fixture (issue #757). Accepts either a
+    /// bare `SessionState` object or a `{type, session}` websocket envelope —
+    /// the same shape the macOS app receives over the wire — so an agent can
+    /// drive a render from a captured daemon payload. Fixtures live next to this
+    /// file under Fixtures/SessionRow/ and carry explicit numeric epoch
+    /// first_seen/updated_at for determinism.
+    private func loadSession(_ name: String) throws -> SessionState {
+        let dir = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/SessionRow")
+        let data = try Data(contentsOf: dir.appendingPathComponent(name))
+        let decoder = JSONDecoder()
+        if let env = try? decoder.decode(SessionEnvelope.self, from: data), let session = env.session {
+            return session
+        }
+        return try decoder.decode(SessionState.self, from: data)
+    }
+
+    private struct SessionEnvelope: Decodable {
+        let type: String?
+        let session: SessionState?
+    }
+
+    // MARK: - Existing alignment / context / history coverage
 
     /// Issue #596 — one row per state, stacked: the leading state icons (and
     /// everything after them) must start at the same x in every row. The
@@ -188,5 +261,124 @@ final class SessionRowSnapshotTests: XCTestCase {
 
     func testHistoryBar60Min_PreservesModelLabel() {
         snapshotHistoryMode("60 Min")
+    }
+
+    // MARK: - Ghost / transient rows (issue #757)
+
+    /// A transient PID=0 session with no metrics at all — the row must render
+    /// gracefully (no token/context column) rather than crash or show garbage.
+    /// (The metrics-present-but-empty shape is covered by the antigravity-ghost
+    /// fixture, whose metrics object carries zero tokens / zero utilization, so a
+    /// separate zero-token unit case would render an identical row.)
+    func testGhostRow_PID0_NilMetrics() {
+        let session = makeSession(state: .ready, metrics: nil, pid: 0, adapter: "antigravity")
+        assertSnapshot(of: host(session), as: .image)
+    }
+
+    // MARK: - Badges and markers
+
+    func testSubagentCountBadge() {
+        let row = SessionRowView(
+            session: makeSession(state: .working, metrics: makeMetrics()),
+            agentNumber: 1,
+            activeSubagentCount: 3
+        )
+        assertSnapshot(of: host(row), as: .image)
+    }
+
+    func testBackgroundMoon_Detached() {
+        let session = makeSession(
+            state: .working,
+            metrics: makeMetrics(),
+            background: BackgroundAgent(name: "nightly refactor", detached: true)
+        )
+        assertSnapshot(of: host(session), as: .image)
+    }
+
+    func testBackgroundMoon_NonDetached() {
+        let session = makeSession(
+            state: .working,
+            metrics: makeMetrics(),
+            background: BackgroundAgent(name: "nightly refactor", detached: false)
+        )
+        assertSnapshot(of: host(session), as: .image)
+    }
+
+    func testCacheBloatArrow() {
+        let session = makeSession(
+            state: .working,
+            metrics: makeMetrics(
+                cacheBloat: true,
+                cacheBloatTooltip: "claude-code 2.1.143 +14K cache tokens vs 2.1.98"
+            )
+        )
+        assertSnapshot(of: host(session), as: .image)
+    }
+
+    func testContextPressureAlert() {
+        // utilization 92% ≥ the pinned 80% threshold, working state → alert row.
+        let session = makeSession(
+            state: .working,
+            metrics: makeMetrics(tokens: 920_000, pressure: "critical", utilization: 92)
+        )
+        assertSnapshot(of: host(session, height: 72), as: .image)
+    }
+
+    func testRoleOrchestratorRow() {
+        let session = makeSession(
+            state: .working,
+            metrics: makeMetrics(),
+            role: "witness",
+            roleIcon: "👁️",
+            workerName: "witness-1",
+            workerID: "bead-12345678ab"
+        )
+        assertSnapshot(of: host(session), as: .image)
+    }
+
+    func testRelayCloud_Online() {
+        sessionManager.relayDaemons = ["mac-studio": "Mac Studio"]
+        let session = makeSession(state: .working, metrics: makeMetrics(), daemonID: "mac-studio")
+        assertSnapshot(of: host(session), as: .image)
+    }
+
+    func testRelayCloud_OfflineFade() {
+        sessionManager.offlineDaemons = ["mac-studio": "Mac Studio"]
+        let session = makeSession(state: .ready, metrics: makeMetrics(), daemonID: "mac-studio")
+        assertSnapshot(of: host(session), as: .image)
+    }
+
+    /// Progress chip without a projection (taskCompletionEta nil): renders the
+    /// time-invariant "rounds/total · percent" form. The far-past marker makes
+    /// it the stale (dimmed) branch, so the snapshot never depends on the clock.
+    func testTaskProgressChip_Stale() {
+        let session = makeSession(
+            state: .working,
+            metrics: makeMetrics(
+                taskEstimate: TaskEstimateInfo(
+                    totalRounds: 10,
+                    completedRounds: 3,
+                    updatedAt: Self.stalePast,
+                    source: "marker"
+                )
+            )
+        )
+        assertSnapshot(of: host(session, height: 72), as: .image)
+    }
+
+    // MARK: - Fixture-driven rendering (issue #757)
+
+    /// Drives a render straight from a captured `{type, session}` websocket
+    /// envelope — the antigravity PID=0 ghost that Phase 1's trace explains.
+    func testFixture_AntigravityGhost() throws {
+        let session = try loadSession("antigravity-ghost.json")
+        assertSnapshot(of: host(session), as: .image)
+    }
+
+    /// Drives a render from a bare daemon `SessionState` object (no envelope) —
+    /// a substantive working Claude Code session with high context fill.
+    func testFixture_WorkingClaude() throws {
+        let session = try loadSession("working-claude.json")
+        assertSnapshot(of: host(session, height: 72), as: .image)
     }
 }
