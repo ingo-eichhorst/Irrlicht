@@ -188,7 +188,10 @@ struct SessionListView: View {
     @State private var isQuitButtonHovered = false
     @State private var isSettingsButtonHovered = false
     @State private var isUpdatesButtonHovered = false
+    @State private var isHistoryButtonHovered = false
     @State private var showSettings = false
+    /// Footer "History" swaps the panel body to the cost-analytics view (#755).
+    @State private var showHistory = false
     /// Settings → "Review agent permissions…" swaps the panel body to the
     /// wizard in review mode (issue #570).
     @State private var showPermissionsReview = false
@@ -252,6 +255,8 @@ struct SessionListView: View {
                     showPermissionsReview: $showPermissionsReview,
                     sessionManager: sessionManager
                 )
+            } else if showHistory {
+                HistoryView(onClose: { showHistory = false })
             } else if showPermissionsReview {
                 PermissionWizardView(mode: .review, onClose: { showPermissionsReview = false })
             } else if let locked = autoWizardAgents {
@@ -292,6 +297,22 @@ struct SessionListView: View {
 
                 Divider()
                 HStack(spacing: 0) {
+                    Button(action: { showHistory = true }) {
+                        Text("History")
+                            .foregroundColor(.secondary)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 8)
+                            .background(isHistoryButtonHovered ? IrrColors.surfaceHover : Color.clear)
+                            .contentShape(Rectangle())
+                            .onHover { hovering in
+                                isHistoryButtonHovered = hovering
+                            }
+                    }
+                    .buttonStyle(.plain)
+                    .tooltip("View historical cost analytics")
+
+                    Divider().frame(height: 20)
+
                     Button(action: { showSettings = true }) {
                         Text("Settings\u{2026}")
                             .foregroundColor(.secondary)
