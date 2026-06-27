@@ -2,7 +2,9 @@
   "name": "irrlicht-web",
   "type": "module",
   "scripts": {
-    "test": "vitest run"
+    "test": "vitest run",
+    "snapshot": "vitest run snapshots/render-html.test.js",
+    "snapshot:png": "node snapshots/snapshot.png.mjs"
   },
   "devDependencies": {
     "vitest": "^4.1.7",

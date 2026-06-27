@@ -1,5 +1,7 @@
-// Minimum DOM required for irrlicht.js top-level wiring
-document.body.innerHTML = `
+// Minimum DOM required for irrlicht.js top-level wiring. Exported so the
+// snapshots/ render test re-applies the same scaffold per scene instead of
+// keeping a divergent copy that silently goes stale (issue #757).
+export const SETUP_BODY = `
   <header></header>
   <button id="theme-toggle"></button>
   <button id="view-mode-cycle">Context</button>
@@ -26,6 +28,7 @@ document.body.innerHTML = `
     <button id="permissions-apply"></button>
   </div>
 `;
+document.body.innerHTML = SETUP_BODY;
 
 // jsdom has no canvas — give paintRowHistory the minimal 2D context it uses
 // so tests that render session rows don't trip an unhandled rejection.
