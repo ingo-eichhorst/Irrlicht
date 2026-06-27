@@ -66,6 +66,34 @@ func (c *Controller) SendInput(sessionID string, data []byte) error {
 	}
 }
 
+// submitCR is the carriage return that submits a line on the CLI backends.
+// The AppleScript hosts auto-submit, so it is appended only for tmux/kitty.
+const submitCR = "\r"
+
+// SendCommand injects command text and submits it, owning the per-backend
+// submit sequence so the caller (a preset rule) never has to (issue #754):
+// tmux/kitty get a trailing CR appended; the AppleScript path broadcasts the
+// bare command, since the macOS app's write-text/do-script auto-submits (and
+// strips any trailing newline) — appending a CR there would double-submit.
+func (c *Controller) SendCommand(sessionID string, command string) error {
+	state, err := c.loadState(sessionID)
+	if err != nil {
+		return err
+	}
+	l := state.Launcher
+	switch resolveBackend(l) {
+	case backendTmux:
+		return c.exec(tmuxInput(l, []byte(command+submitCR)))
+	case backendKitty:
+		return c.exec(kittyInput(l, []byte(command+submitCR)))
+	case backendAppleScript:
+		c.broadcastInput(state, outbound.InputActionInput, command)
+		return nil
+	default:
+		return fmt.Errorf("control: session %s has no controllable backend", sessionID)
+	}
+}
+
 // Interrupt delivers an interrupt (Ctrl-C) to the session.
 func (c *Controller) Interrupt(sessionID string) error {
 	state, err := c.loadState(sessionID)

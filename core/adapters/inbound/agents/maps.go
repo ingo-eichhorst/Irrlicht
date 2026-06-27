@@ -100,6 +100,22 @@ func ArgvExcluders(agents []agent.Agent) map[string]func([]string) bool {
 	return m
 }
 
+// ControlPresets produces the adapter-name → (preset id → command text) map
+// consumed by the BackchannelEngine to translate a rule's agent-agnostic preset
+// into the concrete command for the session's agent (issue #754). Only adapters
+// that declare Control.Presets appear; for the rest a preset rule degrades
+// gracefully (the engine logs and doesn't fire). The submit sequence is owned
+// downstream by the controller, not these strings.
+func ControlPresets(agents []agent.Agent) map[string]map[string]string {
+	m := make(map[string]map[string]string)
+	for _, a := range agents {
+		if len(a.Control.Presets) > 0 {
+			m[a.Identity.Name] = a.Control.Presets
+		}
+	}
+	return m
+}
+
 // SubagentCounters produces the adapter-name → SubagentCounter map
 // consumed by metrics.Adapter. Only adapters whose LineParser implements
 // agent.SubagentCounter (currently: claudecode) appear in the map.

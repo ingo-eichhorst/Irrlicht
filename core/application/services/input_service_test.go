@@ -12,12 +12,17 @@ import (
 type fakeController struct {
 	controllable bool
 	sentData     []byte
+	sentCommand  string
 	interrupted  bool
 	sendErr      error
 }
 
 func (f *fakeController) SendInput(_ string, data []byte) error {
 	f.sentData = data
+	return f.sendErr
+}
+func (f *fakeController) SendCommand(_ string, command string) error {
+	f.sentCommand = command
 	return f.sendErr
 }
 func (f *fakeController) Interrupt(_ string) error   { f.interrupted = true; return nil }

@@ -26,6 +26,7 @@ type ruleSource interface {
 // on every call).
 type inputForwarder interface {
 	SendInput(sessionID string, data []byte) error
+	SendCommand(sessionID string, command string) error
 	Interrupt(sessionID string) error
 }
 
@@ -42,6 +43,7 @@ type inputForwarder interface {
 type BackchannelEngine struct {
 	rules   ruleSource
 	input   inputForwarder
+	presets map[string]map[string]string // adapter → (preset id → command text)
 	push    outbound.PushBroadcaster
 	enabled func() bool
 	logger  outbound.Logger
@@ -57,10 +59,11 @@ type BackchannelEngine struct {
 // NewBackchannelEngine constructs an engine. enabled reports the backchannel
 // master-toggle (firing is suppressed when off, but edge bookkeeping continues
 // so re-enabling never causes a spurious fire).
-func NewBackchannelEngine(rules ruleSource, input inputForwarder, push outbound.PushBroadcaster, enabled func() bool, logger outbound.Logger) *BackchannelEngine {
+func NewBackchannelEngine(rules ruleSource, input inputForwarder, presets map[string]map[string]string, push outbound.PushBroadcaster, enabled func() bool, logger outbound.Logger) *BackchannelEngine {
 	return &BackchannelEngine{
 		rules:     rules,
 		input:     input,
+		presets:   presets,
 		push:      push,
 		enabled:   enabled,
 		logger:    logger,
@@ -94,7 +97,7 @@ func (e *BackchannelEngine) Run(ctx context.Context) {
 				continue
 			}
 			for _, r := range e.evaluate(msg.Session) {
-				go e.runActions(r, msg.Session.SessionID)
+				go e.runActions(r, msg.Session.SessionID, msg.Session.Adapter)
 			}
 		}
 	}
@@ -196,13 +199,26 @@ func triggered(t backchannel.Trigger, prev, cur string, prevUtil, util float64) 
 }
 
 // runActions executes a fired rule's actions in order, stopping on the first
-// failure. Each call re-passes InputService's gates.
-func (e *BackchannelEngine) runActions(r backchannel.Rule, sid string) {
+// failure. Each call re-passes InputService's gates. adapter is the session's
+// agent kind, used to translate preset actions into the agent's concrete
+// command (issue #754).
+func (e *BackchannelEngine) runActions(r backchannel.Rule, sid, adapter string) {
 	for _, a := range r.Actions {
 		var err error
 		switch a.Kind {
 		case backchannel.ActionInput:
-			err = e.input.SendInput(sid, []byte(a.Data))
+			if a.Preset != "" {
+				cmd, ok := e.presets[adapter][a.Preset]
+				if !ok {
+					// Unsupported preset for this agent: don't fire the rule
+					// rather than send a wrong command (issue #754).
+					e.logger.LogInfo("backchannel", sid, "rule "+r.ID+" preset "+a.Preset+" unsupported for "+adapter+"; not firing")
+					return
+				}
+				err = e.input.SendCommand(sid, cmd)
+			} else {
+				err = e.input.SendInput(sid, []byte(a.Data))
+			}
 		case backchannel.ActionInterrupt:
 			err = e.input.Interrupt(sid)
 		default:

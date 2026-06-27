@@ -529,18 +529,28 @@ func handleGetVersion(version string) http.HandlerFunc {
 // frontends should treat ordering as informational only and key by `name`.
 func handleGetAgents(allAgents []agent.Agent) http.HandlerFunc {
 	type agentEntry struct {
-		Name         string `json:"name"`
-		DisplayName  string `json:"display_name"`
-		IconSVGLight string `json:"icon_svg_light"`
-		IconSVGDark  string `json:"icon_svg_dark"`
+		Name         string   `json:"name"`
+		DisplayName  string   `json:"display_name"`
+		IconSVGLight string   `json:"icon_svg_light"`
+		IconSVGDark  string   `json:"icon_svg_dark"`
+		Presets      []string `json:"presets"`
 	}
 	entries := make([]agentEntry, 0, len(allAgents))
 	for _, a := range allAgents {
+		// Supported backchannel presets (issue #754), sorted for a stable
+		// contract; always a slice (never null) so the macOS editor can iterate
+		// without a nil check.
+		presets := make([]string, 0, len(a.Control.Presets))
+		for p := range a.Control.Presets {
+			presets = append(presets, p)
+		}
+		sort.Strings(presets)
 		entries = append(entries, agentEntry{
 			Name:         a.Identity.Name,
 			DisplayName:  a.Identity.DisplayName,
 			IconSVGLight: a.Identity.IconSVGLight,
 			IconSVGDark:  a.Identity.IconSVGDark,
+			Presets:      presets,
 		})
 	}
 	return func(w http.ResponseWriter, r *http.Request) {

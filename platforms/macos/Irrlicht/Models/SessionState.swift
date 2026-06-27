@@ -19,12 +19,20 @@ struct AgentBranding: Decodable {
     let displayName: String
     let iconSVGLight: String
     let iconSVGDark: String
+    /// Backchannel presets this agent supports (issue #754), e.g. ["compact"].
+    /// Optional with a default so an older daemon that omits the field still
+    /// decodes (and call sites that predate it still build).
+    var presets: [String]? = nil
+
+    /// Non-nil accessor for the supported preset ids.
+    var supportedPresets: [String] { presets ?? [] }
 
     enum CodingKeys: String, CodingKey {
         case name
         case displayName = "display_name"
         case iconSVGLight = "icon_svg_light"
         case iconSVGDark = "icon_svg_dark"
+        case presets
     }
 }
 

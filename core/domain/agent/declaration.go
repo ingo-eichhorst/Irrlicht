@@ -32,6 +32,14 @@ type Control struct {
 	SupportsInput bool
 	// Interrupt is how an interrupt is delivered to this agent.
 	Interrupt InterruptMethod
+	// Presets maps a backchannel preset id (backchannel.Preset*) to this
+	// agent's concrete command text (issue #754) — e.g. "compact" → "/compact".
+	// The text is the literal command only; the daemon appends the submit
+	// sequence the session's terminal backend needs (a CR for tmux/kitty;
+	// AppleScript hosts auto-submit). An agent that omits a preset doesn't
+	// support it: the rule won't fire and the UI marks it unsupported, so a
+	// wrong command is never sent. Nil means no presets are supported.
+	Presets map[string]string
 }
 
 // InterruptMethod is how the daemon interrupts a running turn.

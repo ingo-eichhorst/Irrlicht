@@ -66,6 +66,22 @@ func (s *InputService) SendInput(sessionID string, data []byte) error {
 	return nil
 }
 
+// SendCommand forwards an agent-agnostic preset command to the session, passing
+// the same gates as SendInput. The command's submit sequence is owned by the
+// controller per terminal backend (issue #754).
+func (s *InputService) SendCommand(sessionID string, command string) error {
+	state, err := s.resolve(sessionID)
+	if err != nil {
+		return err
+	}
+	if err := s.controller.SendCommand(sessionID, command); err != nil {
+		s.logger.LogError("control", sessionID, err.Error())
+		return err
+	}
+	s.logger.LogInfo("control", sessionID, "command forwarded ("+state.Adapter+")")
+	return nil
+}
+
 // Interrupt delivers an interrupt to the session, passing the same gates.
 func (s *InputService) Interrupt(sessionID string) error {
 	state, err := s.resolve(sessionID)

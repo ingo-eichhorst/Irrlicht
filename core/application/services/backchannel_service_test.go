@@ -31,9 +31,73 @@ func sess(state string, util float64) *session.SessionState {
 // newEngine builds an engine with a controllable clock and toggle. *clock and
 // *on are mutated by the test.
 func newEngine(rules []backchannel.Rule, on *bool, clock *time.Time) *BackchannelEngine {
-	e := NewBackchannelEngine(stubRules{rules}, nil, nil, func() bool { return *on }, bcNopLog{})
+	e := NewBackchannelEngine(stubRules{rules}, nil, nil, nil, func() bool { return *on }, bcNopLog{})
 	e.now = func() time.Time { return *clock }
 	return e
+}
+
+// fakeForwarder records what runActions delegates, bypassing InputService's
+// gates so the preset-translation logic is tested in isolation.
+type fakeForwarder struct {
+	sentInput   []byte
+	sentCommand string
+	commandSet  bool
+	interrupted bool
+}
+
+func (f *fakeForwarder) SendInput(_ string, data []byte) error { f.sentInput = data; return nil }
+func (f *fakeForwarder) SendCommand(_ string, cmd string) error {
+	f.sentCommand, f.commandSet = cmd, true
+	return nil
+}
+func (f *fakeForwarder) Interrupt(_ string) error { f.interrupted = true; return nil }
+
+func claudeCompactPresets() map[string]map[string]string {
+	return map[string]map[string]string{"claude-code": {backchannel.PresetCompact: "/compact"}}
+}
+
+func presetRule() backchannel.Rule {
+	return backchannel.Rule{ID: "r", Enabled: true,
+		Actions: []backchannel.Action{{Kind: backchannel.ActionInput, Preset: backchannel.PresetCompact}}}
+}
+
+func TestRunActions_PresetTranslatesPerAdapter(t *testing.T) {
+	on := true
+	fw := &fakeForwarder{}
+	e := NewBackchannelEngine(stubRules{}, fw, claudeCompactPresets(), nil, func() bool { return on }, bcNopLog{})
+	e.runActions(presetRule(), "s1", "claude-code")
+	if fw.sentCommand != "/compact" {
+		t.Errorf("SendCommand = %q, want %q", fw.sentCommand, "/compact")
+	}
+	if fw.sentInput != nil {
+		t.Errorf("SendInput must not be used for a preset, got %q", fw.sentInput)
+	}
+}
+
+func TestRunActions_UnsupportedPresetDoesNotFire(t *testing.T) {
+	on := true
+	fw := &fakeForwarder{}
+	e := NewBackchannelEngine(stubRules{}, fw, claudeCompactPresets(), nil, func() bool { return on }, bcNopLog{})
+	// codex declares no compact preset → the rule must not fire (no wrong command).
+	e.runActions(presetRule(), "s1", "codex")
+	if fw.commandSet || fw.sentInput != nil {
+		t.Errorf("unsupported preset must not fire: command=%q input=%q", fw.sentCommand, fw.sentInput)
+	}
+}
+
+func TestRunActions_CustomSendsRawVerbatim(t *testing.T) {
+	on := true
+	fw := &fakeForwarder{}
+	e := NewBackchannelEngine(stubRules{}, fw, claudeCompactPresets(), nil, func() bool { return on }, bcNopLog{})
+	r := backchannel.Rule{ID: "r", Enabled: true,
+		Actions: []backchannel.Action{{Kind: backchannel.ActionInput, Data: "/foo\r"}}}
+	e.runActions(r, "s1", "claude-code")
+	if string(fw.sentInput) != "/foo\r" {
+		t.Errorf("SendInput = %q, want %q", fw.sentInput, "/foo\r")
+	}
+	if fw.commandSet {
+		t.Errorf("SendCommand must not be used for Custom, got %q", fw.sentCommand)
+	}
 }
 
 func waitingRule() backchannel.Rule {

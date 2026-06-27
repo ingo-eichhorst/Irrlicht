@@ -18,6 +18,9 @@ struct BackchannelRule: Codable, Identifiable, Equatable {
 
     struct Action: Codable, Equatable {
         var kind: String
+        /// Agent-agnostic preset id (issue #754); when set, the daemon
+        /// translates it to the agent's command. nil means Custom (raw `data`).
+        var preset: String? = nil
         var data: String?
     }
 
@@ -34,6 +37,15 @@ struct BackchannelRule: Codable, Identifiable, Equatable {
 
     static let actionInput = "input"
     static let actionInterrupt = "interrupt"
+
+    // Preset ids, matching the daemon's backchannel.Preset* constants.
+    static let presetCompact = "compact"
+
+    /// The presets the editor offers, id → label. Whether a given agent
+    /// supports one is sourced from the daemon (AgentBranding.supportedPresets).
+    static let presetCatalog: [(id: String, label: String)] = [
+        (presetCompact, "Compact"),
+    ]
 }
 
 /// Thin client for the daemon's backchannel rules endpoint (GET/PUT).
