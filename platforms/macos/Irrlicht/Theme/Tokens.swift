@@ -10,6 +10,8 @@ enum IrrHex {
     static let waiting   = "#FF9500"
     static let ready     = "#34C759"
     static let cancelled = "#8E8E93"
+    // User-intent block (beta): purple, distinct from the working-state violet.
+    static let intent    = "#AF52DE"
 
     // Pressure scale
     static let pressureLow      = "#34C759"
@@ -38,11 +40,13 @@ enum IrrColors {
     static let waiting   = Color(hex: IrrHex.waiting)
     static let ready     = Color(hex: IrrHex.ready)
     static let cancelled = Color(hex: IrrHex.cancelled)
+    static let intent    = Color(hex: IrrHex.intent)
 
     // 12%-alpha soft backgrounds (--working-dim / --waiting-dim / --ready-dim).
     static let workingDim = working.opacity(0.12)
     static let waitingDim = waiting.opacity(0.12)
     static let readyDim   = ready.opacity(0.12)
+    static let intentDim  = intent.opacity(0.12)
 
     // Glow halos (--working-glow 0.25, --waiting-glow / --ready-glow 0.20).
     static let workingGlow = working.opacity(0.25)

@@ -449,22 +449,18 @@ struct SessionListView: View {
     /// once (issue #738). When nothing is collapsed it collapses all; otherwise
     /// it expands all.
     private var summaryCollapseAllButton: some View {
-        let anyCollapsed = !sessionManager.collapsedSummarySessions.isEmpty
+        let collapsed = sessionManager.summariesCollapsed
         return Button {
-            if anyCollapsed {
-                sessionManager.collapsedSummarySessions = []
-            } else {
-                sessionManager.collapsedSummarySessions = Set(sessionManager.sessions.map { $0.id })
-            }
+            sessionManager.summariesCollapsed.toggle()
         } label: {
-            Image(systemName: anyCollapsed ? "rectangle.expand.vertical" : "rectangle.compress.vertical")
+            Image(systemName: collapsed ? "rectangle.expand.vertical" : "rectangle.compress.vertical")
                 .font(.system(size: 11))
                 .foregroundColor(.secondary)
                 .frame(width: 16)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .tooltip(anyCollapsed ? "Expand all task summaries" : "Collapse all task summaries")
+        .tooltip(collapsed ? "Expand all task summaries" : "Collapse all task summaries")
         .accessibilityIdentifier("summary-collapse-all")
     }
 
@@ -1154,6 +1150,7 @@ struct SessionRowView: View {
     @AppStorage("debugMode") private var debugMode: Bool = false
     @AppStorage("showCostDisplay") private var showCostDisplay: Bool = false
     @AppStorage("displayMode") private var displayModeRaw: String = DisplayMode.context.rawValue
+    @AppStorage("userIntentDisplay") private var userIntentDisplay: Bool = false
     @AppStorage(ContextPressureThreshold.valueKey) private var contextThresholdValue: Double = ContextPressureThreshold.defaultValue
     @AppStorage(ContextPressureThreshold.unitKey) private var contextThresholdUnitRaw: String = ContextPressureThreshold.defaultUnit.rawValue
     @EnvironmentObject var sessionManager: SessionManager
@@ -1169,56 +1166,42 @@ struct SessionRowView: View {
     }
 
     private var summaryCollapsed: Bool {
-        sessionManager.collapsedSummarySessions.contains(session.id)
+        sessionManager.summariesCollapsed
     }
 
-    private func toggleSummaryCollapsed() {
-        if sessionManager.collapsedSummarySessions.contains(session.id) {
-            sessionManager.collapsedSummarySessions.remove(session.id)
-        } else {
-            sessionManager.collapsedSummarySessions.insert(session.id)
-        }
-    }
-
-    /// Collapsible "what is this session about" block (issue #738): a one-line
-    /// summary title with a chevron, and — while waiting — the pending question
-    /// beneath it when expanded. Renders only when there's something to show.
+    /// Session detail block. While waiting, shows the agent's pending question
+    /// (orange) — the waiting state is already clear from the row's state icon,
+    /// so there's no separate label. When the beta "User-Intent Display" setting
+    /// is on, also shows the task summary — the agent's irrlicht-summary marker,
+    /// else its first user prompt (issue #738) — as a purple "what the user
+    /// asked for" block. Collapse is driven globally by the header collapse-all
+    /// control; there is no per-row toggle.
     @ViewBuilder
     private var summaryBlock: some View {
         let summary = session.metrics?.taskSummary
         let question = session.state == .waiting ? session.metrics?.lastAssistantText : nil
-        let hasSummary = (summary?.isEmpty == false)
-        let hasQuestion = (question?.isEmpty == false)
-        if hasSummary || hasQuestion {
-            let collapsed = summaryCollapsed
+        let collapsed = summaryCollapsed
+        let showIntent = userIntentDisplay && (summary?.isEmpty == false) && !collapsed
+        let showQuestion = (question?.isEmpty == false) && !collapsed
+        if showIntent || showQuestion {
             VStack(alignment: .leading, spacing: 2) {
-                Button(action: { toggleSummaryCollapsed() }) {
-                    HStack(spacing: 4) {
-                        Image(systemName: collapsed ? "chevron.right" : "chevron.down")
-                            .font(.system(size: 8))
-                            .foregroundColor(.secondary)
-                            .frame(width: 10)
-                        if let s = summary, !s.isEmpty {
-                            Text(s)
-                                .font(.system(size: 9, weight: .medium))
-                                .foregroundColor(.secondary)
-                                .lineLimit(collapsed ? 1 : nil)
-                                .truncationMode(.tail)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        } else {
-                            Text("Waiting for input")
-                                .font(.system(size: 9, weight: .medium))
-                                .foregroundColor(IrrColors.waiting)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                    }
-                    .contentShape(Rectangle())
+                // User intent (beta): what the user asked for.
+                if showIntent, let s = summary {
+                    Text(s)
+                        .font(.system(size: 9))
+                        .foregroundColor(IrrColors.intent)
+                        .lineLimit(3)
+                        .truncationMode(.tail)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 3)
+                        .background(IrrColors.intentDim)
+                        .cornerRadius(IrrRadius.sm)
+                        .tooltip(s)
                 }
-                .buttonStyle(.plain)
-                .tooltip(summary ?? "")
-                .accessibilityIdentifier("session-summary-toggle-\(session.id)")
 
-                if !collapsed, let q = question, !q.isEmpty {
+                // Pending question: what the agent is asking.
+                if showQuestion, let q = question {
                     Text(q)
                         .font(.system(size: 9))
                         .foregroundColor(IrrColors.waiting)
@@ -1445,9 +1428,9 @@ struct SessionRowView: View {
 
             // Task summary + waiting question — a single collapsible block
             // (issue #738). The summary ("what is this session about") shows
-            // in any state; the question shows only while waiting. A small
-            // chevron collapses this one entry; the list header offers a
-            // collapse-all. Default expanded so the info is visible.
+            // in any state; the question shows only while waiting. The list
+            // header's collapse-all toggle governs every row at once (global
+            // state, no per-row chevron). Default expanded so the info is visible.
             summaryBlock
 
             // Context pressure alert (configurable threshold, active sessions only — #689)
