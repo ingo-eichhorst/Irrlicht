@@ -1,0 +1,227 @@
+<!doctype html>
+<!--
+  ir:exec plan template — self-contained, no external resources.
+
+  HOW TO USE (see ../SKILL.md). NOTE: this how-to avoids writing literal
+  comment-close sequences so it never terminates early; the body holds the
+  real "REPEAT:x" / "OPTIONAL:x" marker comments.
+    1. Copy this file to /tmp/ir-exec-plan-<issue>.html
+    2. Replace every {{TOKEN}} with real content.
+    3. For each REPEAT:x marker-comment region in the body, duplicate the inner
+       block once per item, then delete the leftover example block.
+    4. NEVER edit the style block — it is the design system; keep it byte-for-byte.
+    5. OPTIONAL:x marker-comment regions may be deleted whole if unused.
+
+  The plan page is PRE-implementation: Problem, Approach/Design, Steps, Files, Risks.
+  Confidence / test-vs-merge is a later conversational step, not part of this page.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plan · #{{ISSUE_NUMBER}} {{ISSUE_TITLE}}</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --surface: #171a21;
+    --surface-2: #1e222b;
+    --border: #2a2f3a;
+    --text: #e6e9ef;
+    --muted: #9aa3b2;
+    --faint: #6b7280;
+    --accent: #7c9cff;
+    --accent-soft: #1f2740;
+    --new: #4ade80;
+    --mod: #fbbf24;
+    --del: #f87171;
+    --risk: #fb923c;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 15px;
+    line-height: 1.6;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 40px 24px 96px; }
+
+  /* Header */
+  header { border-bottom: 1px solid var(--border); padding-bottom: 24px; margin-bottom: 36px; }
+  .eyebrow { font-family: var(--mono); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); margin: 0 0 8px; }
+  h1 { font-size: 26px; line-height: 1.25; margin: 0 0 16px; font-weight: 650; }
+  .meta { display: flex; flex-wrap: wrap; gap: 8px 16px; font-family: var(--mono); font-size: 12.5px; color: var(--muted); }
+  .meta a { color: var(--accent); text-decoration: none; }
+  .meta a:hover { text-decoration: underline; }
+  .meta span b { color: var(--text); font-weight: 600; }
+
+  /* Sections */
+  section { margin: 0 0 40px; }
+  h2 {
+    font-size: 13px; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--faint); margin: 0 0 16px; font-weight: 600;
+    display: flex; align-items: center; gap: 10px;
+  }
+  h2::before { content: ""; width: 14px; height: 2px; background: var(--accent); border-radius: 2px; }
+
+  .lede { font-size: 16px; color: var(--text); margin: 0 0 12px; }
+  p { margin: 0 0 12px; }
+  .muted { color: var(--muted); }
+  code { font-family: var(--mono); font-size: .88em; background: var(--surface-2); padding: 1px 6px; border-radius: 5px; color: #cdd6f4; }
+
+  /* Approach bullets */
+  ul.approach { list-style: none; margin: 0; padding: 0; }
+  ul.approach li { position: relative; padding: 0 0 10px 22px; }
+  ul.approach li::before { content: "→"; position: absolute; left: 0; color: var(--accent); font-family: var(--mono); }
+
+  /* Diagram */
+  .diagram {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    padding: 24px; margin: 12px 0 4px; overflow-x: auto;
+  }
+  .flow { display: flex; align-items: center; gap: 12px; min-width: max-content; }
+  .node {
+    background: var(--surface-2); border: 1px solid var(--border); border-radius: 9px;
+    padding: 10px 14px; font-family: var(--mono); font-size: 12.5px; white-space: nowrap;
+  }
+  .node.accent { border-color: var(--accent); background: var(--accent-soft); color: #cdd6ff; }
+  .arrow { color: var(--faint); font-family: var(--mono); }
+
+  /* Steps */
+  ol.steps { list-style: none; counter-reset: step; margin: 0; padding: 0; }
+  ol.steps > li {
+    position: relative; counter-increment: step;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    padding: 18px 20px 18px 60px; margin: 0 0 14px;
+  }
+  ol.steps > li::before {
+    content: counter(step); position: absolute; left: 16px; top: 17px;
+    width: 28px; height: 28px; border-radius: 50%;
+    background: var(--accent-soft); color: var(--accent); border: 1px solid var(--accent);
+    font-family: var(--mono); font-size: 13px; font-weight: 600;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .step-title { font-weight: 600; font-size: 15.5px; margin: 0 0 6px; }
+  .step-body { color: var(--muted); margin: 0 0 10px; font-size: 14.5px; }
+  .step-body:last-child { margin-bottom: 0; }
+  .step-files { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { font-family: var(--mono); font-size: 11.5px; background: var(--surface-2); border: 1px solid var(--border); color: var(--muted); padding: 2px 8px; border-radius: 6px; }
+
+  /* Files table */
+  .files { display: flex; flex-direction: column; gap: 6px; }
+  .file-row { display: flex; align-items: center; gap: 12px; font-family: var(--mono); font-size: 13px; padding: 8px 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; }
+  .badge { font-size: 10.5px; font-weight: 700; letter-spacing: .04em; padding: 2px 7px; border-radius: 5px; flex-shrink: 0; min-width: 46px; text-align: center; }
+  .badge.new { background: rgba(74,222,128,.12); color: var(--new); border: 1px solid rgba(74,222,128,.3); }
+  .badge.mod { background: rgba(251,191,36,.12); color: var(--mod); border: 1px solid rgba(251,191,36,.3); }
+  .badge.del { background: rgba(248,113,113,.12); color: var(--del); border: 1px solid rgba(248,113,113,.3); }
+  .file-row .path { color: var(--text); word-break: break-all; }
+  .file-row .note { color: var(--faint); margin-left: auto; font-size: 12px; white-space: nowrap; }
+
+  /* Risks */
+  .risk-card { background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--risk); border-radius: 10px; padding: 14px 18px; margin: 0 0 12px; }
+  .risk-card .rt { font-weight: 600; margin: 0 0 4px; color: #ffd9b3; }
+  .risk-card .rb { color: var(--muted); margin: 0; font-size: 14.5px; }
+
+  /* Approval footer */
+  .approval { background: var(--accent-soft); border: 1px solid var(--accent); border-radius: 12px; padding: 20px 22px; margin-top: 8px; }
+  .approval h2 { color: var(--accent); margin-bottom: 8px; }
+  .approval h2::before { background: var(--accent); }
+  .approval p { color: #cdd6ff; margin: 0; }
+
+  footer { margin-top: 48px; padding-top: 20px; border-top: 1px solid var(--border); font-family: var(--mono); font-size: 11.5px; color: var(--faint); text-align: center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <p class="eyebrow">Implementation Plan</p>
+    <h1>{{ISSUE_TITLE}}</h1>
+    <div class="meta">
+      <span>Issue <a href="{{ISSUE_URL}}">#{{ISSUE_NUMBER}}</a></span>
+      <span>Branch <b>{{BRANCH}}</b></span>
+      <span>Worktree <b>{{WORKTREE}}</b></span>
+      <span>Generated {{GENERATED}}</span>
+    </div>
+  </header>
+
+  <section>
+    <h2>Problem</h2>
+    <p class="lede">{{PROBLEM}}</p>
+  </section>
+
+  <section>
+    <h2>Approach &amp; Design</h2>
+    <p>{{APPROACH_INTRO}}</p>
+    <ul class="approach">
+      <!-- REPEAT:approach -->
+      <li>{{APPROACH_BULLET}}</li>
+      <!-- /REPEAT:approach -->
+    </ul>
+
+    <!-- OPTIONAL:diagram — a clean flow/box visual of the design. Edit the nodes;
+         add more .flow rows for layered diagrams. Delete this whole block if not useful. -->
+    <div class="diagram">
+      <div class="flow">
+        <div class="node">{{DIAGRAM_NODE}}</div>
+        <span class="arrow">→</span>
+        <div class="node accent">{{DIAGRAM_NODE}}</div>
+        <span class="arrow">→</span>
+        <div class="node">{{DIAGRAM_NODE}}</div>
+      </div>
+    </div>
+    <!-- /OPTIONAL:diagram -->
+  </section>
+
+  <section>
+    <h2>Steps</h2>
+    <ol class="steps">
+      <!-- REPEAT:step -->
+      <li>
+        <p class="step-title">{{STEP_TITLE}}</p>
+        <p class="step-body">{{STEP_BODY}}</p>
+        <div class="step-files">
+          <span class="chip">{{STEP_FILE}}</span>
+        </div>
+      </li>
+      <!-- /REPEAT:step -->
+    </ol>
+  </section>
+
+  <section>
+    <h2>Files Touched</h2>
+    <div class="files">
+      <!-- REPEAT:file — badge class is one of: new | mod | del -->
+      <div class="file-row">
+        <span class="badge mod">{{FILE_STATUS}}</span>
+        <span class="path">{{FILE_PATH}}</span>
+        <span class="note">{{FILE_NOTE}}</span>
+      </div>
+      <!-- /REPEAT:file -->
+    </div>
+  </section>
+
+  <section>
+    <h2>Risks &amp; Unknowns</h2>
+    <!-- REPEAT:risk -->
+    <div class="risk-card">
+      <p class="rt">{{RISK_TITLE}}</p>
+      <p class="rb">{{RISK_BODY}}</p>
+    </div>
+    <!-- /REPEAT:risk -->
+  </section>
+
+  <section class="approval">
+    <h2>Approval</h2>
+    <p>Review this plan, then reply in the session to approve (or request changes). Implementation does not begin until you accept.</p>
+  </section>
+
+  <footer>ir:exec · plan for #{{ISSUE_NUMBER}} · {{GENERATED}}</footer>
+
+</div>
+</body>
+</html>
