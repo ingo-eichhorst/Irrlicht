@@ -488,6 +488,14 @@ type seriesAgg struct {
 	prevCache float64
 }
 
+// advance seeds/updates a session's running baselines to the current row's
+// values. A method (not a per-row closure) so the scan loop allocates nothing.
+func (s *seriesAgg) advance(cur, in, out, cache float64) {
+	s.prev = cur
+	s.prevIn, s.prevOut, s.prevCache = in, out, cache
+	s.hasPrev = true
+}
+
 // maxSeriesBuckets caps how many buckets CostSeries will allocate, so a wide
 // span paired with a tiny bucket (e.g. a custom range with ?bucket=1) can't
 // force a multi-gigabyte allocation. When the requested granularity would
@@ -608,24 +616,18 @@ func (t *CostTracker) scanSeries(path string, q outbound.SeriesQuery, bucketSeco
 		curIn := float64(r.CumIn)
 		curOut := float64(r.CumOut)
 		curCache := float64(r.CumRead + r.CumCreate)
-		// advance seeds/updates the per-session baselines on every kept row.
-		advance := func() {
-			s.prev = cur
-			s.prevIn, s.prevOut, s.prevCache = curIn, curOut, curCache
-			s.hasPrev = true
-		}
 
 		switch {
 		case r.TS < q.Start:
 			// Pre-range row: advance the baseline so the first in-range delta
 			// measures spend since the last snapshot.
-			advance()
+			s.advance(cur, curIn, curOut, curCache)
 			return
 		case r.TS >= q.End:
 			return
 		case !s.hasPrev:
 			// First observation with no pre-range baseline: seed, no delta.
-			advance()
+			s.advance(cur, curIn, curOut, curCache)
 			return
 		}
 
@@ -653,7 +655,7 @@ func (t *CostTracker) scanSeries(path string, q outbound.SeriesQuery, bucketSeco
 				out.TokenSplit.Cache += d
 			}
 		}
-		advance()
+		s.advance(cur, curIn, curOut, curCache)
 	})
 }
 

@@ -180,16 +180,7 @@ enum HistoryGroup: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
-    var label: String {
-        switch self {
-        case .project: return "Project"
-        case .branch: return "Branch"
-        case .provider: return "Provider"
-        case .model: return "Model"
-        case .session: return "Session"
-        }
-    }
-
+    /// Segmented-control label (the 380pt popover uses the compact form).
     var shortLabel: String {
         switch self {
         case .project: return "Proj"
