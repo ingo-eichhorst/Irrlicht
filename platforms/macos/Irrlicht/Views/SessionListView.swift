@@ -445,9 +445,8 @@ struct SessionListView: View {
         }
     }
 
-    /// Header control to collapse/expand every session's task-summary block at
-    /// once (issue #738). When nothing is collapsed it collapses all; otherwise
-    /// it expands all.
+    /// Header control that toggles the global collapse state for every
+    /// session's task-summary block at once (issue #738).
     private var summaryCollapseAllButton: some View {
         let collapsed = sessionManager.summariesCollapsed
         return Button {
