@@ -20,6 +20,16 @@ func IsCanonicalState(s string) bool {
 	return s == StateWorking || s == StateWaiting || s == StateReady
 }
 
+// Yield state constants — whether a finished session's work survived in the
+// repo or was reverted (#373). An independent dimension from the lifecycle
+// State above: a session is always in one of the three lifecycle states, and
+// separately carries one of these yield verdicts once it has gone ready.
+const (
+	YieldUnknown    = "unknown"    // not git-tracked, or not yet evaluated
+	YieldProductive = "productive" // shipped a commit that hasn't been reverted
+	YieldReverted   = "reverted"   // its HEAD commit was later git-reverted
+)
+
 // MetricsTimelinePoint is one cumulative SessionMetrics snapshot tagged with
 // the transcript-relative timestamp it was observed at. A MetricsCollector can
 // return an ordered timeline of these so a replay viewer can show cost/tokens
@@ -742,19 +752,30 @@ type SessionState struct {
 	State     string `json:"state"`
 	// Adapter identifies the source agent (e.g. "claude-code", "codex").
 	// Empty means Claude Code (for backwards compatibility).
-	Adapter        string          `json:"adapter,omitempty"`
-	Model          string          `json:"model,omitempty"`
-	CWD            string          `json:"cwd,omitempty"`
-	TranscriptPath string          `json:"transcript_path,omitempty"`
-	GitBranch      string          `json:"git_branch,omitempty"`
-	ProjectName    string          `json:"project_name,omitempty"`
-	FirstSeen      int64           `json:"first_seen"`
-	UpdatedAt      int64           `json:"updated_at"`
-	Confidence     string          `json:"confidence"`
-	EventCount     int             `json:"event_count"`
-	LastEvent      string          `json:"last_event"`
-	LastMatcher    string          `json:"last_matcher,omitempty"`
-	Metrics        *SessionMetrics `json:"metrics,omitempty"`
+	Adapter        string `json:"adapter,omitempty"`
+	Model          string `json:"model,omitempty"`
+	CWD            string `json:"cwd,omitempty"`
+	TranscriptPath string `json:"transcript_path,omitempty"`
+	GitBranch      string `json:"git_branch,omitempty"`
+	ProjectName    string `json:"project_name,omitempty"`
+
+	// HeadCommit is the full SHA of the session's working-directory HEAD,
+	// captured when the session transitions to ready. Empty when the CWD is
+	// not a git repo. The yield sweep correlates `git revert` commits back to
+	// the session that authored the reverted work via this SHA (#373).
+	HeadCommit string `json:"head_commit,omitempty"`
+	// YieldState records whether the session's work survived: one of
+	// YieldProductive / YieldReverted / YieldUnknown (default unknown). Set on
+	// the ready transition and flipped to reverted by the yield sweep (#373).
+	YieldState string `json:"yield_state,omitempty"`
+
+	FirstSeen   int64           `json:"first_seen"`
+	UpdatedAt   int64           `json:"updated_at"`
+	Confidence  string          `json:"confidence"`
+	EventCount  int             `json:"event_count"`
+	LastEvent   string          `json:"last_event"`
+	LastMatcher string          `json:"last_matcher,omitempty"`
+	Metrics     *SessionMetrics `json:"metrics,omitempty"`
 
 	// PID of the Claude Code process that owns this session (set on SessionStart).
 	PID int `json:"pid,omitempty"`

@@ -24,6 +24,25 @@ func newMetadataEnricher(git outbound.GitResolver, metrics outbound.MetricsColle
 	return &metadataEnricher{git: git, metrics: metrics}
 }
 
+// CaptureYieldOnReady records the session's HEAD commit and an initial yield
+// verdict at the moment it transitions to ready (#373). A git-tracked CWD is
+// presumed productive — it shipped a commit — until the yield sweep proves
+// otherwise; a non-git CWD is permanently unknown. It never clobbers a session
+// already marked reverted, and re-captures HEAD on each ready transition so the
+// latest shipped commit wins.
+func (e *metadataEnricher) CaptureYieldOnReady(state *session.SessionState) {
+	if state == nil || state.YieldState == session.YieldReverted {
+		return
+	}
+	head := e.git.GetHeadCommit(state.CWD)
+	if head == "" {
+		state.YieldState = session.YieldUnknown
+		return
+	}
+	state.HeadCommit = head
+	state.YieldState = session.YieldProductive
+}
+
 // PruneMetrics releases per-session metrics state when a session ends.
 func (e *metadataEnricher) PruneMetrics(transcriptPath string) {
 	if e.metrics == nil || transcriptPath == "" {

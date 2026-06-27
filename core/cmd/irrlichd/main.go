@@ -498,7 +498,7 @@ func main() {
 
 	// History tab analytics (issue #369): trailing/calendar/custom-range cost
 	// series + linear forecast, computed from the cost snapshot files.
-	mux.HandleFunc("GET /api/v1/history", handleGetHistory(costTracker))
+	mux.HandleFunc("GET /api/v1/history", handleGetHistory(costTracker, cachedRepo))
 
 	focusService := services.NewFocusService(cachedRepo, push, logger)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/focus", sessionshandler.NewFocusHandler(focusService, logger))
@@ -762,6 +762,12 @@ func main() {
 		// Backchannel rule engine: consumes the push stream and fires
 		// event→action rules through inputService (issue #724).
 		go backchannelEngine.Run(detectorCtx)
+
+		// Yield sweep (issue #373): periodically correlates `git revert`
+		// commits back to the sessions that authored the reverted work,
+		// flipping their YieldState to reverted. Read-mostly and fault-
+		// tolerant, so it runs in every mode.
+		go services.NewYieldSweeper(cachedRepo, gitResolver, logger, cfg.YieldSweepInterval).Run(detectorCtx)
 
 		// Backchannel read-back observer (issue #732): polls controllable
 		// sessions' rendered terminals and folds transcript-invisible UI

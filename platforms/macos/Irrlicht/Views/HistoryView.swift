@@ -29,6 +29,7 @@ struct HistoryView: View {
     @State private var appliedCustomEnd: Int64?
 
     @State private var response: HistoryResponse?
+    @State private var yieldResponse: HistoryYieldResponse?
     @State private var loadFailed = false
 
     /// Re-runs the fetch via `.task(id:)` whenever the effective query changes.
@@ -133,6 +134,22 @@ struct HistoryView: View {
                 .labelsHidden()
             }
 
+            // Chart-type selector — only for the cost calendar ranges (the
+            // quota spans render a burn-rate projection, not a chart type). #373.
+            if !range.isQuota {
+                HStack(spacing: IrrSpacing.sp2) {
+                    Text("Chart")
+                        .font(.caption2).foregroundColor(.secondary)
+                        .frame(width: 40, alignment: .leading)
+                    Picker("", selection: $chart) {
+                        Text("Cost").tag(HistoryChart.cost)
+                        Text("Yield").tag(HistoryChart.yieldRatio)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                }
+            }
+
             if range == .custom {
                 HStack(spacing: IrrSpacing.sp2) {
                     DatePicker("", selection: $customStart, displayedComponents: .date)
@@ -194,6 +211,8 @@ struct HistoryView: View {
     @ViewBuilder private var content: some View {
         if range.isQuota {
             quotaContent
+        } else if chart == .yieldRatio {
+            yieldContent
         } else if let r = response {
             HistoryContentView(
                 data: r,
@@ -207,6 +226,20 @@ struct HistoryView: View {
                 onExportCSV: { save(ext: "csv", text: HistoryExport.csv(r)) },
                 onExportJSON: { save(ext: "json", text: HistoryExport.json(r)) }
             )
+        } else if loadFailed {
+            Text("Couldn’t load history.")
+                .font(.callout)
+                .foregroundColor(.secondary)
+                .frame(maxWidth: .infinity, minHeight: 220)
+        } else {
+            ProgressView()
+                .frame(maxWidth: .infinity, minHeight: 220)
+        }
+    }
+
+    @ViewBuilder private var yieldContent: some View {
+        if let y = yieldResponse {
+            HistoryYieldContentView(data: y, range: range)
         } else if loadFailed {
             Text("Couldn’t load history.")
                 .font(.callout)
@@ -256,9 +289,15 @@ struct HistoryView: View {
                 loadFailed = true
                 return
             }
-            let decoded = try JSONDecoder().decode(HistoryResponse.self, from: data)
-            if Task.isCancelled { return }
-            response = decoded
+            if chart == .yieldRatio {
+                let decoded = try JSONDecoder().decode(HistoryYieldResponse.self, from: data)
+                if Task.isCancelled { return }
+                yieldResponse = decoded
+            } else {
+                let decoded = try JSONDecoder().decode(HistoryResponse.self, from: data)
+                if Task.isCancelled { return }
+                response = decoded
+            }
         } catch {
             if !Task.isCancelled { loadFailed = true }
         }
@@ -497,6 +536,113 @@ struct HistoryContentView: View {
             order.append(pt.project)
         }
         return order
+    }
+}
+
+// MARK: - Yield content (#373)
+//
+// Per-project productive-vs-reverted spend and the headline ratio. Yield is an
+// aggregate over completed sessions, not a time series, so it renders a summary
+// plus per-project split bars rather than the stacked-area chart. Pure inputs
+// (HistoryYieldResponse) so it hosts directly under a snapshot test.
+
+struct HistoryYieldContentView: View {
+    let data: HistoryYieldResponse
+    let range: HistoryRange
+
+    private var projectsWithSpend: [HistoryYieldProject] {
+        data.projects.filter { $0.totalCost > 0 || $0.unknownCost > 0 }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: IrrSpacing.sp3) {
+            summary
+            Divider()
+            if projectsWithSpend.isEmpty {
+                Text("no completed sessions in this range")
+                    .font(.callout)
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 160)
+            } else {
+                VStack(alignment: .leading, spacing: IrrSpacing.sp3) {
+                    ForEach(projectsWithSpend) { p in
+                        HistoryYieldRow(project: p)
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, IrrSpacing.sp4)
+        .padding(.vertical, IrrSpacing.sp3)
+    }
+
+    private var summary: some View {
+        VStack(alignment: .leading, spacing: IrrSpacing.sp2) {
+            Text("Yield · \(range.label)")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            HStack(alignment: .firstTextBaseline, spacing: IrrSpacing.sp2) {
+                Text(data.totalCost > 0 ? "\(Int((data.yieldRatio * 100).rounded()))%" : "—")
+                    .font(.title2)
+                    .fontWeight(.semibold)
+                    .monospacedDigit()
+                Text("\(HistoryFormat.dollar(data.productiveCost)) productive of \(HistoryFormat.dollar(data.totalCost))")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            if data.unknownCost > 0 {
+                Text("\(HistoryFormat.dollar(data.unknownCost)) unattributed (non-git)")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+        }
+    }
+}
+
+private struct HistoryYieldRow: View {
+    let project: HistoryYieldProject
+
+    private var productiveFraction: CGFloat {
+        guard project.totalCost > 0 else { return 0 }
+        return CGFloat(project.productiveCost / project.totalCost)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: IrrSpacing.sp1) {
+            HStack(spacing: IrrSpacing.sp2) {
+                Text(project.project)
+                    .font(.caption)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                if project.revertedCount > 0 {
+                    Text("↩\(project.revertedCount)")
+                        .font(.caption2)
+                        .foregroundColor(IrrColors.pressureHigh)
+                }
+                Spacer(minLength: IrrSpacing.sp2)
+                Text(project.totalCost > 0 ? "\(Int((project.yieldRatio * 100).rounded()))%" : "—")
+                    .font(.caption)
+                    .monospacedDigit()
+                    .foregroundColor(.secondary)
+            }
+            // Productive (green) vs reverted (red) split bar. Unknown-only
+            // projects (no attributable spend) show a neutral track.
+            GeometryReader { geo in
+                if project.totalCost > 0 {
+                    HStack(spacing: 0) {
+                        Rectangle()
+                            .fill(IrrColors.ready)
+                            .frame(width: geo.size.width * productiveFraction)
+                        Rectangle()
+                            .fill(IrrColors.pressureHigh)
+                            .frame(width: geo.size.width * (1 - productiveFraction))
+                    }
+                } else {
+                    Rectangle().fill(Color.secondary.opacity(0.2))
+                }
+            }
+            .frame(height: 6)
+            .clipShape(Capsule())
+        }
     }
 }
 

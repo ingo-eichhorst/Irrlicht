@@ -88,7 +88,7 @@ func shortID(id string) string {
 
 // renderGroups renders the dashboard group tree. Group headers are shown
 // only when there is more than one group (web parity).
-func renderGroups(w io.Writer, groups []*session.AgentGroup, useColor bool) {
+func renderGroups(w io.Writer, groups []*session.AgentGroup, useColor, showYield bool) {
 	showHeaders := len(groups) > 1
 	for i, g := range groups {
 		if showHeaders {
@@ -103,7 +103,7 @@ func renderGroups(w io.Writer, groups []*session.AgentGroup, useColor bool) {
 			fmt.Fprintf(w, "%s (%d %s)\n", g.Name, n, noun)
 		}
 		for _, a := range g.Agents {
-			renderAgent(w, a, 0, useColor)
+			renderAgent(w, a, 0, useColor, showYield)
 		}
 	}
 }
@@ -119,9 +119,9 @@ func countAgents(agents []*session.Agent) int {
 
 // renderAgent renders one session row, its detail lines (waiting question,
 // task progress), then its children indented one level deeper.
-func renderAgent(w io.Writer, a *session.Agent, depth int, useColor bool) {
+func renderAgent(w io.Writer, a *session.Agent, depth int, useColor, showYield bool) {
 	indent := strings.Repeat("  ", depth)
-	fmt.Fprintf(w, "%s%s\n", indent, formatRow(a, useColor))
+	fmt.Fprintf(w, "%s%s\n", indent, formatRow(a, useColor, showYield))
 
 	detailIndent := indent + "    "
 	if a.State == session.StateWaiting && a.Metrics != nil && a.Metrics.LastAssistantText != "" {
@@ -139,13 +139,15 @@ func renderAgent(w io.Writer, a *session.Agent, depth int, useColor bool) {
 	}
 
 	for _, c := range a.Children {
-		renderAgent(w, c, depth+1, useColor)
+		renderAgent(w, c, depth+1, useColor, showYield)
 	}
 }
 
 // formatRow renders a single session line:
 // state project id model ctx% Nk $cost adapter [N agents: Ww/Rr] (age ago)
-func formatRow(a *session.Agent, useColor bool) string {
+// With showYield, two columns are appended after the cost: the yield state and
+// the session's HEAD commit truncated to 7 chars (#373).
+func formatRow(a *session.Agent, useColor, showYield bool) string {
 	s := a.SessionState
 	age := time.Since(time.Unix(s.UpdatedAt, 0)).Truncate(time.Second)
 
@@ -163,6 +165,21 @@ func formatRow(a *session.Agent, useColor bool) string {
 		if cost := formatCostUSD(m.EstimatedCostUSD); cost != "" {
 			sb.WriteString(" " + cost)
 		}
+	}
+
+	if showYield {
+		state := s.YieldState
+		if state == "" {
+			state = session.YieldUnknown
+		}
+		sha := s.HeadCommit
+		if len(sha) > 7 {
+			sha = sha[:7]
+		}
+		if sha == "" {
+			sha = "-"
+		}
+		fmt.Fprintf(&sb, " %s %s", state, sha)
 	}
 
 	sb.WriteString(" " + adapterName(s))

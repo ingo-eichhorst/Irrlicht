@@ -128,6 +128,9 @@ type GitResolver interface {
 	// GetGitRoot returns the absolute path of the git repo root for the given
 	// directory, or "" if the directory is not inside a git repository.
 	GetGitRoot(dir string) string
+	// GetHeadCommit returns the full SHA of the current HEAD commit for the
+	// given directory, or "" if it is not inside a git repository (#373).
+	GetHeadCommit(dir string) string
 	GetBranchFromTranscript(transcriptPath string) string
 	// GetCWDFromTranscript extracts the working directory from a transcript
 	// file by scanning the first few lines for a "cwd" field.

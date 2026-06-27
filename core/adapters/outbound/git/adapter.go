@@ -6,10 +6,15 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"irrlicht/core/pkg/transcript"
 )
+
+// revertTrailer matches the "This reverts commit <sha>." trailer that
+// `git revert` writes into the body of a revert commit (#373).
+var revertTrailer = regexp.MustCompile(`(?m)^This reverts commit ([0-9a-f]{7,40})`)
 
 // Adapter implements ports/outbound.GitResolver using local git commands and
 // transcript file inspection.
@@ -37,6 +42,49 @@ func (a *Adapter) GetBranch(dir string) string {
 	// Claude Code worktree branches are named "worktree-<slug>" — strip the prefix.
 	branch = strings.TrimPrefix(branch, "worktree-")
 	return branch
+}
+
+// GetHeadCommit returns the full SHA of the current HEAD commit for the given
+// working directory. Returns "" if git is unavailable or the directory is not
+// a git repo (e.g. an unborn branch with no commits yet). See issue #373.
+func (a *Adapter) GetHeadCommit(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	cmd := exec.Command("git", "rev-parse", "HEAD")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// RevertedCommits returns the full SHAs reverted in the repo containing dir,
+// parsed from the "This reverts commit <sha>." trailer that `git revert`
+// writes. It scans all reachable history (`--all`), so a revert on any branch
+// counts — the documented v1 behavior (#373). Returns nil if dir is not a git
+// repo or has no reverts. Errors are swallowed: a sweep over many projects must
+// tolerate non-git, permission-denied, and missing directories without failing.
+func (a *Adapter) RevertedCommits(dir string) []string {
+	if dir == "" {
+		return nil
+	}
+	cmd := exec.Command("git", "log", "--all", "--grep", "^This reverts commit ", "--pretty=format:%b")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return nil
+	}
+	matches := revertTrailer.FindAllSubmatch(out, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	shas := make([]string, 0, len(matches))
+	for _, m := range matches {
+		shas = append(shas, string(m[1]))
+	}
+	return shas
 }
 
 // GetGitRoot returns the absolute path of the git repo root for the given

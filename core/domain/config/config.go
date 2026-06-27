@@ -23,6 +23,11 @@ const defaultMaxSessionAge = 5 * 24 * time.Hour
 // remains 30 min.
 const defaultReadySessionTTL = 30 * time.Minute
 
+// defaultYieldSweepInterval is how often the yield sweep correlates `git
+// revert` commits back to the sessions that authored the reverted work (#373).
+// Overridable via IRRLICHT_YIELD_SWEEP_INTERVAL (Go duration string).
+const defaultYieldSweepInterval = 30 * time.Minute
+
 // Permission-wizard modes (issue #570). Ask is the production default:
 // nothing is read or written until the user grants each permission.
 // GrantAll auto-grants every declared permission at startup and never
@@ -50,9 +55,10 @@ const (
 
 // Config holds daemon-wide runtime configuration.
 type Config struct {
-	MaxSessionAge   time.Duration
-	ReadySessionTTL time.Duration
-	PermissionMode  string
+	MaxSessionAge      time.Duration
+	ReadySessionTTL    time.Duration
+	YieldSweepInterval time.Duration
+	PermissionMode     string
 
 	// Cache-bloat detector knobs (issue #374), overridable via env vars.
 	CacheBloatBaselineDays       int
@@ -71,14 +77,21 @@ func Default() Config {
 			ttl = parsed
 		}
 	}
+	yieldInterval := defaultYieldSweepInterval
+	if raw := os.Getenv("IRRLICHT_YIELD_SWEEP_INTERVAL"); raw != "" {
+		if parsed, err := time.ParseDuration(raw); err == nil && parsed > 0 {
+			yieldInterval = parsed
+		}
+	}
 	mode := PermissionModeAsk
 	if os.Getenv("IRRLICHT_PERMISSION_MODE") == PermissionModeGrantAll {
 		mode = PermissionModeGrantAll
 	}
 	return Config{
-		MaxSessionAge:   defaultMaxSessionAge,
-		ReadySessionTTL: ttl,
-		PermissionMode:  mode,
+		MaxSessionAge:      defaultMaxSessionAge,
+		ReadySessionTTL:    ttl,
+		YieldSweepInterval: yieldInterval,
+		PermissionMode:     mode,
 
 		CacheBloatBaselineDays:       envInt("IRRLICHT_CACHE_BLOAT_BASELINE_DAYS", defaultCacheBloatBaselineDays),
 		CacheBloatThreshold:          envFloat("IRRLICHT_CACHE_BLOAT_THRESHOLD", defaultCacheBloatThreshold),

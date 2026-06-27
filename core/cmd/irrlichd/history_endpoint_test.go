@@ -36,7 +36,7 @@ func doHistory(t *testing.T, tracker *filesystem.CostTracker, query string) (*ht
 	t.Helper()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/history?"+query, nil)
 	rec := httptest.NewRecorder()
-	handleGetHistory(tracker)(rec, req)
+	handleGetHistory(tracker, nil)(rec, req)
 	var resp historyResponse
 	if rec.Code == http.StatusOK {
 		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
@@ -116,7 +116,7 @@ func TestHandleGetHistory_AgentsStub(t *testing.T) {
 	tr := filesystem.NewCostTrackerWithDir(filepath.Join(t.TempDir(), "cost"))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/history?range=day&chart=agents", nil)
 	rec := httptest.NewRecorder()
-	handleGetHistory(tr)(rec, req)
+	handleGetHistory(tr, nil)(rec, req)
 	if rec.Code != http.StatusNotImplemented {
 		t.Fatalf("chart=agents: want 501, got %d", rec.Code)
 	}
@@ -275,7 +275,7 @@ func TestHandleGetHistory_BadRequests(t *testing.T) {
 	for _, q := range []string{"chart=bogus", "group=bogus", "range=bogus", "start=abc&end=def", "start=2000&end=1000"} {
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/history?"+q, nil)
 		rec := httptest.NewRecorder()
-		handleGetHistory(tr)(rec, req)
+		handleGetHistory(tr, nil)(rec, req)
 		if rec.Code != http.StatusBadRequest {
 			t.Errorf("%q: want 400, got %d", q, rec.Code)
 		}
@@ -285,7 +285,7 @@ func TestHandleGetHistory_BadRequests(t *testing.T) {
 func TestHandleGetHistory_NilTrackerEmpty(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/history?range=week", nil)
 	rec := httptest.NewRecorder()
-	handleGetHistory(nil)(rec, req)
+	handleGetHistory(nil, nil)(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("nil tracker: want 200, got %d", rec.Code)
 	}

@@ -73,6 +73,53 @@ struct HistoryForecastPoint: Codable {
     let value: Double
 }
 
+// Codable mirror of the daemon's `chart=yield` response (#373). Yield is a
+// per-project aggregate over completed sessions — productive vs reverted spend
+// and the resulting ratio — not a time series, so it has its own envelope.
+struct HistoryYieldResponse: Codable {
+    let range: String
+    let productiveCost: Double
+    let revertedCost: Double
+    let unknownCost: Double
+    let totalCost: Double
+    let yieldRatio: Double
+    let projects: [HistoryYieldProject]
+
+    enum CodingKeys: String, CodingKey {
+        case range, projects
+        case productiveCost = "productive_cost"
+        case revertedCost = "reverted_cost"
+        case unknownCost = "unknown_cost"
+        case totalCost = "total_cost"
+        case yieldRatio = "yield"
+    }
+
+    /// Anything to show: attributable spend, or unattributed (non-git) spend.
+    var hasData: Bool { totalCost > 0 || unknownCost > 0 }
+}
+
+struct HistoryYieldProject: Codable, Identifiable {
+    let project: String
+    let productiveCost: Double
+    let revertedCost: Double
+    let unknownCost: Double
+    let totalCost: Double
+    let yieldRatio: Double
+    let revertedCount: Int
+
+    var id: String { project }
+
+    enum CodingKeys: String, CodingKey {
+        case project
+        case productiveCost = "productive_cost"
+        case revertedCost = "reverted_cost"
+        case unknownCost = "unknown_cost"
+        case totalCost = "total_cost"
+        case yieldRatio = "yield"
+        case revertedCount = "reverted_count"
+    }
+}
+
 /// The History range selector. Mirrors the web dashboard's segmented control,
 /// minus `this-month` (issue #755 scopes macOS Phase 1 to Day/Week/Month/Year
 /// + Custom).
@@ -147,6 +194,7 @@ enum HistoryRange: String, CaseIterable, Identifiable {
 /// the models/providers presets measure USD; tokens measures token counts.
 enum HistoryChart: String, CaseIterable, Identifiable {
     case cost, tokens, models, providers
+    case yieldRatio = "yield" // #373 — per-project productive vs reverted spend
 
     var id: String { rawValue }
 
@@ -156,6 +204,7 @@ enum HistoryChart: String, CaseIterable, Identifiable {
         case .tokens: return "Tokens"
         case .models: return "Models"
         case .providers: return "Providers"
+        case .yieldRatio: return "Yield"
         }
     }
 

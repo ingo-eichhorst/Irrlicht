@@ -20,7 +20,7 @@ func fixture(id, state, project string) *session.SessionState {
 func render(t *testing.T, sessions []*session.SessionState, useColor bool) string {
 	t.Helper()
 	var sb strings.Builder
-	renderGroups(&sb, session.BuildDashboard(sessions, nil), useColor)
+	renderGroups(&sb, session.BuildDashboard(sessions, nil), useColor, false)
 	return sb.String()
 }
 
@@ -77,7 +77,7 @@ func TestShortID(t *testing.T) {
 
 func TestFormatRowNilMetrics(t *testing.T) {
 	a := &session.Agent{SessionState: fixture("abcd1234-rest", session.StateReady, "proj")}
-	row := formatRow(a, false)
+	row := formatRow(a, false, false)
 	for _, want := range []string{"ready", "proj", "abcd1234", "claude-code", "ago"} {
 		if !strings.Contains(row, want) {
 			t.Errorf("row %q does not contain %q", row, want)
@@ -100,14 +100,14 @@ func TestFormatRowFullMetrics(t *testing.T) {
 		PressureLevel:      "caution",
 		EstimatedCostUSD:   3.21,
 	}
-	row := formatRow(&session.Agent{SessionState: s}, true)
+	row := formatRow(&session.Agent{SessionState: s}, true, false)
 	for _, want := range []string{"gpt-5", ansiYellow + "47%" + ansiReset, "400k", "$3.21", "codex"} {
 		if !strings.Contains(row, want) {
 			t.Errorf("row %q does not contain %q", row, want)
 		}
 	}
 
-	plain := formatRow(&session.Agent{SessionState: s}, false)
+	plain := formatRow(&session.Agent{SessionState: s}, false, false)
 	if strings.Contains(plain, "\033[") {
 		t.Errorf("row %q contains ANSI escapes with useColor=false", plain)
 	}
