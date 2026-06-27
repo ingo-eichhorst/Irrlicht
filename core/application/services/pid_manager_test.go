@@ -859,7 +859,7 @@ func TestHandleProcessExit_EvictsChildrenViaFunnel(t *testing.T) {
 	}
 
 	var deleted []string
-	newPIDManagerForTestWithDeleteSpy(repo, &deleted).HandleProcessExit(4242, "parent")
+	newPIDManagerForTestWithDeleteSpy(repo, &deleted).HandleProcessExit(4242, "parent", "test: pid exited")
 
 	if len(repo.states) != 0 {
 		t.Fatalf("parent and child should both be gone, repo has %d sessions", len(repo.states))

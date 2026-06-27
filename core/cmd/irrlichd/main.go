@@ -297,7 +297,7 @@ func main() {
 	var pwPort outbound.ProcessWatcher
 	if !demoMode {
 		pw, err := processlifecycle.NewMonitor(func(pid int, sessionID string) {
-			detector.HandleProcessExit(pid, sessionID)
+			detector.HandleProcessExit(pid, sessionID, "process watcher: pid exited (NOTE_EXIT)")
 		})
 		if err != nil {
 			logger.LogError("startup", "", fmt.Sprintf("ProcessWatcher init failed (non-fatal): %v", err))

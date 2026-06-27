@@ -91,6 +91,12 @@ type Event struct {
 	NewState  string `json:"new_state,omitempty"`
 	Reason    string `json:"reason,omitempty"`
 
+	// Inputs is the classifier-input snapshot that drove this transition
+	// (KindStateTransition only). Pointer + omitempty: absent on every event
+	// that isn't a transition, so existing sidecars stay compact. Lets an
+	// agent reconstruct *why* the classifier chose NewState (issue #757).
+	Inputs *ClassifierInputs `json:"inputs,omitempty"`
+
 	// Parent-child.
 	ParentSessionID string `json:"parent_session_id,omitempty"`
 
@@ -122,4 +128,27 @@ type Event struct {
 	DeltaTokens       int64   `json:"delta_tokens,omitempty"`
 	BaselineMedian    float64 `json:"baseline_median,omitempty"`
 	CurrentMedian     float64 `json:"current_median,omitempty"`
+}
+
+// ClassifierInputs is a snapshot of the transient SessionMetrics signals that
+// feed ClassifyState, attached to KindStateTransition events so a recorded
+// trace explains its own classification decisions at replay time (issue #757).
+// Every field is omitempty and mirrors the same-named SessionMetrics field;
+// the values are copied, never re-derived here. Captured on the transition edge
+// only (not on every activity event) since these are the inputs that decided
+// the new state — the headline use is reconstructing why an antigravity PID=0
+// ghost was classified ready before it was reaped.
+type ClassifierInputs struct {
+	HasLiveBackgroundProcess          bool     `json:"has_live_background_process,omitempty"`
+	PermissionPending                 bool     `json:"permission_pending,omitempty"`
+	CompactInProgress                 bool     `json:"compact_in_progress,omitempty"`
+	OpenToolStalled                   bool     `json:"open_tool_stalled,omitempty"`
+	SawUserBlockingToolClosedThisPass bool     `json:"saw_user_blocking_tool_closed_this_pass,omitempty"`
+	SawManualCompactBoundary          bool     `json:"saw_manual_compact_boundary,omitempty"`
+	NoSubstantiveActivity             bool     `json:"no_substantive_activity,omitempty"`
+	HasOpenToolCall                   bool     `json:"has_open_tool_call,omitempty"`
+	LastOpenToolNames                 []string `json:"last_open_tool_names,omitempty"`
+	LastEventType                     string   `json:"last_event_type,omitempty"`
+	LastWasUserInterrupt              bool     `json:"last_was_user_interrupt,omitempty"`
+	LastWasToolDenial                 bool     `json:"last_was_tool_denial,omitempty"`
 }
