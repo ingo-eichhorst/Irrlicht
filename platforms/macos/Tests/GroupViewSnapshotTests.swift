@@ -108,4 +108,32 @@ final class GroupViewSnapshotTests: XCTestCase {
         let view = host(GroupView(group: makeGroup(name: "nested"), depth: 1))
         assertSnapshot(of: view, as: .image)
     }
+
+    /// A transient PID=0 antigravity ghost (ready, no metrics) sitting alongside
+    /// a substantive working session in one group — the list-level view an agent
+    /// checks to confirm a ghost row renders without disturbing its neighbours
+    /// (issue #757).
+    func testGhostAlongsideRealSessions() {
+        let real = makeSession(id: "real-working")
+        let ghost = SessionState(
+            id: "proc-0",
+            state: .ready,
+            model: "gemini-3-pro",
+            cwd: "/Users/test/projects/app",
+            transcriptPath: nil,
+            gitBranch: "main",
+            projectName: "app",
+            firstSeen: Date(timeIntervalSince1970: 1_700_000_000),
+            updatedAt: Date(timeIntervalSince1970: 1_700_000_000),
+            eventCount: 0,
+            lastEvent: nil,
+            metrics: nil,
+            pid: 0,
+            adapter: "antigravity"
+        )
+        let group = SessionManager.AgentGroup(name: "app", agents: [real, ghost])
+        sessionManager.apiGroups = [group]
+        let view = host(GroupView(group: group), height: 160)
+        assertSnapshot(of: view, as: .image)
+    }
 }
