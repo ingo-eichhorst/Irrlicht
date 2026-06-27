@@ -243,10 +243,7 @@ struct HistoryView: View {
            eta > now, eta <= w.resetsAt {
             return eta
         }
-        let elapsed = now.timeIntervalSince(start)
-        guard w.usedPercent > 0, w.usedPercent < 100, elapsed > 0 else { return nil }
-        let cap = start.addingTimeInterval(elapsed * (100.0 / w.usedPercent))
-        return (cap > now && cap <= w.resetsAt) ? cap : nil
+        return QuotaWindowVM.averagePaceCap(now: now, start: start, resetsAt: w.resetsAt, usedPercent: w.usedPercent)
     }
 
     private func save(ext: String, text: String) {
@@ -503,6 +500,16 @@ struct QuotaWindowVM {
         let total = end.timeIntervalSince(start)
         return min(100, usedPercent * (total / elapsed))
     }
+
+    /// Average-pace cap time: when usage hits 100% if it holds the mean rate
+    /// since the window opened. nil when flat, already at the cap, or not
+    /// projected to hit it before reset. Pure so it can be unit-tested.
+    static func averagePaceCap(now: Date, start: Date, resetsAt: Date, usedPercent: Double) -> Date? {
+        let elapsed = now.timeIntervalSince(start)
+        guard usedPercent > 0, usedPercent < 100, elapsed > 0 else { return nil }
+        let cap = start.addingTimeInterval(elapsed * (100.0 / usedPercent))
+        return (cap > now && cap <= resetsAt) ? cap : nil
+    }
 }
 
 struct HistoryQuotaContentView: View {
@@ -567,16 +574,21 @@ private struct HistoryQuotaChart: View {
         [Pt(id: "c0", date: window.start, percent: 0),
          Pt(id: "c1", date: window.end, percent: 100)]
     }
-    // Usage so far: window open (0%) → now (used %).
+    // Clamp to the window so a stale snapshot (now past reset) keeps its marks
+    // inside the chart's x-domain.
+    private var clampedNow: Date { min(window.now, window.end) }
+    // Average-pace trajectory up to the current reading (window open 0% → now).
+    // We only hold the latest sample, so this is the mean rate, not a measured
+    // history curve.
     private var actual: [Pt] {
         [Pt(id: "a0", date: window.start, percent: 0),
-         Pt(id: "a1", date: window.now, percent: window.usedPercent)]
+         Pt(id: "a1", date: clampedNow, percent: window.usedPercent)]
     }
     // Projection: now → projected cap (100%), or → window end at average pace.
     private var projected: [Pt] {
         let tail = window.projectedCap.map { Pt(id: "p1", date: $0, percent: 100) }
             ?? Pt(id: "p1", date: window.end, percent: window.projectedEndPercent)
-        return [Pt(id: "p0", date: window.now, percent: window.usedPercent), tail]
+        return [Pt(id: "p0", date: clampedNow, percent: window.usedPercent), tail]
     }
     private var lineColor: Color { window.willHitCap ? IrrColors.waiting : IrrColors.ready }
     private var showTime: Bool { window.end.timeIntervalSince(window.start) <= 86_400 }
@@ -604,7 +616,7 @@ private struct HistoryQuotaChart: View {
                     .foregroundStyle(lineColor)
                     .lineStyle(StrokeStyle(lineWidth: 2, dash: [4, 3]))
             }
-            PointMark(x: .value("Time", window.now), y: .value("Used", window.usedPercent))
+            PointMark(x: .value("Time", clampedNow), y: .value("Used", window.usedPercent))
                 .foregroundStyle(lineColor)
                 .symbolSize(60)
         }
