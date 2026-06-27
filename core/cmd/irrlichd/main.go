@@ -496,6 +496,10 @@ func main() {
 			return false
 		}))
 
+	// History tab analytics (issue #369): trailing/calendar/custom-range cost
+	// series + linear forecast, computed from the cost snapshot files.
+	mux.HandleFunc("GET /api/v1/history", handleGetHistory(costTracker))
+
 	focusService := services.NewFocusService(cachedRepo, push, logger)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/focus", sessionshandler.NewFocusHandler(focusService, logger))
 

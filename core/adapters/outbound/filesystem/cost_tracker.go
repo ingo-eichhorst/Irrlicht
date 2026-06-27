@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"irrlicht/core/domain/session"
+	"irrlicht/core/ports/outbound"
 )
 
 const (
@@ -367,27 +368,8 @@ type sessionWindows struct {
 //     the minimum cost observed inside the window.
 //   - contribution = max(0, MAX(cost) − baseline).
 func (t *CostTracker) scanWindows(path string, cutoffs map[string]int64) (map[string]*sessionWindows, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	defer f.Close()
-
 	agg := make(map[string]*sessionWindows)
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
-		}
-		var r snapshotRow
-		if err := json.Unmarshal(line, &r); err != nil {
-			continue
-		}
+	err := scanCostFile(path, func(r snapshotRow) {
 		s := agg[r.Session]
 		if s == nil {
 			s = &sessionWindows{windows: make(map[string]*windowAgg, len(cutoffs))}
@@ -422,11 +404,46 @@ func (t *CostTracker) scanWindows(path string, cutoffs map[string]int64) (map[st
 				w.hasMax = true
 			}
 		}
-	}
-	if err := scanner.Err(); err != nil && err != io.EOF {
+	})
+	if err != nil {
 		return nil, err
 	}
 	return agg, nil
+}
+
+// scanCostFile streams one cost file, invoking perRow for each parsed snapshot
+// row. A missing file and malformed lines are skipped. Shared by scanWindows
+// (trailing-window baseline/max) and scanSeries (per-bucket deltas) so the
+// on-disk format, line-buffer sizing, and skip policy live in one place — the
+// two row folds must stay in lockstep for a series' sum to match its window
+// total.
+func scanCostFile(path string, perRow func(snapshotRow)) error {
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		var r snapshotRow
+		if err := json.Unmarshal(line, &r); err != nil {
+			continue
+		}
+		perRow(r)
+	}
+	if err := scanner.Err(); err != nil && err != io.EOF {
+		return err
+	}
+	return nil
 }
 
 // addContributions folds one session's per-window deltas into out under key.
@@ -441,6 +458,143 @@ func addContributions(s *sessionWindows, key string, out map[string]map[string]f
 		}
 		out[tf][key] += d
 	}
+}
+
+// seriesAgg accumulates one session's per-bucket incremental cost while a cost
+// file is scanned. prevCost carries the running cumulative cost so the next
+// in-range row's delta can be computed; project is the bucket key (constant
+// across a session's rows, matching scanWindows).
+type seriesAgg struct {
+	project  string
+	prevCost float64
+	hasPrev  bool
+	buckets  []float64
+}
+
+// maxSeriesBuckets caps how many buckets CostSeries will allocate, so a wide
+// span paired with a tiny bucket (e.g. a custom range with ?bucket=1) can't
+// force a multi-gigabyte allocation. When the requested granularity would
+// exceed it, the bucket is coarsened to keep [start, end) covered within the
+// ceiling; the result reports the BucketSeconds actually used.
+const maxSeriesBuckets = 10000
+
+// CostSeries returns a per-project incremental-cost time series bucketed into
+// fixed bucketSeconds-wide buckets spanning [start, end) (unix seconds), plus
+// each project's total over the range. A session's spend in a bucket is the
+// increase in its cumulative cost across the rows that fall in that bucket; the
+// last row before start (or, failing that, the first in-range row) seeds the
+// baseline so pre-range cost is never attributed to the first bucket. Because
+// snapshot cost is monotonic, summing a project's buckets yields the same
+// (max − baseline) total CostsInWindows computes for the matching trailing
+// window. One pass over every cost file.
+func (t *CostTracker) CostSeries(start, end, bucketSeconds int64) (*outbound.CostSeriesResult, error) {
+	if bucketSeconds <= 0 || end <= start {
+		return &outbound.CostSeriesResult{
+			Start:         start,
+			End:           end,
+			BucketSeconds: bucketSeconds,
+			BucketStarts:  []int64{},
+			ByProject:     map[string][]float64{},
+			Totals:        map[string]float64{},
+		}, nil
+	}
+	// Bound the bucket count: coarsen the bucket if the span would otherwise
+	// blow past the ceiling, keeping the allocation (and JSON payload) bounded
+	// regardless of caller-supplied start/end/bucket.
+	if span := end - start; span/bucketSeconds+1 > maxSeriesBuckets {
+		bucketSeconds = (span + maxSeriesBuckets - 1) / maxSeriesBuckets
+	}
+	n := int((end - start + bucketSeconds - 1) / bucketSeconds)
+	out := &outbound.CostSeriesResult{
+		Start:         start,
+		End:           end,
+		BucketSeconds: bucketSeconds,
+		BucketStarts:  make([]int64, n),
+		ByProject:     map[string][]float64{},
+		Totals:        map[string]float64{},
+	}
+	for i := range out.BucketStarts {
+		out.BucketStarts[i] = start + int64(i)*bucketSeconds
+	}
+
+	entries, err := os.ReadDir(t.dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return out, nil
+		}
+		return nil, err
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+			continue
+		}
+		fallback := strings.TrimSuffix(e.Name(), ".jsonl")
+		if err := t.scanSeries(filepath.Join(t.dir, e.Name()), start, end, bucketSeconds, n, fallback, out); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+// scanSeries streams one cost file once and folds its sessions' per-bucket
+// deltas into out. A session whose rows carry no project is keyed under
+// fallback (the filename), mirroring CostsInWindows.
+func (t *CostTracker) scanSeries(path string, start, end, bucketSeconds int64, n int, fallback string, out *outbound.CostSeriesResult) error {
+	aggs := make(map[string]*seriesAgg)
+	err := scanCostFile(path, func(r snapshotRow) {
+		s := aggs[r.Session]
+		if s == nil {
+			s = &seriesAgg{buckets: make([]float64, n)}
+			aggs[r.Session] = s
+		}
+		if r.Project != "" {
+			s.project = r.Project
+		}
+		if r.TS < start {
+			// Pre-range row: keep advancing the baseline so the first
+			// in-range delta measures spend since the last snapshot.
+			s.prevCost = r.Cost
+			s.hasPrev = true
+			return
+		}
+		if r.TS >= end {
+			return
+		}
+		if !s.hasPrev {
+			// First observation of this session, with no pre-range baseline:
+			// seed the baseline, contributing nothing for this row.
+			s.prevCost = r.Cost
+			s.hasPrev = true
+			return
+		}
+		if d := r.Cost - s.prevCost; d > 0 {
+			// The guards above filter rows to [start, end), so the index is
+			// always within [0, n-1] — no clamp needed.
+			s.buckets[int((r.TS-start)/bucketSeconds)] += d
+		}
+		s.prevCost = r.Cost
+	})
+	if err != nil {
+		return err
+	}
+	for _, s := range aggs {
+		key := s.project
+		if key == "" {
+			key = fallback
+		}
+		dst := out.ByProject[key]
+		if dst == nil {
+			dst = make([]float64, n)
+			out.ByProject[key] = dst
+		}
+		for i, v := range s.buckets {
+			if v != 0 {
+				dst[i] += v
+				out.Totals[key] += v
+			}
+		}
+	}
+	return nil
 }
 
 // Prune rewrites each project file to drop rows older than olderThanDays.

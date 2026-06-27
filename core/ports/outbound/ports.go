@@ -208,6 +208,20 @@ type EventRecorder interface {
 	Close() error
 }
 
+// CostSeriesResult is the downsampled per-project incremental-cost time series
+// returned by CostTracker.CostSeries. BucketStarts holds each bucket's start
+// timestamp (unix seconds); ByProject maps a project to its per-bucket
+// incremental USD (each slice has len == len(BucketStarts)); Totals is each
+// project's sum over [Start, End).
+type CostSeriesResult struct {
+	Start         int64                `json:"start"`
+	End           int64                `json:"end"`
+	BucketSeconds int64                `json:"bucket_seconds"`
+	BucketStarts  []int64              `json:"bucket_starts"`
+	ByProject     map[string][]float64 `json:"by_project"`
+	Totals        map[string]float64   `json:"totals"`
+}
+
 // CostTracker persists per-session cost/token snapshots so clients can query
 // project-level cost totals over a trailing time window (last day/week/…).
 // Implementations must be safe for concurrent use.
@@ -225,6 +239,13 @@ type CostTracker interface {
 	// byProvider keys by billing provider ("anthropic"/"openai"), excluding
 	// rows with no known provider. Both axes come from one scan.
 	CostsInWindows(windowSeconds map[string]int64) (byProject, byProvider map[string]map[string]float64, err error)
+
+	// CostSeries returns a downsampled per-project incremental-cost time series
+	// over [start, end) (unix seconds), bucketed into bucketSeconds-wide
+	// buckets, plus per-project totals. One pass over every cost file, reusing
+	// the same baseline/delta model as CostsInWindows so a series' sum matches
+	// the corresponding trailing-window total.
+	CostSeries(start, end, bucketSeconds int64) (*CostSeriesResult, error)
 
 	// Prune drops snapshot rows older than the given number of days.
 	// Safe to call periodically (e.g. daemon startup).

@@ -2925,6 +2925,333 @@ import { isSummaryCollapsed, toggleSummaryCollapsed, anySummaryCollapsed, collap
 
     refreshPermissions();
 
+    // --- History tab (issue #369) ---
+    // A top-level view (toggled by #history-tab-toggle) that charts historical
+    // USD cost from GET /api/v1/history. Hard constraint: exactly one chart +
+    // one side panel. Phase 1 wires chart=cost grouped by project; the other
+    // chart/group buttons are disabled stubs. The stacked-area chart is
+    // hand-rolled on a canvas (no external lib), mirroring paintRowHistory's
+    // DPI handling.
+    const ACTIVE_TAB_KEY = 'irrlicht_activeTab';
+    const HISTORY_COLORS = [
+      '#8B5CF6', '#34C759', '#FF9500', '#0A84FF', '#FF375F',
+      '#5E5CE6', '#FFD60A', '#30D158', '#BF5AF2', '#64D2FF',
+    ];
+    const RANGE_LABELS = { day: 'Day', week: 'Week', month: 'Month', year: 'Year', 'this-month': 'This Month', custom: 'Custom' };
+    const historyState = { range: 'day', chart: 'cost', group: 'project', forecast: true, start: null, end: null, data: null };
+    let historyFetchSeq = 0;
+    let historyResizeRAF = 0;
+
+    function historyColorFor(i) { return HISTORY_COLORS[i % HISTORY_COLORS.length]; }
+    function histDollar(v) { return '$' + (Number(v) || 0).toFixed(2); }
+    function histAxisLabel(ts, bucketSeconds) {
+      const d = new Date(ts * 1000);
+      if (bucketSeconds < 86400) {
+        return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+      }
+      return (d.getMonth() + 1) + '/' + d.getDate();
+    }
+
+    function historyTabOn() { return document.body.classList.contains('tab-history'); }
+    function setHistoryTab(on) {
+      document.body.classList.toggle('tab-history', on);
+      const btn = document.getElementById('history-tab-toggle');
+      if (btn) {
+        btn.classList.toggle('active', on);
+        btn.textContent = on ? 'Live' : 'History';
+        btn.title = on ? 'Back to live sessions' : 'Show historical cost analytics';
+      }
+      localStorage.setItem(ACTIVE_TAB_KEY, on ? 'history' : 'live');
+      if (on) fetchHistory();
+    }
+
+    function historyQuery() {
+      const p = new URLSearchParams();
+      p.set('chart', historyState.chart);
+      p.set('group', historyState.group);
+      p.set('forecast', historyState.forecast ? 'true' : 'false');
+      if (historyState.range === 'custom' && historyState.start != null && historyState.end != null) {
+        p.set('start', String(historyState.start));
+        p.set('end', String(historyState.end));
+      } else {
+        p.set('range', historyState.range);
+      }
+      return p.toString();
+    }
+
+    function fetchHistory() {
+      const seq = ++historyFetchSeq;
+      return fetch('/api/v1/history?' + historyQuery())
+        .then(r => (r.ok ? r.json() : null))
+        .catch(() => null)
+        .then(data => {
+          if (seq !== historyFetchSeq) return; // superseded by a newer request
+          historyState.data = data || null;
+          renderHistory();
+        });
+    }
+
+    function renderHistory() {
+      if (!historyState.data) {
+        const wrap = document.getElementById('history-chart-wrap');
+        if (wrap) wrap.classList.add('empty');
+        return;
+      }
+      paintHistoryChart();
+      renderHistoryPanel();
+    }
+
+    function paintHistoryChart() {
+      const canvas = document.getElementById('history-chart');
+      const wrap = document.getElementById('history-chart-wrap');
+      if (!canvas || !wrap) return;
+      const data = historyState.data;
+      const dpr = window.devicePixelRatio || 1;
+      const w = canvas.offsetWidth || wrap.clientWidth || 600;
+      const h = canvas.offsetHeight || 340;
+      const pxW = Math.round(w * dpr), pxH = Math.round(h * dpr);
+      if (canvas.width !== pxW || canvas.height !== pxH) { canvas.width = pxW; canvas.height = pxH; }
+      const ctx = canvas.getContext('2d');
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, w, h);
+
+      const buckets = (data && data.bucket_starts) || [];
+      const B = buckets.length;
+      const hasData = !!(data && data.total > 0 && B > 0);
+      wrap.classList.toggle('empty', !hasData);
+      if (!hasData) return;
+
+      const cs = getComputedStyle(document.documentElement);
+      const muted = (cs.getPropertyValue('--muted') || '#888').trim();
+      const waiting = (cs.getPropertyValue('--waiting') || '#FF9500').trim();
+      const gridColor = 'rgba(128,140,170,0.18)';
+
+      // Per-project matrix aligned to buckets. Project order follows
+      // top_contributors (so side-panel dots match chart colors), then any
+      // extra projects from the series.
+      const projects = [];
+      const idx = new Map();
+      for (const c of (data.top_contributors || [])) {
+        if (!idx.has(c.label)) { idx.set(c.label, projects.length); projects.push(c.label); }
+      }
+      for (const pt of (data.series || [])) {
+        if (!idx.has(pt.project)) { idx.set(pt.project, projects.length); projects.push(pt.project); }
+      }
+      const matrix = projects.map(() => new Array(B).fill(0));
+      const tsIdx = new Map();
+      buckets.forEach((t, i) => tsIdx.set(t, i));
+      for (const pt of (data.series || [])) {
+        const r = idx.get(pt.project), c = tsIdx.get(pt.ts);
+        if (r != null && c != null) matrix[r][c] += pt.value;
+      }
+      const fc = (historyState.forecast && data.forecast && Array.isArray(data.forecast.series)) ? data.forecast.series : [];
+      const H = fc.length;
+
+      // Y scale = the tallest stacked column (sum across projects per bucket),
+      // also accounting for the forecast points.
+      let maxY = 0;
+      for (let c = 0; c < B; c++) {
+        let s = 0;
+        for (let r = 0; r < projects.length; r++) s += matrix[r][c];
+        if (s > maxY) maxY = s;
+      }
+      for (const p of fc) if (p.value > maxY) maxY = p.value;
+      if (maxY <= 0) maxY = 1;
+      maxY *= 1.12;
+
+      const padL = 46, padR = 12, padT = 12, padB = 22;
+      const plotW = Math.max(1, w - padL - padR);
+      const plotH = Math.max(1, h - padT - padB);
+      const N = B + H;
+      const xAt = (i) => (N <= 1 ? padL : padL + plotW * (i / (N - 1)));
+      const yAt = (v) => padT + plotH * (1 - v / maxY);
+
+      // Y gridlines + dollar labels (drawn first, behind the areas).
+      ctx.font = '10px ui-monospace, monospace';
+      ctx.textBaseline = 'middle';
+      ctx.textAlign = 'right';
+      const ticks = 4;
+      for (let t = 0; t <= ticks; t++) {
+        const v = maxY * t / ticks;
+        const y = yAt(v);
+        ctx.strokeStyle = gridColor;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(padL, y);
+        ctx.lineTo(w - padR, y);
+        ctx.stroke();
+        ctx.fillStyle = muted;
+        ctx.fillText(histDollar(v), padL - 6, y);
+      }
+
+      // Stacked areas, bottom-up.
+      const baseline = new Array(B).fill(0);
+      for (let r = 0; r < projects.length; r++) {
+        ctx.beginPath();
+        for (let c = 0; c < B; c++) {
+          const x = xAt(c), y = yAt(baseline[c] + matrix[r][c]);
+          if (c === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        }
+        for (let c = B - 1; c >= 0; c--) ctx.lineTo(xAt(c), yAt(baseline[c]));
+        ctx.closePath();
+        ctx.fillStyle = historyColorFor(r);
+        ctx.fill();
+        for (let c = 0; c < B; c++) baseline[c] += matrix[r][c];
+      }
+
+      // Forecast: a dashed flat line at the projected per-bucket rate, drawn
+      // from the right edge of the data into the future. Anchored at the
+      // forecast's own first value (not grand[B-1]) so an empty trailing bucket
+      // — common for the in-progress current minute — doesn't draw a spurious
+      // dip-and-spike down to the axis.
+      if (H > 0) {
+        ctx.save();
+        ctx.setLineDash([4, 3]);
+        ctx.strokeStyle = waiting;
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(xAt(B - 1), yAt(fc[0].value));
+        for (let k = 0; k < H; k++) ctx.lineTo(xAt(B + k), yAt(fc[k].value));
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      // X axis time labels.
+      ctx.fillStyle = muted;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+      const labelCount = Math.min(6, B);
+      for (let i = 0; i < labelCount; i++) {
+        const c = Math.round(i * (B - 1) / Math.max(1, labelCount - 1));
+        ctx.fillText(histAxisLabel(buckets[c], data.bucket_seconds), xAt(c), h - padB + 5);
+      }
+    }
+
+    function renderHistoryPanel() {
+      const data = historyState.data;
+      if (!data) return;
+      const titleEl = document.getElementById('history-panel-title');
+      const totalEl = document.getElementById('history-total');
+      const fcEl = document.getElementById('history-forecast-line');
+      const listEl = document.getElementById('history-contrib');
+      if (titleEl) titleEl.textContent = 'Total · ' + (RANGE_LABELS[historyState.range] || historyState.range);
+      if (totalEl) totalEl.textContent = histDollar(data.total);
+      if (fcEl) {
+        fcEl.textContent = (historyState.forecast && data.forecast)
+          ? '▲ projected ' + histDollar(data.forecast.projected) + ' (' + (data.forecast.basis || 'linear') + ')'
+          : '';
+      }
+      if (!listEl) return;
+      listEl.innerHTML = '';
+      const contribs = data.top_contributors || [];
+      if (!contribs.length) {
+        const li = document.createElement('li');
+        li.className = 'history-empty-contrib';
+        li.textContent = 'no spend in this range';
+        listEl.appendChild(li);
+        return;
+      }
+      contribs.forEach((c, i) => {
+        const li = document.createElement('li');
+        const dot = document.createElement('span');
+        dot.className = 'dot';
+        dot.style.background = historyColorFor(i);
+        const label = document.createElement('span');
+        label.className = 'label';
+        label.textContent = c.label;
+        const val = document.createElement('span');
+        val.className = 'val';
+        val.textContent = histDollar(c.value);
+        li.appendChild(dot);
+        li.appendChild(label);
+        li.appendChild(val);
+        listEl.appendChild(li);
+      });
+    }
+
+    function historyDownload(filename, mime, text) {
+      const blob = new Blob([text], { type: mime });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+    }
+    function historyCsvCell(s) {
+      s = String(s);
+      return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+    }
+    function exportHistoryCSV() {
+      const d = historyState.data;
+      if (!d) return;
+      const lines = ['bucket_start,project,value'];
+      for (const pt of (d.series || [])) {
+        lines.push([new Date(pt.ts * 1000).toISOString(), historyCsvCell(pt.project), pt.value.toFixed(6)].join(','));
+      }
+      historyDownload('irrlicht-history-' + historyState.range + '-' + historyState.chart + '.csv', 'text/csv;charset=utf-8', lines.join('\n') + '\n');
+    }
+    function exportHistoryJSON() {
+      const d = historyState.data;
+      if (!d) return;
+      historyDownload('irrlicht-history-' + historyState.range + '-' + historyState.chart + '.json', 'application/json', JSON.stringify(d, null, 2));
+    }
+
+    // Wiring.
+    const histToggleBtn = document.getElementById('history-tab-toggle');
+    if (histToggleBtn) histToggleBtn.addEventListener('click', () => setHistoryTab(!historyTabOn()));
+
+    const histRangeSeg = document.getElementById('history-range');
+    if (histRangeSeg) histRangeSeg.addEventListener('click', (e) => {
+      const b = e.target.closest('button[data-range]');
+      if (!b) return;
+      for (const x of histRangeSeg.querySelectorAll('button')) x.classList.toggle('active', x === b);
+      const r = b.dataset.range;
+      const custom = document.getElementById('history-custom');
+      if (r === 'custom') { if (custom) custom.hidden = false; return; } // wait for Apply
+      if (custom) custom.hidden = true;
+      historyState.range = r;
+      historyState.start = null;
+      historyState.end = null;
+      fetchHistory();
+    });
+
+    const histApplyBtn = document.getElementById('history-custom-apply');
+    if (histApplyBtn) histApplyBtn.addEventListener('click', () => {
+      const sv = document.getElementById('history-start').value;
+      const ev = document.getElementById('history-end').value;
+      if (!sv || !ev) return;
+      const start = Math.floor(new Date(sv + 'T00:00:00').getTime() / 1000);
+      const end = Math.floor(new Date(ev + 'T00:00:00').getTime() / 1000) + 86400; // include the end day
+      if (!(end > start)) return;
+      historyState.range = 'custom';
+      historyState.start = start;
+      historyState.end = end;
+      fetchHistory();
+    });
+
+    const histForecastChk = document.getElementById('history-forecast');
+    if (histForecastChk) histForecastChk.addEventListener('change', () => {
+      historyState.forecast = histForecastChk.checked;
+      fetchHistory();
+    });
+
+    const histCsvBtn = document.getElementById('history-export-csv');
+    if (histCsvBtn) histCsvBtn.addEventListener('click', exportHistoryCSV);
+    const histJsonBtn = document.getElementById('history-export-json');
+    if (histJsonBtn) histJsonBtn.addEventListener('click', exportHistoryJSON);
+
+    window.addEventListener('resize', () => {
+      if (!historyTabOn() || !historyState.data) return;
+      if (historyResizeRAF) cancelAnimationFrame(historyResizeRAF);
+      historyResizeRAF = requestAnimationFrame(paintHistoryChart);
+    });
+
+    // Restore the History tab if it was active last session.
+    if (localStorage.getItem(ACTIVE_TAB_KEY) === 'history') setHistoryTab(true);
+
 export {
   resolvedTheme, rowLabel, maybeNotifyOnUpdate,
   formatCost, formatUsageCost, pressureClass, historyPriorityForState,

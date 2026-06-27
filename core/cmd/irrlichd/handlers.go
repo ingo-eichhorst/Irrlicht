@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -229,6 +231,282 @@ func providerCostsByProvider(byTf map[string]map[string]float64) map[string]map[
 		return nil
 	}
 	return out
+}
+
+// History tab (issue #369). Phase 1 serves chart=cost grouped by project only,
+// computed from the cost snapshot files via CostTracker.CostSeries. The other
+// chart types and groups are scaffolded in the UI but return 501 here with a
+// phase hint so the frontend can disable them honestly.
+
+type historyPoint struct {
+	TS      int64   `json:"ts"`
+	Project string  `json:"project"`
+	Value   float64 `json:"value"`
+}
+
+type historyContributor struct {
+	Label string  `json:"label"`
+	Value float64 `json:"value"`
+}
+
+type historyForecastPoint struct {
+	TS    int64   `json:"ts"`
+	Value float64 `json:"value"`
+}
+
+type historyForecast struct {
+	Projected      float64                `json:"projected"`
+	Basis          string                 `json:"basis"`
+	HorizonBuckets int                    `json:"horizon_buckets"`
+	Series         []historyForecastPoint `json:"series"`
+}
+
+type historyResponse struct {
+	Range           string               `json:"range"`
+	Chart           string               `json:"chart"`
+	Group           string               `json:"group"`
+	Start           int64                `json:"start"`
+	End             int64                `json:"end"`
+	BucketSeconds   int64                `json:"bucket_seconds"`
+	BucketStarts    []int64              `json:"bucket_starts"`
+	Total           float64              `json:"total"`
+	Series          []historyPoint       `json:"series"`
+	TopContributors []historyContributor `json:"top_contributors"`
+	Forecast        *historyForecast     `json:"forecast,omitempty"`
+}
+
+// handleGetHistory serves GET /api/v1/history?range=&chart=&group=&start=&end=
+// &bucket=&forecast=&forecast_buckets=. Range is a trailing window
+// (day|week|month|year), a calendar shorthand (this-month), or an explicit
+// start&end (unix seconds). Bucket granularity is downsampled at read time.
+func handleGetHistory(tracker outbound.CostTracker) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+
+		chart := q.Get("chart")
+		if chart == "" {
+			chart = "cost"
+		}
+		switch chart {
+		case "cost":
+			// implemented
+		case "tokens", "models", "providers":
+			writeHistoryNotImplemented(w, "chart="+chart, 2)
+			return
+		case "agents":
+			writeHistoryNotImplemented(w, "chart="+chart, 3)
+			return
+		default:
+			http.Error(w, "unknown chart: "+chart, http.StatusBadRequest)
+			return
+		}
+
+		group := q.Get("group")
+		if group == "" {
+			group = "project"
+		}
+		switch group {
+		case "project":
+			// implemented
+		case "branch", "provider", "model", "session":
+			writeHistoryNotImplemented(w, "group="+group, 2)
+			return
+		default:
+			http.Error(w, "unknown group: "+group, http.StatusBadRequest)
+			return
+		}
+
+		rangeKey, start, end, ok := resolveHistoryRange(q)
+		if !ok {
+			http.Error(w, "invalid range: use range=day|week|month|year|this-month or start&end (unix seconds)", http.StatusBadRequest)
+			return
+		}
+		bucketSeconds := historyBucketSeconds(q, end-start)
+
+		var series *outbound.CostSeriesResult
+		if tracker != nil {
+			s, err := tracker.CostSeries(start, end, bucketSeconds)
+			if err != nil {
+				http.Error(w, "internal error", http.StatusInternalServerError)
+				return
+			}
+			series = s
+		}
+		if series == nil {
+			// No tracker (init failed): respond with an empty-but-valid payload
+			// so the dashboard renders cleanly instead of erroring.
+			series = &outbound.CostSeriesResult{Start: start, End: end, BucketSeconds: bucketSeconds, BucketStarts: []int64{}, ByProject: map[string][]float64{}, Totals: map[string]float64{}}
+		}
+
+		resp := buildHistoryResponse(rangeKey, chart, group, series, q)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}
+}
+
+// writeHistoryNotImplemented emits a 501 with a phase hint for chart types and
+// groups scaffolded in the UI but not yet wired (Phase 2/3).
+func writeHistoryNotImplemented(w http.ResponseWriter, what string, phase int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusNotImplemented)
+	json.NewEncoder(w).Encode(map[string]any{
+		"error": what + " is not implemented in Phase 1",
+		"phase": phase,
+	})
+}
+
+// resolveHistoryRange resolves the requested window to [start, end) unix
+// seconds. Precedence: explicit start&end → calendar shorthand / trailing
+// window via range. Missing range defaults to "day". Returns ok=false on a
+// malformed explicit range or an unknown range key.
+func resolveHistoryRange(q url.Values) (rangeKey string, start, end int64, ok bool) {
+	if s := q.Get("start"); s != "" {
+		startN, err1 := strconv.ParseInt(s, 10, 64)
+		endN, err2 := strconv.ParseInt(q.Get("end"), 10, 64)
+		if err1 != nil || err2 != nil || endN <= startN {
+			return "", 0, 0, false
+		}
+		return "custom", startN, endN, true
+	}
+	rk := q.Get("range")
+	if rk == "" {
+		rk = "day"
+	}
+	now := time.Now()
+	nowUnix := now.Unix()
+	switch rk {
+	case "day", "week", "month", "year":
+		return rk, nowUnix - costTimeframeSeconds[rk], nowUnix, true
+	case "this-month":
+		first := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+		return rk, first.Unix(), nowUnix, true
+	default:
+		return "", 0, 0, false
+	}
+}
+
+// historyBucketSeconds picks a bucket width: an explicit positive ?bucket=
+// override, else downsampled by span — 1 m for ≤2 d, 1 h for ≤14 d, else 1 d.
+func historyBucketSeconds(q url.Values, span int64) int64 {
+	if b := q.Get("bucket"); b != "" {
+		if v, err := strconv.ParseInt(b, 10, 64); err == nil && v > 0 {
+			return v
+		}
+	}
+	switch {
+	case span <= 2*24*3600:
+		return 60
+	case span <= 14*24*3600:
+		return 3600
+	default:
+		return 86400
+	}
+}
+
+// buildHistoryResponse flattens the per-project series into the response
+// envelope: a sparse [{ts,project,value}] series (zero buckets omitted),
+// per-project top contributors, and an optional linear forecast over the
+// grand (all-project) per-bucket total.
+func buildHistoryResponse(rangeKey, chart, group string, s *outbound.CostSeriesResult, q url.Values) historyResponse {
+	resp := historyResponse{
+		Range:           rangeKey,
+		Chart:           chart,
+		Group:           group,
+		Start:           s.Start,
+		End:             s.End,
+		BucketSeconds:   s.BucketSeconds,
+		BucketStarts:    s.BucketStarts,
+		Series:          []historyPoint{},
+		TopContributors: []historyContributor{},
+	}
+
+	// Deterministic project order: total desc, then name.
+	projects := make([]string, 0, len(s.Totals))
+	for p := range s.Totals {
+		projects = append(projects, p)
+	}
+	sort.Slice(projects, func(i, j int) bool {
+		if s.Totals[projects[i]] != s.Totals[projects[j]] {
+			return s.Totals[projects[i]] > s.Totals[projects[j]]
+		}
+		return projects[i] < projects[j]
+	})
+
+	for _, p := range projects {
+		resp.Total += s.Totals[p]
+		for i, v := range s.ByProject[p] {
+			if i >= len(s.BucketStarts) {
+				break
+			}
+			if v != 0 {
+				resp.Series = append(resp.Series, historyPoint{TS: s.BucketStarts[i], Project: p, Value: v})
+			}
+		}
+	}
+	for i, p := range projects {
+		if i >= 5 {
+			break
+		}
+		resp.TopContributors = append(resp.TopContributors, historyContributor{Label: p, Value: s.Totals[p]})
+	}
+
+	if historyForecastEnabled(q) && resp.Total > 0 && len(s.BucketStarts) > 0 {
+		resp.Forecast = computeLinearForecast(s.BucketStarts, s.BucketSeconds, resp.Total, historyForecastBuckets(q, len(s.BucketStarts)))
+	}
+	return resp
+}
+
+// historyForecastEnabled defaults to on; ?forecast=false|0 disables it.
+func historyForecastEnabled(q url.Values) bool {
+	switch q.Get("forecast") {
+	case "false", "0":
+		return false
+	default:
+		return true
+	}
+}
+
+// historyForecastBuckets returns the projection horizon: an explicit positive
+// ?forecast_buckets= override, else ~20% of the visible buckets (min 1, cap 60).
+func historyForecastBuckets(q url.Values, n int) int {
+	if b := q.Get("forecast_buckets"); b != "" {
+		if v, err := strconv.Atoi(b); err == nil && v > 0 {
+			return v
+		}
+	}
+	h := n / 5
+	if h < 1 {
+		h = 1
+	}
+	if h > 60 {
+		h = 60
+	}
+	return h
+}
+
+// computeLinearForecast projects future spend by extrapolating the window's
+// mean per-bucket rate (total ÷ bucket count) forward over `horizon` buckets —
+// a linear extrapolation of cumulative spend. It depends only on the total and
+// the elapsed bucket count, not on where in the window the spend landed: the
+// same total yields the same projection whether spend was bursty-early or
+// bursty-late. (A least-squares fit over the sparse, mostly-zero per-bucket
+// deltas does depend on burst position, which made the headline projection
+// swing widely for identical totals.) basis is "linear" so the UI labels it an
+// estimate.
+func computeLinearForecast(bucketStarts []int64, bucketSeconds int64, currentTotal float64, horizon int) *historyForecast {
+	n := len(bucketStarts)
+	fc := &historyForecast{Basis: "linear", HorizonBuckets: horizon, Series: []historyForecastPoint{}}
+	if n == 0 {
+		fc.Projected = currentTotal
+		return fc
+	}
+	rate := currentTotal / float64(n) // mean USD per bucket over the window
+	lastTS := bucketStarts[n-1]
+	for k := 1; k <= horizon; k++ {
+		fc.Series = append(fc.Series, historyForecastPoint{TS: lastTS + int64(k)*bucketSeconds, Value: rate})
+	}
+	fc.Projected = currentTotal + rate*float64(horizon)
+	return fc
 }
 
 // handleGetVersion serves the daemon's build version. Frontends use it to

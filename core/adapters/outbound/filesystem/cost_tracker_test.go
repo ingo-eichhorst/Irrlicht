@@ -369,6 +369,138 @@ func abs(f float64) float64 {
 	return f
 }
 
+func sumF(s []float64) float64 {
+	var sum float64
+	for _, v := range s {
+		sum += v
+	}
+	return sum
+}
+
+// TestCostSeries_BucketsDeltas covers the core bucketing rules across two
+// projects in separate files: deltas land in the bucket of the later row;
+// a pre-range row seeds the baseline so the first in-range delta measures
+// spend since the last snapshot; and a session whose first row is in-range
+// contributes nothing for that row (no pre-range baseline).
+func TestCostSeries_BucketsDeltas(t *testing.T) {
+	tr := newTestTracker(t)
+	const start, bucket int64 = 1000, 100
+	const end = start + 4*bucket // 4 buckets: [1000,1100,1200,1300]
+
+	// proj-a / s1: baseline before start, then deltas into buckets 0, 1, 3.
+	writeRow(t, tr, "proj-a", snapshotRow{TS: 950, Project: "proj-a", Session: "s1", Cost: 1.00})
+	writeRow(t, tr, "proj-a", snapshotRow{TS: 1050, Project: "proj-a", Session: "s1", Cost: 1.30})
+	writeRow(t, tr, "proj-a", snapshotRow{TS: 1150, Project: "proj-a", Session: "s1", Cost: 1.50})
+	writeRow(t, tr, "proj-a", snapshotRow{TS: 1350, Project: "proj-a", Session: "s1", Cost: 2.00})
+	// proj-a / s2: first row is in-range → seeds baseline (no delta), one delta into bucket 2.
+	writeRow(t, tr, "proj-a", snapshotRow{TS: 1050, Project: "proj-a", Session: "s2", Cost: 0.50})
+	writeRow(t, tr, "proj-a", snapshotRow{TS: 1250, Project: "proj-a", Session: "s2", Cost: 0.90})
+	// proj-b / s3: separate file, single delta into bucket 0.
+	writeRow(t, tr, "proj-b", snapshotRow{TS: 980, Project: "proj-b", Session: "s3", Cost: 5.00})
+	writeRow(t, tr, "proj-b", snapshotRow{TS: 1010, Project: "proj-b", Session: "s3", Cost: 5.20})
+
+	res, err := tr.CostSeries(start, end, bucket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.BucketStarts) != 4 || res.BucketStarts[0] != 1000 || res.BucketStarts[3] != 1300 {
+		t.Fatalf("bucket starts: %v", res.BucketStarts)
+	}
+	wantA := []float64{0.30, 0.20, 0.40, 0.50} // s1 → 0,1,3 ; s2 → 2
+	for i, want := range wantA {
+		if abs(res.ByProject["proj-a"][i]-want) > 1e-9 {
+			t.Errorf("proj-a bucket %d: want %v, got %v", i, want, res.ByProject["proj-a"][i])
+		}
+	}
+	if abs(res.Totals["proj-a"]-1.40) > 1e-9 {
+		t.Errorf("proj-a total: want 1.40, got %v", res.Totals["proj-a"])
+	}
+	wantB := []float64{0.20, 0, 0, 0}
+	for i, want := range wantB {
+		if abs(res.ByProject["proj-b"][i]-want) > 1e-9 {
+			t.Errorf("proj-b bucket %d: want %v, got %v", i, want, res.ByProject["proj-b"][i])
+		}
+	}
+	if abs(res.Totals["proj-b"]-0.20) > 1e-9 {
+		t.Errorf("proj-b total: want 0.20, got %v", res.Totals["proj-b"])
+	}
+}
+
+// TestCostSeries_SumMatchesWindowTotal verifies a series' per-project sum over
+// a trailing window equals the total ProjectCostsInWindows computes for the
+// same window — they share the baseline/delta model.
+func TestCostSeries_SumMatchesWindowTotal(t *testing.T) {
+	tr := newTestTracker(t)
+	now := time.Now().Unix()
+	writeRow(t, tr, "proj-a", snapshotRow{TS: now - 12*3600, Project: "proj-a", Session: "s1", Cost: 1.00})
+	writeRow(t, tr, "proj-a", snapshotRow{TS: now - 1*3600, Project: "proj-a", Session: "s1", Cost: 1.50})
+	writeRow(t, tr, "proj-a", snapshotRow{TS: now - 200*3600, Project: "proj-a", Session: "s2", Cost: 3.00})
+	writeRow(t, tr, "proj-a", snapshotRow{TS: now - 3*24*3600, Project: "proj-a", Session: "s2", Cost: 4.00})
+	writeRow(t, tr, "proj-a", snapshotRow{TS: now - 2*3600, Project: "proj-a", Session: "s2", Cost: 4.75})
+
+	const day int64 = 24 * 3600
+	window, err := tr.ProjectCostsInWindows(map[string]int64{"day": day})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := tr.CostSeries(now-day, now, 3600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if abs(sumF(res.ByProject["proj-a"])-window["day"]["proj-a"]) > 1e-9 {
+		t.Fatalf("series sum %v != window total %v", sumF(res.ByProject["proj-a"]), window["day"]["proj-a"])
+	}
+	if abs(res.Totals["proj-a"]-window["day"]["proj-a"]) > 1e-9 {
+		t.Fatalf("totals %v != window total %v", res.Totals["proj-a"], window["day"]["proj-a"])
+	}
+}
+
+// TestCostSeries_CapsBucketCount guards against a wide span + tiny bucket
+// forcing an unbounded allocation: the bucket is coarsened so the count stays
+// within maxSeriesBuckets while still covering [start, end).
+func TestCostSeries_CapsBucketCount(t *testing.T) {
+	tr := newTestTracker(t)
+	res, err := tr.CostSeries(0, 2_000_000_000, 1) // naive n would be ~2e9
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.BucketStarts) > maxSeriesBuckets {
+		t.Fatalf("bucket count %d exceeds cap %d", len(res.BucketStarts), maxSeriesBuckets)
+	}
+	if res.BucketSeconds <= 1 {
+		t.Fatalf("bucket should have been coarsened above 1s, got %d", res.BucketSeconds)
+	}
+	// Buckets must still span the whole range.
+	last := res.BucketStarts[len(res.BucketStarts)-1]
+	if last+res.BucketSeconds < 2_000_000_000 {
+		t.Fatalf("buckets do not cover the range: last=%d bucket=%d", last, res.BucketSeconds)
+	}
+}
+
+func TestCostSeries_EmptyAndInvalid(t *testing.T) {
+	tr := newTestTracker(t) // dir does not exist yet
+	res, err := tr.CostSeries(1000, 2000, 100)
+	if err != nil {
+		t.Fatalf("empty dir should not error: %v", err)
+	}
+	if len(res.ByProject) != 0 || len(res.Totals) != 0 {
+		t.Fatalf("want empty maps, got %+v", res)
+	}
+	if len(res.BucketStarts) != 10 {
+		t.Fatalf("want 10 buckets, got %d", len(res.BucketStarts))
+	}
+	// Degenerate args return an empty result, not an error.
+	for _, bad := range [][3]int64{{1000, 2000, 0}, {2000, 1000, 100}} {
+		r, err := tr.CostSeries(bad[0], bad[1], bad[2])
+		if err != nil {
+			t.Fatalf("args %v: unexpected error %v", bad, err)
+		}
+		if len(r.BucketStarts) != 0 {
+			t.Fatalf("args %v: want no buckets, got %d", bad, len(r.BucketStarts))
+		}
+	}
+}
+
 func TestRecordSnapshot_StampsProvider(t *testing.T) {
 	tr := newTestTracker(t)
 	state := &session.SessionState{

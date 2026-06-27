@@ -18,6 +18,8 @@
       <div class="app-state-icons" id="app-state-icons" aria-label="Active sessions"></div>
     </div>
     <div class="header-right">
+      <button class="view-mode-cycle" id="history-tab-toggle" type="button"
+              title="Show historical cost analytics">History</button>
       <button class="view-mode-cycle" id="view-mode-cycle" type="button"
               title="Cycle Context / 1 Min / 10 Min / 60 Min">Context</button>
       <button class="theme-toggle" id="summary-collapse-all" type="button"
@@ -152,11 +154,77 @@
 
   <main>
     <div id="connection-banner" role="alert" aria-live="polite"></div>
-    <div id="empty-state">
-      <div class="empty-dot"></div>
-      <p>awaiting sessions</p>
+
+    <div id="view-live">
+      <div id="empty-state">
+        <div class="empty-dot"></div>
+        <p>awaiting sessions</p>
+      </div>
+      <div class="session-list" id="session-list" aria-live="polite"></div>
     </div>
-    <div class="session-list" id="session-list" aria-live="polite"></div>
+
+    <section id="view-history" aria-label="Historical cost analytics">
+      <div class="history-controls">
+        <div class="history-ctl-row">
+          <span class="history-ctl-label">Range</span>
+          <div class="history-seg" id="history-range" role="group" aria-label="Range">
+            <button type="button" data-range="day" class="active">Day</button>
+            <button type="button" data-range="week">Week</button>
+            <button type="button" data-range="month">Month</button>
+            <button type="button" data-range="year">Year</button>
+            <button type="button" data-range="this-month">This Month</button>
+            <button type="button" data-range="custom">Custom…</button>
+          </div>
+          <div class="history-custom" id="history-custom" hidden>
+            <input type="date" id="history-start" aria-label="Start date">
+            <span class="history-custom-sep">→</span>
+            <input type="date" id="history-end" aria-label="End date">
+            <button type="button" id="history-custom-apply">Apply</button>
+          </div>
+          <label class="history-forecast-toggle">
+            <input type="checkbox" id="history-forecast" checked>
+            <span>Forecast</span>
+          </label>
+        </div>
+        <div class="history-ctl-row">
+          <span class="history-ctl-label">Chart</span>
+          <div class="history-seg" id="history-chart-sel" role="group" aria-label="Chart type">
+            <button type="button" data-chart="cost" class="active">Cost</button>
+            <button type="button" data-chart="tokens" disabled title="Available in Phase 2">Tokens</button>
+            <button type="button" data-chart="models" disabled title="Available in Phase 2">Models</button>
+            <button type="button" data-chart="providers" disabled title="Available in Phase 2">Providers</button>
+            <button type="button" data-chart="agents" disabled title="Available in Phase 3">Agents</button>
+          </div>
+        </div>
+        <div class="history-ctl-row">
+          <span class="history-ctl-label">Group</span>
+          <div class="history-seg" id="history-group-sel" role="group" aria-label="Group by">
+            <button type="button" data-group="project" class="active">Project</button>
+            <button type="button" data-group="branch" disabled title="Available in Phase 2">Branch</button>
+            <button type="button" data-group="provider" disabled title="Available in Phase 2">Provider</button>
+            <button type="button" data-group="model" disabled title="Available in Phase 2">Model</button>
+            <button type="button" data-group="session" disabled title="Available in Phase 2">Session</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="history-layout">
+        <div class="history-chart-wrap" id="history-chart-wrap">
+          <canvas id="history-chart"></canvas>
+          <div class="history-chart-empty" id="history-chart-empty">no cost data in this range yet</div>
+        </div>
+        <aside class="history-panel" id="history-panel">
+          <div class="history-panel-title" id="history-panel-title">Total · Day</div>
+          <div class="history-total" id="history-total">$0.00</div>
+          <div class="history-forecast-line" id="history-forecast-line"></div>
+          <ul class="history-contrib" id="history-contrib"></ul>
+          <div class="history-panel-footer">
+            <button type="button" id="history-export-csv">CSV</button>
+            <button type="button" id="history-export-json">JSON</button>
+          </div>
+        </aside>
+      </div>
+    </section>
   </main>
 
   <script type="module" src="irrlicht.js"></script>
