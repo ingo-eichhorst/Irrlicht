@@ -14,9 +14,11 @@ import (
 const DefaultYieldSweepInterval = 30 * time.Minute
 
 // yieldSessionStore is the narrow slice of the session repository the sweeper
-// needs: list every persisted session and write back a flipped yield verdict.
+// needs: list persisted sessions, re-load one fresh before flipping it, and
+// write back the flipped yield verdict.
 type yieldSessionStore interface {
 	ListAll() ([]*session.SessionState, error)
+	Load(sessionID string) (*session.SessionState, error)
 	Save(state *session.SessionState) error
 }
 
@@ -109,13 +111,28 @@ func (s *YieldSweeper) Sweep() int {
 
 	flipped := 0
 	for sha := range reverted {
-		for _, st := range byCommit[sha] {
+		for _, snap := range byCommit[sha] {
+			// Re-load fresh immediately before writing: the snapshot from
+			// ListAll above is stale by the time the per-project git scans
+			// finish, and the detector may have re-saved this session in the
+			// meantime. Writing back the fresh state (with only YieldState
+			// flipped) avoids stomping a concurrent update.
+			fresh, err := s.store.Load(snap.SessionID)
+			if err != nil || fresh == nil {
+				continue
+			}
+			// The session may already be reverted (idempotent) or have moved
+			// its HEAD since the snapshot, in which case the correlation no
+			// longer holds — leave it for the next sweep.
+			if fresh.YieldState == session.YieldReverted || fresh.HeadCommit != sha {
+				continue
+			}
 			// UpdatedAt is deliberately not bumped: the cost was incurred when
 			// the session ran, so it must stay in its original yield window
 			// even though the revert was detected later.
-			st.YieldState = session.YieldReverted
-			if err := s.store.Save(st); err != nil {
-				s.logError(fmt.Sprintf("failed to persist reverted yield for %s", st.SessionID), err)
+			fresh.YieldState = session.YieldReverted
+			if err := s.store.Save(fresh); err != nil {
+				s.logError(fmt.Sprintf("failed to persist reverted yield for %s", fresh.SessionID), err)
 				continue
 			}
 			flipped++

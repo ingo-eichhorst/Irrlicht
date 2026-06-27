@@ -17,7 +17,8 @@ import (
 // memYieldStore is an in-memory yieldSessionStore for sweeper tests.
 type memYieldStore struct{ sessions []*session.SessionState }
 
-func (m *memYieldStore) ListAll() ([]*session.SessionState, error) { return m.sessions, nil }
+func (m *memYieldStore) ListAll() ([]*session.SessionState, error)     { return m.sessions, nil }
+func (m *memYieldStore) Load(id string) (*session.SessionState, error) { return m.get(id), nil }
 func (m *memYieldStore) Save(s *session.SessionState) error {
 	for i, e := range m.sessions {
 		if e.SessionID == s.SessionID {
