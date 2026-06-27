@@ -9,7 +9,7 @@ Take an issue from a number to a review-clean PR. The flow has a hard gate in th
 middle: **plan → user approves → implement**. Nothing is edited before approval.
 
 ```
-worktree → investigate → HTML plan (/tmp) → ⛔ APPROVAL → implement → PR → /review → fix → /simplify → PR link + recommendation
+worktree → investigate → HTML plan (/tmp) → ⛔ APPROVAL → assign issue → implement → PR → /review → fix → /simplify → PR link + recommendation
 ```
 
 ## Inputs
@@ -114,34 +114,39 @@ typed. If none is resolvable, ask for an issue number before continuing.
 
 ## Phase 4 — Implement (only after approval)
 
-8. **Push through the implementation** in the worktree.
+8. **Mark the issue in progress.** Now that work is actually starting, assign the issue
+   to the current GitHub user so others can see it's being worked:
+   ```bash
+   gh issue edit <N> --add-assignee @me   # add --repo <owner/repo> for cross-repo
+   ```
+9. **Push through the implementation** in the worktree.
    - If the work is complex/multi-part, break it into tasks with `TaskCreate` and work
      them in order (as you naturally would). For a small change, just implement it.
    - Follow the repo's conventions (AGENTS.md): surgical changes, match surrounding
      style, three-state model, hexagonal layering, etc.
-9. **Verify** before declaring done: run the test suites relevant to what you touched
-   (per AGENTS.md — `go test ./core/... -race -count=1`, the factory/web suites, replay
-   fixtures, `swift build`/`swift test`, as applicable). Fix what you broke.
+10. **Verify** before declaring done: run the test suites relevant to what you touched
+    (per AGENTS.md — `go test ./core/... -race -count=1`, the factory/web suites, replay
+    fixtures, `swift build`/`swift test`, as applicable). Fix what you broke.
 
 ## Phase 5 — PR, review, simplify
 
-10. **Open the PR** against `main`:
+11. **Open the PR** against `main`:
     ```bash
     git push -u origin feat/<N>-<slug>
     gh pr create --base main --fill   # or a written title/body; reference "Closes #<N>"
     ```
     End the PR body with the `🤖 Generated with [Claude Code]` line.
-11. **Review with the `/review` skill on the PR.** Then fix every issue it surfaces, in
+12. **Review with the `/review` skill on the PR.** Then fix every issue it surfaces, in
     the worktree, and push the fixes.
     - **IMPORTANT: do NOT use the Workflow tool / multi-agent orchestration for the
       review — it is too expensive.** Invoke the `/review` skill directly (use
       `/code-review` on the local diff if you prefer not to round-trip the PR). A single
       review pass, not a fan-out.
-12. **Run the `/simplify` skill** on the change to clean up reuse/complexity, then push.
+13. **Run the `/simplify` skill** on the change to clean up reuse/complexity, then push.
 
 ## Phase 6 — Hand back
 
-13. **Present the final PR link** and ask whether the user wants to **test** or **merge**.
+14. **Present the final PR link** and ask whether the user wants to **test** or **merge**.
     Make a recommendation, and let your **confidence** decide which you lead with:
     - **Lean merge** when: `/review` came back clean (no unresolved findings), all
       relevant suites are green, and the diff is small/low-risk and fully covered by
