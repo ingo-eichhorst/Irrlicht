@@ -234,9 +234,12 @@ func (pm *PIDManager) record(ev lifecycle.Event) {
 	pm.recorder.Record(ev)
 }
 
-// HandleProcessExit deletes a session when its process exits.
-func (pm *PIDManager) HandleProcessExit(pid int, sessionID string) {
-	pm.record(lifecycle.Event{Kind: lifecycle.KindProcessExited, SessionID: sessionID, PID: pid})
+// HandleProcessExit deletes a session when its process exits. reason describes
+// the triggering edge (e.g. "pid exited (ESRCH)") and is recorded on both the
+// KindProcessExited event and the resulting deletion, so a trace explains why
+// the session went away (issue #757).
+func (pm *PIDManager) HandleProcessExit(pid int, sessionID, reason string) {
+	pm.record(lifecycle.Event{Kind: lifecycle.KindProcessExited, SessionID: sessionID, PID: pid, Reason: reason})
 
 	if pm.onSessionDeleted != nil {
 		pm.onSessionDeleted(sessionID)
@@ -252,7 +255,7 @@ func (pm *PIDManager) HandleProcessExit(pid int, sessionID string) {
 	pm.log.LogInfo("process-exit", sessionID,
 		fmt.Sprintf("pid %d exited, deleting session (was %s)", pid, state.State))
 
-	pm.deleteWithChildren(state)
+	pm.deleteWithChildren(state, reason)
 }
 
 // CleanupZombies is a one-shot synchronous startup sweep that deletes any
@@ -306,7 +309,7 @@ func (pm *PIDManager) CleanupZombies() int {
 		}
 		pm.log.LogInfo("startup-cleanup", state.SessionID,
 			fmt.Sprintf("zombie session (pid=%d, state=%s, adapter=%s) — deleting", state.PID, state.State, state.Adapter))
-		pm.deleteWithChildren(state)
+		pm.deleteWithChildren(state, fmt.Sprintf("startup zombie sweep: pid=%d state=%s", state.PID, state.State))
 		deleted++
 	}
 	return deleted
@@ -422,7 +425,9 @@ func (pm *PIDManager) deleteSession(s *session.SessionState, reason string) {
 }
 
 // deleteWithChildren removes a session and all its child sessions (subagents).
-func (pm *PIDManager) deleteWithChildren(state *session.SessionState) {
+// reason is recorded on the parent's deletion event so the trace explains why
+// it was reaped; children carry "parent deleted" (issue #757).
+func (pm *PIDManager) deleteWithChildren(state *session.SessionState, reason string) {
 	if states, err := pm.repo.ListAll(); err == nil {
 		for _, s := range states {
 			if s.ParentSessionID == state.SessionID {
@@ -430,7 +435,7 @@ func (pm *PIDManager) deleteWithChildren(state *session.SessionState) {
 			}
 		}
 	}
-	pm.deleteSession(state, "session deleted")
+	pm.deleteSession(state, reason)
 }
 
 // cleanupChildren removes all child sessions of the given parent.
@@ -787,7 +792,7 @@ func (pm *PIDManager) CheckPIDLiveness() bool {
 	for _, snap := range snaps {
 		if snap.pid > 0 {
 			if err := syscall.Kill(snap.pid, 0); err == syscall.ESRCH {
-				pm.HandleProcessExit(snap.pid, snap.state.SessionID)
+				pm.HandleProcessExit(snap.pid, snap.state.SessionID, "pid exited (ESRCH)")
 				foundDead = true
 				continue
 			}
@@ -799,7 +804,8 @@ func (pm *PIDManager) CheckPIDLiveness() bool {
 				pm.log.LogInfo("session-detector", snap.state.SessionID,
 					fmt.Sprintf("pid %d is %s background infra, not the session — reaping ghost",
 						snap.pid, snap.adapter))
-				pm.HandleProcessExit(snap.pid, snap.state.SessionID)
+				pm.HandleProcessExit(snap.pid, snap.state.SessionID,
+					fmt.Sprintf("infra-bound ghost: pid %d is %s background infra, not the session", snap.pid, snap.adapter))
 				foundDead = true
 			}
 		}
@@ -851,7 +857,8 @@ func (pm *PIDManager) CheckPIDLiveness() bool {
 				isStaleTranscript(snap.transcriptPath) {
 				pm.log.LogInfo("session-detector", snap.state.SessionID,
 					"ready session with no PID and stale transcript for >30s, deleting")
-				pm.deleteWithChildren(snap.state)
+				pm.deleteWithChildren(snap.state,
+					"ghost reaped: PID=0, ready, stale transcript >30s — pre-session never bound a process")
 				continue
 			}
 
@@ -868,7 +875,8 @@ func (pm *PIDManager) CheckPIDLiveness() bool {
 				pm.log.LogInfo("session-detector", snap.state.SessionID,
 					fmt.Sprintf("%s session (pid=%d) idle for >%v, deleting",
 						snap.sessionState, snap.pid, pm.readyTTL))
-				pm.deleteWithChildren(snap.state)
+				pm.deleteWithChildren(snap.state,
+					fmt.Sprintf("%s session (pid=%d) idle >%v — liveness sweep", snap.sessionState, snap.pid, pm.readyTTL))
 			}
 		}
 	}
@@ -948,7 +956,7 @@ func (pm *PIDManager) seedAlivePIDs(states []*session.SessionState) map[int]*ses
 			// cwdMissing also catches zombies re-touched by `claude --resume`
 			// after the worktree was deleted (#321).
 			pm.log.LogInfo("session-detector-seed", state.SessionID, "deleting orphan session")
-			pm.deleteWithChildren(state)
+			pm.deleteWithChildren(state, "orphan session at seed — PID discovery never succeeded")
 		}
 	}
 	return newestByPID
@@ -961,7 +969,7 @@ func (pm *PIDManager) handleAlivePIDState(state *session.SessionState) bool {
 	if err := syscall.Kill(state.PID, 0); err == syscall.ESRCH {
 		pm.log.LogInfo("session-detector-seed", state.SessionID,
 			fmt.Sprintf("pid %d dead, deleting session", state.PID))
-		pm.deleteWithChildren(state)
+		pm.deleteWithChildren(state, fmt.Sprintf("pid %d dead at seed (ESRCH)", state.PID))
 		return false
 	}
 	if pm.pw != nil {
