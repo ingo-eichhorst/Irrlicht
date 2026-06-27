@@ -354,8 +354,10 @@ struct SessionMetrics: Codable {
     let pressureLevel: String       // pressure level: "safe", "caution", "warning", "critical" ("unknown" if not available)
     let contextWindowUnknown: Bool? // true when daemon has no LiteLLM pricing for the model — render tokens-only, no percentage
     let estimatedCostUSD: Double?   // estimated session cost in USD (nil if not available)
-    let lastAssistantText: String?  // last assistant message text, truncated (~200 chars)
-    let taskSummary: String?        // human-readable "what is this session about" (issue #738)
+    let lastAssistantText: String?  // last assistant message text, truncated (~200 chars) — full text for the question tooltip
+    let taskSummary: String?        // human-readable "what is this session about" (issue #738) — full text for the intent tooltip
+    let intentHeadline: String?     // terse one-line version of taskSummary for the sidebar (issue #759)
+    let questionHeadline: String?   // terse one-line version of the pending question for the sidebar (issue #759)
     let tasks: [SessionTask]?              // Claude Code task list (nil when TaskCreate never called)
     let rateLimit: RateLimitInfo?          // subscription-quota snapshot (nil for API-key / Bedrock / Vertex)
     let rateLimitForecastEta: Date?        // projected wall-clock time when the imminent window hits 100% (nil when unforecastable)
@@ -375,6 +377,8 @@ struct SessionMetrics: Codable {
         case estimatedCostUSD = "estimated_cost_usd"
         case lastAssistantText = "last_assistant_text"
         case taskSummary = "task_summary"
+        case intentHeadline = "intent_headline"
+        case questionHeadline = "question_headline"
         case tasks
         case rateLimit = "rate_limit"
         case rateLimitForecastEta = "rate_limit_forecast_eta"
@@ -396,6 +400,8 @@ struct SessionMetrics: Codable {
         estimatedCostUSD = try c.decodeIfPresent(Double.self, forKey: .estimatedCostUSD)
         lastAssistantText = try c.decodeIfPresent(String.self, forKey: .lastAssistantText)
         taskSummary = try c.decodeIfPresent(String.self, forKey: .taskSummary)
+        intentHeadline = try c.decodeIfPresent(String.self, forKey: .intentHeadline)
+        questionHeadline = try c.decodeIfPresent(String.self, forKey: .questionHeadline)
         tasks = try c.decodeIfPresent([SessionTask].self, forKey: .tasks)
         rateLimit = try c.decodeIfPresent(RateLimitInfo.self, forKey: .rateLimit)
         if let epoch = try c.decodeIfPresent(Double.self, forKey: .rateLimitForecastEta) {
@@ -431,6 +437,8 @@ struct SessionMetrics: Codable {
         estimatedCostUSD: Double?,
         lastAssistantText: String?,
         taskSummary: String? = nil,
+        intentHeadline: String? = nil,
+        questionHeadline: String? = nil,
         tasks: [SessionTask]?,
         rateLimit: RateLimitInfo? = nil,
         rateLimitForecastEta: Date? = nil,
@@ -449,6 +457,8 @@ struct SessionMetrics: Codable {
         self.estimatedCostUSD = estimatedCostUSD
         self.lastAssistantText = lastAssistantText
         self.taskSummary = taskSummary
+        self.intentHeadline = intentHeadline
+        self.questionHeadline = questionHeadline
         self.tasks = tasks
         self.rateLimit = rateLimit
         self.rateLimitForecastEta = rateLimitForecastEta
@@ -470,6 +480,8 @@ struct SessionMetrics: Codable {
         try c.encodeIfPresent(estimatedCostUSD, forKey: .estimatedCostUSD)
         try c.encodeIfPresent(lastAssistantText, forKey: .lastAssistantText)
         try c.encodeIfPresent(taskSummary, forKey: .taskSummary)
+        try c.encodeIfPresent(intentHeadline, forKey: .intentHeadline)
+        try c.encodeIfPresent(questionHeadline, forKey: .questionHeadline)
         try c.encodeIfPresent(tasks, forKey: .tasks)
         try c.encodeIfPresent(rateLimit, forKey: .rateLimit)
         try c.encodeIfPresent(rateLimitForecastEta.map { $0.timeIntervalSince1970 }, forKey: .rateLimitForecastEta)

@@ -14,6 +14,7 @@ import (
 	"irrlicht/core/adapters/inbound/agents/aider"
 	"irrlicht/core/adapters/inbound/agents/claudecode"
 	"irrlicht/core/adapters/inbound/agents/opencode"
+	"irrlicht/core/adapters/outbound/compaction"
 	"irrlicht/core/adapters/outbound/metrics"
 	"irrlicht/core/domain/agent"
 	"irrlicht/core/pkg/tailer"
@@ -48,5 +49,8 @@ func BuildMetricsCollector(adapters []agent.Agent) outbound.MetricsCollector {
 		SubagentCounters: agents.SubagentCounters(adapters),
 		MetricsProviders: agents.MetricsProviders(adapters),
 		FallbackName:     claudecode.AdapterName,
+		// Default headline compaction (issue #759). A future setting or LLM
+		// adapter swaps this one line.
+		Compactor: compaction.DeterministicCompactor{},
 	})
 }

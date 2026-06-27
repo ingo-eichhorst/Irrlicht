@@ -464,7 +464,7 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": true,
-      "last_assistant_text_head": "Want me to restart the Swift app, or should I look at the app log to see what it…"
+      "last_assistant_text_head": "…menu bar may be collapsed — `proc-21130` should appear under the `irrlicht`…"
     },
     {
       "index": 30,
@@ -479,7 +479,7 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": true,
-      "last_assistant_text_head": "Want me to restart the Swift app, or should I look at the app log to see what it…"
+      "last_assistant_text_head": "…menu bar may be collapsed — `proc-21130` should appear under the `irrlicht`…"
     },
     {
       "index": 31,

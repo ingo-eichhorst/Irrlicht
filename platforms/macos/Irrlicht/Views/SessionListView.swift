@@ -1198,42 +1198,49 @@ struct SessionRowView: View {
     /// control; there is no per-row toggle.
     @ViewBuilder
     private var summaryBlock: some View {
-        let summary = session.metrics?.taskSummary
-        let question = session.state == .waiting ? session.metrics?.lastAssistantText : nil
+        // Block text is the terse one-line headline (issue #759); the tooltip
+        // keeps the full text. Fall back to the full field when the daemon hasn't
+        // supplied a headline (older daemon, or pre-headline state).
+        let summaryFull = session.metrics?.taskSummary
+        let summaryLine = session.metrics?.intentHeadline ?? summaryFull
+        let questionFull = session.state == .waiting ? session.metrics?.lastAssistantText : nil
+        let questionLine = session.state == .waiting
+            ? (session.metrics?.questionHeadline ?? questionFull)
+            : nil
         let collapsed = summaryCollapsed
-        let showIntent = userIntentDisplay && (summary?.isEmpty == false) && !collapsed
-        let showQuestion = (question?.isEmpty == false) && !collapsed
+        let showIntent = userIntentDisplay && (summaryLine?.isEmpty == false) && !collapsed
+        let showQuestion = (questionLine?.isEmpty == false) && !collapsed
         if showIntent || showQuestion {
             VStack(alignment: .leading, spacing: 2) {
                 // User intent (beta): what the user asked for.
-                if showIntent, let s = summary {
+                if showIntent, let s = summaryLine {
                     Text(s)
                         .font(.system(size: 9))
                         .foregroundColor(IrrColors.intent)
-                        .lineLimit(3)
+                        .lineLimit(1)
                         .truncationMode(.tail)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 5)
                         .padding(.vertical, 3)
                         .background(IrrColors.intentDim)
                         .cornerRadius(IrrRadius.sm)
-                        .tooltip(s)
+                        .tooltip(summaryFull ?? s)
                 }
 
                 // Pending question: what the agent is asking.
-                if showQuestion, let q = question {
+                if showQuestion, let q = questionLine {
                     Text(q)
                         .font(.system(size: 9))
                         .foregroundColor(IrrColors.waiting)
-                        .lineLimit(3)
-                        .truncationMode(.head)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 5)
                         .padding(.vertical, 3)
                         .background(IrrColors.waitingDim)
                         .cornerRadius(IrrRadius.sm)
-                        // Surface the full prompt — head-truncation hides the start.
-                        .tooltip(q)
+                        // Surface the full prompt on hover.
+                        .tooltip(questionFull ?? q)
                 }
             }
             .padding(.top, 2)

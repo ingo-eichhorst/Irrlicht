@@ -169,7 +169,22 @@ type SessionMetrics struct {
 	// in-band irrlicht-summary marker when present, else a daemon-side
 	// heuristic (the first user message). Surfaced in both the waiting and
 	// ready states so a human can tell what a session was about at a glance.
+	// Kept as the full text; the sidebar shows IntentHeadline and uses this as
+	// the hover tooltip.
 	TaskSummary string `json:"task_summary,omitempty"`
+
+	// IntentHeadline is the terse ~70-char one-line version of TaskSummary,
+	// produced by the compaction seam (issue #759). The sidebar renders this in
+	// the purple "intent" block; the full TaskSummary is the tooltip. Empty
+	// when there is no summary source.
+	IntentHeadline string `json:"intent_headline,omitempty"`
+
+	// QuestionHeadline is the terse ~70-char one-line version of the pending
+	// question, produced by the compaction seam from the agent's in-band
+	// irrlicht-question marker when present, else from LastAssistantText (issue
+	// #759). The sidebar renders this in the orange "waiting" block; the full
+	// LastAssistantText is the tooltip. Empty when there is no question source.
+	QuestionHeadline string `json:"question_headline,omitempty"`
 
 	// PermissionMode is the session's permission mode from the JSONL
 	// (e.g. "default", "plan", "bypassPermissions"). Surfaced by the tailer
@@ -814,6 +829,8 @@ func MergeMetrics(newM, oldM *SessionMetrics) *SessionMetrics {
 		EstimatedCostUSD:         newM.EstimatedCostUSD,
 		LastAssistantText:        newM.LastAssistantText,
 		TaskSummary:              newM.TaskSummary,
+		IntentHeadline:           newM.IntentHeadline,
+		QuestionHeadline:         newM.QuestionHeadline,
 		PermissionMode:           newM.PermissionMode,
 		SubagentCompletions:      newM.SubagentCompletions,
 		AppliedTaskDeltas:        newM.AppliedTaskDeltas,

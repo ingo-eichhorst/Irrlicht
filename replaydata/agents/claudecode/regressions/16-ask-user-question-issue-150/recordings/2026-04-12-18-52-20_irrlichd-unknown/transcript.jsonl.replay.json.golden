@@ -264,7 +264,7 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": true,
-      "last_assistant_text_head": "What can I help you with?"
+      "last_assistant_text_head": "Hi! What can I help you with?"
     },
     {
       "index": 15,
@@ -279,7 +279,7 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": true,
-      "last_assistant_text_head": "What can I help you with?"
+      "last_assistant_text_head": "Hi! What can I help you with?"
     },
     {
       "index": 16,
@@ -308,7 +308,7 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": true,
-      "last_assistant_text_head": "What would you like to work on?"
+      "last_assistant_text_head": "Hey! What would you like to work on?"
     },
     {
       "index": 18,
@@ -382,7 +382,7 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": true,
-      "last_assistant_text_head": "…at would you like me to test?"
+      "last_assistant_text_head": "…at would you like me to test? For example:\n\n- Run the Go test suite (`go test…"
     },
     {
       "index": 23,
@@ -411,7 +411,7 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": true,
-      "last_assistant_text_head": "What are you looking to test?"
+      "last_assistant_text_head": "What are you looking to test? Give me a bit more context and I'll jump in."
     },
     {
       "index": 25,
