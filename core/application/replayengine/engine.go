@@ -79,9 +79,17 @@ type Options struct {
 // MetricsSnapshot is the cumulative SessionMetrics observed up to a point in a
 // replayed transcript, tagged with that point's transcript-relative timestamp.
 // Emitted only when Options.EmitMetricsTimeline is set.
+//
+// TaskEstimate/TaskEstimateBase carry the raw tailer marker state (which
+// TailerToDomain deliberately drops as a live-only enrichment) so the metrics
+// adapter can layer the SAME completion forecast onto the timeline that the
+// live path computes — only anchored at VirtualTime instead of wall-clock, so
+// a replayed ETA is reproducible from the transcript alone (#753).
 type MetricsSnapshot struct {
-	VirtualTime time.Time
-	Metrics     *session.SessionMetrics
+	VirtualTime      time.Time
+	Metrics          *session.SessionMetrics
+	TaskEstimate     *tailer.TaskEstimate
+	TaskEstimateBase *tailer.TaskEstimate
 }
 
 // Result is the outcome of replaying a transcript.
@@ -221,10 +229,13 @@ func (r *replayer) runBatches(batches [][]rawEvent) error {
 		r.lastMetrics = metrics
 		if r.emitTimeline {
 			// TailerToDomain allocates a fresh struct per call, so the snapshot
-			// never aliases the tailer's mutable cumulative state.
+			// never aliases the tailer's mutable cumulative state; the estimate
+			// pointers are copied for the same reason.
 			r.result.MetricsTimeline = append(r.result.MetricsTimeline, MetricsSnapshot{
-				VirtualTime: nextEventTime,
-				Metrics:     TailerToDomain(metrics),
+				VirtualTime:      nextEventTime,
+				Metrics:          TailerToDomain(metrics),
+				TaskEstimate:     copyTailerTaskEstimate(metrics.TaskEstimate),
+				TaskEstimateBase: copyTailerTaskEstimate(metrics.TaskEstimateBase),
 			})
 		}
 		cause := CauseEvent
@@ -243,8 +254,10 @@ func (r *replayer) runBatches(batches [][]rawEvent) error {
 			last := batches[len(batches)-1]
 			if r.emitTimeline {
 				r.result.MetricsTimeline = append(r.result.MetricsTimeline, MetricsSnapshot{
-					VirtualTime: last[len(last)-1].Time,
-					Metrics:     TailerToDomain(metrics),
+					VirtualTime:      last[len(last)-1].Time,
+					Metrics:          TailerToDomain(metrics),
+					TaskEstimate:     copyTailerTaskEstimate(metrics.TaskEstimate),
+					TaskEstimateBase: copyTailerTaskEstimate(metrics.TaskEstimateBase),
 				})
 			}
 			r.classifyBatch(last[len(last)-1].Index, last[len(last)-1].Time, CauseIdleFlush, TailerToDomain(metrics))

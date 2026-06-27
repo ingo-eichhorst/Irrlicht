@@ -139,30 +139,12 @@ func (a *Adapter) ComputeMetrics(transcriptPath, adapter string) (*session.Sessi
 			result.RateLimitForecastEta = &etaUnix
 		}
 	}
-	// A fresh in-band marker is the agent's own holistic estimate and wins;
-	// when none survives (claude ≥2.1.162 drops mid-task text blocks, #604)
-	// — or the surviving one has gone stale while the task list kept moving
-	// (#622) — the estimate derives from the task list's completion stamps.
-	// FresherTaskEstimate holds the grace rule; the forecast base must
-	// follow whichever source was chosen.
 	markerEst := tailerTaskEstimateToDomain(m.TaskEstimate)
 	var markerBase *session.TaskEstimate
 	if markerEst != nil {
-		markerEst.Source = session.MarkerEstimateSource
 		markerBase = tailerTaskEstimateToDomain(m.TaskEstimateBase)
 	}
-	tasksEst, tasksBase := session.TaskEstimateFromTasks(result.Tasks)
-	result.TaskEstimate = session.FresherTaskEstimate(markerEst, tasksEst, time.Now())
-	estBase := markerBase
-	if result.TaskEstimate == tasksEst && tasksEst != nil {
-		estBase = tasksBase
-	}
-	if result.TaskEstimate != nil {
-		if eta := session.ForecastTaskCompletion(result.TaskEstimate, estBase, m.ElapsedSeconds, time.Now()); eta != nil {
-			etaUnix := eta.Unix()
-			result.TaskCompletionEta = &etaUnix
-		}
-	}
+	enrichTaskForecast(result, markerEst, markerBase, time.Now())
 	if result.ModelName == "" {
 		result.ModelName = "unknown"
 	}
@@ -204,6 +186,14 @@ func (a *Adapter) ComputeMetricsTimeline(transcriptPath, adapter string) ([]sess
 	}
 	out := make([]session.MetricsTimelinePoint, 0, len(res.MetricsTimeline))
 	for _, s := range res.MetricsTimeline {
+		markerEst := tailerTaskEstimateToDomain(s.TaskEstimate)
+		var markerBase *session.TaskEstimate
+		if markerEst != nil {
+			markerBase = tailerTaskEstimateToDomain(s.TaskEstimateBase)
+		}
+		// Anchor the forecast at the turn's VirtualTime, not wall-clock, so a
+		// replayed timeline's ETA is reproducible from the transcript (#753).
+		enrichTaskForecast(s.Metrics, markerEst, markerBase, s.VirtualTime)
 		out = append(out, session.MetricsTimelinePoint{VirtualTime: s.VirtualTime, Metrics: s.Metrics})
 	}
 	return out, nil
@@ -405,6 +395,34 @@ func tailerRateLimitToDomain(src *tailer.RateLimitSnapshot) *session.RateLimitSn
 
 // tailerTaskEstimateToDomain converts a tailer-side task estimate to its
 // domain mirror.
+// enrichTaskForecast layers the live-only task estimate + completion forecast
+// onto result, anchored at `now`. Shared by the live ComputeMetrics
+// (now = time.Now()) and the replay ComputeMetricsTimeline (now = a turn's
+// VirtualTime) so the two paths can't drift (#753).
+//
+// A fresh in-band marker is the agent's own holistic estimate and wins; when
+// none survives (claude ≥2.1.162 drops mid-task text blocks, #604) — or the
+// surviving one has gone stale while the task list kept moving (#622) — the
+// estimate derives from the task list's completion stamps. FresherTaskEstimate
+// holds the grace rule; the forecast base must follow whichever source won.
+func enrichTaskForecast(result *session.SessionMetrics, markerEst, markerBase *session.TaskEstimate, now time.Time) {
+	if markerEst != nil {
+		markerEst.Source = session.MarkerEstimateSource
+	}
+	tasksEst, tasksBase := session.TaskEstimateFromTasks(result.Tasks)
+	result.TaskEstimate = session.FresherTaskEstimate(markerEst, tasksEst, now)
+	estBase := markerBase
+	if result.TaskEstimate == tasksEst && tasksEst != nil {
+		estBase = tasksBase
+	}
+	if result.TaskEstimate != nil {
+		if eta := session.ForecastTaskCompletion(result.TaskEstimate, estBase, result.ElapsedSeconds, now); eta != nil {
+			etaUnix := eta.Unix()
+			result.TaskCompletionEta = &etaUnix
+		}
+	}
+}
+
 func tailerTaskEstimateToDomain(src *tailer.TaskEstimate) *session.TaskEstimate {
 	if src == nil {
 		return nil

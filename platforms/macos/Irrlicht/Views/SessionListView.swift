@@ -1602,8 +1602,10 @@ struct SessionRowView: View {
         let sourceLabel = est.source == "tasks" ? "from task list"
             : est.source == "subagents" ? "from subagents" : "agent-reported"
         guard est.completedRounds > 0 else {
-            // No measurable rate yet, but the agent committed to a plan —
-            // immediate feedback beats waiting for the first round (#602).
+            // No MEASURED rate yet, but the daemon projects from a corpus prior
+            // (#753) so a real number shows at the first marker instead of
+            // "estimating…" (#602). Widen the range (2×) to signal a population
+            // prior, not a measured rate; no projection → "estimating…".
             guard est.totalRounds > 0 else { return nil }
             var stale = false
             var title = "Task ETA — \(sourceLabel) 0/\(est.totalRounds) rounds"
@@ -1612,7 +1614,18 @@ struct SessionRowView: View {
                 stale = age > 180
                 title += ", updated \(Int(age))s ago"
             }
-            return TaskEtaPresentation(text: "estimating…", stale: stale, title: title)
+            guard let eta = metrics.taskCompletionEta else {
+                return TaskEtaPresentation(text: "estimating…", stale: stale, title: title)
+            }
+            let rem0 = max(0, eta.timeIntervalSince(now))
+            let high0: TimeInterval
+            if let updated = est.updatedAt {
+                high0 = max(rem0, eta.timeIntervalSince(updated) * 2)
+            } else {
+                high0 = rem0 * 2
+            }
+            let text0 = etaText(remaining: rem0, highSecs: high0)
+            return TaskEtaPresentation(text: text0, stale: stale, title: title + " · rough prior")
         }
         guard let eta = metrics.taskCompletionEta else {
             // Progress without a projection (e.g. a subagent aggregate whose

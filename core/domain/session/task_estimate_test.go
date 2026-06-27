@@ -77,16 +77,37 @@ func TestForecastTaskCompletion_BaseWithoutProgressFallsBack(t *testing.T) {
 	}
 }
 
-func TestForecastTaskCompletion_NoProjectionPossible(t *testing.T) {
-	now := time.Now()
-	if eta := ForecastTaskCompletion(nil, nil, 240, now); eta != nil {
+func TestForecastTaskCompletion_NoEstimateYieldsNil(t *testing.T) {
+	// The only no-projection case left after #753: no estimate at all.
+	if eta := ForecastTaskCompletion(nil, nil, 240, time.Now()); eta != nil {
 		t.Error("nil estimate should yield nil eta")
 	}
-	if eta := ForecastTaskCompletion(&TaskEstimate{TotalRounds: 10, CompletedRounds: 0}, nil, 240, now); eta != nil {
-		t.Error("zero completed rounds should yield nil eta (no measured rate)")
+}
+
+func TestForecastTaskCompletion_PriorBootstrapAtZeroRounds(t *testing.T) {
+	// #753: with zero completed rounds there is no measured rate, but a real
+	// eta still appears at the very first marker — total_rounds × the corpus
+	// prior — instead of "estimating…". This is the time-to-first-estimate win.
+	marker := time.Date(2026, 6, 3, 12, 0, 0, 0, time.UTC)
+	est := &TaskEstimate{TotalRounds: 4, CompletedRounds: 0, UpdatedAt: marker.Unix()}
+	eta := ForecastTaskCompletion(est, est, 0, marker)
+	if eta == nil {
+		t.Fatal("zero completed rounds should now surface a prior-based eta (#753), got nil")
 	}
-	if eta := ForecastTaskCompletion(&TaskEstimate{TotalRounds: 10, CompletedRounds: 2}, nil, 0, now); eta != nil {
-		t.Error("zero elapsed should yield nil eta")
+	want := marker.Add(time.Duration(4*taskRoundPriorSeconds) * time.Second)
+	if !eta.Equal(want) {
+		t.Errorf("eta = %v, want %v (total_rounds × prior)", eta, want)
+	}
+}
+
+func TestForecastTaskCompletion_PriorConfinedToZeroRounds(t *testing.T) {
+	// The prior seeds ONLY the zero-round case. Once progress is reported but
+	// no rate is measurable (no base, zero elapsed), the projection is nil — as
+	// before #753 — so the prior never leaks into the measured-turns space.
+	marker := time.Date(2026, 6, 3, 12, 0, 0, 0, time.UTC)
+	est := &TaskEstimate{TotalRounds: 10, CompletedRounds: 2, UpdatedAt: marker.Unix()}
+	if eta := ForecastTaskCompletion(est, nil, 0, marker); eta != nil {
+		t.Errorf("progress with no measurable rate should yield nil, got %v", eta)
 	}
 }
 
