@@ -144,6 +144,73 @@ func TestControllerAppleScriptBroadcasts(t *testing.T) {
 	}
 }
 
+// TestControllerSendCommandSubmits locks the per-backend submit ownership
+// (issue #754): tmux/kitty get a trailing CR appended; the AppleScript path
+// broadcasts the bare command (the app auto-submits, so a CR would double).
+func TestControllerSendCommandSubmits(t *testing.T) {
+	t.Run("tmux appends CR", func(t *testing.T) {
+		repo := &fakeRepo{state: &session.SessionState{
+			SessionID: "abc", Launcher: &session.Launcher{TmuxPane: "%3"},
+		}}
+		c := NewController(repo, &fakePush{}, nopLog{})
+		var ran command
+		c.run = func(_ context.Context, cmd command) ([]byte, error) { ran = cmd; return nil, nil }
+		if err := c.SendCommand("abc", "/compact"); err != nil {
+			t.Fatalf("SendCommand: %v", err)
+		}
+		if got := ran.args[len(ran.args)-1]; got != "/compact\r" {
+			t.Errorf("tmux payload = %q, want %q", got, "/compact\r")
+		}
+	})
+
+	t.Run("kitty appends CR", func(t *testing.T) {
+		repo := &fakeRepo{state: &session.SessionState{
+			SessionID: "abc", Launcher: &session.Launcher{KittyListenOn: "unix:/x", KittyWindowID: "12"},
+		}}
+		c := NewController(repo, &fakePush{}, nopLog{})
+		var ran command
+		c.run = func(_ context.Context, cmd command) ([]byte, error) { ran = cmd; return nil, nil }
+		if err := c.SendCommand("abc", "/compact"); err != nil {
+			t.Fatalf("SendCommand: %v", err)
+		}
+		if got := ran.args[len(ran.args)-1]; got != "/compact\r" {
+			t.Errorf("kitty payload = %q, want %q", got, "/compact\r")
+		}
+	})
+
+	t.Run("AppleScript broadcasts bare command", func(t *testing.T) {
+		repo := &fakeRepo{state: &session.SessionState{
+			SessionID: "abc", Launcher: &session.Launcher{TermProgram: "iTerm.app", ITermSessionID: "w0t0p0:UUID"},
+		}}
+		push := &fakePush{}
+		c := NewController(repo, push, nopLog{})
+		c.run = func(_ context.Context, _ command) ([]byte, error) {
+			t.Fatal("AppleScript backend must not shell out")
+			return nil, nil
+		}
+		if err := c.SendCommand("abc", "/compact"); err != nil {
+			t.Fatalf("SendCommand: %v", err)
+		}
+		if len(push.msgs) != 1 || push.msgs[0].Input == nil {
+			t.Fatalf("expected one input_requested broadcast, got %v", push.msgs)
+		}
+		// No trailing CR — the app's write-text/do-script auto-submits.
+		if got := push.msgs[0].Input.Data; got != "/compact" {
+			t.Errorf("AppleScript payload = %q, want %q (no CR)", got, "/compact")
+		}
+	})
+
+	t.Run("no backend errors", func(t *testing.T) {
+		repo := &fakeRepo{state: &session.SessionState{
+			SessionID: "abc", Launcher: &session.Launcher{TermProgram: "vscode"},
+		}}
+		c := NewController(repo, &fakePush{}, nopLog{})
+		if err := c.SendCommand("abc", "/compact"); err == nil {
+			t.Error("expected error for a session with no controllable backend")
+		}
+	})
+}
+
 func TestControllerNoBackend(t *testing.T) {
 	repo := &fakeRepo{state: &session.SessionState{
 		SessionID: "abc",

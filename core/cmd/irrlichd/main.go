@@ -694,7 +694,7 @@ func main() {
 	// fires through inputService, so the same toggle+consent+controllable
 	// gates apply. Started under detectorCtx below.
 	backchannelRules := filesystem.NewBackchannelRulesStore(dataDir(home))
-	backchannelEngine := services.NewBackchannelEngine(backchannelRules, in, push, backchannelStore.Enabled, logger)
+	backchannelEngine := services.NewBackchannelEngine(backchannelRules, in, agents.ControlPresets(allAgents), push, backchannelStore.Enabled, logger)
 	mux.HandleFunc("/api/v1/backchannel/rules",
 		localhostOnly(backchannelhandler.NewRulesHandler(backchannelRules, logger)))
 

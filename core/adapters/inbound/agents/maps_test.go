@@ -11,6 +11,7 @@ import (
 	"irrlicht/core/adapters/inbound/agents/opencode"
 	"irrlicht/core/adapters/inbound/agents/pi"
 	"irrlicht/core/domain/agent"
+	"irrlicht/core/domain/backchannel"
 )
 
 // testAgents mirrors the production agents slice used by main.go and replay.
@@ -80,6 +81,23 @@ func TestSubagentCounters_onlyClaudecode(t *testing.T) {
 	for _, name := range []string{codex.AdapterName, pi.AdapterName, aider.AdapterName, opencode.AdapterName} {
 		if _, ok := m[name]; ok {
 			t.Errorf("SubagentCounters should not include %q", name)
+		}
+	}
+}
+
+func TestControlPresets_onlyClaudecodeMapsCompact(t *testing.T) {
+	m := agents.ControlPresets(testAgents())
+	cc, ok := m[claudecode.AdapterName]
+	if !ok {
+		t.Fatalf("ControlPresets missing %q", claudecode.AdapterName)
+	}
+	if cc[backchannel.PresetCompact] != "/compact" {
+		t.Errorf("claude-code compact preset = %q, want %q", cc[backchannel.PresetCompact], "/compact")
+	}
+	// Agents with no declared presets are absent so a preset rule degrades.
+	for _, name := range []string{codex.AdapterName, pi.AdapterName, aider.AdapterName, opencode.AdapterName} {
+		if _, ok := m[name]; ok {
+			t.Errorf("ControlPresets should not include %q (no presets declared)", name)
 		}
 	}
 }

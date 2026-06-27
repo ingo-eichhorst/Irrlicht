@@ -16,8 +16,18 @@ const (
 
 // Action kinds.
 const (
-	ActionInput     = "input"     // inject Data into the session
+	ActionInput     = "input"     // inject Data (or a Preset's command) into the session
 	ActionInterrupt = "interrupt" // deliver an interrupt (Data ignored)
+)
+
+// Preset ids. A preset is an agent-agnostic semantic command (issue #754): the
+// rule stores a preset id, and the daemon translates it into the concrete
+// command for the session's agent (adapter-declared) and appends the submit
+// sequence the session's terminal backend needs. Start small — Compact is the
+// only one mapped today; an agent with no mapping degrades gracefully (the rule
+// doesn't fire). Interrupt is already semantic via ActionInterrupt.
+const (
+	PresetCompact = "compact" // compact / summarize the conversation (Claude Code: /compact)
 )
 
 // DefaultPressureThreshold is the context-utilization percentage (0–100) at
@@ -39,8 +49,15 @@ type Trigger struct {
 
 // Action is one response step, fired in order.
 type Action struct {
-	Kind string `json:"kind"`           // ActionInput | ActionInterrupt
-	Data string `json:"data,omitempty"` // text to inject for ActionInput (e.g. "/compact\r")
+	Kind string `json:"kind"` // ActionInput | ActionInterrupt
+	// Preset, when set on an ActionInput, names an agent-agnostic command the
+	// daemon translates per the session's agent + terminal backend (issue
+	// #754). One of the Preset* ids. When empty, Data is sent verbatim (Custom).
+	Preset string `json:"preset,omitempty"`
+	// Data is the raw text injected for a Custom ActionInput (Preset empty),
+	// sent byte-for-byte including any submit sequence the user typed. Ignored
+	// when Preset is set.
+	Data string `json:"data,omitempty"`
 }
 
 // Rule is one configured event→action automation.

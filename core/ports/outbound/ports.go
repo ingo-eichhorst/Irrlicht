@@ -324,6 +324,11 @@ type AgentController interface {
 	// Returns a non-nil error when the backend command fails; callers that
 	// want a "not controllable" verdict consult Controllable first.
 	SendInput(sessionID string, data []byte) error
+	// SendCommand injects a command and submits it. Unlike SendInput, the
+	// submit sequence is owned by the backend: tmux/kitty get a trailing CR
+	// appended; AppleScript hosts auto-submit the bare command. Used for
+	// preset actions whose command text is agent-declared (issue #754).
+	SendCommand(sessionID string, command string) error
 	// Interrupt delivers an interrupt (e.g. Ctrl-C) to the session.
 	Interrupt(sessionID string) error
 	// Controllable reports whether the session has a usable backend target
