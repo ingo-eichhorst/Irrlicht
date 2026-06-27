@@ -106,3 +106,23 @@ func TestBuildGhostTimelines_NoGhostsLeaveReportFieldsZero(t *testing.T) {
 		}
 	}
 }
+
+// TestBuildGhostTimelines_SubagentNotGhost guards the child exclusion: a
+// completed subagent (ParentSessionID set) reaped via "parent deleted" — no PID
+// and no working/waiting transition of its own — must NOT be flagged a ghost,
+// even though it has the same removed && !substantive shape as a real ghost.
+func TestBuildGhostTimelines_SubagentNotGhost(t *testing.T) {
+	base := time.Date(2026, 6, 27, 12, 0, 0, 0, time.UTC)
+	events := []lifecycle.Event{
+		{Seq: 1, Timestamp: base, Kind: lifecycle.KindTranscriptNew, SessionID: "child", Adapter: "claude-code"},
+		{Seq: 2, Timestamp: base.Add(time.Second), Kind: lifecycle.KindParentLinked, SessionID: "child", ParentSessionID: "parent"},
+		{Seq: 3, Timestamp: base.Add(2 * time.Second), Kind: lifecycle.KindStateTransition, SessionID: "child",
+			PrevState: session.StateWorking, NewState: session.StateReady, Reason: "subagent completed (parent task-notification)"},
+		{Seq: 4, Timestamp: base.Add(3 * time.Second), Kind: lifecycle.KindTranscriptRemoved, SessionID: "child", Reason: "parent deleted"},
+	}
+	for _, tl := range buildGhostTimelines(events) {
+		if tl.SessionID == "child" && tl.IsGhost {
+			t.Errorf("completed subagent (ParentSessionID set) must not be flagged IsGhost")
+		}
+	}
+}

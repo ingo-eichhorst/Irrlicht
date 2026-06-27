@@ -597,6 +597,7 @@ func (d *SessionDetector) processActivityLocked(id agent.Identity, state *sessio
 				PrevState: session.StateWorking,
 				NewState:  session.StateWaiting,
 				Reason:    SyntheticWaitingReason,
+				Inputs:    classifierInputs(state.Metrics),
 			})
 			state.State = session.StateWaiting
 			newState, reason = ClassifyState(state.State, state.Metrics)

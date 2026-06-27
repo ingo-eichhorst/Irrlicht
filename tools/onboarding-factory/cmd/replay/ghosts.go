@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
@@ -49,9 +48,14 @@ func buildGhostTimelines(events []lifecycle.Event) []sessionTimeline {
 				g.finalReason = ev.Reason
 			}
 		case lifecycle.KindTranscriptRemoved, lifecycle.KindProcessExited, lifecycle.KindPreSessionRemoved:
-			g.removed = true
-			g.removedAt = ev.Timestamp
-			g.removalReason = ev.Reason
+			// Keep the FIRST removal edge: a HandleProcessExit reap records
+			// KindProcessExited and then KindTranscriptRemoved for the same
+			// session, and the process-exit edge is the true (earlier) one.
+			if !g.removed {
+				g.removed = true
+				g.removedAt = ev.Timestamp
+				g.removalReason = ev.Reason
+			}
 		}
 	}
 
@@ -70,7 +74,11 @@ func buildGhostTimelines(events []lifecycle.Event) []sessionTimeline {
 				base[i].LifetimeMs = at.Sub(base[i].FirstSeen).Milliseconds()
 			}
 		}
-		base[i].IsGhost = !g.substantive
+		// Children (subagents) are not ghosts in the antigravity PID=0 sense: a
+		// subagent reaped via "parent deleted" can lack both a PID and a
+		// working/waiting transition of its own, yet it did real work. Exclude
+		// them so the conservative predicate doesn't false-positive.
+		base[i].IsGhost = !g.substantive && base[i].ParentSessionID == ""
 	}
 	return base
 }
@@ -217,12 +225,9 @@ func runGhostDump(sidecarPath string) error {
 	if err != nil {
 		return fmt.Errorf("load sidecar %s: %w", sidecarPath, err)
 	}
+	// buildGhostTimelines already returns timelines sorted by FirstSeen
+	// (buildSessionTimelines sorts; the ghost-layering pass preserves order).
 	timelines := buildGhostTimelines(events)
-	// Stable, time-independent ordering already applied by buildSessionTimelines
-	// (sorted by FirstSeen); keep ghosts grouped within that order.
-	sort.SliceStable(timelines, func(i, j int) bool {
-		return timelines[i].FirstSeen.Before(timelines[j].FirstSeen)
-	})
 	fmt.Print(renderGhostTimeline(sidecarPath, timelines, lastTransitionInputs(events)))
 	return nil
 }
