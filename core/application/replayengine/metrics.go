@@ -95,6 +95,17 @@ func TailerToDomain(m *tailer.SessionMetrics) *session.SessionMetrics {
 	return result
 }
 
+// copyTailerTaskEstimate deep-copies a tailer task estimate so a timeline
+// snapshot never aliases the tailer's mutable cumulative state (#753). The
+// Confidence pointer is shared — it's read-only once parsed.
+func copyTailerTaskEstimate(e *tailer.TaskEstimate) *tailer.TaskEstimate {
+	if e == nil {
+		return nil
+	}
+	c := *e
+	return &c
+}
+
 func copyStrings(s []string) []string {
 	if len(s) == 0 {
 		return nil
