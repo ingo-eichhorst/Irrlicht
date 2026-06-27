@@ -1,19 +1,31 @@
 <!doctype html>
 <!--
-  ir:exec plan template — self-contained, no external resources.
+  ir:exec plan template — self-contained (no EXTERNAL resources: no URLs, CDN
+  scripts, or web fonts). The inline style block AND the inline interaction-engine
+  script are part of the template — keep both byte-for-byte; do not add others.
+  data: URIs (e.g. an embedded screenshot) are allowed — they are not external.
 
   HOW TO USE (see ../SKILL.md). NOTE: this how-to avoids writing literal
-  comment-close sequences so it never terminates early; the body holds the
-  real "REPEAT:x" / "OPTIONAL:x" marker comments.
+  comment-close sequences so it never terminates early; the body holds the real
+  REPEAT:x and OPTIONAL:x marker comments.
     1. Copy this file to /tmp/ir-exec-plan-<issue>.html
     2. Replace every {{TOKEN}} with real content.
-    3. For each REPEAT:x marker-comment region in the body, duplicate the inner
-       block once per item, then delete the leftover example block.
-    4. NEVER edit the style block — it is the design system; keep it byte-for-byte.
-    5. OPTIONAL:x marker-comment regions may be deleted whole if unused.
+    3. For each REPEAT:x marker-comment region, duplicate the inner block once per
+       item, then delete the leftover example block.
+    4. OPTIONAL:x marker-comment regions may be deleted whole if unused. The visual
+       section ships THREE archetypes (ui / dataflow / components): keep the ONE that
+       fits the issue, delete the other two; delete all three if no visual helps.
+    5. To make anything click-to-reveal, give it data-detail="<id>" and put the detail
+       in a sibling <template data-detail-body="<id>">. Do NOT write event handlers —
+       the inline engine handles it.
+    6. NEVER edit the style block or the script engine — they are the design system.
+    7. Never write a comment-close sequence inside a comment's text, and never write a
+       closing template or script tag inside a detail body. Leave no {{ or REPEAT:/
+       OPTIONAL: markers behind (a load-time banner warns if you do).
 
-  The plan page is PRE-implementation: Problem, Approach/Design, Steps, Files, Risks.
-  Confidence / test-vs-merge is a later conversational step, not part of this page.
+  Section order: header -> TL;DR -> High-level design -> Adaptive visual ->
+  Approach (deep) -> Steps -> Files -> Risks -> Approval. The plan is
+  PRE-implementation; confidence / test-vs-merge is a later conversational step.
 -->
 <html lang="en">
 <head>
@@ -22,117 +34,146 @@
 <title>Plan · #{{ISSUE_NUMBER}} {{ISSUE_TITLE}}</title>
 <style>
   :root {
-    --bg: #0f1115;
-    --surface: #171a21;
-    --surface-2: #1e222b;
-    --border: #2a2f3a;
-    --text: #e6e9ef;
-    --muted: #9aa3b2;
-    --faint: #6b7280;
-    --accent: #7c9cff;
-    --accent-soft: #1f2740;
-    --new: #4ade80;
-    --mod: #fbbf24;
-    --del: #f87171;
-    --risk: #fb923c;
+    /* Irrlicht brand — copied inline (no font @import); system fonts only. */
+    --bg: #050a14;
+    --surface: #0c1426;
+    --surface-2: #111b30;
+    --border: rgba(138, 132, 246, 0.14);
+    --border-soft: rgba(138, 132, 246, 0.08);
+    --text: #c8cdd8;
+    --text-bright: #e8ecf4;
+    --muted: #8a93a8;
+    --faint: #5a6378;
+    --working: #8b5cf6;   /* purple — primary accent / changed */
+    --waiting: #ff9500;   /* orange — adjacent / at-risk / risk */
+    --ready:   #34c759;   /* green  — new / added */
+    --del:     #f87171;   /* red    — removed */
+    --working-soft: rgba(139, 92, 246, 0.13);
+    --waiting-soft: rgba(255, 149, 0, 0.13);
+    --ready-soft:   rgba(52, 199, 89, 0.13);
+    --del-soft:     rgba(248, 113, 113, 0.13);
+    --accent: var(--working);
     --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
     --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   }
   * { box-sizing: border-box; }
   html { -webkit-text-size-adjust: 100%; }
   body {
-    margin: 0;
-    background: var(--bg);
-    color: var(--text);
-    font-family: var(--sans);
-    font-size: 15px;
-    line-height: 1.6;
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: var(--sans); font-size: 15px; line-height: 1.6;
   }
-  .wrap { max-width: 860px; margin: 0 auto; padding: 40px 24px 96px; }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 40px 24px 96px; }
 
   /* Header */
-  header { border-bottom: 1px solid var(--border); padding-bottom: 24px; margin-bottom: 36px; }
-  .eyebrow { font-family: var(--mono); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); margin: 0 0 8px; }
-  h1 { font-size: 26px; line-height: 1.25; margin: 0 0 16px; font-weight: 650; }
+  header { border-bottom: 1px solid var(--border); padding-bottom: 24px; margin-bottom: 32px; }
+  .eyebrow { font-family: var(--mono); font-size: 12px; letter-spacing: .1em; text-transform: uppercase; color: var(--working); margin: 0 0 8px; }
+  h1 { font-size: 26px; line-height: 1.25; margin: 0 0 16px; font-weight: 650; color: var(--text-bright); }
   .meta { display: flex; flex-wrap: wrap; gap: 8px 16px; font-family: var(--mono); font-size: 12.5px; color: var(--muted); }
-  .meta a { color: var(--accent); text-decoration: none; }
+  .meta a { color: var(--working); text-decoration: none; }
   .meta a:hover { text-decoration: underline; }
-  .meta span b { color: var(--text); font-weight: 600; }
+  .meta span b { color: var(--text-bright); font-weight: 600; }
 
   /* Sections */
-  section { margin: 0 0 40px; }
+  section { margin: 0 0 38px; }
   h2 {
     font-size: 13px; letter-spacing: .08em; text-transform: uppercase;
-    color: var(--faint); margin: 0 0 16px; font-weight: 600;
+    color: var(--faint); margin: 0 0 14px; font-weight: 600;
     display: flex; align-items: center; gap: 10px;
   }
-  h2::before { content: ""; width: 14px; height: 2px; background: var(--accent); border-radius: 2px; }
-
-  .lede { font-size: 16px; color: var(--text); margin: 0 0 12px; }
+  h2::before { content: ""; width: 14px; height: 2px; background: var(--working); border-radius: 2px; }
+  .lede { font-size: 16px; color: var(--text-bright); margin: 0 0 12px; }
   p { margin: 0 0 12px; }
-  .muted { color: var(--muted); }
-  code { font-family: var(--mono); font-size: .88em; background: var(--surface-2); padding: 1px 6px; border-radius: 5px; color: #cdd6f4; }
+  code { font-family: var(--mono); font-size: .88em; background: var(--surface-2); padding: 1px 6px; border-radius: 5px; color: #d6cffb; }
 
-  /* Approach bullets */
+  /* TL;DR — the most-read block */
+  .tldr { background: linear-gradient(180deg, var(--working-soft), transparent); border: 1px solid var(--border); border-left: 3px solid var(--working); border-radius: 12px; padding: 18px 22px; }
+  .tldr h2 { margin-bottom: 8px; color: var(--working); }
+  .tldr h2::before { background: var(--working); }
+  .tldr .lede { margin: 0; font-size: 16.5px; line-height: 1.55; }
+
+  /* High-level design bullets */
   ul.approach { list-style: none; margin: 0; padding: 0; }
   ul.approach li { position: relative; padding: 0 0 10px 22px; }
-  ul.approach li::before { content: "→"; position: absolute; left: 0; color: var(--accent); font-family: var(--mono); }
+  ul.approach li::before { content: "\2192"; position: absolute; left: 0; color: var(--working); font-family: var(--mono); }
 
-  /* Diagram */
-  .diagram {
-    background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
-    padding: 24px; margin: 12px 0 4px; overflow-x: auto;
-  }
+  /* Click-to-reveal affordance + detail panels */
+  [data-detail] { cursor: pointer; }
+  .detail-panel { margin-top: 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 9px; padding: 12px 14px; font-size: 14px; color: var(--text); animation: fade .12s ease-out; }
+  .detail-panel p { margin: 0 0 8px; } .detail-panel p:last-child { margin: 0; }
+  @keyframes fade { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
+  .visual-detail-dock:empty { display: none; }
+  .visual-detail-dock { margin-top: 12px; }
+
+  /* Adaptive visual — UI before/after */
+  .ui-ba { display: flex; flex-wrap: wrap; gap: 16px; }
+  .ui-panel { flex: 1 1 280px; margin: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 12px; }
+  .ui-panel figcaption { font-family: var(--mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--faint); margin: 0 0 8px; }
+  .ui-shot { display: block; max-width: 100%; height: auto; border-radius: 7px; border: 1px solid var(--border-soft); }
+  .ui-mock { display: block; width: 100%; height: auto; background: var(--bg); border-radius: 7px; }
+  .ui-mock rect, .ui-mock line { vector-effect: non-scaling-stroke; }
+  .ui-region-new { } .ui-region-new rect { fill: var(--ready-soft); stroke: var(--ready); stroke-width: 1.5; }
+  .ui-region-new text { fill: var(--ready); font: 600 9px var(--mono); }
+  [data-detail].detail-open { outline: 2px solid var(--working); outline-offset: 1px; }
+
+  /* Adaptive visual — data-flow (reuses .diagram/.flow) */
+  .diagram { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 22px; margin: 4px 0; overflow-x: auto; }
   .flow { display: flex; align-items: center; gap: 12px; min-width: max-content; }
-  .node {
-    background: var(--surface-2); border: 1px solid var(--border); border-radius: 9px;
-    padding: 10px 14px; font-family: var(--mono); font-size: 12.5px; white-space: nowrap;
-  }
-  .node.accent { border-color: var(--accent); background: var(--accent-soft); color: #cdd6ff; }
+  .node { background: var(--surface-2); border: 1px solid var(--border); border-radius: 9px; padding: 10px 14px; font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
+  .node.accent { border-color: var(--working); background: var(--working-soft); color: #d6cffb; }
   .arrow { color: var(--faint); font-family: var(--mono); }
+
+  /* Adaptive visual — component-impact map */
+  .impact-map { display: flex; flex-wrap: wrap; gap: 8px; }
+  .cnode { font-family: var(--mono); font-size: 12.5px; padding: 7px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); }
+  .cnode[data-impact="changed"]   { border-color: var(--working); background: var(--working-soft); color: #d6cffb; }
+  .cnode[data-impact="adjacent"]  { border-color: var(--waiting); background: var(--waiting-soft); color: #ffd9a8; }
+  .cnode[data-impact="untouched"] { color: var(--faint); opacity: .7; }
+  .impact-legend { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 12px; font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
+  .impact-legend i { display: inline-block; width: 9px; height: 9px; border-radius: 3px; margin-right: 5px; vertical-align: middle; }
+  .lg-changed { background: var(--working); } .lg-adjacent { background: var(--waiting); } .lg-untouched { background: var(--faint); }
 
   /* Steps */
   ol.steps { list-style: none; counter-reset: step; margin: 0; padding: 0; }
-  ol.steps > li {
-    position: relative; counter-increment: step;
-    background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
-    padding: 18px 20px 18px 60px; margin: 0 0 14px;
-  }
-  ol.steps > li::before {
-    content: counter(step); position: absolute; left: 16px; top: 17px;
-    width: 28px; height: 28px; border-radius: 50%;
-    background: var(--accent-soft); color: var(--accent); border: 1px solid var(--accent);
-    font-family: var(--mono); font-size: 13px; font-weight: 600;
-    display: flex; align-items: center; justify-content: center;
-  }
-  .step-title { font-weight: 600; font-size: 15.5px; margin: 0 0 6px; }
-  .step-body { color: var(--muted); margin: 0 0 10px; font-size: 14.5px; }
-  .step-body:last-child { margin-bottom: 0; }
+  ol.steps > li { position: relative; counter-increment: step; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px 40px 16px 56px; margin: 0 0 12px; }
+  ol.steps > li::before { content: counter(step); position: absolute; left: 14px; top: 15px; width: 26px; height: 26px; border-radius: 50%; background: var(--working-soft); color: var(--working); border: 1px solid var(--working); font-family: var(--mono); font-size: 12.5px; font-weight: 600; display: flex; align-items: center; justify-content: center; }
+  ol.steps > li[data-detail]::after { content: "\203A"; position: absolute; right: 16px; top: 15px; color: var(--faint); font-size: 18px; transition: transform .15s; }
+  ol.steps > li[data-detail].detail-open::after { transform: rotate(90deg); color: var(--working); }
+  ol.steps > li[data-detail].detail-open { outline: none; }
+  .step-title { font-weight: 600; font-size: 15px; margin: 0 0 5px; color: var(--text-bright); }
+  .step-body { color: var(--muted); margin: 0 0 9px; font-size: 14px; } .step-body:last-child { margin-bottom: 0; }
   .step-files { display: flex; flex-wrap: wrap; gap: 6px; }
   .chip { font-family: var(--mono); font-size: 11.5px; background: var(--surface-2); border: 1px solid var(--border); color: var(--muted); padding: 2px 8px; border-radius: 6px; }
 
-  /* Files table */
+  /* Files touched */
   .files { display: flex; flex-direction: column; gap: 6px; }
-  .file-row { display: flex; align-items: center; gap: 12px; font-family: var(--mono); font-size: 13px; padding: 8px 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; }
+  .file-row { position: relative; display: flex; align-items: center; gap: 12px; font-family: var(--mono); font-size: 13px; padding: 8px 34px 8px 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; }
+  .file-row[data-detail]::after { content: "\203A"; position: absolute; right: 14px; color: var(--faint); font-size: 16px; transition: transform .15s; }
+  .file-row[data-detail].detail-open::after { transform: rotate(90deg); color: var(--working); }
+  .file-row[data-detail].detail-open { outline: none; }
   .badge { font-size: 10.5px; font-weight: 700; letter-spacing: .04em; padding: 2px 7px; border-radius: 5px; flex-shrink: 0; min-width: 46px; text-align: center; }
-  .badge.new { background: rgba(74,222,128,.12); color: var(--new); border: 1px solid rgba(74,222,128,.3); }
-  .badge.mod { background: rgba(251,191,36,.12); color: var(--mod); border: 1px solid rgba(251,191,36,.3); }
-  .badge.del { background: rgba(248,113,113,.12); color: var(--del); border: 1px solid rgba(248,113,113,.3); }
-  .file-row .path { color: var(--text); word-break: break-all; }
+  .badge.new { background: var(--ready-soft); color: var(--ready); border: 1px solid rgba(52,199,89,.3); }
+  .badge.mod { background: var(--waiting-soft); color: var(--waiting); border: 1px solid rgba(255,149,0,.3); }
+  .badge.del { background: var(--del-soft); color: var(--del); border: 1px solid rgba(248,113,113,.3); }
+  .file-row .path { color: var(--text-bright); word-break: break-all; }
   .file-row .note { color: var(--faint); margin-left: auto; font-size: 12px; white-space: nowrap; }
 
-  /* Risks */
-  .risk-card { background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--risk); border-radius: 10px; padding: 14px 18px; margin: 0 0 12px; }
-  .risk-card .rt { font-weight: 600; margin: 0 0 4px; color: #ffd9b3; }
-  .risk-card .rb { color: var(--muted); margin: 0; font-size: 14.5px; }
+  /* Risks — native details */
+  .risk-card { background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--waiting); border-radius: 10px; padding: 12px 16px; margin: 0 0 10px; }
+  .risk-card > summary { font-weight: 600; color: #ffd9a8; cursor: pointer; list-style: none; }
+  .risk-card > summary::-webkit-details-marker { display: none; }
+  .risk-card > summary::before { content: "\203A "; color: var(--waiting); }
+  .risk-card[open] > summary::before { content: "\2304 "; }
+  .risk-card .rb { color: var(--muted); margin: 8px 0 0; font-size: 14px; }
 
   /* Approval footer */
-  .approval { background: var(--accent-soft); border: 1px solid var(--accent); border-radius: 12px; padding: 20px 22px; margin-top: 8px; }
-  .approval h2 { color: var(--accent); margin-bottom: 8px; }
-  .approval h2::before { background: var(--accent); }
-  .approval p { color: #cdd6ff; margin: 0; }
+  .approval { background: var(--working-soft); border: 1px solid var(--working); border-radius: 12px; padding: 18px 22px; }
+  .approval h2 { color: var(--working); margin-bottom: 8px; } .approval h2::before { background: var(--working); }
+  .approval p { color: #d6cffb; margin: 0; }
 
-  footer { margin-top: 48px; padding-top: 20px; border-top: 1px solid var(--border); font-family: var(--mono); font-size: 11.5px; color: var(--faint); text-align: center; }
+  /* Unfilled-template warning banner (shown only by the engine guardrail) */
+  .fill-warning { position: fixed; top: 0; left: 0; right: 0; z-index: 9999; background: var(--waiting); color: #1a1205; font-family: var(--mono); font-size: 12.5px; text-align: center; padding: 7px 12px; font-weight: 600; }
+
+  footer { margin-top: 44px; padding-top: 18px; border-top: 1px solid var(--border); font-family: var(--mono); font-size: 11.5px; color: var(--faint); text-align: center; }
 </style>
 </head>
 <body>
@@ -149,44 +190,102 @@
     </div>
   </header>
 
-  <section>
-    <h2>Problem</h2>
-    <p class="lede">{{PROBLEM}}</p>
+  <section class="tldr">
+    <h2>TL;DR</h2>
+    <p class="lede">{{TLDR}}</p>
   </section>
 
   <section>
-    <h2>Approach &amp; Design</h2>
+    <h2>How it works (high level)</h2>
+    <p>{{HLD_INTRO}}</p>
+    <ul class="approach">
+      <!-- REPEAT:hld -->
+      <li>{{HLD_POINT}}</li>
+      <!-- /REPEAT:hld -->
+    </ul>
+  </section>
+
+  <section>
+    <h2>Visual</h2>
+
+    <!-- OPTIONAL:ui — Frontend/UI tickets. Embed the REAL current screenshot as a
+         data: URI ("Today"), hand-author the SVG wireframe ("Proposed"); mark each
+         new region <g data-detail="ui-N"> and give it a matching template. -->
+    <div class="ui-ba">
+      <figure class="ui-panel">
+        <figcaption>Today</figcaption>
+        <img class="ui-shot" src="{{UI_SCREENSHOT_DATA_URI}}" alt="current UI">
+      </figure>
+      <figure class="ui-panel">
+        <figcaption>Proposed</figcaption>
+        <svg class="ui-mock" viewBox="0 0 320 200" role="img" aria-label="proposed UI">
+          <rect x="6" y="6" width="308" height="188" rx="6" fill="none" stroke="var(--border)"/>
+          <g data-detail="ui-1" class="ui-region-new">
+            <rect x="16" y="60" width="288" height="120" rx="5"/>
+            <text x="26" y="80">{{UI_NEW_LABEL}}</text>
+          </g>
+        </svg>
+      </figure>
+    </div>
+    <div class="visual-detail-dock" data-detail-dock></div>
+    <template data-detail-body="ui-1"><p>{{UI_NEW_DETAIL}}</p></template>
+    <!-- /OPTIONAL:ui -->
+
+    <!-- OPTIONAL:dataflow — Data-processing tickets. Node-and-arrow flow; each node
+         may be data-detail clickable to reveal its transform. -->
+    <div class="diagram">
+      <div class="flow">
+        <div class="node" data-detail="df-1">{{DF_NODE}}</div>
+        <span class="arrow">&rarr;</span>
+        <div class="node accent" data-detail="df-2">{{DF_NODE}}</div>
+        <span class="arrow">&rarr;</span>
+        <div class="node" data-detail="df-3">{{DF_NODE}}</div>
+      </div>
+    </div>
+    <template data-detail-body="df-1"><p>{{DF_DETAIL}}</p></template>
+    <template data-detail-body="df-2"><p>{{DF_DETAIL}}</p></template>
+    <template data-detail-body="df-3"><p>{{DF_DETAIL}}</p></template>
+    <!-- /OPTIONAL:dataflow -->
+
+    <!-- OPTIONAL:components — Vertical slice across many components. data-impact is one
+         of changed|adjacent|untouched; show the blast radius AND what's left alone. -->
+    <div class="impact-map">
+      <!-- REPEAT:cnode -->
+      <span class="cnode" data-impact="{{IMPACT}}" data-detail="c-{{CID}}">{{COMPONENT}}</span>
+      <!-- /REPEAT:cnode -->
+    </div>
+    <div class="impact-legend">
+      <span><i class="lg-changed"></i>changed</span>
+      <span><i class="lg-adjacent"></i>adjacent / at-risk</span>
+      <span><i class="lg-untouched"></i>untouched</span>
+    </div>
+    <div class="visual-detail-dock" data-detail-dock></div>
+    <!-- REPEAT:cdetail -->
+    <template data-detail-body="c-{{CID}}"><p>{{COMPONENT_DETAIL}}</p></template>
+    <!-- /REPEAT:cdetail -->
+    <!-- /OPTIONAL:components -->
+
+  </section>
+
+  <section>
+    <h2>Approach &amp; Design (technical)</h2>
     <p>{{APPROACH_INTRO}}</p>
     <ul class="approach">
       <!-- REPEAT:approach -->
       <li>{{APPROACH_BULLET}}</li>
       <!-- /REPEAT:approach -->
     </ul>
-
-    <!-- OPTIONAL:diagram — a clean flow/box visual of the design. Edit the nodes;
-         add more .flow rows for layered diagrams. Delete this whole block if not useful. -->
-    <div class="diagram">
-      <div class="flow">
-        <div class="node">{{DIAGRAM_NODE}}</div>
-        <span class="arrow">→</span>
-        <div class="node accent">{{DIAGRAM_NODE}}</div>
-        <span class="arrow">→</span>
-        <div class="node">{{DIAGRAM_NODE}}</div>
-      </div>
-    </div>
-    <!-- /OPTIONAL:diagram -->
   </section>
 
   <section>
     <h2>Steps</h2>
     <ol class="steps">
       <!-- REPEAT:step -->
-      <li>
+      <li data-detail="step-{{STEP_ID}}">
         <p class="step-title">{{STEP_TITLE}}</p>
-        <p class="step-body">{{STEP_BODY}}</p>
-        <div class="step-files">
-          <span class="chip">{{STEP_FILE}}</span>
-        </div>
+        <p class="step-body">{{STEP_SUMMARY}}</p>
+        <div class="step-files"><span class="chip">{{STEP_FILE}}</span></div>
+        <template data-detail-body="step-{{STEP_ID}}"><p>{{STEP_DETAIL}}</p></template>
       </li>
       <!-- /REPEAT:step -->
     </ol>
@@ -196,10 +295,11 @@
     <h2>Files Touched</h2>
     <div class="files">
       <!-- REPEAT:file — badge class is one of: new | mod | del -->
-      <div class="file-row">
+      <div class="file-row" data-detail="file-{{FILE_ID}}">
         <span class="badge mod">{{FILE_STATUS}}</span>
         <span class="path">{{FILE_PATH}}</span>
         <span class="note">{{FILE_NOTE}}</span>
+        <template data-detail-body="file-{{FILE_ID}}"><p>{{FILE_DETAIL}}</p></template>
       </div>
       <!-- /REPEAT:file -->
     </div>
@@ -208,10 +308,10 @@
   <section>
     <h2>Risks &amp; Unknowns</h2>
     <!-- REPEAT:risk -->
-    <div class="risk-card">
-      <p class="rt">{{RISK_TITLE}}</p>
+    <details class="risk-card">
+      <summary>{{RISK_TITLE}}</summary>
       <p class="rb">{{RISK_BODY}}</p>
-    </div>
+    </details>
     <!-- /REPEAT:risk -->
   </section>
 
@@ -223,5 +323,60 @@
   <footer>ir:exec · plan for #{{ISSUE_NUMBER}} · {{GENERATED}}</footer>
 
 </div>
+
+<script>
+/* ir:exec interaction-engine — design-system content, keep byte-for-byte.
+   Generic click-to-reveal: any [data-detail] element toggles the sibling
+   <template data-detail-body="<id>">. No per-issue JS. Also warns (never blocks)
+   if the template shipped with unfilled placeholders. */
+(function () {
+  "use strict";
+  try {
+    var main = document.querySelector(".wrap");           // scan content only, not this script
+    var raw = main ? main.innerHTML : "";
+    if (/\{\{[A-Z_]+\}\}|REPEAT:|OPTIONAL:/.test(raw)) {
+      var warn = document.createElement("div");
+      warn.className = "fill-warning";
+      warn.textContent = "⚠ template not fully filled — a placeholder or marker was left behind";
+      document.body.appendChild(warn);
+    }
+    var open = null;
+    function close() {
+      if (!open) return;
+      if (open.panel && open.panel.parentNode) open.panel.parentNode.removeChild(open.panel);
+      open.trigger.classList.remove("detail-open");
+      open.trigger.setAttribute("aria-expanded", "false");
+      open = null;
+    }
+    document.addEventListener("click", function (e) {
+      var t = e.target;
+      if (t.closest && t.closest(".detail-panel")) return;          // clicks inside a panel never toggle
+      var trigger = t.closest ? t.closest("[data-detail]") : null;  // works for HTML and SVG elements
+      if (!trigger) return;
+      var id = trigger.getAttribute("data-detail");
+      var tpl = document.querySelector('template[data-detail-body="' + id + '"]');
+      if (!tpl) return;
+      var wasOpen = open && open.trigger === trigger;
+      close();
+      if (wasOpen) return;                                          // second click closes
+      var panel = document.createElement("div");
+      panel.className = "detail-panel";
+      panel.appendChild(tpl.content.cloneNode(true));
+      var isSvg = !!trigger.ownerSVGElement;
+      if (isSvg) {
+        var dock = null, n = trigger;
+        while (n && n.parentNode) { n = n.parentNode; if (n.querySelector) { dock = n.querySelector("[data-detail-dock]"); if (dock) break; } }
+        (dock || document.body).appendChild(panel);
+      } else {
+        trigger.appendChild(panel);
+      }
+      trigger.classList.add("detail-open");
+      trigger.setAttribute("aria-expanded", "true");
+      open = { trigger: trigger, panel: panel };
+    });
+    document.addEventListener("keydown", function (e) { if (e.key === "Escape") close(); });
+  } catch (err) { /* a partial fill must never break the page */ }
+})();
+</script>
 </body>
 </html>

@@ -46,16 +46,55 @@ typed. If none is resolvable, ask for an issue number before continuing.
 ## Phase 3 — Visual HTML plan + approval gate
 
 6. **Render the plan to HTML.** Read `templates/plan.html` (next to this file). Copy it
-   to `/tmp/ir-exec-plan-<N>.html` and fill it in:
-   - Replace every `{{TOKEN}}`. Keep the `<style>` block byte-for-byte — it is the
-     design system, not content.
-   - For each `<!-- REPEAT:x -->…<!-- /REPEAT:x -->` region, duplicate the inner block
-     once per item (steps, files, approach bullets, risks) and remove the leftover
-     example. File `badge` class is `new` | `mod` | `del`.
-   - Use the `<!-- OPTIONAL:diagram -->` flow region to visualize the design when it
-     helps (data flow, component seams, before/after). Delete it whole if a diagram
-     adds nothing — don't ship an empty box.
-   - Keep it self-contained: no external URLs, scripts, or fonts.
+   to `/tmp/ir-exec-plan-<N>.html` and fill it in. The page reads outside-in — a
+   stranger to the codebase should understand the top half:
+
+   **Section roster (order in the template):**
+   - **TL;DR** — `{{TLDR}}`, 2–3 sentences: the problem + the intent. The most-read line.
+   - **High-level design** — `{{HLD_INTRO}}` + `REPEAT:hld` bullets. **Code-free**: no
+     file or function names here (those belong to the technical Approach below).
+   - **Visual** — pick exactly one archetype (see next bullet), or delete all three.
+   - **Approach & Design (technical)** — the file/function-level direction (`REPEAT:approach`).
+   - **Steps** — `REPEAT:step`; card = title + one-line summary + file chips; the deep
+     rationale/edge-cases go in the step's `<template>` (click-to-reveal).
+   - **Files Touched** — `REPEAT:file`, `badge` class `new`|`mod`|`del`; per-file "what
+     changes and why" in its `<template>`.
+   - **Risks & Unknowns** — `REPEAT:risk` (native `<details>`).
+
+   **Fill primitives:** replace every `{{TOKEN}}`; duplicate each
+   `REPEAT:x`…`/REPEAT:x` region per item and delete the leftover example; delete any
+   unused `OPTIONAL:x` region whole.
+
+   **Pick ONE visual archetype** matching the dominant kind of work (delete the others;
+   delete all three if no visual adds signal — don't ship an empty box):
+   | Issue kind | Keep block | What to author |
+   |---|---|---|
+   | Frontend / UI | `OPTIONAL:ui` | a real screenshot ("Today") + a hand-authored SVG wireframe ("Proposed"); mark each new region `<g data-detail="ui-N">` |
+   | Data processing | `OPTIONAL:dataflow` | node-and-arrow flow; each node `data-detail` reveals its transform |
+   | Vertical slice / many components | `OPTIONAL:components` | impact-map nodes, `data-impact` = `changed`\|`adjacent`\|`untouched` — show the blast radius AND what's left alone |
+
+   **UI screenshot policy** (the `ui` archetype embeds the *real* current UI):
+   - **Web UI (a URL exists):** use the `claude-in-chrome` tools to open the running UI,
+     screenshot the relevant viewport (not a giant full-page capture — keep the data-URI
+     reasonable), and embed it as the "Today" `<img src="data:image/png;base64,…">`.
+   - **Non-URL UI (macOS app, CLI):** there's no reliable capture at plan time — **ask
+     the user for a screenshot**, or hand-model the current screen as SVG from code/asset
+     inspection. **Never invent a UI you haven't seen.**
+
+   **Interactivity:** to make anything click-to-reveal, give it `data-detail="<id>"` and
+   put the detail in a sibling `<template data-detail-body="<id>">`. **Do not write event
+   handlers** — the template's inline engine handles it.
+
+   **Self-containment & hazards:**
+   - Self-contained = **no EXTERNAL resources** (no URLs, CDN scripts, or web fonts).
+     The inline `<style>` block and the inline `<script>` engine are part of the
+     template — **keep both byte-for-byte**, add no others. `data:` URIs (the screenshot)
+     are fine.
+   - Never write a comment-close sequence inside a comment's text, and never write a
+     closing `</template>` or `</script>` inside a detail body.
+   - Before presenting, verify **no `{{` and no `REPEAT:`/`OPTIONAL:` markers are left
+     behind** (the page also shows a warning banner at load time if any slip through).
+   - One visual archetype max; Steps ≤ 8–10.
 7. **Present the link and stop.** Give the user the `file:///tmp/ir-exec-plan-<N>.html`
    link plus a 2–3 line summary, then **wait**. Do not edit a single file until the
    user replies with approval. If they request changes, revise the plan + HTML and
