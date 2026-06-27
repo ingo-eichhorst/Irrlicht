@@ -110,6 +110,14 @@ for f in events.jsonl transcript.jsonl transcript.md transcript.json; do
     cp "$STAGED_DIR/$f" "$REC_DIR/$f"
   fi
 done
+# Antigravity usage store (#766): curate captured the sibling SQLite store under
+# store/conversations/; carry the whole subtree so replay can rebuild the live
+# layout and resolve tokens + the canonical model. RecordingComplete checks only
+# required-file presence, so this extra subtree keeps `of validate` green.
+if [[ -d "$STAGED_DIR/store" ]]; then
+  cp -R "$STAGED_DIR/store" "$REC_DIR/store"
+  echo "wrote $REC_DIR/store (antigravity usage store)" >&2
+fi
 echo "wrote recording $REC_DIR" >&2
 
 # 3. Validate this recording against the cell's expected.jsonl, capturing the

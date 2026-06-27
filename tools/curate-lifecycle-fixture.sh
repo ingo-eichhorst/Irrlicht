@@ -177,6 +177,26 @@ if [[ "$TRANSCRIPT" == *.jsonl && -f "$SIDECAR_SRC" ]]; then
   echo "wrote $SCENARIO_DIR/transcript.json (metadata sidecar)"
 fi
 
+# Antigravity conversation store: token usage and the canonical model id live in
+# a per-conversation SQLite store BESIDE the transcript tree (not a sibling), at
+# <root>/conversations/<conv>.db — where <root> is five levels above
+# <root>/brain/<conv>/.system_generated/logs/transcript.jsonl (dbmetrics.go's
+# storePathForTranscript). The live daemon reads it (#719) but the transcript
+# carries no tokens, so capture it (with any -wal/-shm) under store/conversations/
+# so replay can rebuild the layout and resolve the same metrics it does live (#766).
+if [[ "$ADAPTER" == "antigravity" && -f "$TRANSCRIPT" ]]; then
+  CONV="$(basename "$(dirname "$(dirname "$(dirname "$TRANSCRIPT")")")")"
+  ROOT="$(cd "$(dirname "$TRANSCRIPT")/../../../.." && pwd)"
+  DB="$ROOT/conversations/$CONV.db"
+  if [[ -f "$DB" ]]; then
+    mkdir -p "$SCENARIO_DIR/store/conversations"
+    for ext in "" "-wal" "-shm"; do
+      [[ -f "$DB$ext" ]] && cp "$DB$ext" "$SCENARIO_DIR/store/conversations/"
+    done
+    echo "wrote $SCENARIO_DIR/store/conversations/$CONV.db (antigravity usage store)"
+  fi
+fi
+
 # Copy all subagent transcripts, if any. The real-world layout is
 # <project-dir>/<parent-id>/subagents/<agent-id>.jsonl (Claude Code's
 # subagent convention) — we mirror that flat in the fixture sibling dir.
