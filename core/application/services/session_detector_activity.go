@@ -397,10 +397,13 @@ func (d *SessionDetector) processActivityLocked(id agent.Identity, state *sessio
 			d.log.LogInfo("session-detector", ev.SessionID,
 				fmt.Sprintf("applied deferred pid %d", pid))
 		}
-		// Capture launcher identity idempotently — HandlePIDAssigned
-		// normally populates it, but this path runs first in startup
-		// races where the pending PID is applied before the direct save.
+		// Capture launcher identity + background-agent marker idempotently —
+		// HandlePIDAssigned normally populates them, but this path runs first in
+		// startup races where the pending PID is applied before the direct save.
+		// captureBackground must follow captureLauncher: it derives Detached from
+		// the just-captured TTY (#744).
 		d.pidMgr.captureLauncher(state, pid)
+		d.pidMgr.captureBackground(state, pid)
 	}
 
 	// Retry PID discovery if not yet known.

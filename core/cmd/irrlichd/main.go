@@ -619,6 +619,20 @@ func main() {
 		}
 		return processlifecycle.ReadLauncherEnv(pid)
 	})
+	// Flag detached Claude Code background agents (Agent View bg agents that keep
+	// running in the daemon pool) so the UI can badge them instead of showing a
+	// phantom row (#744). Reads ~/.claude/sessions/<pid>.json, gated by the same
+	// transcripts/observe consent as other claude process reads (#570).
+	detector.SetBackgroundReader(func(pid int) *session.BackgroundAgent {
+		if !permService.Granted(claudecode.AdapterName, claudecode.PermissionKeyTranscripts) {
+			return nil
+		}
+		name, ok := claudecode.ReadBackgroundMeta(pid)
+		if !ok {
+			return nil
+		}
+		return &session.BackgroundAgent{Name: name}
+	})
 	// Let the liveness sweep reap a session bound to a still-alive PID that is
 	// the adapter's background infra rather than the session — Claude Code's
 	// --bg-spare pool helper outlives every session, so a mis-bound session

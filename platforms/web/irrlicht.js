@@ -812,6 +812,7 @@ import { isSummaryCollapsed, toggleSummaryCollapsed, anySummaryCollapsed, collap
         '<span class="row-state-icon"></span>' +
         '<span class="row-num"></span>' +
         '<span class="row-sub-badge" style="display:none"></span>' +
+        '<span class="row-bg-badge" style="display:none"></span>' +
         '<span class="row-role-badge" style="display:none"></span>' +
         '<span class="row-origin" style="display:none"></span>' +
         '<span class="row-cache-bloat" style="display:none">↑</span>' +
@@ -955,6 +956,32 @@ import { isSummaryCollapsed, toggleSummaryCollapsed, anySummaryCollapsed, collap
       } else {
         subBadge.style.display = 'none';
         el.classList.remove('has-sub');
+      }
+
+      // Background-agent badge (#744) — a moon glyph marks a Claude Code Agent
+      // View background agent that keeps running detached in the daemon pool
+      // after its window is closed. Always shown for kind:bg; the amber
+      // .is-detached state emphasizes "no open window owns this".
+      const bgBadge = el.querySelector('.row-bg-badge');
+      const bg = agent.background;
+      if (bg) {
+        if (!bgBadge.dataset.on) {
+          bgBadge.innerHTML = '<svg viewBox="0 0 24 24" width="11" height="11" fill="currentColor" aria-hidden="true"><path d="M12.74 2.02a.6.6 0 0 0-.66.86 7 7 0 1 1-9.2 9.2.6.6 0 0 0-.86.66A8.5 8.5 0 1 0 12.74 2.02z"/></svg>';
+          bgBadge.dataset.on = '1';
+        }
+        bgBadge.style.display = '';
+        const detached = !!bg.detached;
+        bgBadge.classList.toggle('is-detached', detached);
+        const name = (bg.name || '').trim();
+        const label = name ? ' (' + name + ')' : '';
+        bgBadge.title = detached
+          ? 'Detached background agent' + label + ' — no open window; runs in the Claude Code daemon pool'
+          : 'Background agent' + label;
+        el.classList.add('has-bg');
+      } else {
+        bgBadge.style.display = 'none';
+        bgBadge.classList.remove('is-detached');
+        el.classList.remove('has-bg');
       }
 
       // Context bar

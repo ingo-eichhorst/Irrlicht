@@ -35,6 +35,13 @@ type LiveCWDsFunc func(processName string) (map[string]struct{}, error)
 // processlifecycle adapter and is injected to preserve the hexagonal layering.
 type LauncherEnvReader func(pid int) *session.Launcher
 
+// BackgroundReader reports adapter-specific background-agent metadata for a PID
+// (e.g. Claude Code's kind:"bg" registry entry for an Agent-View background
+// agent). Returns nil for ordinary interactive sessions or PIDs the adapter
+// doesn't recognize. The real reader lives in the claudecode adapter and is
+// injected to preserve the hexagonal layering (#744).
+type BackgroundReader func(pid int) *session.BackgroundAgent
+
 // PIDManager manages the process lifecycle for sessions. It discovers PIDs,
 // registers them with ProcessWatcher, handles exits, and sweeps dead processes.
 type PIDManager struct {
@@ -63,6 +70,10 @@ type PIDManager struct {
 
 	// launcherEnv reads launcher env from a PID. Optional — nil skips capture.
 	launcherEnv LauncherEnvReader
+
+	// background reads background-agent metadata from a PID. Optional — nil
+	// skips capture (#744).
+	background BackgroundReader
 
 	// argvExcluders maps adapter name → its Process.ExcludeArgv predicate, and
 	// readArgv reads a live PID's argv. Together they let the liveness sweep
@@ -161,6 +172,13 @@ func (pm *PIDManager) SetLauncherEnvReader(fn LauncherEnvReader) {
 	pm.launcherEnv = fn
 }
 
+// SetBackgroundReader installs a reader that flags a session as a background
+// agent (e.g. a detached Claude Code Agent View bg agent) when its PID is
+// assigned. Nil disables the check. Called once at startup (#744).
+func (pm *PIDManager) SetBackgroundReader(fn BackgroundReader) {
+	pm.background = fn
+}
+
 // SetInfraReaper installs the seam the liveness sweep uses to reap a session
 // bound to a still-alive PID that is the adapter's background infrastructure
 // rather than the interactive session (issue #727). excluders maps adapter name
@@ -181,6 +199,25 @@ func (pm *PIDManager) captureLauncher(state *session.SessionState, pid int) {
 	if l := pm.launcherEnv(pid); l != nil {
 		state.Launcher = l
 	}
+}
+
+// captureBackground flags state as a background agent when the reader recognizes
+// its PID, stamping Detached from the captured Launcher TTY. Must run AFTER
+// captureLauncher so the controlling TTY is known. Set-once: a no-op once
+// Background is already set, when no reader is installed, or for an unrecognized
+// PID. Returns true when it set Background so callers can persist (#744).
+func (pm *PIDManager) captureBackground(state *session.SessionState, pid int) bool {
+	if pm.background == nil || state == nil || state.Background != nil || pid <= 0 {
+		return false
+	}
+	bg := pm.background(pid)
+	if bg == nil {
+		return false
+	}
+	// No controlling terminal ⇒ no window/tab owns it — the "detached" signature.
+	bg.Detached = state.Launcher == nil || state.Launcher.TTY == ""
+	state.Background = bg
+	return true
 }
 
 // record emits a lifecycle event if recording is enabled.
@@ -494,6 +531,7 @@ func (pm *PIDManager) assignPIDLocked(pid int, sessionID string) (*session.Sessi
 
 	state.PID = pid
 	pm.captureLauncher(state, pid)
+	pm.captureBackground(state, pid) // after captureLauncher: needs the TTY (#744)
 	state.UpdatedAt = time.Now().Unix()
 	_ = pm.repo.Save(state)
 
@@ -933,6 +971,13 @@ func (pm *PIDManager) handleAlivePIDState(state *session.SessionState) bool {
 		}
 	}
 	pm.backfillLauncher(state)
+	// Re-attach the background-agent badge to sessions persisted before the
+	// field existed, or restored after a daemon restart (#744). Runs after
+	// backfillLauncher so Detached reflects the refreshed TTY.
+	if pm.captureBackground(state, state.PID) {
+		state.UpdatedAt = time.Now().Unix()
+		_ = pm.repo.Save(state)
+	}
 	return true
 }
 
