@@ -40,37 +40,40 @@ final class HistoryViewSnapshotTests: XCTestCase {
     private func populated() -> HistoryResponse {
         let day: Int64 = 86_400
         let base: Int64 = 1_700_000_000
-        let buckets = [base, base + day, base + 2 * day, base + 3 * day]
-        let series = [
-            HistoryPoint(ts: buckets[0], project: "irrlicht", value: 1.20),
-            HistoryPoint(ts: buckets[1], project: "irrlicht", value: 0.80),
-            HistoryPoint(ts: buckets[3], project: "irrlicht", value: 2.00),
-            HistoryPoint(ts: buckets[1], project: "dashboard", value: 0.50),
-            HistoryPoint(ts: buckets[2], project: "dashboard", value: 1.50),
-            HistoryPoint(ts: buckets[2], project: "scratch", value: 0.30),
+        let buckets = (0..<8).map { base + Int64($0) * day }
+        // Three projects with a value in every bucket so the stacked areas read
+        // as continuous bands (a classic stacked-area chart).
+        let perProject: [(String, [Double])] = [
+            ("irrlicht", [0.80, 1.00, 1.20, 1.10, 1.50, 1.80, 2.00, 2.40]),
+            ("dashboard", [0.30, 0.40, 0.50, 0.60, 0.50, 0.70, 0.90, 1.00]),
+            ("scratch", [0.10, 0.15, 0.20, 0.10, 0.25, 0.30, 0.20, 0.35]),
         ]
-        let forecast = HistoryForecast(
-            projected: 7.88,
-            basis: "linear",
-            horizonBuckets: 1,
-            series: [HistoryForecastPoint(ts: base + 4 * day, value: 1.575)]
-        )
+        var series: [HistoryPoint] = []
+        for (project, values) in perProject {
+            for (i, v) in values.enumerated() {
+                series.append(HistoryPoint(ts: buckets[i], project: project, value: v))
+            }
+        }
+        let totals = perProject.map { ($0.0, $0.1.reduce(0, +)) }
+        let grand = totals.reduce(0.0) { $0 + $1.1 }
+        let rate = grand / Double(buckets.count)
         return HistoryResponse(
             range: "month",
             chart: "cost",
             group: "project",
             start: base,
-            end: base + 4 * day,
+            end: base + Int64(buckets.count) * day,
             bucketSeconds: day,
             bucketStarts: buckets,
-            total: 6.30,
+            total: grand,
             series: series,
-            topContributors: [
-                HistoryContributor(label: "irrlicht", value: 4.00),
-                HistoryContributor(label: "dashboard", value: 2.00),
-                HistoryContributor(label: "scratch", value: 0.30),
-            ],
-            forecast: forecast
+            topContributors: totals.map { HistoryContributor(label: $0.0, value: $0.1) },
+            forecast: HistoryForecast(
+                projected: grand + rate,
+                basis: "linear",
+                horizonBuckets: 1,
+                series: [HistoryForecastPoint(ts: base + Int64(buckets.count) * day, value: rate)]
+            )
         )
     }
 
