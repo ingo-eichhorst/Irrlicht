@@ -280,7 +280,7 @@ struct HistoryContentView: View {
     }
 }
 
-// MARK: - Stacked-area cost chart (Swift Charts)
+// MARK: - Stacked-bar cost chart (Swift Charts)
 
 private struct HistoryCostChart: View {
     let data: HistoryResponse
@@ -294,23 +294,19 @@ private struct HistoryCostChart: View {
         let value: Double
     }
 
-    /// Densify the sparse series to a value for every (bucket, project) so the
-    /// stacked areas line up — the daemon omits zero buckets.
+    /// Stacked bars draw straight from the sparse series — no zero-fill needed
+    /// (unlike a continuous area), which also keeps the mark count low on
+    /// fine-grained ranges. Per-bucket stacking order follows the
+    /// `chartForegroundStyleScale` domain (`orderedProjects`).
     private var costData: [Datum] {
-        var byKey: [Int64: [String: Double]] = [:]
-        for pt in data.series {
-            byKey[pt.ts, default: [:]][pt.project, default: 0] += pt.value
+        data.series.map { pt in
+            Datum(
+                id: "\(pt.ts)|\(pt.project)",
+                date: Date(timeIntervalSince1970: TimeInterval(pt.ts)),
+                project: pt.project,
+                value: pt.value
+            )
         }
-        var out: [Datum] = []
-        out.reserveCapacity(data.bucketStarts.count * max(1, orderedProjects.count))
-        for ts in data.bucketStarts {
-            let date = Date(timeIntervalSince1970: TimeInterval(ts))
-            for project in orderedProjects {
-                let v = byKey[ts]?[project] ?? 0
-                out.append(Datum(id: "\(ts)|\(project)", date: date, project: project, value: v))
-            }
-        }
-        return out
     }
 
     private var forecastData: [Datum] {
@@ -341,7 +337,7 @@ private struct HistoryCostChart: View {
     var body: some View {
         Chart {
             ForEach(costData) { d in
-                AreaMark(
+                BarMark(
                     x: .value("Time", d.date),
                     y: .value("Cost", d.value)
                 )
