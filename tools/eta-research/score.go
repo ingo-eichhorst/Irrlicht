@@ -1,6 +1,10 @@
 package etaresearch
 
-import "math"
+import (
+	"math"
+
+	"irrlicht/core/domain/stats"
+)
 
 // Score aggregates one estimator's performance over a corpus of episodes. All
 // times are seconds. Accuracy is measured only on turns strictly before the
@@ -82,8 +86,8 @@ func ScoreEstimator(est Estimator, eps []Episode, reachedOnly bool) Score {
 
 	sc.Turns = len(abs)
 	sc.MAESeconds = mean(abs)
-	sc.MedianAbsSeconds = median(abs)
-	sc.MedianRelErr = median(rel)
+	sc.MedianAbsSeconds, _ = stats.Median(abs)
+	sc.MedianRelErr, _ = stats.Median(rel)
 	sc.BiasSeconds = mean(signed)
 	if totalEpisodes > 0 {
 		sc.FirstCoverage = float64(episodesWithEstimate) / float64(totalEpisodes)

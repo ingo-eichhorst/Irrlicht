@@ -1,10 +1,10 @@
 package etaresearch
 
 import (
-	"sort"
 	"time"
 
 	"irrlicht/core/domain/session"
+	"irrlicht/core/domain/stats"
 )
 
 // Estimator is one candidate ETA model. Predict returns the projected
@@ -142,18 +142,6 @@ func MedianPerRound(eps []Episode) float64 {
 			durs = append(durs, float64(dt)/float64(dr))
 		}
 	}
-	return median(durs)
-}
-
-func median(xs []float64) float64 {
-	if len(xs) == 0 {
-		return 0
-	}
-	s := append([]float64(nil), xs...)
-	sort.Float64s(s)
-	n := len(s)
-	if n%2 == 1 {
-		return s[n/2]
-	}
-	return (s[n/2-1] + s[n/2]) / 2
+	m, _ := stats.Median(durs)
+	return m
 }
