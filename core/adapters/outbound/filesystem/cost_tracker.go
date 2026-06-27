@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"irrlicht/core/domain/session"
+	"irrlicht/core/ports/outbound"
 )
 
 const (
@@ -441,6 +442,147 @@ func addContributions(s *sessionWindows, key string, out map[string]map[string]f
 		}
 		out[tf][key] += d
 	}
+}
+
+// seriesAgg accumulates one session's per-bucket incremental cost while a cost
+// file is scanned. prevCost carries the running cumulative cost so the next
+// in-range row's delta can be computed; project is the bucket key (constant
+// across a session's rows, matching scanWindows).
+type seriesAgg struct {
+	project  string
+	prevCost float64
+	hasPrev  bool
+	buckets  []float64
+}
+
+// CostSeries returns a per-project incremental-cost time series bucketed into
+// fixed bucketSeconds-wide buckets spanning [start, end) (unix seconds), plus
+// each project's total over the range. A session's spend in a bucket is the
+// increase in its cumulative cost across the rows that fall in that bucket; the
+// last row before start (or, failing that, the first in-range row) seeds the
+// baseline so pre-range cost is never attributed to the first bucket. Because
+// snapshot cost is monotonic, summing a project's buckets yields the same
+// (max − baseline) total CostsInWindows computes for the matching trailing
+// window. One pass over every cost file.
+func (t *CostTracker) CostSeries(start, end, bucketSeconds int64) (*outbound.CostSeriesResult, error) {
+	out := &outbound.CostSeriesResult{
+		Start:         start,
+		End:           end,
+		BucketSeconds: bucketSeconds,
+		BucketStarts:  []int64{},
+		ByProject:     map[string][]float64{},
+		Totals:        map[string]float64{},
+	}
+	if bucketSeconds <= 0 || end <= start {
+		return out, nil
+	}
+	n := int((end - start + bucketSeconds - 1) / bucketSeconds)
+	out.BucketStarts = make([]int64, n)
+	for i := range out.BucketStarts {
+		out.BucketStarts[i] = start + int64(i)*bucketSeconds
+	}
+
+	entries, err := os.ReadDir(t.dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return out, nil
+		}
+		return nil, err
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+			continue
+		}
+		fallback := strings.TrimSuffix(e.Name(), ".jsonl")
+		if err := t.scanSeries(filepath.Join(t.dir, e.Name()), start, end, bucketSeconds, n, fallback, out); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+// scanSeries streams one cost file once and folds its sessions' per-bucket
+// deltas into out. A session whose rows carry no project is keyed under
+// fallback (the filename), mirroring CostsInWindows.
+func (t *CostTracker) scanSeries(path string, start, end, bucketSeconds int64, n int, fallback string, out *outbound.CostSeriesResult) error {
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	defer f.Close()
+
+	aggs := make(map[string]*seriesAgg)
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		var r snapshotRow
+		if err := json.Unmarshal(line, &r); err != nil {
+			continue
+		}
+		s := aggs[r.Session]
+		if s == nil {
+			s = &seriesAgg{buckets: make([]float64, n)}
+			aggs[r.Session] = s
+		}
+		if r.Project != "" {
+			s.project = r.Project
+		}
+		if r.TS < start {
+			// Pre-range row: keep advancing the baseline so the first
+			// in-range delta measures spend since the last snapshot.
+			s.prevCost = r.Cost
+			s.hasPrev = true
+			continue
+		}
+		if r.TS >= end {
+			continue
+		}
+		if !s.hasPrev {
+			// First observation of this session, with no pre-range baseline:
+			// seed the baseline, contributing nothing for this row.
+			s.prevCost = r.Cost
+			s.hasPrev = true
+			continue
+		}
+		if d := r.Cost - s.prevCost; d > 0 {
+			idx := int((r.TS - start) / bucketSeconds)
+			if idx < 0 {
+				idx = 0
+			} else if idx >= n {
+				idx = n - 1
+			}
+			s.buckets[idx] += d
+		}
+		s.prevCost = r.Cost
+	}
+	if err := scanner.Err(); err != nil && err != io.EOF {
+		return err
+	}
+	for _, s := range aggs {
+		key := s.project
+		if key == "" {
+			key = fallback
+		}
+		dst := out.ByProject[key]
+		if dst == nil {
+			dst = make([]float64, n)
+			out.ByProject[key] = dst
+		}
+		for i, v := range s.buckets {
+			if v != 0 {
+				dst[i] += v
+				out.Totals[key] += v
+			}
+		}
+	}
+	return nil
 }
 
 // Prune rewrites each project file to drop rows older than olderThanDays.
