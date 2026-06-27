@@ -11,6 +11,7 @@ final class SessionRowSnapshotTests: XCTestCase {
     private var originalShowCost: Any?
     private var originalThresholdValue: Any?
     private var originalThresholdUnit: Any?
+    private var originalUserIntent: Any?
 
     override func setUp() async throws {
         try await super.setUp()
@@ -22,9 +23,11 @@ final class SessionRowSnapshotTests: XCTestCase {
         originalShowCost = defaults.object(forKey: "showCostDisplay")
         originalThresholdValue = defaults.object(forKey: ContextPressureThreshold.valueKey)
         originalThresholdUnit = defaults.object(forKey: ContextPressureThreshold.unitKey)
+        originalUserIntent = defaults.object(forKey: "userIntentDisplay")
         defaults.set("context", forKey: "displayMode")
         defaults.set(false, forKey: "debugMode")
         defaults.set(false, forKey: "showCostDisplay")
+        defaults.set(false, forKey: "userIntentDisplay")
         // Pin the context-pressure threshold so the alert snapshot is independent
         // of the developer's Settings (issue #689 made it configurable).
         defaults.set(80, forKey: ContextPressureThreshold.valueKey)
@@ -38,6 +41,7 @@ final class SessionRowSnapshotTests: XCTestCase {
         restore(key: "showCostDisplay", value: originalShowCost)
         restore(key: ContextPressureThreshold.valueKey, value: originalThresholdValue)
         restore(key: ContextPressureThreshold.unitKey, value: originalThresholdUnit)
+        restore(key: "userIntentDisplay", value: originalUserIntent)
         try await super.tearDown()
     }
 
@@ -60,6 +64,7 @@ final class SessionRowSnapshotTests: XCTestCase {
         lastText: String? = nil,
         utilization: Double = 4.5,
         contextWindowUnknown: Bool? = nil,
+        summary: String? = nil,
         tasks: [SessionTask]? = nil,
         taskEstimate: TaskEstimateInfo? = nil,
         taskCompletionEta: Date? = nil,
@@ -76,6 +81,7 @@ final class SessionRowSnapshotTests: XCTestCase {
             contextWindowUnknown: contextWindowUnknown,
             estimatedCostUSD: nil,
             lastAssistantText: lastText,
+            taskSummary: summary,
             tasks: tasks,
             taskEstimate: taskEstimate,
             taskCompletionEta: taskCompletionEta,
@@ -188,6 +194,39 @@ final class SessionRowSnapshotTests: XCTestCase {
             metrics: makeMetrics(lastText: "Should I run the migration?")
         )
         let view = host(session, height: 72)
+        assertSnapshot(of: view, as: .image)
+    }
+
+    func testUserIntent_ShowsPurpleBlock() {
+        // Beta "User-Intent Display" on: the task summary renders as a purple
+        // block above the orange pending-question block.
+        UserDefaults.standard.set(true, forKey: "userIntentDisplay")
+        let session = makeSession(
+            state: .waiting,
+            metrics: makeMetrics(
+                lastText: "Should I run the migration?",
+                summary: "Add OAuth login to the web dashboard"
+            )
+        )
+        let view = host(session, height: 96)
+        assertSnapshot(of: view, as: .image)
+    }
+
+    func testCollapsed_HidesSummaryBlocks() {
+        // Global collapse on: a waiting session with BOTH an intent summary and
+        // a pending question shows neither block — collapse applies to every
+        // row, including new entries (issue #763). User-intent display is on to
+        // prove the purple block is hidden by collapse, not by the beta gate.
+        UserDefaults.standard.set(true, forKey: "userIntentDisplay")
+        sessionManager.summariesCollapsed = true
+        let session = makeSession(
+            state: .waiting,
+            metrics: makeMetrics(
+                lastText: "Should I run the migration?",
+                summary: "Add OAuth login to the web dashboard"
+            )
+        )
+        let view = host(session, height: 48)
         assertSnapshot(of: view, as: .image)
     }
 

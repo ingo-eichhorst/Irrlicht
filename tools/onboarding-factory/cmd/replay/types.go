@@ -74,6 +74,18 @@ type sessionTimeline struct {
 	PIDDiscoveryMs  int64            `json:"pid_discovery_lag_ms,omitempty"`
 	DebounceEvents  int              `json:"debounce_coalesced_events"`
 	StateDurations  map[string]int64 `json:"state_durations_ms"`
+
+	// Ghost-detection signals (issue #757) populated ONLY by buildGhostTimelines
+	// for the --ghosts text view — never by the JSON report path
+	// (finalizeSessionTracker), so committed replay goldens stay byte-identical.
+	// RemovedAt is a pointer because time.Time's zero value is not suppressed by
+	// omitempty; nil keeps it out of any serialized timeline.
+	IsGhost        bool       `json:"is_ghost,omitempty"`
+	HadSubstantive bool       `json:"had_substantive,omitempty"`
+	RemovalReason  string     `json:"removal_reason,omitempty"`
+	RemovedAt      *time.Time `json:"removed_at,omitempty"`
+	LifetimeMs     int64      `json:"lifetime_ms,omitempty"`
+	FinalReason    string     `json:"final_reason,omitempty"`
 }
 
 // extendedCheck compares the replayed state transitions against a committed

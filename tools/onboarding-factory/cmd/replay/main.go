@@ -27,6 +27,8 @@
 //	--debounce DURATION     Simulated activity debounce window. Default 2s.
 //	--flicker-max DURATION  Episodes shorter than this are counted as flickers. Default 10s.
 //	--quiet                 Suppress per-event progress on stderr.
+//	--ghosts SIDECAR        Print a human-readable ghost lifecycle timeline from a
+//	                        lifecycle sidecar (.events.jsonl) and exit.
 //
 // The report is a JSON object containing every state transition (with reason,
 // virtual timestamp, event index, and a metric snapshot) plus a flicker
@@ -138,11 +140,19 @@ type cliOptions struct {
 	debounceFlag time.Duration
 	flickerMax   time.Duration
 	quiet        bool
+	ghostsPath   string
 	src          string
 }
 
 func main() {
 	opts := parseFlags()
+	if opts.ghostsPath != "" {
+		if err := runGhostDump(opts.ghostsPath); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	transcriptPath, sidecarPath, useSidecar := resolveInputPaths(opts.src)
 	if !useSidecar && opts.sessionFlag != "" {
 		fmt.Fprintln(os.Stderr, "--session requires a sidecar (.events.jsonl); no sidecar found")
@@ -172,7 +182,13 @@ func parseFlags() cliOptions {
 	flag.DurationVar(&opts.debounceFlag, "debounce", 2*time.Second, "simulated activity debounce window")
 	flag.DurationVar(&opts.flickerMax, "flicker-max", 10*time.Second, "episodes shorter than this are counted as flickers (automated agent loops cycle turns in ~25s, so 30s overcounts)")
 	flag.BoolVar(&opts.quiet, "quiet", false, "suppress per-event progress on stderr")
+	flag.StringVar(&opts.ghostsPath, "ghosts", "", "print a human-readable ghost lifecycle timeline from a lifecycle sidecar (.events.jsonl) and exit")
 	flag.Parse()
+	// --ghosts is a self-contained text mode driven by its own sidecar path; it
+	// takes no positional transcript argument.
+	if opts.ghostsPath != "" {
+		return opts
+	}
 	if flag.NArg() != 1 {
 		fmt.Fprintln(os.Stderr, "usage: replay [flags] INPUT.jsonl")
 		flag.PrintDefaults()

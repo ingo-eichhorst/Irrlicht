@@ -92,9 +92,10 @@ func (d *SessionDetector) onRemovedLocked(state *session.SessionState, ev agent.
 	d.enricher.PruneMetrics(state.TranscriptPath)
 }
 
-// HandleProcessExit deletes a session when its process exits.
-func (d *SessionDetector) HandleProcessExit(pid int, sessionID string) {
-	d.pidMgr.HandleProcessExit(pid, sessionID)
+// HandleProcessExit deletes a session when its process exits. reason describes
+// the triggering edge for the recorded lifecycle trace (issue #757).
+func (d *SessionDetector) HandleProcessExit(pid int, sessionID, reason string) {
+	d.pidMgr.HandleProcessExit(pid, sessionID, reason)
 }
 
 // HandlePIDAssigned records a newly-discovered PID for a session.

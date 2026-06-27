@@ -390,6 +390,30 @@ func (d *SessionDetector) record(ev lifecycle.Event) {
 	d.recorder.Record(ev)
 }
 
+// classifierInputs snapshots the transient SessionMetrics signals that drive
+// ClassifyState into a lifecycle.ClassifierInputs for attaching to recorded
+// state-transition events (issue #757). Returns nil when metrics is nil so the
+// event's omitempty Inputs field stays absent.
+func classifierInputs(m *session.SessionMetrics) *lifecycle.ClassifierInputs {
+	if m == nil {
+		return nil
+	}
+	return &lifecycle.ClassifierInputs{
+		HasLiveBackgroundProcess:          m.HasLiveBackgroundProcess,
+		PermissionPending:                 m.PermissionPending,
+		CompactInProgress:                 m.CompactInProgress,
+		OpenToolStalled:                   m.OpenToolStalled,
+		SawUserBlockingToolClosedThisPass: m.SawUserBlockingToolClosedThisPass,
+		SawManualCompactBoundary:          m.SawManualCompactBoundary,
+		NoSubstantiveActivity:             m.NoSubstantiveActivity,
+		HasOpenToolCall:                   m.HasOpenToolCall,
+		LastOpenToolNames:                 m.LastOpenToolNames,
+		LastEventType:                     m.LastEventType,
+		LastWasUserInterrupt:              m.LastWasUserInterrupt,
+		LastWasToolDenial:                 m.LastWasToolDenial,
+	}
+}
+
 // AddWatcher registers a watcher with the running (or not-yet-running)
 // detector: a drain goroutine subscribes to the watcher's events and fans
 // them into the merged channel until ctx is cancelled. The caller owns the

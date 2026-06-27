@@ -81,11 +81,11 @@ class SessionManager: ObservableObject {
     /// groups, and (b) collapse state survives apiGroups re-assignments.
     @Published var collapsedGroupNames: Set<String> = []
 
-    /// Session IDs whose task-summary/question block the user has collapsed
-    /// (issue #738). Default-absent → expanded; presence → collapsed. Held
-    /// here (not in the row's local state) so it survives row re-creation and
-    /// a global collapse-all can mutate it.
-    @Published var collapsedSummarySessions: Set<String> = []
+    /// Global collapse state for every session's task-summary/question block
+    /// (issue #738). A single bool — not a per-id set — so sessions that appear
+    /// after a "collapse all" still honor it (a snapshot set would leave new
+    /// rows expanded). Default expanded; in-memory only.
+    @Published var summariesCollapsed: Bool = false
 
     /// Timer that periodically re-hydrates sessions so group-level cost
     /// values (which only ride the /api/v1/sessions response) stay fresh —

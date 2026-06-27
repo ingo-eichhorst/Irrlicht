@@ -1083,7 +1083,7 @@ func TestSessionDetector_HandleProcessExit_DeletesSession(t *testing.T) {
 
 	det := newDetector(tw, pw, repo)
 
-	det.HandleProcessExit(12345, "exit1")
+	det.HandleProcessExit(12345, "exit1", "test: pid exited")
 
 	state, _ := repo.Load("exit1")
 	if state != nil {
@@ -1106,7 +1106,7 @@ func TestSessionDetector_HandleProcessExit_DeletesReadySession(t *testing.T) {
 
 	det := newDetector(tw, pw, repo)
 
-	det.HandleProcessExit(12345, "exit2")
+	det.HandleProcessExit(12345, "exit2", "test: pid exited")
 
 	state, _ := repo.Load("exit2")
 	if state != nil {
@@ -1135,7 +1135,7 @@ func TestSessionDetector_ContinueSession_RecreatableAfterProcessExit(t *testing.
 	det.SetDeletedCooldown(0) // allow immediate re-creation
 
 	// Process exits — session is deleted and added to deletedSessions.
-	det.HandleProcessExit(12345, "cont1")
+	det.HandleProcessExit(12345, "cont1", "test: pid exited")
 
 	state, _ := repo.Load("cont1")
 	if state != nil {
@@ -1198,7 +1198,7 @@ func TestSessionDetector_LateWriteAfterQuit_NoGhostSession(t *testing.T) {
 	// Keep default 10s cooldown — late writes happen within milliseconds.
 
 	// Process exits — session deleted.
-	det.HandleProcessExit(12345, "ghost1")
+	det.HandleProcessExit(12345, "ghost1", "test: pid exited")
 
 	state, _ := repo.Load("ghost1")
 	if state != nil {
@@ -1244,7 +1244,7 @@ func TestSessionDetector_HandleProcessExit_UnknownSession(t *testing.T) {
 	det := newDetector(tw, pw, repo)
 
 	// Should not panic for unknown session.
-	det.HandleProcessExit(99999, "nonexistent")
+	det.HandleProcessExit(99999, "nonexistent", "test: pid exited")
 }
 
 // TestSessionDetector_SeedFromDisk_PersistsRefreshedMetrics is a regression

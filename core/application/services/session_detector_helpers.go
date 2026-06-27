@@ -100,7 +100,7 @@ func (d *SessionDetector) cleanupPreSessionsForProject(projectDir, realCWD, adap
 			adapterName = state.Adapter
 			d.broadcast(outbound.PushTypeDeleted, state)
 		}
-		d.record(lifecycle.Event{Kind: lifecycle.KindPreSessionRemoved, SessionID: sid, Adapter: adapterName})
+		d.record(lifecycle.Event{Kind: lifecycle.KindPreSessionRemoved, SessionID: sid, Adapter: adapterName, Reason: "superseded by real session for project"})
 		d.log.LogInfo("session-detector", sid,
 			fmt.Sprintf("removed pre-session — real session arrived in %s", projectDir))
 	}
