@@ -2833,7 +2833,7 @@ import { isGroupCollapsed, toggleGroupCollapsed } from './collapsedGroups.js';
     // chart/group buttons are disabled stubs. The stacked-area chart is
     // hand-rolled on a canvas (no external lib), mirroring paintRowHistory's
     // DPI handling.
-    const HISTORY_TAB_KEY = 'irrlicht_activeTab';
+    const ACTIVE_TAB_KEY = 'irrlicht_activeTab';
     const HISTORY_COLORS = [
       '#8B5CF6', '#34C759', '#FF9500', '#0A84FF', '#FF375F',
       '#5E5CE6', '#FFD60A', '#30D158', '#BF5AF2', '#64D2FF',
@@ -2862,7 +2862,7 @@ import { isGroupCollapsed, toggleGroupCollapsed } from './collapsedGroups.js';
         btn.textContent = on ? 'Live' : 'History';
         btn.title = on ? 'Back to live sessions' : 'Show historical cost analytics';
       }
-      localStorage.setItem(HISTORY_TAB_KEY, on ? 'history' : 'live');
+      localStorage.setItem(ACTIVE_TAB_KEY, on ? 'history' : 'live');
       if (on) fetchHistory();
     }
 
@@ -2945,18 +2945,17 @@ import { isGroupCollapsed, toggleGroupCollapsed } from './collapsedGroups.js';
         const r = idx.get(pt.project), c = tsIdx.get(pt.ts);
         if (r != null && c != null) matrix[r][c] += pt.value;
       }
-      const grand = new Array(B).fill(0);
-      for (let c = 0; c < B; c++) {
-        let s = 0;
-        for (let r = 0; r < projects.length; r++) s += matrix[r][c];
-        grand[c] = s;
-      }
-
       const fc = (historyState.forecast && data.forecast && Array.isArray(data.forecast.series)) ? data.forecast.series : [];
       const H = fc.length;
 
+      // Y scale = the tallest stacked column (sum across projects per bucket),
+      // also accounting for the forecast points.
       let maxY = 0;
-      for (const v of grand) if (v > maxY) maxY = v;
+      for (let c = 0; c < B; c++) {
+        let s = 0;
+        for (let r = 0; r < projects.length; r++) s += matrix[r][c];
+        if (s > maxY) maxY = s;
+      }
       for (const p of fc) if (p.value > maxY) maxY = p.value;
       if (maxY <= 0) maxY = 1;
       maxY *= 1.12;
@@ -2983,7 +2982,7 @@ import { isGroupCollapsed, toggleGroupCollapsed } from './collapsedGroups.js';
         ctx.lineTo(w - padR, y);
         ctx.stroke();
         ctx.fillStyle = muted;
-        ctx.fillText('$' + v.toFixed(2), padL - 6, y);
+        ctx.fillText(histDollar(v), padL - 6, y);
       }
 
       // Stacked areas, bottom-up.
@@ -3152,7 +3151,7 @@ import { isGroupCollapsed, toggleGroupCollapsed } from './collapsedGroups.js';
     });
 
     // Restore the History tab if it was active last session.
-    if (localStorage.getItem(HISTORY_TAB_KEY) === 'history') setHistoryTab(true);
+    if (localStorage.getItem(ACTIVE_TAB_KEY) === 'history') setHistoryTab(true);
 
 export {
   resolvedTheme, rowLabel, maybeNotifyOnUpdate,

@@ -373,12 +373,13 @@ func resolveHistoryRange(q url.Values) (rangeKey string, start, end int64, ok bo
 		rk = "day"
 	}
 	now := time.Now()
+	nowUnix := now.Unix()
 	switch rk {
 	case "day", "week", "month", "year":
-		return rk, now.Unix() - costTimeframeSeconds[rk], now.Unix(), true
+		return rk, nowUnix - costTimeframeSeconds[rk], nowUnix, true
 	case "this-month":
 		first := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
-		return rk, first.Unix(), now.Unix(), true
+		return rk, first.Unix(), nowUnix, true
 	default:
 		return "", 0, 0, false
 	}
