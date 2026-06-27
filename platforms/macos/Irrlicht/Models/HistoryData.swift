@@ -63,13 +63,30 @@ struct HistoryForecastPoint: Codable {
 /// minus `this-month` (issue #755 scopes macOS Phase 1 to Day/Week/Month/Year
 /// + Custom).
 enum HistoryRange: String, CaseIterable, Identifiable {
-    case day, week, month, year, custom
+    // Quota rate-limit windows first (they render a burn-rate projection, not
+    // cost), then the cost calendar spans.
+    case fiveHour, sevenDay, day, week, month, year, custom
 
     var id: String { rawValue }
+
+    /// True for the subscription rate-limit windows (5h / 7d), which render a
+    /// quota burn-rate projection to the cap instead of cost.
+    var isQuota: Bool { self == .fiveHour || self == .sevenDay }
+
+    /// Rate-limit window length in minutes (300 / 10080) for the quota spans.
+    var windowMinutes: Int? {
+        switch self {
+        case .fiveHour: return 300
+        case .sevenDay: return 10080
+        default: return nil
+        }
+    }
 
     /// Side-panel label ("Total · Day"), matching the web `RANGE_LABELS`.
     var label: String {
         switch self {
+        case .fiveHour: return "5h"
+        case .sevenDay: return "7d"
         case .day: return "Day"
         case .week: return "Week"
         case .month: return "Month"
@@ -81,6 +98,8 @@ enum HistoryRange: String, CaseIterable, Identifiable {
     /// Compact label for the 380pt-popover segmented control.
     var shortLabel: String {
         switch self {
+        case .fiveHour: return "5h"
+        case .sevenDay: return "7d"
         case .day: return "Day"
         case .week: return "Wk"
         case .month: return "Mo"

@@ -114,4 +114,46 @@ final class HistoryViewSnapshotTests: XCTestCase {
         )
         assertSnapshot(of: host(view, height: 320), as: .image)
     }
+
+    // MARK: Quota projection
+
+    /// 5h window, 60% used 2h in → over pace, projected to hit the cap before
+    /// reset (orange trajectory + projected-cap label).
+    private func fiveHourHitsCap() -> QuotaWindowVM {
+        let base = Date(timeIntervalSince1970: 1_700_000_000)
+        return QuotaWindowVM(
+            label: "5h",
+            planLabel: "Claude Max",
+            start: base,
+            end: base.addingTimeInterval(5 * 3600),
+            now: base.addingTimeInterval(2 * 3600),
+            usedPercent: 60,
+            projectedCap: base.addingTimeInterval(2 * 3600 * 100.0 / 60.0),
+            isStale: false
+        )
+    }
+
+    /// 7d window, 15% used 2 days in → under pace, won't hit the cap this window
+    /// (green trajectory, no projected cap).
+    private func sevenDayUnderPace() -> QuotaWindowVM {
+        let base = Date(timeIntervalSince1970: 1_700_000_000)
+        return QuotaWindowVM(
+            label: "7d",
+            planLabel: "Claude Max",
+            start: base,
+            end: base.addingTimeInterval(7 * 86_400),
+            now: base.addingTimeInterval(2 * 86_400),
+            usedPercent: 15,
+            projectedCap: nil,
+            isStale: false
+        )
+    }
+
+    func testQuota_FiveHour_HitsCap() {
+        assertSnapshot(of: host(HistoryQuotaContentView(window: fiveHourHitsCap()), height: 360), as: .image)
+    }
+
+    func testQuota_SevenDay_UnderPace() {
+        assertSnapshot(of: host(HistoryQuotaContentView(window: sevenDayUnderPace()), height: 360), as: .image)
+    }
 }

@@ -13,6 +13,8 @@ import SwiftUI
 struct HistoryView: View {
     let onClose: () -> Void
 
+    @EnvironmentObject var sessionManager: SessionManager
+
     @State private var range: HistoryRange = .day
     @State private var forecastEnabled = true
     @State private var customStart = Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date()
@@ -98,9 +100,11 @@ struct HistoryView: View {
                 .font(.caption)
             }
 
-            Toggle("Forecast", isOn: $forecastEnabled)
-                .toggleStyle(.checkbox)
-                .font(.caption)
+            if !range.isQuota {
+                Toggle("Forecast", isOn: $forecastEnabled)
+                    .toggleStyle(.checkbox)
+                    .font(.caption)
+            }
         }
         .padding(.horizontal, IrrSpacing.sp4)
         .padding(.vertical, IrrSpacing.sp3)
@@ -109,7 +113,9 @@ struct HistoryView: View {
     // MARK: Content
 
     @ViewBuilder private var content: some View {
-        if let r = response {
+        if range.isQuota {
+            quotaContent
+        } else if let r = response {
             HistoryContentView(
                 data: r,
                 range: range,
@@ -128,6 +134,19 @@ struct HistoryView: View {
         }
     }
 
+    @ViewBuilder private var quotaContent: some View {
+        if let win = quotaWindow {
+            HistoryQuotaContentView(window: win)
+        } else {
+            Text("No subscription quota data yet.\nStart a Claude Pro/Max or ChatGPT session.")
+                .font(.callout)
+                .multilineTextAlignment(.center)
+                .foregroundColor(.secondary)
+                .frame(maxWidth: .infinity, minHeight: 220)
+                .padding(.horizontal, IrrSpacing.sp4)
+        }
+    }
+
     // MARK: Fetch
 
     private func applyCustomRange() {
@@ -140,6 +159,7 @@ struct HistoryView: View {
     }
 
     private func fetch() async {
+        guard !range.isQuota else { return }  // quota spans read the live snapshot, no fetch
         loadFailed = false
         let cs = range == .custom ? appliedCustomStart : nil
         let ce = range == .custom ? appliedCustomEnd : nil
@@ -159,6 +179,53 @@ struct HistoryView: View {
         } catch {
             if !Task.isCancelled { loadFailed = true }
         }
+    }
+
+    // MARK: Quota window (live rate-limit snapshot → projection)
+
+    /// The freshest subscription rate-limit snapshot's window matching the
+    /// selected span (5h / 7d), resolved to a projection view-model. nil when no
+    /// subscription session is active or that window isn't present.
+    private var quotaWindow: QuotaWindowVM? {
+        guard let target = range.windowMinutes else { return nil }
+        var best: (info: RateLimitInfo, eta: Date?)?
+        for s in sessionManager.sessions {
+            guard let rl = s.metrics?.rateLimit else { continue }
+            if best == nil || rl.sampledAt > best!.info.sampledAt {
+                best = (rl, s.metrics?.rateLimitForecastEta)
+            }
+        }
+        guard let best,
+              let w = best.info.windows.first(where: { abs($0.windowMinutes - target) <= 1 })
+        else { return nil }
+        let now = Date()
+        let start = w.resetsAt.addingTimeInterval(-Double(w.windowMinutes) * 60)
+        return QuotaWindowVM(
+            label: range.label,
+            planLabel: best.info.planTypeLabel,
+            start: start,
+            end: w.resetsAt,
+            now: now,
+            usedPercent: w.usedPercent,
+            projectedCap: projectedCap(window: w, info: best.info, eta: best.eta, now: now, start: start),
+            isStale: w.resetsAt <= now
+        )
+    }
+
+    /// Projected wall-clock time the window hits 100%. Prefers the daemon's
+    /// forecast when it belongs to this (imminent) window — keeping it
+    /// consistent with the provider view's chip — else extrapolates the average
+    /// pace since the window opened. nil when usage is on track to stay under
+    /// the cap before reset.
+    private func projectedCap(window w: RateLimitWindowInfo, info: RateLimitInfo, eta: Date?, now: Date, start: Date) -> Date? {
+        if let eta, let imm = info.imminentWindow, imm.windowMinutes == w.windowMinutes,
+           eta > now, eta <= w.resetsAt {
+            return eta
+        }
+        let elapsed = now.timeIntervalSince(start)
+        guard w.usedPercent > 0, w.usedPercent < 100, elapsed > 0 else { return nil }
+        let cap = start.addingTimeInterval(elapsed * (100.0 / w.usedPercent))
+        return (cap > now && cap <= w.resetsAt) ? cap : nil
     }
 
     private func save(ext: String, text: String) {
@@ -386,6 +453,164 @@ private struct HistoryCostChart: View {
     }
 }
 
+// MARK: - Quota burn-rate projection (5h / 7d windows)
+//
+// For the rate-limit spans the chart isn't cost — it's the subscription
+// "projected cap line" from the provider view, shown as its own time span:
+// usage % over the exact window (start→end), with a 100% cap line and the
+// forecast extrapolated to the projected-cap time. Pure inputs (QuotaWindowVM)
+// so the chart is snapshot-testable.
+
+/// Pure inputs for the quota projection chart.
+struct QuotaWindowVM {
+    let label: String          // "5h" / "7d"
+    let planLabel: String?     // "Claude Max", etc.
+    let start: Date
+    let end: Date
+    let now: Date
+    let usedPercent: Double
+    let projectedCap: Date?    // when usage hits 100% (nil = won't this window)
+    let isStale: Bool
+
+    var willHitCap: Bool { projectedCap != nil }
+
+    /// Projected usage % at window end at the average pace (when the cap isn't
+    /// reached) — the endpoint of the dashed projection line.
+    var projectedEndPercent: Double {
+        let elapsed = now.timeIntervalSince(start)
+        guard usedPercent > 0, elapsed > 0 else { return usedPercent }
+        let total = end.timeIntervalSince(start)
+        return min(100, usedPercent * (total / elapsed))
+    }
+}
+
+struct HistoryQuotaContentView: View {
+    let window: QuotaWindowVM
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: IrrSpacing.sp3) {
+            HistoryQuotaChart(window: window)
+                .frame(height: 200)
+            Divider()
+            summary
+        }
+        .padding(.horizontal, IrrSpacing.sp4)
+        .padding(.vertical, IrrSpacing.sp3)
+        .opacity(window.isStale ? 0.5 : 1)
+    }
+
+    private var summary: some View {
+        VStack(alignment: .leading, spacing: IrrSpacing.sp2) {
+            HStack(spacing: IrrSpacing.sp2) {
+                Text("\(window.label) · \(Int(window.usedPercent.rounded()))% used")
+                    .font(.title3)
+                    .fontWeight(.semibold)
+                    .monospacedDigit()
+                if let plan = window.planLabel {
+                    Text(plan).font(.caption).foregroundColor(.secondary)
+                }
+            }
+            if let cap = window.projectedCap {
+                Text("▲ projected cap \(HistoryFormat.clock(cap))")
+                    .font(.caption)
+                    .foregroundColor(IrrColors.waiting)
+            } else {
+                Text("on pace — won’t hit the cap this window")
+                    .font(.caption)
+                    .foregroundColor(IrrColors.ready)
+            }
+            Text("Resets \(HistoryFormat.clock(window.end))")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            if window.isStale {
+                Text("window reset — waiting for fresh data")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct HistoryQuotaChart: View {
+    let window: QuotaWindowVM
+
+    private struct Pt: Identifiable {
+        let id: String
+        let date: Date
+        let percent: Double
+    }
+
+    // Even-pace reference: straight line from window open (0%) to reset (100%).
+    private var pace: [Pt] {
+        [Pt(id: "c0", date: window.start, percent: 0),
+         Pt(id: "c1", date: window.end, percent: 100)]
+    }
+    // Usage so far: window open (0%) → now (used %).
+    private var actual: [Pt] {
+        [Pt(id: "a0", date: window.start, percent: 0),
+         Pt(id: "a1", date: window.now, percent: window.usedPercent)]
+    }
+    // Projection: now → projected cap (100%), or → window end at average pace.
+    private var projected: [Pt] {
+        let tail = window.projectedCap.map { Pt(id: "p1", date: $0, percent: 100) }
+            ?? Pt(id: "p1", date: window.end, percent: window.projectedEndPercent)
+        return [Pt(id: "p0", date: window.now, percent: window.usedPercent), tail]
+    }
+    private var lineColor: Color { window.willHitCap ? IrrColors.waiting : IrrColors.ready }
+    private var showTime: Bool { window.end.timeIntervalSince(window.start) <= 86_400 }
+
+    var body: some View {
+        Chart {
+            RuleMark(y: .value("Cap", 100))
+                .foregroundStyle(IrrColors.pressureHigh.opacity(0.8))
+                .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
+                .annotation(position: .top, alignment: .trailing) {
+                    Text("cap").font(.caption2).foregroundColor(.secondary)
+                }
+            ForEach(pace) { p in
+                LineMark(x: .value("Time", p.date), y: .value("Used", p.percent), series: .value("s", "pace"))
+                    .foregroundStyle(Color.secondary.opacity(0.35))
+                    .lineStyle(StrokeStyle(lineWidth: 1, dash: [2, 3]))
+            }
+            ForEach(actual) { p in
+                LineMark(x: .value("Time", p.date), y: .value("Used", p.percent), series: .value("s", "actual"))
+                    .foregroundStyle(lineColor)
+                    .lineStyle(StrokeStyle(lineWidth: 2))
+            }
+            ForEach(projected) { p in
+                LineMark(x: .value("Time", p.date), y: .value("Used", p.percent), series: .value("s", "proj"))
+                    .foregroundStyle(lineColor)
+                    .lineStyle(StrokeStyle(lineWidth: 2, dash: [4, 3]))
+            }
+            PointMark(x: .value("Time", window.now), y: .value("Used", window.usedPercent))
+                .foregroundStyle(lineColor)
+                .symbolSize(60)
+        }
+        .chartYScale(domain: 0...110)
+        .chartXScale(domain: window.start...window.end)
+        .chartLegend(.hidden)
+        .chartYAxis {
+            AxisMarks(position: .leading, values: [0, 50, 100]) { v in
+                AxisGridLine()
+                AxisValueLabel {
+                    if let d = v.as(Double.self) { Text("\(Int(d))%") }
+                }
+            }
+        }
+        .chartXAxis {
+            AxisMarks(values: .automatic(desiredCount: 4)) { v in
+                AxisGridLine()
+                AxisValueLabel {
+                    if let d = v.as(Date.self) {
+                        Text(HistoryFormat.axisLabel(d, bucketSeconds: showTime ? 3_600 : 86_400))
+                    }
+                }
+            }
+        }
+    }
+}
+
 // MARK: - Shared palette / formatting / export
 
 enum HistoryPalette {
@@ -409,6 +634,15 @@ enum HistoryFormat {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
         f.dateFormat = bucketSeconds < 86_400 ? "HH:mm" : "M/d"
+        return f.string(from: date)
+    }
+
+    /// Weekday + 12-hour clock, e.g. "Sat 3:15 PM" — for projected-cap and reset
+    /// timestamps. Pinned to POSIX so snapshot tests stay stable.
+    static func clock(_ date: Date) -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "EEE h:mm a"
         return f.string(from: date)
     }
 }
