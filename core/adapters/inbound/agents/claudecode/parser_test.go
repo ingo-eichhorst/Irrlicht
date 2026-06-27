@@ -25,6 +25,88 @@ func TestParser_AgentVersion_Captured(t *testing.T) {
 	}
 }
 
+// TestParser_TaskSummary_FromBashDescription pins that the task-summary marker
+// emitted in a Bash tool_use `description` (issue #617's mandatory carrier,
+// since pre-tool-call text blocks can vanish) is parsed from the transcript —
+// not only from assistant prose — so the summary surfaces without the live
+// hook and survives replay (issue #738).
+func TestParser_TaskSummary_FromBashDescription(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(map[string]interface{}{
+		"type": "assistant",
+		"message": map[string]interface{}{
+			"role": "assistant",
+			"content": []interface{}{
+				map[string]interface{}{
+					"type": "tool_use",
+					"name": "Bash",
+					"input": map[string]interface{}{
+						"command":     "go build ./...",
+						"description": `Build core <!-- {"marker":"irrlicht-summary","summary":"Add the logout button"} -->`,
+					},
+				},
+			},
+		},
+	})
+	if ev == nil || ev.TaskSummary == nil {
+		t.Fatalf("expected TaskSummary from Bash description, got %+v", ev)
+	}
+	if ev.TaskSummary.Text != "Add the logout button" {
+		t.Fatalf("TaskSummary.Text = %q, want %q", ev.TaskSummary.Text, "Add the logout button")
+	}
+}
+
+// TestParser_TaskEstimate_FromBashDescriptionIgnored pins that a *valid* ETA
+// marker in a Bash tool_use `description` is NOT applied by the transcript
+// parser: only the task-summary marker is lifted from tool input. ETA stays
+// prose/hook-only (live enrichment), so replay/timeline behavior is unchanged.
+func TestParser_TaskEstimate_FromBashDescriptionIgnored(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(map[string]interface{}{
+		"type": "assistant",
+		"message": map[string]interface{}{
+			"role": "assistant",
+			"content": []interface{}{
+				map[string]interface{}{
+					"type": "tool_use",
+					"name": "Bash",
+					"input": map[string]interface{}{
+						"command":     "go build ./...",
+						"description": `Build core <!-- {"marker":"irrlicht-eta","total_rounds":10,"completed_rounds":2} -->`,
+					},
+				},
+			},
+		},
+	})
+	if ev != nil && ev.TaskEstimate != nil {
+		t.Fatalf("ETA marker in a tool description must NOT be applied by the parser, got %+v", ev.TaskEstimate)
+	}
+}
+
+// TestParser_TaskSummary_UserToolUseIgnored pins the assistant-only guard: a
+// marker in a non-assistant event's tool input must not feed the summary.
+func TestParser_TaskSummary_UserToolUseIgnored(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(map[string]interface{}{
+		"type": "user",
+		"message": map[string]interface{}{
+			"role": "user",
+			"content": []interface{}{
+				map[string]interface{}{
+					"type": "tool_use",
+					"name": "Bash",
+					"input": map[string]interface{}{
+						"description": `x <!-- {"marker":"irrlicht-summary","summary":"nope"} -->`,
+					},
+				},
+			},
+		},
+	})
+	if ev != nil && ev.TaskSummary != nil {
+		t.Fatalf("user-event marker must be ignored, got %q", ev.TaskSummary.Text)
+	}
+}
+
 // --- Contribution / cost tests ---
 
 func TestParser_Contribution_RequestIDDedup(t *testing.T) {

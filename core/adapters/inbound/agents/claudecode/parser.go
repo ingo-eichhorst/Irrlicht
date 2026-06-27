@@ -408,6 +408,19 @@ func scanMessageContent(raw map[string]interface{}, ev *tailer.ParsedEvent) stri
 			if q := collectToolUse(block, ev); q != "" {
 				askUserQuestion = q
 			}
+			// The task-summary marker rides in the Bash tool's `description`
+			// (a tool_use input field), not in assistant prose — issue #617's
+			// mandatory-carrier instruction, since pre-tool-call text blocks
+			// can vanish. Scan the input so the summary is parsed from the
+			// transcript and survives replay, mirroring the hook path's
+			// scanToolInput. Assistant events only (a user echoing a marker
+			// must not feed it). ETA stays prose/hook-only, so apply only the
+			// summary.
+			if isAssistantEventType(ev.EventType) {
+				if _, s := scanValueForMarkers(block["input"], ev.Timestamp); s != nil {
+					ev.TaskSummary = s
+				}
+			}
 		case "tool_result":
 			collectToolResult(block, ev, bgTaskID, createdTaskID)
 		case "text":

@@ -104,6 +104,16 @@ func scanToolInput(raw json.RawMessage, observedAt time.Time) (*tailer.TaskEstim
 	if err := json.Unmarshal(raw, &decoded); err != nil {
 		return nil, nil
 	}
+	return scanValueForMarkers(decoded, observedAt)
+}
+
+// scanValueForMarkers walks a decoded JSON value, scanning every string for
+// task-estimate and task-summary markers; latest valid of each wins. Shared by
+// the PostToolUse hook (scanToolInput) and the transcript parser so a marker
+// emitted inside a tool input — e.g. the Bash `description` carrier (#617) — is
+// found by both the live hook and the transcript/replay path. The per-string
+// fast-reject lives inside the Scan* functions.
+func scanValueForMarkers(v interface{}, observedAt time.Time) (*tailer.TaskEstimate, *tailer.TaskSummary) {
 	var est *tailer.TaskEstimate
 	var sum *tailer.TaskSummary
 	var walk func(v interface{})
@@ -126,7 +136,7 @@ func scanToolInput(raw json.RawMessage, observedAt time.Time) (*tailer.TaskEstim
 			}
 		}
 	}
-	walk(decoded)
+	walk(v)
 	return est, sum
 }
 

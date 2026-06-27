@@ -9,6 +9,7 @@ final class SessionRowSnapshotTests: XCTestCase {
     private var originalDisplayMode: Any?
     private var originalDebugMode: Any?
     private var originalShowCost: Any?
+    private var originalUserIntent: Any?
 
     override func setUp() async throws {
         try await super.setUp()
@@ -18,9 +19,11 @@ final class SessionRowSnapshotTests: XCTestCase {
         originalDisplayMode = defaults.object(forKey: "displayMode")
         originalDebugMode = defaults.object(forKey: "debugMode")
         originalShowCost = defaults.object(forKey: "showCostDisplay")
+        originalUserIntent = defaults.object(forKey: "userIntentDisplay")
         defaults.set("context", forKey: "displayMode")
         defaults.set(false, forKey: "debugMode")
         defaults.set(false, forKey: "showCostDisplay")
+        defaults.set(false, forKey: "userIntentDisplay")
         sessionManager = SessionManager()
     }
 
@@ -29,6 +32,7 @@ final class SessionRowSnapshotTests: XCTestCase {
         restore(key: "displayMode", value: originalDisplayMode)
         restore(key: "debugMode", value: originalDebugMode)
         restore(key: "showCostDisplay", value: originalShowCost)
+        restore(key: "userIntentDisplay", value: originalUserIntent)
         _ = defaults
         try await super.tearDown()
     }
@@ -44,7 +48,8 @@ final class SessionRowSnapshotTests: XCTestCase {
     private func makeMetrics(
         tokens: Int64 = 45_000,
         pressure: String = "safe",
-        lastText: String? = nil
+        lastText: String? = nil,
+        summary: String? = nil
     ) -> SessionMetrics {
         SessionMetrics(
             elapsedSeconds: 0,
@@ -56,6 +61,7 @@ final class SessionRowSnapshotTests: XCTestCase {
             contextWindowUnknown: nil,
             estimatedCostUSD: nil,
             lastAssistantText: lastText,
+            taskSummary: summary,
             tasks: nil
         )
     }
@@ -115,6 +121,39 @@ final class SessionRowSnapshotTests: XCTestCase {
             metrics: makeMetrics(lastText: "Should I run the migration?")
         )
         let view = host(session, height: 72)
+        assertSnapshot(of: view, as: .image)
+    }
+
+    func testUserIntent_ShowsPurpleBlock() {
+        // Beta "User-Intent Display" on: the task summary renders as a purple
+        // block above the orange pending-question block.
+        UserDefaults.standard.set(true, forKey: "userIntentDisplay")
+        let session = makeSession(
+            state: .waiting,
+            metrics: makeMetrics(
+                lastText: "Should I run the migration?",
+                summary: "Add OAuth login to the web dashboard"
+            )
+        )
+        let view = host(session, height: 96)
+        assertSnapshot(of: view, as: .image)
+    }
+
+    func testCollapsed_HidesSummaryBlocks() {
+        // Global collapse on: a waiting session with BOTH an intent summary and
+        // a pending question shows neither block — collapse applies to every
+        // row, including new entries (issue #763). User-intent display is on to
+        // prove the purple block is hidden by collapse, not by the beta gate.
+        UserDefaults.standard.set(true, forKey: "userIntentDisplay")
+        sessionManager.summariesCollapsed = true
+        let session = makeSession(
+            state: .waiting,
+            metrics: makeMetrics(
+                lastText: "Should I run the migration?",
+                summary: "Add OAuth login to the web dashboard"
+            )
+        )
+        let view = host(session, height: 48)
         assertSnapshot(of: view, as: .image)
     }
 
