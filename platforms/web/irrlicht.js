@@ -829,6 +829,7 @@ import { isSummaryCollapsed, toggleSummaryCollapsed, anySummaryCollapsed, collap
         '<span class="row-tool" style="display:none"></span>' +
         '<span class="row-ctx-bar"><span class="row-ctx-fill"></span><span class="row-ctx-label"></span></span>' +
         '<span class="row-ctx-pct"></span>' +
+        '<span class="row-yield-revert" style="display:none" title="Session work was reverted">↩</span>' +
         '<span class="row-cost"></span>' +
         '<canvas class="row-history"></canvas>' +
         '<span class="row-eta" style="display:none"></span>' +
@@ -1017,6 +1018,11 @@ import { isSummaryCollapsed, toggleSummaryCollapsed, anySummaryCollapsed, collap
       // Cost
       const costEl = el.querySelector('.row-cost');
       if (costEl.textContent !== cost) costEl.textContent = cost;
+
+      // Yield revert marker (#373): ↩ next to cost when the session's work
+      // was later git-reverted.
+      const yieldEl = el.querySelector('.row-yield-revert');
+      if (yieldEl) yieldEl.style.display = (agent.yield_state === 'reverted') ? '' : 'none';
 
       // Model
       const modelEl = el.querySelector('.row-model');
@@ -3021,13 +3027,21 @@ import { isSummaryCollapsed, toggleSummaryCollapsed, anySummaryCollapsed, collap
 
     function renderHistory() {
       renderHistoryBreadcrumb();
+      const isYield = historyState.chart === 'yield';
+      const emptyEl = document.getElementById('history-chart-empty');
+      if (emptyEl) emptyEl.textContent = isYield ? 'no completed sessions in this range yet' : 'no cost data in this range yet';
       if (!historyState.data) {
         const wrap = document.getElementById('history-chart-wrap');
         if (wrap) wrap.classList.add('empty');
         return;
       }
-      paintHistoryChart();
-      renderHistoryPanel();
+      if (isYield) {
+        paintYieldChart();
+        renderYieldPanel();
+      } else {
+        paintHistoryChart();
+        renderHistoryPanel();
+      }
     }
 
     function paintHistoryChart() {
@@ -3281,6 +3295,115 @@ import { isSummaryCollapsed, toggleSummaryCollapsed, anySummaryCollapsed, collap
       if (groupSeg) for (const b of groupSeg.querySelectorAll('button')) b.classList.toggle('active', b.dataset.group === historyState.group);
     }
 
+    // Yield chart (#373): one horizontal bar per project, split productive
+    // (green) vs reverted (red), bar length ∝ the project's attributable spend.
+    // Yield is a per-project aggregate, not a time series, so it draws its own
+    // shape on the shared canvas rather than reusing the stacked-area painter.
+    function histTruncate(s, n) { s = String(s); return s.length > n ? s.slice(0, n - 1) + '…' : s; }
+
+    function paintYieldChart() {
+      const canvas = document.getElementById('history-chart');
+      const wrap = document.getElementById('history-chart-wrap');
+      if (!canvas || !wrap) return;
+      const data = historyState.data;
+      const dpr = window.devicePixelRatio || 1;
+      const w = canvas.offsetWidth || wrap.clientWidth || 600;
+      const h = canvas.offsetHeight || 340;
+      const pxW = Math.round(w * dpr), pxH = Math.round(h * dpr);
+      if (canvas.width !== pxW || canvas.height !== pxH) { canvas.width = pxW; canvas.height = pxH; }
+      const ctx = canvas.getContext('2d');
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, w, h);
+
+      const projects = (data && data.projects) || [];
+      // Only projects with attributable (productive+reverted) spend get a bar;
+      // unknown-only projects contribute nothing to the ratio.
+      const rows = projects.filter(p => (p.total_cost || 0) > 0);
+      const hasData = rows.length > 0;
+      wrap.classList.toggle('empty', !hasData);
+      if (!hasData) return;
+
+      const cs = getComputedStyle(document.documentElement);
+      const green = (cs.getPropertyValue('--ready') || '#34C759').trim();
+      const red = (cs.getPropertyValue('--pressure-high') || '#FF3B30').trim();
+      const muted = (cs.getPropertyValue('--muted') || '#888').trim();
+      const bright = (cs.getPropertyValue('--text-bright') || '#fff').trim();
+
+      const maxTotal = rows.reduce((m, p) => Math.max(m, p.total_cost), 0) || 1;
+      const padL = 8, padR = 10, padT = 10, padB = 8;
+      const labelH = 15, barH = 14, gap = 11;
+      const blockH = labelH + barH + gap;
+      const plotW = Math.max(1, w - padL - padR);
+      const maxRows = Math.max(1, Math.floor((h - padT - padB) / blockH));
+      const shown = rows.slice(0, maxRows);
+
+      let y = padT;
+      for (const p of shown) {
+        const total = p.total_cost || 0;
+        const fullW = plotW * (total / maxTotal);
+        const prodW = total > 0 ? fullW * ((p.productive_cost || 0) / total) : 0;
+        ctx.font = '11px ui-monospace, monospace';
+        ctx.textBaseline = 'alphabetic';
+        ctx.textAlign = 'left';
+        ctx.fillStyle = bright;
+        ctx.fillText(histTruncate(p.project, 26), padL, y + 11);
+        ctx.textAlign = 'right';
+        ctx.fillStyle = muted;
+        ctx.fillText(Math.round((p.yield || 0) * 100) + '% · ' + histDollar(p.productive_cost) + ' / ' + histDollar(total), w - padR, y + 11);
+        const by = y + labelH;
+        ctx.fillStyle = green;
+        ctx.fillRect(padL, by, prodW, barH);
+        ctx.fillStyle = red;
+        ctx.fillRect(padL + prodW, by, Math.max(0, fullW - prodW), barH);
+        y += blockH;
+      }
+    }
+
+    function renderYieldPanel() {
+      const data = historyState.data;
+      if (!data) return;
+      const titleEl = document.getElementById('history-panel-title');
+      const totalEl = document.getElementById('history-total');
+      const fcEl = document.getElementById('history-forecast-line');
+      const listEl = document.getElementById('history-contrib');
+      if (titleEl) titleEl.textContent = 'Yield · ' + (RANGE_LABELS[historyState.range] || historyState.range);
+      const hasSpend = (data.total_cost || 0) > 0 || (data.unknown_cost || 0) > 0;
+      if (totalEl) totalEl.textContent = (data.total_cost || 0) > 0 ? Math.round((data.yield || 0) * 100) + '%' : '—';
+      if (fcEl) {
+        let line = histDollar(data.productive_cost) + ' productive of ' + histDollar(data.total_cost) + ' total';
+        if ((data.unknown_cost || 0) > 0) line += ' · ' + histDollar(data.unknown_cost) + ' unattributed';
+        fcEl.textContent = hasSpend ? line : '';
+      }
+      if (!listEl) return;
+      listEl.innerHTML = '';
+      const projects = (data.projects || []).filter(p => (p.total_cost || 0) > 0 || (p.unknown_cost || 0) > 0);
+      if (!projects.length) {
+        const li = document.createElement('li');
+        li.className = 'history-empty-contrib';
+        li.textContent = 'no completed sessions in this range';
+        listEl.appendChild(li);
+        return;
+      }
+      projects.forEach((p) => {
+        const li = document.createElement('li');
+        const dot = document.createElement('span');
+        dot.className = 'dot';
+        dot.style.background = (p.reverted_cost || 0) > 0 ? red() : green();
+        const label = document.createElement('span');
+        label.className = 'label';
+        label.textContent = p.project + ((p.reverted_count || 0) > 0 ? ' ↩' + p.reverted_count : '');
+        const val = document.createElement('span');
+        val.className = 'val';
+        val.textContent = (p.total_cost || 0) > 0 ? Math.round((p.yield || 0) * 100) + '%' : '—';
+        li.appendChild(dot);
+        li.appendChild(label);
+        li.appendChild(val);
+        listEl.appendChild(li);
+      });
+      function green() { return (getComputedStyle(document.documentElement).getPropertyValue('--ready') || '#34C759').trim(); }
+      function red() { return (getComputedStyle(document.documentElement).getPropertyValue('--pressure-high') || '#FF3B30').trim(); }
+    }
+
     function historyDownload(filename, mime, text) {
       const blob = new Blob([text], { type: mime });
       const url = URL.createObjectURL(blob);
@@ -3299,9 +3422,22 @@ import { isSummaryCollapsed, toggleSummaryCollapsed, anySummaryCollapsed, collap
     function exportHistoryCSV() {
       const d = historyState.data;
       if (!d) return;
-      const lines = ['bucket_start,project,value'];
-      for (const pt of (d.series || [])) {
-        lines.push([new Date(pt.ts * 1000).toISOString(), historyCsvCell(pt.project), pt.value.toFixed(6)].join(','));
+      let lines;
+      if (historyState.chart === 'yield') {
+        lines = ['project,productive_cost,reverted_cost,unknown_cost,total_cost,yield,reverted_count'];
+        for (const p of (d.projects || [])) {
+          lines.push([
+            historyCsvCell(p.project),
+            (p.productive_cost || 0).toFixed(6), (p.reverted_cost || 0).toFixed(6),
+            (p.unknown_cost || 0).toFixed(6), (p.total_cost || 0).toFixed(6),
+            (p.yield || 0).toFixed(6), String(p.reverted_count || 0),
+          ].join(','));
+        }
+      } else {
+        lines = ['bucket_start,project,value'];
+        for (const pt of (d.series || [])) {
+          lines.push([new Date(pt.ts * 1000).toISOString(), historyCsvCell(pt.project), pt.value.toFixed(6)].join(','));
+        }
       }
       historyDownload('irrlicht-history-' + historyState.range + '-' + historyState.chart + '.csv', 'text/csv;charset=utf-8', lines.join('\n') + '\n');
     }

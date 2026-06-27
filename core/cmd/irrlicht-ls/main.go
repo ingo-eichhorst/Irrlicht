@@ -23,13 +23,15 @@ type filterSpec struct {
 
 func main() {
 	var (
-		watch  bool
-		format string
-		f      filterSpec
+		watch     bool
+		format    string
+		showYield bool
+		f         filterSpec
 	)
 	flag.BoolVar(&watch, "w", false, "watch mode — refresh every second")
 	flag.BoolVar(&watch, "watch", false, "watch mode — refresh every second")
 	flag.StringVar(&format, "format", "text", `output format: "text" or "json"`)
+	flag.BoolVar(&showYield, "yield", false, "show yield state and revert SHA (7-char) columns")
 	flag.StringVar(&f.idPrefix, "id", "", "filter: session ID prefix")
 	flag.StringVar(&f.state, "state", "", "filter: session state (working|waiting|ready)")
 	flag.StringVar(&f.project, "project", "", "filter: project name substring")
@@ -83,7 +85,7 @@ func main() {
 		} else if len(groups) == 0 {
 			fmt.Println("no sessions")
 		} else {
-			renderGroups(os.Stdout, groups, useColor)
+			renderGroups(os.Stdout, groups, useColor, showYield)
 		}
 
 		if !watch {

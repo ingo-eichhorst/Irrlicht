@@ -73,6 +73,10 @@ func (d *SessionDetector) onRemovedLocked(state *session.SessionState, ev agent.
 	state.Confidence = "high"
 	state.LastEvent = "transcript_removed"
 
+	// Stamp the session's HEAD commit + yield verdict now that its work is
+	// done, so the yield sweep can later correlate reverts back to it (#373).
+	d.enricher.CaptureYieldOnReady(state)
+
 	d.record(lifecycle.Event{Kind: lifecycle.KindStateTransition, SessionID: ev.SessionID, PrevState: prevState, NewState: session.StateReady, Reason: "transcript removed"})
 
 	if err := d.repo.Save(state); err != nil {

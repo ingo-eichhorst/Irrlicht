@@ -693,6 +693,7 @@ struct SessionState: Identifiable, Codable {
     let launcher: Launcher?     // terminal/IDE that spawned this session (optional)
     let controllable: Bool?     // daemon would accept input/interrupt now (backchannel, #724)
     let background: BackgroundAgent? // detached background agent marker (#744)
+    let yieldState: String?     // yield verdict: "productive"/"reverted"/"unknown" (#373)
 
     // For duplicate handling (not stored in JSON, computed by SessionManager)
     var duplicateIndex: Int? = nil
@@ -735,6 +736,7 @@ struct SessionState: Identifiable, Codable {
         case launcher
         case controllable
         case background
+        case yieldState = "yield_state"
     }
     
     // Custom decoder to handle multiple date formats and missing fields
@@ -771,6 +773,7 @@ struct SessionState: Identifiable, Codable {
         launcher = try container.decodeIfPresent(Launcher.self, forKey: .launcher)
         controllable = try container.decodeIfPresent(Bool.self, forKey: .controllable)
         background = try container.decodeIfPresent(BackgroundAgent.self, forKey: .background)
+        yieldState = try container.decodeIfPresent(String.self, forKey: .yieldState)
 
         // Handle firstSeen date (unix timestamp format)
         if let timestamp = try? container.decode(Double.self, forKey: .firstSeen) {
@@ -816,7 +819,7 @@ struct SessionState: Identifiable, Codable {
     }
     
     // Regular initializer for testing/preview purposes
-    init(id: String, state: State, model: String, cwd: String, transcriptPath: String? = nil, gitBranch: String? = nil, projectName: String? = nil, firstSeen: Date, updatedAt: Date, eventCount: Int? = nil, lastEvent: String? = nil, metrics: SessionMetrics? = nil, pid: Int? = nil, parentSessionId: String? = nil, subagents: SubagentSummary? = nil, adapter: String? = nil, daemonVersion: String? = nil, role: String? = nil, roleIcon: String? = nil, roleDescription: String? = nil, workerName: String? = nil, workerID: String? = nil, children: [SessionState]? = nil, launcher: Launcher? = nil, controllable: Bool? = nil, background: BackgroundAgent? = nil) {
+    init(id: String, state: State, model: String, cwd: String, transcriptPath: String? = nil, gitBranch: String? = nil, projectName: String? = nil, firstSeen: Date, updatedAt: Date, eventCount: Int? = nil, lastEvent: String? = nil, metrics: SessionMetrics? = nil, pid: Int? = nil, parentSessionId: String? = nil, subagents: SubagentSummary? = nil, adapter: String? = nil, daemonVersion: String? = nil, role: String? = nil, roleIcon: String? = nil, roleDescription: String? = nil, workerName: String? = nil, workerID: String? = nil, children: [SessionState]? = nil, launcher: Launcher? = nil, controllable: Bool? = nil, background: BackgroundAgent? = nil, yieldState: String? = nil) {
         self.id = id
         self.state = state
         self.model = model
@@ -843,6 +846,7 @@ struct SessionState: Identifiable, Codable {
         self.launcher = launcher
         self.controllable = controllable
         self.background = background
+        self.yieldState = yieldState
     }
 
     enum State: String, CaseIterable, Codable {
@@ -923,7 +927,8 @@ struct SessionState: Identifiable, Codable {
             adapter: adapter, daemonVersion: daemonVersion,
             role: role, roleIcon: roleIcon, roleDescription: roleDescription,
             workerName: workerName, workerID: workerID,
-            children: newChildren, launcher: launcher
+            children: newChildren, launcher: launcher,
+            yieldState: yieldState
         )
         copy.duplicateIndex = duplicateIndex
         copy.daemonID = daemonID
@@ -943,7 +948,8 @@ struct SessionState: Identifiable, Codable {
             adapter: adapter, daemonVersion: daemonVersion,
             role: role, roleIcon: roleIcon, roleDescription: roleDescription,
             workerName: workerName, workerID: workerID,
-            children: children, launcher: launcher
+            children: children, launcher: launcher,
+            yieldState: yieldState
         )
         copy.duplicateIndex = duplicateIndex
         copy.daemonID = daemonID

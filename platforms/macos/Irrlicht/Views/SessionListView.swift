@@ -1178,6 +1178,15 @@ struct SessionRowView: View {
 
     private var displayMode: DisplayMode { DisplayMode(rawValue: displayModeRaw) ?? .context }
 
+    /// ↩ shown next to cost when the session's work was later git-reverted (#373).
+    @ViewBuilder private var yieldRevertGlyph: some View {
+        if session.yieldState == "reverted" {
+            Image(systemName: "arrow.uturn.left")
+                .font(.system(size: 8, weight: .bold))
+                .foregroundColor(IrrColors.pressureHigh)
+        }
+    }
+
     private var contextThreshold: ContextPressureThreshold {
         ContextPressureThreshold(
             value: contextThresholdValue > 0 ? contextThresholdValue : ContextPressureThreshold.defaultValue,
@@ -1371,11 +1380,14 @@ struct SessionRowView: View {
                             .frame(width: 100, height: 13)
                             .tooltip("Context window usage")
                         if showCostDisplay {
-                            Text(metrics.formattedCost ?? "")
-                                .font(.system(size: 9, weight: .medium, design: .monospaced))
-                                .foregroundColor(.secondary)
-                                .frame(width: 36, alignment: .leading)
-                                .tooltip("Estimated session cost")
+                            HStack(spacing: 1) {
+                                yieldRevertGlyph
+                                Text(metrics.formattedCost ?? "")
+                                    .font(.system(size: 9, weight: .medium, design: .monospaced))
+                                    .foregroundColor(.secondary)
+                            }
+                            .frame(width: 36, alignment: .leading)
+                            .tooltip(session.yieldState == "reverted" ? "Estimated cost — session work was reverted" : "Estimated session cost")
                         } else {
                             Text(metrics.formattedContextUtilization)
                                 .font(.system(size: 9, design: .monospaced))
@@ -1396,10 +1408,13 @@ struct SessionRowView: View {
                             .frame(width: 100, height: 13, alignment: .leading)
                             .tooltip("Token count — context window not known for \(session.shortModelName)")
                         if showCostDisplay {
-                            Text(metrics.formattedCost ?? "—")
-                                .font(.system(size: 9, weight: .medium, design: .monospaced))
-                                .foregroundColor(.secondary)
-                                .frame(width: 36, alignment: .leading)
+                            HStack(spacing: 1) {
+                                yieldRevertGlyph
+                                Text(metrics.formattedCost ?? "—")
+                                    .font(.system(size: 9, weight: .medium, design: .monospaced))
+                                    .foregroundColor(.secondary)
+                            }
+                            .frame(width: 36, alignment: .leading)
                         } else {
                             Text("—")
                                 .font(.system(size: 9, design: .monospaced))

@@ -616,6 +616,10 @@ func (d *SessionDetector) processActivityLocked(id agent.Identity, state *sessio
 				state.WaitingStartTime = &now
 			} else if newState == session.StateWorking {
 				state.WaitingStartTime = nil
+			} else if newState == session.StateReady {
+				// Stamp HEAD + yield verdict on the turn-done → ready edge so
+				// the yield sweep can correlate reverts back to it (#373).
+				d.enricher.CaptureYieldOnReady(state)
 			}
 		}
 

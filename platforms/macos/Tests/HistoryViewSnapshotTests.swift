@@ -176,6 +176,32 @@ final class HistoryViewSnapshotTests: XCTestCase {
         assertSnapshot(of: host(view, height: 320), as: .image)
     }
 
+    // MARK: Yield (#373)
+
+    /// Three projects: two with a productive/reverted split, one unknown-only
+    /// (non-git, no attributable spend). Exercises the headline ratio, the
+    /// unattributed line, the ↩ counts, and the split bars.
+    private func yieldFixture() -> HistoryYieldResponse {
+        HistoryYieldResponse(
+            range: "month",
+            productiveCost: 12.50,
+            revertedCost: 3.50,
+            unknownCost: 1.25,
+            totalCost: 16.00,
+            yieldRatio: 12.50 / 16.00,
+            projects: [
+                HistoryYieldProject(project: "irrlicht", productiveCost: 8.0, revertedCost: 2.0, unknownCost: 0, totalCost: 10.0, yieldRatio: 0.80, revertedCount: 2),
+                HistoryYieldProject(project: "dashboard", productiveCost: 4.5, revertedCost: 1.5, unknownCost: 0, totalCost: 6.0, yieldRatio: 0.75, revertedCount: 1),
+                HistoryYieldProject(project: "scratch", productiveCost: 0, revertedCost: 0, unknownCost: 1.25, totalCost: 0, yieldRatio: 0, revertedCount: 0),
+            ]
+        )
+    }
+
+    func testYield_Populated() {
+        let view = HistoryYieldContentView(data: yieldFixture(), range: .month)
+        assertSnapshot(of: host(view, height: 360), as: .image)
+    }
+
     // MARK: Quota projection
 
     /// 5h window, 60% used 2h in → over pace, projected to hit the cap before

@@ -715,6 +715,15 @@
       text-align: right;
     }
 
+    /* Yield revert marker (#373): ↩ next to cost when the session was reverted. */
+    .row-yield-revert {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--pressure-high, #FF3B30);
+      flex-shrink: 0;
+      cursor: default;
+    }
+
     .row-model {
       font-size: 10px;
       color: var(--muted);
@@ -952,6 +961,7 @@
     body.view-history .row-ctx-bar { display: none !important; }
     body.view-history .row-ctx-pct { display: none !important; }
     body.view-history .row-cost    { display: none !important; }
+    body.view-history .row-yield-revert { display: none !important; }
     body.view-history .row-model   { display: none !important; }
     body.view-history .row-history { display: block !important; }
 
@@ -961,6 +971,7 @@
          row-created chips (timestamps + ID are dev-only info, just like
          the macOS overlay). */
     body.no-cost .row-cost { display: none !important; }
+    body.no-cost .row-yield-revert { display: none !important; }
     body:not(.debug-mode) .row-id      { display: none !important; }
     body:not(.debug-mode) .row-elapsed { display: none !important; }
     body:not(.debug-mode) .row-created { display: none !important; }

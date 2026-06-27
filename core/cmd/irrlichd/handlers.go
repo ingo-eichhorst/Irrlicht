@@ -290,11 +290,47 @@ type historyResponse struct {
 	Scope           string               `json:"scope,omitempty"`       // active drilldown filter "field:value"
 }
 
+// historyYieldProject is one project's productive/reverted/unknown cost split
+// and the resulting yield ratio (#373).
+type historyYieldProject struct {
+	Project        string  `json:"project"`
+	ProductiveCost float64 `json:"productive_cost"`
+	RevertedCost   float64 `json:"reverted_cost"`
+	UnknownCost    float64 `json:"unknown_cost"`
+	TotalCost      float64 `json:"total_cost"` // productive + reverted (yield denominator)
+	Yield          float64 `json:"yield"`      // productive / total; 0 when total == 0
+	RevertedCount  int     `json:"reverted_count"`
+}
+
+// historyYieldResponse is the chart=yield payload (#373): per-project productive
+// vs reverted spend and the headline ratio over the selected window. Unlike the
+// cost chart it is a per-project aggregate, not a time series — it reads
+// completed (ready) sessions directly, since yield is a per-session property.
+type historyYieldResponse struct {
+	Range          string                `json:"range"`
+	Chart          string                `json:"chart"`
+	Group          string                `json:"group"`
+	Start          int64                 `json:"start"`
+	End            int64                 `json:"end"`
+	ProductiveCost float64               `json:"productive_cost"`
+	RevertedCost   float64               `json:"reverted_cost"`
+	UnknownCost    float64               `json:"unknown_cost"`
+	TotalCost      float64               `json:"total_cost"`
+	Yield          float64               `json:"yield"`
+	Projects       []historyYieldProject `json:"projects"`
+}
+
+// historySessionLister is the narrow read the yield aggregation needs over the
+// session repository.
+type historySessionLister interface {
+	ListAll() ([]*session.SessionState, error)
+}
+
 // handleGetHistory serves GET /api/v1/history?range=&chart=&group=&start=&end=
 // &bucket=&forecast=&forecast_buckets=. Range is a trailing window
 // (day|week|month|year), a calendar shorthand (this-month), or an explicit
 // start&end (unix seconds). Bucket granularity is downsampled at read time.
-func handleGetHistory(tracker outbound.CostTracker) http.HandlerFunc {
+func handleGetHistory(tracker outbound.CostTracker, sessions historySessionLister) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 
@@ -305,6 +341,8 @@ func handleGetHistory(tracker outbound.CostTracker) http.HandlerFunc {
 		switch chart {
 		case "cost", "tokens", "models", "providers":
 			// implemented (Phase 2)
+		case "yield":
+			// implemented (#373) — handled after range resolution below
 		case "agents":
 			writeHistoryNotImplemented(w, "chart="+chart, 3)
 			return
@@ -348,6 +386,15 @@ func handleGetHistory(tracker outbound.CostTracker) http.HandlerFunc {
 			http.Error(w, "invalid range: use range=day|week|month|year|this-month or start&end (unix seconds)", http.StatusBadRequest)
 			return
 		}
+
+		// Yield is a per-project aggregate over completed sessions, not a cost
+		// time series — handle it before the cost-tracker path (#373).
+		if chart == "yield" {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(buildYieldResponse(rangeKey, group, start, end, sessions))
+			return
+		}
+
 		bucketSeconds := historyBucketSeconds(q, end-start)
 
 		var series *outbound.CostSeriesResult
@@ -547,6 +594,107 @@ func resolveUnknownBucket(s *outbound.CostSeriesResult) {
 			s.ByKey[historyUnknownLabel] = uSeries
 		}
 	}
+}
+
+// buildYieldResponse aggregates completed (ready) sessions into per-project
+// productive/reverted/unknown spend and the resulting yield ratio over
+// [start,end) (#373). Sessions are windowed by UpdatedAt — their completion
+// time — so a revert detected later never moves a session into a newer window.
+// Only sessions that have gone ready (non-empty YieldState) are counted; spend
+// from sessions still in flight is excluded. Unknown (non-git) spend is reported
+// separately and kept out of the ratio's denominator.
+func buildYieldResponse(rangeKey, group string, start, end int64, lister historySessionLister) historyYieldResponse {
+	resp := historyYieldResponse{
+		Range:    rangeKey,
+		Chart:    "yield",
+		Group:    group,
+		Start:    start,
+		End:      end,
+		Projects: []historyYieldProject{},
+	}
+	if lister == nil {
+		return resp
+	}
+	sessions, err := lister.ListAll()
+	if err != nil {
+		return resp
+	}
+
+	type agg struct {
+		productive, reverted, unknown float64
+		revertedCount                 int
+	}
+	byProject := make(map[string]*agg)
+	for _, st := range sessions {
+		if st == nil || st.YieldState == "" {
+			continue // not a completed, ready-captured session
+		}
+		if st.UpdatedAt < start || st.UpdatedAt >= end {
+			continue
+		}
+		cost := 0.0
+		if st.Metrics != nil {
+			cost = st.Metrics.EstimatedCostUSD
+		}
+		project := st.ProjectName
+		if project == "" {
+			project = "unknown"
+		}
+		a := byProject[project]
+		if a == nil {
+			a = &agg{}
+			byProject[project] = a
+		}
+		switch st.YieldState {
+		case session.YieldReverted:
+			a.reverted += cost
+			a.revertedCount++
+		case session.YieldProductive:
+			a.productive += cost
+		default: // YieldUnknown
+			a.unknown += cost
+		}
+	}
+
+	// Project order: total (productive+reverted) desc, then name.
+	names := make([]string, 0, len(byProject))
+	for p := range byProject {
+		names = append(names, p)
+	}
+	sort.Slice(names, func(i, j int) bool {
+		ti := byProject[names[i]].productive + byProject[names[i]].reverted
+		tj := byProject[names[j]].productive + byProject[names[j]].reverted
+		if ti != tj {
+			return ti > tj
+		}
+		return names[i] < names[j]
+	})
+
+	for _, p := range names {
+		a := byProject[p]
+		total := a.productive + a.reverted
+		y := 0.0
+		if total > 0 {
+			y = a.productive / total
+		}
+		resp.Projects = append(resp.Projects, historyYieldProject{
+			Project:        p,
+			ProductiveCost: a.productive,
+			RevertedCost:   a.reverted,
+			UnknownCost:    a.unknown,
+			TotalCost:      total,
+			Yield:          y,
+			RevertedCount:  a.revertedCount,
+		})
+		resp.ProductiveCost += a.productive
+		resp.RevertedCost += a.reverted
+		resp.UnknownCost += a.unknown
+	}
+	resp.TotalCost = resp.ProductiveCost + resp.RevertedCost
+	if resp.TotalCost > 0 {
+		resp.Yield = resp.ProductiveCost / resp.TotalCost
+	}
+	return resp
 }
 
 // historyForecastEnabled defaults to on; ?forecast=false|0 disables it.
