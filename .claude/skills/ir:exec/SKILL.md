@@ -55,15 +55,18 @@ typed. If none is resolvable, ask for an issue number before continuing.
      file or function names here (those belong to the technical Approach below).
    - **Visual** — pick exactly one archetype (see next bullet), or delete all three.
    - **Approach & Design (technical)** — the file/function-level direction (`REPEAT:approach`).
-   - **Steps** — `REPEAT:step`; card = title + one-line summary + file chips; the deep
-     rationale/edge-cases go in the step's `<template>` (click-to-reveal).
+   - **Steps** — `REPEAT:step`; card = title + one-line summary + one or more `chip`
+     spans for the file(s) it touches; the deep rationale/edge-cases go in the step's
+     `<template>` (click-to-reveal).
    - **Files Touched** — `REPEAT:file`, `badge` class `new`|`mod`|`del`; per-file "what
      changes and why" in its `<template>`.
    - **Risks & Unknowns** — `REPEAT:risk` (native `<details>`).
 
    **Fill primitives:** replace every `{{TOKEN}}`; duplicate each
    `REPEAT:x`…`/REPEAT:x` region per item and delete the leftover example; delete any
-   unused `OPTIONAL:x` region whole.
+   unused `OPTIONAL:x` region whole. Then **strip every `REPEAT:`/`OPTIONAL:` marker
+   comment** from the file — they are scaffolding, not output (a kept marker is
+   harmless but clutters the source).
 
    **Pick ONE visual archetype** matching the dominant kind of work (delete the others;
    delete all three if no visual adds signal — don't ship an empty box):
@@ -73,15 +76,22 @@ typed. If none is resolvable, ask for an issue number before continuing.
    | Data processing | `OPTIONAL:dataflow` | node-and-arrow flow; each node `data-detail` reveals its transform |
    | Vertical slice / many components | `OPTIONAL:components` | impact-map nodes, `data-impact` = `changed`\|`adjacent`\|`untouched` — show the blast radius AND what's left alone |
 
-   **UI screenshot policy** (the `ui` archetype embeds the *real* current UI):
-   - **Web UI (a URL exists):** use the `claude-in-chrome` tools to open the running UI,
-     screenshot the relevant viewport (not a giant full-page capture — keep the data-URI
-     reasonable), and embed it as the "Today" `<img src="data:image/png;base64,…">`.
-   - **Non-URL UI (macOS app, CLI):** there's no reliable capture at plan time — **ask
-     the user for a screenshot**, or hand-model the current screen as SVG from code/asset
-     inspection. **Never invent a UI you haven't seen.**
+   **UI screenshot policy** (the `ui` archetype embeds the *real* current UI). Obtain the
+   capture **before** rendering — never ship the page with an unfilled
+   `{{UI_SCREENSHOT_DATA_URI}}`:
+   - **Web UI (a URL exists):** use the `claude-in-chrome` tools to open the running UI
+     and screenshot the relevant viewport (not a giant full-page capture). The capture
+     comes back as a file path — **base64-encode it** and embed as the "Today"
+     `<img src="data:image/png;base64,…">`. Never put a `file://`, `http(s)://`, or raw
+     path in `src` (that is an external/broken reference, not self-contained).
+   - **Non-URL UI (macOS app, CLI) or no clean capture:** there's no reliable capture at
+     plan time — either **ask the user for a screenshot** (and wait for it before
+     rendering), **hand-model the current screen as SVG** in place of the `<img>`, or
+     **delete the `OPTIONAL:ui` block**. **Never invent a UI you haven't seen**, and never
+     render with the image token still unfilled.
 
-   **Interactivity:** to make anything click-to-reveal, give it `data-detail="<id>"` and
+   **Interactivity:** to make anything click-to-reveal, give it `data-detail="<id>"`
+   (the id must be **unique within the page**) and
    put the detail in a sibling `<template data-detail-body="<id>">`. **Do not write event
    handlers** — the template's inline engine handles it.
 
@@ -92,13 +102,15 @@ typed. If none is resolvable, ask for an issue number before continuing.
      are fine.
    - Never write a comment-close sequence inside a comment's text, and never write a
      closing `</template>` or `</script>` inside a detail body.
-   - Before presenting, verify **no `{{` and no `REPEAT:`/`OPTIONAL:` markers are left
-     behind** (the page also shows a warning banner at load time if any slip through).
+   - Before presenting, verify **no `{{TOKEN}}` is left behind** (the page also shows a
+     warning banner at load time if any slip through).
    - One visual archetype max; Steps ≤ 8–10.
-7. **Present the link and stop.** Give the user the `file:///tmp/ir-exec-plan-<N>.html`
-   link plus a 2–3 line summary, then **wait**. Do not edit a single file until the
-   user replies with approval. If they request changes, revise the plan + HTML and
-   re-present.
+7. **Present the link, then end your turn.** Give the user the
+   `file:///tmp/ir-exec-plan-<N>.html` link plus a 2–3 line summary, and **stop the
+   response there** — do not present the link and keep working in the same turn. The
+   next user message is the gate: treat only an explicit approval as go. An ambiguous or
+   partial reply ("looks good, but…") is a change request — revise the plan + HTML and
+   re-present. Do not edit a single implementation file until the user approves.
 
 ## Phase 4 — Implement (only after approval)
 

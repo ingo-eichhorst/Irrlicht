@@ -15,13 +15,16 @@
     4. OPTIONAL:x marker-comment regions may be deleted whole if unused. The visual
        section ships THREE archetypes (ui / dataflow / components): keep the ONE that
        fits the issue, delete the other two; delete all three if no visual helps.
-    5. To make anything click-to-reveal, give it data-detail="<id>" and put the detail
-       in a sibling <template data-detail-body="<id>">. Do NOT write event handlers —
-       the inline engine handles it.
-    6. NEVER edit the style block or the script engine — they are the design system.
+    5. To make anything click-to-reveal, give it data-detail="<id>" (the id must be
+       UNIQUE in the page) and put the detail in a sibling
+       <template data-detail-body="<id>">. Do NOT write event handlers — the inline
+       engine handles it.
+    6. STRIP every REPEAT:x / OPTIONAL:x marker comment from the final file — they are
+       scaffolding, not output. NEVER edit the style block or the script engine — they
+       are the design system.
     7. Never write a comment-close sequence inside a comment's text, and never write a
-       closing template or script tag inside a detail body. Leave no {{ or REPEAT:/
-       OPTIONAL: markers behind (a load-time banner warns if you do).
+       closing template or script tag inside a detail body. Leave no {{TOKEN}} behind
+       (a load-time banner warns if you do).
 
   Section order: header -> TL;DR -> High-level design -> Adaptive visual ->
   Approach (deep) -> Steps -> Files -> Risks -> Approval. The plan is
@@ -52,7 +55,7 @@
     --waiting-soft: rgba(255, 149, 0, 0.13);
     --ready-soft:   rgba(52, 199, 89, 0.13);
     --del-soft:     rgba(248, 113, 113, 0.13);
-    --accent: var(--working);
+    --accent-text: #d6cffb;   /* readable purple text on --working-soft fills */
     --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
     --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   }
@@ -81,15 +84,14 @@
     display: flex; align-items: center; gap: 10px;
   }
   h2::before { content: ""; width: 14px; height: 2px; background: var(--working); border-radius: 2px; }
-  .lede { font-size: 16px; color: var(--text-bright); margin: 0 0 12px; }
   p { margin: 0 0 12px; }
-  code { font-family: var(--mono); font-size: .88em; background: var(--surface-2); padding: 1px 6px; border-radius: 5px; color: #d6cffb; }
+  code { font-family: var(--mono); font-size: .88em; background: var(--surface-2); padding: 1px 6px; border-radius: 5px; color: var(--accent-text); }
 
   /* TL;DR — the most-read block */
   .tldr { background: linear-gradient(180deg, var(--working-soft), transparent); border: 1px solid var(--border); border-left: 3px solid var(--working); border-radius: 12px; padding: 18px 22px; }
   .tldr h2 { margin-bottom: 8px; color: var(--working); }
   .tldr h2::before { background: var(--working); }
-  .tldr .lede { margin: 0; font-size: 16.5px; line-height: 1.55; }
+  .tldr .lede { margin: 0; font-size: 16.5px; line-height: 1.55; color: var(--text-bright); }
 
   /* High-level design bullets */
   ul.approach { list-style: none; margin: 0; padding: 0; }
@@ -101,8 +103,8 @@
   .detail-panel { margin-top: 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 9px; padding: 12px 14px; font-size: 14px; color: var(--text); animation: fade .12s ease-out; }
   .detail-panel p { margin: 0 0 8px; } .detail-panel p:last-child { margin: 0; }
   @keyframes fade { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
-  .visual-detail-dock:empty { display: none; }
   .visual-detail-dock { margin-top: 12px; }
+  .visual-detail-dock:empty { display: none; }
 
   /* Adaptive visual — UI before/after */
   .ui-ba { display: flex; flex-wrap: wrap; gap: 16px; }
@@ -110,8 +112,9 @@
   .ui-panel figcaption { font-family: var(--mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--faint); margin: 0 0 8px; }
   .ui-shot { display: block; max-width: 100%; height: auto; border-radius: 7px; border: 1px solid var(--border-soft); }
   .ui-mock { display: block; width: 100%; height: auto; background: var(--bg); border-radius: 7px; }
-  .ui-mock rect, .ui-mock line { vector-effect: non-scaling-stroke; }
-  .ui-region-new { } .ui-region-new rect { fill: var(--ready-soft); stroke: var(--ready); stroke-width: 1.5; }
+  .ui-mock rect { vector-effect: non-scaling-stroke; }
+  .ui-frame { fill: none; stroke: var(--border); }   /* var() resolves in CSS, not in an SVG presentation attr */
+  .ui-region-new rect { fill: var(--ready-soft); stroke: var(--ready); stroke-width: 1.5; }
   .ui-region-new text { fill: var(--ready); font: 600 9px var(--mono); }
   [data-detail].detail-open { outline: 2px solid var(--working); outline-offset: 1px; }
 
@@ -119,13 +122,13 @@
   .diagram { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 22px; margin: 4px 0; overflow-x: auto; }
   .flow { display: flex; align-items: center; gap: 12px; min-width: max-content; }
   .node { background: var(--surface-2); border: 1px solid var(--border); border-radius: 9px; padding: 10px 14px; font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
-  .node.accent { border-color: var(--working); background: var(--working-soft); color: #d6cffb; }
+  .node.accent { border-color: var(--working); background: var(--working-soft); color: var(--accent-text); }
   .arrow { color: var(--faint); font-family: var(--mono); }
 
   /* Adaptive visual — component-impact map */
   .impact-map { display: flex; flex-wrap: wrap; gap: 8px; }
   .cnode { font-family: var(--mono); font-size: 12.5px; padding: 7px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); }
-  .cnode[data-impact="changed"]   { border-color: var(--working); background: var(--working-soft); color: #d6cffb; }
+  .cnode[data-impact="changed"]   { border-color: var(--working); background: var(--working-soft); color: var(--accent-text); }
   .cnode[data-impact="adjacent"]  { border-color: var(--waiting); background: var(--waiting-soft); color: #ffd9a8; }
   .cnode[data-impact="untouched"] { color: var(--faint); opacity: .7; }
   .impact-legend { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 12px; font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
@@ -168,7 +171,7 @@
   /* Approval footer */
   .approval { background: var(--working-soft); border: 1px solid var(--working); border-radius: 12px; padding: 18px 22px; }
   .approval h2 { color: var(--working); margin-bottom: 8px; } .approval h2::before { background: var(--working); }
-  .approval p { color: #d6cffb; margin: 0; }
+  .approval p { color: var(--accent-text); margin: 0; }
 
   /* Unfilled-template warning banner (shown only by the engine guardrail) */
   .fill-warning { position: fixed; top: 0; left: 0; right: 0; z-index: 9999; background: var(--waiting); color: #1a1205; font-family: var(--mono); font-size: 12.5px; text-align: center; padding: 7px 12px; font-weight: 600; }
@@ -219,7 +222,7 @@
       <figure class="ui-panel">
         <figcaption>Proposed</figcaption>
         <svg class="ui-mock" viewBox="0 0 320 200" role="img" aria-label="proposed UI">
-          <rect x="6" y="6" width="308" height="188" rx="6" fill="none" stroke="var(--border)"/>
+          <rect class="ui-frame" x="6" y="6" width="308" height="188" rx="6"/>
           <g data-detail="ui-1" class="ui-region-new">
             <rect x="16" y="60" width="288" height="120" rx="5"/>
             <text x="26" y="80">{{UI_NEW_LABEL}}</text>
@@ -227,7 +230,6 @@
         </svg>
       </figure>
     </div>
-    <div class="visual-detail-dock" data-detail-dock></div>
     <template data-detail-body="ui-1"><p>{{UI_NEW_DETAIL}}</p></template>
     <!-- /OPTIONAL:ui -->
 
@@ -250,8 +252,8 @@
     <!-- OPTIONAL:components — Vertical slice across many components. data-impact is one
          of changed|adjacent|untouched; show the blast radius AND what's left alone. -->
     <div class="impact-map">
-      <!-- REPEAT:cnode -->
-      <span class="cnode" data-impact="{{IMPACT}}" data-detail="c-{{CID}}">{{COMPONENT}}</span>
+      <!-- REPEAT:cnode — id and detail authored together so the CID can't drift -->
+      <span class="cnode" data-impact="{{IMPACT}}" data-detail="c-{{CID}}">{{COMPONENT}}<template data-detail-body="c-{{CID}}"><p>{{COMPONENT_DETAIL}}</p></template></span>
       <!-- /REPEAT:cnode -->
     </div>
     <div class="impact-legend">
@@ -259,12 +261,11 @@
       <span><i class="lg-adjacent"></i>adjacent / at-risk</span>
       <span><i class="lg-untouched"></i>untouched</span>
     </div>
-    <div class="visual-detail-dock" data-detail-dock></div>
-    <!-- REPEAT:cdetail -->
-    <template data-detail-body="c-{{CID}}"><p>{{COMPONENT_DETAIL}}</p></template>
-    <!-- /REPEAT:cdetail -->
     <!-- /OPTIONAL:components -->
 
+    <!-- shared dock for click-to-reveal detail of any visual region (kept whichever
+         archetype survives) -->
+    <div class="visual-detail-dock" data-detail-dock></div>
   </section>
 
   <section>
@@ -334,10 +335,10 @@
   try {
     var main = document.querySelector(".wrap");           // scan content only, not this script
     var raw = main ? main.innerHTML : "";
-    if (/\{\{[A-Z_]+\}\}|REPEAT:|OPTIONAL:/.test(raw)) {
+    if (/\{\{[A-Z_]+\}\}/.test(raw)) {                     // leftover token; markers are stripped during fill
       var warn = document.createElement("div");
       warn.className = "fill-warning";
-      warn.textContent = "⚠ template not fully filled — a placeholder or marker was left behind";
+      warn.textContent = "⚠ template not fully filled — a placeholder was left behind";
       document.body.appendChild(warn);
     }
     var open = null;
@@ -349,30 +350,30 @@
       open = null;
     }
     document.addEventListener("click", function (e) {
-      var t = e.target;
-      if (t.closest && t.closest(".detail-panel")) return;          // clicks inside a panel never toggle
-      var trigger = t.closest ? t.closest("[data-detail]") : null;  // works for HTML and SVG elements
-      if (!trigger) return;
-      var id = trigger.getAttribute("data-detail");
-      var tpl = document.querySelector('template[data-detail-body="' + id + '"]');
-      if (!tpl) return;
-      var wasOpen = open && open.trigger === trigger;
-      close();
-      if (wasOpen) return;                                          // second click closes
-      var panel = document.createElement("div");
-      panel.className = "detail-panel";
-      panel.appendChild(tpl.content.cloneNode(true));
-      var isSvg = !!trigger.ownerSVGElement;
-      if (isSvg) {
-        var dock = null, n = trigger;
-        while (n && n.parentNode) { n = n.parentNode; if (n.querySelector) { dock = n.querySelector("[data-detail-dock]"); if (dock) break; } }
-        (dock || document.body).appendChild(panel);
-      } else {
-        trigger.appendChild(panel);
-      }
-      trigger.classList.add("detail-open");
-      trigger.setAttribute("aria-expanded", "true");
-      open = { trigger: trigger, panel: panel };
+      try {                                                         // runs after setup — guard so a bad fill can't break clicks
+        var t = e.target;
+        if (t.closest(".detail-panel")) return;                     // clicks inside a panel never toggle
+        var trigger = t.closest("[data-detail]");                   // closest works on HTML and SVG elements
+        if (!trigger) return;
+        var id = trigger.getAttribute("data-detail"), tpl = null;
+        var tpls = document.querySelectorAll("template[data-detail-body]"); // match by value — no selector injection
+        for (var i = 0; i < tpls.length; i++) { if (tpls[i].getAttribute("data-detail-body") === id) { tpl = tpls[i]; break; } }
+        if (!tpl) return;
+        var wasOpen = open && open.trigger === trigger;
+        close();
+        if (wasOpen) return;                                        // second click closes
+        var panel = document.createElement("div");
+        panel.className = "detail-panel";
+        panel.appendChild(tpl.content.cloneNode(true));
+        // Render in the trigger's OWN <section> dock if it has one (the visual archetypes);
+        // otherwise expand inline inside the trigger (steps, file rows). SVG with no dock → body.
+        var sec = trigger.closest("section");
+        var dock = sec ? sec.querySelector("[data-detail-dock]") : null;
+        (dock || (trigger.ownerSVGElement ? document.body : trigger)).appendChild(panel);
+        trigger.classList.add("detail-open");
+        trigger.setAttribute("aria-expanded", "true");
+        open = { trigger: trigger, panel: panel };
+      } catch (err) { /* a malformed id or unexpected DOM must never break the page */ }
     });
     document.addEventListener("keydown", function (e) { if (e.key === "Escape") close(); });
   } catch (err) { /* a partial fill must never break the page */ }
