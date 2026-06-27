@@ -408,7 +408,24 @@ func TestEnsureTaskSummaryBlock_CreatesFileIfAbsent(t *testing.T) {
 	}
 }
 
-func TestApplyInstructionBlocks_InstallsBothAndCoexist(t *testing.T) {
+func TestEnsureTaskQuestionBlock_CreatesFileIfAbsent(t *testing.T) {
+	home := withTempHome(t)
+	modified, err := EnsureTaskQuestionBlockInstalled()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !modified {
+		t.Fatal("expected modified=true on first install")
+	}
+	content := readFileString(t, memoryPathFor(home))
+	for _, want := range []string{taskQuestionBeginSentinel, taskQuestionEndSentinel, `"marker":"irrlicht-question"`} {
+		if !strings.Contains(content, want) {
+			t.Errorf("installed file missing %q", want)
+		}
+	}
+}
+
+func TestApplyInstructionBlocks_InstallsAllAndCoexist(t *testing.T) {
 	home := withTempHome(t)
 	if err := applyInstructionBlocks(); err != nil {
 		t.Fatal(err)
@@ -417,6 +434,7 @@ func TestApplyInstructionBlocks_InstallsBothAndCoexist(t *testing.T) {
 	for _, want := range []string{
 		taskEtaBeginSentinel, taskEtaEndSentinel, `"marker":"irrlicht-eta"`,
 		taskSummaryBeginSentinel, taskSummaryEndSentinel, `"marker":"irrlicht-summary"`,
+		taskQuestionBeginSentinel, taskQuestionEndSentinel, `"marker":"irrlicht-question"`,
 	} {
 		if !strings.Contains(content, want) {
 			t.Errorf("file missing %q after applyInstructionBlocks", want)

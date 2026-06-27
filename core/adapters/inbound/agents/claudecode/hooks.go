@@ -87,9 +87,9 @@ type MarkerTarget interface {
 // body would not unmarshal. Tool inputs are small, shallow objects — the walk
 // recurses into nested objects/arrays for completeness. Latest valid of each
 // wins, matching the transcript scan.
-func scanToolInput(raw json.RawMessage, observedAt time.Time) (*tailer.TaskEstimate, *tailer.TaskSummary) {
+func scanToolInput(raw json.RawMessage, observedAt time.Time) (*tailer.TaskEstimate, *tailer.TaskSummary, *tailer.TaskQuestion) {
 	if len(raw) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	// Fast reject before decoding. The comment opener survives JSON string
 	// escaping (a backslash-quote doesn't touch "<!--"), but HTML-escaping
@@ -98,24 +98,25 @@ func scanToolInput(raw json.RawMessage, observedAt time.Time) (*tailer.TaskEstim
 	// raw-string needle below is the escaped opener byte-for-byte.
 	htmlEscapedOpener := `\u003c!--`
 	if s := string(raw); !strings.Contains(s, "<!--") && !strings.Contains(s, htmlEscapedOpener) {
-		return nil, nil
+		return nil, nil, nil
 	}
 	var decoded interface{}
 	if err := json.Unmarshal(raw, &decoded); err != nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	return scanValueForMarkers(decoded, observedAt)
 }
 
 // scanValueForMarkers walks a decoded JSON value, scanning every string for
-// task-estimate and task-summary markers; latest valid of each wins. Shared by
-// the PostToolUse hook (scanToolInput) and the transcript parser so a marker
-// emitted inside a tool input — e.g. the Bash `description` carrier (#617) — is
-// found by both the live hook and the transcript/replay path. The per-string
-// fast-reject lives inside the Scan* functions.
-func scanValueForMarkers(v interface{}, observedAt time.Time) (*tailer.TaskEstimate, *tailer.TaskSummary) {
+// task-estimate, task-summary and task-question markers; latest valid of each
+// wins. Shared by the PostToolUse hook (scanToolInput) and the transcript
+// parser so a marker emitted inside a tool input — e.g. the Bash `description`
+// carrier (#617) — is found by both the live hook and the transcript/replay
+// path. The per-string fast-reject lives inside the Scan* functions.
+func scanValueForMarkers(v interface{}, observedAt time.Time) (*tailer.TaskEstimate, *tailer.TaskSummary, *tailer.TaskQuestion) {
 	var est *tailer.TaskEstimate
 	var sum *tailer.TaskSummary
+	var q *tailer.TaskQuestion
 	var walk func(v interface{})
 	walk = func(v interface{}) {
 		switch val := v.(type) {
@@ -125,6 +126,9 @@ func scanValueForMarkers(v interface{}, observedAt time.Time) (*tailer.TaskEstim
 			}
 			if found := tailer.ScanTaskSummary(val, observedAt); found != nil {
 				sum = found
+			}
+			if found := tailer.ScanTaskQuestion(val, observedAt); found != nil {
+				q = found
 			}
 		case map[string]interface{}:
 			for _, child := range val {
@@ -137,7 +141,7 @@ func scanValueForMarkers(v interface{}, observedAt time.Time) (*tailer.TaskEstim
 		}
 	}
 	walk(v)
-	return est, sum
+	return est, sum, q
 }
 
 // ConsentGate reports whether the user has granted a permission (issue
@@ -232,7 +236,11 @@ func NewHookHandler(target HookTarget, markers MarkerTarget, gate ConsentGate, l
 			// Bash description), and the payload reaches the daemon even
 			// when the transcript drops the surrounding prose.
 			if markers != nil {
-				est, sum := scanToolInput(payload.ToolInput, time.Now())
+				// The question marker rides end-of-turn assistant prose, not a
+				// tool-input carrier, so the hook path (tool inputs only) drops it
+				// (#759): the transcript text-block scan delivers it, and the
+				// deterministic compactor covers the no-marker case regardless.
+				est, sum, _ := scanToolInput(payload.ToolInput, time.Now())
 				if est != nil {
 					log.LogInfo("hook-receiver", sessionID,
 						fmt.Sprintf("task-estimate marker via %s tool input: %d/%d", payload.ToolName, est.CompletedRounds, est.TotalRounds))

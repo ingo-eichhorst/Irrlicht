@@ -226,6 +226,12 @@ type ParsedEvent struct {
 	// recent one across passes.
 	TaskSummary *TaskSummary
 
+	// TaskQuestion, when non-nil, is the agent's terse one-line version of the
+	// question it is currently blocked on, parsed from an in-band HTML-comment
+	// marker (issue #759). Latest non-empty marker wins; the tailer keeps the
+	// most recent one across passes and clears it on a real user message.
+	TaskQuestion *TaskQuestion
+
 	// UserText is the prose of a genuine user prompt on this event (not a
 	// tool result). The tailer captures the FIRST non-empty one as the
 	// heuristic-fallback task summary (issue #738). Adapters that don't set
@@ -287,6 +293,21 @@ type TaskEstimate struct {
 // "what is this session about" that the UI surfaces in both the waiting and
 // ready states. Wall-clock independent, so it survives replay.
 type TaskSummary struct {
+	Text string
+	// ObservedAt is the unix-seconds timestamp of the transcript event the
+	// marker appeared in (replay-deterministic), used for latest-wins.
+	ObservedAt int64
+}
+
+// TaskQuestion mirrors the agent's terse one-line question parsed from an
+// in-band marker like
+//
+//	<!-- {"marker":"irrlicht-question","question":"Run the migration now?"} -->
+//
+// It is the question-state companion to TaskSummary (issue #759): the preferred
+// source for the surfaced waiting-state headline when the agent supplies one.
+// Wall-clock independent, so it survives replay.
+type TaskQuestion struct {
 	Text string
 	// ObservedAt is the unix-seconds timestamp of the transcript event the
 	// marker appeared in (replay-deterministic), used for latest-wins.
@@ -450,6 +471,10 @@ type LedgerState struct {
 	// before the next marker/message arrives. A reset stores a nil summary.
 	LastTaskSummary *TaskSummary `json:"last_task_summary,omitempty"`
 	FirstUserText   string       `json:"first_user_text,omitempty"`
+	// LastTaskQuestion persists the agent's task-question marker (issue #759)
+	// so a daemon restart keeps surfacing the waiting headline before the next
+	// marker/message arrives. A reset stores nil.
+	LastTaskQuestion *TaskQuestion `json:"last_task_question,omitempty"`
 	// ModelName is the last observed model for the session. Persisted so that
 	// applyContribution's fallback (used when a contribution event carries no
 	// model — codex token_count) still routes to the right pricing bucket

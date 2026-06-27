@@ -1033,7 +1033,7 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": true,
-      "last_assistant_text_head": "Yep — what do you want to do with **pi**?"
+      "last_assistant_text_head": "Yep — what do you want to do with **pi**?\n\nI can help with setup, config, skil…"
     },
     {
       "index": 69,

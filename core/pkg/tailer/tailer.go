@@ -225,6 +225,14 @@ type SessionMetrics struct {
 	// as a daemon-side heuristic fallback for the surfaced task summary when
 	// no marker is present (issue #738) — e.g. agents that don't emit one.
 	FirstUserText string `json:"first_user_text,omitempty"`
+
+	// TaskQuestion is the most recent agent-emitted task-question marker
+	// (issue #759) — the terse one-line version of the question the agent is
+	// blocked on. Sporadic like TaskSummary; the last one seen persists across
+	// passes and is cleared on a real user message. Nil when the session never
+	// emitted a question marker; the surfaced waiting headline then falls back
+	// to compacting the raw last-assistant text.
+	TaskQuestion *TaskQuestion `json:"task_question,omitempty"`
 }
 
 // TranscriptTailer monitors transcript files and computes metrics.
@@ -335,6 +343,11 @@ type TranscriptTailer struct {
 	// once and never overwritten — the heuristic fallback for the surfaced
 	// task summary when no marker is present (issue #738).
 	firstUserText string
+
+	// lastTaskQuestion holds the most recent agent-emitted task-question marker
+	// (issue #759). Sporadic like lastTaskSummary — the last one seen persists
+	// across markerless passes; cleared on a real user message.
+	lastTaskQuestion *TaskQuestion
 
 	// tasks accumulates the session's task list from TaskCreate / TaskUpdate
 	// tool_use events parsed by the Claude Code adapter.
@@ -465,6 +478,7 @@ func (t *TranscriptTailer) GetLedgerState() LedgerState {
 	s.FirstTaskEstimate = t.firstTaskEstimate
 	s.LastTaskSummary = t.lastTaskSummary
 	s.FirstUserText = t.firstUserText
+	s.LastTaskQuestion = t.lastTaskQuestion
 	return s
 }
 
@@ -540,6 +554,7 @@ func (t *TranscriptTailer) SetLedgerState(s LedgerState) {
 	t.firstTaskEstimate = s.FirstTaskEstimate
 	t.lastTaskSummary = s.LastTaskSummary
 	t.firstUserText = s.FirstUserText
+	t.lastTaskQuestion = s.LastTaskQuestion
 }
 
 // TailAndProcess reads new transcript content from the last offset (or from the
@@ -1102,6 +1117,9 @@ func (t *TranscriptTailer) processParsedEvent(parsed *ParsedEvent, sawUserBlocki
 	if parsed.TaskSummary != nil {
 		t.applyTaskSummary(parsed.TaskSummary)
 	}
+	if parsed.TaskQuestion != nil {
+		t.applyTaskQuestion(parsed.TaskQuestion)
+	}
 	// Capture the first user prompt once as the heuristic-fallback summary
 	// (issue #738) — never overwritten, so it describes what the session was
 	// originally about even after many turns.
@@ -1121,6 +1139,9 @@ func (t *TranscriptTailer) processParsedEvent(parsed *ParsedEvent, sawUserBlocki
 		// The summary describes the now-superseded task; clear it so the next
 		// task re-anchors (the agent re-emits, or the heuristic takes over).
 		t.lastTaskSummary = nil
+		// The question was answered by this very user message — clear it so the
+		// next waiting turn re-derives from the new last-assistant text.
+		t.lastTaskQuestion = nil
 	}
 
 	t.addMessageEvent(MessageEvent{
@@ -1183,6 +1204,20 @@ func (t *TranscriptTailer) applyTaskSummary(s *TaskSummary) {
 // text blocks on claude ≥2.1.162. Caller holds the per-tailer lock.
 func (t *TranscriptTailer) IngestTaskSummary(s *TaskSummary) {
 	t.applyTaskSummary(s)
+}
+
+// applyTaskQuestion keeps the latest task-question marker (issue #759). A
+// question observed BEFORE the current latest is dropped so an out-of-order
+// delivery can't regress a fresher marker. The user-message reset stays in
+// processParsedEvent: it is transcript-line-driven.
+func (t *TranscriptTailer) applyTaskQuestion(q *TaskQuestion) {
+	if q == nil || q.Text == "" {
+		return
+	}
+	if t.lastTaskQuestion != nil && q.ObservedAt < t.lastTaskQuestion.ObservedAt {
+		return
+	}
+	t.lastTaskQuestion = q
 }
 
 // PurgeBackgroundProcs drops the tracked background processes whose output

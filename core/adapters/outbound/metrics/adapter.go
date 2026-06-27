@@ -9,6 +9,7 @@ import (
 	"irrlicht/core/application/replayengine"
 	"irrlicht/core/domain/session"
 	"irrlicht/core/pkg/tailer"
+	"irrlicht/core/ports/outbound"
 )
 
 // lockedTailer wraps a TranscriptTailer with its own mutex so that
@@ -33,6 +34,10 @@ type Adapter struct {
 	subagents        map[string]agents.SubagentCounter
 	metricsProviders map[string]agents.MetricsProvider
 	fallbackName     string // adapter name to use when the requested name is unknown
+	// converter performs the tailer→domain conversion, including the one-line
+	// intent/question headline compaction (issue #759). Built once from the
+	// Registry's compactor; nil compactor → identity headlines.
+	converter *replayengine.MetricsConverter
 }
 
 // Registry holds the per-adapter behaviour the metrics adapter dispatches
@@ -49,6 +54,10 @@ type Registry struct {
 	// fallback factory, and zero ambiguity if Parsers["claude-code"] is
 	// ever swapped.
 	FallbackName string
+	// Compactor produces the one-line intent/question headlines (issue #759).
+	// Nil means identity (headlines carry the full text) — what existing tests
+	// that build a bare Registry get.
+	Compactor outbound.TextCompactor
 }
 
 // New returns a metrics Adapter configured from the given Registry.
@@ -59,6 +68,7 @@ func New(r Registry) *Adapter {
 		subagents:        r.SubagentCounters,
 		metricsProviders: r.MetricsProviders,
 		fallbackName:     r.FallbackName,
+		converter:        replayengine.NewMetricsConverter(r.Compactor),
 	}
 }
 
@@ -126,10 +136,10 @@ func (a *Adapter) ComputeMetrics(transcriptPath, adapter string) (*session.Sessi
 	if err != nil || m == nil {
 		return nil, nil //nolint:nilerr — absent transcript is not an error
 	}
-	// Plain field copies live in replayengine.TailerToDomain — the single
-	// tailer→domain conversion shared with the replay paths. Everything
-	// below is a live-only enrichment.
-	result := replayengine.TailerToDomain(m)
+	// Plain field copies + headline compaction live in the shared
+	// MetricsConverter — the single tailer→domain conversion shared with the
+	// replay paths. Everything below is a live-only enrichment.
+	result := a.converter.Convert(m)
 	result.OpenSubagents = a.countOpenSubagents(adapter, m)
 	if m.RateLimit != nil {
 		result.RateLimit = tailerRateLimitToDomain(m.RateLimit)

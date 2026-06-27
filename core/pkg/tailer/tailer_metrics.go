@@ -331,6 +331,10 @@ func (t *TranscriptTailer) computeMetrics() {
 	t.metrics.TaskSummary = t.lastTaskSummary
 	t.metrics.FirstUserText = t.firstUserText
 
+	// The task-question marker is surfaced the same way (issue #759) — last-seen
+	// one persists across empty/resume passes, cleared on a user message.
+	t.metrics.TaskQuestion = t.lastTaskQuestion
+
 	// Background-process count + output paths share the rate-limit block's
 	// "must run even on an empty pass" property: the open set can be
 	// rehydrated from the ledger after a daemon restart and must surface

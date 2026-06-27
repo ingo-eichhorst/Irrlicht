@@ -417,8 +417,13 @@ func scanMessageContent(raw map[string]interface{}, ev *tailer.ParsedEvent) stri
 			// must not feed it). ETA stays prose/hook-only, so apply only the
 			// summary.
 			if isAssistantEventType(ev.EventType) {
-				if _, s := scanValueForMarkers(block["input"], ev.Timestamp); s != nil {
-					ev.TaskSummary = s
+				if _, s, q := scanValueForMarkers(block["input"], ev.Timestamp); s != nil || q != nil {
+					if s != nil {
+						ev.TaskSummary = s
+					}
+					if q != nil {
+						ev.TaskQuestion = q
+					}
 				}
 			}
 		case "tool_result":
@@ -437,6 +442,12 @@ func scanMessageContent(raw map[string]interface{}, ev *tailer.ParsedEvent) stri
 				}
 				if s := tailer.ScanTaskSummary(text, ev.Timestamp); s != nil {
 					ev.TaskSummary = s
+				}
+				// The question marker rides end-of-turn prose (the agent's final
+				// line when it asks the user something), which survives the
+				// text-drop, so the text-block scan is its primary path (#759).
+				if q := tailer.ScanTaskQuestion(text, ev.Timestamp); q != nil {
+					ev.TaskQuestion = q
 				}
 			}
 		}

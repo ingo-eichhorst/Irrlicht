@@ -191,7 +191,7 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": true,
-      "last_assistant_text_head": "- (d) build a small redactor that strips paths + suspicious strings before commi…"
+      "last_assistant_text_head": "… as-is,\n- (b) commit only 02/03/04 and drop the 60 MB one,\n- (c) run a secret…"
     },
     {
       "index": 11,
@@ -220,7 +220,7 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": true,
-      "last_assistant_text_head": "Want me to start with the Bug B fix (small, self-contained, immediately visible …"
+      "last_assistant_text_head": "… to land for the regression numbers to drop.\n\nWant me to start with the Bug B…"
     },
     {
       "index": 13,
@@ -249,7 +249,7 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": true,
-      "last_assistant_text_head": "Want me to ship both fixes as two separate commits?"
+      "last_assistant_text_head": "… | 4               | 2           | **0**           |\n\nWant me to ship both fi…"
     },
     {
       "index": 15,
@@ -307,7 +307,7 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": true,
-      "last_assistant_text_head": "…e scoreboard, then move through the fixes one by one?"
+      "last_assistant_text_head": "…e scoreboard, then move through the fixes one by one? Or would you prefer I d…"
     },
     {
       "index": 19,

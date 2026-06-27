@@ -1,9 +1,9 @@
 // instructioninstaller.go manages the Irrlicht-managed emission rules in the
 // user-level Claude Code instruction file ~/.claude/CLAUDE.md: the task-eta
-// progress marker (issue #558) and the task-summary marker (issue #738), each
-// in its own BEGIN/END-delimited block. The blocks instruct the agent to emit
-// in-band markers; with them in the user-level file every project inherits the
-// rules without per-repo opt-in.
+// progress marker (issue #558), the task-summary marker (issue #738) and the
+// task-question marker (issue #759), each in its own BEGIN/END-delimited block.
+// The blocks instruct the agent to emit in-band markers; with them in the
+// user-level file every project inherits the rules without per-repo opt-in.
 //
 // Like the hook/statusline installers, consent lives in the permission
 // wizard (issue #577): install/uninstall run as the claude-code/instructions
@@ -113,8 +113,42 @@ summary of the overall task as a hidden marker, early in the task:
 
 Emit it once near the start by appending it to the ` + "`description`" + ` of an
 early Bash call (never to the command itself). Re-emit only if the task
-fundamentally changes. Keep it under ~120 characters, plain prose, no secrets.
+fundamentally changes. Keep it a short one-liner — under ~70 characters, plain
+prose, no secrets.
 ` + taskSummaryEndSentinel
+
+// Sentinels delimiting the task-question managed block (issue #759). Distinct
+// from the eta/summary pairs so all three blocks coexist and are patched or
+// removed independently.
+const (
+	taskQuestionBeginSentinel = "<!-- BEGIN IRRLICHT MANAGED BLOCK (task-question) -->"
+	taskQuestionEndSentinel   = "<!-- END IRRLICHT MANAGED BLOCK (task-question) -->"
+)
+
+// managedTaskQuestionBlock instructs the agent to emit a terse one-line version
+// of the question it is blocked on when it ends a turn waiting on the user
+// (issue #759) — the preferred source for the surfaced waiting-state headline.
+// Unlike the eta/summary markers, a pending question has no following Bash call
+// to carry it, so the marker rides the end-of-turn response text — the one shape
+// that survives the claude ≥2.1.162 transcript text-drop (end-of-turn text is
+// not dropped; only mid-task pre-tool-call prose is). The example marker MUST
+// sit inside a fenced code block for the same reason as the other blocks —
+// Claude Code strips bare HTML comments from CLAUDE.md at injection time. The
+// daemon always falls back to compacting the raw last-assistant text, so the
+// marker is a refinement, not a requirement.
+const managedTaskQuestionBlock = taskQuestionBeginSentinel + `
+## Pending-question marker (managed by Irrlicht)
+
+When you end your turn by asking the user a question, also emit a hidden
+one-line version of that question so tools can show a terse headline:
+
+` + "```" + `
+<!-- {"marker":"irrlicht-question","question":"<the question, ~70 chars>"} -->
+` + "```" + `
+
+Emit it on its own line at the very end of your response, only when you are
+actually waiting on the user. Keep it under ~70 characters, plain prose.
+` + taskQuestionEndSentinel
 
 // claudeMemoryPath returns the user-level Claude Code instruction file path.
 func claudeMemoryPath() (string, error) {
@@ -188,6 +222,18 @@ func UninstallTaskSummaryBlock() (bool, error) {
 	return uninstallBlock(taskSummaryBeginSentinel, taskSummaryEndSentinel)
 }
 
+// EnsureTaskQuestionBlockInstalled writes-or-patches the task-question managed
+// block (issue #759) — installed alongside the eta/summary blocks under the
+// same instructions permission.
+func EnsureTaskQuestionBlockInstalled() (bool, error) {
+	return ensureBlockInstalled(taskQuestionBeginSentinel, taskQuestionEndSentinel, managedTaskQuestionBlock)
+}
+
+// UninstallTaskQuestionBlock removes only the task-question managed block.
+func UninstallTaskQuestionBlock() (bool, error) {
+	return uninstallBlock(taskQuestionBeginSentinel, taskQuestionEndSentinel)
+}
+
 // applyInstructionBlocks installs both managed blocks — the grant effect of
 // the instructions permission. Both are installed together so a single toggle
 // governs all irrlicht-managed instruction text. Returns on the first error.
@@ -195,17 +241,23 @@ func applyInstructionBlocks() error {
 	if _, err := EnsureTaskEtaBlockInstalled(); err != nil {
 		return err
 	}
-	_, err := EnsureTaskSummaryBlockInstalled()
+	if _, err := EnsureTaskSummaryBlockInstalled(); err != nil {
+		return err
+	}
+	_, err := EnsureTaskQuestionBlockInstalled()
 	return err
 }
 
-// removeInstructionBlocks removes both managed blocks — the revoke effect of
+// removeInstructionBlocks removes all managed blocks — the revoke effect of
 // the instructions permission.
 func removeInstructionBlocks() error {
 	if _, err := UninstallTaskEtaBlock(); err != nil {
 		return err
 	}
-	_, err := UninstallTaskSummaryBlock()
+	if _, err := UninstallTaskSummaryBlock(); err != nil {
+		return err
+	}
+	_, err := UninstallTaskQuestionBlock()
 	return err
 }
 

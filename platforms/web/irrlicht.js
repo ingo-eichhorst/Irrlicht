@@ -1335,7 +1335,10 @@ import { isSummaryCollapsed, toggleSummaryCollapsed, anySummaryCollapsed, collap
     }
     function updateSummaryRow(el, agent) {
       const summary = (agent.metrics && agent.metrics.task_summary) || '';
-      const question = (agent.state === 'waiting' && agent.metrics && agent.metrics.last_assistant_text) || '';
+      // Prefer the terse one-line headline (issue #759); fall back to the full
+      // last-assistant text for older daemons. The full text is kept for hover.
+      const questionFull = (agent.state === 'waiting' && agent.metrics && agent.metrics.last_assistant_text) || '';
+      const question = (agent.state === 'waiting' && agent.metrics && (agent.metrics.question_headline || agent.metrics.last_assistant_text)) || '';
       if (!summary && !question) { el.style.display = 'none'; return; }
       el.style.display = '';
       el._sessionId = agent.session_id;
@@ -1355,7 +1358,7 @@ import { isSummaryCollapsed, toggleSummaryCollapsed, anySummaryCollapsed, collap
         qEl.style.display = '';
         if (qEl.dataset.full !== question) {
           qEl.textContent = question;
-          qEl.title = question;
+          qEl.title = questionFull || question;
           qEl.dataset.full = question;
         }
       } else {
