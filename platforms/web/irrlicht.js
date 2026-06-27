@@ -418,15 +418,24 @@ import { isSummaryCollapsed, toggleSummaryCollapsed, anySummaryCollapsed, collap
       if (state !== 'working' || !est) return null;
       const sourceLabel = est.source === 'tasks' ? 'from task list'
         : est.source === 'subagents' ? 'from subagents' : 'agent-reported';
-      // No completed rounds yet: no measurable rate, but the agent HAS
-      // committed to a plan — show a progress-only chip so the user gets
-      // feedback within seconds of the first marker (issue #604/#602).
+      // No completed rounds yet: no MEASURED rate, but the daemon projects from
+      // a corpus prior (#753) so a real number appears at the very first marker
+      // instead of "estimating…" (the agent has committed to a plan, #604/#602).
+      // Widen the range generously (2×) to signal a population prior, not a
+      // measured rate; with no projection (e.g. a subagent aggregate) fall back
+      // to the progress-only "estimating…" chip.
       if (!(est.completed_rounds > 0)) {
         if (!(est.total_rounds > 0)) return null;
         const age = est.updated_at > 0 ? Math.max(0, Math.floor(nowSec - est.updated_at)) : 0;
+        const zeroStale = est.updated_at > 0 && age > 180;
         let zeroTitle = 'Task ETA — ' + sourceLabel + ' 0/' + est.total_rounds + ' rounds';
         if (est.updated_at > 0) zeroTitle += ', updated ' + fmtDuration(age) + ' ago';
-        return { text: 'estimating…', stale: est.updated_at > 0 && age > 180, title: zeroTitle };
+        if (!eta) return { text: 'estimating…', stale: zeroStale, title: zeroTitle };
+        const rem0 = Math.max(0, Math.floor(eta - nowSec));
+        const high0 = est.updated_at > 0
+          ? Math.max(rem0, Math.floor((eta - est.updated_at) * 2))
+          : Math.floor(rem0 * 2);
+        return { text: fmtEtaText(rem0, high0), stale: zeroStale, title: zeroTitle + ' · rough prior' };
       }
       // Progress without a projection (e.g. a subagent aggregate whose
       // children carry no etas yet, #626): show a rounds-only chip rather

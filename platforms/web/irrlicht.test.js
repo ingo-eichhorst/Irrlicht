@@ -431,15 +431,27 @@ describe('taskEtaPresentation', () => {
     // rounds-only chip (#626), covered below.
   })
 
-  test('zero completed rounds renders a progress-only chip (#602)', () => {
-    // No measurable rate yet, but the agent committed to a plan — show
-    // "estimating…" immediately instead of waiting for the first round.
+  test('zero completed rounds without a projection falls back to "estimating…" (#602)', () => {
+    // No measured rate AND no prior projection (e.g. a subagent aggregate) —
+    // keep the progress-only "estimating…" chip.
     const m = metricsFor({ est: { completed_rounds: 0 }, metrics: { task_completion_eta: undefined } })
     const info = taskEtaPresentation(m, 'working', now)
     expect(info).not.toBeNull()
     expect(info.text).toBe('estimating…')
     expect(info.stale).toBe(false)
     expect(info.title).toContain('0/10 rounds')
+  })
+
+  test('zero completed rounds with a prior eta renders a wide range (#753)', () => {
+    // The daemon projects from a corpus prior at the first marker, so a real
+    // number appears immediately — shown as a deliberately wide (2×) range.
+    const m = metricsFor({ est: { completed_rounds: 0, updated_at: now }, metrics: { task_completion_eta: now + 600 } })
+    const info = taskEtaPresentation(m, 'working', now)
+    expect(info).not.toBeNull()
+    expect(info.text).toBe('~10m–20m left')
+    expect(info.stale).toBe(false)
+    expect(info.title).toContain('0/10 rounds')
+    expect(info.title).toContain('rough prior')
   })
 
   test('zero completed rounds: stale past 3min, hidden without total or while not working', () => {
