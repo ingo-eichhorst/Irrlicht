@@ -163,6 +163,17 @@ func newReplayer(src string, opts Options, events []rawEvent) (*replayer, func()
 		return nil, nil, err
 	}
 	tmpPath := filepath.Join(tmpDir, "transcript.jsonl")
+	// A parser whose live store sits outside the transcript tree (Antigravity's
+	// conversations/<conv>.db, #766) rebuilds its expected layout under tmpDir
+	// from a store captured next to the recorded transcript, and returns where
+	// the transcript must live so its unchanged path-resolution finds the store.
+	// Best-effort, like the sidecar staging below: any failure falls back to the
+	// flat path, replaying storeless (the pre-#719 state).
+	if st, ok := opts.Parser.(tailer.ReplayStoreStager); ok {
+		if relocated, err := st.StageReplayStore(tmpDir, filepath.Dir(src)); err == nil && relocated != "" {
+			tmpPath = relocated
+		}
+	}
 	tmp, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
 		os.RemoveAll(tmpDir)

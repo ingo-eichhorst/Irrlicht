@@ -415,6 +415,21 @@ type TranscriptPathAware interface {
 	SetTranscriptPath(path string)
 }
 
+// ReplayStoreStager is an optional interface for parsers whose live
+// path-resolution reads a store that is NOT a transcript sibling — e.g.
+// Antigravity's conversations/<conv>.db, which the parser finds by climbing the
+// brain/<conv>/.system_generated/logs/ tree (issue #766). During replay the
+// recorded transcript is materialized in a flat scratch dir, so that climb
+// would miss the captured store. The replay engine gives such a parser a chance
+// to rebuild its expected directory layout under tmpDir from a store captured
+// next to the recorded transcript (recordingDir/store/…), and to return the
+// transcript path the tailer should open instead of the flat default.
+// Returning "" (or any error) means "no relocation — use the flat path", so a
+// recording without a captured store replays exactly as before.
+type ReplayStoreStager interface {
+	StageReplayStore(tmpDir, recordingDir string) (transcriptPath string, err error)
+}
+
 // LedgerSchemaVersion is the current ledger schema. A persisted ledger with a
 // different version is discarded on load, forcing a full transcript re-scan
 // under the current parser. Bump it whenever a LedgerState change (or a parser
