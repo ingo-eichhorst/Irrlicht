@@ -2947,12 +2947,27 @@ import { isSummaryCollapsed, toggleSummaryCollapsed, anySummaryCollapsed, collap
       '#5E5CE6', '#FFD60A', '#30D158', '#BF5AF2', '#64D2FF',
     ];
     const RANGE_LABELS = { day: 'Day', week: 'Week', month: 'Month', year: 'Year', 'this-month': 'This Month', custom: 'Custom' };
-    const historyState = { range: 'day', chart: 'cost', group: 'project', forecast: true, start: null, end: null, data: null };
+    const CHART_LABELS = { cost: 'Cost', tokens: 'Tokens', models: 'Models', providers: 'Providers' };
+    // Drilldown order: clicking a contributor scopes to it and re-groups by the
+    // next finer axis. A leaf (no entry) makes that contributor non-drillable.
+    const DRILL_NEXT = { project: 'branch', branch: 'session', provider: 'model', model: 'session' };
+    // scope is null or { field, value } — a single-level drilldown filter.
+    const historyState = { range: 'day', chart: 'cost', group: 'project', forecast: true, start: null, end: null, scope: null, data: null };
     let historyFetchSeq = 0;
     let historyResizeRAF = 0;
 
     function historyColorFor(i) { return HISTORY_COLORS[i % HISTORY_COLORS.length]; }
     function histDollar(v) { return '$' + (Number(v) || 0).toFixed(2); }
+    // Compact token count: 1.2M / 3.4k / 970.
+    function histTokens(v) {
+      v = Number(v) || 0;
+      if (v >= 1e6) return (v / 1e6).toFixed(1) + 'M';
+      if (v >= 1e3) return (v / 1e3).toFixed(1) + 'k';
+      return String(Math.round(v));
+    }
+    // The value formatter for the active chart — dollars for cost/models/providers,
+    // token counts for tokens.
+    function histValue(v) { return historyState.chart === 'tokens' ? histTokens(v) : histDollar(v); }
     function histAxisLabel(ts, bucketSeconds) {
       const d = new Date(ts * 1000);
       if (bucketSeconds < 86400) {
@@ -2974,16 +2989,17 @@ import { isSummaryCollapsed, toggleSummaryCollapsed, anySummaryCollapsed, collap
       if (on) fetchHistory();
     }
 
-    function historyQuery() {
+    function historyQuery(state = historyState) {
       const p = new URLSearchParams();
-      p.set('chart', historyState.chart);
-      p.set('group', historyState.group);
-      p.set('forecast', historyState.forecast ? 'true' : 'false');
-      if (historyState.range === 'custom' && historyState.start != null && historyState.end != null) {
-        p.set('start', String(historyState.start));
-        p.set('end', String(historyState.end));
+      p.set('chart', state.chart);
+      p.set('group', state.group);
+      p.set('forecast', state.forecast ? 'true' : 'false');
+      if (state.scope) p.set('scope', state.scope.field + ':' + state.scope.value);
+      if (state.range === 'custom' && state.start != null && state.end != null) {
+        p.set('start', String(state.start));
+        p.set('end', String(state.end));
       } else {
-        p.set('range', historyState.range);
+        p.set('range', state.range);
       }
       return p.toString();
     }
@@ -3001,6 +3017,7 @@ import { isSummaryCollapsed, toggleSummaryCollapsed, anySummaryCollapsed, collap
     }
 
     function renderHistory() {
+      renderHistoryBreadcrumb();
       if (!historyState.data) {
         const wrap = document.getElementById('history-chart-wrap');
         if (wrap) wrap.classList.add('empty');
@@ -3090,7 +3107,7 @@ import { isSummaryCollapsed, toggleSummaryCollapsed, anySummaryCollapsed, collap
         ctx.lineTo(w - padR, y);
         ctx.stroke();
         ctx.fillStyle = muted;
-        ctx.fillText(histDollar(v), padL - 6, y);
+        ctx.fillText(histValue(v), padL - 6, y);
       }
 
       // Stacked areas, bottom-up.
@@ -3143,39 +3160,122 @@ import { isSummaryCollapsed, toggleSummaryCollapsed, anySummaryCollapsed, collap
       const totalEl = document.getElementById('history-total');
       const fcEl = document.getElementById('history-forecast-line');
       const listEl = document.getElementById('history-contrib');
-      if (titleEl) titleEl.textContent = 'Total · ' + (RANGE_LABELS[historyState.range] || historyState.range);
-      if (totalEl) totalEl.textContent = histDollar(data.total);
+      const chartLabel = CHART_LABELS[historyState.chart] || 'Total';
+      if (titleEl) titleEl.textContent = chartLabel + ' · ' + (RANGE_LABELS[historyState.range] || historyState.range);
+      if (totalEl) totalEl.textContent = histValue(data.total);
       if (fcEl) {
+        // Forecast is USD-only; the daemon omits it for the tokens chart.
         fcEl.textContent = (historyState.forecast && data.forecast)
           ? '▲ projected ' + histDollar(data.forecast.projected) + ' (' + (data.forecast.basis || 'linear') + ')'
           : '';
       }
       if (!listEl) return;
       listEl.innerHTML = '';
-      const contribs = data.top_contributors || [];
-      if (!contribs.length) {
-        const li = document.createElement('li');
-        li.className = 'history-empty-contrib';
-        li.textContent = 'no spend in this range';
-        listEl.appendChild(li);
+
+      // Tokens: the side panel is an input/output/cache breakdown, not a
+      // contributor ranking.
+      if (historyState.chart === 'tokens') {
+        const split = data.token_split;
+        if (!split || !(data.total > 0)) {
+          appendHistoryEmpty(listEl, 'no token usage in this range');
+          return;
+        }
+        [['Input', split.input], ['Output', split.output], ['Cache', split.cache]].forEach(([label, v], i) => {
+          const li = document.createElement('li');
+          const dot = document.createElement('span'); dot.className = 'dot'; dot.style.background = historyColorFor(i);
+          const lab = document.createElement('span'); lab.className = 'label'; lab.textContent = label;
+          const val = document.createElement('span'); val.className = 'val'; val.textContent = histTokens(v);
+          li.append(dot, lab, val);
+          listEl.appendChild(li);
+        });
         return;
       }
+
+      const contribs = data.top_contributors || [];
+      if (!contribs.length) {
+        appendHistoryEmpty(listEl, 'no spend in this range');
+        return;
+      }
+      // Drilldown: click a contributor to scope into it (the effective stacking
+      // axis is data.group). The synthetic "unknown" bucket and leaf axes aren't
+      // drillable.
+      const drillField = data.group;
+      const drillable = !!DRILL_NEXT[drillField];
       contribs.forEach((c, i) => {
         const li = document.createElement('li');
-        const dot = document.createElement('span');
-        dot.className = 'dot';
-        dot.style.background = historyColorFor(i);
-        const label = document.createElement('span');
-        label.className = 'label';
-        label.textContent = c.label;
-        const val = document.createElement('span');
-        val.className = 'val';
-        val.textContent = histDollar(c.value);
-        li.appendChild(dot);
-        li.appendChild(label);
-        li.appendChild(val);
+        const dot = document.createElement('span'); dot.className = 'dot'; dot.style.background = historyColorFor(i);
+        const label = document.createElement('span'); label.className = 'label'; label.textContent = c.label;
+        const val = document.createElement('span'); val.className = 'val'; val.textContent = histValue(c.value);
+        li.append(dot, label, val);
+        if (drillable && c.label !== 'unknown') {
+          li.classList.add('drillable');
+          li.tabIndex = 0;
+          li.setAttribute('role', 'button');
+          li.title = 'Drill into ' + c.label;
+          const drill = () => drillInto(drillField, c.label);
+          li.addEventListener('click', drill);
+          li.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); drill(); } });
+        }
         listEl.appendChild(li);
       });
+    }
+
+    function appendHistoryEmpty(listEl, text) {
+      const li = document.createElement('li');
+      li.className = 'history-empty-contrib';
+      li.textContent = text;
+      listEl.appendChild(li);
+    }
+
+    // drillInto re-scopes the view to one contributor and re-groups by the next
+    // finer axis (project → branch → session). Drilldown is cost-based, matching
+    // the "Cost · Day · grouped by Branch · scoped to X" example in #750.
+    function drillInto(field, value) {
+      const next = DRILL_NEXT[field];
+      if (!next) return;
+      historyState.scope = { field, value };
+      historyState.group = next;
+      historyState.chart = 'cost';
+      syncHistorySelectors();
+      fetchHistory();
+    }
+
+    function renderHistoryBreadcrumb() {
+      const el = document.getElementById('history-breadcrumb');
+      if (!el) return;
+      el.innerHTML = '';
+      if (!historyState.scope) { el.hidden = true; return; }
+      el.hidden = false;
+      const all = document.createElement('button');
+      all.type = 'button';
+      all.className = 'history-crumb';
+      all.textContent = 'All';
+      all.addEventListener('click', clearHistoryDrilldown);
+      const sep = document.createElement('span');
+      sep.className = 'history-crumb-sep';
+      sep.textContent = '›';
+      const cur = document.createElement('span');
+      cur.className = 'history-crumb current';
+      cur.textContent = historyState.scope.field + ': ' + historyState.scope.value;
+      el.append(all, sep, cur);
+    }
+
+    function clearHistoryDrilldown() {
+      const field = historyState.scope ? historyState.scope.field : 'project';
+      historyState.scope = null;
+      historyState.group = field; // return to the axis we drilled from
+      syncHistorySelectors();
+      fetchHistory();
+    }
+
+    // syncHistorySelectors reflects historyState.chart/group onto the segmented
+    // controls — drilldown and the models/providers presets change them
+    // programmatically, so the active classes must follow.
+    function syncHistorySelectors() {
+      const chartSeg = document.getElementById('history-chart-sel');
+      if (chartSeg) for (const b of chartSeg.querySelectorAll('button')) b.classList.toggle('active', b.dataset.chart === historyState.chart);
+      const groupSeg = document.getElementById('history-group-sel');
+      if (groupSeg) for (const b of groupSeg.querySelectorAll('button')) b.classList.toggle('active', b.dataset.group === historyState.group);
     }
 
     function historyDownload(filename, mime, text) {
@@ -3241,6 +3341,33 @@ import { isSummaryCollapsed, toggleSummaryCollapsed, anySummaryCollapsed, collap
       fetchHistory();
     });
 
+    const histChartSeg = document.getElementById('history-chart-sel');
+    if (histChartSeg) histChartSeg.addEventListener('click', (e) => {
+      const b = e.target.closest('button[data-chart]');
+      if (!b || b.disabled) return;
+      const c = b.dataset.chart;
+      historyState.chart = c;
+      // models/providers are presets that pin the stacking axis.
+      if (c === 'models') historyState.group = 'model';
+      else if (c === 'providers') historyState.group = 'provider';
+      historyState.scope = null; // a new metric resets any drilldown
+      syncHistorySelectors();
+      fetchHistory();
+    });
+
+    const histGroupSeg = document.getElementById('history-group-sel');
+    if (histGroupSeg) histGroupSeg.addEventListener('click', (e) => {
+      const b = e.target.closest('button[data-group]');
+      if (!b || b.disabled) return;
+      historyState.group = b.dataset.group;
+      // Choosing a group explicitly leaves the metric-preset charts so the
+      // chosen axis sticks.
+      if (historyState.chart === 'models' || historyState.chart === 'providers') historyState.chart = 'cost';
+      historyState.scope = null;
+      syncHistorySelectors();
+      fetchHistory();
+    });
+
     const histForecastChk = document.getElementById('history-forecast');
     if (histForecastChk) histForecastChk.addEventListener('change', () => {
       historyState.forecast = histForecastChk.checked;
@@ -3271,4 +3398,5 @@ export {
   sessionOrigin, sourceIdOf, localBareIds, isShadowedRemote,
   daemonSessionIds, structureSignature,
   pendingWizardAgents, buildPermissionAnswers, stillPendingForAgents,
+  historyQuery, histTokens, DRILL_NEXT,
 };

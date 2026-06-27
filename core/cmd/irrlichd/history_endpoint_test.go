@@ -111,35 +111,162 @@ func TestHandleGetHistory_CustomRange(t *testing.T) {
 	}
 }
 
-func TestHandleGetHistory_PhaseStubs(t *testing.T) {
+// TestHandleGetHistory_AgentsStub: chart=agents is still Phase 3 (#751).
+func TestHandleGetHistory_AgentsStub(t *testing.T) {
 	tr := filesystem.NewCostTrackerWithDir(filepath.Join(t.TempDir(), "cost"))
-	cases := []struct {
-		query string
-		phase float64
-	}{
-		{"chart=tokens", 2},
-		{"chart=models", 2},
-		{"chart=providers", 2},
-		{"chart=agents", 3},
-		{"group=branch", 2},
-		{"group=session", 2},
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/history?range=day&chart=agents", nil)
+	rec := httptest.NewRecorder()
+	handleGetHistory(tr)(rec, req)
+	if rec.Code != http.StatusNotImplemented {
+		t.Fatalf("chart=agents: want 501, got %d", rec.Code)
 	}
-	for _, c := range cases {
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/history?range=day&"+c.query, nil)
-		rec := httptest.NewRecorder()
-		handleGetHistory(tr)(rec, req)
-		if rec.Code != http.StatusNotImplemented {
-			t.Errorf("%s: want 501, got %d", c.query, rec.Code)
-			continue
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body["phase"] != float64(3) {
+		t.Errorf("want phase 3, got %v", body["phase"])
+	}
+}
+
+// seedPhase2 lays down one project with two sessions differing on every group
+// axis (branch/provider/model), with cumulative tokens, over [1000,1400).
+func seedPhase2(t *testing.T, dir string) {
+	t.Helper()
+	seedCostRows(t, dir, "proj-a", []map[string]any{
+		{"ts": 1050, "project": "proj-a", "branch": "main", "model": "opus", "provider": "anthropic", "session": "s1", "cost": 1.00, "cum_in": 100, "cum_out": 10},
+		{"ts": 1150, "project": "proj-a", "branch": "main", "model": "opus", "provider": "anthropic", "session": "s1", "cost": 1.40, "cum_in": 300, "cum_out": 30, "cum_read": 20},
+		{"ts": 1050, "project": "proj-a", "branch": "feat", "model": "sonnet", "provider": "openai", "session": "s2", "cost": 2.00, "cum_in": 50, "cum_out": 5},
+		{"ts": 1150, "project": "proj-a", "branch": "feat", "model": "sonnet", "provider": "openai", "session": "s2", "cost": 2.50, "cum_in": 150, "cum_out": 25},
+	})
+}
+
+// TestHandleGetHistory_Phase2Combos: the previously-501 chart/group combos now
+// return real data, and chart=models|providers pin the effective group.
+func TestHandleGetHistory_Phase2Combos(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "cost")
+	seedPhase2(t, dir)
+	tr := filesystem.NewCostTrackerWithDir(dir)
+	const base = "start=1000&end=1400&bucket=100&forecast=false"
+
+	for _, group := range []string{"branch", "provider", "model", "session"} {
+		rec, resp := doHistory(t, tr, base+"&group="+group)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("group=%s: want 200, got %d (%s)", group, rec.Code, rec.Body.String())
 		}
-		var body map[string]any
-		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-			t.Errorf("%s: decode: %v", c.query, err)
-			continue
+		if resp.Group != group {
+			t.Errorf("group=%s: echoed %q", group, resp.Group)
 		}
-		if body["phase"] != c.phase {
-			t.Errorf("%s: want phase %v, got %v", c.query, c.phase, body["phase"])
+		if len(resp.TopContributors) != 2 {
+			t.Errorf("group=%s: want 2 contributors, got %+v", group, resp.TopContributors)
 		}
+	}
+
+	for _, tc := range []struct{ chart, group string }{{"models", "model"}, {"providers", "provider"}} {
+		rec, resp := doHistory(t, tr, base+"&chart="+tc.chart)
+		if rec.Code != http.StatusOK || resp.Chart != tc.chart || resp.Group != tc.group {
+			t.Errorf("chart=%s: want 200 chart=%s group=%s, got %d/%q/%q", tc.chart, tc.chart, tc.group, rec.Code, resp.Chart, resp.Group)
+		}
+	}
+}
+
+// TestHandleGetHistory_TokensSplit: chart=tokens returns token counts + the
+// in/out/cache split, and no USD forecast.
+func TestHandleGetHistory_TokensSplit(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "cost")
+	seedPhase2(t, dir)
+	tr := filesystem.NewCostTrackerWithDir(dir)
+
+	rec, resp := doHistory(t, tr, "start=1000&end=1400&bucket=100&chart=tokens")
+	if rec.Code != http.StatusOK || resp.Chart != "tokens" {
+		t.Fatalf("want 200 chart=tokens, got %d/%q", rec.Code, resp.Chart)
+	}
+	if resp.TokenSplit == nil {
+		t.Fatal("chart=tokens must carry token_split")
+	}
+	// s1 delta: in 200, out 20, cache 20; s2 delta: in 100, out 20, cache 0.
+	if resp.TokenSplit.Input != 300 || resp.TokenSplit.Output != 40 || resp.TokenSplit.Cache != 20 {
+		t.Errorf("split: want in=300 out=40 cache=20, got %+v", resp.TokenSplit)
+	}
+	if resp.Forecast != nil {
+		t.Errorf("tokens chart should not forecast USD, got %+v", resp.Forecast)
+	}
+}
+
+// TestHandleGetHistory_UnknownBucketRule: the unknown bucket is surfaced only at
+// ≥10% of the window total, else dropped.
+func TestHandleGetHistory_UnknownBucketRule(t *testing.T) {
+	const base = "start=1000&end=1400&bucket=100&group=branch&forecast=false"
+	hasUnknown := func(resp historyResponse) bool {
+		for _, c := range resp.TopContributors {
+			if c.Label == "unknown" {
+				return true
+			}
+		}
+		return false
+	}
+
+	// Kept: missing-branch session is 0.30 / 1.20 = 25% (well above 10%).
+	dirA := filepath.Join(t.TempDir(), "cost")
+	seedCostRows(t, dirA, "proj-a", []map[string]any{
+		{"ts": 1050, "project": "proj-a", "branch": "main", "session": "s1", "cost": 1.00},
+		{"ts": 1150, "project": "proj-a", "branch": "main", "session": "s1", "cost": 1.90},
+		{"ts": 1050, "project": "proj-a", "session": "s2", "cost": 5.00},
+		{"ts": 1150, "project": "proj-a", "session": "s2", "cost": 5.30},
+	})
+	if _, resp := doHistory(t, filesystem.NewCostTrackerWithDir(dirA), base); !hasUnknown(resp) {
+		t.Errorf("≥10%% unknown should be surfaced, got %+v", resp.TopContributors)
+	}
+
+	// Dropped: missing-branch session is 0.05 / 0.95 ≈ 5%.
+	dirB := filepath.Join(t.TempDir(), "cost")
+	seedCostRows(t, dirB, "proj-a", []map[string]any{
+		{"ts": 1050, "project": "proj-a", "branch": "main", "session": "s1", "cost": 1.00},
+		{"ts": 1150, "project": "proj-a", "branch": "main", "session": "s1", "cost": 1.90},
+		{"ts": 1050, "project": "proj-a", "session": "s2", "cost": 5.00},
+		{"ts": 1150, "project": "proj-a", "session": "s2", "cost": 5.05},
+	})
+	_, resp := doHistory(t, filesystem.NewCostTrackerWithDir(dirB), base)
+	if hasUnknown(resp) {
+		t.Errorf("<10%% unknown should be dropped, got %+v", resp.TopContributors)
+	}
+	if d := resp.Total - 0.90; d > 1e-9 || d < -1e-9 {
+		t.Errorf("dropped unknown excluded from total: want 0.90, got %v", resp.Total)
+	}
+}
+
+// TestHandleGetHistory_Drilldown: scope filters rows to one contributor and is
+// echoed back for the breadcrumb.
+func TestHandleGetHistory_Drilldown(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "cost")
+	seedCostRows(t, dir, "proj-a", []map[string]any{
+		{"ts": 1050, "project": "proj-a", "branch": "main", "session": "s1", "cost": 1.00},
+		{"ts": 1150, "project": "proj-a", "branch": "main", "session": "s1", "cost": 1.30},
+	})
+	seedCostRows(t, dir, "proj-b", []map[string]any{
+		{"ts": 1050, "project": "proj-b", "branch": "x", "session": "s2", "cost": 2.00},
+		{"ts": 1150, "project": "proj-b", "branch": "x", "session": "s2", "cost": 2.50},
+	})
+	tr := filesystem.NewCostTrackerWithDir(dir)
+
+	rec, resp := doHistory(t, tr, "start=1000&end=1400&bucket=100&group=branch&scope=project:proj-a&forecast=false")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	if resp.Scope != "project:proj-a" {
+		t.Errorf("scope echo: want project:proj-a, got %q", resp.Scope)
+	}
+	if d := resp.Total - 0.30; d > 1e-9 || d < -1e-9 {
+		t.Errorf("scoped total: want 0.30 (proj-a only), got %v", resp.Total)
+	}
+	if len(resp.TopContributors) != 1 || resp.TopContributors[0].Label != "main" {
+		t.Errorf("scoped contributors: want [main], got %+v", resp.TopContributors)
+	}
+
+	// A malformed scope is ignored (no filter, empty echo).
+	_, resp2 := doHistory(t, tr, "start=1000&end=1400&bucket=100&group=branch&scope=bogus")
+	if resp2.Scope != "" {
+		t.Errorf("malformed scope should echo empty, got %q", resp2.Scope)
 	}
 }
 

@@ -24,6 +24,9 @@ import {
   isShadowedRemote,
   daemonSessionIds,
   structureSignature,
+  historyQuery,
+  histTokens,
+  DRILL_NEXT,
 } from './irrlicht.js'
 
 describe('resolvedTheme', () => {
@@ -677,5 +680,51 @@ describe('stillPendingForAgents (#570 locked-set dismissal)', () => {
     expect(stillPendingForAgents(null, ['x'])).toBe(false)
     expect(stillPendingForAgents({}, ['x'])).toBe(false)
     expect(stillPendingForAgents(snap('pending'), null)).toBe(false)
+  })
+})
+
+describe('histTokens', () => {
+  test('formats millions, thousands, and units', () => {
+    expect(histTokens(2_000_000)).toBe('2.0M')
+    expect(histTokens(1500)).toBe('1.5k')
+    expect(histTokens(970)).toBe('970')
+    expect(histTokens(0)).toBe('0')
+  })
+})
+
+describe('historyQuery (#750 chart/group/scope params)', () => {
+  const base = { range: 'day', chart: 'cost', group: 'project', forecast: true, start: null, end: null, scope: null }
+
+  test('emits chart, group, forecast, range', () => {
+    const q = new URLSearchParams(historyQuery(base))
+    expect(q.get('chart')).toBe('cost')
+    expect(q.get('group')).toBe('project')
+    expect(q.get('forecast')).toBe('true')
+    expect(q.get('range')).toBe('day')
+    expect(q.get('scope')).toBeNull()
+  })
+
+  test('includes scope when drilled down', () => {
+    const q = new URLSearchParams(historyQuery({ ...base, chart: 'tokens', group: 'branch', scope: { field: 'project', value: 'irrlicht' } }))
+    expect(q.get('chart')).toBe('tokens')
+    expect(q.get('group')).toBe('branch')
+    expect(q.get('scope')).toBe('project:irrlicht')
+  })
+
+  test('a custom range sends start/end instead of range', () => {
+    const q = new URLSearchParams(historyQuery({ ...base, range: 'custom', start: 900, end: 2000 }))
+    expect(q.get('start')).toBe('900')
+    expect(q.get('end')).toBe('2000')
+    expect(q.get('range')).toBeNull()
+  })
+})
+
+describe('DRILL_NEXT (drilldown axis order)', () => {
+  test('project → branch → session; provider/model → session; session is a leaf', () => {
+    expect(DRILL_NEXT.project).toBe('branch')
+    expect(DRILL_NEXT.branch).toBe('session')
+    expect(DRILL_NEXT.provider).toBe('model')
+    expect(DRILL_NEXT.model).toBe('session')
+    expect(DRILL_NEXT.session).toBeUndefined()
   })
 })

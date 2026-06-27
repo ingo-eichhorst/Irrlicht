@@ -208,18 +208,47 @@ type EventRecorder interface {
 	Close() error
 }
 
-// CostSeriesResult is the downsampled per-project incremental-cost time series
-// returned by CostTracker.CostSeries. BucketStarts holds each bucket's start
-// timestamp (unix seconds); ByProject maps a project to its per-bucket
-// incremental USD (each slice has len == len(BucketStarts)); Totals is each
-// project's sum over [Start, End).
+// SeriesQuery parameterizes CostTracker.CostSeries (issue #750). It carries the
+// window + bucket width, which group axis to key the matrix by, which metric to
+// measure, and an optional scope filter (only rows whose ScopeField equals
+// ScopeValue are counted — the drilldown primitive). Group "project" preserves
+// Phase 1 behavior (the filename is the fallback key); the other axes read the
+// matching snapshot column, with an empty value bucketed under "" (the unknown
+// key, surfaced or dropped by the handler's ≥10% rule).
+type SeriesQuery struct {
+	Start         int64
+	End           int64
+	BucketSeconds int64
+	Group         string // project|branch|provider|model|session
+	Metric        string // cost|tokens ("" defaults to cost)
+	ScopeField    string // "" = unscoped; else project|branch|provider|model|session
+	ScopeValue    string
+}
+
+// TokenSplit holds the window's aggregate token throughput broken down by kind,
+// populated only when SeriesQuery.Metric is "tokens" (nil otherwise). It drives
+// the History tab's tokens side panel (in/out/cache).
+type TokenSplit struct {
+	Input  float64 `json:"input"`
+	Output float64 `json:"output"`
+	Cache  float64 `json:"cache"` // cache-read + cache-creation tokens
+}
+
+// CostSeriesResult is the downsampled incremental time series returned by
+// CostTracker.CostSeries. BucketStarts holds each bucket's start timestamp
+// (unix seconds); ByKey maps a group key (project/branch/provider/model/session
+// per the query) to its per-bucket increment — USD for the cost metric, token
+// counts for the tokens metric (each slice has len == len(BucketStarts));
+// Totals is each key's sum over [Start, End). TokenSplit is set only for the
+// tokens metric.
 type CostSeriesResult struct {
 	Start         int64                `json:"start"`
 	End           int64                `json:"end"`
 	BucketSeconds int64                `json:"bucket_seconds"`
 	BucketStarts  []int64              `json:"bucket_starts"`
-	ByProject     map[string][]float64 `json:"by_project"`
+	ByKey         map[string][]float64 `json:"by_key"`
 	Totals        map[string]float64   `json:"totals"`
+	TokenSplit    *TokenSplit          `json:"token_split,omitempty"`
 }
 
 // CostTracker persists per-session cost/token snapshots so clients can query
@@ -240,12 +269,15 @@ type CostTracker interface {
 	// rows with no known provider. Both axes come from one scan.
 	CostsInWindows(windowSeconds map[string]int64) (byProject, byProvider map[string]map[string]float64, err error)
 
-	// CostSeries returns a downsampled per-project incremental-cost time series
-	// over [start, end) (unix seconds), bucketed into bucketSeconds-wide
-	// buckets, plus per-project totals. One pass over every cost file, reusing
-	// the same baseline/delta model as CostsInWindows so a series' sum matches
-	// the corresponding trailing-window total.
-	CostSeries(start, end, bucketSeconds int64) (*CostSeriesResult, error)
+	// CostSeries returns a downsampled incremental time series over the query's
+	// [Start, End) window, bucketed into BucketSeconds-wide buckets and keyed by
+	// the requested group axis, plus per-key totals. Each interval's increment
+	// is attributed to the group value active at the interval's end row, so a
+	// session that changes branch/model/provider mid-flight splits cleanly. One
+	// pass over every cost file, reusing the same baseline/delta model as
+	// CostsInWindows so a cost series' sum matches the corresponding
+	// trailing-window total.
+	CostSeries(q SeriesQuery) (*CostSeriesResult, error)
 
 	// Prune drops snapshot rows older than the given number of days.
 	// Safe to call periodically (e.g. daemon startup).

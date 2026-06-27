@@ -1307,6 +1307,21 @@
       font-family: var(--font-mono); font-size: 10px; color: var(--muted); cursor: pointer;
     }
 
+    /* Drilldown breadcrumb (#750). Sits above the chart; back-navigates the
+       single-level scope filter. */
+    .history-breadcrumb {
+      display: flex; align-items: center; gap: 6px; margin: 0 0 12px;
+      font-family: var(--font-mono); font-size: 11px;
+    }
+    .history-breadcrumb[hidden] { display: none; }
+    .history-crumb {
+      background: none; border: none; color: var(--working); cursor: pointer;
+      font: inherit; padding: 0;
+    }
+    .history-crumb:hover { text-decoration: underline; }
+    .history-crumb-sep { color: var(--muted); }
+    .history-crumb.current { color: var(--text-bright); }
+
     .history-layout { display: flex; gap: 18px; align-items: stretch; }
     .history-chart-wrap {
       position: relative; flex: 1 1 auto; min-width: 0; height: 360px;
@@ -1343,6 +1358,10 @@
     .history-contrib .dot { width: 9px; height: 9px; border-radius: 2px; flex-shrink: 0; }
     .history-contrib .label { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .history-contrib .val { margin-left: auto; color: var(--text-bright); }
+    /* Drilldown affordance: contributors you can click to scope into. */
+    .history-contrib li.drillable { cursor: pointer; border-radius: 4px; margin: 0 -6px; padding: 2px 6px; }
+    .history-contrib li.drillable:hover { background: var(--surface-hover); }
+    .history-contrib li.drillable:hover .label { color: var(--text-bright); }
     .history-empty-contrib { color: var(--muted); font-family: var(--font-mono); font-size: 11px; }
     .history-panel-footer {
       display: flex; gap: 8px; justify-content: flex-end;

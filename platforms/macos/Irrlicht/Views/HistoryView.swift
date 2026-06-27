@@ -16,6 +16,10 @@ struct HistoryView: View {
     @EnvironmentObject var sessionManager: SessionManager
 
     @State private var range: HistoryRange = .fiveHour
+    @State private var chart: HistoryChart = .cost
+    @State private var group: HistoryGroup = .project
+    // Single-level drilldown filter (#750); nil = unscoped.
+    @State private var scope: HistoryScope?
     @State private var forecastEnabled = true
     @State private var customStart = Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date()
     @State private var customEnd = Date()
@@ -32,10 +36,30 @@ struct HistoryView: View {
     /// dedup — `.task(id:)` cancels the in-flight request when the key changes.
     private var queryKey: String {
         let fc = forecastEnabled ? "f1" : "f0"
+        let dims = "\(chart.rawValue)-\(effectiveGroup.rawValue)-\(scope?.query ?? "")"
         if range == .custom {
-            return "custom-\(appliedCustomStart ?? 0)-\(appliedCustomEnd ?? 0)-\(fc)"
+            return "custom-\(appliedCustomStart ?? 0)-\(appliedCustomEnd ?? 0)-\(fc)-\(dims)"
         }
-        return "\(range.rawValue)-\(fc)"
+        return "\(range.rawValue)-\(fc)-\(dims)"
+    }
+
+    /// The stacking axis actually sent to the daemon: pinned to model/provider
+    /// for the models/providers presets, else the user's group choice.
+    private var effectiveGroup: HistoryGroup { chart.pinnedGroup ?? group }
+
+    /// Drill into one contributor: scope the view to it and re-group by the next
+    /// finer axis, always cost-based (matching the web).
+    private func drill(into field: HistoryGroup, value: String) {
+        guard let next = field.drillNext else { return }
+        scope = HistoryScope(field: field, value: value)
+        group = next
+        chart = .cost
+    }
+
+    /// Back out of the drilldown, returning to the axis we drilled from.
+    private func clearDrill() {
+        if let field = scope?.field { group = field }
+        scope = nil
     }
 
     var body: some View {
@@ -121,7 +145,41 @@ struct HistoryView: View {
                 .font(.caption)
             }
 
+            // Chart-type + group axis (#750). Cost spans only — the quota
+            // windows render a burn-rate projection, not a grouped series.
             if !range.isQuota {
+                HStack(spacing: IrrSpacing.sp2) {
+                    Text("Chart")
+                        .font(.caption2).foregroundColor(.secondary)
+                        .frame(width: 40, alignment: .leading)
+                    Picker("", selection: Binding(
+                        get: { chart },
+                        set: { chart = $0; scope = nil } // a new metric resets any drilldown
+                    )) {
+                        ForEach(HistoryChart.allCases) { Text($0.label).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                }
+                HStack(spacing: IrrSpacing.sp2) {
+                    Text("Group")
+                        .font(.caption2).foregroundColor(.secondary)
+                        .frame(width: 40, alignment: .leading)
+                    Picker("", selection: Binding(
+                        get: { effectiveGroup },
+                        set: { newGroup in
+                            group = newGroup
+                            // Choosing a group leaves the metric-preset charts.
+                            if chart.pinnedGroup != nil { chart = .cost }
+                            scope = nil
+                        }
+                    )) {
+                        ForEach(HistoryGroup.allCases) { Text($0.shortLabel).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                }
+
                 Toggle("Forecast", isOn: $forecastEnabled)
                     .toggleStyle(.checkbox)
                     .font(.caption)
@@ -140,7 +198,12 @@ struct HistoryView: View {
             HistoryContentView(
                 data: r,
                 range: range,
+                chart: chart,
+                group: effectiveGroup,
+                scope: scope,
                 forecastEnabled: forecastEnabled,
+                onDrill: { field, value in drill(into: field, value: value) },
+                onClearDrill: { clearDrill() },
                 onExportCSV: { save(ext: "csv", text: HistoryExport.csv(r)) },
                 onExportJSON: { save(ext: "json", text: HistoryExport.json(r)) }
             )
@@ -184,7 +247,7 @@ struct HistoryView: View {
         loadFailed = false
         var comps = URLComponents(string: "\(DaemonEndpoint.httpBase)/api/v1/history")
         // queryItems ignores the custom bounds unless range == .custom.
-        comps?.queryItems = range.queryItems(forecast: forecastEnabled, customStart: appliedCustomStart, customEnd: appliedCustomEnd)
+        comps?.queryItems = range.queryItems(chart: chart, group: effectiveGroup, scope: scope, forecast: forecastEnabled, customStart: appliedCustomStart, customEnd: appliedCustomEnd)
         guard let url = comps?.url else { return }
         do {
             let (data, resp) = try await URLSession.shared.data(from: url)
@@ -256,7 +319,7 @@ struct HistoryView: View {
 
     private func save(ext: String, text: String) {
         let panel = NSSavePanel()
-        panel.nameFieldStringValue = "irrlicht-history-\(range.rawValue)-cost.\(ext)"
+        panel.nameFieldStringValue = "irrlicht-history-\(range.rawValue)-\(chart.rawValue).\(ext)"
         panel.begin { resp in
             guard resp == .OK, let url = panel.url else { return }
             try? text.write(to: url, atomically: true, encoding: .utf8)
@@ -272,13 +335,19 @@ struct HistoryView: View {
 struct HistoryContentView: View {
     let data: HistoryResponse
     let range: HistoryRange
+    var chart: HistoryChart = .cost
+    var group: HistoryGroup = .project
+    var scope: HistoryScope?
     let forecastEnabled: Bool
+    var onDrill: (HistoryGroup, String) -> Void = { _, _ in }
+    var onClearDrill: () -> Void = {}
     let onExportCSV: () -> Void
     let onExportJSON: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: IrrSpacing.sp3) {
-            chart
+            breadcrumb
+            chartView
             Divider()
             summary
         }
@@ -286,16 +355,32 @@ struct HistoryContentView: View {
         .padding(.vertical, IrrSpacing.sp3)
     }
 
-    @ViewBuilder private var chart: some View {
+    @ViewBuilder private var breadcrumb: some View {
+        if let scope {
+            HStack(spacing: IrrSpacing.sp1) {
+                Button(action: onClearDrill) {
+                    Text("All").foregroundColor(IrrColors.working)
+                }
+                .buttonStyle(.plain)
+                Text("›").foregroundColor(.secondary)
+                Text("\(scope.field.rawValue): \(scope.value)")
+                    .lineLimit(1).truncationMode(.middle)
+            }
+            .font(.caption)
+        }
+    }
+
+    @ViewBuilder private var chartView: some View {
         if data.hasData {
             HistoryCostChart(
                 data: data,
                 orderedProjects: orderedProjects,
-                forecastEnabled: forecastEnabled
+                forecastEnabled: forecastEnabled,
+                chart: chart
             )
             .frame(height: 200)
         } else {
-            Text("no cost data in this range yet")
+            Text(chart == .tokens ? "no token usage in this range yet" : "no cost data in this range yet")
                 .font(.callout)
                 .foregroundColor(.secondary)
                 .frame(maxWidth: .infinity, minHeight: 200)
@@ -304,45 +389,25 @@ struct HistoryContentView: View {
 
     private var summary: some View {
         VStack(alignment: .leading, spacing: IrrSpacing.sp2) {
-            Text("Total · \(range.label)")
+            Text("\(chart.label) · \(range.label)")
                 .font(.caption)
                 .foregroundColor(.secondary)
-            Text(HistoryFormat.dollar(data.total))
+            Text(HistoryFormat.value(data.total, chart: chart))
                 .font(.title2)
                 .fontWeight(.semibold)
                 .monospacedDigit()
 
-            if forecastEnabled, let fc = data.forecast {
+            // Forecast is USD-only; the daemon omits it for the tokens chart.
+            if forecastEnabled, chart.isCost, let fc = data.forecast {
                 Text("▲ projected \(HistoryFormat.dollar(fc.projected)) (\(fc.basis))")
                     .font(.caption)
                     .foregroundColor(IrrColors.waiting)
             }
 
-            if data.topContributors.isEmpty {
-                Text("no spend in this range")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .padding(.top, IrrSpacing.sp1)
+            if chart == .tokens {
+                tokenSplitRows
             } else {
-                VStack(alignment: .leading, spacing: IrrSpacing.sp1) {
-                    ForEach(Array(data.topContributors.enumerated()), id: \.offset) { i, c in
-                        HStack(spacing: IrrSpacing.sp2) {
-                            Circle()
-                                .fill(HistoryPalette.color(at: i))
-                                .frame(width: 8, height: 8)
-                            Text(c.label)
-                                .font(.caption)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                            Spacer(minLength: IrrSpacing.sp2)
-                            Text(HistoryFormat.dollar(c.value))
-                                .font(.caption)
-                                .monospacedDigit()
-                                .foregroundColor(.secondary)
-                        }
-                    }
-                }
-                .padding(.top, IrrSpacing.sp1)
+                contributorRows
             }
 
             HStack(spacing: IrrSpacing.sp2) {
@@ -355,8 +420,70 @@ struct HistoryContentView: View {
         }
     }
 
-    /// Project order: `top_contributors` first (so the panel dots match the
-    /// chart colors), then any extra projects from the series — mirrors the web
+    /// Tokens side panel: the input/output/cache split, not a contributor rank.
+    @ViewBuilder private var tokenSplitRows: some View {
+        if let split = data.tokenSplit, data.total > 0 {
+            VStack(alignment: .leading, spacing: IrrSpacing.sp1) {
+                ForEach(Array([("Input", split.input), ("Output", split.output), ("Cache", split.cache)].enumerated()), id: \.offset) { i, row in
+                    HStack(spacing: IrrSpacing.sp2) {
+                        Circle().fill(HistoryPalette.color(at: i)).frame(width: 8, height: 8)
+                        Text(row.0).font(.caption)
+                        Spacer(minLength: IrrSpacing.sp2)
+                        Text(HistoryFormat.tokens(row.1))
+                            .font(.caption).monospacedDigit().foregroundColor(.secondary)
+                    }
+                }
+            }
+            .padding(.top, IrrSpacing.sp1)
+        } else {
+            Text("no token usage in this range")
+                .font(.caption).foregroundColor(.secondary).padding(.top, IrrSpacing.sp1)
+        }
+    }
+
+    /// Cost/models/providers side panel: top contributors, tappable to drill
+    /// into the next finer axis (except the synthetic "unknown" bucket and leaf
+    /// axes).
+    @ViewBuilder private var contributorRows: some View {
+        if data.topContributors.isEmpty {
+            Text("no spend in this range")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .padding(.top, IrrSpacing.sp1)
+        } else {
+            let drillable = group.drillNext != nil
+            VStack(alignment: .leading, spacing: IrrSpacing.sp1) {
+                ForEach(Array(data.topContributors.enumerated()), id: \.offset) { i, c in
+                    let canDrill = drillable && c.label != "unknown"
+                    let row = HStack(spacing: IrrSpacing.sp2) {
+                        Circle()
+                            .fill(HistoryPalette.color(at: i))
+                            .frame(width: 8, height: 8)
+                        Text(c.label)
+                            .font(.caption)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer(minLength: IrrSpacing.sp2)
+                        Text(HistoryFormat.value(c.value, chart: chart))
+                            .font(.caption)
+                            .monospacedDigit()
+                            .foregroundColor(.secondary)
+                    }
+                    .contentShape(Rectangle())
+                    .onTapGesture { if canDrill { onDrill(group, c.label) } }
+                    if canDrill {
+                        row.tooltip("Drill into \(c.label)")
+                    } else {
+                        row
+                    }
+                }
+            }
+            .padding(.top, IrrSpacing.sp1)
+        }
+    }
+
+    /// Key order: `top_contributors` first (so the panel dots match the chart
+    /// colors), then any extra keys from the series — mirrors the web
     /// `paintHistoryChart`.
     private var orderedProjects: [String] {
         var seen = Set<String>()
@@ -379,6 +506,7 @@ private struct HistoryCostChart: View {
     let data: HistoryResponse
     let orderedProjects: [String]
     let forecastEnabled: Bool
+    var chart: HistoryChart = .cost
 
     private struct Datum: Identifiable {
         let id: String
@@ -461,7 +589,7 @@ private struct HistoryCostChart: View {
                 AxisGridLine()
                 AxisValueLabel {
                     if let v = value.as(Double.self) {
-                        Text(HistoryFormat.dollar(v))
+                        Text(HistoryFormat.value(v, chart: chart))
                     }
                 }
             }
@@ -667,6 +795,19 @@ enum HistoryPalette {
 enum HistoryFormat {
     /// `$X.XX`, matching the web `histDollar`.
     static func dollar(_ v: Double) -> String { String(format: "$%.2f", v) }
+
+    /// Compact token count (1.2M / 3.4k / 970), matching the web `histTokens`.
+    static func tokens(_ v: Double) -> String {
+        if v >= 1_000_000 { return String(format: "%.1fM", v / 1_000_000) }
+        if v >= 1_000 { return String(format: "%.1fk", v / 1_000) }
+        return String(Int(v.rounded()))
+    }
+
+    /// Dollars for the USD charts, token counts for the tokens chart — the
+    /// macOS twin of the web `histValue`.
+    static func value(_ v: Double, chart: HistoryChart) -> String {
+        chart.isCost ? dollar(v) : tokens(v)
+    }
 
     // Cached formatters — DateFormatter init is expensive and these fire per
     // axis tick. POSIX-pinned so snapshot tests stay stable; timezone tracks the
