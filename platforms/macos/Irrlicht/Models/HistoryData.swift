@@ -1,10 +1,11 @@
 import Foundation
 
 // Codable mirror of the daemon's `GET /api/v1/history` response envelope
-// (`historyResponse` in core/cmd/irrlichd/handlers.go). Phase 1 serves only
-// `chart=cost` grouped by `project`. The types are Encodable as well as
-// Decodable so the History view can round-trip the payload back out for the
-// JSON export (web parity — the web exports the raw response object).
+// (`historyResponse` in core/cmd/irrlichd/handlers.go). Phase 2 (#750) adds the
+// tokens/models/providers chart types, the branch/provider/model/session group
+// axes, and drilldown scoping. The types are Encodable as well as Decodable so
+// the History view can round-trip the payload back out for the JSON export
+// (web parity — the web exports the raw response object).
 
 struct HistoryResponse: Codable {
     let range: String
@@ -18,12 +19,15 @@ struct HistoryResponse: Codable {
     let series: [HistoryPoint]
     let topContributors: [HistoryContributor]
     let forecast: HistoryForecast?
+    let tokenSplit: HistoryTokenSplit? // chart=tokens only
+    let scope: String?                 // active drilldown filter "field:value"
 
     enum CodingKeys: String, CodingKey {
-        case range, chart, group, start, end, total, series, forecast
+        case range, chart, group, start, end, total, series, forecast, scope
         case bucketSeconds = "bucket_seconds"
         case bucketStarts = "bucket_starts"
         case topContributors = "top_contributors"
+        case tokenSplit = "token_split"
     }
 
     /// Mirrors the web `hasData` gate: a non-empty window with spend. Drives the
@@ -33,6 +37,8 @@ struct HistoryResponse: Codable {
 
 struct HistoryPoint: Codable {
     let ts: Int64
+    // Carries the group key (project/branch/provider/model/session per ?group);
+    // the json field stays "project" for Phase 1 wire compatibility.
     let project: String
     let value: Double
 }
@@ -40,6 +46,14 @@ struct HistoryPoint: Codable {
 struct HistoryContributor: Codable {
     let label: String
     let value: Double
+}
+
+/// The window's aggregate token throughput by kind, present only for
+/// chart=tokens. Drives the tokens side panel (in/out/cache).
+struct HistoryTokenSplit: Codable {
+    let input: Double
+    let output: Double
+    let cache: Double
 }
 
 struct HistoryForecast: Codable {
@@ -110,12 +124,15 @@ enum HistoryRange: String, CaseIterable, Identifiable {
 
     /// Query items for `GET /api/v1/history`, mirroring the web `historyQuery()`:
     /// presets send `range`; `.custom` sends explicit `start`/`end` unix seconds.
-    func queryItems(forecast: Bool, customStart: Int64?, customEnd: Int64?) -> [URLQueryItem] {
+    func queryItems(chart: HistoryChart, group: HistoryGroup, scope: HistoryScope?, forecast: Bool, customStart: Int64?, customEnd: Int64?) -> [URLQueryItem] {
         var items = [
-            URLQueryItem(name: "chart", value: "cost"),
-            URLQueryItem(name: "group", value: "project"),
+            URLQueryItem(name: "chart", value: chart.rawValue),
+            URLQueryItem(name: "group", value: group.rawValue),
             URLQueryItem(name: "forecast", value: forecast ? "true" : "false"),
         ]
+        if let scope {
+            items.append(URLQueryItem(name: "scope", value: scope.query))
+        }
         if self == .custom, let customStart, let customEnd {
             items.append(URLQueryItem(name: "start", value: String(customStart)))
             items.append(URLQueryItem(name: "end", value: String(customEnd)))
@@ -124,4 +141,74 @@ enum HistoryRange: String, CaseIterable, Identifiable {
         }
         return items
     }
+}
+
+/// History chart type (#750). Mirrors the web Chart segmented control. cost and
+/// the models/providers presets measure USD; tokens measures token counts.
+enum HistoryChart: String, CaseIterable, Identifiable {
+    case cost, tokens, models, providers
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .cost: return "Cost"
+        case .tokens: return "Tokens"
+        case .models: return "Models"
+        case .providers: return "Providers"
+        }
+    }
+
+    /// True for the USD metrics (everything but tokens) — they render a $ axis
+    /// and a cost forecast.
+    var isCost: Bool { self != .tokens }
+
+    /// models/providers are presets that pin the stacking axis to that
+    /// dimension; cost/tokens leave the group axis to the user.
+    var pinnedGroup: HistoryGroup? {
+        switch self {
+        case .models: return .model
+        case .providers: return .provider
+        default: return nil
+        }
+    }
+}
+
+/// History group axis (#750). Mirrors the web Group segmented control.
+enum HistoryGroup: String, CaseIterable, Identifiable {
+    case project, branch, provider, model, session
+
+    var id: String { rawValue }
+
+    /// Segmented-control label (the 380pt popover uses the compact form).
+    var shortLabel: String {
+        switch self {
+        case .project: return "Proj"
+        case .branch: return "Branch"
+        case .provider: return "Prov"
+        case .model: return "Model"
+        case .session: return "Sess"
+        }
+    }
+
+    /// The next finer axis to drill into, or nil for a leaf — mirrors the web
+    /// DRILL_NEXT map (project → branch → session; provider/model → session).
+    var drillNext: HistoryGroup? {
+        switch self {
+        case .project: return .branch
+        case .branch: return .session
+        case .provider: return .model
+        case .model: return .session
+        case .session: return nil
+        }
+    }
+}
+
+/// A single-level drilldown filter: show only rows whose `field` equals `value`.
+struct HistoryScope: Equatable {
+    let field: HistoryGroup
+    let value: String
+
+    /// The `scope=field:value` query-param form the daemon parses.
+    var query: String { "\(field.rawValue):\(value)" }
 }

@@ -9,7 +9,14 @@ import (
 	"time"
 
 	"irrlicht/core/domain/session"
+	"irrlicht/core/ports/outbound"
 )
+
+// costSeriesByProject runs CostSeries with the Phase-1 default axis (cost ×
+// project), so the bucketing/baseline tests keep their original call shape.
+func costSeriesByProject(tr *CostTracker, start, end, bucket int64) (*outbound.CostSeriesResult, error) {
+	return tr.CostSeries(outbound.SeriesQuery{Start: start, End: end, BucketSeconds: bucket, Group: "project"})
+}
 
 func newTestTracker(t *testing.T) *CostTracker {
 	t.Helper()
@@ -399,7 +406,7 @@ func TestCostSeries_BucketsDeltas(t *testing.T) {
 	writeRow(t, tr, "proj-b", snapshotRow{TS: 980, Project: "proj-b", Session: "s3", Cost: 5.00})
 	writeRow(t, tr, "proj-b", snapshotRow{TS: 1010, Project: "proj-b", Session: "s3", Cost: 5.20})
 
-	res, err := tr.CostSeries(start, end, bucket)
+	res, err := costSeriesByProject(tr, start, end, bucket)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -408,8 +415,8 @@ func TestCostSeries_BucketsDeltas(t *testing.T) {
 	}
 	wantA := []float64{0.30, 0.20, 0.40, 0.50} // s1 → 0,1,3 ; s2 → 2
 	for i, want := range wantA {
-		if abs(res.ByProject["proj-a"][i]-want) > 1e-9 {
-			t.Errorf("proj-a bucket %d: want %v, got %v", i, want, res.ByProject["proj-a"][i])
+		if abs(res.ByKey["proj-a"][i]-want) > 1e-9 {
+			t.Errorf("proj-a bucket %d: want %v, got %v", i, want, res.ByKey["proj-a"][i])
 		}
 	}
 	if abs(res.Totals["proj-a"]-1.40) > 1e-9 {
@@ -417,8 +424,8 @@ func TestCostSeries_BucketsDeltas(t *testing.T) {
 	}
 	wantB := []float64{0.20, 0, 0, 0}
 	for i, want := range wantB {
-		if abs(res.ByProject["proj-b"][i]-want) > 1e-9 {
-			t.Errorf("proj-b bucket %d: want %v, got %v", i, want, res.ByProject["proj-b"][i])
+		if abs(res.ByKey["proj-b"][i]-want) > 1e-9 {
+			t.Errorf("proj-b bucket %d: want %v, got %v", i, want, res.ByKey["proj-b"][i])
 		}
 	}
 	if abs(res.Totals["proj-b"]-0.20) > 1e-9 {
@@ -443,12 +450,12 @@ func TestCostSeries_SumMatchesWindowTotal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := tr.CostSeries(now-day, now, 3600)
+	res, err := costSeriesByProject(tr, now-day, now, 3600)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if abs(sumF(res.ByProject["proj-a"])-window["day"]["proj-a"]) > 1e-9 {
-		t.Fatalf("series sum %v != window total %v", sumF(res.ByProject["proj-a"]), window["day"]["proj-a"])
+	if abs(sumF(res.ByKey["proj-a"])-window["day"]["proj-a"]) > 1e-9 {
+		t.Fatalf("series sum %v != window total %v", sumF(res.ByKey["proj-a"]), window["day"]["proj-a"])
 	}
 	if abs(res.Totals["proj-a"]-window["day"]["proj-a"]) > 1e-9 {
 		t.Fatalf("totals %v != window total %v", res.Totals["proj-a"], window["day"]["proj-a"])
@@ -460,7 +467,7 @@ func TestCostSeries_SumMatchesWindowTotal(t *testing.T) {
 // within maxSeriesBuckets while still covering [start, end).
 func TestCostSeries_CapsBucketCount(t *testing.T) {
 	tr := newTestTracker(t)
-	res, err := tr.CostSeries(0, 2_000_000_000, 1) // naive n would be ~2e9
+	res, err := costSeriesByProject(tr, 0, 2_000_000_000, 1) // naive n would be ~2e9
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -479,11 +486,11 @@ func TestCostSeries_CapsBucketCount(t *testing.T) {
 
 func TestCostSeries_EmptyAndInvalid(t *testing.T) {
 	tr := newTestTracker(t) // dir does not exist yet
-	res, err := tr.CostSeries(1000, 2000, 100)
+	res, err := costSeriesByProject(tr, 1000, 2000, 100)
 	if err != nil {
 		t.Fatalf("empty dir should not error: %v", err)
 	}
-	if len(res.ByProject) != 0 || len(res.Totals) != 0 {
+	if len(res.ByKey) != 0 || len(res.Totals) != 0 {
 		t.Fatalf("want empty maps, got %+v", res)
 	}
 	if len(res.BucketStarts) != 10 {
@@ -491,7 +498,7 @@ func TestCostSeries_EmptyAndInvalid(t *testing.T) {
 	}
 	// Degenerate args return an empty result, not an error.
 	for _, bad := range [][3]int64{{1000, 2000, 0}, {2000, 1000, 100}} {
-		r, err := tr.CostSeries(bad[0], bad[1], bad[2])
+		r, err := costSeriesByProject(tr, bad[0], bad[1], bad[2])
 		if err != nil {
 			t.Fatalf("args %v: unexpected error %v", bad, err)
 		}
@@ -569,5 +576,132 @@ func TestProviderCostsInWindows_BucketsByProvider(t *testing.T) {
 		if v, ok := got[tf][""]; ok {
 			t.Errorf("%s: empty-provider bucket must be excluded, got %v", tf, v)
 		}
+	}
+}
+
+// --- Phase 2 (#750): branch/model schema + generalized series ---
+
+// TestRecordSnapshot_StampsBranchAndModel verifies the new v2 columns are
+// populated from SessionState at write time.
+func TestRecordSnapshot_StampsBranchAndModel(t *testing.T) {
+	tr := newTestTracker(t)
+	state := &session.SessionState{
+		SessionID:   "s1",
+		ProjectName: "proj-a",
+		GitBranch:   "feat/x",
+		Model:       "claude-opus",
+		Metrics:     &session.SessionMetrics{EstimatedCostUSD: 0.10},
+	}
+	if err := tr.RecordSnapshot(state); err != nil {
+		t.Fatal(err)
+	}
+	rows := readRows(t, tr.filePath("proj-a"))
+	if len(rows) != 1 || rows[0].Branch != "feat/x" || rows[0].Model != "claude-opus" {
+		t.Fatalf("want branch+model stamped, got %+v", rows)
+	}
+}
+
+// TestSnapshotSchema_PreV2RowsReadUnknown asserts the schema bump is backward
+// compatible: a row written without the branch/model columns decodes with both
+// empty and buckets under the unknown ("") key on those axes — no migration.
+func TestSnapshotSchema_PreV2RowsReadUnknown(t *testing.T) {
+	if costSchemaVersion < 2 {
+		t.Fatalf("schema version should be >=2 after #750, got %d", costSchemaVersion)
+	}
+	tr := newTestTracker(t)
+	// snapshotRow with no Branch/Model marshals (omitempty) exactly like a
+	// pre-v2 row on disk.
+	writeRow(t, tr, "proj-a", snapshotRow{TS: 1050, Project: "proj-a", Session: "s1", Cost: 1.00})
+	writeRow(t, tr, "proj-a", snapshotRow{TS: 1150, Project: "proj-a", Session: "s1", Cost: 1.30})
+	rows := readRows(t, tr.filePath("proj-a"))
+	if rows[0].Branch != "" || rows[0].Model != "" {
+		t.Fatalf("pre-v2 row should decode with empty branch/model, got %+v", rows[0])
+	}
+	res, err := tr.CostSeries(outbound.SeriesQuery{Start: 1000, End: 1400, BucketSeconds: 100, Group: "branch"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if abs(res.Totals[""]-0.30) > 1e-9 {
+		t.Fatalf("missing-branch delta should bucket under \"\" (unknown), got %+v", res.Totals)
+	}
+}
+
+// TestCostSeries_IntervalEndAttribution is the core mid-session-change AC: a
+// session that switches branch mid-window credits each delta to the branch
+// active at the interval's end row, never lumping the whole session onto one.
+func TestCostSeries_IntervalEndAttribution(t *testing.T) {
+	tr := newTestTracker(t)
+	const start, bucket, end int64 = 1000, 100, 1400
+	// s1 starts on main, then switches to feat at TS=1250.
+	writeRow(t, tr, "proj-a", snapshotRow{TS: 1050, Project: "proj-a", Branch: "main", Session: "s1", Cost: 1.00})
+	writeRow(t, tr, "proj-a", snapshotRow{TS: 1150, Project: "proj-a", Branch: "main", Session: "s1", Cost: 1.30})
+	writeRow(t, tr, "proj-a", snapshotRow{TS: 1250, Project: "proj-a", Branch: "feat", Session: "s1", Cost: 1.70})
+
+	res, err := tr.CostSeries(outbound.SeriesQuery{Start: start, End: end, BucketSeconds: bucket, Group: "branch"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if abs(res.Totals["main"]-0.30) > 1e-9 {
+		t.Errorf("main: want 0.30 (only the pre-switch delta), got %v", res.Totals["main"])
+	}
+	if abs(res.Totals["feat"]-0.40) > 1e-9 {
+		t.Errorf("feat: want 0.40 (the post-switch delta), got %v", res.Totals["feat"])
+	}
+	// The post-switch delta lands in feat's bucket 2 (TS 1250), not main's.
+	if abs(res.ByKey["feat"][2]-0.40) > 1e-9 {
+		t.Errorf("feat bucket 2: want 0.40, got %v", res.ByKey["feat"])
+	}
+}
+
+// TestCostSeries_TokensMetricSplit verifies the tokens metric buckets total
+// tokens and accumulates the aggregate in/out/cache split.
+func TestCostSeries_TokensMetricSplit(t *testing.T) {
+	tr := newTestTracker(t)
+	writeRow(t, tr, "proj-a", snapshotRow{TS: 1050, Project: "proj-a", Session: "s1", CumIn: 100, CumOut: 10})
+	writeRow(t, tr, "proj-a", snapshotRow{TS: 1150, Project: "proj-a", Session: "s1", CumIn: 200, CumOut: 30, CumRead: 50})
+
+	res, err := tr.CostSeries(outbound.SeriesQuery{Start: 1000, End: 1400, BucketSeconds: 100, Group: "project", Metric: "tokens"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// total tokens delta = (200+30+50) − (100+10) = 170, into bucket 1.
+	if abs(res.Totals["proj-a"]-170) > 1e-9 || abs(res.ByKey["proj-a"][1]-170) > 1e-9 {
+		t.Errorf("tokens total: want 170 in bucket 1, got %+v", res.ByKey["proj-a"])
+	}
+	if res.TokenSplit == nil {
+		t.Fatal("tokens metric must populate TokenSplit")
+	}
+	if abs(res.TokenSplit.Input-100) > 1e-9 || abs(res.TokenSplit.Output-20) > 1e-9 || abs(res.TokenSplit.Cache-50) > 1e-9 {
+		t.Errorf("split: want in=100 out=20 cache=50, got %+v", res.TokenSplit)
+	}
+	// Cost metric never populates the split.
+	costRes, _ := tr.CostSeries(outbound.SeriesQuery{Start: 1000, End: 1400, BucketSeconds: 100, Group: "project", Metric: "cost"})
+	if costRes.TokenSplit != nil {
+		t.Errorf("cost metric should leave TokenSplit nil, got %+v", costRes.TokenSplit)
+	}
+}
+
+// TestCostSeries_ScopeFilter verifies the drilldown primitive: only rows
+// matching the scope field/value contribute.
+func TestCostSeries_ScopeFilter(t *testing.T) {
+	tr := newTestTracker(t)
+	// Two sessions in one project on different branches.
+	writeRow(t, tr, "proj-a", snapshotRow{TS: 1050, Project: "proj-a", Branch: "main", Session: "s1", Cost: 1.00})
+	writeRow(t, tr, "proj-a", snapshotRow{TS: 1150, Project: "proj-a", Branch: "main", Session: "s1", Cost: 1.30})
+	writeRow(t, tr, "proj-a", snapshotRow{TS: 1050, Project: "proj-a", Branch: "feat", Session: "s2", Cost: 2.00})
+	writeRow(t, tr, "proj-a", snapshotRow{TS: 1150, Project: "proj-a", Branch: "feat", Session: "s2", Cost: 2.50})
+
+	res, err := tr.CostSeries(outbound.SeriesQuery{
+		Start: 1000, End: 1400, BucketSeconds: 100,
+		Group: "session", ScopeField: "branch", ScopeValue: "main",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if abs(res.Totals["s1"]-0.30) > 1e-9 {
+		t.Errorf("scoped to branch=main: want s1=0.30, got %v", res.Totals["s1"])
+	}
+	if _, ok := res.Totals["s2"]; ok {
+		t.Errorf("scoped to branch=main must exclude s2 (branch=feat), got %+v", res.Totals)
 	}
 }

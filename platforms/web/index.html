@@ -190,9 +190,9 @@
           <span class="history-ctl-label">Chart</span>
           <div class="history-seg" id="history-chart-sel" role="group" aria-label="Chart type">
             <button type="button" data-chart="cost" class="active">Cost</button>
-            <button type="button" data-chart="tokens" disabled title="Available in Phase 2">Tokens</button>
-            <button type="button" data-chart="models" disabled title="Available in Phase 2">Models</button>
-            <button type="button" data-chart="providers" disabled title="Available in Phase 2">Providers</button>
+            <button type="button" data-chart="tokens">Tokens</button>
+            <button type="button" data-chart="models">Models</button>
+            <button type="button" data-chart="providers">Providers</button>
             <button type="button" data-chart="agents" disabled title="Available in Phase 3">Agents</button>
           </div>
         </div>
@@ -200,13 +200,15 @@
           <span class="history-ctl-label">Group</span>
           <div class="history-seg" id="history-group-sel" role="group" aria-label="Group by">
             <button type="button" data-group="project" class="active">Project</button>
-            <button type="button" data-group="branch" disabled title="Available in Phase 2">Branch</button>
-            <button type="button" data-group="provider" disabled title="Available in Phase 2">Provider</button>
-            <button type="button" data-group="model" disabled title="Available in Phase 2">Model</button>
-            <button type="button" data-group="session" disabled title="Available in Phase 2">Session</button>
+            <button type="button" data-group="branch">Branch</button>
+            <button type="button" data-group="provider">Provider</button>
+            <button type="button" data-group="model">Model</button>
+            <button type="button" data-group="session">Session</button>
           </div>
         </div>
       </div>
+
+      <nav class="history-breadcrumb" id="history-breadcrumb" aria-label="Drilldown" hidden></nav>
 
       <div class="history-layout">
         <div class="history-chart-wrap" id="history-chart-wrap">

@@ -233,13 +233,17 @@ func providerCostsByProvider(byTf map[string]map[string]float64) map[string]map[
 	return out
 }
 
-// History tab (issue #369). Phase 1 serves chart=cost grouped by project only,
-// computed from the cost snapshot files via CostTracker.CostSeries. The other
-// chart types and groups are scaffolded in the UI but return 501 here with a
-// phase hint so the frontend can disable them honestly.
+// History tab (issues #369 / #750). Phase 1 served chart=cost grouped by
+// project; Phase 2 adds the tokens/models/providers chart types and the
+// branch/provider/model/session group axes plus drilldown scoping, all computed
+// from the cost snapshot files via CostTracker.CostSeries. chart=agents remains
+// a Phase 3 (#751) 501 stub.
 
 type historyPoint struct {
-	TS      int64   `json:"ts"`
+	TS int64 `json:"ts"`
+	// Project carries the group key for the point — a project, branch,
+	// provider, model, or session id depending on ?group. The json tag stays
+	// "project" for Phase 1 wire compatibility (web + macOS decoders).
 	Project string  `json:"project"`
 	Value   float64 `json:"value"`
 }
@@ -247,6 +251,15 @@ type historyPoint struct {
 type historyContributor struct {
 	Label string  `json:"label"`
 	Value float64 `json:"value"`
+}
+
+// historyTokenSplit mirrors outbound.TokenSplit on the wire: the window's
+// aggregate token throughput by kind, present only for chart=tokens. Drives the
+// tokens side panel (in/out/cache).
+type historyTokenSplit struct {
+	Input  float64 `json:"input"`
+	Output float64 `json:"output"`
+	Cache  float64 `json:"cache"`
 }
 
 type historyForecastPoint struct {
@@ -264,7 +277,7 @@ type historyForecast struct {
 type historyResponse struct {
 	Range           string               `json:"range"`
 	Chart           string               `json:"chart"`
-	Group           string               `json:"group"`
+	Group           string               `json:"group"` // effective stacking axis (pinned to model/provider for chart=models|providers)
 	Start           int64                `json:"start"`
 	End             int64                `json:"end"`
 	BucketSeconds   int64                `json:"bucket_seconds"`
@@ -273,6 +286,8 @@ type historyResponse struct {
 	Series          []historyPoint       `json:"series"`
 	TopContributors []historyContributor `json:"top_contributors"`
 	Forecast        *historyForecast     `json:"forecast,omitempty"`
+	TokenSplit      *historyTokenSplit   `json:"token_split,omitempty"` // chart=tokens only
+	Scope           string               `json:"scope,omitempty"`       // active drilldown filter "field:value"
 }
 
 // handleGetHistory serves GET /api/v1/history?range=&chart=&group=&start=&end=
@@ -288,11 +303,8 @@ func handleGetHistory(tracker outbound.CostTracker) http.HandlerFunc {
 			chart = "cost"
 		}
 		switch chart {
-		case "cost":
-			// implemented
-		case "tokens", "models", "providers":
-			writeHistoryNotImplemented(w, "chart="+chart, 2)
-			return
+		case "cost", "tokens", "models", "providers":
+			// implemented (Phase 2)
 		case "agents":
 			writeHistoryNotImplemented(w, "chart="+chart, 3)
 			return
@@ -306,14 +318,29 @@ func handleGetHistory(tracker outbound.CostTracker) http.HandlerFunc {
 			group = "project"
 		}
 		switch group {
-		case "project":
-			// implemented
-		case "branch", "provider", "model", "session":
-			writeHistoryNotImplemented(w, "group="+group, 2)
-			return
+		case "project", "branch", "provider", "model", "session":
+			// implemented (Phase 2)
 		default:
 			http.Error(w, "unknown group: "+group, http.StatusBadRequest)
 			return
+		}
+
+		// chart picks the measured metric; models/providers are presets that
+		// pin the stacking axis to that dimension (one-click "cost by X").
+		metric := "cost"
+		switch chart {
+		case "tokens":
+			metric = "tokens"
+		case "models":
+			group = "model"
+		case "providers":
+			group = "provider"
+		}
+
+		scopeField, scopeValue := parseHistoryScope(q.Get("scope"))
+		scopeEcho := ""
+		if scopeField != "" {
+			scopeEcho = scopeField + ":" + scopeValue
 		}
 
 		rangeKey, start, end, ok := resolveHistoryRange(q)
@@ -325,7 +352,15 @@ func handleGetHistory(tracker outbound.CostTracker) http.HandlerFunc {
 
 		var series *outbound.CostSeriesResult
 		if tracker != nil {
-			s, err := tracker.CostSeries(start, end, bucketSeconds)
+			s, err := tracker.CostSeries(outbound.SeriesQuery{
+				Start:         start,
+				End:           end,
+				BucketSeconds: bucketSeconds,
+				Group:         group,
+				Metric:        metric,
+				ScopeField:    scopeField,
+				ScopeValue:    scopeValue,
+			})
 			if err != nil {
 				http.Error(w, "internal error", http.StatusInternalServerError)
 				return
@@ -335,13 +370,29 @@ func handleGetHistory(tracker outbound.CostTracker) http.HandlerFunc {
 		if series == nil {
 			// No tracker (init failed): respond with an empty-but-valid payload
 			// so the dashboard renders cleanly instead of erroring.
-			series = &outbound.CostSeriesResult{Start: start, End: end, BucketSeconds: bucketSeconds, BucketStarts: []int64{}, ByProject: map[string][]float64{}, Totals: map[string]float64{}}
+			series = &outbound.CostSeriesResult{Start: start, End: end, BucketSeconds: bucketSeconds, BucketStarts: []int64{}, ByKey: map[string][]float64{}, Totals: map[string]float64{}}
 		}
 
-		resp := buildHistoryResponse(rangeKey, chart, group, series, q)
+		resp := buildHistoryResponse(rangeKey, chart, group, scopeEcho, series, q)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(resp)
 	}
+}
+
+// parseHistoryScope parses a ?scope=field:value drilldown filter, used to
+// re-scope the series to one contributor. Returns empty field/value (no filter)
+// for an empty, malformed, or unknown-field scope. The value may itself contain
+// colons (split on the first only).
+func parseHistoryScope(s string) (field, value string) {
+	i := strings.IndexByte(s, ':')
+	if i <= 0 || i == len(s)-1 {
+		return "", ""
+	}
+	switch f := s[:i]; f {
+	case "project", "branch", "provider", "model", "session":
+		return f, s[i+1:]
+	}
+	return "", ""
 }
 
 // writeHistoryNotImplemented emits a 501 with a phase hint for chart types and
@@ -403,11 +454,24 @@ func historyBucketSeconds(q url.Values, span int64) int64 {
 	}
 }
 
-// buildHistoryResponse flattens the per-project series into the response
-// envelope: a sparse [{ts,project,value}] series (zero buckets omitted),
-// per-project top contributors, and an optional linear forecast over the
-// grand (all-project) per-bucket total.
-func buildHistoryResponse(rangeKey, chart, group string, s *outbound.CostSeriesResult, q url.Values) historyResponse {
+// historyUnknownLabel / historyUnknownMinShare govern the "unknown" group
+// bucket: rows missing a value on the group axis (branch/provider/model) are
+// surfaced as one "unknown" contributor only when they are at least this share
+// of the window total; below it the bucket is dropped rather than drawn as a
+// misleading sliver. Project/session never produce an empty key.
+const (
+	historyUnknownLabel    = "unknown"
+	historyUnknownMinShare = 0.10
+)
+
+// buildHistoryResponse flattens the per-key series into the response envelope:
+// a sparse [{ts,project,value}] series (zero buckets omitted), per-key top
+// contributors, and an optional linear forecast over the grand per-bucket
+// total. The "project" json field carries the group key generically (Phase 1
+// wire compat). For chart=tokens it also attaches the in/out/cache token split.
+func buildHistoryResponse(rangeKey, chart, group, scope string, s *outbound.CostSeriesResult, q url.Values) historyResponse {
+	resolveUnknownBucket(s)
+
 	resp := historyResponse{
 		Range:           rangeKey,
 		Chart:           chart,
@@ -418,42 +482,71 @@ func buildHistoryResponse(rangeKey, chart, group string, s *outbound.CostSeriesR
 		BucketStarts:    s.BucketStarts,
 		Series:          []historyPoint{},
 		TopContributors: []historyContributor{},
+		Scope:           scope,
 	}
 
-	// Deterministic project order: total desc, then name.
-	projects := make([]string, 0, len(s.Totals))
-	for p := range s.Totals {
-		projects = append(projects, p)
+	// Deterministic key order: total desc, then name.
+	keys := make([]string, 0, len(s.Totals))
+	for k := range s.Totals {
+		keys = append(keys, k)
 	}
-	sort.Slice(projects, func(i, j int) bool {
-		if s.Totals[projects[i]] != s.Totals[projects[j]] {
-			return s.Totals[projects[i]] > s.Totals[projects[j]]
+	sort.Slice(keys, func(i, j int) bool {
+		if s.Totals[keys[i]] != s.Totals[keys[j]] {
+			return s.Totals[keys[i]] > s.Totals[keys[j]]
 		}
-		return projects[i] < projects[j]
+		return keys[i] < keys[j]
 	})
 
-	for _, p := range projects {
-		resp.Total += s.Totals[p]
-		for i, v := range s.ByProject[p] {
+	for _, k := range keys {
+		resp.Total += s.Totals[k]
+		for i, v := range s.ByKey[k] {
 			if i >= len(s.BucketStarts) {
 				break
 			}
 			if v != 0 {
-				resp.Series = append(resp.Series, historyPoint{TS: s.BucketStarts[i], Project: p, Value: v})
+				resp.Series = append(resp.Series, historyPoint{TS: s.BucketStarts[i], Project: k, Value: v})
 			}
 		}
 	}
-	for i, p := range projects {
+	for i, k := range keys {
 		if i >= 5 {
 			break
 		}
-		resp.TopContributors = append(resp.TopContributors, historyContributor{Label: p, Value: s.Totals[p]})
+		resp.TopContributors = append(resp.TopContributors, historyContributor{Label: k, Value: s.Totals[k]})
 	}
 
-	if historyForecastEnabled(q) && resp.Total > 0 && len(s.BucketStarts) > 0 {
+	if s.TokenSplit != nil {
+		resp.TokenSplit = &historyTokenSplit{Input: s.TokenSplit.Input, Output: s.TokenSplit.Output, Cache: s.TokenSplit.Cache}
+	}
+
+	// Forecast projects USD spend; it isn't meaningful for token counts.
+	if chart != "tokens" && historyForecastEnabled(q) && resp.Total > 0 && len(s.BucketStarts) > 0 {
 		resp.Forecast = computeLinearForecast(s.BucketStarts, s.BucketSeconds, resp.Total, historyForecastBuckets(q, len(s.BucketStarts)))
 	}
 	return resp
+}
+
+// resolveUnknownBucket relabels or drops the "" key that CostSeries emits for
+// rows missing a value on the group axis (branch/provider/model), per the ≥10%
+// share rule. A no-op for project/session, which always carry a key.
+func resolveUnknownBucket(s *outbound.CostSeriesResult) {
+	uTotal, ok := s.Totals[""]
+	if !ok {
+		return
+	}
+	grand := 0.0
+	for _, v := range s.Totals {
+		grand += v
+	}
+	uSeries := s.ByKey[""]
+	delete(s.Totals, "")
+	delete(s.ByKey, "")
+	if grand > 0 && uTotal/grand >= historyUnknownMinShare {
+		s.Totals[historyUnknownLabel] = uTotal
+		if uSeries != nil {
+			s.ByKey[historyUnknownLabel] = uSeries
+		}
+	}
 }
 
 // historyForecastEnabled defaults to on; ?forecast=false|0 disables it.

@@ -23,6 +23,14 @@ const (
 	// given session. Keeps files small when cumulative totals tick forward
 	// every couple of seconds during active work.
 	costWriteInterval = 60 * time.Second
+
+	// costSchemaVersion documents the on-disk row shape. v2 (#750) added the
+	// branch and model columns; the format is forward/backward compatible
+	// JSONL with omitempty, so pre-v2 rows simply decode with empty branch and
+	// model (read back as "unknown" for those group axes) — no migration and
+	// no daemon-restart requirement. The constant is documentary; rows do not
+	// carry it.
+	costSchemaVersion = 2
 )
 
 // snapshotRow is the on-disk JSON shape for one cost-tracker line. One row
@@ -30,7 +38,9 @@ const (
 type snapshotRow struct {
 	TS        int64   `json:"ts"`
 	Project   string  `json:"project,omitempty"`  // raw SessionState.ProjectName (filename is sanitized)
+	Branch    string  `json:"branch,omitempty"`   // SessionState.GitBranch ("" = detached/unknown); see #750
 	Provider  string  `json:"provider,omitempty"` // "anthropic", "openai", or "" (unknown); see providerForSession
+	Model     string  `json:"model,omitempty"`    // SessionState.Model ("" = unknown)
 	Session   string  `json:"session"`
 	Cost      float64 `json:"cost"`
 	CumIn     int64   `json:"cum_in,omitempty"`
@@ -126,7 +136,9 @@ func (t *CostTracker) RecordSnapshot(state *session.SessionState) error {
 	row := snapshotRow{
 		TS:        time.Now().Unix(),
 		Project:   state.ProjectName,
+		Branch:    state.GitBranch,
 		Provider:  t.providerOf(state),
+		Model:     state.Model,
 		Session:   state.SessionID,
 		Cost:      m.EstimatedCostUSD,
 		CumIn:     m.CumInputTokens,
@@ -202,7 +214,9 @@ func (t *CostTracker) RecordBaseline(state *session.SessionState) error {
 	row := snapshotRow{
 		TS:        ts,
 		Project:   state.ProjectName,
+		Branch:    state.GitBranch,
 		Provider:  t.providerOf(state),
+		Model:     state.Model,
 		Session:   state.SessionID,
 		Cost:      m.EstimatedCostUSD,
 		CumIn:     m.CumInputTokens,
@@ -460,15 +474,26 @@ func addContributions(s *sessionWindows, key string, out map[string]map[string]f
 	}
 }
 
-// seriesAgg accumulates one session's per-bucket incremental cost while a cost
-// file is scanned. prevCost carries the running cumulative cost so the next
-// in-range row's delta can be computed; project is the bucket key (constant
-// across a session's rows, matching scanWindows).
+// seriesAgg tracks one session's running cumulative values while a cost file is
+// scanned, so the next in-range row's delta can be measured. prev is the
+// previous cumulative value of the selected metric; prevIn/prevOut/prevCache
+// back the tokens in/out/cache split. Unlike Phase 1, deltas are attributed to
+// the group key on the row that closes each interval (see scanSeries), so a
+// session that changes branch/model/provider mid-flight splits correctly.
 type seriesAgg struct {
-	project  string
-	prevCost float64
-	hasPrev  bool
-	buckets  []float64
+	prev      float64
+	hasPrev   bool
+	prevIn    float64
+	prevOut   float64
+	prevCache float64
+}
+
+// advance seeds/updates a session's running baselines to the current row's
+// values. A method (not a per-row closure) so the scan loop allocates nothing.
+func (s *seriesAgg) advance(cur, in, out, cache float64) {
+	s.prev = cur
+	s.prevIn, s.prevOut, s.prevCache = in, out, cache
+	s.hasPrev = true
 }
 
 // maxSeriesBuckets caps how many buckets CostSeries will allocate, so a wide
@@ -478,23 +503,55 @@ type seriesAgg struct {
 // ceiling; the result reports the BucketSeconds actually used.
 const maxSeriesBuckets = 10000
 
-// CostSeries returns a per-project incremental-cost time series bucketed into
-// fixed bucketSeconds-wide buckets spanning [start, end) (unix seconds), plus
-// each project's total over the range. A session's spend in a bucket is the
-// increase in its cumulative cost across the rows that fall in that bucket; the
-// last row before start (or, failing that, the first in-range row) seeds the
-// baseline so pre-range cost is never attributed to the first bucket. Because
-// snapshot cost is monotonic, summing a project's buckets yields the same
-// (max − baseline) total CostsInWindows computes for the matching trailing
-// window. One pass over every cost file.
-func (t *CostTracker) CostSeries(start, end, bucketSeconds int64) (*outbound.CostSeriesResult, error) {
+// rowKey returns a row's value on the requested group axis. For project an
+// empty value falls back to the filename (matching CostsInWindows); the other
+// axes return "" for a missing value, which the handler buckets as "unknown".
+func rowKey(r snapshotRow, group, fallback string) string {
+	switch group {
+	case "branch":
+		return r.Branch
+	case "provider":
+		return r.Provider
+	case "model":
+		return r.Model
+	case "session":
+		return r.Session
+	default: // project
+		if r.Project != "" {
+			return r.Project
+		}
+		return fallback
+	}
+}
+
+// rowMetric returns a row's cumulative value for the selected metric: total
+// tokens (in + out + cache) for "tokens", else estimated USD cost.
+func rowMetric(r snapshotRow, metric string) float64 {
+	if metric == "tokens" {
+		return float64(r.CumIn + r.CumOut + r.CumRead + r.CumCreate)
+	}
+	return r.Cost
+}
+
+// CostSeries returns an incremental time series bucketed into fixed
+// bucketSeconds-wide buckets spanning [Start, End) (unix seconds), keyed by the
+// query's group axis, plus each key's total over the range. A session's
+// increment in a bucket is the increase in its cumulative metric across the
+// rows that fall in that bucket, attributed to the group value on the row that
+// closes the interval; the last row before Start (or, failing that, the first
+// in-range row) seeds the baseline so pre-range cost is never attributed to the
+// first bucket. Because snapshot values are monotonic, summing a key's buckets
+// yields the same (max − baseline) total CostsInWindows computes for the
+// matching trailing window. One pass over every cost file.
+func (t *CostTracker) CostSeries(q outbound.SeriesQuery) (*outbound.CostSeriesResult, error) {
+	start, end, bucketSeconds := q.Start, q.End, q.BucketSeconds
 	if bucketSeconds <= 0 || end <= start {
 		return &outbound.CostSeriesResult{
 			Start:         start,
 			End:           end,
 			BucketSeconds: bucketSeconds,
 			BucketStarts:  []int64{},
-			ByProject:     map[string][]float64{},
+			ByKey:         map[string][]float64{},
 			Totals:        map[string]float64{},
 		}, nil
 	}
@@ -510,8 +567,11 @@ func (t *CostTracker) CostSeries(start, end, bucketSeconds int64) (*outbound.Cos
 		End:           end,
 		BucketSeconds: bucketSeconds,
 		BucketStarts:  make([]int64, n),
-		ByProject:     map[string][]float64{},
+		ByKey:         map[string][]float64{},
 		Totals:        map[string]float64{},
+	}
+	if q.Metric == "tokens" {
+		out.TokenSplit = &outbound.TokenSplit{}
 	}
 	for i := range out.BucketStarts {
 		out.BucketStarts[i] = start + int64(i)*bucketSeconds
@@ -529,7 +589,7 @@ func (t *CostTracker) CostSeries(start, end, bucketSeconds int64) (*outbound.Cos
 			continue
 		}
 		fallback := strings.TrimSuffix(e.Name(), ".jsonl")
-		if err := t.scanSeries(filepath.Join(t.dir, e.Name()), start, end, bucketSeconds, n, fallback, out); err != nil {
+		if err := t.scanSeries(filepath.Join(t.dir, e.Name()), q, bucketSeconds, n, fallback, out); err != nil {
 			return nil, err
 		}
 	}
@@ -537,64 +597,66 @@ func (t *CostTracker) CostSeries(start, end, bucketSeconds int64) (*outbound.Cos
 }
 
 // scanSeries streams one cost file once and folds its sessions' per-bucket
-// deltas into out. A session whose rows carry no project is keyed under
-// fallback (the filename), mirroring CostsInWindows.
-func (t *CostTracker) scanSeries(path string, start, end, bucketSeconds int64, n int, fallback string, out *outbound.CostSeriesResult) error {
+// increments into out, keyed by the group value on each interval's end row and
+// filtered to the query's scope. A row whose group value is empty is keyed
+// under "" (the unknown bucket); for the project axis the empty value falls
+// back to the filename, mirroring CostsInWindows.
+func (t *CostTracker) scanSeries(path string, q outbound.SeriesQuery, bucketSeconds int64, n int, fallback string, out *outbound.CostSeriesResult) error {
 	aggs := make(map[string]*seriesAgg)
-	err := scanCostFile(path, func(r snapshotRow) {
+	return scanCostFile(path, func(r snapshotRow) {
+		if q.ScopeField != "" && rowKey(r, q.ScopeField, fallback) != q.ScopeValue {
+			return
+		}
 		s := aggs[r.Session]
 		if s == nil {
-			s = &seriesAgg{buckets: make([]float64, n)}
+			s = &seriesAgg{}
 			aggs[r.Session] = s
 		}
-		if r.Project != "" {
-			s.project = r.Project
-		}
-		if r.TS < start {
-			// Pre-range row: keep advancing the baseline so the first
-			// in-range delta measures spend since the last snapshot.
-			s.prevCost = r.Cost
-			s.hasPrev = true
+		cur := rowMetric(r, q.Metric)
+		curIn := float64(r.CumIn)
+		curOut := float64(r.CumOut)
+		curCache := float64(r.CumRead + r.CumCreate)
+
+		switch {
+		case r.TS < q.Start:
+			// Pre-range row: advance the baseline so the first in-range delta
+			// measures spend since the last snapshot.
+			s.advance(cur, curIn, curOut, curCache)
+			return
+		case r.TS >= q.End:
+			return
+		case !s.hasPrev:
+			// First observation with no pre-range baseline: seed, no delta.
+			s.advance(cur, curIn, curOut, curCache)
 			return
 		}
-		if r.TS >= end {
-			return
+
+		// The guards above filter rows to [Start, End), so the index is always
+		// within [0, n-1] — no clamp needed.
+		idx := int((r.TS - q.Start) / bucketSeconds)
+		if d := cur - s.prev; d > 0 {
+			key := rowKey(r, q.Group, fallback)
+			dst := out.ByKey[key]
+			if dst == nil {
+				dst = make([]float64, n)
+				out.ByKey[key] = dst
+			}
+			dst[idx] += d
+			out.Totals[key] += d
 		}
-		if !s.hasPrev {
-			// First observation of this session, with no pre-range baseline:
-			// seed the baseline, contributing nothing for this row.
-			s.prevCost = r.Cost
-			s.hasPrev = true
-			return
-		}
-		if d := r.Cost - s.prevCost; d > 0 {
-			// The guards above filter rows to [start, end), so the index is
-			// always within [0, n-1] — no clamp needed.
-			s.buckets[int((r.TS-start)/bucketSeconds)] += d
-		}
-		s.prevCost = r.Cost
-	})
-	if err != nil {
-		return err
-	}
-	for _, s := range aggs {
-		key := s.project
-		if key == "" {
-			key = fallback
-		}
-		dst := out.ByProject[key]
-		if dst == nil {
-			dst = make([]float64, n)
-			out.ByProject[key] = dst
-		}
-		for i, v := range s.buckets {
-			if v != 0 {
-				dst[i] += v
-				out.Totals[key] += v
+		if out.TokenSplit != nil {
+			if d := curIn - s.prevIn; d > 0 {
+				out.TokenSplit.Input += d
+			}
+			if d := curOut - s.prevOut; d > 0 {
+				out.TokenSplit.Output += d
+			}
+			if d := curCache - s.prevCache; d > 0 {
+				out.TokenSplit.Cache += d
 			}
 		}
-	}
-	return nil
+		s.advance(cur, curIn, curOut, curCache)
+	})
 }
 
 // Prune rewrites each project file to drop rows older than olderThanDays.

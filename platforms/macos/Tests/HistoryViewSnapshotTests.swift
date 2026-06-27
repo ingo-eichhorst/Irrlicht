@@ -73,7 +73,9 @@ final class HistoryViewSnapshotTests: XCTestCase {
                 basis: "linear",
                 horizonBuckets: 1,
                 series: [HistoryForecastPoint(ts: base + Int64(buckets.count) * day, value: rate)]
-            )
+            ),
+            tokenSplit: nil,
+            scope: nil
         )
     }
 
@@ -89,7 +91,38 @@ final class HistoryViewSnapshotTests: XCTestCase {
             total: 0,
             series: [],
             topContributors: [],
-            forecast: nil
+            forecast: nil,
+            tokenSplit: nil,
+            scope: nil
+        )
+    }
+
+    /// Tokens chart (#750): the side panel is the input/output/cache split and
+    /// there is no USD forecast.
+    private func populatedTokens() -> HistoryResponse {
+        let day: Int64 = 86_400
+        let base: Int64 = 1_700_000_000
+        let buckets = (0..<8).map { base + Int64($0) * day }
+        let perKey: [(String, [Double])] = [
+            ("main", [12000, 14000, 16000, 15000, 20000, 24000, 26000, 30000]),
+            ("feat/x", [4000, 5000, 6000, 7000, 6000, 9000, 11000, 12000]),
+        ]
+        var series: [HistoryPoint] = []
+        for (key, values) in perKey {
+            for (i, v) in values.enumerated() {
+                series.append(HistoryPoint(ts: buckets[i], project: key, value: v))
+            }
+        }
+        let grand = perKey.reduce(0.0) { $0 + $1.1.reduce(0, +) }
+        return HistoryResponse(
+            range: "month", chart: "tokens", group: "branch",
+            start: base, end: base + Int64(buckets.count) * day,
+            bucketSeconds: day, bucketStarts: buckets, total: grand,
+            series: series,
+            topContributors: perKey.map { HistoryContributor(label: $0.0, value: $0.1.reduce(0, +)) },
+            forecast: nil,
+            tokenSplit: HistoryTokenSplit(input: grand * 0.6, output: grand * 0.1, cache: grand * 0.3),
+            scope: nil
         )
     }
 
@@ -102,6 +135,34 @@ final class HistoryViewSnapshotTests: XCTestCase {
             onExportJSON: {}
         )
         assertSnapshot(of: host(view, height: 460), as: .image)
+    }
+
+    func testHistory_Tokens() {
+        let view = HistoryContentView(
+            data: populatedTokens(),
+            range: .month,
+            chart: .tokens,
+            group: .branch,
+            scope: nil,
+            forecastEnabled: true,
+            onExportCSV: {},
+            onExportJSON: {}
+        )
+        assertSnapshot(of: host(view, height: 460), as: .image)
+    }
+
+    func testHistory_Drilldown() {
+        let view = HistoryContentView(
+            data: populated(),
+            range: .month,
+            chart: .cost,
+            group: .branch,
+            scope: HistoryScope(field: .project, value: "irrlicht"),
+            forecastEnabled: true,
+            onExportCSV: {},
+            onExportJSON: {}
+        )
+        assertSnapshot(of: host(view, height: 500), as: .image)
     }
 
     func testHistory_EmptyState() {
