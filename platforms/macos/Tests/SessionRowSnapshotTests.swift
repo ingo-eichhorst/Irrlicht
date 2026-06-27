@@ -228,19 +228,11 @@ final class SessionRowSnapshotTests: XCTestCase {
 
     /// A transient PID=0 session with no metrics at all — the row must render
     /// gracefully (no token/context column) rather than crash or show garbage.
+    /// (The metrics-present-but-empty shape is covered by the antigravity-ghost
+    /// fixture, whose metrics object carries zero tokens / zero utilization, so a
+    /// separate zero-token unit case would render an identical row.)
     func testGhostRow_PID0_NilMetrics() {
         let session = makeSession(state: .ready, metrics: nil, pid: 0, adapter: "antigravity")
-        assertSnapshot(of: host(session), as: .image)
-    }
-
-    /// A PID=0 ready session that booted but did no work — zero tokens.
-    func testGhostRow_PID0_ZeroTokens() {
-        let session = makeSession(
-            state: .ready,
-            metrics: makeMetrics(tokens: 0, utilization: 0),
-            pid: 0,
-            adapter: "antigravity"
-        )
         assertSnapshot(of: host(session), as: .image)
     }
 
