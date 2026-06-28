@@ -236,11 +236,43 @@ final class HistoryViewSnapshotTests: XCTestCase {
         )
     }
 
-    func testQuota_FiveHour_HitsCap() {
-        assertSnapshot(of: host(HistoryQuotaContentView(window: fiveHourHitsCap()), height: 360), as: .image)
+    /// 5h OpenAI window, 30% used 1h in → under pace (green, no cap).
+    private func openaiFiveHourUnderPace() -> QuotaWindowVM {
+        let base = Date(timeIntervalSince1970: 1_700_000_000)
+        return QuotaWindowVM(
+            label: "5h",
+            planLabel: "ChatGPT Plus",
+            start: base,
+            end: base.addingTimeInterval(5 * 3600),
+            now: base.addingTimeInterval(1 * 3600),
+            usedPercent: 30,
+            projectedCap: nil,
+            isStale: false
+        )
     }
 
-    func testQuota_SevenDay_UnderPace() {
-        assertSnapshot(of: host(HistoryQuotaContentView(window: sevenDayUnderPace()), height: 360), as: .image)
+    private func anthropicProvider() -> QuotaProviderVM {
+        QuotaProviderVM(id: "anthropic", iconKey: "anthropic", planLabel: "Claude Max",
+                        windows: [fiveHourHitsCap(), sevenDayUnderPace()])
+    }
+
+    private func openaiProvider() -> QuotaProviderVM {
+        QuotaProviderVM(id: "openai", iconKey: "openai", planLabel: "ChatGPT Plus",
+                        windows: [openaiFiveHourUnderPace()])
+    }
+
+    /// Single provider, both windows side-by-side — the common case (one Claude
+    /// subscription): exercises the 5h cap trajectory + 7d on-pace footer.
+    func testQuotaForecast_SingleProvider() {
+        let view = HistoryQuotaForecastView(providers: [anthropicProvider()])
+        assertSnapshot(of: host(view, height: 320), as: .image)
+    }
+
+    /// Two active providers stacked — Anthropic (5h hits cap, 7d on pace) +
+    /// OpenAI (5h on pace). Exercises the per-provider grid, both brand icons,
+    /// and both footer states.
+    func testQuotaForecast_MultiProvider() {
+        let view = HistoryQuotaForecastView(providers: [anthropicProvider(), openaiProvider()])
+        assertSnapshot(of: host(view, height: 460), as: .image)
     }
 }

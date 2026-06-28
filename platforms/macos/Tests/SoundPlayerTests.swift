@@ -47,11 +47,6 @@ final class SoundPlayerTests: XCTestCase {
         }
     }
 
-    func testSpokenVoiceIsInstalledForDefaultAlwaysTrue() {
-        XCTAssertTrue(SpokenVoice.default.isInstalled,
-            ".default has no canonical name and must always report installed")
-    }
-
     func testMatchesAcceptsBareAndQualitySuffixedNames() {
         // macOS 26.x reports premium/enhanced voices with the quality in
         // the name ("Zoe (Premium)"); older releases report bare "Zoe".

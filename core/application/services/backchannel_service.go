@@ -49,11 +49,12 @@ type BackchannelEngine struct {
 	logger  outbound.Logger
 	now     func() time.Time
 
-	mu        sync.Mutex
-	prevState map[string]string      // sessionID → last observed state
-	prevUtil  map[string]float64     // sessionID → last observed context utilization
-	lastFired map[string]time.Time   // ruleID\x00sessionID → last fire time
-	recent    map[string][]time.Time // sessionID → recent fire times (global cap)
+	mu         sync.Mutex
+	prevState  map[string]string      // sessionID → last observed state
+	prevUtil   map[string]float64     // sessionID → last observed context utilization
+	prevTokens map[string]int64       // sessionID → last observed total context tokens
+	lastFired  map[string]time.Time   // ruleID\x00sessionID → last fire time
+	recent     map[string][]time.Time // sessionID → recent fire times (global cap)
 }
 
 // NewBackchannelEngine constructs an engine. enabled reports the backchannel
@@ -61,17 +62,18 @@ type BackchannelEngine struct {
 // so re-enabling never causes a spurious fire).
 func NewBackchannelEngine(rules ruleSource, input inputForwarder, presets map[string]map[string]string, push outbound.PushBroadcaster, enabled func() bool, logger outbound.Logger) *BackchannelEngine {
 	return &BackchannelEngine{
-		rules:     rules,
-		input:     input,
-		presets:   presets,
-		push:      push,
-		enabled:   enabled,
-		logger:    logger,
-		now:       time.Now,
-		prevState: map[string]string{},
-		prevUtil:  map[string]float64{},
-		lastFired: map[string]time.Time{},
-		recent:    map[string][]time.Time{},
+		rules:      rules,
+		input:      input,
+		presets:    presets,
+		push:       push,
+		enabled:    enabled,
+		logger:     logger,
+		now:        time.Now,
+		prevState:  map[string]string{},
+		prevUtil:   map[string]float64{},
+		prevTokens: map[string]int64{},
+		lastFired:  map[string]time.Time{},
+		recent:     map[string][]time.Time{},
 	}
 }
 
@@ -113,8 +115,10 @@ func (e *BackchannelEngine) evaluate(s *session.SessionState) []backchannel.Rule
 	sid := s.SessionID
 	cur := s.State
 	util := 0.0
+	var tokens int64
 	if s.Metrics != nil {
 		util = s.Metrics.ContextUtilization
+		tokens = s.Metrics.TotalTokens
 	}
 
 	e.mu.Lock()
@@ -122,8 +126,10 @@ func (e *BackchannelEngine) evaluate(s *session.SessionState) []backchannel.Rule
 
 	prev, seen := e.prevState[sid]
 	prevUtil := e.prevUtil[sid]
+	prevTokens := e.prevTokens[sid]
 	e.prevState[sid] = cur
 	e.prevUtil[sid] = util
+	e.prevTokens[sid] = tokens
 
 	// First observation establishes the baseline; never fire on it (otherwise
 	// a session already in `waiting` or already high-pressure would fire the
@@ -142,7 +148,7 @@ func (e *BackchannelEngine) evaluate(s *session.SessionState) []backchannel.Rule
 		if r.Adapter != "" && r.Adapter != s.Adapter {
 			continue
 		}
-		if !triggered(r.Trigger, prev, cur, prevUtil, util) {
+		if !triggered(r.Trigger, prev, cur, prevUtil, util, prevTokens, tokens) {
 			continue
 		}
 		// Firing is gated on the master-toggle here (after bookkeeping, so a
@@ -174,6 +180,7 @@ func (e *BackchannelEngine) forget(sessionID string) {
 	defer e.mu.Unlock()
 	delete(e.prevState, sessionID)
 	delete(e.prevUtil, sessionID)
+	delete(e.prevTokens, sessionID)
 	delete(e.recent, sessionID)
 	suffix := "\x00" + sessionID
 	for k := range e.lastFired {
@@ -184,15 +191,19 @@ func (e *BackchannelEngine) forget(sessionID string) {
 }
 
 // triggered reports whether a trigger matches this transition. State triggers
-// fire on the edge into the state; context_pressure fires on the rising
-// crossing of the threshold (hysteresis is inherent in prevUtil→util).
-func triggered(t backchannel.Trigger, prev, cur string, prevUtil, util float64) bool {
+// fire on the edge into the state; context_pressure / context_pressure_tokens
+// fire on the rising crossing of the threshold (hysteresis is inherent in
+// prevUtil→util and prevTokens→tokens respectively).
+func triggered(t backchannel.Trigger, prev, cur string, prevUtil, util float64, prevTokens, tokens int64) bool {
 	switch t.Event {
 	case backchannel.EventWaiting, backchannel.EventReady, backchannel.EventWorking:
 		return cur == t.Event && prev != cur
 	case backchannel.EventContextPressure:
 		th := t.PressureThreshold()
 		return prevUtil < th && util >= th
+	case backchannel.EventContextTokens:
+		th := t.TokensThreshold()
+		return prevTokens < th && tokens >= th
 	default:
 		return false
 	}

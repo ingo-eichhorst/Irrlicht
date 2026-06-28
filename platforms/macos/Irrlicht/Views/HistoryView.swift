@@ -10,12 +10,34 @@ import SwiftUI
 // changes. The web's side-by-side chart + side-panel is restacked vertically
 // to fit the 380pt popover.
 
+/// Top-level History tabs. The three concerns are too different to share one
+/// control bar, so each is its own tab with only the controls it needs:
+/// Usage (cost/token time series), Yield (productive-vs-reverted), and Quota
+/// (live per-provider subscription rate-limit forecast).
+enum HistoryTab: String, CaseIterable, Identifiable {
+    case usage, yield, quota
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .usage: return "Usage"
+        case .yield: return "Yield"
+        case .quota: return "Quota"
+        }
+    }
+}
+
 struct HistoryView: View {
     let onClose: () -> Void
 
     @EnvironmentObject var sessionManager: SessionManager
 
-    @State private var range: HistoryRange = .fiveHour
+    // Top-level view: each tab is a self-contained concern with its own controls
+    // (Usage = cost/token time series, Yield = productive-vs-reverted, Quota =
+    // live per-provider rate-limit forecast).
+    @State private var tab: HistoryTab
+    @State private var range: HistoryRange = .day
     @State private var chart: HistoryChart = .cost
     @State private var group: HistoryGroup = .project
     // Single-level drilldown filter (#750); nil = unscoped.
@@ -41,6 +63,11 @@ struct HistoryView: View {
     @State private var yieldResponse: HistoryYieldResponse?
     @State private var loadFailed = false
 
+    init(onClose: @escaping () -> Void, initialTab: HistoryTab = .usage) {
+        self.onClose = onClose
+        self._tab = State(initialValue: initialTab)
+    }
+
     /// The cross-filters keyed by dimension, for `queryItems` and the query key.
     private var filtersDict: [HistoryGroup: [String]] {
         [.provider: Array(filterProvider),
@@ -54,12 +81,17 @@ struct HistoryView: View {
     private var queryKey: String {
         let fc = forecastEnabled ? "f1" : "f0"
         let flt = "\(filterProvider.sorted().joined(separator: ","))|\(filterTokenType.map(\.rawValue).sorted().joined(separator: ","))|\(filterProject.sorted().joined(separator: ","))"
-        let dims = "\(chart.rawValue)-\(effectiveGroup.rawValue)-\(scope?.query ?? "")-\(flt)"
+        let dims = "\(tab.rawValue)-\(fetchChart.rawValue)-\(effectiveGroup.rawValue)-\(scope?.query ?? "")-\(flt)"
         if range == .custom {
             return "custom-\(appliedCustomStart ?? 0)-\(appliedCustomEnd ?? 0)-\(fc)-\(dims)"
         }
         return "\(range.rawValue)-\(fc)-\(dims)"
     }
+
+    /// The chart metric actually sent to the daemon: the Yield tab forces the
+    /// yield aggregate; otherwise the Usage tab's Cost/Tokens choice. (Quota does
+    /// not fetch.)
+    private var fetchChart: HistoryChart { tab == .yield ? .yieldRatio : chart }
 
     /// The stacking axis actually sent to the daemon: pinned to model/provider
     /// for the models/providers presets, else the user's group choice.
@@ -84,7 +116,7 @@ struct HistoryView: View {
         VStack(alignment: .leading, spacing: 0) {
             header
             Divider()
-            controls
+            topControls
             Divider()
             content
         }
@@ -102,6 +134,12 @@ struct HistoryView: View {
         }
         .onChange(of: chart) { newChart in
             if newChart != .tokens && group == .tokenType { group = .project }
+        }
+        // Switching tabs drops any drilldown and keeps the Usage metric valid
+        // (Cost/Tokens only — Yield lives in its own tab now).
+        .onChange(of: tab) { newTab in
+            scope = nil
+            if newTab == .usage, chart == .yieldRatio { chart = .cost }
         }
     }
 
@@ -139,126 +177,119 @@ struct HistoryView: View {
 
     // MARK: Controls
 
-    private var controls: some View {
+    /// Tab selector at the very top, then only the controls that apply to the
+    /// active tab — Quota needs none, Yield needs just a range, Usage gets the
+    /// full set. Partitioning by tab is what keeps any single row from
+    /// overflowing the 380pt panel.
+    private var topControls: some View {
         VStack(alignment: .leading, spacing: IrrSpacing.sp2) {
-            // Two rows so neither is cramped at 380pt, and the quota/cost split
-            // is explicit. Both Pickers bind to `range`; the row that doesn't
-            // own the current selection simply shows nothing highlighted.
-            HStack(spacing: IrrSpacing.sp2) {
-                Text("Quota")
-                    .font(.caption2).foregroundColor(.secondary)
-                    .frame(width: 40, alignment: .leading)
-                Picker("", selection: $range) {
-                    Text("5h").tag(HistoryRange.fiveHour)
-                    Text("7d").tag(HistoryRange.sevenDay)
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
+            Picker("", selection: $tab) {
+                ForEach(HistoryTab.allCases) { Text($0.label).tag($0) }
             }
-            HStack(spacing: IrrSpacing.sp2) {
-                Text("Cost")
-                    .font(.caption2).foregroundColor(.secondary)
-                    .frame(width: 40, alignment: .leading)
-                Picker("", selection: $range) {
-                    Text("Day").tag(HistoryRange.day)
-                    Text("Wk").tag(HistoryRange.week)
-                    Text("Mo").tag(HistoryRange.month)
-                    Text("Yr").tag(HistoryRange.year)
-                    Text("Custom").tag(HistoryRange.custom)
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
 
-            // Chart-type selector — only for the cost calendar ranges (the
-            // quota spans render a burn-rate projection, not a chart type). #373.
-            if !range.isQuota {
-                HStack(spacing: IrrSpacing.sp2) {
-                    Text("Chart")
-                        .font(.caption2).foregroundColor(.secondary)
-                        .frame(width: 40, alignment: .leading)
-                    Picker("", selection: $chart) {
-                        Text("Cost").tag(HistoryChart.cost)
-                        Text("Yield").tag(HistoryChart.yieldRatio)
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                }
-            }
-
-            if range == .custom {
-                HStack(spacing: IrrSpacing.sp2) {
-                    DatePicker("", selection: $customStart, displayedComponents: .date)
-                        .labelsHidden()
-                    Text("→").foregroundColor(.secondary)
-                    DatePicker("", selection: $customEnd, displayedComponents: .date)
-                        .labelsHidden()
-                    Button("Apply") { applyCustomRange() }
-                }
-                .font(.caption)
-            }
-
-            // Chart-type + group axis (#750). Cost spans only — the quota
-            // windows render a burn-rate projection, not a grouped series.
-            if !range.isQuota {
-                HStack(spacing: IrrSpacing.sp2) {
-                    Text("Chart")
-                        .font(.caption2).foregroundColor(.secondary)
-                        .frame(width: 40, alignment: .leading)
-                    Picker("", selection: Binding(
-                        get: { chart },
-                        set: { chart = $0; scope = nil } // a new metric resets any drilldown
-                    )) {
-                        ForEach(HistoryChart.allCases) { Text($0.label).tag($0) }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                }
-                HStack(spacing: IrrSpacing.sp2) {
-                    Text("Group")
-                        .font(.caption2).foregroundColor(.secondary)
-                        .frame(width: 40, alignment: .leading)
-                    Picker("", selection: Binding(
-                        get: { effectiveGroup },
-                        set: { newGroup in
-                            group = newGroup
-                            // Choosing a group leaves the metric-preset charts.
-                            if chart.pinnedGroup != nil { chart = .cost }
-                            scope = nil
-                        }
-                    )) {
-                        ForEach(HistoryGroup.allCases) { Text($0.shortLabel).tag($0) }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                }
-
-                Toggle("Forecast", isOn: $forecastEnabled)
-                    .toggleStyle(.checkbox)
-                    .font(.caption)
-
-                // Cross-filters (#750): the grouped dimension is hidden (never
-                // both axis and filter); token_type only narrows the tokens
-                // metric.
-                HStack(spacing: IrrSpacing.sp2) {
-                    Text("Filter")
-                        .font(.caption2).foregroundColor(.secondary)
-                        .frame(width: 40, alignment: .leading)
-                    if effectiveGroup != .provider { providerFilterMenu }
-                    if chart == .tokens && group != .tokenType { tokenTypeFilterMenu }
-                    if effectiveGroup != .project { projectFilterMenu }
-                    Spacer()
-                }
+            switch tab {
+            case .usage: usageControls
+            case .yield: yieldControls
+            case .quota: EmptyView()
             }
         }
         .padding(.horizontal, IrrSpacing.sp4)
         .padding(.vertical, IrrSpacing.sp3)
     }
 
+    /// Usage tab: cost/token time series. Labelled dropdowns, two per row so
+    /// nothing overflows the 380pt panel (a .menu Picker sizes to its widest
+    /// option, ~90pt each). The models/providers presets are gone — they're just
+    /// Cost grouped by model/provider, which the Group axis already offers.
+    @ViewBuilder private var usageControls: some View {
+        HStack(spacing: IrrSpacing.sp3) {
+            Picker("Range", selection: $range) {
+                ForEach(HistoryRange.allCases) { Text($0.label).tag($0) }
+            }
+            .fixedSize()
+            Picker("Chart", selection: Binding(
+                get: { chart },
+                set: { chart = $0; scope = nil } // a new metric resets any drilldown
+            )) {
+                ForEach(visibleCharts) { Text($0.label).tag($0) }
+            }
+            .fixedSize()
+            Spacer(minLength: 0)
+        }
+        .pickerStyle(.menu)
+        .font(.caption)
+
+        HStack(spacing: IrrSpacing.sp3) {
+            Picker("Group", selection: Binding(
+                get: { effectiveGroup },
+                set: { newGroup in
+                    group = newGroup
+                    if chart.pinnedGroup != nil { chart = .cost } // leave the presets
+                    scope = nil
+                }
+            )) {
+                ForEach(HistoryGroup.allCases) { Text($0.shortLabel).tag($0) }
+            }
+            .fixedSize()
+            .pickerStyle(.menu)
+            Toggle("Forecast", isOn: $forecastEnabled)
+                .toggleStyle(.checkbox)
+            Spacer(minLength: 0)
+        }
+        .font(.caption)
+
+        if range == .custom { customRangeRow }
+
+        // Cross-filters (#750), always visible. The daemon query still drops the
+        // grouped dimension and the token_type filter outside the tokens metric,
+        // so those act as no-ops rather than vanishing from the UI.
+        HStack(spacing: IrrSpacing.sp2) {
+            providerFilterMenu
+            tokenTypeFilterMenu
+            projectFilterMenu
+            Spacer(minLength: 0)
+        }
+        .font(.caption)
+    }
+
+    /// Yield tab: a per-project aggregate over the range — just the range picker.
+    @ViewBuilder private var yieldControls: some View {
+        HStack(spacing: IrrSpacing.sp3) {
+            Picker("Range", selection: $range) {
+                ForEach(HistoryRange.allCases) { Text($0.label).tag($0) }
+            }
+            .fixedSize()
+            .pickerStyle(.menu)
+            Spacer(minLength: 0)
+        }
+        .font(.caption)
+
+        if range == .custom { customRangeRow }
+    }
+
+    /// Custom-range date pickers, shared by the Usage and Yield tabs.
+    private var customRangeRow: some View {
+        HStack(spacing: IrrSpacing.sp2) {
+            DatePicker("", selection: $customStart, displayedComponents: .date)
+                .labelsHidden()
+            Text("→").foregroundColor(.secondary)
+            DatePicker("", selection: $customEnd, displayedComponents: .date)
+                .labelsHidden()
+            Button("Apply") { applyCustomRange() }
+        }
+        .font(.caption)
+    }
+
+    /// Metrics shown in the Chart dropdown — Cost and Tokens (Yield is its own
+    /// tab; the models/providers presets fold into the Group axis).
+    private var visibleCharts: [HistoryChart] { [.cost, .tokens] }
+
     // MARK: Cross-filter menus
 
     private func filterLabel(_ name: String, count: Int) -> String {
-        count > 0 ? "\(name): \(count)" : "\(name): All"
+        count > 0 ? "\(name) (\(count))" : name
     }
 
     private func setBinding(_ set: Binding<Set<String>>, _ value: String) -> Binding<Bool> {
@@ -315,12 +346,26 @@ struct HistoryView: View {
 
     // MARK: Content
 
+    /// Caps the scrollable content height so the popover can't outgrow the
+    /// screen — mirrors SessionListView's group-list cap.
+    private static let contentMaxHeight: CGFloat = 560
+
     @ViewBuilder private var content: some View {
-        if range.isQuota {
-            quotaContent
-        } else if chart == .yieldRatio {
-            yieldContent
-        } else if let r = response {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                switch tab {
+                case .usage: usageContent
+                case .yield: yieldContent
+                case .quota: quotaContent
+                }
+            }
+        }
+        .frame(maxHeight: Self.contentMaxHeight)
+    }
+
+    /// Usage tab: the stacked-area cost/token time series.
+    @ViewBuilder private var usageContent: some View {
+        if let r = response {
             HistoryContentView(
                 data: r,
                 range: range,
@@ -334,41 +379,48 @@ struct HistoryView: View {
                 onExportJSON: { save(ext: "json", text: HistoryExport.json(r)) }
             )
         } else if loadFailed {
-            Text("Couldn’t load history.")
-                .font(.callout)
-                .foregroundColor(.secondary)
-                .frame(maxWidth: .infinity, minHeight: 220)
+            loadFailedText
         } else {
             ProgressView()
                 .frame(maxWidth: .infinity, minHeight: 220)
         }
     }
 
+    /// Yield tab: per-project productive-vs-reverted aggregate over the range.
     @ViewBuilder private var yieldContent: some View {
         if let y = yieldResponse {
             HistoryYieldContentView(data: y, range: range)
         } else if loadFailed {
-            Text("Couldn’t load history.")
-                .font(.callout)
-                .foregroundColor(.secondary)
-                .frame(maxWidth: .infinity, minHeight: 220)
+            loadFailedText
         } else {
             ProgressView()
                 .frame(maxWidth: .infinity, minHeight: 220)
         }
     }
 
+    /// Quota tab: live per-provider rate-limit forecast (reads the session
+    /// snapshot, not the history API). Empty state when no subscription is active.
     @ViewBuilder private var quotaContent: some View {
-        if let win = quotaWindow {
-            HistoryQuotaContentView(window: win)
-        } else {
+        let providers = quotaForecasts
+        if providers.isEmpty {
             Text("No subscription quota data yet.\nStart a Claude Pro/Max or ChatGPT session.")
                 .font(.callout)
                 .multilineTextAlignment(.center)
                 .foregroundColor(.secondary)
                 .frame(maxWidth: .infinity, minHeight: 220)
                 .padding(.horizontal, IrrSpacing.sp4)
+        } else {
+            HistoryQuotaForecastView(providers: providers)
+                .padding(.horizontal, IrrSpacing.sp4)
+                .padding(.vertical, IrrSpacing.sp3)
         }
+    }
+
+    private var loadFailedText: some View {
+        Text("Couldn’t load history.")
+            .font(.callout)
+            .foregroundColor(.secondary)
+            .frame(maxWidth: .infinity, minHeight: 220)
     }
 
     // MARK: Fetch
@@ -383,11 +435,11 @@ struct HistoryView: View {
     }
 
     private func fetch() async {
-        guard !range.isQuota else { return }  // quota spans read the live snapshot, no fetch
+        guard tab != .quota else { return }  // quota reads the live snapshot, no fetch
         loadFailed = false
         var comps = URLComponents(string: "\(DaemonEndpoint.httpBase)/api/v1/history")
         // queryItems ignores the custom bounds unless range == .custom.
-        comps?.queryItems = range.queryItems(chart: chart, group: effectiveGroup, scope: scope, filters: filtersDict, forecast: forecastEnabled, customStart: appliedCustomStart, customEnd: appliedCustomEnd)
+        comps?.queryItems = range.queryItems(chart: fetchChart, group: effectiveGroup, scope: scope, filters: filtersDict, forecast: forecastEnabled, customStart: appliedCustomStart, customEnd: appliedCustomEnd)
         guard let url = comps?.url else { return }
         do {
             let (data, resp) = try await URLSession.shared.data(from: url)
@@ -396,7 +448,7 @@ struct HistoryView: View {
                 loadFailed = true
                 return
             }
-            if chart == .yieldRatio {
+            if fetchChart == .yieldRatio {
                 let decoded = try JSONDecoder().decode(HistoryYieldResponse.self, from: data)
                 if Task.isCancelled { return }
                 yieldResponse = decoded
@@ -425,44 +477,55 @@ struct HistoryView: View {
         return set.sorted()
     }
 
-    // MARK: Quota window (live rate-limit snapshot → projection)
+    // MARK: Quota forecast (live rate-limit snapshot → per-provider projection)
 
-    /// The freshest subscription rate-limit snapshot's window matching the
-    /// selected span (5h / 7d), resolved to a projection view-model. nil when no
-    /// subscription session is active or that window isn't present.
-    private var quotaWindow: QuotaWindowVM? {
-        guard let target = range.windowMinutes else { return nil }
+    /// One projection view-model per active subscription provider, each carrying
+    /// its 5h/7d windows. Reads the live session snapshots (not the history API),
+    /// so it's independent of the selected range. Mirrors the per-provider dedup
+    /// in SessionListView.quotaChipData: one bucket per provider, the freshest
+    /// non-stale snapshot wins.
+    private var quotaForecasts: [QuotaProviderVM] {
         let now = Date()
-        // Pick the freshest snapshot carrying this window, preferring one whose
-        // window hasn't already reset — a finished session's pre-rollover
-        // snapshot can have a newer sampledAt yet show a stale window (the same
-        // tiebreak SessionListView's chip buckets use).
-        var best: (info: RateLimitInfo, eta: Date?, window: RateLimitWindowInfo)?
+        struct Bucket { var info: RateLimitInfo; var eta: Date?; var adapter: String?; var stale: Bool }
+        var byProvider: [String: Bucket] = [:]
         for s in sessionManager.sessions {
-            guard let rl = s.metrics?.rateLimit,
-                  let w = rl.windows.first(where: { $0.canonicalWindowMinutes == target })
-            else { continue }
-            if let b = best {
-                let bStale = b.window.resetsAt <= now
-                let wStale = w.resetsAt <= now
-                let fresher = (bStale && !wStale) || (bStale == wStale && rl.sampledAt > b.info.sampledAt)
+            guard let rl = s.metrics?.rateLimit, !rl.windows.isEmpty else { continue }
+            let key = rl.providerKey(adapter: s.adapter) ?? "unknown:\(s.adapter ?? "")"
+            let stale = rl.windows.contains { $0.resetsAt <= now }
+            if let ex = byProvider[key] {
+                // Prefer a fresh snapshot over a stale one regardless of
+                // sampledAt; within the same freshness, the newest sample wins.
+                let fresher = (ex.stale && !stale) || (ex.stale == stale && rl.sampledAt > ex.info.sampledAt)
                 guard fresher else { continue }
             }
-            best = (rl, s.metrics?.rateLimitForecastEta, w)
+            byProvider[key] = Bucket(info: rl, eta: s.metrics?.rateLimitForecastEta, adapter: s.adapter, stale: stale)
         }
-        guard let best else { return nil }
-        let w = best.window
-        let start = w.resetsAt.addingTimeInterval(-Double(w.windowMinutes) * 60)
-        return QuotaWindowVM(
-            label: range.label,
-            planLabel: best.info.planTypeLabel,
-            start: start,
-            end: w.resetsAt,
-            now: now,
-            usedPercent: w.usedPercent,
-            projectedCap: projectedCap(window: w, info: best.info, eta: best.eta, now: now, start: start),
-            isStale: w.resetsAt <= now
-        )
+        return byProvider.map { key, b -> QuotaProviderVM in
+            let windows = b.info.windows
+                .filter { $0.canonicalWindowMinutes == 300 || $0.canonicalWindowMinutes == 10080 }
+                .sorted { $0.canonicalWindowMinutes < $1.canonicalWindowMinutes }
+                .map { w -> QuotaWindowVM in
+                    let start = w.resetsAt.addingTimeInterval(-Double(w.windowMinutes) * 60)
+                    return QuotaWindowVM(
+                        label: HistoryFormat.quotaWindowLabel(w.canonicalWindowMinutes),
+                        planLabel: b.info.planTypeLabel,
+                        start: start,
+                        end: w.resetsAt,
+                        now: now,
+                        usedPercent: w.usedPercent,
+                        projectedCap: projectedCap(window: w, info: b.info, eta: b.eta, now: now, start: start),
+                        isStale: w.resetsAt <= now
+                    )
+                }
+            return QuotaProviderVM(
+                id: key,
+                iconKey: b.info.providerKey(adapter: b.adapter),
+                planLabel: b.info.planTypeLabel,
+                windows: windows
+            )
+        }
+        .filter { !$0.windows.isEmpty }
+        .sorted { $0.id < $1.id }
     }
 
     /// Projected wall-clock time the window hits 100%. Prefers the daemon's
@@ -565,10 +628,11 @@ struct HistoryContentView: View {
                     .foregroundColor(IrrColors.waiting)
             }
 
-            if chart == .tokens && group == .tokenType {
+            // The legend always reflects the stacking axis (the chart stacks by
+            // group, for cost AND tokens alike) — only the Token-type grouping
+            // gets friendly band labels. Cost vs Tokens is just the metric.
+            if group == .tokenType {
                 tokenBandRows
-            } else if chart == .tokens {
-                tokenSplitRows
             } else {
                 contributorRows
             }
@@ -606,33 +670,12 @@ struct HistoryContentView: View {
         }
     }
 
-    /// Tokens side panel: the input/output/cache split, not a contributor rank.
-    @ViewBuilder private var tokenSplitRows: some View {
-        if let split = data.tokenSplit, data.total > 0 {
-            VStack(alignment: .leading, spacing: IrrSpacing.sp1) {
-                ForEach(Array([("Input", split.input), ("Output", split.output), ("Cache", split.cache)].enumerated()), id: \.offset) { i, row in
-                    HStack(spacing: IrrSpacing.sp2) {
-                        Circle().fill(HistoryPalette.color(at: i)).frame(width: 8, height: 8)
-                        Text(row.0).font(.caption)
-                        Spacer(minLength: IrrSpacing.sp2)
-                        Text(HistoryFormat.tokens(row.1))
-                            .font(.caption).monospacedDigit().foregroundColor(.secondary)
-                    }
-                }
-            }
-            .padding(.top, IrrSpacing.sp1)
-        } else {
-            Text("no token usage in this range")
-                .font(.caption).foregroundColor(.secondary).padding(.top, IrrSpacing.sp1)
-        }
-    }
-
     /// Cost/models/providers side panel: top contributors, tappable to drill
     /// into the next finer axis (except the synthetic "unknown" bucket and leaf
     /// axes).
     @ViewBuilder private var contributorRows: some View {
         if data.topContributors.isEmpty {
-            Text("no spend in this range")
+            Text(chart == .tokens ? "no token usage in this range" : "no spend in this range")
                 .font(.caption)
                 .foregroundColor(.secondary)
                 .padding(.top, IrrSpacing.sp1)
@@ -947,56 +990,102 @@ struct QuotaWindowVM {
     }
 }
 
-struct HistoryQuotaContentView: View {
-    let window: QuotaWindowVM
+/// A provider's live rate-limit forecast: brand identity + its window
+/// projections. Pure value type so the forecast strip is snapshot-testable.
+struct QuotaProviderVM: Identifiable {
+    let id: String          // providerKey ("anthropic"/"openai") or "unknown:<adapter>"
+    let iconKey: String?    // ProviderIconRegistry key (nil → no icon)
+    let planLabel: String?  // "Claude Max", "ChatGPT Plus", …
+    let windows: [QuotaWindowVM]
+
+    /// Heading text: the plan label when known, else the provider brand.
+    var displayName: String {
+        if let planLabel { return planLabel }
+        switch id {
+        case "anthropic": return "Anthropic"
+        case "openai": return "OpenAI"
+        default: return "Subscription"
+        }
+    }
+}
+
+// MARK: - Multi-provider quota forecast strip (#755 redesign)
+//
+// Replaces the single-window quota *mode* with an always-visible strip: one
+// labelled block per active subscription provider, each window rendered as a
+// compact burn-rate projection chart. Pure inputs ([QuotaProviderVM]) so it
+// hosts directly under a snapshot test.
+
+struct HistoryQuotaForecastView: View {
+    let providers: [QuotaProviderVM]
 
     var body: some View {
         VStack(alignment: .leading, spacing: IrrSpacing.sp3) {
-            HistoryQuotaChart(window: window)
-                .frame(height: 200)
-            Divider()
-            summary
-        }
-        .padding(.horizontal, IrrSpacing.sp4)
-        .padding(.vertical, IrrSpacing.sp3)
-        .opacity(window.isStale ? 0.5 : 1)
-    }
-
-    private var summary: some View {
-        VStack(alignment: .leading, spacing: IrrSpacing.sp2) {
-            HStack(spacing: IrrSpacing.sp2) {
-                Text("\(window.label) · \(Int(window.usedPercent.rounded()))% used")
-                    .font(.title3)
-                    .fontWeight(.semibold)
-                    .monospacedDigit()
-                if let plan = window.planLabel {
-                    Text(plan).font(.caption).foregroundColor(.secondary)
-                }
-            }
-            if let cap = window.projectedCap {
-                Text("▲ projected cap \(HistoryFormat.clock(cap))")
-                    .font(.caption)
-                    .foregroundColor(IrrColors.waiting)
-            } else {
-                Text("on pace — won’t hit the cap this window")
-                    .font(.caption)
-                    .foregroundColor(IrrColors.ready)
-            }
-            Text("Resets \(HistoryFormat.clock(window.end))")
+            Text("Rate limits")
                 .font(.caption)
                 .foregroundColor(.secondary)
-            if window.isStale {
-                Text("window reset — waiting for fresh data")
+            ForEach(providers) { providerBlock($0) }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder private func providerBlock(_ p: QuotaProviderVM) -> some View {
+        VStack(alignment: .leading, spacing: IrrSpacing.sp2) {
+            HStack(spacing: IrrSpacing.sp1) {
+                if let icon = ProviderIconRegistry.image(forKey: p.iconKey) {
+                    Image(nsImage: icon)
+                        .resizable()
+                        .renderingMode(.template)
+                        .frame(width: 12, height: 12)
+                        .foregroundColor(.primary)
+                }
+                Text(p.displayName)
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
+            HStack(alignment: .top, spacing: IrrSpacing.sp3) {
+                ForEach(Array(p.windows.enumerated()), id: \.offset) { _, w in
+                    windowCard(w)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private func windowCard(_ w: QuotaWindowVM) -> some View {
+        VStack(alignment: .leading, spacing: IrrSpacing.sp1) {
+            HStack(spacing: IrrSpacing.sp1) {
+                Text(w.label)
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                Spacer(minLength: 0)
+                Text("\(Int(w.usedPercent.rounded()))%")
+                    .font(.caption2)
+                    .monospacedDigit()
+            }
+            HistoryQuotaChart(window: w, compact: true)
+                .frame(height: 84)
+            if let cap = w.projectedCap {
+                Text("▲ cap \(HistoryFormat.clock(cap))")
+                    .font(.caption2)
+                    .foregroundColor(IrrColors.waiting)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            } else {
+                Text("on pace")
+                    .font(.caption2)
+                    .foregroundColor(IrrColors.ready)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .opacity(w.isStale ? 0.5 : 1)
     }
 }
 
 private struct HistoryQuotaChart: View {
     let window: QuotaWindowVM
+    /// Strips the x-axis labels and the "cap" annotation for the small
+    /// per-provider cards in the forecast strip.
+    var compact: Bool = false
 
     private struct Pt: Identifiable {
         let id: String
@@ -1034,7 +1123,7 @@ private struct HistoryQuotaChart: View {
                 .foregroundStyle(IrrColors.pressureHigh.opacity(0.8))
                 .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
                 .annotation(position: .top, alignment: .trailing) {
-                    Text("cap").font(.caption2).foregroundColor(.secondary)
+                    if !compact { Text("cap").font(.caption2).foregroundColor(.secondary) }
                 }
             ForEach(pace) { p in
                 LineMark(x: .value("Time", p.date), y: .value("Used", p.percent), series: .value("s", "pace"))
@@ -1053,13 +1142,13 @@ private struct HistoryQuotaChart: View {
             }
             PointMark(x: .value("Time", clampedNow), y: .value("Used", window.usedPercent))
                 .foregroundStyle(lineColor)
-                .symbolSize(60)
+                .symbolSize(compact ? 24 : 60)
         }
         .chartYScale(domain: 0...110)
         .chartXScale(domain: window.start...window.end)
         .chartLegend(.hidden)
         .chartYAxis {
-            AxisMarks(position: .leading, values: [0, 50, 100]) { v in
+            AxisMarks(position: .leading, values: compact ? [0, 100] : [0, 50, 100]) { v in
                 AxisGridLine()
                 AxisValueLabel {
                     if let d = v.as(Double.self) { Text("\(Int(d))%") }
@@ -1067,11 +1156,13 @@ private struct HistoryQuotaChart: View {
             }
         }
         .chartXAxis {
-            AxisMarks(values: .automatic(desiredCount: 4)) { v in
+            AxisMarks(values: .automatic(desiredCount: compact ? 3 : 4)) { v in
                 AxisGridLine()
-                AxisValueLabel {
-                    if let d = v.as(Date.self) {
-                        Text(HistoryFormat.axisLabel(d, bucketSeconds: showTime ? 3_600 : 86_400))
+                if !compact {
+                    AxisValueLabel {
+                        if let d = v.as(Date.self) {
+                            Text(HistoryFormat.axisLabel(d, bucketSeconds: showTime ? 3_600 : 86_400))
+                        }
                     }
                 }
             }
@@ -1094,6 +1185,18 @@ enum HistoryPalette {
 enum HistoryFormat {
     /// `$X.XX`, matching the web `histDollar`.
     static func dollar(_ v: Double) -> String { String(format: "$%.2f", v) }
+
+    /// "5h" / "7d" from a canonical rate-limit window length in minutes.
+    static func quotaWindowLabel(_ minutes: Int) -> String {
+        switch minutes {
+        case 300: return "5h"
+        case 10080: return "7d"
+        default:
+            if minutes % 1440 == 0 { return "\(minutes / 1440)d" }
+            if minutes % 60 == 0 { return "\(minutes / 60)h" }
+            return "\(minutes)m"
+        }
+    }
 
     /// Compact token count (1.2M / 3.4k / 970), matching the web `histTokens`.
     static func tokens(_ v: Double) -> String {

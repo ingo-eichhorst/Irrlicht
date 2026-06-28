@@ -537,13 +537,18 @@ struct SettingsView: View {
             Text(label)
                 .font(.callout)
                 .frame(width: 80, alignment: .leading)
+            // A .menu (not .segmented) picker: the "Subscription" option makes a
+            // segmented control ~315pt wide, which overflows the 360pt panel and
+            // clips the whole settings stack. The dropdown stays compact.
             Picker("", selection: selection) {
                 ForEach(ProviderModePreference.allCases) { mode in
                     Text(mode.label).tag(mode.rawValue)
                 }
             }
-            .pickerStyle(.segmented)
+            .pickerStyle(.menu)
             .labelsHidden()
+            .fixedSize()
+            Spacer()
         }
     }
 
@@ -624,9 +629,15 @@ private struct CLIToolSection: View {
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundColor(.green)
                         .font(.caption)
+                    // Middle-truncate so a long install path stays on one line
+                    // instead of forcing the whole Settings panel wider than its
+                    // 360pt frame (which centers + clips every row).
                     Text("irrlicht-ls installed at \(path)")
                         .font(.caption)
                         .foregroundColor(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
             case .notInstalled:
                 Text("Make the irrlicht-ls session list available in your terminal.")
@@ -647,6 +658,7 @@ private struct CLIToolSection: View {
                         .font(.caption)
                         .foregroundColor(.orange)
                         .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
@@ -746,12 +758,6 @@ private struct NotificationEventRow: View {
     let onImportError: (String) -> Void
 
     @State private var selection: SoundChoice = .default
-    /// The non-default speak voice that isn't installed yet, if any — drives the
-    /// "Install voice…" affordance. Resolved off the main thread (#729): the
-    /// equivalent `SpokenVoice.isInstalled` check enumerates system voices via
-    /// the TextToSpeech subsystem, which is far too slow to run from `body` on
-    /// every render (it pegged the CPU and dropped Settings to ~2fps).
-    @State private var voiceToInstall: SpokenVoice?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -790,43 +796,26 @@ private struct NotificationEventRow: View {
                 .tooltip("Preview")
             }
 
-            if let voiceToInstall {
+            // A premium voice (Jamie/Zoe) may not be installed; offer a path to
+            // System Settings. We deliberately do NOT probe install state via
+            // AVSpeechSynthesisVoice.speechVoices() — that boots the TextToSpeech
+            // + accessibility subsystem and crashes (SIGBUS) on macOS 26.x when
+            // run off the main thread (#780). The link is unconditional instead.
+            if case .speak(let voice) = selection, voice != .default {
                 Button {
                     Self.openSpokenContentSettings()
                 } label: {
                     HStack(spacing: 4) {
                         Image(systemName: "arrow.down.circle")
-                        Text("Install \(voiceToInstall.displayName) in System Settings")
+                        Text("Manage \(voice.displayName) in System Settings")
                     }
                     .font(.caption)
                 }
                 .buttonStyle(.link)
-                .foregroundColor(.orange)
                 .tooltip("Open System Settings → Accessibility → Spoken Content")
             }
         }
         .onAppear { loadFromDefaults() }
-        .task(id: selection) { await refreshVoiceInstallState() }
-    }
-
-    /// Resolve whether the selected speak-voice needs installing, off the main
-    /// thread. `SpokenVoice.isInstalled` calls `AVSpeechSynthesisVoice.speechVoices()`
-    /// — expensive enough that running it from `body` dropped Settings to ~2fps and
-    /// pegged the CPU (#729). Re-runs whenever the selection changes, so the
-    /// affordance also stays correct after the user installs a voice.
-    private func refreshVoiceInstallState() async {
-        guard case .speak(let voice) = selection, voice != .default else {
-            voiceToInstall = nil
-            return
-        }
-        let installed = await Task.detached(priority: .userInitiated) {
-            voice.isInstalled
-        }.value
-        // The detached task outlives `.task(id:)` cancellation, so a selection
-        // change mid-flight could otherwise let this stale result overwrite the
-        // newer one. Drop it if our task was cancelled.
-        guard !Task.isCancelled else { return }
-        voiceToInstall = installed ? nil : voice
     }
 
     private static func openSpokenContentSettings() {

@@ -8,10 +8,11 @@ package backchannel
 
 // Trigger event names.
 const (
-	EventWaiting         = "waiting" // session entered the waiting state
-	EventReady           = "ready"   // session entered the ready state
-	EventWorking         = "working" // session entered the working state
-	EventContextPressure = "context_pressure"
+	EventWaiting         = "waiting"                 // session entered the waiting state
+	EventReady           = "ready"                   // session entered the ready state
+	EventWorking         = "working"                 // session entered the working state
+	EventContextPressure = "context_pressure"        // context utilization crossed a percentage
+	EventContextTokens   = "context_pressure_tokens" // context crossed an absolute token count
 )
 
 // Action kinds.
@@ -34,6 +35,11 @@ const (
 // which a context_pressure trigger fires when a rule sets no Threshold.
 const DefaultPressureThreshold = 85.0
 
+// DefaultPressureTokens is the absolute context token count at which a
+// context_pressure_tokens trigger fires when a rule sets no Threshold. Matches
+// the macOS notification default (ContextPressureThreshold.defaultValue(.tokens)).
+const DefaultPressureTokens int64 = 150_000
+
 // DefaultCooldownSeconds bounds how often one rule may fire for one session.
 const DefaultCooldownSeconds = 60
 
@@ -41,9 +47,10 @@ const DefaultCooldownSeconds = 60
 type Trigger struct {
 	// Event is one of the Event* constants.
 	Event string `json:"event"`
-	// Threshold is the context-utilization percentage (0–100) for a
-	// context_pressure trigger; ignored for state triggers. Zero means
-	// DefaultPressureThreshold.
+	// Threshold is interpreted by Event: the context-utilization percentage
+	// (0–100) for context_pressure, or the absolute context token count for
+	// context_pressure_tokens; ignored for state triggers. Zero means the
+	// event's default (DefaultPressureThreshold / DefaultPressureTokens).
 	Threshold float64 `json:"threshold,omitempty"`
 }
 
@@ -84,10 +91,18 @@ func (r Rule) Cooldown() int {
 	return DefaultCooldownSeconds
 }
 
-// PressureThreshold returns the effective context-pressure threshold.
+// PressureThreshold returns the effective context-pressure percentage.
 func (t Trigger) PressureThreshold() float64 {
 	if t.Threshold > 0 {
 		return t.Threshold
 	}
 	return DefaultPressureThreshold
+}
+
+// TokensThreshold returns the effective context-pressure token count.
+func (t Trigger) TokensThreshold() int64 {
+	if t.Threshold > 0 {
+		return int64(t.Threshold)
+	}
+	return DefaultPressureTokens
 }
