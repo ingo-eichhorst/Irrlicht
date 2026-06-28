@@ -705,3 +705,107 @@ func TestCostSeries_ScopeFilter(t *testing.T) {
 		t.Errorf("scoped to branch=main must exclude s2 (branch=feat), got %+v", res.Totals)
 	}
 }
+
+// TestCostSeries_GroupByTokenType verifies the tokens metric grouped by
+// token_type splits each row's per-kind deltas into the four bands.
+func TestCostSeries_GroupByTokenType(t *testing.T) {
+	tr := newTestTracker(t)
+	writeRow(t, tr, "proj-a", snapshotRow{TS: 1050, Project: "proj-a", Session: "s1", CumIn: 100, CumOut: 10})
+	writeRow(t, tr, "proj-a", snapshotRow{TS: 1150, Project: "proj-a", Session: "s1", CumIn: 200, CumOut: 30, CumRead: 50, CumCreate: 5})
+
+	res, err := tr.CostSeries(outbound.SeriesQuery{Start: 1000, End: 1400, BucketSeconds: 100, Group: "token_type", Metric: "tokens"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Deltas land in bucket 1 (TS 1150): in=100 out=20 read=50 create=5.
+	want := map[string]float64{"input": 100, "output": 20, "cache_read": 50, "cache_creation": 5}
+	for k, v := range want {
+		if abs(res.Totals[k]-v) > 1e-9 {
+			t.Errorf("band %s total: want %v, got %v", k, v, res.Totals[k])
+		}
+		if abs(res.ByKey[k][1]-v) > 1e-9 {
+			t.Errorf("band %s bucket 1: want %v, got %v", k, v, res.ByKey[k])
+		}
+	}
+	if len(res.Totals) != 4 {
+		t.Errorf("token_type grouping should yield exactly 4 bands, got %+v", res.Totals)
+	}
+}
+
+// TestCostSeries_ProjectFilter verifies the project cross-filter keeps only the
+// selected projects' sessions.
+func TestCostSeries_ProjectFilter(t *testing.T) {
+	tr := newTestTracker(t)
+	writeRow(t, tr, "proj-a", snapshotRow{TS: 1050, Project: "proj-a", Session: "s1", Cost: 1.00})
+	writeRow(t, tr, "proj-a", snapshotRow{TS: 1150, Project: "proj-a", Session: "s1", Cost: 1.40})
+	writeRow(t, tr, "proj-b", snapshotRow{TS: 1050, Project: "proj-b", Session: "s2", Cost: 5.00})
+	writeRow(t, tr, "proj-b", snapshotRow{TS: 1150, Project: "proj-b", Session: "s2", Cost: 6.00})
+
+	res, err := tr.CostSeries(outbound.SeriesQuery{
+		Start: 1000, End: 1400, BucketSeconds: 100, Group: "session", Projects: []string{"proj-a"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if abs(res.Totals["s1"]-0.40) > 1e-9 {
+		t.Errorf("project=proj-a: want s1=0.40, got %v", res.Totals["s1"])
+	}
+	if _, ok := res.Totals["s2"]; ok {
+		t.Errorf("project=proj-a must exclude proj-b's s2, got %+v", res.Totals)
+	}
+}
+
+// TestCostSeries_ProviderFilter verifies the provider cross-filter, including
+// selecting the empty-provider rows via the "unknown" key.
+func TestCostSeries_ProviderFilter(t *testing.T) {
+	tr := newTestTracker(t)
+	writeRow(t, tr, "proj-a", snapshotRow{TS: 1050, Project: "proj-a", Provider: "anthropic", Session: "s1", Cost: 1.00})
+	writeRow(t, tr, "proj-a", snapshotRow{TS: 1150, Project: "proj-a", Provider: "anthropic", Session: "s1", Cost: 1.40})
+	writeRow(t, tr, "proj-a", snapshotRow{TS: 1050, Project: "proj-a", Provider: "openai", Session: "s2", Cost: 2.00})
+	writeRow(t, tr, "proj-a", snapshotRow{TS: 1150, Project: "proj-a", Provider: "openai", Session: "s2", Cost: 2.70})
+	writeRow(t, tr, "proj-a", snapshotRow{TS: 1050, Project: "proj-a", Session: "s3", Cost: 9.00})
+	writeRow(t, tr, "proj-a", snapshotRow{TS: 1150, Project: "proj-a", Session: "s3", Cost: 9.50})
+
+	res, err := tr.CostSeries(outbound.SeriesQuery{
+		Start: 1000, End: 1400, BucketSeconds: 100, Group: "session", Providers: []string{"anthropic"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if abs(res.Totals["s1"]-0.40) > 1e-9 || len(res.Totals) != 1 {
+		t.Errorf("provider=anthropic: want only s1=0.40, got %+v", res.Totals)
+	}
+	// "unknown" selects the empty-provider session.
+	unk, err := tr.CostSeries(outbound.SeriesQuery{
+		Start: 1000, End: 1400, BucketSeconds: 100, Group: "session", Providers: []string{"unknown"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if abs(unk.Totals["s3"]-0.50) > 1e-9 || len(unk.Totals) != 1 {
+		t.Errorf("provider=unknown: want only s3=0.50, got %+v", unk.Totals)
+	}
+}
+
+// TestCostSeries_TokenTypeFilter verifies the token_type cross-filter restricts
+// which counters the tokens metric (and its split) sums.
+func TestCostSeries_TokenTypeFilter(t *testing.T) {
+	tr := newTestTracker(t)
+	writeRow(t, tr, "proj-a", snapshotRow{TS: 1050, Project: "proj-a", Session: "s1", CumIn: 100, CumOut: 10})
+	writeRow(t, tr, "proj-a", snapshotRow{TS: 1150, Project: "proj-a", Session: "s1", CumIn: 200, CumOut: 30, CumRead: 50})
+
+	res, err := tr.CostSeries(outbound.SeriesQuery{
+		Start: 1000, End: 1400, BucketSeconds: 100, Group: "project", Metric: "tokens",
+		TokenTypes: []string{"input"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Only input deltas count: 200−100 = 100.
+	if abs(res.Totals["proj-a"]-100) > 1e-9 {
+		t.Errorf("token_type=input total: want 100, got %v", res.Totals["proj-a"])
+	}
+	if res.TokenSplit == nil || abs(res.TokenSplit.Input-100) > 1e-9 || res.TokenSplit.Output != 0 || res.TokenSplit.Cache != 0 {
+		t.Errorf("token_type=input split: want in=100 out=0 cache=0, got %+v", res.TokenSplit)
+	}
+}

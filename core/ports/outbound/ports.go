@@ -211,21 +211,38 @@ type EventRecorder interface {
 	Close() error
 }
 
+// TokenTypeKeys are the four token-kind keys used when grouping the tokens
+// metric by token_type (one stacked band each) and as the vocabulary of the
+// token_type cross-filter. Order is the natural input→output→cache reading.
+var TokenTypeKeys = []string{"input", "output", "cache_read", "cache_creation"}
+
 // SeriesQuery parameterizes CostTracker.CostSeries (issue #750). It carries the
 // window + bucket width, which group axis to key the matrix by, which metric to
 // measure, and an optional scope filter (only rows whose ScopeField equals
 // ScopeValue are counted — the drilldown primitive). Group "project" preserves
 // Phase 1 behavior (the filename is the fallback key); the other axes read the
 // matching snapshot column, with an empty value bucketed under "" (the unknown
-// key, surfaced or dropped by the handler's ≥10% rule).
+// key, surfaced or dropped by the handler's ≥10% rule). Group "token_type"
+// (tokens metric only) keys by token kind, splitting each row's token deltas
+// into the four TokenTypeKeys bands.
+//
+// Projects/Providers/TokenTypes are orthogonal cross-filters (faceted History):
+// each is an OR-set within its dimension, AND across dimensions, and an empty
+// slice means no constraint. Projects/Providers skip non-matching rows (like
+// the scope drilldown); TokenTypes restricts which token counters the tokens
+// metric sums (a no-op for cost). The handler clears whichever filter matches
+// the active Group — a dimension is never both grouped and filtered.
 type SeriesQuery struct {
 	Start         int64
 	End           int64
 	BucketSeconds int64
-	Group         string // project|branch|provider|model|session
+	Group         string // project|branch|provider|model|session|token_type
 	Metric        string // cost|tokens ("" defaults to cost)
 	ScopeField    string // "" = unscoped; else project|branch|provider|model|session
 	ScopeValue    string
+	Projects      []string // cross-filter: keep only these projects (empty = all)
+	Providers     []string // cross-filter: keep only these providers (empty = all)
+	TokenTypes    []string // cross-filter: sum only these token kinds (empty = all)
 }
 
 // TokenSplit holds the window's aggregate token throughput broken down by kind,

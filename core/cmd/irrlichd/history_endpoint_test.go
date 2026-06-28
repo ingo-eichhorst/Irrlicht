@@ -340,13 +340,67 @@ func TestHandleGetHistory_Drilldown(t *testing.T) {
 
 func TestHandleGetHistory_BadRequests(t *testing.T) {
 	tr := filesystem.NewCostTrackerWithDir(filepath.Join(t.TempDir(), "cost"))
-	for _, q := range []string{"chart=bogus", "group=bogus", "range=bogus", "start=abc&end=def", "start=2000&end=1000"} {
+	for _, q := range []string{"chart=bogus", "group=bogus", "range=bogus", "start=abc&end=def", "start=2000&end=1000", "chart=cost&group=token_type", "chart=tokens&token_type=bogus"} {
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/history?"+q, nil)
 		rec := httptest.NewRecorder()
 		handleGetHistory(tr, nil, nil)(rec, req)
 		if rec.Code != http.StatusBadRequest {
 			t.Errorf("%q: want 400, got %d", q, rec.Code)
 		}
+	}
+}
+
+// TestHandleGetHistory_GroupByTokenType: chart=tokens&group=token_type stacks
+// the four token kinds as series keys (cache_creation absent here, zero delta).
+func TestHandleGetHistory_GroupByTokenType(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "cost")
+	seedPhase2(t, dir)
+	tr := filesystem.NewCostTrackerWithDir(dir)
+
+	rec, resp := doHistory(t, tr, "start=1000&end=1400&bucket=100&chart=tokens&group=token_type")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	if resp.Group != "token_type" {
+		t.Errorf("group: want token_type, got %q", resp.Group)
+	}
+	got := map[string]float64{}
+	for _, c := range resp.TopContributors {
+		got[c.Label] = c.Value
+	}
+	// input = 200+100, output = 20+20, cache_read = 20+0.
+	for k, v := range map[string]float64{"input": 300, "output": 40, "cache_read": 20} {
+		if got[k] != v {
+			t.Errorf("band %s: want %v, got %v (all=%+v)", k, v, got[k], got)
+		}
+	}
+}
+
+// TestHandleGetHistory_CrossFilter: a non-grouped filter narrows the data, while
+// a filter on the active group dimension is ignored (never both axis & filter).
+func TestHandleGetHistory_CrossFilter(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "cost")
+	seedPhase2(t, dir)
+	tr := filesystem.NewCostTrackerWithDir(dir)
+	const base = "start=1000&end=1400&bucket=100&forecast=false"
+
+	// provider=anthropic keeps only s1 (s2 is openai): proj-a total = s1's 0.40.
+	rec, resp := doHistory(t, tr, base+"&chart=cost&group=project&provider=anthropic")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	if d := resp.Total - 0.40; len(resp.TopContributors) != 1 || resp.TopContributors[0].Label != "proj-a" || d > 1e-9 || d < -1e-9 {
+		t.Errorf("provider=anthropic: want proj-a total 0.40, got total=%v contribs=%+v", resp.Total, resp.TopContributors)
+	}
+
+	// Filtering on the active group dimension is dropped: group=provider with a
+	// provider filter still shows both providers.
+	rec, resp = doHistory(t, tr, base+"&group=provider&provider=anthropic")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	if len(resp.TopContributors) != 2 {
+		t.Errorf("provider filter on grouped axis should be ignored, want 2 providers, got %+v", resp.TopContributors)
 	}
 }
 
