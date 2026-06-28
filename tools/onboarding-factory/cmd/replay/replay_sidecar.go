@@ -52,7 +52,7 @@ func replayWithSidecar(transcriptPath, sidecarPath string, cfg reportSettings) (
 	}
 
 	r.addDuration(r.state, r.report.Summary.LastEventTime.Sub(r.prevTransitionAt))
-	finalizeSummary(r.report, len(buckets.fswatches), r.stateDurations, r.lastMetrics)
+	finalizeSummary(r.report, len(buckets.fswatches), r.stateDurations, r.lastMetrics, cfg.Adapter)
 	r.report.Sessions = buildSessionTimelines(sidecarEvents)
 	return r.report, nil
 }

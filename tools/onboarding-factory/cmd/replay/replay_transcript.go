@@ -55,7 +55,7 @@ func replay(src string, cfg reportSettings) (*replayReport, error) {
 	// Credit the final state with the tail of the session, matching the live
 	// daemon's "duration since last transition" accounting.
 	b.addDuration(res.FinalState, res.LastEventTime.Sub(b.prevTransitionAt))
-	finalizeSummary(report, res.ConsumedEvents, b.stateDurations, res.LastMetrics)
+	finalizeSummary(report, res.ConsumedEvents, b.stateDurations, res.LastMetrics, adapterName)
 	return report, nil
 }
 

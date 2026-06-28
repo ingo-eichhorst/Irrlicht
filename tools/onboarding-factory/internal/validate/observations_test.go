@@ -72,6 +72,40 @@ func TestObservationsCostNonzeroFails(t *testing.T) {
 	}
 }
 
+// TestObservationsStoreDerivedContextPass covers the #766 store-derived vector:
+// a golden carrying total_tokens/context_window/context_utilization_percentage
+// (antigravity's out-of-band store) satisfies the new nonzero assertions, which
+// are distinct from cost/cum-token (both zero here).
+func TestObservationsStoreDerivedContextPass(t *testing.T) {
+	dir := t.TempDir()
+	mkGoldenRec(t, dir, "2026-06-28-00-00-00_x", `{"model_name":"gemini-3.5-flash","total_tokens":16353,"context_window":1048576,"context_utilization_percentage":1.56}`)
+	writeExpected(t, dir, `{"schema_version":1,"scenario_id":"s","observations":{"model":"gemini-3.5-flash","total_tokens_nonzero":true,"context_window_nonzero":true,"context_utilization_nonzero":true}}`)
+	rep, err := ValidateObservations(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rep.Pass || len(rep.Asserts) != 4 {
+		t.Fatalf("want pass + 4 asserts, got %+v", rep)
+	}
+	for _, a := range rep.Asserts {
+		if !a.OK {
+			t.Fatalf("assert %s should pass: %+v", a.Field, a)
+		}
+	}
+}
+
+// TestObservationsContextNonzeroFails: a storeless golden (no context vector)
+// must fail the #766 nonzero assertions — proving capture+serve is load-bearing.
+func TestObservationsContextNonzeroFails(t *testing.T) {
+	dir := t.TempDir()
+	mkGoldenRec(t, dir, "2026-06-28-00-00-00_x", `{"model_name":"gemini-3.5-flash"}`)
+	writeExpected(t, dir, `{"schema_version":1,"scenario_id":"s","observations":{"context_window_nonzero":true,"context_utilization_nonzero":true,"total_tokens_nonzero":true}}`)
+	rep, _ := ValidateObservations(dir)
+	if rep.Pass {
+		t.Fatalf("storeless golden must fail the context/token assertions: %+v", rep)
+	}
+}
+
 func TestObservationsSoftDriftReportedNotFailed(t *testing.T) {
 	dir := t.TempDir()
 	// prior cheaper; current 3× → > default 50% band → drift, but no hard assert.

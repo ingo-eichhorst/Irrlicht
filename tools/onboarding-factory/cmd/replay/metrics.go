@@ -3,6 +3,7 @@ package main
 import (
 	"time"
 
+	"irrlicht/core/adapters/inbound/agents/antigravity"
 	"irrlicht/core/domain/session"
 	"irrlicht/core/pkg/tailer"
 )
@@ -30,7 +31,7 @@ func transitionFromMetrics(eventIdx int, virtTime time.Time, cause transitionCau
 // finalizeSummary fills the report's computed summary fields (consumed events,
 // transitions, flickers, cost) from the replay state. Both replay and
 // replayWithSidecar call this at the end to avoid duplicating the logic.
-func finalizeSummary(report *replayReport, consumed int, stateDurations map[string]time.Duration, lastMetrics *tailer.SessionMetrics) {
+func finalizeSummary(report *replayReport, consumed int, stateDurations map[string]time.Duration, lastMetrics *tailer.SessionMetrics, adapter string) {
 	report.Summary.ConsumedEvents = consumed
 	report.Summary.TotalTransitions = len(report.Transitions)
 	report.Summary.StateDurations = stateDurations
@@ -48,6 +49,18 @@ func finalizeSummary(report *replayReport, consumed int, stateDurations map[stri
 		report.Summary.CumCacheReadTokens = lastMetrics.CumCacheReadTokens
 		report.Summary.CumCacheCreationTokens = lastMetrics.CumCacheCreationTokens
 		report.Summary.ModelName = lastMetrics.ModelName
+		// Store-derived context vector (#766): antigravity keeps token usage in an
+		// out-of-band SQLite store (conversations/<conv>.db, #719), so its turn
+		// snapshots set TotalTokens (and the derived ContextWindow/ContextUtilization)
+		// with no in-transcript per-turn usage. Surface them so `of verify` can
+		// assert the context+token half the matrix was blind to. Scoped to this
+		// adapter so every other golden stays byte-identical — kiro-cli's #599
+		// sidecar shares the signature and could opt in the same way later.
+		if adapter == antigravity.AdapterName && lastMetrics.TotalTokens > 0 {
+			report.Summary.TotalTokens = lastMetrics.TotalTokens
+			report.Summary.ContextWindow = lastMetrics.ContextWindow
+			report.Summary.ContextUtilization = lastMetrics.ContextUtilization
+		}
 		if len(lastMetrics.Tasks) > 0 {
 			report.Summary.Tasks = make([]session.Task, len(lastMetrics.Tasks))
 			for i, t := range lastMetrics.Tasks {
