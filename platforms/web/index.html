@@ -205,7 +205,23 @@
             <button type="button" data-group="provider">Provider</button>
             <button type="button" data-group="model">Model</button>
             <button type="button" data-group="session">Session</button>
+            <button type="button" data-group="token_type" title="Stack by token kind (tokens metric)">Token type</button>
           </div>
+        </div>
+        <div class="history-ctl-row" id="history-filter-row">
+          <span class="history-ctl-label">Filter</span>
+          <details class="history-filter" data-dim="provider">
+            <summary>Provider: All</summary>
+            <div class="menu"></div>
+          </details>
+          <details class="history-filter" data-dim="token_type">
+            <summary>Token type: All</summary>
+            <div class="menu"></div>
+          </details>
+          <details class="history-filter" data-dim="project">
+            <summary>Project: All</summary>
+            <div class="menu"></div>
+          </details>
         </div>
       </div>
 

@@ -1297,6 +1297,33 @@
     .history-seg button.active { background: var(--working-dim); color: var(--working); }
     .history-seg button:disabled { color: var(--muted); opacity: 0.4; cursor: not-allowed; }
 
+    /* Cross-filter dropdowns: a styled <details> with a checkbox menu. */
+    .history-filter { position: relative; }
+    .history-filter[hidden] { display: none; }
+    .history-filter > summary {
+      list-style: none; cursor: pointer; user-select: none;
+      border: 1px solid var(--border); border-radius: 5px;
+      color: var(--text); font-family: var(--font-mono); font-size: 10px;
+      letter-spacing: 0.03em; padding: 4px 10px; white-space: nowrap;
+    }
+    .history-filter > summary::-webkit-details-marker { display: none; }
+    .history-filter > summary::after { content: ' ▾'; color: var(--muted); }
+    .history-filter[open] > summary { background: var(--working-dim); color: var(--working); }
+    .history-filter > summary:hover { background: var(--surface-hover); color: var(--text-bright); }
+    .history-filter .menu {
+      position: absolute; z-index: 20; top: 100%; left: 0; margin-top: 4px;
+      min-width: 150px; max-height: 240px; overflow-y: auto;
+      background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+      padding: 4px; box-shadow: 0 6px 20px rgba(0,0,0,0.3);
+    }
+    .history-filter .menu label {
+      display: flex; align-items: center; gap: 7px; cursor: pointer;
+      font-family: var(--font-mono); font-size: 11px; color: var(--text);
+      padding: 4px 6px; border-radius: 4px;
+    }
+    .history-filter .menu label:hover { background: var(--surface-hover); color: var(--text-bright); }
+    .history-filter .menu .history-empty-contrib { color: var(--muted); font-size: 10px; padding: 4px 6px; }
+
     .history-custom { display: inline-flex; align-items: center; gap: 6px; }
     .history-custom[hidden] { display: none; }
     .history-custom input[type="date"] {
