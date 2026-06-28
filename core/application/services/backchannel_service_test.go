@@ -28,6 +28,15 @@ func sess(state string, util float64) *session.SessionState {
 	}
 }
 
+func sessTokens(state string, tokens int64) *session.SessionState {
+	return &session.SessionState{
+		SessionID: "s1",
+		State:     state,
+		Adapter:   "claude-code",
+		Metrics:   &session.SessionMetrics{TotalTokens: tokens},
+	}
+}
+
 // newEngine builds an engine with a controllable clock and toggle. *clock and
 // *on are mutated by the test.
 func newEngine(rules []backchannel.Rule, on *bool, clock *time.Time) *BackchannelEngine {
@@ -166,6 +175,32 @@ func TestEvaluate_ContextPressureHysteresis(t *testing.T) {
 	e.evaluate(sess("working", 70)) // drop below
 	clk = clk.Add(2 * time.Second)
 	if len(e.evaluate(sess("working", 88))) != 1 {
+		t.Fatal("re-crossing upward should fire again")
+	}
+}
+
+func TestEvaluate_ContextTokensHysteresis(t *testing.T) {
+	on := true
+	clk := time.Unix(1000, 0)
+	r := backchannel.Rule{ID: "pt", Enabled: true,
+		Trigger:         backchannel.Trigger{Event: backchannel.EventContextTokens, Threshold: 150000},
+		Actions:         []backchannel.Action{{Kind: backchannel.ActionInput, Data: "/compact\r"}},
+		CooldownSeconds: 1}
+
+	e := newEngine([]backchannel.Rule{r}, &on, &clk)
+	e.evaluate(sessTokens("working", 50000)) // baseline below threshold
+	clk = clk.Add(2 * time.Second)
+	if len(e.evaluate(sessTokens("working", 160000))) != 1 {
+		t.Fatal("rising across token threshold should fire")
+	}
+	clk = clk.Add(2 * time.Second)
+	if got := e.evaluate(sessTokens("working", 170000)); got != nil {
+		t.Fatalf("staying above token threshold must not re-fire, got %d", len(got))
+	}
+	clk = clk.Add(2 * time.Second)
+	e.evaluate(sessTokens("working", 120000)) // drop below (e.g. after a /compact)
+	clk = clk.Add(2 * time.Second)
+	if len(e.evaluate(sessTokens("working", 155000))) != 1 {
 		t.Fatal("re-crossing upward should fire again")
 	}
 }

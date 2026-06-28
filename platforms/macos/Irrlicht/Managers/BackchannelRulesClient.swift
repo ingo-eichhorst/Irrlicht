@@ -33,7 +33,8 @@ struct BackchannelRule: Codable, Identifiable, Equatable {
     static let eventWaiting = "waiting"
     static let eventReady = "ready"
     static let eventWorking = "working"
-    static let eventContextPressure = "context_pressure"
+    static let eventContextPressure = "context_pressure"        // threshold = % of context window
+    static let eventContextTokens = "context_pressure_tokens"   // threshold = absolute token count
 
     static let actionInput = "input"
     static let actionInterrupt = "interrupt"

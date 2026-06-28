@@ -1,4 +1,3 @@
-import AVFoundation
 import Foundation
 
 /// Which voice the "Speak aloud" notification choice uses.
@@ -42,24 +41,9 @@ enum SpokenVoice: String, CaseIterable {
     /// where earlier releases reported bare "Zoe", so accept both shapes.
     /// The " (" requirement keeps near-miss names (e.g. "Zoey") out.
     /// `.default` has no canonical name and matches nothing — callers
-    /// (`isInstalled`, `SoundPlayer.voice(for:)`) special-case it first.
+    /// (`SoundPlayer.voice(for:)`) special-case it first.
     func matches(installedName: String) -> Bool {
         guard let name = canonicalName else { return false }
         return installedName == name || installedName.hasPrefix(name + " (")
-    }
-
-    /// Whether a voice matching `canonicalName` is installed at any
-    /// quality. Drives the "Install voice…" affordance in Settings.
-    /// `.default` always reports `true` because the system-language voice
-    /// is always available.
-    ///
-    /// - Important: calls `AVSpeechSynthesisVoice.speechVoices()`, which boots
-    ///   the TextToSpeech/AXSpeech subsystem and does per-voice ICU locale work.
-    ///   It is far too slow for a SwiftUI `body` — doing so dropped the Settings
-    ///   panel to ~2fps (issue #729). Resolve it off the main thread (e.g. a
-    ///   `.task` + `Task.detached`) and render from cached state; never in `body`.
-    var isInstalled: Bool {
-        guard canonicalName != nil else { return true }
-        return AVSpeechSynthesisVoice.speechVoices().contains { matches(installedName: $0.name) }
     }
 }

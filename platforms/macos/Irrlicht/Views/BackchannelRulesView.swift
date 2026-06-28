@@ -46,8 +46,22 @@ struct BackchannelRulesView: View {
         EventOption(id: BackchannelRule.eventWaiting, label: "Waiting"),
         EventOption(id: BackchannelRule.eventReady, label: "Ready"),
         EventOption(id: BackchannelRule.eventWorking, label: "Working"),
-        EventOption(id: BackchannelRule.eventContextPressure, label: "Context pressure"),
+        EventOption(id: BackchannelRule.eventContextPressure, label: "Context (%)"),
+        EventOption(id: BackchannelRule.eventContextTokens, label: "Context (tokens)"),
     ]
+
+    /// The two context-pressure events whose Threshold field is a percentage vs
+    /// an absolute token count. Drives the threshold-row defaults + unit suffix.
+    private func isContextEvent(_ event: String) -> Bool {
+        event == BackchannelRule.eventContextPressure || event == BackchannelRule.eventContextTokens
+    }
+
+    /// Default threshold for a context event's unit — mirrors the daemon
+    /// (DefaultPressureThreshold / DefaultPressureTokens) and the Settings
+    /// notification defaults (ContextPressureThreshold).
+    private func contextDefault(for event: String) -> Double {
+        event == BackchannelRule.eventContextTokens ? 150_000 : 85
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -98,6 +112,12 @@ struct BackchannelRulesView: View {
                 .buttonStyle(.borderless)
             }
 
+            // Event, threshold (context events only), and Agent each on their
+            // own row. The .menu pickers are .fixedSize() (they won't compress),
+            // so crowding them into one HStack overflowed the ~288pt card and
+            // clipped the whole Settings panel (#724 layout fix). The threshold
+            // gets its own row so the wider "Context (tokens)" picker + value +
+            // unit never force the labels to wrap.
             HStack(spacing: 6) {
                 Text("When").font(.caption).foregroundColor(.secondary)
                 Picker("", selection: rule.trigger.event) {
@@ -107,19 +127,34 @@ struct BackchannelRulesView: View {
                 }
                 .labelsHidden()
                 .fixedSize()
-
-                if rule.wrappedValue.trigger.event == BackchannelRule.eventContextPressure {
-                    Text("≥").font(.caption).foregroundColor(.secondary)
-                    TextField("85", value: Binding(
-                        get: { rule.wrappedValue.trigger.threshold ?? 85 },
-                        set: { rule.wrappedValue.trigger.threshold = $0 }
-                    ), format: .number)
-                    .frame(width: 48)
-                    .textFieldStyle(.roundedBorder)
-                    Text("%").font(.caption).foregroundColor(.secondary)
+                .onChange(of: rule.wrappedValue.trigger.event) { newEvent in
+                    // Reset the threshold to the new event's unit default so a
+                    // percentage (85) never lingers as a token count or vice-versa
+                    // (mirrors ContextThresholdRow's unit-switch reset).
+                    if isContextEvent(newEvent) {
+                        rule.wrappedValue.trigger.threshold = contextDefault(for: newEvent)
+                    }
                 }
                 Spacer()
+            }
 
+            if isContextEvent(rule.wrappedValue.trigger.event) {
+                let isTokens = rule.wrappedValue.trigger.event == BackchannelRule.eventContextTokens
+                let fallback = contextDefault(for: rule.wrappedValue.trigger.event)
+                HStack(spacing: 6) {
+                    Text("≥").font(.caption).foregroundColor(.secondary)
+                    TextField(isTokens ? "150000" : "85", value: Binding(
+                        get: { rule.wrappedValue.trigger.threshold ?? fallback },
+                        set: { rule.wrappedValue.trigger.threshold = $0 }
+                    ), format: .number)
+                    .frame(width: isTokens ? 72 : 48)
+                    .textFieldStyle(.roundedBorder)
+                    Text(isTokens ? "tokens" : "%").font(.caption).foregroundColor(.secondary)
+                    Spacer()
+                }
+            }
+
+            HStack(spacing: 6) {
                 Text("Agent").font(.caption).foregroundColor(.secondary)
                 Picker("", selection: rule.adapter) {
                     Text("Any").tag(String?.none)
@@ -129,6 +164,7 @@ struct BackchannelRulesView: View {
                 }
                 .labelsHidden()
                 .fixedSize()
+                Spacer()
             }
 
             ForEach(rule.wrappedValue.actions.indices, id: \.self) { i in
@@ -168,52 +204,64 @@ struct BackchannelRulesView: View {
 
     @ViewBuilder
     private func actionRow(action: Binding<BackchannelRule.Action>, adapter: String?, onDelete: @escaping () -> Void) -> some View {
-        HStack(spacing: 6) {
-            Picker("", selection: action.kind) {
-                Text("Send").tag(BackchannelRule.actionInput)
-                Text("Interrupt").tag(BackchannelRule.actionInterrupt)
-            }
-            .labelsHidden()
-            .fixedSize()
-
-            if action.wrappedValue.kind == BackchannelRule.actionInput {
-                // Preset vs Custom: the empty tag is Custom (preset nil), which
-                // reveals the raw-text field — exactly today's behavior.
-                Picker("", selection: Binding(
-                    get: { action.wrappedValue.preset ?? "" },
-                    set: { action.wrappedValue.preset = $0.isEmpty ? nil : $0 }
-                )) {
-                    ForEach(BackchannelRule.presetCatalog, id: \.id) { p in
-                        Text(p.label).tag(p.id)
-                    }
-                    Text("Custom").tag("")
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Picker("", selection: action.kind) {
+                    Text("Send").tag(BackchannelRule.actionInput)
+                    Text("Interrupt").tag(BackchannelRule.actionInterrupt)
                 }
                 .labelsHidden()
                 .fixedSize()
 
-                if let preset = action.wrappedValue.preset {
-                    if let warning = unsupportedWarning(preset: preset, adapter: adapter) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundColor(.orange)
-                            .font(.caption)
-                        Text(warning).font(.caption).foregroundColor(.orange)
+                if action.wrappedValue.kind == BackchannelRule.actionInput {
+                    // Preset vs Custom: the empty tag is Custom (preset nil), which
+                    // reveals the raw-text field — exactly today's behavior.
+                    Picker("", selection: Binding(
+                        get: { action.wrappedValue.preset ?? "" },
+                        set: { action.wrappedValue.preset = $0.isEmpty ? nil : $0 }
+                    )) {
+                        ForEach(BackchannelRule.presetCatalog, id: \.id) { p in
+                            Text(p.label).tag(p.id)
+                        }
+                        Text("Custom").tag("")
                     }
-                    Spacer()
+                    .labelsHidden()
+                    .fixedSize()
+
+                    if action.wrappedValue.preset == nil {
+                        TextField("/compact", text: Binding(
+                            get: { action.wrappedValue.data ?? "" },
+                            set: { action.wrappedValue.data = $0 }
+                        ))
+                        .textFieldStyle(.roundedBorder)
+                    } else {
+                        Spacer()
+                    }
                 } else {
-                    TextField("/compact", text: Binding(
-                        get: { action.wrappedValue.data ?? "" },
-                        set: { action.wrappedValue.data = $0 }
-                    ))
-                    .textFieldStyle(.roundedBorder)
+                    Spacer()
                 }
-            } else {
-                Spacer()
+
+                Button(role: .destructive, action: onDelete) {
+                    Image(systemName: "minus.circle")
+                }
+                .buttonStyle(.borderless)
             }
 
-            Button(role: .destructive, action: onDelete) {
-                Image(systemName: "minus.circle")
+            // Unsupported-preset warning on its own row so a long agent name
+            // can't widen (and clip) the whole Settings panel.
+            if action.wrappedValue.kind == BackchannelRule.actionInput,
+               let preset = action.wrappedValue.preset,
+               let warning = unsupportedWarning(preset: preset, adapter: adapter) {
+                HStack(spacing: 4) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundColor(.orange)
+                        .font(.caption)
+                    Text(warning)
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
-            .buttonStyle(.borderless)
         }
     }
 
@@ -225,5 +273,14 @@ struct BackchannelRulesView: View {
             if Task.isCancelled { return }
             await model.save()
         }
+    }
+}
+
+extension BackchannelRulesView {
+    /// Injects a pre-populated model for snapshot tests — the view otherwise
+    /// hydrates its rules from the daemon (unreachable under test). Defined in an
+    /// extension so the synthesized `init()` production uses stays available.
+    init(model: BackchannelRulesModel) {
+        _model = StateObject(wrappedValue: model)
     }
 }

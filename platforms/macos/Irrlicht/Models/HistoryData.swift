@@ -120,51 +120,21 @@ struct HistoryYieldProject: Codable, Identifiable {
     }
 }
 
-/// The History range selector. Mirrors the web dashboard's segmented control,
-/// minus `this-month` (issue #755 scopes macOS Phase 1 to Day/Week/Month/Year
-/// + Custom).
+/// The History range selector — the cost calendar spans shown in the dropdown.
+/// The subscription rate-limit windows (5h / 7d) are no longer a range; quota is
+/// surfaced as a live per-provider forecast strip instead (see HistoryView).
 enum HistoryRange: String, CaseIterable, Identifiable {
-    // Quota rate-limit windows first (they render a burn-rate projection, not
-    // cost), then the cost calendar spans.
-    case fiveHour, sevenDay, day, week, month, year, custom
+    case day, week, month, year, custom
 
     var id: String { rawValue }
 
-    /// True for the subscription rate-limit windows (5h / 7d), which render a
-    /// quota burn-rate projection to the cap instead of cost.
-    var isQuota: Bool { self == .fiveHour || self == .sevenDay }
-
-    /// Rate-limit window length in minutes (300 / 10080) for the quota spans.
-    var windowMinutes: Int? {
-        switch self {
-        case .fiveHour: return 300
-        case .sevenDay: return 10080
-        default: return nil
-        }
-    }
-
-    /// Side-panel label ("Total · Day"), matching the web `RANGE_LABELS`.
+    /// Dropdown + side-panel label ("Total · Day"), matching the web `RANGE_LABELS`.
     var label: String {
         switch self {
-        case .fiveHour: return "5h"
-        case .sevenDay: return "7d"
         case .day: return "Day"
         case .week: return "Week"
         case .month: return "Month"
         case .year: return "Year"
-        case .custom: return "Custom"
-        }
-    }
-
-    /// Compact label for the 380pt-popover segmented control.
-    var shortLabel: String {
-        switch self {
-        case .fiveHour: return "5h"
-        case .sevenDay: return "7d"
-        case .day: return "Day"
-        case .week: return "Wk"
-        case .month: return "Mo"
-        case .year: return "Yr"
         case .custom: return "Custom"
         }
     }

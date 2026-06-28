@@ -166,6 +166,20 @@ enum DisplayMode: String, CaseIterable {
         return all[((all.firstIndex(of: self) ?? 0) + 1) % all.count]
     }
 
+    /// SF Symbol for the compact header toggle: a gauge for context
+    /// utilization, a clock for the time-windowed activity views.
+    var icon: String { self == .context ? "gauge.medium" : "clock" }
+
+    /// Window length shown beside the clock icon ("" for context).
+    var compactMinutes: String {
+        switch self {
+        case .context:    return ""
+        case .history1s:  return "1"
+        case .history10s: return "10"
+        case .history60s: return "60"
+        }
+    }
+
     var tooltip: String {
         switch self {
         case .context:    return "Context utilization (click to cycle to history view)"
@@ -439,17 +453,19 @@ struct SessionListView: View {
                     sessionManager.setHistoryGranularity(next.granularitySec)
                 }
             } label: {
-                Text(displayMode.rawValue)
-                    .font(.system(size: 10, design: .monospaced))
-                    .frame(width: 44)
+                HStack(spacing: 1) {
+                    Image(systemName: displayMode.icon)
+                    if displayMode.isHistory {
+                        Text(displayMode.compactMinutes)
+                            .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                    }
+                }
+                .font(.system(size: 11))
+                .foregroundColor(displayMode.isHistory ? IrrColors.working : .secondary)
+                .frame(minWidth: 16)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .padding(.horizontal, 7)
-            .padding(.vertical, 3)
-            .background(displayMode.isHistory ? IrrColors.working.opacity(0.15) : Color.clear)
-            .cornerRadius(IrrRadius.sm)
-            .overlay(RoundedRectangle(cornerRadius: IrrRadius.sm).stroke(Color.secondary.opacity(0.4)))
-            .contentShape(Rectangle())
             .tooltip(displayMode.tooltip)
             .id("mode-cycle-btn")
 
