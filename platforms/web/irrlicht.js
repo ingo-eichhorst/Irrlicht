@@ -2960,8 +2960,19 @@ import { isSummaryCollapsed, toggleSummaryCollapsed, anySummaryCollapsed, collap
     // Drilldown order: clicking a contributor scopes to it and re-groups by the
     // next finer axis. A leaf (no entry) makes that contributor non-drillable.
     const DRILL_NEXT = { project: 'branch', branch: 'session', provider: 'model', model: 'session' };
+    // Cross-filter dimensions and the fixed token-type vocabulary. A dimension
+    // is never both the active group and a filter (the grouped one is hidden).
+    const HISTORY_FILTER_DIMS = ['provider', 'token_type', 'project'];
+    const TOKEN_TYPE_OPTIONS = [['input', 'Input'], ['output', 'Output'], ['cache_read', 'Cache read'], ['cache_creation', 'Cache create']];
+    const TOKEN_TYPE_LABEL = { input: 'Input', output: 'Output', cache_read: 'Cache read', cache_creation: 'Cache create' };
     // scope is null or { field, value } — a single-level drilldown filter.
-    const historyState = { range: 'day', chart: 'cost', group: 'project', forecast: true, start: null, end: null, scope: null, data: null };
+    // filters holds per-dimension multi-select sets; known accumulates the
+    // provider/project option lists seen across responses (token_type is fixed).
+    const historyState = {
+      range: 'day', chart: 'cost', group: 'project', forecast: true, start: null, end: null, scope: null, data: null,
+      filters: { provider: [], token_type: [], project: [] },
+      known: { provider: [], project: [] },
+    };
     let historyFetchSeq = 0;
     let historyResizeRAF = 0;
 
@@ -2990,6 +3001,12 @@ import { isSummaryCollapsed, toggleSummaryCollapsed, anySummaryCollapsed, collap
       }
       return (d.getMonth() + 1) + '/' + d.getDate();
     }
+    // Running total of a per-bucket series, so stacked bands climb to the grand
+    // total at the right edge instead of reading as a spiky per-bucket rate.
+    function historyRunningSum(arr) {
+      let total = 0;
+      return (arr || []).map(v => { total += (Number(v) || 0); return total; });
+    }
 
     function historyTabOn() { return document.body.classList.contains('tab-history'); }
     function setHistoryTab(on) {
@@ -3016,6 +3033,15 @@ import { isSummaryCollapsed, toggleSummaryCollapsed, anySummaryCollapsed, collap
       } else {
         p.set('range', state.range);
       }
+      // Orthogonal cross-filters: emit each non-empty dimension except the one
+      // being grouped on. token_type only narrows the tokens metric.
+      const filters = state.filters || {};
+      for (const dim of HISTORY_FILTER_DIMS) {
+        if (dim === state.group) continue;
+        if (dim === 'token_type' && state.chart !== 'tokens') continue;
+        const vals = filters[dim];
+        if (vals && vals.length) p.set(dim, vals.join(','));
+      }
       return p.toString();
     }
 
@@ -3027,12 +3053,22 @@ import { isSummaryCollapsed, toggleSummaryCollapsed, anySummaryCollapsed, collap
         .then(data => {
           if (seq !== historyFetchSeq) return; // superseded by a newer request
           historyState.data = data || null;
+          // Grow the provider/project filter vocabularies from any response
+          // grouped on that axis (token_type's options are fixed).
+          if (data && (data.group === 'provider' || data.group === 'project')) {
+            const set = new Set(historyState.known[data.group]);
+            for (const c of (data.top_contributors || [])) {
+              if (c.label && c.label !== 'unknown') set.add(c.label);
+            }
+            historyState.known[data.group] = [...set].sort();
+          }
           renderHistory();
         });
     }
 
     function renderHistory() {
       renderHistoryBreadcrumb();
+      renderHistoryFilters();
       const isYield = historyState.chart === 'yield';
       // Yield counts completed sessions; agents are reconstructed from opt-in
       // recordings — each gets its own empty caption.
@@ -3098,18 +3134,33 @@ import { isSummaryCollapsed, toggleSummaryCollapsed, anySummaryCollapsed, collap
         const r = idx.get(pt.project), c = tsIdx.get(pt.ts);
         if (r != null && c != null) matrix[r][c] += pt.value;
       }
+      // Cumulative for the stacked cost/token area charts: each band becomes a
+      // running total climbing to its grand total at the right edge. Agents (a
+      // concurrency count, not a flow) stays a per-bucket rate.
+      const cumulative = historyState.chart !== 'agents';
+      if (cumulative) for (let r = 0; r < matrix.length; r++) matrix[r] = historyRunningSum(matrix[r]);
+
       const fc = (historyState.forecast && data.forecast && Array.isArray(data.forecast.series)) ? data.forecast.series : [];
       const H = fc.length;
+      // Grand cumulative total = the stack's right-edge height; it anchors the
+      // forecast when cumulative.
+      let grandTotal = 0;
+      for (let r = 0; r < matrix.length; r++) grandTotal += matrix[r][B - 1] || 0;
+      // Forecast points in display space: continue the cumulative climb from the
+      // grand total, or stay at the per-bucket projected rate when incremental.
+      const fcY = cumulative
+        ? historyRunningSum(fc.map(p => p.value)).map(v => grandTotal + v)
+        : fc.map(p => p.value);
 
-      // Y scale = the tallest stacked column (sum across projects per bucket),
-      // also accounting for the forecast points.
+      // Y scale = the tallest stacked column (sum across bands per bucket), also
+      // covering the forecast points.
       let maxY = 0;
       for (let c = 0; c < B; c++) {
         let s = 0;
         for (let r = 0; r < projects.length; r++) s += matrix[r][c];
         if (s > maxY) maxY = s;
       }
-      for (const p of fc) if (p.value > maxY) maxY = p.value;
+      for (const v of fcY) if (v > maxY) maxY = v;
       if (maxY <= 0) maxY = 1;
       maxY *= 1.12;
 
@@ -3153,19 +3204,19 @@ import { isSummaryCollapsed, toggleSummaryCollapsed, anySummaryCollapsed, collap
         for (let c = 0; c < B; c++) baseline[c] += matrix[r][c];
       }
 
-      // Forecast: a dashed flat line at the projected per-bucket rate, drawn
-      // from the right edge of the data into the future. Anchored at the
-      // forecast's own first value (not grand[B-1]) so an empty trailing bucket
-      // — common for the in-progress current minute — doesn't draw a spurious
-      // dip-and-spike down to the axis.
+      // Forecast: a dashed line into the future. Cumulative charts continue the
+      // climb from the grand total to ≈forecast.projected; incremental charts
+      // hold a flat line at the projected per-bucket rate, anchored at the
+      // forecast's own first value so an empty trailing bucket (the in-progress
+      // current minute) doesn't draw a spurious dip-and-spike to the axis.
       if (H > 0) {
         ctx.save();
         ctx.setLineDash([4, 3]);
         ctx.strokeStyle = waiting;
         ctx.lineWidth = 1.5;
         ctx.beginPath();
-        ctx.moveTo(xAt(B - 1), yAt(fc[0].value));
-        for (let k = 0; k < H; k++) ctx.lineTo(xAt(B + k), yAt(fc[k].value));
+        ctx.moveTo(xAt(B - 1), yAt(cumulative ? grandTotal : fcY[0]));
+        for (let k = 0; k < H; k++) ctx.lineTo(xAt(B + k), yAt(fcY[k]));
         ctx.stroke();
         ctx.restore();
       }
@@ -3227,8 +3278,25 @@ import { isSummaryCollapsed, toggleSummaryCollapsed, anySummaryCollapsed, collap
       listEl.innerHTML = '';
 
       // Tokens: the side panel is an input/output/cache breakdown, not a
-      // contributor ranking.
+      // contributor ranking — except when grouping by token_type, where the
+      // stacked bands themselves are the breakdown (listed with friendly labels).
       if (historyState.chart === 'tokens') {
+        if (historyState.group === 'token_type') {
+          const contribs = data.top_contributors || [];
+          if (!contribs.length) {
+            appendHistoryEmpty(listEl, 'no token usage in this range');
+            return;
+          }
+          contribs.forEach((c, i) => {
+            const li = document.createElement('li');
+            const dot = document.createElement('span'); dot.className = 'dot'; dot.style.background = historyColorFor(i);
+            const lab = document.createElement('span'); lab.className = 'label'; lab.textContent = TOKEN_TYPE_LABEL[c.label] || c.label;
+            const val = document.createElement('span'); val.className = 'val'; val.textContent = histTokens(c.value);
+            li.append(dot, lab, val);
+            listEl.appendChild(li);
+          });
+          return;
+        }
         const split = data.token_split;
         if (!split || !(data.total > 0)) {
           appendHistoryEmpty(listEl, 'no token usage in this range');
@@ -3279,6 +3347,52 @@ import { isSummaryCollapsed, toggleSummaryCollapsed, anySummaryCollapsed, collap
       li.className = 'history-empty-contrib';
       li.textContent = text;
       listEl.appendChild(li);
+    }
+
+    function historyFilterOptions(dim) {
+      if (dim === 'token_type') return TOKEN_TYPE_OPTIONS;
+      return (historyState.known[dim] || []).map(v => [v, v]);
+    }
+
+    // renderHistoryFilters repopulates the per-dimension filter dropdowns,
+    // hiding the dimension currently being grouped on (never both axis and
+    // filter) and the token_type filter outside the tokens metric.
+    function renderHistoryFilters() {
+      const row = document.getElementById('history-filter-row');
+      if (!row) return;
+      for (const det of row.querySelectorAll('details.history-filter')) {
+        const dim = det.dataset.dim;
+        const hidden = dim === historyState.group || (dim === 'token_type' && historyState.chart !== 'tokens');
+        det.hidden = hidden;
+        if (hidden) { det.open = false; continue; }
+        const sel = new Set(historyState.filters[dim] || []);
+        const menu = det.querySelector('.menu');
+        if (menu) {
+          menu.innerHTML = '';
+          const opts = historyFilterOptions(dim);
+          for (const [val, label] of opts) {
+            const lab = document.createElement('label');
+            const cb = document.createElement('input');
+            cb.type = 'checkbox'; cb.value = val; cb.checked = sel.has(val);
+            cb.addEventListener('change', () => toggleHistoryFilter(dim, val, cb.checked));
+            const span = document.createElement('span'); span.textContent = label;
+            lab.append(cb, span);
+            menu.appendChild(lab);
+          }
+          if (!opts.length) appendHistoryEmpty(menu, 'none seen yet');
+        }
+        const sum = det.querySelector('summary');
+        const dimLabel = dim === 'token_type' ? 'Token type' : dim[0].toUpperCase() + dim.slice(1);
+        if (sum) sum.textContent = dimLabel + ': ' + (sel.size ? sel.size + ' selected' : 'All');
+      }
+    }
+
+    function toggleHistoryFilter(dim, val, on) {
+      const cur = new Set(historyState.filters[dim] || []);
+      if (on) cur.add(val); else cur.delete(val);
+      historyState.filters[dim] = [...cur];
+      historyState.scope = null; // a filter change invalidates any drilldown
+      fetchHistory();
     }
 
     // drillInto re-scopes the view to one contributor and re-groups by the next
@@ -3528,6 +3642,7 @@ import { isSummaryCollapsed, toggleSummaryCollapsed, anySummaryCollapsed, collap
       if (c === 'models') historyState.group = 'model';
       else if (c === 'providers') historyState.group = 'provider';
       else if (c === 'agents') historyState.group = 'project';
+      else if (c !== 'tokens' && historyState.group === 'token_type') historyState.group = 'project'; // token_type needs the tokens metric
       historyState.scope = null; // a new metric resets any drilldown
       syncHistorySelectors();
       fetchHistory();
@@ -3538,9 +3653,16 @@ import { isSummaryCollapsed, toggleSummaryCollapsed, anySummaryCollapsed, collap
       const b = e.target.closest('button[data-group]');
       if (!b || b.disabled) return;
       historyState.group = b.dataset.group;
-      // Choosing a group explicitly leaves the metric-preset charts (and agents,
-      // which is project-only) so the chosen axis sticks on a cost breakdown.
-      if (historyState.chart === 'models' || historyState.chart === 'providers' || historyState.chart === 'agents') historyState.chart = 'cost';
+      if (historyState.group === 'token_type') {
+        historyState.chart = 'tokens'; // token bands require the tokens metric
+      } else if (historyState.chart === 'models' || historyState.chart === 'providers' || historyState.chart === 'agents') {
+        // Choosing a group explicitly leaves the metric-preset charts (and
+        // agents, which is project-only) so the chosen axis sticks on a cost
+        // breakdown.
+        historyState.chart = 'cost';
+      }
+      // A dimension is never both the stacking axis and a filter.
+      if (historyState.filters[historyState.group]) historyState.filters[historyState.group] = [];
       historyState.scope = null;
       syncHistorySelectors();
       fetchHistory();
@@ -3576,5 +3698,5 @@ export {
   sessionOrigin, sourceIdOf, localBareIds, isShadowedRemote,
   daemonSessionIds, structureSignature,
   pendingWizardAgents, buildPermissionAnswers, stillPendingForAgents,
-  historyQuery, histTokens, histCount, CHART_LABELS, DRILL_NEXT,
+  historyQuery, histTokens, histCount, CHART_LABELS, DRILL_NEXT, historyRunningSum,
 };

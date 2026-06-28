@@ -29,6 +29,7 @@ import {
   histCount,
   CHART_LABELS,
   DRILL_NEXT,
+  historyRunningSum,
 } from './irrlicht.js'
 
 describe('resolvedTheme', () => {
@@ -718,6 +719,48 @@ describe('historyQuery (#750 chart/group/scope params)', () => {
     expect(q.get('start')).toBe('900')
     expect(q.get('end')).toBe('2000')
     expect(q.get('range')).toBeNull()
+  })
+})
+
+describe('historyQuery cross-filters (#750 faceted)', () => {
+  const base = {
+    range: 'day', chart: 'tokens', group: 'project', forecast: true, start: null, end: null, scope: null,
+    filters: { provider: ['anthropic'], token_type: ['input', 'output'], project: ['x'] },
+  }
+
+  test('emits non-grouped filters and drops the grouped dimension', () => {
+    const q = new URLSearchParams(historyQuery(base))
+    expect(q.get('provider')).toBe('anthropic')
+    expect(q.get('token_type')).toBe('input,output')
+    expect(q.get('project')).toBeNull() // project is the active group
+  })
+
+  test('token_type filter is omitted unless the tokens metric is active', () => {
+    const q = new URLSearchParams(historyQuery({ ...base, chart: 'cost' }))
+    expect(q.get('token_type')).toBeNull()
+    expect(q.get('provider')).toBe('anthropic')
+  })
+
+  test('empty filter sets emit nothing', () => {
+    const q = new URLSearchParams(historyQuery({ ...base, filters: { provider: [], token_type: [], project: [] } }))
+    expect(q.get('provider')).toBeNull()
+    expect(q.get('token_type')).toBeNull()
+  })
+
+  test('a missing filters field is tolerated (back-compat)', () => {
+    const q = new URLSearchParams(historyQuery({ range: 'day', chart: 'cost', group: 'project', forecast: true, start: null, end: null, scope: null }))
+    expect(q.get('provider')).toBeNull()
+  })
+})
+
+describe('historyRunningSum (cumulative chart)', () => {
+  test('produces a monotonic running total', () => {
+    expect(historyRunningSum([1, 0, 2, 0, 3])).toEqual([1, 1, 3, 3, 6])
+  })
+  test('tolerates empty/nullish input', () => {
+    expect(historyRunningSum([])).toEqual([])
+    expect(historyRunningSum(null)).toEqual([])
+    expect(historyRunningSum([1, null, 2])).toEqual([1, 1, 3])
   })
 })
 

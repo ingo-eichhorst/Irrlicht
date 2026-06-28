@@ -476,23 +476,25 @@ func addContributions(s *sessionWindows, key string, out map[string]map[string]f
 
 // seriesAgg tracks one session's running cumulative values while a cost file is
 // scanned, so the next in-range row's delta can be measured. prev is the
-// previous cumulative value of the selected metric; prevIn/prevOut/prevCache
-// back the tokens in/out/cache split. Unlike Phase 1, deltas are attributed to
-// the group key on the row that closes each interval (see scanSeries), so a
-// session that changes branch/model/provider mid-flight splits correctly.
+// previous cumulative value of the selected metric; prevIn/prevOut/prevRead/
+// prevCreate back the per-token-kind deltas (the in/out/cache split and the
+// token_type bands). Unlike Phase 1, deltas are attributed to the group key on
+// the row that closes each interval (see scanSeries), so a session that changes
+// branch/model/provider mid-flight splits correctly.
 type seriesAgg struct {
-	prev      float64
-	hasPrev   bool
-	prevIn    float64
-	prevOut   float64
-	prevCache float64
+	prev       float64
+	hasPrev    bool
+	prevIn     float64
+	prevOut    float64
+	prevRead   float64
+	prevCreate float64
 }
 
 // advance seeds/updates a session's running baselines to the current row's
 // values. A method (not a per-row closure) so the scan loop allocates nothing.
-func (s *seriesAgg) advance(cur, in, out, cache float64) {
+func (s *seriesAgg) advance(cur, in, out, read, create float64) {
 	s.prev = cur
-	s.prevIn, s.prevOut, s.prevCache = in, out, cache
+	s.prevIn, s.prevOut, s.prevRead, s.prevCreate = in, out, read, create
 	s.hasPrev = true
 }
 
@@ -524,13 +526,94 @@ func rowKey(r snapshotRow, group, fallback string) string {
 	}
 }
 
-// rowMetric returns a row's cumulative value for the selected metric: total
-// tokens (in + out + cache) for "tokens", else estimated USD cost.
-func rowMetric(r snapshotRow, metric string) float64 {
-	if metric == "tokens" {
-		return float64(r.CumIn + r.CumOut + r.CumRead + r.CumCreate)
+// rowTokenSum returns the row's cumulative token count summed over the selected
+// token kinds. sel names which counters the tokens metric measures; an
+// unfiltered query selects all four, matching the plain in+out+cache total.
+func rowTokenSum(r snapshotRow, sel map[string]bool) float64 {
+	var s float64
+	if sel["input"] {
+		s += float64(r.CumIn)
 	}
-	return r.Cost
+	if sel["output"] {
+		s += float64(r.CumOut)
+	}
+	if sel["cache_read"] {
+		s += float64(r.CumRead)
+	}
+	if sel["cache_creation"] {
+		s += float64(r.CumCreate)
+	}
+	return s
+}
+
+// providerKey is the provider filter/grouping value for a row, surfacing a
+// missing provider under "unknown" so the empty-provider slice is selectable by
+// an explicit provider filter (the handler relabels the grouped "" key the same
+// way via its ≥10% rule).
+func providerKey(r snapshotRow) string {
+	if r.Provider == "" {
+		return "unknown"
+	}
+	return r.Provider
+}
+
+// addBand folds one token kind's positive per-bucket delta into out under the
+// kind's key — used when grouping the tokens metric by token_type, where each
+// in-range row contributes up to four bands. A deselected kind (token_type
+// filter) or a non-positive delta contributes nothing.
+func addBand(out *outbound.CostSeriesResult, key string, idx, n int, d float64, sel map[string]bool) {
+	if !sel[key] || d <= 0 {
+		return
+	}
+	dst := out.ByKey[key]
+	if dst == nil {
+		dst = make([]float64, n)
+		out.ByKey[key] = dst
+	}
+	dst[idx] += d
+	out.Totals[key] += d
+}
+
+// seriesFilter is SeriesQuery's cross-filter set resolved to lookup form for the
+// scan loop. A nil projects/providers map means no constraint on that axis;
+// tokens is always populated (all four kinds when unfiltered) and names which
+// token counters the tokens metric sums. groupByToken is true when the series
+// is keyed by token type (a row contributes bands, not a single group key).
+type seriesFilter struct {
+	projects     map[string]bool
+	providers    map[string]bool
+	tokens       map[string]bool
+	groupByToken bool
+}
+
+// resolveSeriesFilter materializes the query's cross-filters once per request so
+// the per-row scan does only map lookups. A token_type filter is honored only
+// for the tokens metric (it can't slice cost).
+func resolveSeriesFilter(q outbound.SeriesQuery) seriesFilter {
+	f := seriesFilter{groupByToken: q.Group == "token_type"}
+	if len(q.Projects) > 0 {
+		f.projects = make(map[string]bool, len(q.Projects))
+		for _, p := range q.Projects {
+			f.projects[p] = true
+		}
+	}
+	if len(q.Providers) > 0 {
+		f.providers = make(map[string]bool, len(q.Providers))
+		for _, p := range q.Providers {
+			f.providers[p] = true
+		}
+	}
+	f.tokens = make(map[string]bool, len(outbound.TokenTypeKeys))
+	if q.Metric == "tokens" && len(q.TokenTypes) > 0 {
+		for _, tt := range q.TokenTypes {
+			f.tokens[tt] = true
+		}
+	} else {
+		for _, tt := range outbound.TokenTypeKeys {
+			f.tokens[tt] = true
+		}
+	}
+	return f
 }
 
 // CostSeries returns an incremental time series bucketed into fixed
@@ -577,6 +660,8 @@ func (t *CostTracker) CostSeries(q outbound.SeriesQuery) (*outbound.CostSeriesRe
 		out.BucketStarts[i] = start + int64(i)*bucketSeconds
 	}
 
+	filter := resolveSeriesFilter(q)
+
 	entries, err := os.ReadDir(t.dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -589,7 +674,7 @@ func (t *CostTracker) CostSeries(q outbound.SeriesQuery) (*outbound.CostSeriesRe
 			continue
 		}
 		fallback := strings.TrimSuffix(e.Name(), ".jsonl")
-		if err := t.scanSeries(filepath.Join(t.dir, e.Name()), q, bucketSeconds, n, fallback, out); err != nil {
+		if err := t.scanSeries(filepath.Join(t.dir, e.Name()), q, filter, bucketSeconds, n, fallback, out); err != nil {
 			return nil, err
 		}
 	}
@@ -598,13 +683,24 @@ func (t *CostTracker) CostSeries(q outbound.SeriesQuery) (*outbound.CostSeriesRe
 
 // scanSeries streams one cost file once and folds its sessions' per-bucket
 // increments into out, keyed by the group value on each interval's end row and
-// filtered to the query's scope. A row whose group value is empty is keyed
-// under "" (the unknown bucket); for the project axis the empty value falls
-// back to the filename, mirroring CostsInWindows.
-func (t *CostTracker) scanSeries(path string, q outbound.SeriesQuery, bucketSeconds int64, n int, fallback string, out *outbound.CostSeriesResult) error {
+// filtered to the query's scope and cross-filters. A row whose group value is
+// empty is keyed under "" (the unknown bucket); for the project axis the empty
+// value falls back to the filename, mirroring CostsInWindows. When grouping by
+// token_type each in-range row contributes one band per selected token kind
+// instead of a single group key.
+func (t *CostTracker) scanSeries(path string, q outbound.SeriesQuery, f seriesFilter, bucketSeconds int64, n int, fallback string, out *outbound.CostSeriesResult) error {
 	aggs := make(map[string]*seriesAgg)
 	return scanCostFile(path, func(r snapshotRow) {
 		if q.ScopeField != "" && rowKey(r, q.ScopeField, fallback) != q.ScopeValue {
+			return
+		}
+		// Cross-filters skip non-matching rows (like scope). Project/provider
+		// are session-constant in practice, so a skipped row carries its
+		// baseline forward exactly as the scope drilldown already does.
+		if f.projects != nil && !f.projects[rowKey(r, "project", fallback)] {
+			return
+		}
+		if f.providers != nil && !f.providers[providerKey(r)] {
 			return
 		}
 		s := aggs[r.Session]
@@ -612,29 +708,40 @@ func (t *CostTracker) scanSeries(path string, q outbound.SeriesQuery, bucketSeco
 			s = &seriesAgg{}
 			aggs[r.Session] = s
 		}
-		cur := rowMetric(r, q.Metric)
+		var cur float64
+		if q.Metric == "tokens" {
+			cur = rowTokenSum(r, f.tokens)
+		} else {
+			cur = r.Cost
+		}
 		curIn := float64(r.CumIn)
 		curOut := float64(r.CumOut)
-		curCache := float64(r.CumRead + r.CumCreate)
+		curRead := float64(r.CumRead)
+		curCreate := float64(r.CumCreate)
 
 		switch {
 		case r.TS < q.Start:
 			// Pre-range row: advance the baseline so the first in-range delta
 			// measures spend since the last snapshot.
-			s.advance(cur, curIn, curOut, curCache)
+			s.advance(cur, curIn, curOut, curRead, curCreate)
 			return
 		case r.TS >= q.End:
 			return
 		case !s.hasPrev:
 			// First observation with no pre-range baseline: seed, no delta.
-			s.advance(cur, curIn, curOut, curCache)
+			s.advance(cur, curIn, curOut, curRead, curCreate)
 			return
 		}
 
 		// The guards above filter rows to [Start, End), so the index is always
 		// within [0, n-1] — no clamp needed.
 		idx := int((r.TS - q.Start) / bucketSeconds)
-		if d := cur - s.prev; d > 0 {
+		if f.groupByToken {
+			addBand(out, "input", idx, n, curIn-s.prevIn, f.tokens)
+			addBand(out, "output", idx, n, curOut-s.prevOut, f.tokens)
+			addBand(out, "cache_read", idx, n, curRead-s.prevRead, f.tokens)
+			addBand(out, "cache_creation", idx, n, curCreate-s.prevCreate, f.tokens)
+		} else if d := cur - s.prev; d > 0 {
 			key := rowKey(r, q.Group, fallback)
 			dst := out.ByKey[key]
 			if dst == nil {
@@ -645,17 +752,30 @@ func (t *CostTracker) scanSeries(path string, q outbound.SeriesQuery, bucketSeco
 			out.Totals[key] += d
 		}
 		if out.TokenSplit != nil {
-			if d := curIn - s.prevIn; d > 0 {
-				out.TokenSplit.Input += d
+			if f.tokens["input"] {
+				if d := curIn - s.prevIn; d > 0 {
+					out.TokenSplit.Input += d
+				}
 			}
-			if d := curOut - s.prevOut; d > 0 {
-				out.TokenSplit.Output += d
+			if f.tokens["output"] {
+				if d := curOut - s.prevOut; d > 0 {
+					out.TokenSplit.Output += d
+				}
 			}
-			if d := curCache - s.prevCache; d > 0 {
-				out.TokenSplit.Cache += d
+			var cache float64
+			if f.tokens["cache_read"] {
+				if d := curRead - s.prevRead; d > 0 {
+					cache += d
+				}
 			}
+			if f.tokens["cache_creation"] {
+				if d := curCreate - s.prevCreate; d > 0 {
+					cache += d
+				}
+			}
+			out.TokenSplit.Cache += cache
 		}
-		s.advance(cur, curIn, curOut, curCache)
+		s.advance(cur, curIn, curOut, curRead, curCreate)
 	})
 }
 

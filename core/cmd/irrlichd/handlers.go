@@ -374,6 +374,8 @@ func handleGetHistory(tracker outbound.CostTracker, sessions historySessionListe
 		switch group {
 		case "project", "branch", "provider", "model", "session":
 			// implemented (Phase 2)
+		case "token_type":
+			// implemented (faceted) — tokens metric only (validated below)
 		default:
 			http.Error(w, "unknown group: "+group, http.StatusBadRequest)
 			return
@@ -392,6 +394,13 @@ func handleGetHistory(tracker outbound.CostTracker, sessions historySessionListe
 			group = "provider"
 		case "agents":
 			group = "project"
+		}
+
+		// token_type is inherently a token concept — it can't slice cost (we
+		// store no per-token-type cost on disk).
+		if group == "token_type" && metric != "tokens" {
+			http.Error(w, "group=token_type requires chart=tokens", http.StatusBadRequest)
+			return
 		}
 
 		scopeField, scopeValue := parseHistoryScope(q.Get("scope"))
@@ -443,6 +452,25 @@ func handleGetHistory(tracker outbound.CostTracker, sessions historySessionListe
 			return
 		}
 
+		// Orthogonal cross-filters (comma-separated, multi-value). The active
+		// group dimension is never filtered — drop whichever matches it — so a
+		// dimension is never both a stacking axis and a filter.
+		projects := parseCSVParam(q.Get("project"))
+		providers := parseCSVParam(q.Get("provider"))
+		tokenTypes, okTT := parseTokenTypeFilter(q.Get("token_type"))
+		if !okTT {
+			http.Error(w, "invalid token_type: use input|output|cache_read|cache_creation", http.StatusBadRequest)
+			return
+		}
+		switch group {
+		case "project":
+			projects = nil
+		case "provider":
+			providers = nil
+		case "token_type":
+			tokenTypes = nil
+		}
+
 		var series *outbound.CostSeriesResult
 		if tracker != nil {
 			s, err := tracker.CostSeries(outbound.SeriesQuery{
@@ -453,6 +481,9 @@ func handleGetHistory(tracker outbound.CostTracker, sessions historySessionListe
 				Metric:        metric,
 				ScopeField:    scopeField,
 				ScopeValue:    scopeValue,
+				Projects:      projects,
+				Providers:     providers,
+				TokenTypes:    tokenTypes,
 			})
 			if err != nil {
 				http.Error(w, "internal error", http.StatusInternalServerError)
@@ -486,6 +517,45 @@ func parseHistoryScope(s string) (field, value string) {
 		return f, s[i+1:]
 	}
 	return "", ""
+}
+
+// parseCSVParam splits a comma-separated multi-value filter param into its
+// trimmed, non-empty values. Returns nil (no constraint) for an empty param.
+func parseCSVParam(s string) []string {
+	if s == "" {
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// parseTokenTypeFilter parses the ?token_type= cross-filter into validated token
+// kinds. An empty param is no filter (nil, true); an unrecognized kind is
+// rejected (nil, false) so the handler can 400 rather than silently ignore it.
+func parseTokenTypeFilter(s string) ([]string, bool) {
+	raw := parseCSVParam(s)
+	if raw == nil {
+		return nil, true
+	}
+	valid := map[string]bool{}
+	for _, k := range outbound.TokenTypeKeys {
+		valid[k] = true
+	}
+	for _, p := range raw {
+		if !valid[p] {
+			return nil, false
+		}
+	}
+	return raw, true
 }
 
 // writeHistoryNotImplemented emits a 501 with a phase hint for chart types and
