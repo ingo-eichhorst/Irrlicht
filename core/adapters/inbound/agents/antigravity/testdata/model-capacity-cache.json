@@ -1,0 +1,33 @@
+{
+  "fetched_at": "2026-06-28T00:00:00Z",
+  "config": {
+    "version": "remote-v2",
+    "last_updated": "2026-06-28",
+    "models": {
+      "gemini-3.1-pro-preview": {
+        "context_window": 1048576,
+        "max_output": 65536,
+        "family": "vertex_ai-language-models",
+        "display_name": "gemini-3.1-pro-preview",
+        "pricing": {
+          "input_per_mtok": 2,
+          "output_per_mtok": 12,
+          "cache_read_per_mtok": 0.2,
+          "cache_creation_per_mtok": 0
+        }
+      },
+      "gemini-3-flash-preview": {
+        "context_window": 1048576,
+        "max_output": 65535,
+        "family": "vertex_ai-language-models",
+        "display_name": "gemini-3-flash-preview",
+        "pricing": {
+          "input_per_mtok": 0.5,
+          "output_per_mtok": 3,
+          "cache_read_per_mtok": 0.05,
+          "cache_creation_per_mtok": 0
+        }
+      }
+    }
+  }
+}
