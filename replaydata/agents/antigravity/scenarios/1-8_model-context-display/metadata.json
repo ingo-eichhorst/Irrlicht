@@ -2,12 +2,12 @@
   "scenario_id": "model-context-display",
   "metadata": {
     "agent_supports": "yes",
-    "daemon_capability": "incapable",
-    "driver_capability": "gap:wait_turn",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
     "agent_cli_version": "1.0.10",
-    "daemon_version": "0.5.2+9cd5c69.dirty",
-    "confidence": 0.85,
-    "notes": "agent=yes daemon=incapable — model_name IS observable (Gemini 3.5 Flash, harvested from <USER_SETTINGS_CHANGE>), but context_utilization/context_window/cost are NOT: antigravity's JSONL carries no tokens (they live in the per-conversation SQLite protobuf), no MetricsReader."
+    "daemon_version": "0.5.3+c0df0a7",
+    "confidence": 0.8,
+    "notes": "RE-ASSESSED after #719+#766+golden-summary surfacing: store-derived context vector reaches the replay golden and of verify → daemon=full (cost still deferred to #716)."
   },
   "details": {
     "assessment": {
@@ -15,41 +15,90 @@
       "scenario_id": "model-context-display",
       "agent": "antigravity",
       "agent_supports": "yes",
-      "daemon_capability": "incapable",
-      "driver_capability": "gap:wait_turn",
-      "confidence": 0.85,
-      "body": "## Verdict\n\n**agent=yes.** `agy` displays both metrics in its own TUI: the footer shows the model chip ('Gemini 3.5 Flash (Low)', observed live) and the palette has `/context` (Visualize current context usage) and `/credits` (remaining G1 credits). The model can also be set with `--model` or `/model`.\n\n**daemon=incapable.** The scenario asserts THREE observable metrics after one trivial turn: model_name (non-empty/not unknown), context_utilization_percentage (> 0), and context_window (> 0). Only model_name is observable from what the daemon tails. The parser harvests the model from the `<USER_SETTINGS_CHANGE>` block ('Gemini 3.5 Flash', `parser.go:84`) and attaches it to assistant events — model_name works. BUT tokens/cost/context are NOT in the filtered transcript.jsonl: the parser's own contract (`parser.go:30-33`) states 'Tokens/cost are not in the JSONL (they live in the per-conversation SQLite protobuf store), so the parser surfaces no usage'. There is no MetricsReader on the adapter (grep confirms zero token/usage emission). With zero tokens flowing, `accumulateTokens` never runs, so context_utilization stays 0, total tokens stay 0, and cost (derived via EstimateCostUSD from tokens) stays 0. The model chip's TUI `/context` value is rendered client-side and never written to the watched JSONL, so it leaves no trace for the daemon. Two of the three required metrics (utilization, window-utilization) and the sibling cells' cost_nonzero/tokens_nonzero observations are unobservable for architectural reasons (the usage data lives in a store the adapter deliberately does not read).\n\n**Why incapable, not bug:** this is not a mis-handled trace — there is NO token trace in the watched transcript at all (the usage is in the SQLite protobuf, an unparsed store). The 3-metric scenario cannot be satisfied; the cell is frozen until a MetricsReader over the SQLite store is built (a v2 adapter feature, out of scope per the column's prerequisites).\n\n**driver=gap:wait_turn** is moot for a frozen cell — the recipe is the standard send+wait_turn, but the daemon can't observe the asserted metrics regardless of driver readiness.",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict (RE-ASSESSMENT — supersedes the stale daemon=incapable / applicable:false verdict, which predated #719 and #766)\n\n**agent=yes.** `agy` displays both metrics in its own TUI: the footer shows the model chip ('Gemini 3.x Flash/Pro', observed live) and `/context` visualizes context usage. Unchanged from the prior assessment.\n\n**daemon=full** (was `incapable`). The earlier verdict reasoned that tokens/cost/context live in the per-conversation SQLite store the adapter \"deliberately does not read\" — that is no longer true. Two merged changes flip it:\n\n- **#719 (`parser.go:180` `applyDBMetrics`).** On every `turn_done` the parser reads the sibling conversation store `<root>/conversations/<conv>.db` and sets BOTH `ev.ModelName` (the canonical resolvable id from gen_metadata field #19, normalized via `NormalizeModelName`) AND `ev.Tokens.Total = contextTokens` (the in-context prompt-token count from gen_metadata field #5; see `dbmetrics.go:121-144` for the field map). With a non-zero Total flowing, `ComputeContextUtilization` returns > 0 and `context_window` > 0 from the capacity table for the resolved model. So all three scenario metrics (model_name non-empty/not-unknown, context_utilization_percentage > 0, context_window > 0) now resolve at the first `turn_done`.\n- **#766 (merged a31bc2e2).** The recording rig captures the store (`curate-lifecycle-fixture.sh` copies `store/conversations/<conv>.db`+wal/+shm) and the replay engine serves it: `Parser.StageReplayStore` (`replaystore.go:25`) rebuilds the live `brain/<conv>/.system_generated/logs/` layout under the replay tmpdir and copies the captured store to `tmpDir/conversations/<conv>.db`, so the unchanged `storePathForTranscript` resolves it (`engine.go` `newReplayer` relocates the transcript to that nested path). A synthetic-store replay test already proves `context_window` + `context_utilization` resolve at replay.\n\n- **Golden-summary surfacing (the final hop to verify-checkable).** The store-derived vector only reaches `of verify` because `finalizeSummary` (`cmd/replay/metrics.go:52-59`, antigravity-gated on `lastMetrics.TotalTokens > 0`) lifts `TotalTokens`/`ContextWindow`/`ContextUtilization` from the last SessionMetrics into the replay golden summary's `total_tokens`/`context_window`/`context_utilization_percentage` fields (`cmd/replay/types.go:147-148`), kept `omitempty` so every cum-token adapter's golden stays byte-identical. `of verify` then exposes three matching observation assertions — `context_window_nonzero`, `context_utilization_nonzero`, `total_tokens_nonzero` (`internal/validate/expected.go:94-96`) — that read those store-derived summary fields. This cell asserts the first two.\n\n**CRITICAL — do NOT use `tokens_nonzero`.** The legacy `tokens_nonzero` assertion reads `totalTokens() = cum_input_tokens + cum_output_tokens` (`internal/validate/observations.go:37`), which antigravity NEVER feeds (it has no in-transcript per-turn cum usage) — asserting it would hard-fail verify on every recording. The store-occupancy total flows through the SEPARATE `total_tokens` summary field, reachable only via `total_tokens_nonzero`; this cell instead asserts the two derived context metrics the scenario actually requires.\n\n**Why full, not bug:** the trace is now read and handled correctly end-to-end (live + replay + golden surfacing + verify); nothing is mis-handled.\n\n**driver=ready** (was `gap:wait_turn`). The stale gap was wrong: `replaydata/agents/antigravity/driver-interactive.sh` lists `wait_turn` in `DRIVE_ELICITS` (line 113) and implements it (line 292) — it blocks until the turn-done count advances. The recipe (send + wait_turn + sleep) needs no step the driver lacks.\n\n## Caveat — COST is NOT derivable (deferred to #716)\n\nAntigravity persists NO cost in its store: the only usable usage signal is the in-context occupancy token count (gen_metadata field #5) plus the canonical model id. There are no labeled per-turn input/output/cache token splits and no ground truth to derive a price from (see #716, closed not-planned). So this cell asserts `tokens_nonzero` (context occupancy) but NOT `cost_nonzero`. The token total is context-window occupancy, not a billable per-turn delta.",
       "caveats": [
-        "model_name ALONE is fully observable (the agent's own normalized label, harvested from <USER_SETTINGS_CHANGE>: 'Gemini 3.5 Flash', which the capacity layer aliases the parenthetical/dash forms to gemini-3.5-flash). If the scenario is ever split so model-only is a separate assertion, that sub-cell would be daemon=full.",
-        "context_window could in principle be derived from the capacity table for the resolved model EVEN without per-turn tokens — but context_utilization_percentage and cost require the token counts that antigravity does not write to the JSONL, so the scenario as a whole stays unobservable.",
-        "Unblock path: build an antigravity MetricsReader that reads the per-conversation SQLite protobuf usage store (the adapter's metadata.json already names this as a deferred v1 limitation). That is a daemon/adapter feature, not a driver gap."
+        "COST is unobservable and intentionally NOT asserted (deferred to #716): antigravity stores only in-context occupancy tokens + the canonical model, with no labeled cost fields or ground truth.",
+        "The spec asserts context_window_nonzero + context_utilization_nonzero (the store-derived golden-summary fields surfaced by finalizeSummary, metrics.go:52-59). It does NOT assert tokens_nonzero — that reads cum_input+cum_output (observations.go:37), which antigravity never feeds, so it would hard-fail verify. The occupancy token count is reachable only via total_tokens_nonzero (a separate summary field); the scenario's load-bearing metrics are the two context fields, so those are what's asserted.",
+        "model is left PROVISIONAL — not pinned. #719 overwrites the transcript display name with the store's canonical dash-form id (e.g. 'gemini-3.x-flash'); the exact id (and whether the boot default is a flash or pro variant) must be filled by `record` from the live recording, not guessed from docs.",
+        "daemon=full is PROVISIONAL on emission: the verdict rests on the store being present beside the transcript at turn_done. #766's capture+serve makes that hold at replay, but a live re-record is what promotes this from provisional to settled (a recording without a captured store reproduces the pre-#719 storeless, tokens-0 state)."
       ],
       "sources": [
         {
           "kind": "file",
-          "ref": "core/adapters/inbound/agents/antigravity/parser.go:30",
-          "note": "parser contract: tokens/cost are NOT in the JSONL (they live in the per-conversation SQLite protobuf); the parser surfaces no usage"
+          "ref": "core/adapters/inbound/agents/antigravity/parser.go:180",
+          "note": "#719 applyDBMetrics: on turn_done reads the sibling store and sets ev.ModelName (canonical id) + ev.Tokens.Total = contextTokens"
         },
         {
           "kind": "file",
-          "ref": "core/adapters/inbound/agents/antigravity/parser.go:84",
-          "note": "model harvested from <USER_SETTINGS_CHANGE> — model_name IS observable"
+          "ref": "core/adapters/inbound/agents/antigravity/dbmetrics.go",
+          "note": "readStoreModelTokens + decodeGenMetadata: gen_metadata field #19 = canonical model, field #5 = prompt/context tokens; no cost field present"
         },
         {
           "kind": "file",
-          "ref": "core/adapters/inbound/agents/antigravity/agent.go",
-          "note": "no MetricsReader declared on the adapter (token/usage emission absent)"
+          "ref": "core/adapters/inbound/agents/antigravity/replaystore.go:25",
+          "note": "#766 StageReplayStore (ReplayStoreStager): copies captured store to tmpDir/conversations/<conv>.db and rebuilds brain/<conv>/.system_generated/logs/ so storePathForTranscript resolves at replay"
         },
         {
-          "kind": "url",
-          "ref": "agy REPL footer + /context, /credits (live, tmux)",
-          "note": "model chip + context/credits shown in the TUI only — not written to the watched transcript"
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/replayengine/engine.go",
+          "note": "newReplayer relocates the transcript under the staged path so the served store resolves; synthetic-store replay test proves context_window + utilization resolve"
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/cmd/replay/metrics.go:52",
+          "note": "finalizeSummary (antigravity-gated on TotalTokens>0) lifts TotalTokens/ContextWindow/ContextUtilization into the golden summary's total_tokens/context_window/context_utilization_percentage (types.go:147-148, omitempty so cum-token goldens stay byte-identical) — the hop that makes the store vector reach of verify"
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/internal/validate/expected.go:94",
+          "note": "of verify assertions context_window_nonzero / context_utilization_nonzero / total_tokens_nonzero read the store-derived summary fields; the legacy tokens_nonzero reads cum_input+cum_output (observations.go:37) which antigravity never feeds — must NOT be asserted here"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/antigravity/driver-interactive.sh:113",
+          "note": "wait_turn is in DRIVE_ELICITS and implemented (line 292) — driver=ready, the stale gap:wait_turn was wrong"
         }
       ]
     },
     "recipe": {
-      "applicable": false,
-      "notes": "daemon=incapable — antigravity's JSONL carries no tokens (usage is in the per-conversation SQLite protobuf; no MetricsReader), so context_utilization_percentage>0, context_window>0, and cost are unobservable; only model_name is. The 3-metric scenario cannot be satisfied. No spec phases; this cell is frozen until a SQLite-store MetricsReader is built."
+      "applicable": true,
+      "preconditions": [
+        "agy CLI on PATH and authenticated (set up out-of-band)",
+        "irrlichd is recording with the #766 store-capturing rig (curate-lifecycle-fixture.sh copies store/conversations/<conv>.db) — without the captured store the recording reproduces the pre-#719 tokens-0 state and the spec fails",
+        "launch with the DEFAULT model — NO --model flag (this scenario asserts default-launch visibility)",
+        "fresh empty cwd"
+      ],
+      "setup": [
+        "Create an empty cwd under the staging dir",
+        "Launch agy interactively with NO --model flag so the boot default model flows through",
+        "Assertions on model_name / context_window / context_utilization are checked AFTER wait_turn (the first turn_done, when applyDBMetrics reads the store)"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "What is 6 times 7?"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        }
+      ],
+      "verify": [
+        "events.jsonl shows one ready->working->ready cycle on the conv-id session",
+        "SessionMetrics.ModelName after turn_done is non-empty and != 'unknown' (the store's canonical dash-form id, e.g. 'gemini-3.x-flash')",
+        "SessionMetrics.ContextWindow after turn_done is > 0 (capacity table for the resolved model)",
+        "SessionMetrics.ContextUtilization (context_utilization_percentage) after turn_done is > 0",
+        "context_window_nonzero + context_utilization_nonzero hold from the store-derived golden summary; tokens_nonzero is NOT asserted (cum-based, antigravity=0) and cost is NOT asserted (deferred #716)",
+        "final session state is ready"
+      ],
+      "settings": {},
+      "timeout_seconds": 120
     }
   }
 }
