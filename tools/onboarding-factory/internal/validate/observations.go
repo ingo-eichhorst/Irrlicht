@@ -25,6 +25,13 @@ type replaySummary struct {
 	CumCacheReadTokens     int64   `json:"cum_cache_read_tokens"`
 	CumCacheCreationTokens int64   `json:"cum_cache_creation_tokens"`
 	ModelName              string  `json:"model_name"`
+
+	// Store-derived context vector (#766): present only for sessions whose tokens
+	// come from an out-of-band store (antigravity #719), so they're distinct from
+	// the cum_* usage above. Zero/absent for every cum-token adapter.
+	TotalTokens        int64   `json:"total_tokens"`
+	ContextWindow      int64   `json:"context_window"`
+	ContextUtilization float64 `json:"context_utilization_percentage"`
 }
 
 func (s replaySummary) totalTokens() int64 { return s.CumInputTokens + s.CumOutputTokens }
@@ -153,6 +160,21 @@ func ValidateObservations(scenarioDir string) (*ObservationReport, error) {
 		if spec.TokensNonzero {
 			ok := cur.totalTokens() > 0
 			rep.Asserts = append(rep.Asserts, ObsAssert{"tokens", ">0", fmt.Sprintf("%d", cur.totalTokens()), ok})
+			rep.Pass = rep.Pass && ok
+		}
+		if spec.TotalTokensNonzero {
+			ok := cur.TotalTokens > 0
+			rep.Asserts = append(rep.Asserts, ObsAssert{"total_tokens", ">0", fmt.Sprintf("%d", cur.TotalTokens), ok})
+			rep.Pass = rep.Pass && ok
+		}
+		if spec.ContextWindowNonzero {
+			ok := cur.ContextWindow > 0
+			rep.Asserts = append(rep.Asserts, ObsAssert{"context_window", ">0", fmt.Sprintf("%d", cur.ContextWindow), ok})
+			rep.Pass = rep.Pass && ok
+		}
+		if spec.ContextUtilizationNonzero {
+			ok := cur.ContextUtilization > 0
+			rep.Asserts = append(rep.Asserts, ObsAssert{"context_utilization", ">0", fmt.Sprintf("%g", cur.ContextUtilization), ok})
 			rep.Pass = rep.Pass && ok
 		}
 	}

@@ -51,9 +51,51 @@ func TestFinalizeSummaryTasks(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			report := &replayReport{}
-			finalizeSummary(report, 0, map[string]time.Duration{}, tc.metrics)
+			finalizeSummary(report, 0, map[string]time.Duration{}, tc.metrics, "")
 			if !reflect.DeepEqual(report.Summary.Tasks, tc.want) {
 				t.Fatalf("Summary.Tasks = %+v, want %+v", report.Summary.Tasks, tc.want)
+			}
+		})
+	}
+}
+
+// TestFinalizeSummaryStoreDerivedContext pins the #766 store-derived context
+// surfacing: antigravity keeps token usage in an out-of-band SQLite store
+// (#719), so finalizeSummary lifts TotalTokens/ContextWindow/ContextUtilization
+// into the golden summary ONLY for that adapter — keeping every cum-token
+// adapter's golden byte-identical. The end-to-end resolution from a captured
+// store is proven by the antigravity replaystore test; this guards the gate.
+func TestFinalizeSummaryStoreDerivedContext(t *testing.T) {
+	storeMetrics := &tailer.SessionMetrics{
+		TotalTokens:        16353,
+		ContextWindow:      1048576,
+		ContextUtilization: 1.56,
+		ModelName:          "gemini-3.5-flash",
+	}
+	tests := []struct {
+		name           string
+		adapter        string
+		metrics        *tailer.SessionMetrics
+		wantTotalToks  int64
+		wantCtxWindow  int64
+		wantCtxUtilPos bool
+	}{
+		{name: "antigravity surfaces the store vector", adapter: "antigravity", metrics: storeMetrics, wantTotalToks: 16353, wantCtxWindow: 1048576, wantCtxUtilPos: true},
+		{name: "other adapter leaves it zero", adapter: "claudecode", metrics: storeMetrics, wantTotalToks: 0, wantCtxWindow: 0, wantCtxUtilPos: false},
+		{name: "antigravity with no store stays zero", adapter: "antigravity", metrics: &tailer.SessionMetrics{ModelName: "gemini-3.5-flash"}, wantTotalToks: 0, wantCtxWindow: 0, wantCtxUtilPos: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			report := &replayReport{}
+			finalizeSummary(report, 0, map[string]time.Duration{}, tc.metrics, tc.adapter)
+			if report.Summary.TotalTokens != tc.wantTotalToks {
+				t.Errorf("TotalTokens = %d, want %d", report.Summary.TotalTokens, tc.wantTotalToks)
+			}
+			if report.Summary.ContextWindow != tc.wantCtxWindow {
+				t.Errorf("ContextWindow = %d, want %d", report.Summary.ContextWindow, tc.wantCtxWindow)
+			}
+			if (report.Summary.ContextUtilization > 0) != tc.wantCtxUtilPos {
+				t.Errorf("ContextUtilization = %g, want positive=%v", report.Summary.ContextUtilization, tc.wantCtxUtilPos)
 			}
 		})
 	}

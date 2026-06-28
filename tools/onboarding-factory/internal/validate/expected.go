@@ -86,6 +86,14 @@ type ObservationSpec struct {
 	CostNonzero   bool    `json:"cost_nonzero,omitempty"`   // estimated_cost_usd > 0
 	TokensNonzero bool    `json:"tokens_nonzero,omitempty"` // cum_input+output > 0
 	TolerancePct  float64 `json:"tolerance_pct,omitempty"`  // soft-diff band vs prior (default 50)
+
+	// Store-derived context/token assertions (#766) for adapters whose usage
+	// lives in an out-of-band store rather than the transcript (antigravity's
+	// conversations/<conv>.db, #719). These read the golden's store-derived
+	// vector, which is distinct from the cum_input+output TokensNonzero covers.
+	TotalTokensNonzero        bool `json:"total_tokens_nonzero,omitempty"`        // summary.total_tokens > 0
+	ContextWindowNonzero      bool `json:"context_window_nonzero,omitempty"`      // summary.context_window > 0
+	ContextUtilizationNonzero bool `json:"context_utilization_nonzero,omitempty"` // summary.context_utilization_percentage > 0
 }
 
 // ExpectedPhase is one line of expected.jsonl after the meta line.
