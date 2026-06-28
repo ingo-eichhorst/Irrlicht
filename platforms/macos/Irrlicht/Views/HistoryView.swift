@@ -28,16 +28,33 @@ struct HistoryView: View {
     @State private var appliedCustomStart: Int64?
     @State private var appliedCustomEnd: Int64?
 
+    // Orthogonal cross-filters (#750): each narrows the others; the grouped
+    // dimension's filter is hidden. knownProviders/knownProjects accumulate the
+    // option lists seen across responses (token types are a fixed set).
+    @State private var filterProvider: Set<String> = []
+    @State private var filterTokenType: Set<HistoryTokenType> = []
+    @State private var filterProject: Set<String> = []
+    @State private var knownProviders: [String] = []
+    @State private var knownProjects: [String] = []
+
     @State private var response: HistoryResponse?
     @State private var yieldResponse: HistoryYieldResponse?
     @State private var loadFailed = false
+
+    /// The cross-filters keyed by dimension, for `queryItems` and the query key.
+    private var filtersDict: [HistoryGroup: [String]] {
+        [.provider: Array(filterProvider),
+         .tokenType: filterTokenType.map(\.rawValue),
+         .project: Array(filterProject)]
+    }
 
     /// Re-runs the fetch via `.task(id:)` whenever the effective query changes.
     /// This is the macOS equivalent of the web's manual `historyFetchSeq`
     /// dedup — `.task(id:)` cancels the in-flight request when the key changes.
     private var queryKey: String {
         let fc = forecastEnabled ? "f1" : "f0"
-        let dims = "\(chart.rawValue)-\(effectiveGroup.rawValue)-\(scope?.query ?? "")"
+        let flt = "\(filterProvider.sorted().joined(separator: ","))|\(filterTokenType.map(\.rawValue).sorted().joined(separator: ","))|\(filterProject.sorted().joined(separator: ","))"
+        let dims = "\(chart.rawValue)-\(effectiveGroup.rawValue)-\(scope?.query ?? "")-\(flt)"
         if range == .custom {
             return "custom-\(appliedCustomStart ?? 0)-\(appliedCustomEnd ?? 0)-\(fc)-\(dims)"
         }
@@ -76,6 +93,25 @@ struct HistoryView: View {
         .task(id: queryKey) { await fetch() }
         .onChange(of: range) { newRange in
             if newRange == .custom { applyCustomRange() }
+        }
+        // token_type grouping and the tokens metric are coupled (the bands are a
+        // token concept); keep them consistent however either is changed.
+        .onChange(of: group) { newGroup in
+            if newGroup == .tokenType && chart != .tokens { chart = .tokens }
+            clearFilter(for: newGroup) // a dimension is never both axis and filter
+        }
+        .onChange(of: chart) { newChart in
+            if newChart != .tokens && group == .tokenType { group = .project }
+        }
+    }
+
+    /// Clears the filter on whichever dimension just became the stacking axis.
+    private func clearFilter(for group: HistoryGroup) {
+        switch group {
+        case .provider: filterProvider = []
+        case .tokenType: filterTokenType = []
+        case .project: filterProject = []
+        default: break
         }
     }
 
@@ -200,10 +236,81 @@ struct HistoryView: View {
                 Toggle("Forecast", isOn: $forecastEnabled)
                     .toggleStyle(.checkbox)
                     .font(.caption)
+
+                // Cross-filters (#750): the grouped dimension is hidden (never
+                // both axis and filter); token_type only narrows the tokens
+                // metric.
+                HStack(spacing: IrrSpacing.sp2) {
+                    Text("Filter")
+                        .font(.caption2).foregroundColor(.secondary)
+                        .frame(width: 40, alignment: .leading)
+                    if effectiveGroup != .provider { providerFilterMenu }
+                    if chart == .tokens && group != .tokenType { tokenTypeFilterMenu }
+                    if effectiveGroup != .project { projectFilterMenu }
+                    Spacer()
+                }
             }
         }
         .padding(.horizontal, IrrSpacing.sp4)
         .padding(.vertical, IrrSpacing.sp3)
+    }
+
+    // MARK: Cross-filter menus
+
+    private func filterLabel(_ name: String, count: Int) -> String {
+        count > 0 ? "\(name): \(count)" : "\(name): All"
+    }
+
+    private func setBinding(_ set: Binding<Set<String>>, _ value: String) -> Binding<Bool> {
+        Binding(
+            get: { set.wrappedValue.contains(value) },
+            set: { on in if on { set.wrappedValue.insert(value) } else { set.wrappedValue.remove(value) } }
+        )
+    }
+
+    private func tokenBinding(_ tt: HistoryTokenType) -> Binding<Bool> {
+        Binding(
+            get: { filterTokenType.contains(tt) },
+            set: { on in if on { filterTokenType.insert(tt) } else { filterTokenType.remove(tt) } }
+        )
+    }
+
+    @ViewBuilder private var providerFilterMenu: some View {
+        Menu(filterLabel("Provider", count: filterProvider.count)) {
+            if knownProviders.isEmpty {
+                Text("none seen yet")
+            } else {
+                ForEach(knownProviders, id: \.self) { p in
+                    Toggle(p, isOn: setBinding($filterProvider, p))
+                }
+            }
+        }
+        .fixedSize()
+        .font(.caption)
+    }
+
+    @ViewBuilder private var tokenTypeFilterMenu: some View {
+        Menu(filterLabel("Type", count: filterTokenType.count)) {
+            ForEach(HistoryTokenType.allCases) { tt in
+                Toggle(tt.label, isOn: tokenBinding(tt))
+            }
+        }
+        .fixedSize()
+        .font(.caption)
+    }
+
+    @ViewBuilder private var projectFilterMenu: some View {
+        Menu(filterLabel("Project", count: filterProject.count)) {
+            if knownProjects.isEmpty {
+                Text("none seen yet")
+            } else {
+                ForEach(knownProjects, id: \.self) { p in
+                    Toggle(p, isOn: setBinding($filterProject, p))
+                }
+            }
+        }
+        .fixedSize()
+        .font(.caption)
     }
 
     // MARK: Content
@@ -280,7 +387,7 @@ struct HistoryView: View {
         loadFailed = false
         var comps = URLComponents(string: "\(DaemonEndpoint.httpBase)/api/v1/history")
         // queryItems ignores the custom bounds unless range == .custom.
-        comps?.queryItems = range.queryItems(chart: chart, group: effectiveGroup, scope: scope, forecast: forecastEnabled, customStart: appliedCustomStart, customEnd: appliedCustomEnd)
+        comps?.queryItems = range.queryItems(chart: chart, group: effectiveGroup, scope: scope, filters: filtersDict, forecast: forecastEnabled, customStart: appliedCustomStart, customEnd: appliedCustomEnd)
         guard let url = comps?.url else { return }
         do {
             let (data, resp) = try await URLSession.shared.data(from: url)
@@ -297,10 +404,25 @@ struct HistoryView: View {
                 let decoded = try JSONDecoder().decode(HistoryResponse.self, from: data)
                 if Task.isCancelled { return }
                 response = decoded
+                // Grow the provider/project filter vocabularies from any
+                // response grouped on that axis (token types are a fixed set).
+                if decoded.group == "provider" {
+                    knownProviders = mergeKnown(knownProviders, decoded.topContributors)
+                } else if decoded.group == "project" {
+                    knownProjects = mergeKnown(knownProjects, decoded.topContributors)
+                }
             }
         } catch {
             if !Task.isCancelled { loadFailed = true }
         }
+    }
+
+    /// Merges a response's contributor labels into an accumulated option list,
+    /// dropping the synthetic "unknown" bucket and keeping it sorted.
+    private func mergeKnown(_ existing: [String], _ contribs: [HistoryContributor]) -> [String] {
+        var set = Set(existing)
+        for c in contribs where !c.label.isEmpty && c.label != "unknown" { set.insert(c.label) }
+        return set.sorted()
     }
 
     // MARK: Quota window (live rate-limit snapshot → projection)
@@ -443,7 +565,9 @@ struct HistoryContentView: View {
                     .foregroundColor(IrrColors.waiting)
             }
 
-            if chart == .tokens {
+            if chart == .tokens && group == .tokenType {
+                tokenBandRows
+            } else if chart == .tokens {
                 tokenSplitRows
             } else {
                 contributorRows
@@ -456,6 +580,29 @@ struct HistoryContentView: View {
             }
             .font(.caption)
             .padding(.top, IrrSpacing.sp2)
+        }
+    }
+
+    /// Token-type grouping side panel: the stacked bands themselves, listed with
+    /// friendly labels (the chart's per-kind breakdown, not the in/out/cache
+    /// split).
+    @ViewBuilder private var tokenBandRows: some View {
+        if data.topContributors.isEmpty {
+            Text("no token usage in this range")
+                .font(.caption).foregroundColor(.secondary).padding(.top, IrrSpacing.sp1)
+        } else {
+            VStack(alignment: .leading, spacing: IrrSpacing.sp1) {
+                ForEach(Array(data.topContributors.enumerated()), id: \.offset) { i, c in
+                    HStack(spacing: IrrSpacing.sp2) {
+                        Circle().fill(HistoryPalette.color(at: i)).frame(width: 8, height: 8)
+                        Text(HistoryTokenType(rawValue: c.label)?.label ?? c.label).font(.caption)
+                        Spacer(minLength: IrrSpacing.sp2)
+                        Text(HistoryFormat.tokens(c.value))
+                            .font(.caption).monospacedDigit().foregroundColor(.secondary)
+                    }
+                }
+            }
+            .padding(.top, IrrSpacing.sp1)
         }
     }
 
@@ -661,20 +808,24 @@ private struct HistoryCostChart: View {
         let value: Double
     }
 
-    /// Densify the sparse series to a value for every (bucket, project) so the
-    /// stacked areas stay continuous — the daemon omits zero buckets. Per-bucket
-    /// stacking order follows the `chartForegroundStyleScale` domain.
+    /// Densify the sparse series into a **cumulative** value for every (bucket,
+    /// project): each project's per-bucket deltas are summed forward over
+    /// `bucketStarts` (the daemon omits zero buckets, so the running total keeps
+    /// the curve flat across gaps). The stacked areas then climb to the grand
+    /// total at the right edge — the macOS twin of the web `historyRunningSum`.
     private var costData: [Datum] {
         var byKey: [Int64: [String: Double]] = [:]
         for pt in data.series {
             byKey[pt.ts, default: [:]][pt.project, default: 0] += pt.value
         }
+        let dates = data.bucketStarts.map { Date(timeIntervalSince1970: TimeInterval($0)) }
         var out: [Datum] = []
         out.reserveCapacity(data.bucketStarts.count * max(1, orderedProjects.count))
-        for ts in data.bucketStarts {
-            let date = Date(timeIntervalSince1970: TimeInterval(ts))
-            for project in orderedProjects {
-                out.append(Datum(id: "\(ts)|\(project)", date: date, project: project, value: byKey[ts]?[project] ?? 0))
+        for project in orderedProjects {
+            var running = 0.0
+            for (i, ts) in data.bucketStarts.enumerated() {
+                running += byKey[ts]?[project] ?? 0
+                out.append(Datum(id: "\(ts)|\(project)", date: dates[i], project: project, value: running))
             }
         }
         return out
@@ -683,24 +834,26 @@ private struct HistoryCostChart: View {
     private var forecastData: [Datum] {
         guard forecastEnabled, let fc = data.forecast, !fc.series.isEmpty else { return [] }
         var pts: [Datum] = []
-        // Anchor the dashed line at the last data bucket (at the forecast's own
-        // first value) so it connects to the chart's right edge and renders even
-        // for a single-bucket horizon — mirrors the web `moveTo(xAt(B-1), …)`.
+        // Continue the cumulative climb: anchor the dashed line at the grand
+        // total (the stack's right-edge height), then add the projected
+        // per-bucket increments forward, ending ≈forecast.projected.
         if let lastBucket = data.bucketStarts.last {
             pts.append(Datum(
                 id: "fc-anchor",
                 date: Date(timeIntervalSince1970: TimeInterval(lastBucket)),
                 project: "forecast",
-                value: fc.series[0].value
+                value: data.total
             ))
         }
-        pts += fc.series.map { p in
-            Datum(
+        var running = data.total
+        for p in fc.series {
+            running += p.value
+            pts.append(Datum(
                 id: "fc-\(p.ts)",
                 date: Date(timeIntervalSince1970: TimeInterval(p.ts)),
                 project: "forecast",
-                value: p.value
-            )
+                value: running
+            ))
         }
         return pts
     }
