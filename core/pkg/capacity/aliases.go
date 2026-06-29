@@ -92,6 +92,8 @@ var modelAliases = map[string]string{
 	"gpt-5-fast":         "gpt-5",
 	"gpt-5.2-low":        "gpt-5",
 	"gpt-5.1-codex-high": "gpt-5.1", // LOCAL_OVERRIDE: codeburn → gpt-5.3-codex (not in LiteLLM). Version-aligned with the input slug, but the codex / high-reasoning tier is unpriced — this under-prices by whatever premium Cursor's codex tier carries over base 5.1.
+	// OpenAI Codex frontend prefixes the model id; gpt-5.5 is in LiteLLM.
+	"openai-codex:gpt-5.5": "gpt-5.5",
 
 	// Moonshot Kimi family — codeburn maps three coding-focused aliases to
 	// "kimi-k2-thinking", which LiteLLM ships only under the dotted
@@ -159,6 +161,9 @@ var modelAliases = map[string]string{
 	// as codeburn's canonical; resolves to a zero-value capacity and logs the
 	// mapping on miss until LiteLLM prices it.
 	"GLM-5.2": "glm-5p1",
+	// Hermes Agent stores the same id lowercased in its sessions table, so it
+	// misses the capitalized alias above; map the lowercase spelling too.
+	"glm-5.2": "glm-5p1",
 
 	// xAI Grok — codeburn's "grok-build-0.1" canonical isn't in LiteLLM (no
 	// grok-build pricing yet). Zero-value capacity + log on miss until the key

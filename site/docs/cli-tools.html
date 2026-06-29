@@ -98,7 +98,8 @@
       <h3>Flags</h3>
 
       <ul>
-        <li><code>--version</code> &mdash; Print version and exit</li>
+        <li><code>--version</code>, <code>-v</code> &mdash; Print version and exit</li>
+        <li><code>--diagnose</code> &mdash; Write a redacted diagnostics bundle (<code>irrlicht-diag.tar.gz</code>) to the current directory and exit, without starting the daemon. For headless installs that can't reach the <code>GET /debug/bundle</code> endpoint. Honors <code>IRRLICHT_HOME</code></li>
       </ul>
 
       <h3>What It Does</h3>
@@ -134,6 +135,7 @@
       <ul>
         <li><code>-w</code>, <code>--watch</code> &mdash; Watch mode &mdash; updates every second (clears screen between refreshes)</li>
         <li><code>--format text|json</code> &mdash; Output format; <code>json</code> emits the same grouped tree as <code>GET /api/v1/sessions</code> (minus cost aggregation)</li>
+        <li><code>--yield</code> &mdash; Append two columns after the cost: the yield state and the session's HEAD commit (7 chars)</li>
         <li><code>--id &lt;prefix&gt;</code> &mdash; Filter by session ID prefix (case-insensitive)</li>
         <li><code>--state working|waiting|ready</code> &mdash; Filter by session state</li>
         <li><code>--project &lt;substring&gt;</code> &mdash; Filter by project name (case-insensitive substring)</li>

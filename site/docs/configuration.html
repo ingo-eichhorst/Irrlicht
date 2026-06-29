@@ -173,6 +173,12 @@
             <td>How long an idle <code>ready</code> session is kept before automatic deletion. Used by test harnesses to expire long-idle sessions in seconds rather than half an hour</td>
           </tr>
           <tr>
+            <td><code>IRRLICHT_YIELD_SWEEP_INTERVAL</code></td>
+            <td>Duration</td>
+            <td><code>30m</code></td>
+            <td>How often the yield sweep correlates <code>git revert</code> commits back to the sessions that authored the reverted work, feeding the History view's productive-vs-reverted ratio</td>
+          </tr>
+          <tr>
             <td><code>IRRLICHT_HOME</code></td>
             <td>Path</td>
             <td><code>~/.local/share/irrlicht</code></td>
@@ -207,6 +213,36 @@
             <td>String</td>
             <td>unset</td>
             <td>Bearer token for an auth-enabled relay. Overrides the <code>token</code> field of <code>&lt;dataDir&gt;/relay-token.json</code>; leave unset against a no-auth relay</td>
+          </tr>
+          <tr>
+            <td><code>IRRLICHT_RELAY_CONTROL</code></td>
+            <td><code>on</code> | unset</td>
+            <td>unset</td>
+            <td>When <code>on</code>, lets the relay forwarder act on inbound remote-control frames (the backchannel's outer remote gate). For standalone/headless daemons; the macOS app drives the same toggle via <code>PUT /api/v1/activation/relay-control</code></td>
+          </tr>
+          <tr>
+            <td><code>IRRLICHT_CACHE_BLOAT_THRESHOLD</code></td>
+            <td>Float</td>
+            <td><code>1.4</code></td>
+            <td>Cache-creation regression detector: a working session trips the rule when its median cache-creation-per-turn exceeds the per-project baseline &times; this factor. <code>0</code> (or negative) disables the whole rule &mdash; the kill switch</td>
+          </tr>
+          <tr>
+            <td><code>IRRLICHT_CACHE_BLOAT_BASELINE_DAYS</code></td>
+            <td>Integer</td>
+            <td><code>14</code></td>
+            <td>Trailing window over completed sessions used to compute the per-project cache-creation-per-turn baseline</td>
+          </tr>
+          <tr>
+            <td><code>IRRLICHT_CACHE_BLOAT_MIN_TURNS</code></td>
+            <td>Integer</td>
+            <td><code>3</code></td>
+            <td>Variance guard &mdash; the rule won't fire before this many completed turns</td>
+          </tr>
+          <tr>
+            <td><code>IRRLICHT_CACHE_BLOAT_VERSION_DELTA</code></td>
+            <td>Integer (tokens)</td>
+            <td><code>10000</code></td>
+            <td>Minimum per-turn cache-creation difference between two agent versions before the regression is attributed to an upstream agent version change</td>
           </tr>
           <tr>
             <td><code>IRRLICHT_MODEL_CAPACITY_CACHE</code></td>

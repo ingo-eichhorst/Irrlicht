@@ -88,6 +88,104 @@
       <h1>Changelog</h1>
       <p class="page-subtitle">All notable changes to Irrlicht, following Keep a Changelog conventions.</p>
 
+      <h2>v0.5.4 <small>(2026-06-29)</small></h2>
+
+      <h3>A full History view with spend analytics, a backchannel that acts on your agents, and plain-language session summaries.</h3>
+
+      <h3>Highlights</h3>
+
+      <h4>Spend &amp; history analytics</h4>
+
+      <figure style="margin: 0.5rem 0 1rem; max-width: 420px;">
+        <picture>
+          <source srcset="../assets/releases/v0.5.4/history-analytics.webp" type="image/webp">
+          <img src="../assets/releases/v0.5.4/history-analytics.png" alt="Irrlicht's History view: a cumulative cost chart with a linear projection and a per-project breakdown with Export CSV / JSON buttons" style="display:block; width:100%; height:auto; border-radius:6px; border:1px solid var(--border);">
+        </picture>
+      </figure>
+
+      <p>A new History view turns every recorded session into cost analytics &mdash; a cumulative spend chart with a linear projection, breakdowns and drill-downs by project, branch/worktree, provider and model, a concurrent-agents timeline, and a productive-vs-reverted &ldquo;yield ratio&rdquo; per project. Facet any axis, cross-filter by token type, and export the whole thing to CSV or JSON. It ships in both the macOS app and the web dashboard.</p>
+
+      <p><strong>Why it matters:</strong> you can finally see where your agent spend actually goes &mdash; which project, which model, and how much of it landed versus got reverted &mdash; without exporting anything by hand. (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/752" target="_blank" rel="noopener">#752</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/761" target="_blank" rel="noopener">#761</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/771" target="_blank" rel="noopener">#771</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/773" target="_blank" rel="noopener">#773</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/778" target="_blank" rel="noopener">#778</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/772" target="_blank" rel="noopener">#772</a>)</p>
+
+      <h4>Backchannel &mdash; act on your agents</h4>
+
+      <figure style="margin: 0.5rem 0 1rem; max-width: 460px;">
+        <picture>
+          <source srcset="../assets/releases/v0.5.4/backchannel-rules.webp" type="image/webp">
+          <img src="../assets/releases/v0.5.4/backchannel-rules.png" alt="The Backchannel Rules editor showing an Auto-compact rule: when Context (%) is at least 85 for any agent, Send the Compact command" style="display:block; width:100%; height:auto; border-radius:6px; border:1px solid var(--border);">
+        </picture>
+      </figure>
+
+      <p>Backchannel turns Irrlicht from a read-only monitor into something that can talk back: control discovered agents locally or remotely, across agents and terminal backends. Define event&rarr;action rules (e.g. when context crosses 85%, send the compact command), pick from agent-translated command presets, or write your own Custom command &mdash; and trigger them by a backchannel token.</p>
+
+      <p><strong>Why it matters:</strong> routine babysitting &mdash; compacting a full context, answering a prompt, nudging a stuck session &mdash; can now happen automatically or with one click, from any machine. (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/731" target="_blank" rel="noopener">#731</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/733" target="_blank" rel="noopener">#733</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/769" target="_blank" rel="noopener">#769</a>)</p>
+
+      <h4>Plain-language session summaries</h4>
+
+      <figure style="margin: 0.5rem 0 1rem; max-width: 640px;">
+        <picture>
+          <source srcset="../assets/releases/v0.5.4/session-summaries.webp" type="image/webp">
+          <img src="../assets/releases/v0.5.4/session-summaries.png" alt="A session row leading with a purple intent block 'Add OAuth login to the web dashboard' and an amber waiting block 'Should I run the migration?'" style="display:block; width:100%; height:auto; border-radius:6px; border:1px solid var(--border);">
+        </picture>
+      </figure>
+
+      <p>Session rows now lead with a human-readable headline instead of raw transcript text: a purple block summarizing what the agent is working on, and an amber block with the exact question it&rsquo;s waiting on. Summaries are generated from lightweight markers with a pluggable compaction step.</p>
+
+      <p><strong>Why it matters:</strong> a glance at the menu bar tells you what each agent is doing and which one actually needs you &mdash; no expanding rows to read the last message. (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/765" target="_blank" rel="noopener">#765</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/770" target="_blank" rel="noopener">#770</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/743" target="_blank" rel="noopener">#743</a>)</p>
+
+      <h3>Added</h3>
+      <ul>
+        <li><strong>ETA accuracy improvements, surfaced sooner</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/768" target="_blank" rel="noopener">#768</a>) &mdash; a replay-based estimator informs the task-completion estimate earlier in a turn.</li>
+        <li><strong>Built-in diagnostics bundle</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/742" target="_blank" rel="noopener">#742</a>) &mdash; a <code>/debug/bundle</code> endpoint and an <code>irrlichd --diagnose</code> flag collect a redacted snapshot for bug reports.</li>
+        <li><strong>Cache-creation regression detection</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/749" target="_blank" rel="noopener">#749</a>) &mdash; sessions that stop reusing prompt cache are flagged and attributed to the upstream agent version that changed.</li>
+        <li><strong>Generic GUI-host fallback for click-to-focus</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/741" target="_blank" rel="noopener">#741</a>) &mdash; focusing a session works for more terminal/IDE hosts out of the box.</li>
+        <li><strong>Agent-legible HTML snapshot artifacts</strong> for the session list, plus an enriched opt-in lifecycle trace that makes ghost sessions reconstructable (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/764" target="_blank" rel="noopener">#764</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/760" target="_blank" rel="noopener">#760</a>).</li>
+      </ul>
+
+      <h3>Fixed</h3>
+      <ul>
+        <li><strong>Detached background agents are now badged</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/747" target="_blank" rel="noopener">#747</a>) &mdash; instead of showing as phantom rows.</li>
+        <li><strong>Sidebar no longer double-lists relay-echoed local projects</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/748" target="_blank" rel="noopener">#748</a>).</li>
+        <li><strong>Ghost sessions age out / get reaped</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/740" target="_blank" rel="noopener">#740</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/734" target="_blank" rel="noopener">#734</a>) &mdash; antigravity PID==0 ghosts age out, and sessions bound to a <code>claude --bg-spare</code> infra PID are reaped.</li>
+        <li><strong>Settings panel no longer janks</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/730" target="_blank" rel="noopener">#730</a>) &mdash; the ~2fps / high-CPU redraw storm is gone.</li>
+        <li><strong>Text-to-speech crash fixed</strong> on macOS (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/781" target="_blank" rel="noopener">#781</a>).</li>
+        <li><strong>Launch crash fixed on the macOS 26 / Xcode 26 SDK</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/issues/782" target="_blank" rel="noopener">#782</a>) &mdash; <code>FocusMonitor</code> resolves the Focus singleton via a guarded selector instead of KVC, which now raises <code>NSUnknownKeyException</code>.</li>
+        <li><strong>Price non-Anthropic-frontend sessions correctly</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/726" target="_blank" rel="noopener">#726</a>) &mdash; synced the model-alias map with codeburn and added new aliases (OpenAI Codex <code>gpt-5.5</code>, Hermes lowercase <code>glm-5.2</code>).</li>
+      </ul>
+
+      <h3>Changed / Docs / Distribution</h3>
+      <ul>
+        <li><strong>History and Settings panels decluttered</strong> on macOS (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/781" target="_blank" rel="noopener">#781</a>).</li>
+        <li><strong>New <code>/ir:exec</code> skill</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/758" target="_blank" rel="noopener">#758</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/767" target="_blank" rel="noopener">#767</a>) &mdash; an end-to-end issue loop (worktree &rarr; visual HTML plan &rarr; implement &rarr; PR &rarr; /review &rarr; /simplify); it now marks the issue in progress before implementing.</li>
+        <li><strong>Antigravity 1.8 + 5.1 scenarios flipped to observed</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/775" target="_blank" rel="noopener">#775</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/776" target="_blank" rel="noopener">#776</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/777" target="_blank" rel="noopener">#777</a>) &mdash; by capturing and serving the <code>conversations/&lt;id&gt;.db</code> store in replay, with the context-window replay test pinned hermetic.</li>
+        <li><strong>Snapshot coverage</strong> added for the unobservable session-row states (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/762" target="_blank" rel="noopener">#762</a>).</li>
+        <li><strong>Dependency bump</strong> &mdash; <code>form-data</code> 4.0.5 &rarr; 4.0.6 in <code>platforms/web</code> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/739" target="_blank" rel="noopener">#739</a>).</li>
+      </ul>
+
+      <h3>Technical appendix</h3>
+      <ul>
+        <li><strong>History view &mdash; web (#752, #771, #778) and macOS (#761, #773)</strong> &mdash; a cost-analytics surface built entirely from on-disk recordings: Phase 1 lands the cumulative cost chart with a linear projection and Export CSV/JSON; Phase 2 adds branch/worktree and provider/model attribution with drill-downs; Phase 3 adds a concurrent-agents timeline computed from recording overlap; #778 adds faceted cross-filtering with token-type grouping. The macOS side reaches cost-analytics parity with the web dashboard.</li>
+        <li><strong>Yield ratio per project (#772)</strong> &mdash; a productive-vs-reverted spend metric per project (spend that survived in the tree vs. spend on changes later reverted), surfaced in the History view.</li>
+        <li><strong>Cache-creation regression detection (#749)</strong> &mdash; detects sessions whose prompt-cache reuse drops off and attributes the regression to the upstream agent version in play, so an agent update that breaks caching is visible rather than silently doubling cost.</li>
+        <li><strong>Backchannel control (#731)</strong> &mdash; control discovered agents locally and remotely, across agents and terminal backends, reusing Focus&rsquo;s <code>Launcher</code> targeting; gated behind a <code>control</code> permission so nothing is exercised while pending or denied.</li>
+        <li><strong>Backchannel read-back (#733)</strong> &mdash; adds the terminal backend (tmux/kitty/iTerm) as a complementary observation source alongside the transcript tailer.</li>
+        <li><strong>Backchannel command presets (#769)</strong> &mdash; agent-translated command presets plus a Custom option; #781 adds a backchannel token trigger.</li>
+        <li><strong>Concise session summaries (#765, #770, #743)</strong> &mdash; session rows render a purple user-intent block and an amber waiting-question block from lightweight summary markers; #770 adds concise intent + waiting headlines with a pluggable compaction step; #765 also fixes a global collapse bug.</li>
+        <li><strong>ETA estimator (#768)</strong> &mdash; replay-based research into the task-completion estimator improves accuracy and surfaces the ETA earlier in a turn.</li>
+        <li><strong>Diagnostics bundle (#742)</strong> &mdash; a <code>GET /debug/bundle</code> endpoint and an <code>irrlichd --diagnose</code> flag assemble a redacted diagnostics snapshot for bug reports.</li>
+        <li><strong>Click-to-focus GUI-host fallback (#741)</strong> &mdash; a generic outermost-top-level-<code>.app</code> host-detection fallback so click-to-focus resolves the right GUI host for more terminal/IDE embeddings.</li>
+        <li><strong>Ghost-session lifecycle (#740, #734)</strong> &mdash; antigravity PID==0 ghost sessions age out via the no-substantive-activity gate; sessions bound to a long-lived <code>claude --bg-spare</code> infra PID are reaped via the infra-reaper self-healing sweep.</li>
+        <li><strong>claudecode detached background agents (#747)</strong> &mdash; detached background agents that land in the <code>claude daemon run</code> pool are badged rather than rendered as phantom active rows.</li>
+        <li><strong>Relay sidebar dedupe (#748)</strong> &mdash; the macOS sidebar de-duplicates local projects echoed back by the relay.</li>
+        <li><strong>Settings panel jank (#730)</strong> &mdash; eliminated the ~2fps / high-CPU redraw storm in the Settings panel.</li>
+        <li><strong>FocusMonitor SDK launch crash (#782)</strong> &mdash; <code>resolveFocusStatusCenter()</code> resolved <code>INFocusStatusCenter.default</code> via KVC <code>value(forKey:)</code>, which under the macOS 26 / Xcode 26 SDK raises <code>NSUnknownKeyException</code> (uncatchable from Swift) instead of returning nil &mdash; SIGABRTing every Developer-ID launch (DevID-gated, so ad-hoc/CI builds never hit it; only the release smoke test does). Now resolved with a <code>responds(to:)</code>-guarded selector <code>perform</code>.</li>
+        <li><strong>Agent-legible observability (#760, #762, #764)</strong> &mdash; #760 enriches an opt-in daemon lifecycle trace (with <code>replay --ghosts</code>) so ghost sessions are reconstructable; #762 snapshots the unobservable session-row states; #764 emits agent-legible HTML snapshot artifacts for the session list.</li>
+        <li><strong>Model-alias sync (#726 + this release)</strong> &mdash; re-synced <code>core/pkg/capacity/aliases.go</code> against codeburn&rsquo;s <code>BUILTIN_ALIASES</code>; this release adds <code>openai-codex:gpt-5.5</code> &rarr; <code>gpt-5.5</code> (in LiteLLM) and the lowercase <code>glm-5.2</code> &rarr; <code>glm-5p1</code> Hermes spelling.</li>
+        <li><strong>Antigravity replay observability (#775, #776, #777)</strong> &mdash; captures and serves antigravity&rsquo;s sibling <code>conversations/&lt;id&gt;.db</code> store in replay (#775), flips the 1.8 + 5.1 cells to observed via golden-summary surfacing and a re-record (#776), and pins the LiteLLM cache so the replay context-window test is hermetic on cold CI (#777).</li>
+        <li><strong><code>/ir:exec</code> skill (#758, #767)</strong> &mdash; an end-to-end issue execution loop (worktree &rarr; visual HTML plan &rarr; implement &rarr; PR &rarr; /review &rarr; /simplify); #767 marks the issue in progress before implementing.</li>
+        <li><strong>Dependencies</strong> &mdash; <code>form-data</code> 4.0.5 &rarr; 4.0.6 in <code>platforms/web</code> (#739).</li>
+      </ul>
+
       <h2>v0.5.3 <small>(2026-06-21)</small></h2>
 
       <h3>Google Antigravity support, publish your sessions to a remote relay, and a clutch of daemon + adapter fixes.</h3>
