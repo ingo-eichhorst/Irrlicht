@@ -119,7 +119,14 @@ final class FocusMonitor: FocusStateProviding, @unchecked Sendable {
     /// is never touched and the dynamic linker never loads it.
     private static func resolveFocusStatusCenter() -> NSObject? {
         guard let cls = NSClassFromString("INFocusStatusCenter") as? NSObject.Type else { return nil }
-        // `+default` is a class method returning the singleton. ObjC dispatch.
-        return cls.value(forKey: "default") as? NSObject
+        // `+default` is a class method returning the singleton. Resolve it via a
+        // selector rather than KVC `value(forKey:)`: under the macOS 26 / Xcode 26
+        // SDK `default` is no longer KVC-discoverable, so `value(forKey:)` raises
+        // NSUnknownKeyException — an ObjC exception Swift can't catch — and SIGABRTs
+        // every Developer-ID launch (only DevID builds reach this branch). A
+        // `responds(to:)`-guarded `perform` returns nil instead of crashing.
+        let sel = NSSelectorFromString("default")
+        guard cls.responds(to: sel) else { return nil }
+        return cls.perform(sel)?.takeUnretainedValue() as? NSObject
     }
 }

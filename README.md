@@ -39,6 +39,7 @@ curl -fsSL https://irrlicht.io/install.sh | sh
 - **Three-state menu-bar dot per session** — 🟣 working, 🟠 waiting, 🟢 ready
 - **Context-pressure gauge** — 🟢 → 🟡 → 🔴 → ⚠️ before the auto-compact cliff, so you can `/compact` while quality is still intact
 - **Live per-session cost in USD** — model-aware via LiteLLM pricing
+- **History view** — spend over time with projection, attribution by project / branch / model, and a productive-vs-reverted yield ratio (macOS app + web dashboard)
 - **Subagent trees** — parent ↔ Explore / Plan / background agents, not just the parent
 - **Git-aware grouping** — sessions clustered by project, branch, worktree
 - **Real-time** — <1s latency via FSEvents/kqueue; no polling

@@ -12,6 +12,88 @@ beyond), see the [Roadmap](https://irrlicht.io/docs/roadmap.html).
 
 ## [Unreleased]
 
+## [0.5.4] — 2026-06-29
+
+### A full History view with spend analytics, a backchannel that acts on your agents, and plain-language session summaries.
+
+### Highlights
+
+#### Spend & history analytics
+
+![Irrlicht's History view: a cumulative cost chart with a linear projection and a per-project breakdown with Export CSV / JSON buttons](assets/releases/v0.5.4/history-analytics.png)
+
+A new History view turns every recorded session into cost analytics — a cumulative spend chart with a linear projection, breakdowns and drill-downs by project, branch/worktree, provider and model, a concurrent-agents timeline, and a productive-vs-reverted "yield ratio" per project. Facet any axis, cross-filter by token type, and export the whole thing to CSV or JSON. It ships in both the macOS app and the web dashboard.
+
+**Why it matters:** you can finally see where your agent spend actually goes — which project, which model, and how much of it landed versus got reverted — without exporting anything by hand.
+
+(#752, #761, #771, #773, #778, #772)
+
+#### Backchannel — act on your agents
+
+![The Backchannel Rules editor showing an "Auto-compact" rule: when Context (%) ≥ 85 for any agent, Send the Compact command](assets/releases/v0.5.4/backchannel-rules.png)
+
+Backchannel turns Irrlicht from a read-only monitor into something that can talk back: control discovered agents locally or remotely, across agents and terminal backends. Define event→action rules (e.g. when context crosses 85%, send the compact command), pick from agent-translated command presets, or write your own Custom command — and trigger them by a backchannel token.
+
+**Why it matters:** routine babysitting — compacting a full context, answering a prompt, nudging a stuck session — can now happen automatically or with one click, from any machine.
+
+(#731, #733, #769)
+
+#### Plain-language session summaries
+
+![A session row leading with a purple intent block "Add OAuth login to the web dashboard" and an amber waiting block "Should I run the migration?"](assets/releases/v0.5.4/session-summaries.png)
+
+Session rows now lead with a human-readable headline instead of raw transcript text: a purple block summarizing what the agent is working on, and an amber block with the exact question it's waiting on. Summaries are generated from lightweight markers with a pluggable compaction step.
+
+**Why it matters:** a glance at the menu bar tells you what each agent is doing and which one actually needs you — no expanding rows to read the last message.
+
+(#765, #770, #743)
+
+### Added
+- ETA accuracy improvements, surfaced sooner — a replay-based estimator informs the task-completion estimate earlier in a turn. (#768)
+- Built-in diagnostics bundle — a `/debug/bundle` endpoint and an `irrlichd --diagnose` flag collect a redacted snapshot for bug reports. (#742)
+- Cache-creation regression detection — sessions that stop reusing prompt cache are flagged and attributed to the upstream agent version that changed. (#749)
+- Generic GUI-host fallback for click-to-focus, so focusing a session works for more terminal/IDE hosts out of the box. (#741)
+- Agent-legible HTML snapshot artifacts for the session list, plus an enriched opt-in lifecycle trace that makes ghost sessions reconstructable. (#764, #760)
+
+### Fixed
+- Detached background agents are now badged instead of showing as phantom rows. (#747)
+- The macOS sidebar no longer double-lists local projects echoed back by the relay. (#748)
+- Ghost sessions age out / get reaped: antigravity PID==0 ghosts age out, and sessions bound to a `claude --bg-spare` infra PID are reaped. (#740, #734)
+- The Settings panel no longer janks at ~2fps / high CPU. (#730)
+- A text-to-speech crash on macOS is fixed. (#781)
+- The macOS app no longer crashes at launch when built against the macOS 26 / Xcode 26 SDK — `FocusMonitor` resolves the Focus singleton via a guarded selector instead of KVC, which now raises `NSUnknownKeyException`. (#782)
+- Price non-Anthropic-frontend sessions correctly: synced the model-alias map with codeburn and added new aliases (OpenAI Codex `gpt-5.5`, Hermes lowercase `glm-5.2`). (#726)
+
+### Changed / Docs / Distribution
+- History and Settings panels decluttered on macOS. (#781)
+- New `/ir:exec` skill — an end-to-end issue loop (worktree → visual HTML plan → implement → PR → /review → /simplify); it now marks the issue in progress before implementing. (#758, #767)
+- Antigravity 1.8 + 5.1 scenarios flipped to observed by capturing and serving the `conversations/<id>.db` store in replay, with the context-window replay test pinned hermetic. (#775, #776, #777)
+- Snapshot coverage added for the unobservable session-row states. (#762)
+- Dependency bump: `form-data` 4.0.5 → 4.0.6 in `platforms/web`. (#739)
+
+### Technical appendix
+- **History view — web (#752, #771, #778) and macOS (#761, #773).** A cost-analytics surface built entirely from on-disk recordings: Phase 1 lands the cumulative cost chart with a linear projection and Export CSV/JSON; Phase 2 adds branch/worktree and provider/model attribution with drill-downs; Phase 3 adds a concurrent-agents timeline computed from recording overlap; #778 adds faceted cross-filtering with token-type grouping and a cumulative chart. The macOS side reaches cost-analytics parity with the web dashboard. (#369, #750, #751, #755)
+- **Yield ratio per project (#772).** A productive-vs-reverted spend metric per project — spend that survived in the tree versus spend on changes later reverted — surfaced in the History view. (#373)
+- **Cache-creation regression detection (#749).** Detects sessions whose prompt-cache reuse drops off and attributes the regression to the upstream agent version in play, so an agent update that breaks caching is visible rather than silently doubling cost. (#374)
+- **Backchannel control (#731).** Control discovered agents locally and remotely, across agents and terminal backends, reusing Focus's `Launcher` targeting; gated behind a `control` permission so nothing is exercised while pending or denied. (#724)
+- **Backchannel read-back (#733).** Adds the terminal backend (tmux/kitty/iTerm) as a complementary observation source that reads back the agent's terminal, alongside the transcript tailer. (#732)
+- **Backchannel command presets (#769).** Agent-translated command presets plus a Custom option, so an action like "compact" maps to the right per-agent command; #781 adds a backchannel token trigger. (#754)
+- **Concise session summaries (#765, #770, #743).** Session rows render a purple user-intent block and an amber waiting-question block built from lightweight summary markers; #770 adds concise intent + waiting headlines with a pluggable compaction step; #743 adds the human-readable task summary for waiting/ready sessions; #765 also fixes a global collapse bug. (#738, #759)
+- **ETA estimator (#768).** Replay-based research into the task-completion estimator improves accuracy and surfaces the ETA earlier in a turn. (#753)
+- **Diagnostics bundle (#742).** A `GET /debug/bundle` endpoint and an `irrlichd --diagnose` flag assemble a redacted diagnostics snapshot for bug reports. (#736)
+- **Click-to-focus GUI-host fallback (#741).** A generic outermost-top-level-`.app` host-detection fallback so click-to-focus resolves the right GUI host for more terminal/IDE embeddings. (#728)
+- **Ghost-session lifecycle (#740, #734).** Antigravity PID==0 ghost sessions age out via the no-substantive-activity gate; sessions bound to a long-lived `claude --bg-spare` infra PID are reaped via the infra-reaper self-healing sweep. (#735, #727)
+- **claudecode detached background agents (#747).** Detached background agents that land in the `claude daemon run` pool are badged rather than rendered as phantom active rows. (#744)
+- **Relay sidebar dedupe (#748).** The macOS sidebar de-duplicates local projects echoed back by the relay. (#746)
+- **Settings panel jank (#730).** Eliminated the ~2fps / high-CPU redraw storm in the Settings panel. (#729)
+- **TTS crash + macOS declutter (#781).** Fixes a text-to-speech crash and declutters the History + Settings panels.
+- **FocusMonitor SDK launch crash (#782).** `resolveFocusStatusCenter()` resolved `INFocusStatusCenter.default` via KVC `value(forKey:)`, which under the macOS 26 / Xcode 26 SDK raises `NSUnknownKeyException` (uncatchable from Swift) instead of returning nil — SIGABRTing every Developer-ID launch (the path is DevID-gated, so ad-hoc/CI builds never hit it; only the release smoke test does). Now resolved with a `responds(to:)`-guarded selector `perform`.
+- **Agent-legible observability (#760, #762, #764).** #760 enriches an opt-in daemon lifecycle trace (with `replay --ghosts`) so ghost sessions are reconstructable; #762 snapshots the unobservable session-row states; #764 emits agent-legible HTML snapshot artifacts for the session list. (#757)
+- **Model-alias sync (#726 + this release).** Re-synced `core/pkg/capacity/aliases.go` against codeburn's `BUILTIN_ALIASES`; this release adds `openai-codex:gpt-5.5` → `gpt-5.5` (in LiteLLM) and the lowercase `glm-5.2` → `glm-5p1` Hermes spelling.
+- **Antigravity replay observability (#775, #776, #777).** Captures and serves antigravity's sibling `conversations/<id>.db` store in replay (#775), flips the 1.8 + 5.1 cells to observed via golden-summary surfacing and a re-record (#776), and pins the LiteLLM cache so the replay context-window test is hermetic on cold CI (#777). (#766)
+- **`/ir:exec` skill (#758, #767).** An end-to-end issue execution loop — open a worktree, present a visual HTML plan for approval, implement, open a PR, run /review and /simplify; #767 marks the issue in progress before implementing. (#756)
+- **Dependencies.** `form-data` 4.0.5 → 4.0.6 in `platforms/web`. (#739)
+
 ## [0.5.3] — 2026-06-21
 
 ### Google Antigravity support, publish your sessions to a remote relay, and a clutch of daemon + adapter fixes.
@@ -1127,7 +1209,8 @@ Four distinct bugs caused long-running Claude Code sessions to bounce between
 - First bundled macOS installer `Irrlicht-0.2.0-mac-installer.pkg` containing
   the daemon, menu bar app, and auto-start LaunchAgent.
 
-[Unreleased]: https://github.com/ingo-eichhorst/Irrlicht/compare/v0.5.3...HEAD
+[Unreleased]: https://github.com/ingo-eichhorst/Irrlicht/compare/v0.5.4...HEAD
+[0.5.4]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.5.4
 [0.5.3]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.5.3
 [0.5.2]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.5.2
 [0.5.1]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.5.1
