@@ -144,6 +144,40 @@ func resolveHostBundleIDFromAncestry(pid int) (bundleID string, hostPID int) {
 	return "", 0
 }
 
+// IsKnownInteractiveHost reports whether pid's process ancestry traces back to
+// a recognized terminal emulator or IDE (the curated termProgramByAppName map,
+// via resolveHostFromAncestry), or to another host known to embed a real
+// terminal (knownEmbeddedHostBundleIDs, e.g. Obsidian). It gates session
+// admission for adapters whose process can be spawned non-interactively by
+// unrelated tooling — issue #784, where a third-party menu-bar app (CodexBar)
+// kept an Antigravity `agy` CLI process running in the background for quota
+// polling, with no distinguishing argv or cwd.
+//
+// Unlike resolveHostBundleIDFromAncestry (which accepts ANY top-level app, for
+// click-to-focus purposes where bringing an unrecognized host forward is still
+// useful), this is a real allow-list: an ancestor that is a legitimate `.app`
+// but isn't a curated terminal/IDE and isn't in knownEmbeddedHostBundleIDs
+// returns false — which is exactly what excludes CodexBar.
+func IsKnownInteractiveHost(pid int) bool {
+	// Short-circuit before the second ancestry walk: resolveHostFromAncestry
+	// and resolveHostBundleIDFromAncestry each independently re-walk the same
+	// parent chain via their own ps shellouts, so skip the bundle-ID walk
+	// entirely once the curated map already matched.
+	term, _ := resolveHostFromAncestry(pid)
+	if term != "" {
+		return true
+	}
+	bundleID, _ := resolveHostBundleIDFromAncestry(pid)
+	return isKnownInteractiveHostFrom(term, bundleID)
+}
+
+// isKnownInteractiveHostFrom is the pure decision behind IsKnownInteractiveHost,
+// split out so the allow-list logic can be tested with synthetic ancestry
+// results instead of depending on whatever launched the test binary.
+func isKnownInteractiveHostFrom(termProgram, bundleID string) bool {
+	return termProgram != "" || knownEmbeddedHostBundleIDs[bundleID]
+}
+
 // resolveTermProgramFromAncestry is a thin wrapper that discards the host
 // PID. Kept for the existing call site that only cares whether kitty (or any
 // other host) appears in the chain; callers that also need the host PID

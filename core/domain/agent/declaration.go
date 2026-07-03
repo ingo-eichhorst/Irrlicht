@@ -125,4 +125,15 @@ type Process struct {
 	// (unreadable, e.g. hardened-runtime) is passed through, so an adapter's
 	// predicate must default to *not* excluding when it can't tell.
 	ExcludeArgv func(argv []string) bool
+
+	// RequireKnownHost, when true, gates session admission on the bound
+	// process's OS-level ancestry: a candidate PID whose parent chain doesn't
+	// resolve to a recognized terminal emulator or IDE is rejected, and no
+	// session is created for it. Unlike ExcludeArgv (adapter-specific argv
+	// shapes), the ancestry check itself is generic and shared — this is a
+	// plain opt-in flag, not a predicate. Added for issue #784: a third-party
+	// menu-bar app (CodexBar) kept an Antigravity `agy` CLI process running in
+	// the background for quota polling, with no distinguishing argv or cwd
+	// signal, so identity has to come from who launched the process instead.
+	RequireKnownHost bool
 }

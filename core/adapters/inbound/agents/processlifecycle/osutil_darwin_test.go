@@ -314,6 +314,38 @@ func TestResolveTermProgramFromAncestry_Self(t *testing.T) {
 	}
 }
 
+// TestIsKnownInteractiveHostFrom exercises the allow-list decision with
+// synthetic ancestry results — no live process chain needed — so the CodexBar
+// exclusion (#784) and the Obsidian carve-out (#728) are both deterministic,
+// not dependent on whatever happens to have launched `go test`.
+func TestIsKnownInteractiveHostFrom(t *testing.T) {
+	tests := []struct {
+		name                 string
+		termProgram          string
+		bundleID             string
+		wantKnownInteractive bool
+	}{
+		{"curated terminal", "iTerm.app", "", true},
+		{"curated IDE", "vscode", "", true},
+		{"obsidian via generic top-level-app fallback", "", "md.obsidian", true},
+		{"codexbar is a real .app but not allow-listed", "", "com.steipete.codexbar", false},
+		{"no ancestry resolved at all", "", "", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isKnownInteractiveHostFrom(tc.termProgram, tc.bundleID); got != tc.wantKnownInteractive {
+				t.Errorf("isKnownInteractiveHostFrom(%q, %q) = %v, want %v", tc.termProgram, tc.bundleID, got, tc.wantKnownInteractive)
+			}
+		})
+	}
+}
+
+// TestIsKnownInteractiveHost_Self mirrors the other "_Self" ancestry tests:
+// we don't know what launched `go test`, so only assert it returns cleanly.
+func TestIsKnownInteractiveHost_Self(t *testing.T) {
+	_ = IsKnownInteractiveHost(os.Getpid())
+}
+
 func reverseLookup(termProgram string) string {
 	for k, v := range termProgramByAppName {
 		if v == termProgram {

@@ -64,6 +64,18 @@ func termProgramForAppPath(cmdPath string) string {
 	return termProgramByAppName[appName]
 }
 
+// knownEmbeddedHostBundleIDs supplements termProgramByAppName for hosts that
+// embed a real terminal but aren't in the curated activation map — no Swift
+// activator is needed here since this list backs a session-identity check
+// (IsKnownInteractiveHost), not focus routing. Obsidian's community terminal
+// plugins (e.g. ghostty-terminal) run a real shell as a child of Obsidian.app,
+// so a coding-agent CLI launched there has a legitimate interactive lineage —
+// see issue #728 (which resolves Obsidian generically for click-to-focus) and
+// issue #784 (which needs an explicit allow-list, not "any top-level app").
+var knownEmbeddedHostBundleIDs = map[string]bool{
+	"md.obsidian": true,
+}
+
 // topLevelAppPath returns the path of the top-level application bundle whose
 // main executable is cmdPath, or "" when cmdPath is not the main executable of
 // a real top-level `.app`. It backs the generic host fallback (for embedded

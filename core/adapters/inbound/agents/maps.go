@@ -100,6 +100,21 @@ func ArgvExcluders(agents []agent.Agent) map[string]func([]string) bool {
 	return m
 }
 
+// RequireKnownHost produces the adapter-name → Process.RequireKnownHost map
+// consumed by session admission's host-ancestry gate: a candidate PID
+// launched by something other than a known terminal or IDE is rejected before
+// a session is ever created (#784). Only adapters that opt in (today:
+// antigravity) appear; the rest get no entry, so admission is unaffected.
+func RequireKnownHost(agents []agent.Agent) map[string]bool {
+	m := make(map[string]bool)
+	for _, a := range agents {
+		if a.Process.RequireKnownHost {
+			m[a.Identity.Name] = true
+		}
+	}
+	return m
+}
+
 // ControlPresets produces the adapter-name → (preset id → command text) map
 // consumed by the BackchannelEngine to translate a rule's agent-agnostic preset
 // into the concrete command for the session's agent (issue #754). Only adapters

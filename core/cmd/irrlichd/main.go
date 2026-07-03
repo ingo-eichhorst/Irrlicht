@@ -649,6 +649,14 @@ func main() {
 	if !demoMode {
 		detector.SetInfraReaper(agents.ArgvExcluders(allAgents), processlifecycle.ReadArgv)
 	}
+	// Reject a candidate PID launched by something other than a known
+	// terminal or IDE before a session is ever created — e.g. CodexBar
+	// keeping an Antigravity `agy` process running in the background for
+	// quota polling, with no distinguishing argv or cwd (#784). Demo mode
+	// never tracks live processes, so leave the gate unwired there.
+	if !demoMode {
+		detector.SetHostGate(agents.RequireKnownHost(allAgents), processlifecycle.IsKnownInteractiveHost)
+	}
 	// Consent gate for the detector's own transcript reads (startup seed +
 	// stale-working refresh of PERSISTED sessions) — the watcher pipeline
 	// is gated by construction, but these two paths read repo-listed
