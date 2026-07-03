@@ -17,5 +17,15 @@
 # `rm $(git rev-parse --git-common-dir)/hooks/pre-push`.
 set -uo pipefail
 
+# Git invokes hooks with GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE set in the
+# environment so the hook's own git commands target the right repo. That
+# leaks into preflight's `go test` subprocess and from there into any test
+# that shells out to `git` expecting isolation via an explicit working
+# directory (e.g. a fresh t.TempDir() repo) — the env override wins over
+# that directory, so the test's git commands silently operate on THIS repo
+# instead, capable of writing real commits onto the branch being pushed.
+# Unset them so preflight's git-touching tests see a clean environment.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
+
 echo "pre-push: running tools/preflight.sh (skip with --no-verify)"
 ./tools/preflight.sh
