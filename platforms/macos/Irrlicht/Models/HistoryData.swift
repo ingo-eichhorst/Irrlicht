@@ -18,12 +18,11 @@ struct HistoryResponse: Codable {
     let total: Double
     let series: [HistoryPoint]
     let topContributors: [HistoryContributor]
-    let forecast: HistoryForecast?
     let tokenSplit: HistoryTokenSplit? // chart=tokens only
     let scope: String?                 // active drilldown filter "field:value"
 
     enum CodingKeys: String, CodingKey {
-        case range, chart, group, start, end, total, series, forecast, scope
+        case range, chart, group, start, end, total, series, scope
         case bucketSeconds = "bucket_seconds"
         case bucketStarts = "bucket_starts"
         case topContributors = "top_contributors"
@@ -54,23 +53,6 @@ struct HistoryTokenSplit: Codable {
     let input: Double
     let output: Double
     let cache: Double
-}
-
-struct HistoryForecast: Codable {
-    let projected: Double
-    let basis: String
-    let horizonBuckets: Int
-    let series: [HistoryForecastPoint]
-
-    enum CodingKeys: String, CodingKey {
-        case projected, basis, series
-        case horizonBuckets = "horizon_buckets"
-    }
-}
-
-struct HistoryForecastPoint: Codable {
-    let ts: Int64
-    let value: Double
 }
 
 // Codable mirror of the daemon's `chart=yield` response (#373). Yield is a
@@ -207,8 +189,7 @@ enum HistoryChart: String, CaseIterable, Identifiable {
         }
     }
 
-    /// True for the USD metrics (everything but tokens) — they render a $ axis
-    /// and a cost forecast.
+    /// True for the USD metrics (everything but tokens) — they render a $ axis.
     var isCost: Bool { self != .tokens }
 
     /// models/providers are presets that pin the stacking axis to that

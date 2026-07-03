@@ -31,8 +31,6 @@ enum HistoryTab: String, CaseIterable, Identifiable {
 struct HistoryView: View {
     let onClose: () -> Void
 
-    @EnvironmentObject var sessionManager: SessionManager
-
     // Top-level view: each tab is a self-contained concern with its own controls
     // (Usage = cost/token time series, Yield = productive-vs-reverted, Quota =
     // live per-provider rate-limit forecast).
@@ -42,7 +40,6 @@ struct HistoryView: View {
     @State private var group: HistoryGroup = .project
     // Single-level drilldown filter (#750); nil = unscoped.
     @State private var scope: HistoryScope?
-    @State private var forecastEnabled = true
     @State private var customStart = Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date()
     @State private var customEnd = Date()
     // Resolved [start, end) unix seconds for a custom range, set on Apply (and
@@ -79,13 +76,12 @@ struct HistoryView: View {
     /// This is the macOS equivalent of the web's manual `historyFetchSeq`
     /// dedup — `.task(id:)` cancels the in-flight request when the key changes.
     private var queryKey: String {
-        let fc = forecastEnabled ? "f1" : "f0"
         let flt = "\(filterProvider.sorted().joined(separator: ","))|\(filterTokenType.map(\.rawValue).sorted().joined(separator: ","))|\(filterProject.sorted().joined(separator: ","))"
         let dims = "\(tab.rawValue)-\(fetchChart.rawValue)-\(effectiveGroup.rawValue)-\(scope?.query ?? "")-\(flt)"
         if range == .custom {
-            return "custom-\(appliedCustomStart ?? 0)-\(appliedCustomEnd ?? 0)-\(fc)-\(dims)"
+            return "custom-\(appliedCustomStart ?? 0)-\(appliedCustomEnd ?? 0)-\(dims)"
         }
-        return "\(range.rawValue)-\(fc)-\(dims)"
+        return "\(range.rawValue)-\(dims)"
     }
 
     /// The chart metric actually sent to the daemon: the Yield tab forces the
@@ -116,11 +112,16 @@ struct HistoryView: View {
         VStack(alignment: .leading, spacing: 0) {
             header
             Divider()
-            topControls
-            Divider()
+            // Quota has no controls (topControls renders EmptyView for it) —
+            // skip the row entirely rather than showing a blank padded gap
+            // between two dividers.
+            if tab != .quota {
+                topControls
+                Divider()
+            }
             content
         }
-        .frame(width: SessionListView.panelWidth)
+        .frame(width: SessionListView.panelWidth, height: panelHeight)
         .background(Color(NSColor.windowBackgroundColor))
         .task(id: queryKey) { await fetch() }
         .onChange(of: range) { newRange in
@@ -156,39 +157,46 @@ struct HistoryView: View {
     // MARK: Header
 
     private var header: some View {
-        ZStack {
-            Text("History").font(.headline)
-            HStack {
-                Button(action: onClose) {
-                    HStack(spacing: 2) {
-                        Image(systemName: "chevron.left")
-                        Text("Back")
-                    }
-                    .foregroundColor(.secondary)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                Spacer()
-            }
-        }
-        .padding(.horizontal, IrrSpacing.sp4)
-        .padding(.vertical, IrrSpacing.sp3)
-    }
-
-    // MARK: Controls
-
-    /// Tab selector at the very top, then only the controls that apply to the
-    /// active tab — Quota needs none, Yield needs just a range, Usage gets the
-    /// full set. Partitioning by tab is what keeps any single row from
-    /// overflowing the 380pt panel.
-    private var topControls: some View {
-        VStack(alignment: .leading, spacing: IrrSpacing.sp2) {
+        // A leading Back button, a centered tab switcher, and an invisible
+        // mirror of the Back button on the trailing side to balance the
+        // centering — the two Spacers guarantee a minimum gap on both sides
+        // of the switcher regardless of how wide Dynamic Type/accessibility
+        // text sizing makes the Back button, so it can never overlap it.
+        HStack {
+            backButton
+            Spacer(minLength: IrrSpacing.sp2)
             Picker("", selection: $tab) {
                 ForEach(HistoryTab.allCases) { Text($0.label).tag($0) }
             }
             .pickerStyle(.segmented)
             .labelsHidden()
+            .fixedSize()
+            Spacer(minLength: IrrSpacing.sp2)
+            backButton.opacity(0).allowsHitTesting(false).accessibilityHidden(true)
+        }
+        .padding(.horizontal, IrrSpacing.sp4)
+        .padding(.vertical, IrrSpacing.sp3)
+    }
 
+    private var backButton: some View {
+        Button(action: onClose) {
+            HStack(spacing: 2) {
+                Image(systemName: "chevron.left")
+                Text("Back")
+            }
+            .foregroundColor(.secondary)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: Controls
+
+    /// Only the controls that apply to the active tab — Quota needs none,
+    /// Yield needs just a range, Usage gets the full set (the tab selector
+    /// itself now lives in the header).
+    private var topControls: some View {
+        VStack(alignment: .leading, spacing: IrrSpacing.sp2) {
             switch tab {
             case .usage: usageControls
             case .yield: yieldControls
@@ -199,29 +207,32 @@ struct HistoryView: View {
         .padding(.vertical, IrrSpacing.sp3)
     }
 
-    /// Usage tab: cost/token time series. Labelled dropdowns, two per row so
-    /// nothing overflows the 380pt panel (a .menu Picker sizes to its widest
-    /// option, ~90pt each). The models/providers presets are gone — they're just
-    /// Cost grouped by model/provider, which the Group axis already offers.
+    /// Range picker, shared by the Usage and Yield tabs. Labels are hidden —
+    /// with the row down to Range/Chart/Group/Filters, the value alone
+    /// ("Day", "Cost", "Proj") reads fine and keeps everything on one line.
+    @ViewBuilder private var rangePicker: some View {
+        Picker("Range", selection: $range) {
+            ForEach(HistoryRange.allCases) { Text($0.label).tag($0) }
+        }
+        .labelsHidden()
+        .fixedSize()
+    }
+
+    /// Usage tab: cost/token time series. Range, Chart, Group, and the
+    /// cross-filters (as one "Filters" dropdown) all fit on a single row —
+    /// the models/providers presets are gone, they're just Cost grouped by
+    /// model/provider, which the Group axis already offers.
     @ViewBuilder private var usageControls: some View {
         HStack(spacing: IrrSpacing.sp3) {
-            Picker("Range", selection: $range) {
-                ForEach(HistoryRange.allCases) { Text($0.label).tag($0) }
-            }
-            .fixedSize()
+            rangePicker
             Picker("Chart", selection: Binding(
                 get: { chart },
                 set: { chart = $0; scope = nil } // a new metric resets any drilldown
             )) {
                 ForEach(visibleCharts) { Text($0.label).tag($0) }
             }
+            .labelsHidden()
             .fixedSize()
-            Spacer(minLength: 0)
-        }
-        .pickerStyle(.menu)
-        .font(.caption)
-
-        HStack(spacing: IrrSpacing.sp3) {
             Picker("Group", selection: Binding(
                 get: { effectiveGroup },
                 set: { newGroup in
@@ -232,38 +243,30 @@ struct HistoryView: View {
             )) {
                 ForEach(HistoryGroup.allCases) { Text($0.shortLabel).tag($0) }
             }
+            .labelsHidden()
             .fixedSize()
-            .pickerStyle(.menu)
-            Toggle("Forecast", isOn: $forecastEnabled)
-                .toggleStyle(.checkbox)
+            // Cross-filters (#750) as one dropdown (#750's three separate menus
+            // didn't fit the row); the daemon query still drops the grouped
+            // dimension and the token_type filter outside the tokens metric,
+            // so those act as no-ops rather than vanishing from the UI.
+            filtersMenu
             Spacer(minLength: 0)
         }
+        .pickerStyle(.menu)
+        .controlSize(.small)
         .font(.caption)
 
         if range == .custom { customRangeRow }
-
-        // Cross-filters (#750), always visible. The daemon query still drops the
-        // grouped dimension and the token_type filter outside the tokens metric,
-        // so those act as no-ops rather than vanishing from the UI.
-        HStack(spacing: IrrSpacing.sp2) {
-            providerFilterMenu
-            tokenTypeFilterMenu
-            projectFilterMenu
-            Spacer(minLength: 0)
-        }
-        .font(.caption)
     }
 
     /// Yield tab: a per-project aggregate over the range — just the range picker.
     @ViewBuilder private var yieldControls: some View {
         HStack(spacing: IrrSpacing.sp3) {
-            Picker("Range", selection: $range) {
-                ForEach(HistoryRange.allCases) { Text($0.label).tag($0) }
-            }
-            .fixedSize()
-            .pickerStyle(.menu)
+            rangePicker
             Spacer(minLength: 0)
         }
+        .pickerStyle(.menu)
+        .controlSize(.small)
         .font(.caption)
 
         if range == .custom { customRangeRow }
@@ -306,49 +309,59 @@ struct HistoryView: View {
         )
     }
 
-    @ViewBuilder private var providerFilterMenu: some View {
-        Menu(filterLabel("Provider", count: filterProvider.count)) {
-            if knownProviders.isEmpty {
-                Text("none seen yet")
-            } else {
-                ForEach(knownProviders, id: \.self) { p in
-                    Toggle(p, isOn: setBinding($filterProvider, p))
+    /// Total selections across all three filter dimensions, shown as the
+    /// "Filters" dropdown's badge count.
+    private var activeFilterCount: Int {
+        filterProvider.count + filterTokenType.count + filterProject.count
+    }
+
+    /// One dropdown holding all three cross-filters as submenus — Provider,
+    /// Type, and Project no longer need a row slot each.
+    @ViewBuilder private var filtersMenu: some View {
+        Menu(filterLabel("Filters", count: activeFilterCount)) {
+            Menu(filterLabel("Provider", count: filterProvider.count)) {
+                if knownProviders.isEmpty {
+                    Text("none seen yet")
+                } else {
+                    ForEach(knownProviders, id: \.self) { p in
+                        Toggle(p, isOn: setBinding($filterProvider, p))
+                    }
+                }
+            }
+            Menu(filterLabel("Type", count: filterTokenType.count)) {
+                ForEach(HistoryTokenType.allCases) { tt in
+                    Toggle(tt.label, isOn: tokenBinding(tt))
+                }
+            }
+            Menu(filterLabel("Project", count: filterProject.count)) {
+                if knownProjects.isEmpty {
+                    Text("none seen yet")
+                } else {
+                    ForEach(knownProjects, id: \.self) { p in
+                        Toggle(p, isOn: setBinding($filterProject, p))
+                    }
                 }
             }
         }
         .fixedSize()
-        .font(.caption)
-    }
-
-    @ViewBuilder private var tokenTypeFilterMenu: some View {
-        Menu(filterLabel("Type", count: filterTokenType.count)) {
-            ForEach(HistoryTokenType.allCases) { tt in
-                Toggle(tt.label, isOn: tokenBinding(tt))
-            }
-        }
-        .fixedSize()
-        .font(.caption)
-    }
-
-    @ViewBuilder private var projectFilterMenu: some View {
-        Menu(filterLabel("Project", count: filterProject.count)) {
-            if knownProjects.isEmpty {
-                Text("none seen yet")
-            } else {
-                ForEach(knownProjects, id: \.self) { p in
-                    Toggle(p, isOn: setBinding($filterProject, p))
-                }
-            }
-        }
-        .fixedSize()
-        .font(.caption)
     }
 
     // MARK: Content
 
-    /// Caps the scrollable content height so the popover can't outgrow the
-    /// screen — mirrors SessionListView's group-list cap.
-    private static let contentMaxHeight: CGFloat = 560
+    /// Fixed total panel height, independent of the width. Keeps the popover
+    /// from inheriting whatever height SessionListView happened to be at
+    /// before switching to History, and from resizing between Usage/Yield/
+    /// Quota — sized to comfortably fit the Usage tab's chart + legend.
+    /// (Quota/Yield's shorter content leaves blank space below rather than
+    /// shrinking the panel — a deliberate tradeoff for a constant height.)
+    /// Grows by customRangeRowHeight while the custom date-range row is
+    /// showing, so that row grows the popover instead of shrinking the
+    /// chart/legend to make room for itself.
+    private static let basePanelHeight: CGFloat = 560
+    private static let customRangeRowHeight: CGFloat = 32
+    private var panelHeight: CGFloat {
+        Self.basePanelHeight + (range == .custom ? Self.customRangeRowHeight : 0)
+    }
 
     @ViewBuilder private var content: some View {
         ScrollView {
@@ -360,7 +373,7 @@ struct HistoryView: View {
                 }
             }
         }
-        .frame(maxHeight: Self.contentMaxHeight)
+        .frame(maxHeight: .infinity)
     }
 
     /// Usage tab: the stacked-area cost/token time series.
@@ -372,7 +385,6 @@ struct HistoryView: View {
                 chart: chart,
                 group: effectiveGroup,
                 scope: scope,
-                forecastEnabled: forecastEnabled,
                 onDrill: { field, value in drill(into: field, value: value) },
                 onClearDrill: { clearDrill() },
                 onExportCSV: { save(ext: "csv", text: HistoryExport.csv(r)) },
@@ -398,22 +410,11 @@ struct HistoryView: View {
         }
     }
 
-    /// Quota tab: live per-provider rate-limit forecast (reads the session
-    /// snapshot, not the history API). Empty state when no subscription is active.
-    @ViewBuilder private var quotaContent: some View {
-        let providers = quotaForecasts
-        if providers.isEmpty {
-            Text("No subscription quota data yet.\nStart a Claude Pro/Max or ChatGPT session.")
-                .font(.callout)
-                .multilineTextAlignment(.center)
-                .foregroundColor(.secondary)
-                .frame(maxWidth: .infinity, minHeight: 220)
-                .padding(.horizontal, IrrSpacing.sp4)
-        } else {
-            HistoryQuotaForecastView(providers: providers)
-                .padding(.horizontal, IrrSpacing.sp4)
-                .padding(.vertical, IrrSpacing.sp3)
-        }
+    /// Quota tab: live per-provider rate-limit forecast. Isolated into its own
+    /// view (see HistoryQuotaTabContent) rather than reading `sessionManager`
+    /// directly here.
+    private var quotaContent: some View {
+        HistoryQuotaTabContent()
     }
 
     private var loadFailedText: some View {
@@ -439,7 +440,7 @@ struct HistoryView: View {
         loadFailed = false
         var comps = URLComponents(string: "\(DaemonEndpoint.httpBase)/api/v1/history")
         // queryItems ignores the custom bounds unless range == .custom.
-        comps?.queryItems = range.queryItems(chart: fetchChart, group: effectiveGroup, scope: scope, filters: filtersDict, forecast: forecastEnabled, customStart: appliedCustomStart, customEnd: appliedCustomEnd)
+        comps?.queryItems = range.queryItems(chart: fetchChart, group: effectiveGroup, scope: scope, filters: filtersDict, forecast: false, customStart: appliedCustomStart, customEnd: appliedCustomEnd)
         guard let url = comps?.url else { return }
         do {
             let (data, resp) = try await URLSession.shared.data(from: url)
@@ -477,7 +478,42 @@ struct HistoryView: View {
         return set.sorted()
     }
 
-    // MARK: Quota forecast (live rate-limit snapshot → per-provider projection)
+    private func save(ext: String, text: String) {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "irrlicht-history-\(range.rawValue)-\(chart.rawValue).\(ext)"
+        panel.begin { resp in
+            guard resp == .OK, let url = panel.url else { return }
+            try? text.write(to: url, atomically: true, encoding: .utf8)
+        }
+    }
+}
+
+// MARK: - Quota tab (live rate-limit snapshot → per-provider projection)
+//
+// A standalone view rather than a computed property on HistoryView: it's the
+// only part of History that needs `sessionManager`, which publishes on every
+// live session tick (as often as every ~100ms during active sessions). If
+// HistoryView itself subscribed, that churn would re-evaluate the whole body
+// — including the Usage tab's Filters menu — dismissing any open submenu.
+
+private struct HistoryQuotaTabContent: View {
+    @EnvironmentObject var sessionManager: SessionManager
+
+    var body: some View {
+        let providers = quotaForecasts
+        if providers.isEmpty {
+            Text("No subscription quota data yet.\nStart a Claude Pro/Max or ChatGPT session.")
+                .font(.callout)
+                .multilineTextAlignment(.center)
+                .foregroundColor(.secondary)
+                .frame(maxWidth: .infinity, minHeight: 220)
+                .padding(.horizontal, IrrSpacing.sp4)
+        } else {
+            HistoryQuotaForecastView(providers: providers)
+                .padding(.horizontal, IrrSpacing.sp4)
+                .padding(.vertical, IrrSpacing.sp3)
+        }
+    }
 
     /// One projection view-model per active subscription provider, each carrying
     /// its 5h/7d windows. Reads the live session snapshots (not the history API),
@@ -540,15 +576,6 @@ struct HistoryView: View {
         }
         return QuotaWindowVM.averagePaceCap(now: now, start: start, resetsAt: w.resetsAt, usedPercent: w.usedPercent)
     }
-
-    private func save(ext: String, text: String) {
-        let panel = NSSavePanel()
-        panel.nameFieldStringValue = "irrlicht-history-\(range.rawValue)-\(chart.rawValue).\(ext)"
-        panel.begin { resp in
-            guard resp == .OK, let url = panel.url else { return }
-            try? text.write(to: url, atomically: true, encoding: .utf8)
-        }
-    }
 }
 
 // MARK: - Pure content (chart + summary + export)
@@ -562,7 +589,6 @@ struct HistoryContentView: View {
     var chart: HistoryChart = .cost
     var group: HistoryGroup = .project
     var scope: HistoryScope?
-    let forecastEnabled: Bool
     var onDrill: (HistoryGroup, String) -> Void = { _, _ in }
     var onClearDrill: () -> Void = {}
     let onExportCSV: () -> Void
@@ -599,7 +625,6 @@ struct HistoryContentView: View {
             HistoryCostChart(
                 data: data,
                 orderedProjects: orderedProjects,
-                forecastEnabled: forecastEnabled,
                 chart: chart
             )
             .frame(height: 200)
@@ -620,13 +645,6 @@ struct HistoryContentView: View {
                 .font(.title2)
                 .fontWeight(.semibold)
                 .monospacedDigit()
-
-            // Forecast is USD-only; the daemon omits it for the tokens chart.
-            if forecastEnabled, chart.isCost, let fc = data.forecast {
-                Text("▲ projected \(HistoryFormat.dollar(fc.projected)) (\(fc.basis))")
-                    .font(.caption)
-                    .foregroundColor(IrrColors.waiting)
-            }
 
             // The legend always reflects the stacking axis (the chart stacks by
             // group, for cost AND tokens alike) — only the Token-type grouping
@@ -841,7 +859,6 @@ private struct HistoryYieldRow: View {
 private struct HistoryCostChart: View {
     let data: HistoryResponse
     let orderedProjects: [String]
-    let forecastEnabled: Bool
     var chart: HistoryChart = .cost
 
     private struct Datum: Identifiable {
@@ -874,33 +891,6 @@ private struct HistoryCostChart: View {
         return out
     }
 
-    private var forecastData: [Datum] {
-        guard forecastEnabled, let fc = data.forecast, !fc.series.isEmpty else { return [] }
-        var pts: [Datum] = []
-        // Continue the cumulative climb: anchor the dashed line at the grand
-        // total (the stack's right-edge height), then add the projected
-        // per-bucket increments forward, ending ≈forecast.projected.
-        if let lastBucket = data.bucketStarts.last {
-            pts.append(Datum(
-                id: "fc-anchor",
-                date: Date(timeIntervalSince1970: TimeInterval(lastBucket)),
-                project: "forecast",
-                value: data.total
-            ))
-        }
-        var running = data.total
-        for p in fc.series {
-            running += p.value
-            pts.append(Datum(
-                id: "fc-\(p.ts)",
-                date: Date(timeIntervalSince1970: TimeInterval(p.ts)),
-                project: "forecast",
-                value: running
-            ))
-        }
-        return pts
-    }
-
     var body: some View {
         Chart {
             ForEach(costData) { d in
@@ -910,15 +900,6 @@ private struct HistoryCostChart: View {
                 )
                 .foregroundStyle(by: .value("Project", d.project))
                 .interpolationMethod(.monotone)
-            }
-            ForEach(forecastData) { d in
-                LineMark(
-                    x: .value("Time", d.date),
-                    y: .value("Cost", d.value),
-                    series: .value("Series", "forecast")
-                )
-                .foregroundStyle(IrrColors.waiting)
-                .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
             }
         }
         .chartForegroundStyleScale(
