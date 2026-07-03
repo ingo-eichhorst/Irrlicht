@@ -49,4 +49,65 @@ final class SessionManagerFocusTests: XCTestCase {
         XCTAssertFalse(m1.isFocusActive)
         XCTAssertFalse(m2.isFocusActive)
     }
+
+    // MARK: - FocusMonitor.readIsFocused (#782 regression: no KVC crash on undiscoverable keys)
+
+    /// Real `@objc dynamic` accessors stand in for `INFocusStatusCenter` /
+    /// `INFocusStatus` without linking Intents.framework, so `responds(to:)`
+    /// and the selector dispatch in `readIsFocused` exercise the same path
+    /// they'd take against the live SDK classes. `isFocused` is typed
+    /// `NSNumber`, not `Bool` — matching `INFocusStatus`'s real
+    /// `NSNumber * _Nullable` ABI, since a `Bool`-typed fake would generate a
+    /// raw-`BOOL` accessor and mask an object-vs-scalar return mismatch.
+    @objc private class FakeFocusStatus: NSObject {
+        @objc dynamic var isFocused: NSNumber
+        init(isFocused: Bool) {
+            self.isFocused = NSNumber(value: isFocused)
+            super.init()
+        }
+    }
+
+    @objc private class FakeFocusCenter: NSObject {
+        @objc dynamic var focusStatus: FakeFocusStatus
+        init(focusStatus: FakeFocusStatus) {
+            self.focusStatus = focusStatus
+            super.init()
+        }
+    }
+
+    /// Exposes no `isFocused` accessor, standing in for a `focusStatus` whose
+    /// key regressed out of KVC-discoverability.
+    @objc private class FakeFocusStatusMissingIsFocused: NSObject {}
+
+    @objc private class FakeFocusCenterWithBadStatus: NSObject {
+        @objc dynamic var focusStatus: FakeFocusStatusMissingIsFocused
+        init(focusStatus: FakeFocusStatusMissingIsFocused) {
+            self.focusStatus = focusStatus
+            super.init()
+        }
+    }
+
+    func testReadIsFocusedReturnsTrueWhenFocused() {
+        let center = FakeFocusCenter(focusStatus: FakeFocusStatus(isFocused: true))
+        XCTAssertTrue(FocusMonitor.readIsFocused(center: center))
+    }
+
+    func testReadIsFocusedReturnsFalseWhenNotFocused() {
+        let center = FakeFocusCenter(focusStatus: FakeFocusStatus(isFocused: false))
+        XCTAssertFalse(FocusMonitor.readIsFocused(center: center))
+    }
+
+    /// Lock-in for #782: a center whose `focusStatus` key isn't KVC-discoverable
+    /// must fall back to `false`, not raise `NSUnknownKeyException`.
+    func testReadIsFocusedReturnsFalseWithoutCrashingWhenFocusStatusMissing() {
+        let center = NSObject()
+        XCTAssertFalse(FocusMonitor.readIsFocused(center: center))
+    }
+
+    /// Lock-in for #782: a `focusStatus` whose `isFocused` key isn't
+    /// KVC-discoverable must also fall back to `false`, not crash.
+    func testReadIsFocusedReturnsFalseWithoutCrashingWhenIsFocusedMissing() {
+        let center = FakeFocusCenterWithBadStatus(focusStatus: FakeFocusStatusMissingIsFocused())
+        XCTAssertFalse(FocusMonitor.readIsFocused(center: center))
+    }
 }

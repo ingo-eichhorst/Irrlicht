@@ -60,19 +60,42 @@ final class FocusMonitor: FocusStateProviding, @unchecked Sendable {
         }
     }
 
-    /// Synchronous live read. `INFocusStatusCenter.default.focusStatus` is
-    /// process-safe and cheap; no caching needed for the rate at which we
+    /// Synchronous live read. `INFocusStatusCenter.default.focusStatus.isFocused`
+    /// is process-safe and cheap; no caching needed for the rate at which we
     /// emit notifications. Returns `false` whenever the dynamic resolve
     /// didn't succeed (xctest, ad-hoc build, or unexpected runtime state).
+    ///
+    /// Equivalent of `center.focusStatus.isFocused`, dispatched dynamically so
+    /// this file compiles without `import Intents` (see the class doc). Same
+    /// `responds(to:)`-guarded selector dance as `resolveFocusStatusCenter()`
+    /// below, not KVC `value(forKey:)` — under the macOS 26 / Xcode 26 SDK an
+    /// undiscoverable key raises `NSUnknownKeyException` instead of returning
+    /// `nil` (#782), and there's no guarantee `focusStatus`/`isFocused` stay
+    /// KVC-compliant just because `default` regressed once already.
     var isFocusActive: Bool {
         guard let center = intentsCenter else { return false }
-        // Equivalent of `center.focusStatus.isFocused ?? false`, dispatched via ObjC.
-        // We deliberately use `value(forKey:)` so this whole file compiles without
-        // `import Intents`. If Apple ever renames the property the worst case is
-        // a `nil` return (== isFocusActive: false), not a crash.
-        guard let focusStatus = center.value(forKey: "focusStatus") as? NSObject else { return false }
-        guard let isFocused = focusStatus.value(forKey: "isFocused") as? Bool else { return false }
-        return isFocused
+        return Self.readIsFocused(center: center)
+    }
+
+    /// Extracted for unit testing with a plain `@objc` fake standing in for
+    /// `INFocusStatusCenter` — internal (not private) so `@testable import`
+    /// can drive it without touching the real Intents framework.
+    static func readIsFocused(center: NSObject) -> Bool {
+        let focusStatusSel = NSSelectorFromString("focusStatus")
+        guard center.responds(to: focusStatusSel),
+              let focusStatus = center.perform(focusStatusSel)?.takeUnretainedValue() as? NSObject else {
+            return false
+        }
+        // `INFocusStatus.isFocused` is declared `NSNumber * _Nullable` (boxed,
+        // `NS_REFINED_FOR_SWIFT` — only the Swift overlay unwraps it to `Bool`),
+        // not a raw `BOOL`. It's an object return, so plain `perform(_:)` is
+        // well-defined here, same as `focusStatus` above.
+        let isFocusedSel = NSSelectorFromString("isFocused")
+        guard focusStatus.responds(to: isFocusedSel),
+              let isFocused = focusStatus.perform(isFocusedSel)?.takeUnretainedValue() as? NSNumber else {
+            return false
+        }
+        return isFocused.boolValue
     }
 
     // MARK: - DevID gate + dynamic Intents resolution
