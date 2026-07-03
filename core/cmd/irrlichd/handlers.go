@@ -20,6 +20,22 @@ import (
 	"irrlicht/core/ports/outbound"
 )
 
+// costTimeframeSeconds maps the four supported time-frame keys to their
+// trailing-window duration in seconds. These are rolling windows (not
+// calendar-aligned) and are embedded under each project group's "costs"
+// field in the /api/v1/sessions response.
+var costTimeframeSeconds = map[string]int64{
+	"day":   24 * 3600,
+	"week":  7 * 24 * 3600,
+	"month": 30 * 24 * 3600,
+	"year":  365 * 24 * 3600,
+}
+
+// costAttachTTL bounds how stale the cached per-project cost maps may be
+// before the handler recomputes them. Well below either client's 30 s
+// poll cadence, short enough to keep the dashboard feeling live.
+const costAttachTTL = 5 * time.Second
+
 // sessionsResponse is the /api/v1/sessions payload. Groups is the dashboard
 // hierarchy (per-project group costs live on each group's `costs` field);
 // ProviderCosts holds per-provider trailing-window spend
