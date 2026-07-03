@@ -8,7 +8,9 @@ import (
 	"sync"
 	"testing"
 
+	"irrlicht/core/domain/permission"
 	"irrlicht/core/domain/session"
+	"irrlicht/core/internal/contracttesting"
 )
 
 // mockTarget records calls to HandlePermissionHook and HandleCompactHook for
@@ -43,6 +45,13 @@ func (m *mockTarget) getCalls() []hookCall {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return append([]hookCall{}, m.calls...)
+}
+
+func (m *mockTarget) reset() {
+	m.mu.Lock()
+	m.calls = nil
+	m.compactCalls = nil
+	m.mu.Unlock()
 }
 
 func (m *mockTarget) getCompactCalls() []compactCall {
@@ -352,6 +361,26 @@ type fakeGate bool
 
 func (g fakeGate) Granted(_, _ string) bool { return bool(g) }
 
+// mutableGate is a ConsentGate whose answer can change between calls —
+// needed to drive a single handler instance through all three consent
+// states for contracttesting.AssertPermissionGated.
+type mutableGate struct {
+	mu      sync.Mutex
+	granted bool
+}
+
+func (g *mutableGate) Granted(_, _ string) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.granted
+}
+
+func (g *mutableGate) setGranted(v bool) {
+	g.mu.Lock()
+	g.granted = v
+	g.mu.Unlock()
+}
+
 func TestHookHandler_ConsentGateDropsWhenNotGranted(t *testing.T) {
 	target := &mockTarget{}
 	handler := NewHookHandler(target, nil, fakeGate(false), mockLogger{})
@@ -564,4 +593,31 @@ func TestHookHandler_PreToolUse_UserInputToolStillDispatchesWithMarkerScan(t *te
 	if got := markers.getCalls(); len(got) != 1 || got[0].est.CompletedRounds != 2 {
 		t.Errorf("IngestTaskEstimate calls = %+v, want one 2/4 ingest (nested input walk)", got)
 	}
+}
+
+// TestHookHandler_PermissionGateContract wires the hooks permission's live
+// per-request ConsentGate check into the shared issue #797 contract: while
+// PermissionKeyHooks is pending or denied, an inbound hook payload must
+// dispatch to nothing; granted, it must dispatch; revoked, dispatch must
+// stop again. TestHookHandler_ConsentGateDropsWhenNotGranted /
+// ConsentGatePassesWhenGranted above cover the same call site by hand —
+// this is the generalized, three-state version.
+func TestHookHandler_PermissionGateContract(t *testing.T) {
+	target := &mockTarget{}
+	gate := &mutableGate{}
+	handler := NewHookHandler(target, nil, gate, mockLogger{})
+	payload := hookPayload{
+		TranscriptPath: "/Users/u/.claude/projects/p/sess-gate.jsonl",
+		HookEventName:  "PermissionRequest",
+		ToolName:       "Bash",
+	}
+
+	contracttesting.AssertPermissionGated(t, contracttesting.PermissionGate{
+		SetState: func(state permission.State) { gate.setGranted(state == permission.StateGranted) },
+		Exercise: func() {
+			target.reset()
+			postHook(t, handler, payload)
+		},
+		Observe: func() bool { return len(target.getCalls()) > 0 },
+	})
 }

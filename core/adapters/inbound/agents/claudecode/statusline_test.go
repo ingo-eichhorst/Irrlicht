@@ -9,7 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"irrlicht/core/domain/permission"
 	"irrlicht/core/domain/session"
+	"irrlicht/core/internal/contracttesting"
 )
 
 type fakeRateLimitTarget struct {
@@ -23,6 +25,10 @@ type rateLimitCall struct {
 
 func (f *fakeRateLimitTarget) IngestRateLimit(path string, snap *session.RateLimitSnapshot) {
 	f.calls = append(f.calls, rateLimitCall{path: path, snap: snap})
+}
+
+func (f *fakeRateLimitTarget) reset() {
+	f.calls = nil
 }
 
 type silentLogger struct{}
@@ -280,4 +286,36 @@ func TestStatuslineHandler_ConsentGateDropsWhenNotGranted(t *testing.T) {
 	if len(target.calls) != 0 {
 		t.Fatalf("ingested %d snapshots while permission not granted", len(target.calls))
 	}
+}
+
+// TestStatuslineHandler_PermissionGateContract generalizes
+// ConsentGateDropsWhenNotGranted into the shared issue #797 contract: an
+// inbound statusline POST must be dropped while PermissionKeyStatusline is
+// pending or denied, ingested once granted, and dropped again once
+// revoked.
+func TestStatuslineHandler_PermissionGateContract(t *testing.T) {
+	target := &fakeRateLimitTarget{}
+	gate := &mutableGate{}
+	h := NewStatuslineHandler(target, gate, silentLogger{})
+	body := `{
+		"session_id": "abc",
+		"transcript_path": "/tmp/sessions/abc.jsonl",
+		"rate_limits": {
+			"five_hour": {"used_percentage": 47, "resets_at": 1778761800}
+		}
+	}`
+
+	contracttesting.AssertPermissionGated(t, contracttesting.PermissionGate{
+		SetState: func(state permission.State) { gate.setGranted(state == permission.StateGranted) },
+		Exercise: func() {
+			target.reset()
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/hooks/claudecode/statusline", strings.NewReader(body))
+			rec := httptest.NewRecorder()
+			h(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200", rec.Code)
+			}
+		},
+		Observe: func() bool { return len(target.calls) > 0 },
+	})
 }

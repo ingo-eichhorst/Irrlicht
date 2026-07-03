@@ -56,6 +56,17 @@ Before marking a ticket done, run the full suite — every layer must pass:
   whether the regression is worth addressing before merging. Deterministic
   and workflow-agnostic: it fires on any push, not tied to a specific agent
   skill.
+- Permission gating: `contracttesting.AssertPermissionGated` (`core/internal/contracttesting/permission_gate.go`)
+  is the behavioral counterpart to the architecture test — it can't be checked
+  statically because gating happens at runtime, by an adapter (or the shared
+  services layer) choosing to call `PermissionService.Granted`/`ObserveGranted`
+  before a read/write, or by wiring a permission's `Apply`/`Remove` closures.
+  New adapters should wire it into their test suite for every `modify`-kind
+  permission they declare — see `claudecode`'s hooks/statusline (a live
+  per-request `ConsentGate`), `claudecode`'s instructions and `processlifecycle`'s
+  kitty remote-control (install-type `Apply`/`Remove`), and `InputService`'s
+  backchannel forwarding (the shared "control" gate) for the three call-site
+  shapes it covers.
 - Factory: `go test ./tools/onboarding-factory/... -race -count=1`.
 - Replay: `tools/replay-fixtures.sh`
 - Replay goldens (when a recording or replay-output change is in play):

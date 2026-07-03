@@ -5,7 +5,9 @@ import (
 	"testing"
 
 	"irrlicht/core/application/services"
+	"irrlicht/core/domain/permission"
 	"irrlicht/core/domain/session"
+	"irrlicht/core/internal/contracttesting"
 )
 
 // fakeController records what InputService delegates to the AgentController.
@@ -31,6 +33,13 @@ func (f *fakeController) Controllable(_ string) bool { return f.controllable }
 type fakeConsent struct{ granted bool }
 
 func (f fakeConsent) Granted(_, _ string) bool { return f.granted }
+
+// mutableConsent is a consentGate whose answer can change between calls —
+// needed to drive a single InputService instance through all three
+// consent states for contracttesting.AssertPermissionGated.
+type mutableConsent struct{ granted bool }
+
+func (c *mutableConsent) Granted(_, _ string) bool { return c.granted }
 
 func controllableSession() *session.SessionState {
 	return &session.SessionState{SessionID: "abc", Adapter: "claude-code"}
@@ -120,4 +129,25 @@ func TestControllable_ReflectsGate(t *testing.T) {
 	if !newInput(true, true, true, nil).Controllable("abc") {
 		t.Error("all gates open: want controllable")
 	}
+}
+
+// TestSendInput_PermissionGateContract wires the backchannel's live
+// per-call ConsentGate check (input_service.go's resolve, the exact
+// "backchannel write path" issue #797 was filed to guard) into the shared
+// three-state contract: forwarding must be a no-op while the "control"
+// permission is pending or denied, must delegate to the controller once
+// granted, and must stop again once revoked.
+func TestSendInput_PermissionGateContract(t *testing.T) {
+	consent := &mutableConsent{}
+	ctrl := &fakeController{controllable: true}
+	svc := services.NewInputService(&stubRepo{state: controllableSession()}, ctrl, consent, func() bool { return true }, stubLog{})
+
+	contracttesting.AssertPermissionGated(t, contracttesting.PermissionGate{
+		SetState: func(state permission.State) { consent.granted = state == permission.StateGranted },
+		Exercise: func() {
+			ctrl.sentData = nil
+			_ = svc.SendInput("abc", []byte("x"))
+		},
+		Observe: func() bool { return ctrl.sentData != nil },
+	})
 }
