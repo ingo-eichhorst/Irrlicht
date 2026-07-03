@@ -114,16 +114,39 @@ func (d *SessionDetector) onNewSession(id agent.Identity, ev agent.Event) {
 			return
 		}
 
+		// Skip sessions previously rejected by the host-ancestry gate below.
+		// Checked unconditionally (before looking at id.Name) because the
+		// debounce-coalesce path re-enters onNewSession with an empty
+		// Identity (see processActivityWithoutIdentity) — without this cache,
+		// AllowsSession("", ...) would no-op on the unrecognized adapter name
+		// and let an already-rejected non-interactive session slip through on
+		// a same-window retry.
+		d.mu.Lock()
+		_, hostRejected := d.hostGateRejected[ev.SessionID]
+		d.mu.Unlock()
+		if hostRejected {
+			return
+		}
+
 		// Skip sessions whose adapter requires a known interactive host
 		// (currently antigravity only) when the process behind them was
 		// launched by something other than a recognized terminal or IDE — a
 		// synchronous, one-shot check so a non-interactive process never
 		// becomes a visible session in the first place, rather than appearing
 		// and being reaped later (issue #784).
-		if !d.pidMgr.AllowsSession(id.Name, ev.CWD, ev.TranscriptPath) {
-			d.log.LogInfo("session-detector", ev.SessionID,
-				"skipping session bound to a non-interactive host")
-			return
+		if d.pidMgr.RequiresKnownHost(id.Name) {
+			cwd := ev.CWD
+			if cwd == "" {
+				cwd = d.enricher.git.GetCWDFromTranscript(ev.TranscriptPath)
+			}
+			if !d.pidMgr.AllowsSession(ev.SessionID, id.Name, cwd, ev.TranscriptPath) {
+				d.mu.Lock()
+				d.hostGateRejected[ev.SessionID] = struct{}{}
+				d.mu.Unlock()
+				d.log.LogInfo("session-detector", ev.SessionID,
+					"skipping session bound to a non-interactive host")
+				return
+			}
 		}
 
 		// All new sessions start as ready. Content-based detection on

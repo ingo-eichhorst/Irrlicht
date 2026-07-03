@@ -159,7 +159,14 @@ func resolveHostBundleIDFromAncestry(pid int) (bundleID string, hostPID int) {
 // but isn't a curated terminal/IDE and isn't in knownEmbeddedHostBundleIDs
 // returns false — which is exactly what excludes CodexBar.
 func IsKnownInteractiveHost(pid int) bool {
+	// Short-circuit before the second ancestry walk: resolveHostFromAncestry
+	// and resolveHostBundleIDFromAncestry each independently re-walk the same
+	// parent chain via their own ps shellouts, so skip the bundle-ID walk
+	// entirely once the curated map already matched.
 	term, _ := resolveHostFromAncestry(pid)
+	if term != "" {
+		return true
+	}
 	bundleID, _ := resolveHostBundleIDFromAncestry(pid)
 	return isKnownInteractiveHostFrom(term, bundleID)
 }

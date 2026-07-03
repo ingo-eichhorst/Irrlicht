@@ -99,13 +99,50 @@ func TestAllowsSession(t *testing.T) {
 			}
 			pm.SetHostGate(requireKnownHost, func(pid int) bool { return tc.isKnownHost })
 
-			if got := pm.AllowsSession("antigravity", "/some/cwd", "/some/transcript.jsonl"); got != tc.want {
+			if got := pm.AllowsSession("sess1", "antigravity", "/some/cwd", "/some/transcript.jsonl"); got != tc.want {
 				t.Errorf("AllowsSession() = %v, want %v", got, tc.want)
 			}
 			if tc.requireKnownHost && discoverCalls != 1 {
 				t.Errorf("expected discover to be called once, got %d", discoverCalls)
 			}
 		})
+	}
+}
+
+// TestAllowsSession_ClaimAwareDisambiguation is the regression test for the
+// #791 review finding: AllowsSession used to pass a nil disambiguate to the
+// discover func, which for antigravity falls back to the lowest matching PID
+// — diverging from TryDiscoverPID's claim-aware "highest unclaimed" policy.
+// If a stale PID (already claimed by another session) shares a cwd with a
+// brand-new, legitimate process, the two paths must agree on which PID they're
+// looking at, or the gate can ancestry-check the wrong one and reject a real
+// session.
+func TestAllowsSession_ClaimAwareDisambiguation(t *testing.T) {
+	repo := newMockRepo()
+	// PID 100 is already claimed by another session (a stale/ghost binding);
+	// PID 200 is the new, unclaimed, legitimate process. A claim-aware
+	// disambiguator must prefer 200 despite it being numerically higher than
+	// (not lower than, the naive "lowest PID" default) 100.
+	repo.states["other-session"] = &session.SessionState{SessionID: "other-session", PID: 100}
+
+	discover := agent.PIDDiscoverFunc(func(cwd, transcriptPath string, disambiguate func([]int) int) (int, error) {
+		return disambiguate([]int{100, 200}), nil
+	})
+	pm := services.NewPIDManager(
+		nil, repo, &mockLogger{}, nil, 10*time.Minute,
+		map[string]agent.PIDDiscoverFunc{"antigravity": discover},
+		nil, nil, func(string) {},
+	)
+	var checkedPID int
+	pm.SetHostGate(map[string]bool{"antigravity": true}, func(pid int) bool {
+		checkedPID = pid
+		return true
+	})
+
+	pm.AllowsSession("new-session", "antigravity", "/some/cwd", "/some/transcript.jsonl")
+
+	if checkedPID != 200 {
+		t.Errorf("AllowsSession ancestry-checked PID %d, want 200 (the unclaimed candidate — PID 100 is already claimed by another session)", checkedPID)
 	}
 }
 

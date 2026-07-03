@@ -209,6 +209,13 @@ func (pm *PIDManager) SetHostGate(requireKnownHost map[string]bool, isKnownHost 
 	pm.isKnownHost = isKnownHost
 }
 
+// RequiresKnownHost reports whether adapter has opted into the host-ancestry
+// admission gate (Process.RequireKnownHost), so callers can decide whether
+// it's worth resolving a cwd before calling AllowsSession.
+func (pm *PIDManager) RequiresKnownHost(adapter string) bool {
+	return pm.requireKnownHost[adapter]
+}
+
 // AllowsSession reports whether a new session should be admitted for adapter,
 // given the candidate PID (if any) a synchronous one-shot discovery attempt
 // finds at cwd. Adapters that don't opt into RequireKnownHost always return
@@ -220,7 +227,13 @@ func (pm *PIDManager) SetHostGate(requireKnownHost map[string]bool, isKnownHost 
 // yet fails open — discovery is best-effort and a real session's process is
 // virtually always already running by the time its transcript file appears,
 // but a rare timing race must not block a legitimate session forever.
-func (pm *PIDManager) AllowsSession(adapter, cwd, transcriptPath string) bool {
+//
+// Uses the same claim-aware disambiguator as TryDiscoverPID (via sessionID)
+// so this check and the real PID binding that follows always agree on which
+// PID they're looking at — a mismatch would let the gate ancestry-check a
+// stale/unrelated PID sharing the same cwd instead of the one that's actually
+// about to be bound.
+func (pm *PIDManager) AllowsSession(sessionID, adapter, cwd, transcriptPath string) bool {
 	if !pm.requireKnownHost[adapter] {
 		return true
 	}
@@ -228,7 +241,7 @@ func (pm *PIDManager) AllowsSession(adapter, cwd, transcriptPath string) bool {
 	if discover == nil {
 		return true
 	}
-	pid, err := discover(cwd, transcriptPath, nil)
+	pid, err := discover(cwd, transcriptPath, pm.claimAwareDisambiguate(sessionID))
 	if err != nil || pid <= 0 {
 		return true
 	}
@@ -690,10 +703,26 @@ func (pm *PIDManager) TryDiscoverPID(sessionID, cwd, transcriptPath, adapter str
 		return false
 	}
 
-	// Prefer unclaimed PIDs (multiple instances in same dir), but allow
-	// claimed PIDs when all candidates are claimed (/clear scenario).
+	if pid, err := discoverFn(cwd, transcriptPath, pm.claimAwareDisambiguate(sessionID)); err == nil && pid > 0 {
+		pm.log.LogInfo("session-detector", sessionID,
+			fmt.Sprintf("discovered pid %d for %s session", pid, adapter))
+		pm.HandlePIDAssigned(pid, sessionID)
+		return true
+	}
+	return false
+}
+
+// claimAwareDisambiguate builds a disambiguator that prefers the highest
+// unclaimed PID among candidates sharing a cwd, falling back to the highest
+// claimed PID when every candidate is already claimed by another session
+// (the /clear scenario). Shared by TryDiscoverPID and AllowsSession so both
+// pick the same PID for the same session — they used to disagree (AllowsSession
+// passed a nil disambiguate, which falls back to each adapter's own default,
+// e.g. antigravity's lowestPID), letting the admission gate ancestry-check a
+// different, possibly stale, PID than the one that would actually get bound.
+func (pm *PIDManager) claimAwareDisambiguate(sessionID string) func([]int) int {
 	claimed := pm.claimedPIDs(sessionID)
-	disambiguate := func(pids []int) int {
+	return func(pids []int) int {
 		bestUnclaimed, bestAny := 0, 0
 		for _, p := range pids {
 			if p > bestAny {
@@ -708,14 +737,6 @@ func (pm *PIDManager) TryDiscoverPID(sessionID, cwd, transcriptPath, adapter str
 		}
 		return bestAny
 	}
-
-	if pid, err := discoverFn(cwd, transcriptPath, disambiguate); err == nil && pid > 0 {
-		pm.log.LogInfo("session-detector", sessionID,
-			fmt.Sprintf("discovered pid %d for %s session", pid, adapter))
-		pm.HandlePIDAssigned(pid, sessionID)
-		return true
-	}
-	return false
 }
 
 // DiscoverPIDWithRetry tries to discover a PID immediately, then retries at

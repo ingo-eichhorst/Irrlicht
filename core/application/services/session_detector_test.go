@@ -226,6 +226,137 @@ func TestSessionDetector_NewSession_AdmitsKnownHost(t *testing.T) {
 	}
 }
 
+// TestSessionDetector_NewSession_HostGateResolvesCWDFromTranscript is the
+// regression test for the #791 review finding that the host-ancestry gate was
+// a structural no-op for antigravity's normal transcript-driven path: fswatcher
+// never sets Event.CWD, so DiscoverPID's cwd-based lookup would always
+// short-circuit to (0, nil) and AllowsSession would fail open before ever
+// attempting an ancestry check. The gate must fall back to the transcript-
+// derived cwd (mirroring the existing #576 stale-rescue pattern) so discovery
+// actually gets a usable cwd.
+func TestSessionDetector_NewSession_HostGateResolvesCWDFromTranscript(t *testing.T) {
+	tw := newMockAgentWatcher().withIdentity(agent.Identity{Name: "antigravity"})
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	const wantCWD = "/Users/ghost/.gemini/antigravity-cli"
+	discoverCalls := 0
+	discovers := map[string]agent.PIDDiscoverFunc{
+		"antigravity": func(cwd, transcriptPath string, disambiguate func([]int) int) (int, error) {
+			discoverCalls++
+			if cwd != wantCWD {
+				t.Errorf("discover called with cwd %q, want %q (transcript-derived fallback cwd wasn't threaded through)", cwd, wantCWD)
+			}
+			return 62540, nil
+		},
+	}
+	det := services.NewSessionDetector(
+		[]inbound.Watcher{tw}, pw, repo,
+		&mockLogger{}, &cwdGit{cwd: wantCWD}, &mockMetrics{}, nil,
+		"test", 0, discovers, nil, nil,
+	)
+	det.SetHostGate(map[string]bool{"antigravity": true}, func(pid int) bool { return false })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	tw.ch <- agent.Event{
+		Type:           agent.EventNewSession,
+		SessionID:      "ghost-empty-cwd",
+		ProjectDir:     "-Users-test-project",
+		TranscriptPath: "/home/.gemini/antigravity-cli/brain/conv/transcript.jsonl",
+		// CWD deliberately left empty — matches production fswatcher events.
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+
+	if discoverCalls == 0 {
+		t.Fatal("discover was never called — the host gate never attempted PID discovery at all")
+	}
+	if state, _ := repo.Load("ghost-empty-cwd"); state != nil {
+		t.Errorf("session should have been rejected once discovered via the transcript-derived cwd, got state %q", state.State)
+	}
+}
+
+// TestSessionDetector_NewSession_HostGateRejectionSurvivesIdentityLessRetry is
+// the regression test for the #791 review finding that a session rejected by
+// the host gate could still be created via the debounce-coalesce path: a
+// second activity event within the 2s debounce window is coalesced and
+// re-dispatched through processActivityWithoutIdentity, which calls
+// onNewSession with an empty Identity — without the hostGateRejected cache,
+// AllowsSession("", ...) would no-op on the unrecognized adapter name and
+// admit the retry. Drives the real debounce timer (NewSessionDetector panics
+// if a watcher itself has no Identity, so there's no way to synthesize this
+// via a second watcher — the empty identity only ever arises internally, via
+// processActivityWithoutIdentity) rather than a synthetic shortcut.
+func TestSessionDetector_NewSession_HostGateRejectionSurvivesIdentityLessRetry(t *testing.T) {
+	tw := newMockAgentWatcher().withIdentity(agent.Identity{Name: "antigravity"})
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	discovers := map[string]agent.PIDDiscoverFunc{
+		"antigravity": func(cwd, transcriptPath string, disambiguate func([]int) int) (int, error) {
+			return 62540, nil
+		},
+	}
+	det := services.NewSessionDetector(
+		[]inbound.Watcher{tw}, pw, repo,
+		&mockLogger{}, &cwdGit{cwd: "/Users/ghost"}, &mockMetrics{}, nil,
+		"test", 0, discovers, nil, nil,
+	)
+	det.SetHostGate(map[string]bool{"antigravity": true}, func(pid int) bool { return false })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	transcriptPath := "/home/.gemini/antigravity-cli/brain/conv/transcript.jsonl"
+
+	// First event: proper identity, rejected by the host gate.
+	tw.ch <- agent.Event{
+		Type:           agent.EventNewSession,
+		SessionID:      "ghost-retry",
+		ProjectDir:     "-Users-test-project",
+		TranscriptPath: transcriptPath,
+	}
+	time.Sleep(30 * time.Millisecond)
+
+	// First EventActivity for this session ID: onActivity fires it
+	// immediately (with proper identity) and starts the debounce window —
+	// state is still nil, so this re-enters onNewSession and is rejected
+	// again, this time via the hostGateRejected cache.
+	tw.ch <- agent.Event{
+		Type:           agent.EventActivity,
+		SessionID:      "ghost-retry",
+		ProjectDir:     "-Users-test-project",
+		TranscriptPath: transcriptPath,
+	}
+	time.Sleep(30 * time.Millisecond)
+
+	// Second EventActivity within the debounce window: coalesced, and
+	// re-dispatched after activityDebounceWindow via
+	// processActivityWithoutIdentity — the empty-identity call this test
+	// targets.
+	tw.ch <- agent.Event{
+		Type:           agent.EventActivity,
+		SessionID:      "ghost-retry",
+		ProjectDir:     "-Users-test-project",
+		TranscriptPath: transcriptPath,
+	}
+	// activityDebounceWindow (session_detector.go) is 2s and unexported;
+	// this external test package can't reference it directly.
+	time.Sleep(2*time.Second + 200*time.Millisecond)
+	cancel()
+	<-done
+
+	if state, _ := repo.Load("ghost-retry"); state != nil {
+		t.Errorf("session rejected by the host gate should stay rejected on a coalesced, identity-less retry, got state %q", state.State)
+	}
+}
+
 // --- stale-transcript rescue (issue #576) -------------------------------------
 //
 // When observe consent is granted after agent sessions are already running,

@@ -118,6 +118,16 @@ type SessionDetector struct {
 	// --continue, not ghost events from a dying process.
 	deletedSessions map[string]int64
 
+	// hostGateRejected tracks session IDs the host-ancestry admission gate
+	// (issue #784) has already rejected. No cooldown/expiry, unlike
+	// deletedSessions — a rejected PID's process ancestry (e.g. CodexBar,
+	// not a terminal) won't change for the life of that process, so there's
+	// no legitimate retry case to allow. Exists specifically to close a gap
+	// where the debounce-coalesce path re-enters onNewSession with an empty
+	// Identity, which would otherwise bypass the gate on a same-window retry
+	// (see the PID-manager AllowsSession call site in onNewSession).
+	hostGateRejected map[string]struct{}
+
 	// debounce coalesces rapid transcript activity events per session.
 	debounceMu sync.Mutex
 	debounce   map[string]*debounceEntry
@@ -243,6 +253,7 @@ func NewSessionDetector(
 		metrics:           metrics,
 		projectSessions:   make(map[string]string),
 		deletedSessions:   make(map[string]int64),
+		hostGateRejected:  make(map[string]struct{}),
 		debounce:          make(map[string]*debounceEntry),
 		debouncedEvents:   make(chan agent.Event, 64),
 		deletedCooldown:   10 * time.Second,
