@@ -6,11 +6,40 @@ import SwiftUI
 /// Longer plain-language hover text for the cache-creation regression badge
 /// (#813). `tooltip` is the daemon's cacheBloatTooltip: the version-attribution
 /// string when it could name the regressing upstream version, else nil/empty.
-func cacheBloatExplanation(_ tooltip: String?) -> String {
+/// Hand-duplicated in web's formatters.js — #827 tracks moving this to the
+/// daemon so both clients render the same server-composed string.
+private func cacheBloatExplanation(_ tooltip: String?) -> String {
     let base = "This session is creating prompt-cache tokens well above normal for this project — it's getting less benefit from caching and costing more per turn."
     let attribution = (tooltip?.isEmpty == false) ? " Likely tied to \(tooltip!)." : ""
     let causes = " Common causes: an agent update that changed context construction, large or varying pasted content each turn, or frequent context resets (e.g. /clear)."
     return base + attribution + causes
+}
+
+/// Shared shape for the row's single-line notice pills (user-intent, pending
+/// question, cache-bloat badge): tinted text on a dim background, full-width,
+/// truncating rather than wrapping.
+private struct PillText: ViewModifier {
+    let color: Color
+    var font: Font = .system(size: 9)
+
+    func body(content: Content) -> some View {
+        content
+            .font(font)
+            .foregroundColor(color)
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 3)
+            .background(color.opacity(0.12))
+            .cornerRadius(IrrRadius.sm)
+    }
+}
+
+extension View {
+    fileprivate func pill(color: Color, font: Font = .system(size: 9)) -> some View {
+        modifier(PillText(color: color, font: font))
+    }
 }
 
 struct ContextBar: View {
@@ -99,30 +128,14 @@ struct SessionRowView: View {
                 // User intent (beta): what the user asked for.
                 if showIntent, let s = summaryLine {
                     Text(s)
-                        .font(.system(size: 9))
-                        .foregroundColor(IrrColors.intent)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 3)
-                        .background(IrrColors.intentDim)
-                        .cornerRadius(IrrRadius.sm)
+                        .pill(color: IrrColors.intent)
                         .tooltip(summaryFull ?? s)
                 }
 
                 // Pending question: what the agent is asking.
                 if showQuestion, let q = questionLine {
                     Text(q)
-                        .font(.system(size: 9))
-                        .foregroundColor(IrrColors.waiting)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 3)
-                        .background(IrrColors.waitingDim)
-                        .cornerRadius(IrrRadius.sm)
+                        .pill(color: IrrColors.waiting)
                         // Surface the full prompt on hover.
                         .tooltip(questionFull ?? q)
                 }
@@ -145,15 +158,7 @@ struct SessionRowView: View {
             let tooltip = session.metrics?.cacheBloatTooltip
             let badgeText = (tooltip?.isEmpty == false) ? tooltip! : "cache \u{2191}"
             Text(badgeText)
-                .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                .foregroundColor(IrrColors.pressureHigh)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 5)
-                .padding(.vertical, 3)
-                .background(IrrColors.pressureHigh.opacity(0.12))
-                .cornerRadius(IrrRadius.sm)
+                .pill(color: IrrColors.pressureHigh, font: .system(size: 9, weight: .semibold, design: .monospaced))
                 .padding(.top, 2)
                 .tooltip(cacheBloatExplanation(tooltip))
         }

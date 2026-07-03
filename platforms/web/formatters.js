@@ -194,6 +194,8 @@ export function cacheBloatBadgeText(tooltip) {
   return tooltip || 'cache ↑';
 }
 
+// Hand-duplicated in macOS's SessionRowView.swift — #827 tracks moving this
+// to the daemon so both clients render the same server-composed string.
 export function cacheBloatExplanation(tooltip) {
   const base = "This session is creating prompt-cache tokens well above normal for this project — it's getting less benefit from caching and costing more per turn.";
   const attribution = tooltip ? ` Likely tied to ${tooltip}.` : '';

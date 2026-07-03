@@ -628,7 +628,6 @@ import { reconcile, paintRowNum } from './domReconcile.js';
         '<span class="row-bg-badge" style="display:none"></span>' +
         '<span class="row-role-badge" style="display:none"></span>' +
         '<span class="row-origin" style="display:none"></span>' +
-        '<span class="row-cache-bloat" style="display:none"></span>' +
         '<span class="row-branch"></span>' +
         '<span class="row-tool" style="display:none"></span>' +
         '<span class="row-ctx-bar"><span class="row-ctx-fill"></span><span class="row-ctx-label"></span></span>' +
@@ -748,23 +747,10 @@ import { reconcile, paintRowNum } from './domReconcile.js';
         originEl.style.display = 'none';
       }
 
-      // Cache-creation regression badge (#813, was #374's bare glyph) — an
-      // always-visible short label (the version attribution, or a compact
-      // fallback) so a user isn't required to hover to learn anything
-      // happened. The longer plain-language explanation still lives in the
-      // hover title, with the attribution folded in when the daemon
-      // provided one.
-      const cacheBloatEl = el.querySelector('.row-cache-bloat');
-      if (cacheBloatEl) {
-        if (metrics.cache_bloat) {
-          cacheBloatEl.style.display = '';
-          const badgeText = cacheBloatBadgeText(metrics.cache_bloat_tooltip);
-          if (cacheBloatEl.textContent !== badgeText) cacheBloatEl.textContent = badgeText;
-          cacheBloatEl.title = cacheBloatExplanation(metrics.cache_bloat_tooltip);
-        } else if (cacheBloatEl.style.display !== 'none') {
-          cacheBloatEl.style.display = 'none';
-        }
-      }
+      // Cache-creation regression badge (#813) renders as its own row beneath
+      // the parent (see createCacheBloatRow / render() emit) — the version
+      // attribution can be a full sentence, too wide for this fixed-width
+      // icon row (mirrors macOS's cacheBloatBlock).
 
       const subBadge = el.querySelector('.row-sub-badge');
       const activeSubs = activeSubagentCount(agent);
@@ -982,6 +968,13 @@ import { reconcile, paintRowNum } from './domReconcile.js';
             if (isActive && (pressure === 'high' || pressure === 'warning' || pressure === 'critical')) {
               items.push({type: 'alert', key: 'al:' + a.session_id, pressure: pressure});
             }
+            // Cache-creation regression badge (#813) — separate row beneath
+            // the parent; the version-attribution string can be a full
+            // sentence, too wide for this fixed-width icon row (mirrors
+            // macOS's cacheBloatBlock).
+            if (a.metrics && a.metrics.cache_bloat) {
+              items.push({type: 'cachebloat', key: 'cb:' + a.session_id, agent: a});
+            }
             // Task summary + waiting question — collapsible block beneath the
             // parent (issue #738). Renders when there's a summary (any state)
             // or a pending question (waiting).
@@ -1007,6 +1000,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
           item => {
             if (item.type === 'group') return createGroupHeader(item.group, item.groupKey, item.depth);
             if (item.type === 'alert') return createAlertRow(item.pressure);
+            if (item.type === 'cachebloat') return createCacheBloatRow(item.agent);
             if (item.type === 'tasks') return createTaskListRow(item.agent, item.isChild);
             if (item.type === 'summary') return createSummaryRow(item.agent, item.isChild);
             const el = createSessionRow(item.agent, item.isChild);
@@ -1017,6 +1011,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
           (el, item) => {
             if (item.type === 'group') { updateGroupHeader(el, item.group, item.groupKey, item.depth); return; }
             if (item.type === 'alert') { updateAlertRow(el, item.pressure); return; }
+            if (item.type === 'cachebloat') { updateCacheBloatRow(el, item.agent); return; }
             if (item.type === 'tasks') { updateTaskListRow(el, item.agent); return; }
             if (item.type === 'summary') { updateSummaryRow(el, item.agent); return; }
             updateSessionRow(el, item.agent, item.isChild);
@@ -1085,6 +1080,27 @@ import { reconcile, paintRowNum } from './domReconcile.js';
     function updateAlertRow(el, pressure) {
       const cls = pressure === 'critical' ? 'alert-critical' : 'alert-high';
       el.innerHTML = '<span class="' + cls + '">\u26A0 Switch to a fresh session soon</span>';
+    }
+
+    // Cache-creation regression badge (#813) \u2014 a separate row beneath the
+    // parent, like the pressure alert, since the version-attribution string
+    // can be a full sentence rather than fitting a fixed-width icon slot.
+    function createCacheBloatRow(agent) {
+      const el = document.createElement('div');
+      el.className = 'row-cache-bloat-row';
+      el.dataset.sessionId = agent.session_id;
+      updateCacheBloatRow(el, agent);
+      return el;
+    }
+
+    function updateCacheBloatRow(el, agent) {
+      const metrics = agent.metrics || {};
+      const badgeText = cacheBloatBadgeText(metrics.cache_bloat_tooltip);
+      if (el.dataset.badge !== badgeText) {
+        el.dataset.badge = badgeText;
+        el.innerHTML = '<span class="row-cache-bloat">' + esc(badgeText) + '</span>';
+      }
+      el.querySelector('.row-cache-bloat').title = cacheBloatExplanation(metrics.cache_bloat_tooltip);
     }
 
     // Shared factory for trailing-row variants rendered beneath the parent
