@@ -120,7 +120,7 @@ struct HistoryView: View {
             Divider()
             content
         }
-        .frame(width: SessionListView.panelWidth)
+        .frame(width: SessionListView.panelWidth, height: Self.panelHeight)
         .background(Color(NSColor.windowBackgroundColor))
         .task(id: queryKey) { await fetch() }
         .onChange(of: range) { newRange in
@@ -157,7 +157,12 @@ struct HistoryView: View {
 
     private var header: some View {
         ZStack {
-            Text("History").font(.headline)
+            Picker("", selection: $tab) {
+                ForEach(HistoryTab.allCases) { Text($0.label).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .fixedSize()
             HStack {
                 Button(action: onClose) {
                     HStack(spacing: 2) {
@@ -177,18 +182,11 @@ struct HistoryView: View {
 
     // MARK: Controls
 
-    /// Tab selector at the very top, then only the controls that apply to the
-    /// active tab — Quota needs none, Yield needs just a range, Usage gets the
-    /// full set. Partitioning by tab is what keeps any single row from
-    /// overflowing the 380pt panel.
+    /// Only the controls that apply to the active tab — Quota needs none,
+    /// Yield needs just a range, Usage gets the full set (the tab selector
+    /// itself now lives in the header).
     private var topControls: some View {
         VStack(alignment: .leading, spacing: IrrSpacing.sp2) {
-            Picker("", selection: $tab) {
-                ForEach(HistoryTab.allCases) { Text($0.label).tag($0) }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-
             switch tab {
             case .usage: usageControls
             case .yield: yieldControls
@@ -199,72 +197,65 @@ struct HistoryView: View {
         .padding(.vertical, IrrSpacing.sp3)
     }
 
-    /// Usage tab: cost/token time series. Labelled dropdowns, two per row so
-    /// nothing overflows the 380pt panel (a .menu Picker sizes to its widest
-    /// option, ~90pt each). The models/providers presets are gone — they're just
-    /// Cost grouped by model/provider, which the Group axis already offers.
+    /// Usage tab: cost/token time series. All controls on one horizontally
+    /// scrollable row so nothing overflows the 380pt panel (a .menu Picker
+    /// sizes to its widest option, ~90pt each). The models/providers presets
+    /// are gone — they're just Cost grouped by model/provider, which the
+    /// Group axis already offers.
     @ViewBuilder private var usageControls: some View {
-        HStack(spacing: IrrSpacing.sp3) {
-            Picker("Range", selection: $range) {
-                ForEach(HistoryRange.allCases) { Text($0.label).tag($0) }
-            }
-            .fixedSize()
-            Picker("Chart", selection: Binding(
-                get: { chart },
-                set: { chart = $0; scope = nil } // a new metric resets any drilldown
-            )) {
-                ForEach(visibleCharts) { Text($0.label).tag($0) }
-            }
-            .fixedSize()
-            Spacer(minLength: 0)
-        }
-        .pickerStyle(.menu)
-        .font(.caption)
-
-        HStack(spacing: IrrSpacing.sp3) {
-            Picker("Group", selection: Binding(
-                get: { effectiveGroup },
-                set: { newGroup in
-                    group = newGroup
-                    if chart.pinnedGroup != nil { chart = .cost } // leave the presets
-                    scope = nil
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: IrrSpacing.sp3) {
+                Picker("Range", selection: $range) {
+                    ForEach(HistoryRange.allCases) { Text($0.label).tag($0) }
                 }
-            )) {
-                ForEach(HistoryGroup.allCases) { Text($0.shortLabel).tag($0) }
+                .fixedSize()
+                Picker("Chart", selection: Binding(
+                    get: { chart },
+                    set: { chart = $0; scope = nil } // a new metric resets any drilldown
+                )) {
+                    ForEach(visibleCharts) { Text($0.label).tag($0) }
+                }
+                .fixedSize()
+                Picker("Group", selection: Binding(
+                    get: { effectiveGroup },
+                    set: { newGroup in
+                        group = newGroup
+                        if chart.pinnedGroup != nil { chart = .cost } // leave the presets
+                        scope = nil
+                    }
+                )) {
+                    ForEach(HistoryGroup.allCases) { Text($0.shortLabel).tag($0) }
+                }
+                .fixedSize()
+                .pickerStyle(.menu)
+                Toggle("Forecast", isOn: $forecastEnabled)
+                    .toggleStyle(.checkbox)
+                // Cross-filters (#750), always visible. The daemon query still drops the
+                // grouped dimension and the token_type filter outside the tokens metric,
+                // so those act as no-ops rather than vanishing from the UI.
+                providerFilterMenu
+                tokenTypeFilterMenu
+                projectFilterMenu
             }
-            .fixedSize()
             .pickerStyle(.menu)
-            Toggle("Forecast", isOn: $forecastEnabled)
-                .toggleStyle(.checkbox)
-            Spacer(minLength: 0)
+            .font(.caption)
         }
-        .font(.caption)
 
         if range == .custom { customRangeRow }
-
-        // Cross-filters (#750), always visible. The daemon query still drops the
-        // grouped dimension and the token_type filter outside the tokens metric,
-        // so those act as no-ops rather than vanishing from the UI.
-        HStack(spacing: IrrSpacing.sp2) {
-            providerFilterMenu
-            tokenTypeFilterMenu
-            projectFilterMenu
-            Spacer(minLength: 0)
-        }
-        .font(.caption)
     }
 
     /// Yield tab: a per-project aggregate over the range — just the range picker.
     @ViewBuilder private var yieldControls: some View {
-        HStack(spacing: IrrSpacing.sp3) {
-            Picker("Range", selection: $range) {
-                ForEach(HistoryRange.allCases) { Text($0.label).tag($0) }
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: IrrSpacing.sp3) {
+                Picker("Range", selection: $range) {
+                    ForEach(HistoryRange.allCases) { Text($0.label).tag($0) }
+                }
+                .fixedSize()
+                .pickerStyle(.menu)
             }
-            .fixedSize()
-            .pickerStyle(.menu)
-            Spacer(minLength: 0)
+            .font(.caption)
         }
-        .font(.caption)
 
         if range == .custom { customRangeRow }
     }
@@ -346,9 +337,11 @@ struct HistoryView: View {
 
     // MARK: Content
 
-    /// Caps the scrollable content height so the popover can't outgrow the
-    /// screen — mirrors SessionListView's group-list cap.
-    private static let contentMaxHeight: CGFloat = 560
+    /// Fixed total panel height, independent of the width. Keeps the popover
+    /// from inheriting whatever height SessionListView happened to be at
+    /// before switching to History, and from resizing between Usage/Yield/
+    /// Quota — sized to comfortably fit the Usage tab's chart + legend.
+    private static let panelHeight: CGFloat = 560
 
     @ViewBuilder private var content: some View {
         ScrollView {
@@ -360,7 +353,7 @@ struct HistoryView: View {
                 }
             }
         }
-        .frame(maxHeight: Self.contentMaxHeight)
+        .frame(maxHeight: .infinity)
     }
 
     /// Usage tab: the stacked-area cost/token time series.
