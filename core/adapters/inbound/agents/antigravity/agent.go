@@ -47,8 +47,9 @@ func Agent() agent.Agent {
 			IconSVGDark:  iconSVGDark,
 		},
 		Process: agent.Process{
-			Match:         agent.ExactName{Name: ProcessName},
-			PIDForSession: DiscoverPID,
+			Match:            agent.ExactName{Name: ProcessName},
+			PIDForSession:    DiscoverPID,
+			RequireKnownHost: true,
 		},
 		Source: agent.FilesUnderRoot{
 			Dir:               cliBrainDir,

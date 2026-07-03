@@ -141,6 +141,91 @@ func TestSessionDetector_NewSession_SkipsWhenCWDDeleted(t *testing.T) {
 	}
 }
 
+// TestSessionDetector_NewSession_SkipsNonInteractiveHost is the regression
+// test for issue #784: an adapter that opts into RequireKnownHost (currently
+// only antigravity) must never create a session for a process whose ancestry
+// doesn't resolve to a known terminal or IDE — e.g. a third-party tool like
+// CodexBar keeping the agent's CLI running in the background for quota
+// polling, with a real, live, but non-interactive PID.
+func TestSessionDetector_NewSession_SkipsNonInteractiveHost(t *testing.T) {
+	tw := newMockAgentWatcher().withIdentity(agent.Identity{Name: "antigravity"})
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	discovers := map[string]agent.PIDDiscoverFunc{
+		"antigravity": func(cwd, transcriptPath string, disambiguate func([]int) int) (int, error) {
+			return 62540, nil // real, live PID — just not launched by a terminal/IDE
+		},
+	}
+	det := services.NewSessionDetector(
+		[]inbound.Watcher{tw}, pw, repo,
+		&mockLogger{}, &mockGit{}, &mockMetrics{}, nil,
+		"test", 0, discovers, nil, nil,
+	)
+	det.SetHostGate(map[string]bool{"antigravity": true}, func(pid int) bool { return false })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	tw.ch <- agent.Event{
+		Type:           agent.EventNewSession,
+		SessionID:      "ghost1",
+		ProjectDir:     "-Users-test-project",
+		TranscriptPath: "/home/.gemini/antigravity-cli/brain/conv/transcript.jsonl",
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+
+	if state, _ := repo.Load("ghost1"); state != nil {
+		t.Errorf("session bound to a non-interactive host should not be created, got state %q", state.State)
+	}
+}
+
+// TestSessionDetector_NewSession_AdmitsKnownHost is the companion to
+// TestSessionDetector_NewSession_SkipsNonInteractiveHost: a real session
+// whose process ancestry resolves to a known terminal/IDE must be admitted
+// exactly as before — the #784 gate must not delay or block legitimate
+// sessions.
+func TestSessionDetector_NewSession_AdmitsKnownHost(t *testing.T) {
+	tw := newMockAgentWatcher().withIdentity(agent.Identity{Name: "antigravity"})
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	discovers := map[string]agent.PIDDiscoverFunc{
+		"antigravity": func(cwd, transcriptPath string, disambiguate func([]int) int) (int, error) {
+			return 4242, nil
+		},
+	}
+	det := services.NewSessionDetector(
+		[]inbound.Watcher{tw}, pw, repo,
+		&mockLogger{}, &mockGit{}, &mockMetrics{}, nil,
+		"test", 0, discovers, nil, nil,
+	)
+	det.SetHostGate(map[string]bool{"antigravity": true}, func(pid int) bool { return true })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	tw.ch <- agent.Event{
+		Type:           agent.EventNewSession,
+		SessionID:      "real1",
+		ProjectDir:     "-Users-test-project",
+		TranscriptPath: "/home/.gemini/antigravity-cli/brain/conv/transcript.jsonl",
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+
+	if state, err := repo.Load("real1"); err != nil || state == nil {
+		t.Fatalf("session bound to a known host should be created: err=%v state=%v", err, state)
+	}
+}
+
 // --- stale-transcript rescue (issue #576) -------------------------------------
 //
 // When observe consent is granted after agent sessions are already running,

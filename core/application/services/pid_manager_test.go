@@ -61,6 +61,54 @@ func newPIDManagerForTestWithLiveCWDs(repo *mockRepo, processNames map[string]st
 	)
 }
 
+// TestAllowsSession covers the #784 host-ancestry admission gate: an adapter
+// that opts into RequireKnownHost rejects a candidate PID whose ancestry
+// isn't a known terminal/IDE, but only once a PID actually resolves — a
+// same-tick "no PID yet" must fail open, and adapters that never opt in must
+// be entirely unaffected.
+func TestAllowsSession(t *testing.T) {
+	tests := []struct {
+		name             string
+		requireKnownHost bool
+		discoverPID      int
+		discoverErr      error
+		isKnownHost      bool
+		want             bool
+	}{
+		{"adapter doesn't opt in: always allowed regardless of host", false, 12345, nil, false, true},
+		{"opts in, no PID discoverable yet: fails open", true, 0, errors.New("not found"), false, true},
+		{"opts in, PID found, known host: allowed", true, 12345, nil, true, true},
+		{"opts in, PID found, unknown host (e.g. CodexBar): rejected", true, 12345, nil, false, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := newMockRepo()
+			discoverCalls := 0
+			discover := agent.PIDDiscoverFunc(func(cwd, transcriptPath string, disambiguate func([]int) int) (int, error) {
+				discoverCalls++
+				return tc.discoverPID, tc.discoverErr
+			})
+			pm := services.NewPIDManager(
+				nil, repo, &mockLogger{}, nil, 10*time.Minute,
+				map[string]agent.PIDDiscoverFunc{"antigravity": discover},
+				nil, nil, func(string) {},
+			)
+			requireKnownHost := map[string]bool{}
+			if tc.requireKnownHost {
+				requireKnownHost["antigravity"] = true
+			}
+			pm.SetHostGate(requireKnownHost, func(pid int) bool { return tc.isKnownHost })
+
+			if got := pm.AllowsSession("antigravity", "/some/cwd", "/some/transcript.jsonl"); got != tc.want {
+				t.Errorf("AllowsSession() = %v, want %v", got, tc.want)
+			}
+			if tc.requireKnownHost && discoverCalls != 1 {
+				t.Errorf("expected discover to be called once, got %d", discoverCalls)
+			}
+		})
+	}
+}
+
 // TestCheckPIDLiveness_FreshTranscript_NotDeleted verifies the Layer 2 fix for
 // issue #109: a ready session with PID=0 and a freshly-written transcript must
 // NOT be fast-deleted after 30s. PID discovery may still be catching up (e.g.

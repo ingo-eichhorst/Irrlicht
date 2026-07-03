@@ -114,6 +114,18 @@ func (d *SessionDetector) onNewSession(id agent.Identity, ev agent.Event) {
 			return
 		}
 
+		// Skip sessions whose adapter requires a known interactive host
+		// (currently antigravity only) when the process behind them was
+		// launched by something other than a recognized terminal or IDE — a
+		// synchronous, one-shot check so a non-interactive process never
+		// becomes a visible session in the first place, rather than appearing
+		// and being reaped later (issue #784).
+		if !d.pidMgr.AllowsSession(id.Name, ev.CWD, ev.TranscriptPath) {
+			d.log.LogInfo("session-detector", ev.SessionID,
+				"skipping session bound to a non-interactive host")
+			return
+		}
+
 		// All new sessions start as ready. Content-based detection on
 		// subsequent activity events will transition to working/waiting.
 		parentID := ev.ParentSessionID

@@ -47,3 +47,9 @@ func resolveHostBundleIDFromAncestry(pid int) (bundleID string, host int) { retu
 func kittyAncestryPID(pid int) int                             { return 0 }
 func kittyListenOnFor(kittyPID int) string                     { return "" }
 func kittyWindowIDForPID(socket string, sessionPID int) string { return "" }
+
+// IsKnownInteractiveHost is darwin-only (ancestry walking); other platforms
+// fail open. The exclusion signal it backs (CodexBar's non-interactive `agy`
+// process, issue #784) only exists on macOS, so failing closed here would
+// reject every antigravity CLI session on this platform instead.
+func IsKnownInteractiveHost(pid int) bool { return true }

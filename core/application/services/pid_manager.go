@@ -84,6 +84,16 @@ type PIDManager struct {
 	argvExcluders map[string]func([]string) bool
 	readArgv      func(pid int) []string
 
+	// requireKnownHost maps adapter name → whether Process.RequireKnownHost is
+	// set, and isKnownHost checks a PID's process ancestry against known
+	// terminals/IDEs. Together they let session admission reject a candidate
+	// PID that is real and alive but was launched by something other than an
+	// interactive terminal or IDE (e.g. CodexBar keeping an Antigravity `agy`
+	// process running for quota polling — issue #784). Both nil disables the
+	// check; installed once at startup via SetHostGate.
+	requireKnownHost map[string]bool
+	isKnownHost      func(pid int) bool
+
 	// onSessionDeleted is called when a session is deleted so the caller can
 	// clean up its own tracking structures (e.g. projectSessions map).
 	onSessionDeleted func(sessionID string)
@@ -187,6 +197,45 @@ func (pm *PIDManager) SetBackgroundReader(fn BackgroundReader) {
 func (pm *PIDManager) SetInfraReaper(excluders map[string]func([]string) bool, readArgv func(pid int) []string) {
 	pm.argvExcluders = excluders
 	pm.readArgv = readArgv
+}
+
+// SetHostGate installs the seam session admission uses to reject a candidate
+// PID launched by something other than a known terminal or IDE (issue #784).
+// requireKnownHost maps adapter name → Process.RequireKnownHost; isKnownHost
+// resolves a PID's process ancestry. Both nil (the default, and what
+// tests/demo mode leave) disables the check. Called once at startup.
+func (pm *PIDManager) SetHostGate(requireKnownHost map[string]bool, isKnownHost func(pid int) bool) {
+	pm.requireKnownHost = requireKnownHost
+	pm.isKnownHost = isKnownHost
+}
+
+// AllowsSession reports whether a new session should be admitted for adapter,
+// given the candidate PID (if any) a synchronous one-shot discovery attempt
+// finds at cwd. Adapters that don't opt into RequireKnownHost always return
+// true — this check is additive and inert everywhere except antigravity.
+//
+// When the adapter opts in: a PID discovered now but whose ancestry doesn't
+// resolve to a known terminal/IDE rejects admission outright, so no
+// SessionState (and no menu-bar circle) is ever created for it. No PID found
+// yet fails open — discovery is best-effort and a real session's process is
+// virtually always already running by the time its transcript file appears,
+// but a rare timing race must not block a legitimate session forever.
+func (pm *PIDManager) AllowsSession(adapter, cwd, transcriptPath string) bool {
+	if !pm.requireKnownHost[adapter] {
+		return true
+	}
+	discover := pm.pidDiscovers[adapter]
+	if discover == nil {
+		return true
+	}
+	pid, err := discover(cwd, transcriptPath, nil)
+	if err != nil || pid <= 0 {
+		return true
+	}
+	if pm.isKnownHost == nil {
+		return true
+	}
+	return pm.isKnownHost(pid)
 }
 
 // captureLauncher invokes the launcher-env reader if one is installed and

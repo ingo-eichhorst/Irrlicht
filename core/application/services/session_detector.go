@@ -347,6 +347,13 @@ func (d *SessionDetector) SetInfraReaper(excluders map[string]func([]string) boo
 	d.pidMgr.SetInfraReaper(excluders, readArgv)
 }
 
+// SetHostGate installs the session-admission seam that rejects a candidate PID
+// launched by something other than a known terminal or IDE (#784). Both args
+// nil disables the check. Call before Run.
+func (d *SessionDetector) SetHostGate(requireKnownHost map[string]bool, isKnownHost func(pid int) bool) {
+	d.pidMgr.SetHostGate(requireKnownHost, isKnownHost)
+}
+
 // SetConsentGate installs the per-adapter observe-consent check (#570).
 // Call before Run. Production wires PermissionService.ObserveGranted; nil
 // (the default) allows everything.
