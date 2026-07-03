@@ -31,8 +31,6 @@ enum HistoryTab: String, CaseIterable, Identifiable {
 struct HistoryView: View {
     let onClose: () -> Void
 
-    @EnvironmentObject var sessionManager: SessionManager
-
     // Top-level view: each tab is a self-contained concern with its own controls
     // (Usage = cost/token time series, Yield = productive-vs-reverted, Quota =
     // live per-provider rate-limit forecast).
@@ -412,22 +410,11 @@ struct HistoryView: View {
         }
     }
 
-    /// Quota tab: live per-provider rate-limit forecast (reads the session
-    /// snapshot, not the history API). Empty state when no subscription is active.
-    @ViewBuilder private var quotaContent: some View {
-        let providers = quotaForecasts
-        if providers.isEmpty {
-            Text("No subscription quota data yet.\nStart a Claude Pro/Max or ChatGPT session.")
-                .font(.callout)
-                .multilineTextAlignment(.center)
-                .foregroundColor(.secondary)
-                .frame(maxWidth: .infinity, minHeight: 220)
-                .padding(.horizontal, IrrSpacing.sp4)
-        } else {
-            HistoryQuotaForecastView(providers: providers)
-                .padding(.horizontal, IrrSpacing.sp4)
-                .padding(.vertical, IrrSpacing.sp3)
-        }
+    /// Quota tab: live per-provider rate-limit forecast. Isolated into its own
+    /// view (see HistoryQuotaTabContent) rather than reading `sessionManager`
+    /// directly here.
+    private var quotaContent: some View {
+        HistoryQuotaTabContent()
     }
 
     private var loadFailedText: some View {
@@ -491,7 +478,42 @@ struct HistoryView: View {
         return set.sorted()
     }
 
-    // MARK: Quota forecast (live rate-limit snapshot → per-provider projection)
+    private func save(ext: String, text: String) {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "irrlicht-history-\(range.rawValue)-\(chart.rawValue).\(ext)"
+        panel.begin { resp in
+            guard resp == .OK, let url = panel.url else { return }
+            try? text.write(to: url, atomically: true, encoding: .utf8)
+        }
+    }
+}
+
+// MARK: - Quota tab (live rate-limit snapshot → per-provider projection)
+//
+// A standalone view rather than a computed property on HistoryView: it's the
+// only part of History that needs `sessionManager`, which publishes on every
+// live session tick (as often as every ~100ms during active sessions). If
+// HistoryView itself subscribed, that churn would re-evaluate the whole body
+// — including the Usage tab's Filters menu — dismissing any open submenu.
+
+private struct HistoryQuotaTabContent: View {
+    @EnvironmentObject var sessionManager: SessionManager
+
+    var body: some View {
+        let providers = quotaForecasts
+        if providers.isEmpty {
+            Text("No subscription quota data yet.\nStart a Claude Pro/Max or ChatGPT session.")
+                .font(.callout)
+                .multilineTextAlignment(.center)
+                .foregroundColor(.secondary)
+                .frame(maxWidth: .infinity, minHeight: 220)
+                .padding(.horizontal, IrrSpacing.sp4)
+        } else {
+            HistoryQuotaForecastView(providers: providers)
+                .padding(.horizontal, IrrSpacing.sp4)
+                .padding(.vertical, IrrSpacing.sp3)
+        }
+    }
 
     /// One projection view-model per active subscription provider, each carrying
     /// its 5h/7d windows. Reads the live session snapshots (not the history API),
@@ -553,15 +575,6 @@ struct HistoryView: View {
             return eta
         }
         return QuotaWindowVM.averagePaceCap(now: now, start: start, resetsAt: w.resetsAt, usedPercent: w.usedPercent)
-    }
-
-    private func save(ext: String, text: String) {
-        let panel = NSSavePanel()
-        panel.nameFieldStringValue = "irrlicht-history-\(range.rawValue)-\(chart.rawValue).\(ext)"
-        panel.begin { resp in
-            guard resp == .OK, let url = panel.url else { return }
-            try? text.write(to: url, atomically: true, encoding: .utf8)
-        }
     }
 }
 
