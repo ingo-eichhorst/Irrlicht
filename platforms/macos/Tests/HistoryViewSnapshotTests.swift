@@ -35,8 +35,8 @@ final class HistoryViewSnapshotTests: XCTestCase {
     }
 
     /// Four daily buckets (bucketSeconds = 86400 → M/d axis labels), three
-    /// projects, a linear forecast — exercises the stacked-area chart, the
-    /// summary total, the forecast line, and the contributor list.
+    /// projects — exercises the stacked-area chart, the summary total, and
+    /// the contributor list.
     private func populated() -> HistoryResponse {
         let day: Int64 = 86_400
         let base: Int64 = 1_700_000_000
@@ -56,7 +56,6 @@ final class HistoryViewSnapshotTests: XCTestCase {
         }
         let totals = perProject.map { ($0.0, $0.1.reduce(0, +)) }
         let grand = totals.reduce(0.0) { $0 + $1.1 }
-        let rate = grand / Double(buckets.count)
         return HistoryResponse(
             range: "month",
             chart: "cost",
@@ -68,12 +67,6 @@ final class HistoryViewSnapshotTests: XCTestCase {
             total: grand,
             series: series,
             topContributors: totals.map { HistoryContributor(label: $0.0, value: $0.1) },
-            forecast: HistoryForecast(
-                projected: grand + rate,
-                basis: "linear",
-                horizonBuckets: 1,
-                series: [HistoryForecastPoint(ts: base + Int64(buckets.count) * day, value: rate)]
-            ),
             tokenSplit: nil,
             scope: nil
         )
@@ -91,14 +84,12 @@ final class HistoryViewSnapshotTests: XCTestCase {
             total: 0,
             series: [],
             topContributors: [],
-            forecast: nil,
             tokenSplit: nil,
             scope: nil
         )
     }
 
-    /// Tokens chart (#750): the side panel is the input/output/cache split and
-    /// there is no USD forecast.
+    /// Tokens chart (#750): the side panel is the input/output/cache split.
     private func populatedTokens() -> HistoryResponse {
         let day: Int64 = 86_400
         let base: Int64 = 1_700_000_000
@@ -120,7 +111,6 @@ final class HistoryViewSnapshotTests: XCTestCase {
             bucketSeconds: day, bucketStarts: buckets, total: grand,
             series: series,
             topContributors: perKey.map { HistoryContributor(label: $0.0, value: $0.1.reduce(0, +)) },
-            forecast: nil,
             tokenSplit: HistoryTokenSplit(input: grand * 0.6, output: grand * 0.1, cache: grand * 0.3),
             scope: nil
         )
@@ -130,7 +120,6 @@ final class HistoryViewSnapshotTests: XCTestCase {
         let view = HistoryContentView(
             data: populated(),
             range: .month,
-            forecastEnabled: true,
             onExportCSV: {},
             onExportJSON: {}
         )
@@ -144,7 +133,6 @@ final class HistoryViewSnapshotTests: XCTestCase {
             chart: .tokens,
             group: .branch,
             scope: nil,
-            forecastEnabled: true,
             onExportCSV: {},
             onExportJSON: {}
         )
@@ -158,7 +146,6 @@ final class HistoryViewSnapshotTests: XCTestCase {
             chart: .cost,
             group: .branch,
             scope: HistoryScope(field: .project, value: "irrlicht"),
-            forecastEnabled: true,
             onExportCSV: {},
             onExportJSON: {}
         )
@@ -169,7 +156,6 @@ final class HistoryViewSnapshotTests: XCTestCase {
         let view = HistoryContentView(
             data: empty(),
             range: .day,
-            forecastEnabled: true,
             onExportCSV: {},
             onExportJSON: {}
         )
