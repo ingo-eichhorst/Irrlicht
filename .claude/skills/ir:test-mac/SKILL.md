@@ -2,43 +2,44 @@
 name: ir:test-mac
 description: >
   Build and run a dev irrlicht daemon + macOS Swift app for local testing.
-  Asks whether to run a SEPARATE instance alongside production (isolated state,
-  port 7838 — production keeps running) or to REPLACE the running production
-  versions (production port 7837 + production state, so the statusline quota
-  feed and existing sessions show up). Use when the user says "test mac",
-  "restart mac", "rebuild mac", or "/ir:test-mac".
+  Defaults to REPLACE: kills the running production versions and runs the dev
+  build on the production port 7837 + production state, so the statusline quota
+  feed and existing sessions show up. Only runs a SEPARATE instance alongside
+  production (isolated state, port 7838 — production keeps running) when the user
+  explicitly asks for it. Use when the user says "test mac", "restart mac",
+  "rebuild mac", or "/ir:test-mac".
 ---
 
-# Build & Run macOS Dev Stack (separate or replace)
+# Build & Run macOS Dev Stack (replace by default, separate on request)
 
-Build the irrlicht daemon and Swift app, then run them in one of two modes the
-user chooses up front:
+Build the irrlicht daemon and Swift app, then run them in one of two modes
+(**replace** unless the user asked for **separate**):
 
-- **separate** (default, recommended) — a dev instance that **coexists with
-  production**. The dev daemon binds port **7838** and stores its state under a
-  worktree-local `IRRLICHT_HOME`; the dev app connects to 7838 via
-  `IRRLICHT_DAEMON_PORT`. Production stays up untouched on 7837. Only prior
-  *dev* instances are replaced on rerun. Note: the Claude Code statusline hook
-  is hardcoded to POST quota data to 7837, so a separate dev instance shows the
-  **subscription empty-state** (no rate-limit data) — that's expected.
-- **replace** — take over from production. Kill the running production app +
-  daemon (and any dev instance), then run the freshly built dev binaries on the
-  **production port 7837** with the **production state dir** (no `IRRLICHT_HOME`
-  override). Because it's on 7837 it receives the statusline quota feed and sees
-  the same on-disk sessions/cost data — i.e. it behaves like production but runs
-  your dev code. There is only one instance afterward.
+- **replace** (default) — take over from production. Kill the running production
+  app + daemon (and any dev instance), then run the freshly built dev binaries
+  on the **production port 7837** with the **production state dir** (no
+  `IRRLICHT_HOME` override). Because it's on 7837 it receives the statusline
+  quota feed and sees the same on-disk sessions/cost data — i.e. it behaves like
+  production but runs your dev code. There is only one instance afterward.
+- **separate** (on request) — a dev instance that **coexists with production**.
+  The dev daemon binds port **7838** and stores its state under a worktree-local
+  `IRRLICHT_HOME`; the dev app connects to 7838 via `IRRLICHT_DAEMON_PORT`.
+  Production stays up untouched on 7837. Only prior *dev* instances are replaced
+  on rerun. Note: the Claude Code statusline hook is hardcoded to POST quota data
+  to 7837, so a separate dev instance shows the **subscription empty-state** (no
+  rate-limit data) — that's expected.
 
 ## Steps
 
-0. **Decide the mode, then set the run config.** If the user typed an explicit
-   `separate` or `replace` argument (e.g. `/ir:test-mac replace`), use it. Otherwise
-   ask with `AskUserQuestion` — two options, "Separate (alongside production)"
-   (recommended, first) and "Replace production". **`replace` is destructive** (it
-   kills production and lets a dev binary read/write production state) — never
-   default to it; when in doubt, pick `separate`.
+0. **Set the run config.** Default to **replace** — don't ask. Only use
+   **separate** when the user explicitly requested it (e.g. `/ir:test-mac separate`,
+   or "alongside production" / "don't touch production"). Note that replace is
+   destructive (it kills production and lets a dev binary read/write production
+   state); that's the intended default, but it's why the step-9 teardown is
+   required to get production back.
 
-   Then edit the `MODE=` line below to the chosen value before running the block —
-   it is a placeholder, not a default to run verbatim. Every later step branches on
+   The `MODE=` line below is already set to `replace`; change it to `separate` only
+   when the user asked for it. Every later step branches on
    `$MODE`/`$PORT`/`$DEV_HOME`/`$SOCK`. **These are shell variables, and each fenced
    block runs in a fresh shell**, so when you execute a later step you must carry the
    step-0 values forward (re-declare them, or inline the literal port/path) — an
@@ -48,7 +49,7 @@ user chooses up front:
    REPO_ROOT="$(git rev-parse --show-toplevel)"        # worktree root if in a worktree, else main repo
    IRRLICHTD_BIN="/Users/ingo/projects/irrlicht/core/bin/irrlichd"  # stable path: build target == launch target
    DEV_APP="/tmp/IrrlichtDev.app"
-   MODE="separate"        # PLACEHOLDER — set to the user's choice ("separate" or "replace") before running
+   MODE="replace"         # default; set to "separate" only if the user explicitly asked for it
 
    if [ "$MODE" = "replace" ]; then
      PORT=7837                                          # production port (statusline quota hook targets this)
