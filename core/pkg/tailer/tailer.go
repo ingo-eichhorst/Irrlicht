@@ -7,23 +7,12 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"maps"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
 	"irrlicht/core/pkg/capacity"
-)
-
-// maxTranscriptLineSize caps a single JSONL line at 64 MB. Lines beyond this
-// are skipped so a malformed or pathological transcript can never wedge the
-// tailer (issue #270).
-const maxTranscriptLineSize = 64 * 1024 * 1024
-
-var (
-	errLineTooLong  = errors.New("transcript line exceeds size cap")
-	errPartialAtEOF = errors.New("transcript ends mid-line")
 )
 
 // MessageEvent represents a single message event from transcript
@@ -430,133 +419,6 @@ func (t *TranscriptTailer) DisableModelConfigFallback() {
 	t.disableModelConfigFallback = true
 }
 
-// GetLedgerState returns the durable accumulation state of the tailer so it
-// can be persisted to disk and rehydrated after a daemon restart.
-func (t *TranscriptTailer) GetLedgerState() LedgerState {
-	s := LedgerState{
-		SchemaVersion:      LedgerSchemaVersion,
-		LastOffset:         t.lastOffset,
-		CumProviderCostUSD: t.cumProviderCostUSD,
-		ModelName:          t.metrics.ModelName,
-		AgentVersion:       t.metrics.AgentVersion,
-		LastEventType:      t.metrics.LastEventType,
-		LastAssistantText:  t.lastAssistantText,
-	}
-	if len(t.cumByModel) > 0 {
-		// Direct assignment is safe: the caller JSON-marshals immediately
-		// while holding the per-tailer lock, so TailAndProcess cannot run
-		// concurrently and mutate the map during the marshal.
-		s.CumByModel = t.cumByModel
-	}
-	if pp, ok := t.parser.(ParserStateProvider); ok {
-		pl := pp.GetParserLedger()
-		s.ParserState = &pl
-	}
-	if len(t.tasks) > 0 {
-		s.Tasks = append([]Task(nil), t.tasks...)
-	}
-	s.TaskSeq = t.taskSeq
-	if len(t.pendingTaskCreates) > 0 {
-		ptc := make(map[string]string, len(t.pendingTaskCreates))
-		maps.Copy(ptc, t.pendingTaskCreates)
-		s.PendingTaskCreates = ptc
-	}
-	if len(t.openBackgroundProcs) > 0 {
-		bp := make(map[string]string, len(t.openBackgroundProcs))
-		maps.Copy(bp, t.openBackgroundProcs)
-		s.BackgroundProcs = bp
-	}
-	if len(t.pendingBashPolls) > 0 {
-		pp := make(map[string]string, len(t.pendingBashPolls))
-		maps.Copy(pp, t.pendingBashPolls)
-		s.PendingBashPolls = pp
-	}
-	// Estimate pointers are only ever reassigned (fresh allocations from
-	// ScanTaskEstimate), never mutated in place, so direct assignment is
-	// safe under the same marshal-while-locked guarantee as CumByModel.
-	s.LastTaskEstimate = t.lastTaskEstimate
-	s.FirstTaskEstimate = t.firstTaskEstimate
-	s.LastTaskSummary = t.lastTaskSummary
-	s.FirstUserText = t.firstUserText
-	s.LastTaskQuestion = t.lastTaskQuestion
-	return s
-}
-
-// SetLedgerState rehydrates accumulation state from a previously persisted
-// ledger. Must be called before the first TailAndProcess; a no-op if the
-// tailer has already processed any lines.
-func (t *TranscriptTailer) SetLedgerState(s LedgerState) {
-	if t.lastOffset != 0 {
-		return
-	}
-	t.lastOffset = s.LastOffset
-	if len(s.CumByModel) > 0 {
-		// Deep-copy so the caller's map doesn't alias the tailer's.
-		t.cumByModel = make(map[string]*UsageBreakdown, len(s.CumByModel))
-		for k, v := range s.CumByModel {
-			if v != nil {
-				copied := *v
-				t.cumByModel[k] = &copied
-			}
-		}
-	}
-	t.cumProviderCostUSD = s.CumProviderCostUSD
-	if s.ModelName != "" {
-		t.metrics.ModelName = s.ModelName
-	}
-	if s.AgentVersion != "" {
-		t.metrics.AgentVersion = s.AgentVersion
-	}
-	// Restore the classification anchor: a resume-at-EOF pass processes no
-	// events, and IsAgentDone needs the pre-restart event type to recognise
-	// a finished turn (issue #649).
-	if s.LastEventType != "" {
-		t.metrics.LastEventType = s.LastEventType
-	}
-	// Restore the question text the same way: a resume-at-EOF pass would
-	// otherwise leave it empty and IsWaitingForUserInput would mis-classify a
-	// persisted `waiting` turn as `ready` (issue #705). Set both — t.metrics
-	// directly so the value survives computeMetrics' empty-MessageHistory early
-	// return on this resume-at-EOF pass (which skips the lastAssistantText
-	// copy), and the private field so it stays the source of truth for the next
-	// ledger write and for computeMetrics on later passes that carry new lines.
-	if s.LastAssistantText != "" {
-		t.lastAssistantText = s.LastAssistantText
-		t.metrics.LastAssistantText = s.LastAssistantText
-	}
-	if s.ParserState != nil {
-		if pp, ok := t.parser.(ParserStateProvider); ok {
-			pp.SetParserLedger(*s.ParserState)
-		}
-	}
-	if len(s.Tasks) > 0 {
-		t.tasks = append([]Task(nil), s.Tasks...)
-	}
-	// Restore the provisional-ID counter from the persisted value, falling
-	// back to len(Tasks) only for pre-#615 ledgers that didn't carry TaskSeq.
-	// len(Tasks) alone understates the counter once completed batches have
-	// been pruned, desyncing every later TaskCreate from Claude's monotonic
-	// numbering (issue #615).
-	t.taskSeq = max(s.TaskSeq, len(t.tasks))
-	if len(s.PendingTaskCreates) > 0 {
-		t.pendingTaskCreates = make(map[string]string, len(s.PendingTaskCreates))
-		maps.Copy(t.pendingTaskCreates, s.PendingTaskCreates)
-	}
-	if len(s.BackgroundProcs) > 0 {
-		t.openBackgroundProcs = make(map[string]string, len(s.BackgroundProcs))
-		maps.Copy(t.openBackgroundProcs, s.BackgroundProcs)
-	}
-	if len(s.PendingBashPolls) > 0 {
-		t.pendingBashPolls = make(map[string]string, len(s.PendingBashPolls))
-		maps.Copy(t.pendingBashPolls, s.PendingBashPolls)
-	}
-	t.lastTaskEstimate = s.LastTaskEstimate
-	t.firstTaskEstimate = s.FirstTaskEstimate
-	t.lastTaskSummary = s.LastTaskSummary
-	t.firstUserText = s.FirstUserText
-	t.lastTaskQuestion = s.LastTaskQuestion
-}
-
 // TailAndProcess reads new transcript content from the last offset (or from the
 // beginning on first open) and processes each JSONL line via the parser.
 func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
@@ -572,23 +434,6 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 	}
 	fileSize := stat.Size()
 
-	// Reset per-pass flag. Set below when a user-blocking tool is observed
-	// both open and close within this single pass (the collapsed-window
-	// case from issue #150).
-	sawUserBlockingClosedThisPass := false
-
-	// Track whether this pass observed any state-relevant change. Set
-	// only when at least one parsed line was seen AND none of them
-	// produced substantive output (no processParsedEvent call, no
-	// subagent completion, no task snapshot). An empty pass (zero
-	// parsed lines, e.g. fswatcher fired on an unchanged file) leaves
-	// the flag at its zero value so the detector's classifier still
-	// runs — needed for hook-driven synthetic activity events that
-	// re-classify against stale metrics. See issue #329.
-	linesParsedThisPass := 0
-	substantiveThisPass := false
-	sawManualCompactThisPass := false
-
 	// Per-pass signals must be cleared so the detector only drains events
 	// discovered in this scan (see issue #134).
 	t.metrics.SubagentCompletions = nil
@@ -600,133 +445,22 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 		// File rotated/truncated — reset cumulative accumulators to avoid
 		// double-counting tokens from the previous file.
 		startPos = 0
-		t.cumInputTokens = 0
-		t.cumOutputTokens = 0
-		t.cumCacheReadTokens = 0
-		t.cumCacheCreationTokens = 0
-		t.lastRequestID = ""
-		t.pendingSnapshot = nil
-		t.cumByModel = make(map[string]*UsageBreakdown)
-		t.cumProviderCostUSD = 0
-		t.tasks = nil
-		t.taskSeq = 0
-		t.pendingTaskCreates = make(map[string]string)
-		// Background-process set belongs to the prior file; drop it so a
-		// rotated/truncated transcript doesn't keep a stale session `working`.
-		// See issue #445.
-		t.openBackgroundProcs = make(map[string]string)
-		t.pendingBashPolls = make(map[string]string)
-		// Drop the pre-rotation idle anchor so the post-scan idleFlusher
-		// hook doesn't synthesize a phantom turn_done against stale time.
-		t.lastLineSeenAt = time.Time{}
+		t.resetAccumulatorsForRotation()
 	case t.lastOffset > 0:
 		// Normal incremental path: never skip ahead of the last processed byte.
 		startPos = t.lastOffset
 	}
 
-	_, err = file.Seek(startPos, io.SeekStart)
-	if err != nil {
+	if _, err := file.Seek(startPos, io.SeekStart); err != nil {
 		return nil, fmt.Errorf("failed to seek transcript: %w", err)
 	}
-
-	currentOffset := startPos
 
 	// bufio.Reader (not Scanner) so a single oversized JSONL line can't wedge
 	// the tailer. Lines above maxTranscriptLineSize are skipped: the offset is
 	// advanced past them and processing continues. See issue #270.
 	reader := bufio.NewReaderSize(file, 64*1024)
-
-	rawLineParser, isRawLine := t.parser.(RawLineParser)
-
-	var loopErr error
-	for {
-		raw, consumed, lineErr := readLineCapped(reader, maxTranscriptLineSize)
-		if errors.Is(lineErr, io.EOF) || errors.Is(lineErr, errPartialAtEOF) {
-			// EOF (clean) or partial trailing line — stop without advancing
-			// past the partial bytes; they'll be re-read next tick once more
-			// data is appended.
-			break
-		}
-		if errors.Is(lineErr, errLineTooLong) {
-			log.Printf("irrlicht/tailer: skipping oversized line at offset %d (%d bytes) in %s", currentOffset, consumed, t.path)
-			currentOffset += consumed
-			continue
-		}
-		if lineErr != nil {
-			loopErr = lineErr
-			break
-		}
-
-		currentOffset += consumed
-		line := strings.TrimSpace(string(raw))
-
-		if line == "" {
-			continue
-		}
-
-		t.lastLineSeenAt = time.Now()
-
-		var parsed *ParsedEvent
-		if isRawLine {
-			// Markdown / non-JSONL formats: parser sees the trimmed line directly.
-			parsed = rawLineParser.ParseLineRaw(line)
-		} else {
-			// Quick JSON check.
-			if !strings.HasPrefix(line, "{") || !strings.HasSuffix(line, "}") {
-				continue
-			}
-
-			var raw map[string]interface{}
-			if err := json.Unmarshal([]byte(line), &raw); err != nil {
-				continue
-			}
-
-			// Delegate to format-specific parser.
-			parsed = t.parser.ParseLine(raw)
-		}
-		if parsed == nil || parsed.Skip {
-			// Even for skipped events, apply metadata that the parser extracted
-			// (e.g. model from model_change, CWD from session header) and drain
-			// SubagentCompletions — task-notification lines are deliberately
-			// marked Skip=true so they don't pollute message-event tracking,
-			// but the completion signal must still surface to the detector
-			// (issue #134). Likewise, task_reminder attachments are Skip=true
-			// but carry an authoritative TaskSnapshot the tailer must apply
-			// (issue #282).
-			if parsed != nil {
-				linesParsedThisPass++
-				t.applyMetadata(parsed)
-				if len(parsed.SubagentCompletions) > 0 {
-					t.metrics.SubagentCompletions = append(t.metrics.SubagentCompletions, parsed.SubagentCompletions...)
-					substantiveThisPass = true
-				}
-				// Background-process completion arrives on a Skip=true
-				// task-notification (origin.kind or queued_command attachment) —
-				// drain it here so the count drops and the pass is substantive
-				// enough for the detector to re-classify and release the hold.
-				// See issue #445.
-				if len(parsed.TerminatedBackgroundTaskIDs) > 0 {
-					for _, id := range parsed.TerminatedBackgroundTaskIDs {
-						delete(t.openBackgroundProcs, id)
-					}
-					substantiveThisPass = true
-				}
-				if parsed.TaskSnapshot != nil {
-					substantiveThisPass = true
-				}
-				t.reconcileTaskSnapshot(parsed)
-			}
-			continue
-		}
-		linesParsedThisPass++
-		substantiveThisPass = true
-		if parsed.IsManualCompactBoundary {
-			sawManualCompactThisPass = true
-		}
-		t.processParsedEvent(parsed, &sawUserBlockingClosedThisPass)
-	}
-
-	t.lastOffset = currentOffset
+	scan := t.scanNewLines(reader, startPos)
+	t.lastOffset = scan.endOffset
 
 	// Idle-flush hook: parsers whose transcript has no in-band end-of-turn
 	// marker (currently aider) synthesize turn_done when the file has been
@@ -736,16 +470,23 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 	// the same way they do for an in-band turn_done.
 	if flusher, ok := t.parser.(idleFlusher); ok && !t.lastLineSeenAt.IsZero() {
 		if ev := flusher.IdleFlush(time.Since(t.lastLineSeenAt)); ev != nil {
-			t.processParsedEvent(ev, &sawUserBlockingClosedThisPass)
-			substantiveThisPass = true
+			t.processParsedEvent(ev, &scan.sawUserBlockingClosed)
+			scan.substantive = true
 		}
 	}
 
 	// Compute current metrics.
 	t.computeMetrics()
-	t.metrics.SawUserBlockingToolClosedThisPass = sawUserBlockingClosedThisPass
-	t.metrics.NoSubstantiveActivity = linesParsedThisPass > 0 && !substantiveThisPass
-	t.metrics.SawManualCompactBoundary = sawManualCompactThisPass
+	t.metrics.SawUserBlockingToolClosedThisPass = scan.sawUserBlockingClosed
+	// NoSubstantiveActivity is set only when at least one parsed line was seen
+	// AND none of them produced substantive output (no processParsedEvent
+	// call, no subagent completion, no task snapshot). An empty pass (zero
+	// parsed lines, e.g. fswatcher fired on an unchanged file) leaves the flag
+	// false so the detector's classifier still runs — needed for hook-driven
+	// synthetic activity events that re-classify against stale metrics. See
+	// issue #329.
+	t.metrics.NoSubstantiveActivity = scan.linesParsed > 0 && !scan.substantive
+	t.metrics.SawManualCompactBoundary = scan.sawManualCompact
 
 	// Model config fallback. Skipped on the replay path (see
 	// disableModelConfigFallback) so fixture output stays hermetic.
@@ -757,72 +498,156 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 
 	t.computeContextUtilization()
 
-	return t.metrics, loopErr
+	return t.metrics, scan.err
 }
 
-// readLineCapped reads a single '\n'-terminated line from r. The returned
-// slice does not include the trailing '\n' (or '\r' before it); consumed is
-// the total bytes drawn from r — the caller advances the file offset by that
-// amount whenever the result represents a fully-handled line (success or
-// errLineTooLong).
-//
-// Outcomes:
-//   - (line, consumed, nil): full line read.
-//   - (nil, consumed, errLineTooLong): line exceeded max and ended with '\n';
-//     bytes were discarded and consumed reflects the skip distance.
-//   - (nil, 0, io.EOF): clean EOF, no bytes read.
-//   - (nil, 0, errPartialAtEOF): EOF reached before '\n' with bytes pending —
-//     either an in-progress line below the cap or one that has already grown
-//     past the cap but the writer hasn't flushed '\n' yet. Caller stops
-//     without advancing so the bytes are re-read once more data is appended;
-//     when the line eventually completes it is reported as either a success
-//     or errLineTooLong with a single accurate consumed count.
-//   - (nil, 0, err): other I/O error.
-func readLineCapped(r *bufio.Reader, max int64) ([]byte, int64, error) {
-	var (
-		buf      []byte
-		consumed int64
-		skipping bool
-	)
-	for {
-		chunk, err := r.ReadSlice('\n')
-		consumed += int64(len(chunk))
+// resetAccumulatorsForRotation clears every accumulator that belongs to the
+// previous transcript file's contents. TailAndProcess calls this when it
+// detects fileSize < lastOffset — the transcript was rotated or truncated —
+// so replaying from byte 0 doesn't double-count tokens, resurrect stale
+// background processes, or misattribute the previous file's tasks.
+func (t *TranscriptTailer) resetAccumulatorsForRotation() {
+	t.cumInputTokens = 0
+	t.cumOutputTokens = 0
+	t.cumCacheReadTokens = 0
+	t.cumCacheCreationTokens = 0
+	t.lastRequestID = ""
+	t.pendingSnapshot = nil
+	t.cumByModel = make(map[string]*UsageBreakdown)
+	t.cumProviderCostUSD = 0
+	t.tasks = nil
+	t.taskSeq = 0
+	t.pendingTaskCreates = make(map[string]string)
+	// Background-process set belongs to the prior file; drop it so a
+	// rotated/truncated transcript doesn't keep a stale session `working`.
+	// See issue #445.
+	t.openBackgroundProcs = make(map[string]string)
+	t.pendingBashPolls = make(map[string]string)
+	// Drop the pre-rotation idle anchor so the post-scan idleFlusher
+	// hook doesn't synthesize a phantom turn_done against stale time.
+	t.lastLineSeenAt = time.Time{}
+}
 
-		switch err {
-		case nil:
-			if skipping {
-				return nil, consumed, errLineTooLong
-			}
-			line := chunk[:len(chunk)-1] // drop '\n'
-			if len(line) > 0 && line[len(line)-1] == '\r' {
-				line = line[:len(line)-1]
-			}
-			if buf == nil {
-				out := make([]byte, len(line))
-				copy(out, line)
-				return out, consumed, nil
-			}
-			buf = append(buf, line...)
-			return buf, consumed, nil
-		case bufio.ErrBufferFull:
-			if skipping {
-				continue
-			}
-			if consumed > max {
-				buf = nil // release accumulated bytes for GC
-				skipping = true
-				continue
-			}
-			buf = append(buf, chunk...)
-		case io.EOF:
-			if consumed == 0 {
-				return nil, 0, io.EOF
-			}
-			return nil, 0, errPartialAtEOF
-		default:
-			return nil, 0, err
+// transcriptScanResult carries the outcomes of one scanNewLines pass: how far
+// the offset advanced and the per-pass signals TailAndProcess folds into the
+// returned SessionMetrics.
+type transcriptScanResult struct {
+	endOffset             int64
+	linesParsed           int
+	substantive           bool
+	sawManualCompact      bool
+	sawUserBlockingClosed bool
+	err                   error
+}
+
+// scanNewLines reads and processes every complete line available from reader
+// (starting at startPos), stopping at clean EOF, a partial trailing line, or
+// a read error. Each line is parsed via parseTranscriptLine and then routed
+// to applySkippedEvent (Skip=true or unparseable) or processParsedEvent
+// (a real event) — the same split TailAndProcess used to perform inline.
+func (t *TranscriptTailer) scanNewLines(reader *bufio.Reader, startPos int64) transcriptScanResult {
+	res := transcriptScanResult{endOffset: startPos}
+	rawLineParser, isRawLine := t.parser.(RawLineParser)
+
+	for {
+		raw, consumed, lineErr := readLineCapped(reader, maxTranscriptLineSize)
+		if errors.Is(lineErr, io.EOF) || errors.Is(lineErr, errPartialAtEOF) {
+			// EOF (clean) or partial trailing line — stop without advancing
+			// past the partial bytes; they'll be re-read next tick once more
+			// data is appended.
+			break
 		}
+		if errors.Is(lineErr, errLineTooLong) {
+			log.Printf("irrlicht/tailer: skipping oversized line at offset %d (%d bytes) in %s", res.endOffset, consumed, t.path)
+			res.endOffset += consumed
+			continue
+		}
+		if lineErr != nil {
+			res.err = lineErr
+			break
+		}
+
+		res.endOffset += consumed
+		line := strings.TrimSpace(string(raw))
+		if line == "" {
+			continue
+		}
+
+		t.lastLineSeenAt = time.Now()
+
+		parsed := t.parseTranscriptLine(line, isRawLine, rawLineParser)
+		if parsed == nil || parsed.Skip {
+			if parsed != nil {
+				res.linesParsed++
+				if t.applySkippedEvent(parsed) {
+					res.substantive = true
+				}
+			}
+			continue
+		}
+		res.linesParsed++
+		res.substantive = true
+		if parsed.IsManualCompactBoundary {
+			res.sawManualCompact = true
+		}
+		t.processParsedEvent(parsed, &res.sawUserBlockingClosed)
 	}
+	return res
+}
+
+// parseTranscriptLine converts a single trimmed transcript line into a
+// ParsedEvent, or nil for a line that carries no event at all (JSONL noise
+// that isn't even a JSON object, or a line the format-specific parser
+// declined to interpret). A nil result is distinct from a non-nil Skip=true
+// event: the latter still carries metadata applySkippedEvent must apply.
+func (t *TranscriptTailer) parseTranscriptLine(line string, isRawLine bool, rawLineParser RawLineParser) *ParsedEvent {
+	if isRawLine {
+		// Markdown / non-JSONL formats: parser sees the trimmed line directly.
+		return rawLineParser.ParseLineRaw(line)
+	}
+	// Quick JSON check.
+	if !strings.HasPrefix(line, "{") || !strings.HasSuffix(line, "}") {
+		return nil
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal([]byte(line), &raw); err != nil {
+		return nil
+	}
+	// Delegate to format-specific parser.
+	return t.parser.ParseLine(raw)
+}
+
+// applySkippedEvent folds a Skip=true event's side effects into tailer state.
+// Even skipped events carry metadata the tailer must apply: model changes,
+// CWD, subagent completions, and authoritative task snapshots — task-
+// notification lines are deliberately marked Skip=true so they don't
+// pollute message-event tracking, but the signals they carry must still
+// surface to the detector (issue #134). Likewise, task_reminder attachments
+// are Skip=true but carry an authoritative TaskSnapshot the tailer must
+// apply (issue #282). Returns true when the event counts as substantive
+// activity for this pass.
+func (t *TranscriptTailer) applySkippedEvent(parsed *ParsedEvent) bool {
+	t.applyMetadata(parsed)
+	substantive := false
+	if len(parsed.SubagentCompletions) > 0 {
+		t.metrics.SubagentCompletions = append(t.metrics.SubagentCompletions, parsed.SubagentCompletions...)
+		substantive = true
+	}
+	// Background-process completion arrives on a Skip=true task-notification
+	// (origin.kind or queued_command attachment) — drain it here so the count
+	// drops and the pass is substantive enough for the detector to
+	// re-classify and release the hold. See issue #445.
+	if len(parsed.TerminatedBackgroundTaskIDs) > 0 {
+		for _, id := range parsed.TerminatedBackgroundTaskIDs {
+			delete(t.openBackgroundProcs, id)
+		}
+		substantive = true
+	}
+	if parsed.TaskSnapshot != nil {
+		substantive = true
+	}
+	t.reconcileTaskSnapshot(parsed)
+	return substantive
 }
 
 // forceIdleFlushDuration is passed to IdleFlush from FlushIdle. Any
@@ -928,23 +753,46 @@ func (t *TranscriptTailer) reconcileTaskSnapshot(parsed *ParsedEvent) {
 }
 
 // processParsedEvent applies a single non-skipped ParsedEvent to the tailer's
-// running state: tool tracking, task deltas, turn_done sweep, interrupt/denial
-// flags, metadata, assistant-text bookkeeping, content-char accumulation, and
-// message-event recording. Called once per non-Skip event from TailAndProcess
-// — both for events parsed from a transcript line and for events synthesized
-// post-scan via the idleFlusher hook. Caller must have already drained
-// SubagentCompletions if applicable.
+// running state: tool tracking, task deltas, background-process tracking,
+// turn_done sweep, interrupt/denial flags, metadata, assistant-text and
+// marker bookkeeping, and message-event recording. Called once per non-Skip
+// event from TailAndProcess — both for events parsed from a transcript line
+// and for events synthesized post-scan via the idleFlusher hook. Caller must
+// have already drained SubagentCompletions if applicable.
+//
+// The steps below run in a fixed order for a reason: applyTaskDeltas' trailing
+// cleanup relies on ToolResultIDs from the same event as any assign_id delta;
+// sweepOpenToolCallsOnTurnDone must see openToolCalls after
+// applyToolCallDeltas has fully applied this event's tool_use/tool_result
+// pairs.
 func (t *TranscriptTailer) processParsedEvent(parsed *ParsedEvent, sawUserBlockingClosed *bool) {
 	if len(parsed.SubagentCompletions) > 0 {
 		t.metrics.SubagentCompletions = append(t.metrics.SubagentCompletions, parsed.SubagentCompletions...)
 	}
 
-	// Apply tool tracking deltas from the parser. openToolCalls is an
-	// id-keyed map — tool_use events insert by ID (idempotent: duplicate
-	// IDs from multi-line splits overwrite), tool_result events delete by
-	// ID (orphan IDs with no matching entry are harmless no-ops). This
-	// eliminates the FIFO's structural weakness where out-of-order or
-	// orphan results could pop unrelated entries. See issue #117.
+	t.applyToolCallDeltas(parsed, sawUserBlockingClosed)
+	t.applyTaskDeltas(parsed)
+	t.applyBackgroundProcessDeltas(parsed)
+	t.reconcileTaskSnapshot(parsed)
+	t.sweepOpenToolCallsOnTurnDone(parsed)
+	t.updateInterruptAndDenialFlags(parsed)
+	t.applyMetadata(parsed)
+	t.applyAssistantTextAndMarkers(parsed)
+
+	t.addMessageEvent(MessageEvent{
+		Timestamp: parsed.Timestamp,
+		EventType: parsed.EventType,
+	})
+}
+
+// applyToolCallDeltas applies the parser's tool tracking deltas to
+// openToolCalls, the id-keyed single source of truth for currently-open tool
+// calls. tool_use events insert by ID (idempotent: duplicate IDs from
+// multi-line splits overwrite), tool_result events delete by ID (orphan IDs
+// with no matching entry are harmless no-ops). This eliminates the old
+// FIFO's structural weakness where out-of-order or orphan results could pop
+// unrelated entries. See issue #117.
+func (t *TranscriptTailer) applyToolCallDeltas(parsed *ParsedEvent, sawUserBlockingClosed *bool) {
 	for _, tu := range parsed.ToolUses {
 		if tu.ID != "" {
 			t.openToolCalls[tu.ID] = tu.Name
@@ -959,6 +807,12 @@ func (t *TranscriptTailer) processParsedEvent(parsed *ParsedEvent, sawUserBlocki
 	if parsed.ClearToolNames && len(parsed.ToolResultIDs) == 0 {
 		t.openToolCalls = make(map[string]string)
 	}
+}
+
+// applyTaskDeltas folds the parser's TaskCreate/AssignID/Update deltas into
+// the running tasks slice and records each applied delta on
+// AppliedTaskDeltas for the detector's task_delta lifecycle events.
+func (t *TranscriptTailer) applyTaskDeltas(parsed *ParsedEvent) {
 	for _, d := range parsed.TaskDeltas {
 		switch d.Op {
 		case TaskOpCreate:
@@ -1030,11 +884,14 @@ func (t *TranscriptTailer) processParsedEvent(parsed *ParsedEvent, sawUserBlocki
 	for _, id := range parsed.ToolResultIDs {
 		delete(t.pendingTaskCreates, id)
 	}
+}
 
-	// Background-process tracking (Bash run_in_background). A spawn adds the
-	// background id; a matched terminated BashOutput poll or a KillShell
-	// removes it. The set is the source of truth for BackgroundProcessCount.
-	// See issue #445.
+// applyBackgroundProcessDeltas tracks agent-spawned background processes
+// (Bash run_in_background) in openBackgroundProcs, the source of truth for
+// BackgroundProcessCount. A spawn adds the background id; a matched
+// terminated BashOutput poll, a KillShell, or a terminal task-notification
+// removes it. See issues #445 and #661.
+func (t *TranscriptTailer) applyBackgroundProcessDeltas(parsed *ParsedEvent) {
 	for _, sp := range parsed.BackgroundSpawns {
 		if sp.BashID != "" {
 			t.openBackgroundProcs[sp.BashID] = sp.OutputPath
@@ -1065,33 +922,38 @@ func (t *TranscriptTailer) processParsedEvent(parsed *ParsedEvent, sawUserBlocki
 	for _, id := range parsed.TerminatedBackgroundTaskIDs {
 		delete(t.openBackgroundProcs, id)
 	}
+}
 
-	t.reconcileTaskSnapshot(parsed)
-
-	// turn_done is the authoritative end-of-turn signal. By definition most
-	// tool_use events opened during the turn have already received their
-	// tool_result, so anything still in openToolCalls is a stale leak.
-	// Sweeping here lets the classifier see HasOpenToolCall=false and
-	// transition working → ready.
-	//
-	// Some tools survive the sweep (see surviveTurnDone): Agent (sub-agent
-	// still running), AskUserQuestion, and ExitPlanMode (user-blocking tools
-	// whose result arrives only after the user responds). Preserving them
-	// ensures NeedsUserAttention() returns true so the classifier transitions
-	// to "waiting" instead of "ready".
-	if parsed.EventType == "turn_done" && len(t.openToolCalls) > 0 {
-		for id, name := range t.openToolCalls {
-			if !surviveTurnDone(name) {
-				delete(t.openToolCalls, id)
-			}
+// sweepOpenToolCallsOnTurnDone drops stale entries from openToolCalls when
+// parsed is the authoritative end-of-turn signal. By definition most
+// tool_use events opened during the turn have already received their
+// tool_result, so anything still open is a stale leak. Sweeping here lets the
+// classifier see HasOpenToolCall=false and transition working → ready.
+//
+// Some tools survive the sweep (see surviveTurnDone): Agent (sub-agent still
+// running), AskUserQuestion, and ExitPlanMode (user-blocking tools whose
+// result arrives only after the user responds). Preserving them ensures
+// NeedsUserAttention() returns true so the classifier transitions to
+// "waiting" instead of "ready".
+func (t *TranscriptTailer) sweepOpenToolCallsOnTurnDone(parsed *ParsedEvent) {
+	if parsed.EventType != "turn_done" || len(t.openToolCalls) == 0 {
+		return
+	}
+	for id, name := range t.openToolCalls {
+		if !surviveTurnDone(name) {
+			delete(t.openToolCalls, id)
 		}
 	}
-	// IsUserInterrupt and IsToolDenial each set their own sticky flag; any
-	// subsequent user event that isn't itself the same kind clears it. The
-	// two flags are tracked independently because only ESC feeds the
-	// classifier's cancellation rule — denials are recorded for observability
-	// but don't end the agent's turn. parsed.IsError is for tool_result
-	// errors — not used by the classifier, so we don't track it.
+}
+
+// updateInterruptAndDenialFlags maintains the sticky lastWasUserInterrupt and
+// lastWasToolDenial flags. Each is cleared by any subsequent user event that
+// isn't itself the same kind. The two flags are tracked independently
+// because only ESC feeds the classifier's cancellation rule — denials are
+// recorded for observability but don't end the agent's turn. parsed.IsError
+// is for tool_result errors — not used by the classifier, so it isn't
+// tracked here.
+func (t *TranscriptTailer) updateInterruptAndDenialFlags(parsed *ParsedEvent) {
 	if parsed.IsUserInterrupt {
 		t.lastWasUserInterrupt = true
 	} else if isUserEventType(parsed.EventType) {
@@ -1102,9 +964,13 @@ func (t *TranscriptTailer) processParsedEvent(parsed *ParsedEvent, sawUserBlocki
 	} else if isUserEventType(parsed.EventType) {
 		t.lastWasToolDenial = false
 	}
+}
 
-	t.applyMetadata(parsed)
-
+// applyAssistantTextAndMarkers updates the assistant-text and
+// agent-emitted-marker state (task estimate, summary, question) that a
+// waiting/ready session's surfaced headline is derived from, and captures
+// the session's first user prompt as the heuristic-fallback summary.
+func (t *TranscriptTailer) applyAssistantTextAndMarkers(parsed *ParsedEvent) {
 	if parsed.AssistantText != "" {
 		t.lastAssistantText = parsed.AssistantText
 	}
@@ -1143,11 +1009,6 @@ func (t *TranscriptTailer) processParsedEvent(parsed *ParsedEvent, sawUserBlocki
 		// next waiting turn re-derives from the new last-assistant text.
 		t.lastTaskQuestion = nil
 	}
-
-	t.addMessageEvent(MessageEvent{
-		Timestamp: parsed.Timestamp,
-		EventType: parsed.EventType,
-	})
 }
 
 // applyTaskEstimate runs the marker anchor bookkeeping shared by the
