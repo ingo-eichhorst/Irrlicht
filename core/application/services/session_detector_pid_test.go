@@ -1,3 +1,10 @@
+// session_detector_pid_test.go covers PID-assignment scenarios:
+// SessionDetector.HandlePIDAssigned (defined in session_detector_lifecycle.go
+// — there is no standalone session_detector_pid.go production file) plus the
+// /clear same-PID reuse cleanup path. Grouped by scenario (binding a
+// discovered PID to a session), not by production file, so a new
+// PID-assignment test belongs here even though the code under test lives in
+// the lifecycle file.
 package services_test
 
 import (

@@ -498,6 +498,37 @@ func TestSessionDetector_Activity_NormalToolCompletion_StaysWorking(t *testing.T
 	}
 }
 
+func TestSessionDetector_Activity_UnknownSession_TreatedAsNew(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	det := newDetector(tw, pw, repo)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	tw.ch <- agent.Event{
+		Type:           agent.EventActivity,
+		SessionID:      "unknown1",
+		ProjectDir:     "-Users-test",
+		TranscriptPath: "/home/.claude/projects/-Users-test/unknown1.jsonl",
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+
+	state, err := repo.Load("unknown1")
+	if err != nil {
+		t.Fatalf("session should have been created: %v", err)
+	}
+	if state.State != session.StateReady {
+		t.Errorf("state: got %q, want ready", state.State)
+	}
+}
+
 func TestNeedsUserAttention(t *testing.T) {
 	tests := []struct {
 		name    string
