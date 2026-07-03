@@ -551,19 +551,23 @@ func (pm *PIDManager) HandlePIDAssigned(pid int, sessionID string) {
 		}
 	}
 
-	// Clean up old sessions that had the same PID (e.g. /clear). A non-subagent
-	// PID can only belong to one session at a time, so a session claiming a PID
-	// makes any other non-subagent holder of that PID stale.
+	pm.cleanupStalePIDHolders(stale, sessionID, pid)
+}
+
+// cleanupStalePIDHolders deletes every session in stale — other sessions that
+// held pid before sessionID claimed it (e.g. the /clear pattern, where the
+// same process starts a new transcript under a new UUID). A non-subagent PID
+// can only belong to one session at a time, so a session claiming a PID makes
+// any other non-subagent holder of that PID stale. Each deletion emits
+// transcript_removed so the pattern is recoverable from the offline replay
+// stream — without it, replay-based analysis sees the old UUID's
+// session_created and state transitions but never a corresponding removal,
+// and the session looks "leaked" in the recording (issue #169).
+func (pm *PIDManager) cleanupStalePIDHolders(stale []*session.SessionState, sessionID string, pid int) {
 	for _, old := range stale {
 		pm.log.LogInfo("session-detector", old.SessionID,
 			fmt.Sprintf("replaced by new session %s (same pid %d) — deleting", sessionID, pid))
 
-		// Emit transcript_removed for the offline replay stream so the
-		// /clear pattern (one PID, UUID rotates) is recoverable from
-		// events.jsonl. Without this, replay-based analysis sees the
-		// old UUID's session_created and state transitions but never a
-		// corresponding removal — the session looks "leaked" in the
-		// recording. Issue #169.
 		pm.record(lifecycle.Event{
 			Kind:           lifecycle.KindTranscriptRemoved,
 			SessionID:      old.SessionID,
@@ -860,24 +864,8 @@ func (pm *PIDManager) CheckPIDLiveness() bool {
 	snaps := pm.snapshotLivenessStates()
 	foundDead := false
 	for _, snap := range snaps {
-		if snap.pid > 0 {
-			if err := syscall.Kill(snap.pid, 0); err == syscall.ESRCH {
-				pm.HandleProcessExit(snap.pid, snap.state.SessionID, "pid exited (ESRCH)")
-				foundDead = true
-				continue
-			}
-			// The PID is alive but may be the adapter's background infra (e.g.
-			// Claude Code's --bg-spare pool helper) that discovery mis-bound, not
-			// the interactive session. Such a helper outlives every session, so
-			// the ESRCH path above never fires — reap the ghost here (#727).
-			if pm.isBoundToInfra(snap) {
-				pm.log.LogInfo("session-detector", snap.state.SessionID,
-					fmt.Sprintf("pid %d is %s background infra, not the session — reaping ghost",
-						snap.pid, snap.adapter))
-				pm.HandleProcessExit(snap.pid, snap.state.SessionID,
-					fmt.Sprintf("infra-bound ghost: pid %d is %s background infra, not the session", snap.pid, snap.adapter))
-				foundDead = true
-			}
+		if pm.reapDeadOrInfraPID(snap) {
+			foundDead = true
 		}
 	}
 
@@ -888,69 +876,128 @@ func (pm *PIDManager) CheckPIDLiveness() bool {
 	// - Child sessions: ready or stale transcript (finished/zombie subagents)
 	if pm.readyTTL > 0 {
 		for _, snap := range snaps {
-			// Child sessions: clean up immediately when ready, or when stale
-			// (transcript stopped updating — zombie from a previous run).
-			// Exception: DB-backed adapters (TranscriptPath contains "?session=")
-			// manage their own session lifetime via maxAge; their subagents are
-			// persistent historical records, not transient process-bound children.
-			if snap.parentSessionID != "" {
-				if !strings.Contains(snap.transcriptPath, "?session=") &&
-					(snap.sessionState == session.StateReady || isStaleTranscript(snap.transcriptPath)) {
-					parentID := snap.parentSessionID
-					reason := "child ready — liveness sweep"
-					if snap.sessionState != session.StateReady {
-						reason = "child transcript stale — liveness sweep"
-					}
-					pm.deleteSession(snap.state, reason)
-					// Re-evaluate the parent: it may have been held in
-					// `working` only because of this child. Without this
-					// nudge the parent stays stuck until its own next
-					// transcript event, which may never come for a
-					// finished session.
-					if pm.onChildDeleted != nil {
-						pm.onChildDeleted(parentID)
-					}
-				}
-				continue
-			}
-			// Sessions with PID=0 that are ready: the process likely exited
-			// before PID discovery succeeded. Clean up quickly (30s) rather
-			// than waiting the full readyTTL — BUT only if the transcript
-			// itself is stale. A freshly-written transcript with no PID
-			// yet means PID discovery is still catching up (e.g. Claude
-			// hasn't written ~/.claude/sessions/<pid>.json yet, or multiple
-			// claude processes share a cwd and the metadata lookup is
-			// retrying). Deleting under those conditions causes the flap
-			// loop in issue #109.
-			if snap.pid == 0 && snap.sessionState == session.StateReady &&
-				time.Since(time.Unix(snap.updatedAt, 0)) > 30*time.Second &&
-				isStaleTranscript(snap.transcriptPath) {
-				pm.log.LogInfo("session-detector", snap.state.SessionID,
-					"ready session with no PID and stale transcript for >30s, deleting")
-				pm.deleteWithChildren(snap.state,
-					"ghost reaped: PID=0, ready, stale transcript >30s — pre-session never bound a process")
-				continue
-			}
-
-			if !isStaleUpdatedAt(snap.updatedAt, pm.readyTTL) {
-				continue
-			}
-			// Don't delete sessions whose process is still alive.
-			if snap.pid > 0 {
-				if err := syscall.Kill(snap.pid, 0); err == nil {
-					continue
-				}
-			}
-			if snap.sessionState == session.StateReady || snap.pid == 0 {
-				pm.log.LogInfo("session-detector", snap.state.SessionID,
-					fmt.Sprintf("%s session (pid=%d) idle for >%v, deleting",
-						snap.sessionState, snap.pid, pm.readyTTL))
-				pm.deleteWithChildren(snap.state,
-					fmt.Sprintf("%s session (pid=%d) idle >%v — liveness sweep", snap.sessionState, snap.pid, pm.readyTTL))
-			}
+			pm.sweepStaleSnapshot(snap)
 		}
 	}
 	return foundDead
+}
+
+// reapDeadOrInfraPID handles the two ways a bound PID can prove the session is
+// gone: the process has actually exited (ESRCH), or — for the case ESRCH can
+// never catch — the PID is alive but is the adapter's background infra (e.g.
+// Claude Code's --bg-spare pool helper) that discovery mis-bound rather than
+// the interactive session; such a helper outlives every session, so it must
+// be recognized by argv instead of liveness (issue #727). Returns true when it
+// reaped the session via HandleProcessExit. A PID <= 0 is left untouched —
+// PID=0 ghosts are handled by the readyTTL sweep below, not here.
+func (pm *PIDManager) reapDeadOrInfraPID(snap livenessSnapshot) bool {
+	if snap.pid <= 0 {
+		return false
+	}
+	if err := syscall.Kill(snap.pid, 0); err == syscall.ESRCH {
+		pm.HandleProcessExit(snap.pid, snap.state.SessionID, "pid exited (ESRCH)")
+		return true
+	}
+	if pm.isBoundToInfra(snap) {
+		pm.log.LogInfo("session-detector", snap.state.SessionID,
+			fmt.Sprintf("pid %d is %s background infra, not the session — reaping ghost",
+				snap.pid, snap.adapter))
+		pm.HandleProcessExit(snap.pid, snap.state.SessionID,
+			fmt.Sprintf("infra-bound ghost: pid %d is %s background infra, not the session", snap.pid, snap.adapter))
+		return true
+	}
+	return false
+}
+
+// sweepStaleSnapshot applies the readyTTL-branch special cases to one
+// snapshot, in priority order: finished/zombie subagents, PID=0 ghosts whose
+// transcript went stale shortly after creation, and finally the general
+// idle-beyond-TTL reap. Each case is mutually exclusive with the others for a
+// given snapshot (a child session is fully handled by reapStaleChild and
+// never falls through to the PID=0 or TTL checks), mirroring the original
+// continue-chained control flow.
+func (pm *PIDManager) sweepStaleSnapshot(snap livenessSnapshot) {
+	// Child sessions: clean up immediately when ready, or when stale
+	// (transcript stopped updating — zombie from a previous run). Exception:
+	// DB-backed adapters (TranscriptPath contains "?session=") manage their
+	// own session lifetime via maxAge; their subagents are persistent
+	// historical records, not transient process-bound children.
+	if snap.parentSessionID != "" {
+		pm.reapStaleChild(snap)
+		return
+	}
+
+	// Sessions with PID=0 that are ready: the process likely exited before
+	// PID discovery succeeded. Clean up quickly (30s) rather than waiting the
+	// full readyTTL — BUT only if the transcript itself is stale. A
+	// freshly-written transcript with no PID yet means PID discovery is
+	// still catching up (e.g. Claude hasn't written ~/.claude/sessions/
+	// <pid>.json yet, or multiple claude processes share a cwd and the
+	// metadata lookup is retrying). Deleting under those conditions causes
+	// the flap loop in issue #109.
+	if pm.reapUnboundReadyGhost(snap) {
+		return
+	}
+
+	if !isStaleUpdatedAt(snap.updatedAt, pm.readyTTL) {
+		return
+	}
+	// Don't delete sessions whose process is still alive.
+	if snap.pid > 0 && syscall.Kill(snap.pid, 0) == nil {
+		return
+	}
+	if snap.sessionState == session.StateReady || snap.pid == 0 {
+		pm.log.LogInfo("session-detector", snap.state.SessionID,
+			fmt.Sprintf("%s session (pid=%d) idle for >%v, deleting",
+				snap.sessionState, snap.pid, pm.readyTTL))
+		pm.deleteWithChildren(snap.state,
+			fmt.Sprintf("%s session (pid=%d) idle >%v — liveness sweep", snap.sessionState, snap.pid, pm.readyTTL))
+	}
+}
+
+// reapStaleChild deletes snap when it's a finished or zombie subagent (ready,
+// or its transcript stopped updating) and notifies onChildDeleted so the
+// parent — which may have been held in `working` solely because of this
+// child — gets re-evaluated. Without that nudge the parent stays stuck until
+// its own next transcript event, which may never come for a finished
+// session. DB-backed adapters are exempt: they manage their own subagent
+// lifetime via maxAge.
+func (pm *PIDManager) reapStaleChild(snap livenessSnapshot) {
+	if strings.Contains(snap.transcriptPath, "?session=") {
+		return
+	}
+	if snap.sessionState != session.StateReady && !isStaleTranscript(snap.transcriptPath) {
+		return
+	}
+	reason := "child ready — liveness sweep"
+	if snap.sessionState != session.StateReady {
+		reason = "child transcript stale — liveness sweep"
+	}
+	pm.deleteSession(snap.state, reason)
+	if pm.onChildDeleted != nil {
+		pm.onChildDeleted(snap.parentSessionID)
+	}
+}
+
+// reapUnboundReadyGhost deletes snap when it's a ready, non-child session
+// that never got a PID and whose transcript has been stale for over 30s —
+// the pre-session-never-bound-a-process signature. Returns true when it
+// deleted the session.
+func (pm *PIDManager) reapUnboundReadyGhost(snap livenessSnapshot) bool {
+	if snap.pid != 0 || snap.sessionState != session.StateReady {
+		return false
+	}
+	if time.Since(time.Unix(snap.updatedAt, 0)) <= 30*time.Second {
+		return false
+	}
+	if !isStaleTranscript(snap.transcriptPath) {
+		return false
+	}
+	pm.log.LogInfo("session-detector", snap.state.SessionID,
+		"ready session with no PID and stale transcript for >30s, deleting")
+	pm.deleteWithChildren(snap.state,
+		"ghost reaped: PID=0, ready, stale transcript >30s — pre-session never bound a process")
+	return true
 }
 
 // isBoundToInfra reports whether snap's still-alive bound PID is one of the
@@ -1128,15 +1175,27 @@ func (pm *PIDManager) dedupeByPID(states []*session.SessionState, newestByPID ma
 			if s, _ := pm.repo.Load(state.SessionID); s == nil {
 				continue
 			}
-			pm.log.LogInfo("session-detector-seed", state.SessionID,
+			pm.removeSessionUntracked("session-detector-seed", state,
 				fmt.Sprintf("duplicate pid %d (keeping %s) — deleting", pid, newest.SessionID))
-			if pm.onSessionDeleted != nil {
-				pm.onSessionDeleted(state.SessionID)
-			}
-			_ = pm.repo.Delete(state.SessionID)
-			pm.broadcast(outbound.PushTypeDeleted, state)
 		}
 	}
+}
+
+// removeSessionUntracked deletes s via the same log→onSessionDeleted→repo
+// .Delete→broadcast sequence used by the reconciliation sweeps (dedup and
+// pre-session supersession). Unlike deleteSession/deleteWithChildren, it does
+// NOT emit a lifecycle recorder event — these paths reconcile bookkeeping
+// artifacts (a duplicate PID row, a superseded proc-* placeholder) rather
+// than tearing down a session whose disappearance belongs in the offline
+// replay trace. tag and msg are the caller's log identity and message, kept
+// verbatim so log output is unchanged by this extraction.
+func (pm *PIDManager) removeSessionUntracked(tag string, s *session.SessionState, msg string) {
+	pm.log.LogInfo(tag, s.SessionID, msg)
+	if pm.onSessionDeleted != nil {
+		pm.onSessionDeleted(s.SessionID)
+	}
+	_ = pm.repo.Delete(s.SessionID)
+	pm.broadcast(outbound.PushTypeDeleted, s)
 }
 
 // isDedupDeleteCandidate returns true when state is a non-subagent,
@@ -1185,13 +1244,8 @@ func (pm *PIDManager) sweepSupersededPreSessions(states []*session.SessionState)
 			continue
 		}
 		if candidate, _ := findSupersedingSession(proc, states); candidate != nil {
-			pm.log.LogInfo("session-detector-seed", proc.SessionID,
+			pm.removeSessionUntracked("session-detector-seed", proc,
 				fmt.Sprintf("pre-session superseded by %s — deleting", candidate.SessionID))
-			if pm.onSessionDeleted != nil {
-				pm.onSessionDeleted(proc.SessionID)
-			}
-			_ = pm.repo.Delete(proc.SessionID)
-			pm.broadcast(outbound.PushTypeDeleted, proc)
 		}
 	}
 }
@@ -1237,20 +1291,8 @@ func (pm *PIDManager) sweepSupersededPreSessionsPeriodic() {
 		if kind == matchNone {
 			continue
 		}
-		if kind == matchCWD {
-			// #113 guard: a freshly-opened process in a dir that already has an
-			// active session must keep its pre-session. Only retire after the
-			// grace window AND when the superseding session is bound to a live,
-			// distinct PID (the ghost signature, not a not-yet-bound sibling).
-			if now.Sub(time.Unix(proc.FirstSeen, 0)) < preSessionSweepGrace {
-				continue
-			}
-			if candidate.PID <= 0 || candidate.PID == proc.PID {
-				continue
-			}
-			if syscall.Kill(candidate.PID, 0) == syscall.ESRCH {
-				continue
-			}
+		if kind == matchCWD && !preSessionCWDGuardPasses(proc, candidate, now) {
+			continue
 		}
 		victims = append(victims, victim{state: proc, candidate: candidate.SessionID})
 	}
@@ -1260,14 +1302,26 @@ func (pm *PIDManager) sweepSupersededPreSessionsPeriodic() {
 		if s, _ := pm.repo.Load(v.state.SessionID); s == nil {
 			continue
 		}
-		pm.log.LogInfo("session-detector", v.state.SessionID,
+		pm.removeSessionUntracked("session-detector", v.state,
 			fmt.Sprintf("pre-session superseded by %s (PID-bound to a sibling) — deleting", v.candidate))
-		if pm.onSessionDeleted != nil {
-			pm.onSessionDeleted(v.state.SessionID)
-		}
-		_ = pm.repo.Delete(v.state.SessionID)
-		pm.broadcast(outbound.PushTypeDeleted, v.state)
 	}
+}
+
+// preSessionCWDGuardPasses implements the #113 guard for the matchCWD path: a
+// freshly-opened process in a directory that already has an active session
+// must keep its pre-session, so retirement is only allowed once the
+// pre-session has existed past preSessionSweepGrace AND the superseding
+// session is bound to a live PID distinct from proc's own — the ghost
+// signature (a real session running under a sibling process), as opposed to
+// a legitimate sibling whose own PID discovery just hasn't completed yet.
+func preSessionCWDGuardPasses(proc, candidate *session.SessionState, now time.Time) bool {
+	if now.Sub(time.Unix(proc.FirstSeen, 0)) < preSessionSweepGrace {
+		return false
+	}
+	if candidate.PID <= 0 || candidate.PID == proc.PID {
+		return false
+	}
+	return syscall.Kill(candidate.PID, 0) != syscall.ESRCH
 }
 
 // findSupersedingSession returns the first real (non-proc) session that
