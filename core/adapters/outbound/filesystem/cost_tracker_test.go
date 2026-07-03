@@ -357,6 +357,27 @@ func TestRecordBaseline_WritesOncePerSession(t *testing.T) {
 	}
 }
 
+// TestRecordBaseline_ModelFromMetrics is RecordBaseline's twin of
+// TestRecordSnapshot_ModelFromMetrics — RecordBaseline resolves the model via
+// the same modelForRow helper, but has its own call site, so it needs its own
+// regression test rather than relying on RecordSnapshot's coverage.
+func TestRecordBaseline_ModelFromMetrics(t *testing.T) {
+	tr := newTestTracker(t)
+	state := &session.SessionState{
+		SessionID:   "s1",
+		ProjectName: "proj-a",
+		FirstSeen:   1_700_000_000,
+		Metrics:     &session.SessionMetrics{EstimatedCostUSD: 0.50, ModelName: "claude-sonnet-5"},
+	}
+	if err := tr.RecordBaseline(state); err != nil {
+		t.Fatal(err)
+	}
+	rows := readRows(t, tr.filePath("proj-a"))
+	if len(rows) != 1 || rows[0].Model != "claude-sonnet-5" {
+		t.Fatalf("want model from Metrics.ModelName, got %+v", rows)
+	}
+}
+
 func TestProjectKey_SanitisesUnsafeChars(t *testing.T) {
 	if k := projectKey("foo/bar"); k != "foo_bar" {
 		t.Fatalf("want foo_bar, got %s", k)
@@ -641,6 +662,41 @@ func TestRecordSnapshot_ModelUnknownSentinelFallsBackEmpty(t *testing.T) {
 	rows := readRows(t, tr.filePath("proj-a"))
 	if len(rows) != 1 || rows[0].Model != "" {
 		t.Fatalf("want empty model (SessionState.Model fallback) for the unknown sentinel, got %+v", rows)
+	}
+}
+
+// TestRecordSnapshot_ModelChangeAloneTriggersWrite: the dedup check that
+// gates each write compares Cost/CumIn/CumOut/CumRead/CumCreate — a model
+// resolving (or changing) with no coincident cost/token delta must still be
+// treated as a change, or the new model is silently dropped and the stale
+// value from the last written row persists indefinitely for idle sessions.
+func TestRecordSnapshot_ModelChangeAloneTriggersWrite(t *testing.T) {
+	tr := newTestTracker(t)
+	state := &session.SessionState{
+		SessionID:   "s1",
+		ProjectName: "proj-a",
+		Metrics:     &session.SessionMetrics{EstimatedCostUSD: 0.10, ModelName: "unknown"},
+	}
+	if err := tr.RecordSnapshot(state); err != nil {
+		t.Fatal(err)
+	}
+
+	// Forge an older lastWrite so the *interval* throttle doesn't also
+	// suppress the second write — isolating the model-only-change path.
+	tr.mu.Lock()
+	lw := tr.lastWrite["s1"]
+	lw.TS -= int64(costWriteInterval/time.Second) + 1
+	tr.lastWrite["s1"] = lw
+	tr.mu.Unlock()
+
+	// Model resolves; cost/tokens are unchanged.
+	state.Metrics.ModelName = "claude-opus-4-8"
+	if err := tr.RecordSnapshot(state); err != nil {
+		t.Fatal(err)
+	}
+	rows := readRows(t, tr.filePath("proj-a"))
+	if len(rows) != 2 || rows[1].Model != "claude-opus-4-8" {
+		t.Fatalf("want a second row capturing the resolved model, got %+v", rows)
 	}
 }
 

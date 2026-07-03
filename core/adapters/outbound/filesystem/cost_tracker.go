@@ -29,7 +29,10 @@ const (
 	// JSONL with omitempty, so pre-v2 rows simply decode with empty branch and
 	// model (read back as "unknown" for those group axes) — no migration and
 	// no daemon-restart requirement. The constant is documentary; rows do not
-	// carry it.
+	// carry it. Note: rows written between #750 and #792's fix are also
+	// schema-v2 but have an empty model for a different reason (a dead source
+	// field, not a pre-v2 row) — no backfill for those either, they age out
+	// under normal retention.
 	costSchemaVersion = 2
 )
 
@@ -119,10 +122,23 @@ func (t *CostTracker) SetProviderResolver(fn func(*session.SessionState) string)
 	}
 }
 
-// RecordSnapshot appends a row for the session if cost or any cumulative
-// token count has changed since the last stored row, and at least
-// costWriteInterval has elapsed since that row. No-ops on sessions without
-// metrics or a project name — nothing useful to store.
+// modelForRow resolves a session's model name for a cost row: prefer the
+// live Metrics.ModelName (populated by the adapters/tailer as turns stream
+// in), falling back to the SessionState.Model field when ModelName is empty
+// or the "unknown" sentinel. Mirrors the equivalent resolution in the
+// session-list handler (handlers.go's /state endpoint) — shared here between
+// RecordSnapshot and RecordBaseline, the two callers within this file.
+func modelForRow(state *session.SessionState) string {
+	if state.Metrics.ModelName != "" && state.Metrics.ModelName != "unknown" {
+		return state.Metrics.ModelName
+	}
+	return state.Model
+}
+
+// RecordSnapshot appends a row for the session if cost, any cumulative token
+// count, or the resolved model has changed since the last stored row, and at
+// least costWriteInterval has elapsed since that row. No-ops on sessions
+// without metrics or a project name — nothing useful to store.
 func (t *CostTracker) RecordSnapshot(state *session.SessionState) error {
 	if state == nil || state.Metrics == nil {
 		return nil
@@ -132,17 +148,13 @@ func (t *CostTracker) RecordSnapshot(state *session.SessionState) error {
 		return nil
 	}
 	m := state.Metrics
-	model := state.Model
-	if m.ModelName != "" && m.ModelName != "unknown" {
-		model = m.ModelName
-	}
 
 	row := snapshotRow{
 		TS:        time.Now().Unix(),
 		Project:   state.ProjectName,
 		Branch:    state.GitBranch,
 		Provider:  t.providerOf(state),
-		Model:     model,
+		Model:     modelForRow(state),
 		Session:   state.SessionID,
 		Cost:      m.EstimatedCostUSD,
 		CumIn:     m.CumInputTokens,
@@ -158,7 +170,8 @@ func (t *CostTracker) RecordSnapshot(state *session.SessionState) error {
 			prev.CumIn == row.CumIn &&
 			prev.CumOut == row.CumOut &&
 			prev.CumRead == row.CumRead &&
-			prev.CumCreate == row.CumCreate
+			prev.CumCreate == row.CumCreate &&
+			prev.Model == row.Model
 		if unchanged {
 			t.mu.Unlock()
 			return nil
@@ -215,16 +228,12 @@ func (t *CostTracker) RecordBaseline(state *session.SessionState) error {
 	if ts == 0 {
 		ts = time.Now().Unix()
 	}
-	model := state.Model
-	if m.ModelName != "" && m.ModelName != "unknown" {
-		model = m.ModelName
-	}
 	row := snapshotRow{
 		TS:        ts,
 		Project:   state.ProjectName,
 		Branch:    state.GitBranch,
 		Provider:  t.providerOf(state),
-		Model:     model,
+		Model:     modelForRow(state),
 		Session:   state.SessionID,
 		Cost:      m.EstimatedCostUSD,
 		CumIn:     m.CumInputTokens,
