@@ -255,6 +255,7 @@ struct HistoryView: View {
             Spacer(minLength: 0)
         }
         .pickerStyle(.menu)
+        .controlSize(.small)
         .font(.caption)
 
         if range == .custom { customRangeRow }
@@ -267,6 +268,7 @@ struct HistoryView: View {
             Spacer(minLength: 0)
         }
         .pickerStyle(.menu)
+        .controlSize(.small)
         .font(.caption)
 
         if range == .custom { customRangeRow }
