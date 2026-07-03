@@ -27,6 +27,7 @@ git clone https://github.com/ingo-eichhorst/Irrlicht.git
 cd Irrlicht
 ./tools/build-release.sh       # build daemon + macOS app
 go test ./core/... -race -count=1   # run the Go suite (see AGENTS.md for the full list)
+tools/install-git-hooks.sh     # one-time: wire the pre-push preflight check
 ```
 
 The full suite — Go unit + e2e, the onboarding-factory, replay fixtures, and the
@@ -52,6 +53,10 @@ expected to follow.
 3. Add tests for new behavior; prefer table-driven tests in Go.
 4. Run the full test suite locally (see [AGENTS.md](AGENTS.md#testing)).
 5. Push and open a PR. Fill in the PR template (summary, test plan, screenshots for UI work).
+   The `ARS Architecture Gate` CI check flags an architecture-health
+   (`core/`) regression vs `main` — advisory, not required to merge; treat a
+   red result as a prompt to look closer (see [AGENTS.md](AGENTS.md#testing)
+   for the local `tools/preflight.sh` equivalent).
 6. Expect review feedback. Small PRs merge faster.
 
 Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/):

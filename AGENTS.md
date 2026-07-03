@@ -42,6 +42,20 @@ Before marking a ticket done, run the full suite — every layer must pass:
 - Unit + e2e: `go test ./core/... -race -count=1` (includes the headless
   daemon startup smoke test — boots a real `irrlichd` on an ephemeral port
   under `t.TempDir()`, so it never touches the production daemon).
+- Architecture: `core/architecture_test.go` (runs automatically as part of
+  `go test ./core/...`) statically enforces the hexagonal import direction
+  from Key Conventions — `domain/` and `ports/` packages may not import
+  outward into `adapters/` or `application/`, and `application/services/`
+  may only reach `adapters/inbound/` through `ports/`.
+- Architecture score: `tools/ars-gate.sh` flags it when the Agent Readiness
+  Score (composite or any category) regresses vs `origin/main` — advisory,
+  not a merge gate: it runs as a PR check (`.github/workflows/ars-gate.yml`,
+  not required by branch protection) and is mirrored locally by
+  `tools/preflight.sh`'s `arch` gate (see "Local CI parity" below). A
+  red result is a prompt to look closer, not a block — use judgment on
+  whether the regression is worth addressing before merging. Deterministic
+  and workflow-agnostic: it fires on any push, not tied to a specific agent
+  skill.
 - Factory: `go test ./tools/onboarding-factory/... -race -count=1`.
 - Replay: `tools/replay-fixtures.sh`
 - Replay goldens (when a recording or replay-output change is in play):
@@ -63,16 +77,17 @@ Before marking a ticket done, run the full suite — every layer must pass:
 
 ### Local CI parity — catch failures before pushing
 
-`tools/preflight.sh` runs every PR-gating check (test.yml + web-test.yml,
-plus the full Linux build+test+replay-fixtures gate via Docker under
-`--linux`) locally, in CI's order, and prints a pass/fail summary instead of
-stopping at the first failure — so before opening a PR, run it once instead
-of round-tripping through GitHub Actions per fix:
+`tools/preflight.sh` runs every PR-gating check (test.yml + web-test.yml +
+ars-gate.yml, plus the full Linux build+test+replay-fixtures gate via Docker
+under `--linux`) locally, in CI's order, and prints a pass/fail summary
+instead of stopping at the first failure — so before opening a PR, run it
+once instead of round-tripping through GitHub Actions per fix:
 
 ```
 tools/preflight.sh                # everything except the Linux Docker gate
 tools/preflight.sh --linux        # + full Linux parity (slow: needs Docker)
 tools/preflight.sh --only go      # just the go-test.yml-equivalent gates
+tools/preflight.sh --only arch    # just the ARS architecture gate
 ```
 
 `tools/install-git-hooks.sh` (run once per clone; worktrees share the parent
