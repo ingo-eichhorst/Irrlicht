@@ -397,22 +397,11 @@ func main() {
 		os.Exit(1)
 	}
 	// resolvedAddr is the actual address (with the OS-assigned port when the
-	// request was :0). Publish it to <dataDir>/irrlichd.addr so tooling and
-	// the smoke test can find a daemon bound to an ephemeral port; the file
-	// also doubles as a "daemon is up" signal. Removed on shutdown.
+	// request was :0), used below for mDNS and — once every route below is
+	// registered — for the addr-file publish that doubles as the "daemon is
+	// up" signal (see the publish block right after the last mux.HandleFunc).
 	resolvedAddr := tcpL.Addr().String()
 	addrPath := filepath.Join(filepath.Dir(sockPath), "irrlichd.addr")
-	// Write atomically (temp + rename) so a reader polling the file can never
-	// observe a half-written, truncated host:port.
-	tmpAddr := addrPath + ".tmp"
-	if err := os.WriteFile(tmpAddr, []byte(resolvedAddr+"\n"), 0600); err != nil {
-		logger.LogError("startup", "", fmt.Sprintf("failed to write addr file %s: %v", tmpAddr, err))
-	} else if err := os.Rename(tmpAddr, addrPath); err != nil {
-		logger.LogError("startup", "", fmt.Sprintf("failed to publish addr file %s: %v", addrPath, err))
-	}
-
-	go func() { _ = srv.Serve(unixL) }()
-	go func() { _ = srv.Serve(tcpL) }()
 
 	// mDNS/Bonjour advertisement — opt-in via IRRLICHT_MDNS=1 to avoid
 	// broadcasting the daemon on networks the user did not intend to share on.
@@ -731,6 +720,25 @@ func main() {
 	// metrics adapter so the snapshot lands in the right session's tailer.
 	mux.HandleFunc("POST /api/v1/hooks/claudecode/statusline",
 		claudecode.NewStatuslineHandler(metricsCollector, permService, logger))
+
+	// Publish the addr file and start serving now that every route above is
+	// registered. Publishing earlier raced a fast client (including this
+	// package's own startup smoke test) against still-in-progress mux
+	// registration: a request landing in that window fell through to the
+	// catch-all "/" handler — surfaced as a spurious 503 on
+	// GET /api/v1/permissions under loaded CI (#795).
+	//
+	// Write atomically (temp + rename) so a reader polling the file can never
+	// observe a half-written, truncated host:port.
+	tmpAddr := addrPath + ".tmp"
+	if err := os.WriteFile(tmpAddr, []byte(resolvedAddr+"\n"), 0600); err != nil {
+		logger.LogError("startup", "", fmt.Sprintf("failed to write addr file %s: %v", tmpAddr, err))
+	} else if err := os.Rename(tmpAddr, addrPath); err != nil {
+		logger.LogError("startup", "", fmt.Sprintf("failed to publish addr file %s: %v", addrPath, err))
+	}
+
+	go func() { _ = srv.Serve(unixL) }()
+	go func() { _ = srv.Serve(tcpL) }()
 
 	// Lifecycle recording: opt-in via --record flag or IRRLICHT_RECORD=1.
 	// Recordings default to <dataDir>/recordings, so IRRLICHT_HOME already
