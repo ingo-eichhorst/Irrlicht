@@ -1,5 +1,12 @@
 # Irrlicht — Development Guide
 
+## Short Cuts
+
+- "wt+plan" = create a worktree for the following issue. move into the worktree and plan execution
+- "wt+exec" = create a worktree for the following issue. move into the worktree, plan and directly execute
+- "wt+full" = create a worktree for the following issue. move into the worktree, plan, directly execute and start the code-review skill on low, then run the simplify skill fix all issues and open a PR.
+- "wt+close" = make sure all contents of the worktree are pushed to a pr. Then close the worktree, move back to main and delete the worktree
+
 ## Build Artifacts
 
 Use `./.build` for build artifacts.
@@ -55,5 +62,5 @@ Before marking a ticket done, run the full suite — every layer must pass:
   `npm test` runs `vitest run` (single CI-shaped pass, no watch).
 
 ## Task Management
-- For larger tasks use github issues to track them
-- Break down those larger tasks into tasks using a task tool (e.g. todowrite in opencode or TaskCreate in claude code)
+- Use github issues to track tickets
+- Break down larger tasks into tasks using a task tool (e.g. todowrite in opencode or TaskCreate in claude code)
