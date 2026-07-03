@@ -10,6 +10,8 @@
 #   .github/workflows/test.yml      — gofmt, core + onboarding-factory tests,
 #                                      of validate, recording-rig smoke test
 #   .github/workflows/web-test.yml  — npm test in both web trees
+#   .github/workflows/ars-gate.yml  — ARS architecture-regression gate
+#                                      (composite/category score vs origin/main)
 #   .github/workflows/linux.yml     — build + full test suite (-race) +
 #                                      replay-fixtures under Linux, via the
 #                                      linux-replay Docker image (opt-in:
@@ -20,6 +22,7 @@
 #   tools/preflight.sh --linux         # + full Linux parity via Docker
 #   tools/preflight.sh --only go       # just the go-test.yml-equivalent gates
 #   tools/preflight.sh --only web      # just the two npm test trees
+#   tools/preflight.sh --only arch     # just the ARS architecture gate
 #   tools/preflight.sh --only linux    # just the Linux Docker gate
 #
 # PLATFORMS overrides the Linux gate's docker --platform (default: linux/amd64,
@@ -88,6 +91,11 @@ web_tree() { ( cd "$1" && npm ci && npm test ); }
 if want web; then
   run_gate "web: platforms/web"             web_tree platforms/web
   run_gate "web: onboarding-factory viewer" web_tree tools/onboarding-factory/internal/viewer/web
+fi
+
+# ---- arch group (mirrors ars-gate.yml) -----------------------------------
+if want arch; then
+  run_gate "ARS architecture gate" tools/ars-gate.sh
 fi
 
 # ---- linux group (mirrors linux.yml, opt-in: --linux or --only linux) ---
