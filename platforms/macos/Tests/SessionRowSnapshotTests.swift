@@ -12,6 +12,7 @@ final class SessionRowSnapshotTests: XCTestCase {
     private var originalThresholdValue: Any?
     private var originalThresholdUnit: Any?
     private var originalUserIntent: Any?
+    private var originalSummariesCollapsed: Any?
 
     override func setUp() async throws {
         try await super.setUp()
@@ -24,6 +25,7 @@ final class SessionRowSnapshotTests: XCTestCase {
         originalThresholdValue = defaults.object(forKey: ContextPressureThreshold.valueKey)
         originalThresholdUnit = defaults.object(forKey: ContextPressureThreshold.unitKey)
         originalUserIntent = defaults.object(forKey: "userIntentDisplay")
+        originalSummariesCollapsed = defaults.object(forKey: "summariesCollapsed")
         defaults.set("context", forKey: "displayMode")
         defaults.set(false, forKey: "debugMode")
         defaults.set(false, forKey: "showCostDisplay")
@@ -32,6 +34,9 @@ final class SessionRowSnapshotTests: XCTestCase {
         // of the developer's Settings (issue #689 made it configurable).
         defaults.set(80, forKey: ContextPressureThreshold.valueKey)
         defaults.set(ContextPressureThreshold.Unit.percent.rawValue, forKey: ContextPressureThreshold.unitKey)
+        // summariesCollapsed now persists (#799) — pin it so SessionManager's
+        // init value doesn't depend on the developer's real toggle state.
+        defaults.set(false, forKey: "summariesCollapsed")
         sessionManager = SessionManager()
     }
 
@@ -42,6 +47,7 @@ final class SessionRowSnapshotTests: XCTestCase {
         restore(key: ContextPressureThreshold.valueKey, value: originalThresholdValue)
         restore(key: ContextPressureThreshold.unitKey, value: originalThresholdUnit)
         restore(key: "userIntentDisplay", value: originalUserIntent)
+        restore(key: "summariesCollapsed", value: originalSummariesCollapsed)
         try await super.tearDown()
     }
 

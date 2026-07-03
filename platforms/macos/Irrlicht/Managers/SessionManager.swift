@@ -84,8 +84,11 @@ class SessionManager: ObservableObject {
     /// Global collapse state for every session's task-summary/question block
     /// (issue #738). A single bool — not a per-id set — so sessions that appear
     /// after a "collapse all" still honor it (a snapshot set would leave new
-    /// rows expanded). Default expanded; in-memory only.
-    @Published var summariesCollapsed: Bool = false
+    /// rows expanded). Default expanded. Persisted in UserDefaults (#799) so
+    /// the choice survives app restarts.
+    @Published var summariesCollapsed: Bool = UserDefaults.standard.bool(forKey: "summariesCollapsed") {
+        didSet { UserDefaults.standard.set(summariesCollapsed, forKey: "summariesCollapsed") }
+    }
 
     /// Timer that periodically re-hydrates sessions so group-level cost
     /// values (which only ride the /api/v1/sessions response) stay fresh —
