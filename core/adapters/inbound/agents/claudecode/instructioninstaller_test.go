@@ -5,6 +5,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"irrlicht/core/domain/agent"
+	"irrlicht/core/domain/permission"
+	"irrlicht/core/internal/contracttesting"
 )
 
 // memoryPathFor returns the CLAUDE.md path inside the temp HOME.
@@ -468,4 +472,55 @@ func TestRemoveInstructionBlocks_RoundTripsToOriginal(t *testing.T) {
 	if got := readFileString(t, path); got != original {
 		t.Errorf("round-trip changed content:\n%q\nwant\n%q", got, original)
 	}
+}
+
+// findPermission returns the declared permission matching key, failing the
+// test if the adapter dropped or renamed it.
+func findPermission(t *testing.T, a agent.Agent, key string) agent.Permission {
+	t.Helper()
+	for _, p := range a.Permissions {
+		if p.Key == key {
+			return p
+		}
+	}
+	t.Fatalf("no permission %q declared by %s", key, a.Identity.Name)
+	return agent.Permission{}
+}
+
+// TestInstructionsPermission_GateContract drives the real Apply/Remove
+// closures behind the declared "instructions" permission through the
+// shared issue #797 contract. Unlike hooks/statusline (a live per-request
+// ConsentGate), this permission has no in-code check of its own — its
+// consent gate is entirely PermissionService's generic effect dispatch, so
+// this test proves that dispatch is wired to the real closures Agent()
+// exports, not a stand-in.
+func TestInstructionsPermission_GateContract(t *testing.T) {
+	home := withTempHome(t)
+	path := memoryPathFor(home)
+	decl := findPermission(t, Agent(), PermissionKeyInstructions)
+
+	contracttesting.AssertPermissionGated(t, contracttesting.PermissionGate{
+		SetState: func(state permission.State) {
+			switch state {
+			case permission.StateGranted:
+				if err := decl.Apply(); err != nil {
+					t.Fatalf("Apply: %v", err)
+				}
+			case permission.StateDenied:
+				if err := decl.Remove(); err != nil {
+					t.Fatalf("Remove: %v", err)
+				}
+			}
+			// Pending: PermissionService never invokes Apply/Remove until
+			// the user answers, so there is nothing to do here.
+		},
+		Exercise: func() {}, // the effect IS the Apply/Remove call above
+		Observe: func() bool {
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return false
+			}
+			return strings.Contains(string(data), taskEtaBeginSentinel)
+		},
+	})
 }

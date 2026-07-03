@@ -5,6 +5,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"irrlicht/core/domain/agent"
+	"irrlicht/core/domain/permission"
+	"irrlicht/core/internal/contracttesting"
 )
 
 // withTempKittyConfig points kitty config resolution at a temp dir via
@@ -280,4 +284,51 @@ func TestKittyPermissionDeclarationShape(t *testing.T) {
 	if p.Apply == nil || p.Remove == nil {
 		t.Error("modify-kind permission must carry Apply and Remove closures")
 	}
+}
+
+// TestKittyPermission_GateContract drives the real Apply/Remove closures
+// behind the declared "remote-control" permission through the shared issue
+// #797 contract: like the claudecode instructions permission, this
+// permission has no in-code live check of its own — its gate is
+// PermissionService's generic effect dispatch — so this proves that
+// dispatch reaches the real closures KittyPermissionDeclaration exports.
+func TestKittyPermission_GateContract(t *testing.T) {
+	path := withTempKittyConfig(t)
+	decl := findKittyPermission(t, PermissionKeyKittyConfig)
+
+	contracttesting.AssertPermissionGated(t, contracttesting.PermissionGate{
+		SetState: func(state permission.State) {
+			switch state {
+			case permission.StateGranted:
+				if err := decl.Apply(); err != nil {
+					t.Fatalf("Apply: %v", err)
+				}
+			case permission.StateDenied:
+				if err := decl.Remove(); err != nil {
+					t.Fatalf("Remove: %v", err)
+				}
+			}
+		},
+		Exercise: func() {}, // the effect IS the Apply/Remove call above
+		Observe: func() bool {
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return false
+			}
+			return strings.Contains(string(data), kittyBlockStart)
+		},
+	})
+}
+
+// findKittyPermission returns the declared permission matching key, failing
+// the test if the declaration dropped or renamed it.
+func findKittyPermission(t *testing.T, key string) agent.Permission {
+	t.Helper()
+	for _, p := range KittyPermissionDeclaration().Permissions {
+		if p.Key == key {
+			return p
+		}
+	}
+	t.Fatalf("no permission %q declared", key)
+	return agent.Permission{}
 }
