@@ -5,7 +5,7 @@
 ![UI Features](assets/explainer.png)
 
 [![Coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fgist.githubusercontent.com%2Fingo-eichhorst%2F9f14c8e5f25c1ccf5d6500c1685fd9fb%2Fraw%2Fcoverage.json&color=%238B5CF6)](https://github.com/ingo-eichhorst/Irrlicht/actions/workflows/coverage.yml)
-[![CodeScene Report](https://github.com/ingo-eichhorst/Irrlicht/actions/workflows/codescene-report.yml/badge.svg)](https://github.com/ingo-eichhorst/Irrlicht/actions/workflows/codescene-report.yml)
+[![CodeScene](https://img.shields.io/badge/CodeScene-Report-6c5ce7)](https://github.com/ingo-eichhorst/Irrlicht/actions/workflows/codescene-report.yml)
 [![License](https://img.shields.io/badge/license-MIT-orange?color=%23FF9500)](LICENSE)
 [![Version](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fingo-eichhorst%2FIrrlicht%2Fmain%2Fversion.json&query=%24.version&label=version&color=%2334C759)](version.json)
 [![ARS](https://img.shields.io/badge/ARS-Agent--Ready%208.1%2F10-green)](https://github.com/ingo-eichhorst/agent-readyness)
