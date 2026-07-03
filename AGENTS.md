@@ -4,7 +4,7 @@
 
 - "wt+plan" = create a worktree for the following issue. move into the worktree and plan execution
 - "wt+exec" = create a worktree for the following issue. move into the worktree, plan and directly execute
-- "wt+full" = create a worktree for the following issue. move into the worktree, plan, directly execute and start the code-review skill on low, then run the simplify skill fix all issues and open a PR.
+- "wt+full" = create a worktree for the following issue. move into the worktree, plan, directly execute and start the code-review skill on low, then fix all issues and open a PR.
 - "wt+close" = make sure all contents of the worktree are pushed to a pr. Then close the worktree, move back to main and delete the worktree
 
 ## Build Artifacts
@@ -60,6 +60,29 @@ Before marking a ticket done, run the full suite — every layer must pass:
   - `tools/onboarding-factory/internal/viewer/web/` — the onboarding viewer.
 
   `npm test` runs `vitest run` (single CI-shaped pass, no watch).
+
+### Local CI parity — catch failures before pushing
+
+`tools/preflight.sh` runs every PR-gating check (test.yml + web-test.yml,
+plus the full Linux build+test+replay-fixtures gate via Docker under
+`--linux`) locally, in CI's order, and prints a pass/fail summary instead of
+stopping at the first failure — so before opening a PR, run it once instead
+of round-tripping through GitHub Actions per fix:
+
+```
+tools/preflight.sh                # everything except the Linux Docker gate
+tools/preflight.sh --linux        # + full Linux parity (slow: needs Docker)
+tools/preflight.sh --only go      # just the go-test.yml-equivalent gates
+```
+
+`tools/install-git-hooks.sh` (run once per clone; worktrees share the parent
+repo's hooks automatically) wires `tools/preflight.sh`'s fast gates as a
+pre-push hook, so a push that would fail CI is rejected locally instead.
+Skip once with `git push --no-verify`.
+
+Two of the failure modes it won't catch: environment-specific timing flakes
+that only manifest on loaded Linux CI runners (not this machine), and true
+Linux-only bugs unless you pass `--linux`.
 
 ## Task Management
 - Use github issues to track tickets

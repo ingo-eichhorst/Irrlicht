@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# pre-push hook — runs tools/preflight.sh's fast gate set (the go + web CI
+# jobs; not the slow opt-in --linux Docker gate) before a push leaves this
+# machine, so a failure shows up here instead of several minutes later on
+# GitHub Actions. Installed via tools/install-git-hooks.sh (not automatic —
+# git doesn't version .git/hooks/, so every clone needs one run; worktrees
+# share the parent repo's hooks automatically).
+#
+# Git runs hooks with CWD set to the working tree performing the push — a
+# worktree's own root, not wherever tools/install-git-hooks.sh was run from
+# — so this correctly preflights the worktree actually being pushed, not the
+# main checkout. Do not resolve the root from $0: hooks live in the shared
+# .git/hooks/ dir, so $0 always points at the main checkout regardless of
+# which worktree is pushing.
+#
+# Skip once with `git push --no-verify`; uninstall with
+# `rm $(git rev-parse --git-common-dir)/hooks/pre-push`.
+set -uo pipefail
+
+echo "pre-push: running tools/preflight.sh (skip with --no-verify)"
+./tools/preflight.sh
