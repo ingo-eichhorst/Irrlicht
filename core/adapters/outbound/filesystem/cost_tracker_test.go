@@ -601,6 +601,49 @@ func TestRecordSnapshot_StampsBranchAndModel(t *testing.T) {
 	}
 }
 
+// TestRecordSnapshot_ModelFromMetrics is the real-world shape (#792):
+// SessionState.Model is never set in production — the live model name lives
+// on Metrics.ModelName. A row must pick that up rather than always falling
+// back to the (empty) SessionState.Model, which previously bucketed every
+// session under "unknown" regardless of the model actually used.
+func TestRecordSnapshot_ModelFromMetrics(t *testing.T) {
+	tr := newTestTracker(t)
+	state := &session.SessionState{
+		SessionID:   "s1",
+		ProjectName: "proj-a",
+		Metrics:     &session.SessionMetrics{EstimatedCostUSD: 0.10, ModelName: "claude-opus-4-8"},
+	}
+	if err := tr.RecordSnapshot(state); err != nil {
+		t.Fatal(err)
+	}
+	rows := readRows(t, tr.filePath("proj-a"))
+	if len(rows) != 1 || rows[0].Model != "claude-opus-4-8" {
+		t.Fatalf("want model from Metrics.ModelName, got %+v", rows)
+	}
+}
+
+// TestRecordSnapshot_ModelUnknownSentinelFallsBackEmpty ensures the
+// Metrics.ModelName "unknown" sentinel (distinct from "") doesn't get
+// persisted verbatim — it should fall through to the empty/SessionState.Model
+// fallback like handlers.go's session-list resolution does, so it still
+// buckets under the aggregate unknown group rather than a literal "unknown"
+// model name.
+func TestRecordSnapshot_ModelUnknownSentinelFallsBackEmpty(t *testing.T) {
+	tr := newTestTracker(t)
+	state := &session.SessionState{
+		SessionID:   "s1",
+		ProjectName: "proj-a",
+		Metrics:     &session.SessionMetrics{EstimatedCostUSD: 0.10, ModelName: "unknown"},
+	}
+	if err := tr.RecordSnapshot(state); err != nil {
+		t.Fatal(err)
+	}
+	rows := readRows(t, tr.filePath("proj-a"))
+	if len(rows) != 1 || rows[0].Model != "" {
+		t.Fatalf("want empty model (SessionState.Model fallback) for the unknown sentinel, got %+v", rows)
+	}
+}
+
 // TestSnapshotSchema_PreV2RowsReadUnknown asserts the schema bump is backward
 // compatible: a row written without the branch/model columns decodes with both
 // empty and buckets under the unknown ("") key on those axes — no migration.

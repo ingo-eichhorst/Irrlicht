@@ -40,7 +40,7 @@ type snapshotRow struct {
 	Project   string  `json:"project,omitempty"`  // raw SessionState.ProjectName (filename is sanitized)
 	Branch    string  `json:"branch,omitempty"`   // SessionState.GitBranch ("" = detached/unknown); see #750
 	Provider  string  `json:"provider,omitempty"` // "anthropic", "openai", or "" (unknown); see providerForSession
-	Model     string  `json:"model,omitempty"`    // SessionState.Model ("" = unknown)
+	Model     string  `json:"model,omitempty"`    // Metrics.ModelName, falling back to SessionState.Model ("" = unknown)
 	Session   string  `json:"session"`
 	Cost      float64 `json:"cost"`
 	CumIn     int64   `json:"cum_in,omitempty"`
@@ -132,13 +132,17 @@ func (t *CostTracker) RecordSnapshot(state *session.SessionState) error {
 		return nil
 	}
 	m := state.Metrics
+	model := state.Model
+	if m.ModelName != "" && m.ModelName != "unknown" {
+		model = m.ModelName
+	}
 
 	row := snapshotRow{
 		TS:        time.Now().Unix(),
 		Project:   state.ProjectName,
 		Branch:    state.GitBranch,
 		Provider:  t.providerOf(state),
-		Model:     state.Model,
+		Model:     model,
 		Session:   state.SessionID,
 		Cost:      m.EstimatedCostUSD,
 		CumIn:     m.CumInputTokens,
@@ -211,12 +215,16 @@ func (t *CostTracker) RecordBaseline(state *session.SessionState) error {
 	if ts == 0 {
 		ts = time.Now().Unix()
 	}
+	model := state.Model
+	if m.ModelName != "" && m.ModelName != "unknown" {
+		model = m.ModelName
+	}
 	row := snapshotRow{
 		TS:        ts,
 		Project:   state.ProjectName,
 		Branch:    state.GitBranch,
 		Provider:  t.providerOf(state),
-		Model:     state.Model,
+		Model:     model,
 		Session:   state.SessionID,
 		Cost:      m.EstimatedCostUSD,
 		CumIn:     m.CumInputTokens,
