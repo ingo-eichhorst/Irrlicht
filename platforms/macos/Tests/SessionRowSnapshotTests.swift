@@ -310,7 +310,7 @@ final class SessionRowSnapshotTests: XCTestCase {
         assertSnapshot(of: host(session), as: .image)
     }
 
-    func testCacheBloatArrow() {
+    func testCacheBloatBadge_Attributed() {
         let session = makeSession(
             state: .working,
             metrics: makeMetrics(
@@ -318,7 +318,17 @@ final class SessionRowSnapshotTests: XCTestCase {
                 cacheBloatTooltip: "claude-code 2.1.143 +14K cache tokens vs 2.1.98"
             )
         )
-        assertSnapshot(of: host(session), as: .image)
+        assertSnapshot(of: host(session, height: 72), as: .image)
+    }
+
+    // #813: no version attribution → the badge falls back to a compact label
+    // instead of the old bare arrow glyph.
+    func testCacheBloatBadge_Fallback() {
+        let session = makeSession(
+            state: .working,
+            metrics: makeMetrics(cacheBloat: true, cacheBloatTooltip: nil)
+        )
+        assertSnapshot(of: host(session, height: 72), as: .image)
     }
 
     func testContextPressureAlert() {

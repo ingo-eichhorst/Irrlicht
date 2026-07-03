@@ -908,13 +908,17 @@
       color: var(--muted); opacity: 0.85;
     }
     .row-origin svg { display: block; }
-    /* Cache-creation regression glyph (#374) — an upward arrow tinted with the
-       warning color, surfaced when the daemon flags a cache-creation
-       regression for the session. */
+    /* Cache-creation regression badge (#813, was #374's bare glyph) — an
+       always-visible short label (version attribution, or a compact
+       fallback) tinted red, surfaced when the daemon flags a cache-creation
+       regression for the session. Hover reveals the longer explanation. */
     .row-cache-bloat {
-      width: 14px; height: 14px; flex-shrink: 0;
-      display: inline-flex; align-items: center; justify-content: center;
-      color: var(--warning, #e0a000); font-weight: 700; cursor: default;
+      font-size: 10px; padding: 0 5px; height: 14px; border-radius: 3px;
+      background: rgba(255, 59, 48, 0.12); color: var(--pressure-high);
+      font-family: var(--font-mono); font-weight: 600;
+      display: flex; align-items: center; white-space: nowrap; cursor: default;
+      flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+      max-width: 160px;
     }
     /* Active tool indicator — hidden for now (the overlay doesn't surface it
        in the default row either). Keep the rule + JS update path so we can

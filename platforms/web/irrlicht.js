@@ -16,6 +16,7 @@ import { relayFrameKind, seqGap, aggregateConnState, relayWsUrl } from './connec
 import {
   stateIcon, shortModel, formatCost, fmtDuration, formatElapsed, fmtEtaDuration, fmtEtaText,
   taskEtaPresentation, shortID, pressureClass, pressureColor, formatTokens, esc, activeSubagentCount,
+  cacheBloatBadgeText, cacheBloatExplanation,
 } from './formatters.js';
 import { reconcile, paintRowNum } from './domReconcile.js';
 
@@ -627,7 +628,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
         '<span class="row-bg-badge" style="display:none"></span>' +
         '<span class="row-role-badge" style="display:none"></span>' +
         '<span class="row-origin" style="display:none"></span>' +
-        '<span class="row-cache-bloat" style="display:none">↑</span>' +
+        '<span class="row-cache-bloat" style="display:none"></span>' +
         '<span class="row-branch"></span>' +
         '<span class="row-tool" style="display:none"></span>' +
         '<span class="row-ctx-bar"><span class="row-ctx-fill"></span><span class="row-ctx-label"></span></span>' +
@@ -747,14 +748,19 @@ import { reconcile, paintRowNum } from './domReconcile.js';
         originEl.style.display = 'none';
       }
 
-      // Cache-creation regression glyph (#374) — an upward arrow marks a
-      // session whose median cache-creation per turn regressed past the project
-      // baseline. Tooltip names the regressing upstream version when attributed.
+      // Cache-creation regression badge (#813, was #374's bare glyph) — an
+      // always-visible short label (the version attribution, or a compact
+      // fallback) so a user isn't required to hover to learn anything
+      // happened. The longer plain-language explanation still lives in the
+      // hover title, with the attribution folded in when the daemon
+      // provided one.
       const cacheBloatEl = el.querySelector('.row-cache-bloat');
       if (cacheBloatEl) {
         if (metrics.cache_bloat) {
           cacheBloatEl.style.display = '';
-          cacheBloatEl.title = metrics.cache_bloat_tooltip || 'cache-creation regression';
+          const badgeText = cacheBloatBadgeText(metrics.cache_bloat_tooltip);
+          if (cacheBloatEl.textContent !== badgeText) cacheBloatEl.textContent = badgeText;
+          cacheBloatEl.title = cacheBloatExplanation(metrics.cache_bloat_tooltip);
         } else if (cacheBloatEl.style.display !== 'none') {
           cacheBloatEl.style.display = 'none';
         }
