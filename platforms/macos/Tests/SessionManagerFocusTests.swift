@@ -55,11 +55,14 @@ final class SessionManagerFocusTests: XCTestCase {
     /// Real `@objc dynamic` accessors stand in for `INFocusStatusCenter` /
     /// `INFocusStatus` without linking Intents.framework, so `responds(to:)`
     /// and the selector dispatch in `readIsFocused` exercise the same path
-    /// they'd take against the live SDK classes.
+    /// they'd take against the live SDK classes. `isFocused` is typed
+    /// `NSNumber`, not `Bool` — matching `INFocusStatus`'s real
+    /// `NSNumber * _Nullable` ABI, since a `Bool`-typed fake would generate a
+    /// raw-`BOOL` accessor and mask an object-vs-scalar return mismatch.
     @objc private class FakeFocusStatus: NSObject {
-        @objc dynamic var isFocused: Bool
+        @objc dynamic var isFocused: NSNumber
         init(isFocused: Bool) {
-            self.isFocused = isFocused
+            self.isFocused = NSNumber(value: isFocused)
             super.init()
         }
     }

@@ -86,17 +86,16 @@ final class FocusMonitor: FocusStateProviding, @unchecked Sendable {
               let focusStatus = center.perform(focusStatusSel)?.takeUnretainedValue() as? NSObject else {
             return false
         }
-        // `isFocused` returns a scalar `BOOL`, not an object, so `perform(_:)`
-        // (which only defines behavior for object/void returns) can't read it
-        // safely. Call the IMP directly through the matching C signature instead.
+        // `INFocusStatus.isFocused` is declared `NSNumber * _Nullable` (boxed,
+        // `NS_REFINED_FOR_SWIFT` — only the Swift overlay unwraps it to `Bool`),
+        // not a raw `BOOL`. It's an object return, so plain `perform(_:)` is
+        // well-defined here, same as `focusStatus` above.
         let isFocusedSel = NSSelectorFromString("isFocused")
         guard focusStatus.responds(to: isFocusedSel),
-              let method = class_getInstanceMethod(type(of: focusStatus), isFocusedSel) else {
+              let isFocused = focusStatus.perform(isFocusedSel)?.takeUnretainedValue() as? NSNumber else {
             return false
         }
-        typealias BoolGetter = @convention(c) (AnyObject, Selector) -> Bool
-        let getter = unsafeBitCast(method_getImplementation(method), to: BoolGetter.self)
-        return getter(focusStatus, isFocusedSel)
+        return isFocused.boolValue
     }
 
     // MARK: - DevID gate + dynamic Intents resolution
