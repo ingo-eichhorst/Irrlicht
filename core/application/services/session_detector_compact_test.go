@@ -16,6 +16,10 @@ import (
 // session to working and hold it there across re-evaluations until the
 // compact_boundary lands — which surfaces as SawManualCompactBoundary and
 // releases the session back to ready (the #656 half).
+//
+// Waits use a 5s budget, not the usual 1s: this test flaked on loaded Linux CI
+// runners under -race (#794), timing out at exactly 1s despite completing in
+// ~60ms locally — a tight-budget issue, not a logic bug.
 func TestSessionDetector_CompactHook_HoldsWorkingThenReleases(t *testing.T) {
 	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
@@ -60,7 +64,7 @@ func TestSessionDetector_CompactHook_HoldsWorkingThenReleases(t *testing.T) {
 
 	// PreCompact hook fires for the manual /compact → force working.
 	det.HandleCompactHook("comp1", path, "manual")
-	waitForSessionState(repo, "comp1", session.StateWorking, time.Second)
+	waitForSessionState(repo, "comp1", session.StateWorking, 5*time.Second)
 
 	repo.mu.Lock()
 	got := repo.lastSavedState["comp1"]
@@ -78,7 +82,7 @@ func TestSessionDetector_CompactHook_HoldsWorkingThenReleases(t *testing.T) {
 		TranscriptPath: path,
 	}
 	// Give the pass time to land, then assert it's still working.
-	waitForCondition(func() bool { return repo.eventCountOf("comp1") >= 1 }, time.Second)
+	waitForCondition(func() bool { return repo.eventCountOf("comp1") >= 1 }, 5*time.Second)
 	repo.mu.Lock()
 	got = repo.lastSavedState["comp1"]
 	repo.mu.Unlock()
@@ -97,7 +101,7 @@ func TestSessionDetector_CompactHook_HoldsWorkingThenReleases(t *testing.T) {
 		ProjectDir:     "-Users-test",
 		TranscriptPath: path,
 	}
-	waitForSessionState(repo, "comp1", session.StateReady, time.Second)
+	waitForSessionState(repo, "comp1", session.StateReady, 5*time.Second)
 
 	repo.mu.Lock()
 	got = repo.lastSavedState["comp1"]
