@@ -47,12 +47,15 @@ Before marking a ticket done, run the full suite — every layer must pass:
   from Key Conventions — `domain/` and `ports/` packages may not import
   outward into `adapters/` or `application/`, and `application/services/`
   may only reach `adapters/inbound/` through `ports/`.
-- Architecture score: `tools/ars-gate.sh` fails if the Agent Readiness Score
-  (composite or any category) regresses vs `origin/main` — enforced as a
-  required PR check (`.github/workflows/ars-gate.yml`) and mirrored locally
-  by `tools/preflight.sh`'s `arch` gate (see "Local CI parity" below).
-  Deterministic and workflow-agnostic: it fires on any push, not tied to a
-  specific agent skill.
+- Architecture score: `tools/ars-gate.sh` flags it when the Agent Readiness
+  Score (composite or any category) regresses vs `origin/main` — advisory,
+  not a merge gate: it runs as a PR check (`.github/workflows/ars-gate.yml`,
+  not required by branch protection) and is mirrored locally by
+  `tools/preflight.sh`'s `arch` gate (see "Local CI parity" below). A
+  red result is a prompt to look closer, not a block — use judgment on
+  whether the regression is worth addressing before merging. Deterministic
+  and workflow-agnostic: it fires on any push, not tied to a specific agent
+  skill.
 - Factory: `go test ./tools/onboarding-factory/... -race -count=1`.
 - Replay: `tools/replay-fixtures.sh`
 - Replay goldens (when a recording or replay-output change is in play):

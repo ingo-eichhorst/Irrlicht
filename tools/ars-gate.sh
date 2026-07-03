@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
-# ars-gate.sh — deterministic architecture-regression gate.
+# ars-gate.sh — deterministic architecture-regression check (advisory, not a
+# merge gate: flags a regression for review, doesn't block a PR on its own).
 #
 # Scans the given directory (default: core) with ARS (Agent Readiness Score,
 # github.com/ingo-eichhorst/agent-readyness) and fails if the composite score,
 # or any individual category score, has regressed vs a fresh origin/main scan.
 #
-# Shared by .githooks/pre-push and .github/workflows/ars-gate.yml so both
-# enforcement points use identical comparison logic — never duplicate the
-# diff logic in the hook or the workflow, call this script from both.
+# Shared by tools/preflight.sh's `arch` gate and .github/workflows/ars-gate.yml
+# so both surfaces use identical comparison logic — never duplicate the diff
+# logic in preflight.sh or the workflow, call this script from both.
 #
 # Usage: tools/ars-gate.sh [<dir>]   # <dir> is relative to the repo root, default "core"
 set -euo pipefail

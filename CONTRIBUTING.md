@@ -53,8 +53,9 @@ expected to follow.
 3. Add tests for new behavior; prefer table-driven tests in Go.
 4. Run the full test suite locally (see [AGENTS.md](AGENTS.md#testing)).
 5. Push and open a PR. Fill in the PR template (summary, test plan, screenshots for UI work).
-   A PR's architecture-health score (`core/`) may not regress vs `main` — the
-   `ARS Architecture Gate` CI check enforces this (see [AGENTS.md](AGENTS.md#testing)
+   The `ARS Architecture Gate` CI check flags an architecture-health
+   (`core/`) regression vs `main` — advisory, not required to merge; treat a
+   red result as a prompt to look closer (see [AGENTS.md](AGENTS.md#testing)
    for the local `tools/preflight.sh` equivalent).
 6. Expect review feedback. Small PRs merge faster.
 
