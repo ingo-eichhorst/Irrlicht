@@ -217,20 +217,12 @@ export function activeSubagentCount(a) {
   return a.children.filter(c => c.state === 'working' || c.state === 'waiting').length;
 }
 
-// Cache-creation regression badge (#813) — short visible text plus a longer
-// hover explanation. `tooltip` is the daemon's cache_bloat_tooltip: the
-// version-attribution string when it could name the regressing upstream
-// version, else '' (no attribution).
+// Cache-creation regression badge (#813) — short visible text. `tooltip` is
+// the daemon's cache_bloat_tooltip: the version-attribution string when it
+// could name the regressing upstream version, else '' (no attribution). The
+// longer hover explanation is composed daemon-side (cache_bloat_explanation,
+// issue #827) and rendered verbatim — see updateCacheBloatRow in irrlicht.js.
 export function cacheBloatBadgeText(tooltip) {
   return tooltip || 'cache ↑';
-}
-
-// Hand-duplicated in macOS's SessionRowView.swift — #827 tracks moving this
-// to the daemon so both clients render the same server-composed string.
-export function cacheBloatExplanation(tooltip) {
-  const base = "This session is creating prompt-cache tokens well above normal for this project — it's getting less benefit from caching and costing more per turn.";
-  const attribution = tooltip ? ` Likely tied to ${tooltip}.` : '';
-  const causes = ' Common causes: an agent update that changed context construction, large or varying pasted content each turn, or frequent context resets (e.g. /clear).';
-  return base + attribution + causes;
 }
 

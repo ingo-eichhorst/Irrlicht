@@ -16,7 +16,7 @@ import { relayFrameKind, seqGap, aggregateConnState, relayWsUrl } from './connec
 import {
   stateIcon, shortModel, formatCost, costCellDisplay, fmtDuration, formatElapsed, fmtEtaDuration, fmtEtaText,
   taskEtaPresentation, shortID, pressureClass, pressureColor, formatTokens, esc, activeSubagentCount,
-  cacheBloatBadgeText, cacheBloatExplanation,
+  cacheBloatBadgeText,
 } from './formatters.js';
 import { reconcile, paintRowNum } from './domReconcile.js';
 
@@ -1117,7 +1117,10 @@ import { reconcile, paintRowNum } from './domReconcile.js';
         el.dataset.badge = badgeText;
         el.innerHTML = '<span class="row-cache-bloat">' + esc(badgeText) + '</span>';
       }
-      el.querySelector('.row-cache-bloat').title = cacheBloatExplanation(metrics.cache_bloat_tooltip);
+      // The longer hover explanation is composed daemon-side (issue #827) and
+      // rendered verbatim so both UIs never re-derive (and silently diverge
+      // on) the wording.
+      el.querySelector('.row-cache-bloat').title = metrics.cache_bloat_explanation || '';
     }
 
     // Shared factory for trailing-row variants rendered beneath the parent

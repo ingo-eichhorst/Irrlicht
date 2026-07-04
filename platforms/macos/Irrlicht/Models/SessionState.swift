@@ -367,6 +367,7 @@ struct SessionMetrics: Codable {
     let taskCompletionEta: Date?           // projected task completion (nil when no marker / no progress yet)
     let cacheBloat: Bool?                  // cache-creation regression detected for this session (issue #374)
     let cacheBloatTooltip: String?         // hover text naming the regressing version (empty when no attribution)
+    let cacheBloatExplanation: String?     // longer plain-language hover text, composed daemon-side (issue #827)
 
     enum CodingKeys: String, CodingKey {
         case elapsedSeconds = "elapsed_seconds"
@@ -390,6 +391,7 @@ struct SessionMetrics: Codable {
         case taskCompletionEta = "task_completion_eta"
         case cacheBloat = "cache_bloat"
         case cacheBloatTooltip = "cache_bloat_tooltip"
+        case cacheBloatExplanation = "cache_bloat_explanation"
     }
 
     init(from decoder: Decoder) throws {
@@ -427,6 +429,7 @@ struct SessionMetrics: Codable {
         }
         cacheBloat = try c.decodeIfPresent(Bool.self, forKey: .cacheBloat)
         cacheBloatTooltip = try c.decodeIfPresent(String.self, forKey: .cacheBloatTooltip)
+        cacheBloatExplanation = try c.decodeIfPresent(String.self, forKey: .cacheBloatExplanation)
     }
 
     /// Explicit memberwise initializer for SwiftUI previews and tests that
@@ -453,7 +456,8 @@ struct SessionMetrics: Codable {
         taskEstimate: TaskEstimateInfo? = nil,
         taskCompletionEta: Date? = nil,
         cacheBloat: Bool? = nil,
-        cacheBloatTooltip: String? = nil
+        cacheBloatTooltip: String? = nil,
+        cacheBloatExplanation: String? = nil
     ) {
         self.elapsedSeconds = elapsedSeconds
         self.totalTokens = totalTokens
@@ -476,6 +480,7 @@ struct SessionMetrics: Codable {
         self.taskCompletionEta = taskCompletionEta
         self.cacheBloat = cacheBloat
         self.cacheBloatTooltip = cacheBloatTooltip
+        self.cacheBloatExplanation = cacheBloatExplanation
     }
 
     func encode(to encoder: Encoder) throws {
@@ -501,6 +506,7 @@ struct SessionMetrics: Codable {
         try c.encodeIfPresent(taskCompletionEta.map { $0.timeIntervalSince1970 }, forKey: .taskCompletionEta)
         try c.encodeIfPresent(cacheBloat, forKey: .cacheBloat)
         try c.encodeIfPresent(cacheBloatTooltip, forKey: .cacheBloatTooltip)
+        try c.encodeIfPresent(cacheBloatExplanation, forKey: .cacheBloatExplanation)
     }
     
     // Computed properties for UI display
