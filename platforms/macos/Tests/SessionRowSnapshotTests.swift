@@ -136,7 +136,8 @@ final class SessionRowSnapshotTests: XCTestCase {
         taskEstimate: TaskEstimateInfo? = nil,
         taskCompletionEta: Date? = nil,
         cacheBloat: Bool? = nil,
-        cacheBloatTooltip: String? = nil
+        cacheBloatTooltip: String? = nil,
+        cacheBloatExplanation: String? = nil
     ) -> SessionMetrics {
         SessionMetrics(
             elapsedSeconds: 0,
@@ -153,7 +154,8 @@ final class SessionRowSnapshotTests: XCTestCase {
             taskEstimate: taskEstimate,
             taskCompletionEta: taskCompletionEta,
             cacheBloat: cacheBloat,
-            cacheBloatTooltip: cacheBloatTooltip
+            cacheBloatTooltip: cacheBloatTooltip,
+            cacheBloatExplanation: cacheBloatExplanation
         )
     }
 
@@ -376,7 +378,8 @@ final class SessionRowSnapshotTests: XCTestCase {
             state: .working,
             metrics: makeMetrics(
                 cacheBloat: true,
-                cacheBloatTooltip: "claude-code 2.1.143 +14K cache tokens vs 2.1.98"
+                cacheBloatTooltip: "claude-code 2.1.143 +14K cache tokens vs 2.1.98",
+                cacheBloatExplanation: "This session is creating prompt-cache tokens well above normal for this project — it's getting less benefit from caching and costing more per turn. Likely tied to claude-code 2.1.143 +14K cache tokens vs 2.1.98. Common causes: an agent update that changed context construction, large or varying pasted content each turn, or frequent context resets (e.g. /clear)."
             )
         )
         assertSnapshot(of: host(session, height: 72), as: .image)
@@ -387,7 +390,11 @@ final class SessionRowSnapshotTests: XCTestCase {
     func testCacheBloatBadge_Fallback() {
         let session = makeSession(
             state: .working,
-            metrics: makeMetrics(cacheBloat: true, cacheBloatTooltip: nil)
+            metrics: makeMetrics(
+                cacheBloat: true,
+                cacheBloatTooltip: nil,
+                cacheBloatExplanation: "This session is creating prompt-cache tokens well above normal for this project — it's getting less benefit from caching and costing more per turn. Common causes: an agent update that changed context construction, large or varying pasted content each turn, or frequent context resets (e.g. /clear)."
+            )
         )
         assertSnapshot(of: host(session, height: 72), as: .image)
     }

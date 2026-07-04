@@ -131,6 +131,7 @@ func (c *CacheBloatDetector) OnActivity(state *session.SessionState) {
 		// Below threshold — clear any prior verdict (re-evaluated each turn).
 		state.Metrics.CacheBloat = false
 		state.Metrics.CacheBloatTooltip = ""
+		state.Metrics.CacheBloatExplanation = ""
 		return
 	}
 
@@ -138,6 +139,7 @@ func (c *CacheBloatDetector) OnActivity(state *session.SessionState) {
 	state.Metrics.CacheBloat = true
 	tooltip, regressing, prior, deltaTokens := c.attributeVersion(state, currentMedian)
 	state.Metrics.CacheBloatTooltip = tooltip
+	state.Metrics.CacheBloatExplanation = cacheBloatExplanation(tooltip)
 
 	// Emit the structured event once per (project, regressing_version) pair
 	// within this process. regressing is "" when no attribution is possible,
@@ -274,6 +276,21 @@ func (c *CacheBloatDetector) attributeVersion(state *session.SessionState, curre
 	deltaTokens = int64(delta)
 	tooltip = fmt.Sprintf("%s %s +%dK cache tokens vs %s", state.Adapter, newest, deltaTokens/1000, prior)
 	return tooltip, newest, prior, deltaTokens
+}
+
+// cacheBloatExplanation composes the CacheBloat badge's longer plain-language
+// hover text from its short tooltip (issue #827). Both UIs used to derive
+// this string independently from cache_bloat_tooltip; composing it once here
+// and shipping it verbatim as CacheBloatExplanation keeps future wording
+// tweaks from silently diverging between platforms.
+func cacheBloatExplanation(tooltip string) string {
+	base := "This session is creating prompt-cache tokens well above normal for this project — it's getting less benefit from caching and costing more per turn."
+	attribution := ""
+	if tooltip != "" {
+		attribution = fmt.Sprintf(" Likely tied to %s.", tooltip)
+	}
+	causes := " Common causes: an agent update that changed context construction, large or varying pasted content each turn, or frequent context resets (e.g. /clear)."
+	return base + attribution + causes
 }
 
 // eligible reports whether a stored session counts toward the project's

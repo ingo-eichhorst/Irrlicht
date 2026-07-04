@@ -88,6 +88,13 @@ func TestCacheBloat_ScenarioA_VersionAttribution(t *testing.T) {
 	if !strings.Contains(tip, "2.0.0") || !strings.Contains(tip, "1.0.0") || !strings.Contains(tip, "claude-code") {
 		t.Errorf("tooltip should name both versions and adapter, got %q", tip)
 	}
+	explanation := live.Metrics.CacheBloatExplanation
+	if !strings.Contains(explanation, tip) {
+		t.Errorf("explanation should fold in the tooltip verbatim, got %q", explanation)
+	}
+	if !strings.Contains(explanation, "prompt-cache tokens well above normal") {
+		t.Errorf("explanation missing the plain-language base sentence, got %q", explanation)
+	}
 	if len(rec.events) != 1 {
 		t.Fatalf("expected exactly 1 event, got %d", len(rec.events))
 	}
@@ -125,6 +132,12 @@ func TestCacheBloat_ScenarioB_NoFalseAttribution(t *testing.T) {
 	}
 	if live.Metrics.CacheBloatTooltip != "" {
 		t.Errorf("tooltip must be empty (no attribution), got %q", live.Metrics.CacheBloatTooltip)
+	}
+	if strings.Contains(live.Metrics.CacheBloatExplanation, "Likely tied to") {
+		t.Errorf("explanation must not fabricate an attribution, got %q", live.Metrics.CacheBloatExplanation)
+	}
+	if live.Metrics.CacheBloatExplanation == "" {
+		t.Error("explanation should still be set when the glyph fires, even without attribution")
 	}
 	if len(rec.events) != 1 {
 		t.Fatalf("expected 1 event, got %d", len(rec.events))
@@ -245,6 +258,9 @@ func TestCacheBloat_ClearsWhenMedianDropsBack(t *testing.T) {
 	}
 	if live.Metrics.CacheBloatTooltip != "" {
 		t.Errorf("tooltip should clear too, got %q", live.Metrics.CacheBloatTooltip)
+	}
+	if live.Metrics.CacheBloatExplanation != "" {
+		t.Errorf("explanation should clear too, got %q", live.Metrics.CacheBloatExplanation)
 	}
 }
 

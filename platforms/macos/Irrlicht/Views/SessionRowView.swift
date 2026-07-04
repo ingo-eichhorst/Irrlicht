@@ -3,18 +3,6 @@ import SwiftUI
 
 // MARK: - Session Row View
 
-/// Longer plain-language hover text for the cache-creation regression badge
-/// (#813). `tooltip` is the daemon's cacheBloatTooltip: the version-attribution
-/// string when it could name the regressing upstream version, else nil/empty.
-/// Hand-duplicated in web's formatters.js — #827 tracks moving this to the
-/// daemon so both clients render the same server-composed string.
-private func cacheBloatExplanation(_ tooltip: String?) -> String {
-    let base = "This session is creating prompt-cache tokens well above normal for this project — it's getting less benefit from caching and costing more per turn."
-    let attribution = (tooltip?.isEmpty == false) ? " Likely tied to \(tooltip!)." : ""
-    let causes = " Common causes: an agent update that changed context construction, large or varying pasted content each turn, or frequent context resets (e.g. /clear)."
-    return base + attribution + causes
-}
-
 /// Shared shape for the row's single-line notice pills (user-intent, pending
 /// question, cache-bloat badge): tinted text on a dim background, full-width,
 /// truncating rather than wrapping.
@@ -177,8 +165,9 @@ struct SessionRowView: View {
     /// row (like summaryBlock) rather than inline among the icon-row badges,
     /// since the short label can be a full version-attribution sentence far
     /// wider than the fixed-width icon slots that row allots each glyph.
-    /// Hover still reveals the longer plain-language explanation, folding in
-    /// the attribution when the daemon could name the regressing version.
+    /// Hover still reveals the longer plain-language explanation
+    /// (cacheBloatExplanation), composed daemon-side (issue #827) and
+    /// rendered verbatim so it can't silently diverge from web's copy.
     @ViewBuilder
     private var cacheBloatBlock: some View {
         if session.metrics?.cacheBloat == true {
@@ -187,7 +176,7 @@ struct SessionRowView: View {
             Text(badgeText)
                 .pill(color: IrrColors.pressureHigh, font: .system(size: 9, weight: .semibold, design: .monospaced))
                 .padding(.top, 2)
-                .tooltip(cacheBloatExplanation(tooltip))
+                .tooltip(session.metrics?.cacheBloatExplanation ?? "")
         }
     }
 

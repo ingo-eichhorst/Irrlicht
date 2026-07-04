@@ -148,6 +148,13 @@ type SessionMetrics struct {
 	// attribution is possible (no false attribution).
 	CacheBloatTooltip string `json:"cache_bloat_tooltip,omitempty"`
 
+	// CacheBloatExplanation is the longer plain-language hover text for the
+	// CacheBloat badge, composed daemon-side (issue #827) from
+	// CacheBloatTooltip so both UIs render the identical string verbatim
+	// instead of each re-deriving it from the tooltip. Empty when CacheBloat
+	// is false.
+	CacheBloatExplanation string `json:"cache_bloat_explanation,omitempty"`
+
 	// LastCWD is the most recent working directory extracted from the
 	// transcript during metrics parsing. Used to avoid a separate file read.
 	LastCWD string `json:"-"` // transient — not persisted in session JSON
@@ -482,6 +489,7 @@ func newMergedMetrics(newM *SessionMetrics) *SessionMetrics {
 		CompletedTurns:           newM.CompletedTurns,
 		CacheBloat:               newM.CacheBloat,
 		CacheBloatTooltip:        newM.CacheBloatTooltip,
+		CacheBloatExplanation:    newM.CacheBloatExplanation,
 		Tasks:                    newM.Tasks,
 		NoSubstantiveActivity:    newM.NoSubstantiveActivity,
 		SawManualCompactBoundary: newM.SawManualCompactBoundary,
@@ -568,13 +576,14 @@ func carryForwardCumulativeCounters(merged, oldM *SessionMetrics) {
 // passes that didn't recompute them. TaskEstimate/TaskCompletionEta are
 // deliberately excluded: see the comment at their use site below.
 func carryForwardOverlayState(merged, oldM *SessionMetrics) {
-	// CacheBloat / CacheBloatTooltip are overlay flags set by the detector on
-	// turn boundaries (newM never carries them). Keep the last verdict sticky
-	// across mid-turn passes so the glyph doesn't flicker; the detector
-	// overwrites it on the next turn boundary.
+	// CacheBloat / CacheBloatTooltip / CacheBloatExplanation are overlay flags
+	// set by the detector on turn boundaries (newM never carries them). Keep
+	// the last verdict sticky across mid-turn passes so the glyph doesn't
+	// flicker; the detector overwrites it on the next turn boundary.
 	if !merged.CacheBloat && oldM.CacheBloat {
 		merged.CacheBloat = oldM.CacheBloat
 		merged.CacheBloatTooltip = oldM.CacheBloatTooltip
+		merged.CacheBloatExplanation = oldM.CacheBloatExplanation
 	}
 	// nil Tasks = "no data yet"; non-nil empty slice = "no tasks" — overwrite only for the latter.
 	if merged.Tasks == nil && oldM.Tasks != nil {
