@@ -513,7 +513,7 @@ PKG, and ZIP land in `/tmp/` as before — only the *assembly* path moves.
 3. Copy `AppIcon.icns` → `$APP_STAGING/Contents/Resources/AppIcon.icns`.
 4. **Copy the dashboard UI** → `$APP_STAGING/Contents/Resources/web/index.html`.
    The daemon resolves it at runtime via `<exe>/../Resources/web/`
-   (`resolveUIDir` in `core/cmd/irrlichd/main.go`). Without this copy,
+   (`resolveUIDir` in `core/cmd/irrlichd/paths.go`). Without this copy,
    `GET /` returns the 503 "Dashboard UI not found" fallback — every
    v0.4.4 install shipped without this file and the dashboard at
    `http://127.0.0.1:7837/` was unreachable until v0.4.5 re-spun the assets.

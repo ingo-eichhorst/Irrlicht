@@ -12,7 +12,7 @@ parentheses are illustrative, not assertions to trust blindly — recompute ever
 
 ---
 
-## 1. Agent adapters (currently 7)
+## 1. Agent adapters (currently 8)
 
 Authoritative: `core/adapters/inbound/agents/all.go`, function `All()`. The slice order is the
 canonical order.
@@ -20,7 +20,7 @@ canonical order.
 ```bash
 sed -n '/^func All()/,/^}/p' core/adapters/inbound/agents/all.go \
   | grep -oE '[a-z]+\.Agent\(\)' | sed 's/\.Agent()//' | sort
-# → aider claudecode codex geminicli kirocli opencode pi
+# → aider antigravity claudecode codex geminicli kirocli opencode pi
 ```
 
 Per-adapter `Capabilities`/`Permissions` follow the `agent.Agent` struct idiom in
@@ -40,9 +40,13 @@ it parses a few flags manually via a `hasFlag()` helper.
 ```bash
 # binaries
 find core/cmd tools/*/cmd -maxdepth 1 -mindepth 1 -type d 2>/dev/null | sort
-# flags defined via the flag package
+# flags defined via the flag package — both flag.XxxVar(&v, "name", ...) and the
+# FlagSet method-call style fs.String("name", ...)/fs.Bool(...)/fs.Int(...)/fs.Duration(...)
+# (e.g. irrlichtrelay defines its flags the second way; the Var-only pattern misses them)
 grep -rhoE 'flag\.[A-Za-z]+Var\([^,]+,\s*"[^"]+"' core tools --include='*.go' \
   | grep -oE '"[^"]+"' | sort -u
+grep -rhoE '\b[A-Za-z_]+\.(String|Bool|Int|Duration|Int64|Float64)\("[^"]+"' core tools --include='*.go' \
+  | grep -v '_test.go' | grep -oE '"[^"]+"' | sort -u
 # irrlichd's manual flags
 grep -oE 'hasFlag\("[^"]+"' core/cmd/irrlichd/main.go | sed 's/hasFlag("//' | sort -u
 ```
@@ -81,11 +85,15 @@ common ones like `IRRLICHT_BIND_ADDR`, `NO_COLOR`).
 
 ## 4. Daemon HTTP routes
 
-Authoritative: `core/cmd/irrlichd/main.go`, registered on a stdlib `http.ServeMux`.
+Authoritative: `core/cmd/irrlichd/startup.go` (route registration moved out of `main.go` in
+#821, "break up irrlichd main() into named startup phases"), registered on a stdlib
+`http.ServeMux`.
 
 ```bash
-grep -oE 'mux\.HandleFunc\("[A-Z]+ [^"]+"' core/cmd/irrlichd/main.go \
-  | sed 's/mux.HandleFunc("//' | sort
+grep -rhoE 'mux\.HandleFunc\("[A-Z]+ [^"]+"' core/cmd/irrlichd/*.go \
+  | sed 's/mux.HandleFunc("//' | sort -u
+# method-agnostic routes (no leading HTTP verb) registered the same way:
+grep -n 'mux\.HandleFunc("/api' core/cmd/irrlichd/startup.go
 ```
 
 Public API routes are the `/api/v1/*` set; `/debug/pprof/*` and `/state` are internal

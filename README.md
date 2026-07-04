@@ -15,7 +15,7 @@
 
 </div>
 
-> 🟣 working · 🟠 waiting · 🟢 ready — one ambient dot per session, multi-agent, no hooks.
+> 🟣 working · 🟠 waiting · 🟢 ready — one ambient dot per session, multi-agent, zero manual setup.
 
 ## Install
 

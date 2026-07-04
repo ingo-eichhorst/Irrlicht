@@ -134,7 +134,7 @@
         <li>Process discovery via <code>CommandLineMatch</code> (<code>/aider($| )</code>) since the OS process is <code>python</code></li>
         <li><strong>Adapter name:</strong> <code>"aider"</code></li>
         <li>Waiting state is pinned to a trailing <code>?</code> contract on the most recent assistant block</li>
-        <li>Stage: <strong>alpha</strong> &mdash; first agent shipped through the <code>/ir:onboard-agent</code> discovery flow</li>
+        <li>Stage: <strong>alpha</strong> &mdash; first agent shipped through the <code>/ir:onboarding-factory</code> discovery flow</li>
       </ul>
 
       <h3>OpenCode Adapter</h3>
@@ -404,7 +404,7 @@ type Watcher interface {
       <h3>Process Watcher</h3>
 
       <ul>
-        <li><strong>Package:</strong> <code>core/adapters/outbound/process/</code></li>
+        <li><strong>Package:</strong> <code>core/adapters/inbound/agents/processlifecycle/</code></li>
         <li>kqueue <code>EVFILT_PROC</code> <code>NOTE_EXIT</code> monitoring</li>
         <li>~1ms exit detection latency</li>
         <li>Periodic liveness sweep as fallback</li>
@@ -501,7 +501,7 @@ type Watcher interface {
 
       <p><strong>For adapters, additionally:</strong></p>
       <ul class="checklist">
-        <li><strong>All</strong> scenarios in <code>.claude/skills/ir:onboard-agent/scenarios.json</code> whose <code>requires</code> is covered by the adapter's capabilities replay green</li>
+        <li><strong>All</strong> scenarios in <code>replaydata/agents/scenarios.json</code> whose <code>requires</code> is covered by the adapter's capabilities replay green</li>
         <li>Model + cost extraction wired through <code>core/adapters/outbound/metrics/</code></li>
         <li>Subagent / parent-child linkage emits <code>ParentSessionID</code> where the agent supports subagents</li>
       </ul>
@@ -528,7 +528,7 @@ type Watcher interface {
 
       <h2>Writing a New Adapter</h2>
 
-      <p>The end-to-end path for adding an agent adapter -- from process discovery through fixture recording to stage promotion -- is documented under <a href="contributing.html#adding-an-adapter">Adding a new agent adapter</a> on the Contributing page. That section drives the <code>/ir:onboard-agent</code> skill, which produces the canonical scenario fixtures used by the criteria above.</p>
+      <p>The end-to-end path for adding an agent adapter -- from process discovery through fixture recording to stage promotion -- is documented under <a href="contributing.html#adding-an-adapter">Adding a new agent adapter</a> on the Contributing page. That section drives the <code>/ir:onboarding-factory</code> skill, which produces the canonical scenario fixtures used by the criteria above.</p>
 
       <!-- Bottom nav -->
       <nav class="docs-nav-bottom">

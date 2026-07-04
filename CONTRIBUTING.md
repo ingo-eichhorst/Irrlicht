@@ -40,7 +40,7 @@ Project layout:
 core/        Go daemon (hexagonal: domain → ports → adapters → services)
 platforms/   Swift macOS app, web frontend, build scripts
 site/        Landing page and docs (GitHub Pages)
-fixtures/    Sample transcripts and recorded sessions
+replaydata/  Sample transcripts and recorded sessions (onboarding-factory fixture catalog)
 ```
 
 See [AGENTS.md](AGENTS.md) for the architectural conventions every change is

@@ -12,6 +12,71 @@ beyond), see the [Roadmap](https://irrlicht.io/docs/roadmap.html).
 
 ## [Unreleased]
 
+## [0.5.5] — 2026-07-04
+
+### CO2 estimates next to cost, a self-explaining cache-regression badge, and reconnect reliability fixes
+
+### Highlights
+
+#### Estimated CO2 footprint alongside cost
+
+![A session row's cost column reading "7.1g CO2e" instead of a dollar amount, with two more rows showing 9.3g CO2e and 2.0g CO2e](assets/releases/v0.5.5/co2-footprint.png)
+
+Click a session's cost figure and it now cycles to an estimated CO2e footprint, with a hover tooltip disclosing how confident the number is — provider-disclosed coefficients where a provider publishes them (Gemini, Mistral), a cross-model average otherwise.
+
+**Why it matters:** cost isn't the only budget that matters. Now you can see a session's environmental footprint with the same glance you'd check its price — no separate tool, no export.
+
+(#829, #831)
+
+#### Cache-regression badge explains itself
+
+![A red badge under a session row reading "claude-code 2.1.143 +14K cache tokens vs 2.1.98"](assets/releases/v0.5.5/cache-bloat-badge.png)
+
+The badge that flags a session whose prompt-cache reuse has regressed now always shows which agent version caused it (or a compact "cache ↑" fallback), with the full plain-language explanation on hover — instead of a bare icon you had to guess at.
+
+**Why it matters:** when caching quietly breaks and a session starts costing more per turn, you immediately know why and which update triggered it, not just that something changed.
+
+(#813, #826, #827, #842)
+
+### Fixed
+- History → Usage tab: grouping by Model no longer buckets everything under "unknown" — a wrong source field meant every session landed in one aggregate bucket regardless of which model was actually used. (#792, #793)
+- History's tab switcher moved into the header, controls collapsed to one row — the Usage/Yield/Quota picker now lives in the header instead of a static label, and Range/Chart/Group/Forecast controls sit on one scrollable row instead of three stacked ones. (#785, #788)
+- Menu bar app recovers when the daemon it's connected to restarts — local-daemon traffic now rides its own recyclable connection with a visible "daemon unreachable — retrying" state, instead of retrying forever against a wedged one. (#843, #845)
+- Relay connections recover from the same wedged-restart failure mode — mirrors the local-daemon fix for a restarted standalone `irrlichtrelay`. (#846, #848)
+- Menu bar session count no longer double-counts relay-echoed sessions — a local daemon that also publishes to a relay it subscribes to could overcount a project's sessions in the menu bar dots/badge. (#828, #830)
+- "Expand All Task Summaries" toggle now persists across restarts. (#799, #800)
+- Antigravity sessions bound to a non-interactive background poller no longer show as phantom menu-bar circles — a known third-party helper process is now recognized and excluded at admission time. (#784, #791)
+- FocusMonitor's remaining crash path on the macOS 26 SDK closed. (#782, #790)
+- Subagents whose worktree/transcript disappeared mid-run are reaped instead of lingering as phantom sessions. (#850)
+- Daemon route-registration startup race fixed. (#794, #795, #798)
+
+### Changed / Docs / Distribution
+- Dropped a fragile SwiftPM resource-bundle dependency — removes a crash mode where a dev build's `.app` could outlive the worktree it was built from. (#844, #847)
+- Doc-review sweep gained a `--fix` mode, wired into the release process itself, and the README's CodeScene score badge now auto-refreshes on every push to main. (#834, #835, #837)
+
+### Technical appendix
+- **Estimated CO2 footprint (#829, #831).** `capacity.EstimateCO2Grams` — a tiered CO2e estimation formula: provider-disclosed coefficients for Gemini (Google's Aug 2025 environmental report) and Mistral (Carbone4/ADEME lifecycle assessment), falling back to a cross-model average (Epoch AI) for everything else, including Claude and GPT since neither Anthropic nor OpenAI publishes per-token figures. Wired through the tailer's existing cumulative-token computation into `SessionMetrics.EstimatedCO2Grams` + `CO2Tier`, mirroring `EstimatedCostUSD`'s plumbing exactly. Ships as a click-to-cycle web dashboard surface first; CLI/macOS parity and historical/aggregate tracking are deferred follow-ups.
+- **Cache-regression badge explanation (#813, #826, #827, #842).** Adds an always-visible badge on both macOS and web showing the version attribution (or a compact `cache ↑` fallback), composed once daemon-side into `cache_bloat_explanation` on `session.metrics` instead of each client re-deriving the copy independently. macOS renders it as its own row below the session row (mirroring the intent/waiting-question pills); web renders it verbatim as hover text.
+- **History Group=Model fix (#792, #793).** `RecordSnapshot`/`RecordBaseline` in `cost_tracker.go` stamped each cost row's `Model` field from `SessionState.Model`, which is never assigned in production code — always `""`, so every row landed in the aggregate "unknown" bucket. Falls back to `Metrics.ModelName`, mirroring the pattern already used correctly in the session-list handler. Introduced in #750/#771, not a regression against older history.
+- **History header/controls redesign (#785, #788).** Moves the Usage/Yield/Quota tab picker into `HistoryView`'s header, flattens Range/Chart/Group/Forecast/cross-filters onto one horizontally-scrollable row instead of three stacked rows, and gives the popover a hard fixed height independent of width so it no longer inherits whatever height `SessionListView` happened to be at.
+- **Local-daemon reconnect recovery (#843, #845).** `SessionManager+WebSocket.swift`'s `connect()` had two compounding bugs: `reconnectDelay` reset to 1.0 on every attempt (including failed ones), defeating exponential backoff, and all local-daemon traffic rode `URLSession.shared`, which can wedge against a host:port that restarted under it. Fix: a dedicated `URLSession` recreated after 3 consecutive silent-failure cycles, backoff/failure streak reset only on a confirmed message, and a surfaced "daemon unreachable — retrying" state.
+- **Relay reconnect recovery (#846, #848).** Same wedged-`URLSession.shared` failure mode, this time for a restarted standalone `irrlichtrelay` — gives the relay path its own dedicated `relayURLSession` with the same recycle-after-3-failures treatment as #845.
+- **Relay-echo dedup in the flat sessions array (#828, #830).** #746/#748 already fixed relay-echo overcounting for `apiGroups` (the list view) with a name-based collapse; the flat `sessions` array backing the menu bar dots/badge only deduped by id, and the echoed session carries a drifted id that escapes that filter. Mirrors the same name-based collapse into `rebuildSessionsFromMap()`.
+- **Antigravity non-interactive host rejection (#784, #791).** A known third-party menu-bar app (CodexBar) keeps an Antigravity `agy` CLI process running in the background to poll quota data, which surfaced as a permanent phantom menu-bar circle. Adds `Process.RequireKnownHost` plus a synchronous, one-shot ancestry check at PID-discovery time (`PIDManager.AllowsSession`) — a process whose ancestry doesn't resolve to a known terminal/IDE never becomes a session. A TTL/staleness-based fix was considered and rejected: Antigravity's activity signal resets on any parseable line, which would make a reaped ghost look freshly alive again minutes later.
+- **FocusMonitor KVC crash path (#782, #790).** `isFocusActive` still read `focusStatus`/`isFocused` via `value(forKey:)` — the same "missing key throws instead of returning nil" trap as the earlier singleton-lookup crash. Both reads now use the same `responds(to:)`-guarded selector dispatch; `isFocused` needs a direct IMP call since `perform(_:)` is undefined for non-object returns.
+- **Subagent reaping on deleted transcript (#850).** A subagent's PID is inherited from its parent process rather than its own, so once the parent exits and the PID is reused, PID-liveness checks can never tell the orphaned subagent is dead. `reapStaleChild`'s only other backstop, `isStaleTranscript`, treated a deleted transcript file the same as "hasn't gone stale yet" (a silently-swallowed `os.Stat` error). Adds `isDeletedTranscript` (confirmed-gone via `os.IsNotExist`), gated on `FirstSeen` age so a freshly-spawned subagent isn't mistaken for an orphan.
+- **Daemon route-registration startup race (#794, #795, #798)**, plus a flaky CI test and preflight tooling fix bundled in the same PR.
+- **SwiftPM resource-bundle removal (#844, #847).** `Bundle.module`'s SwiftPM-generated accessor only ever resolved via its compile-time absolute `buildPath` fallback, which crashed the moment the worktree that built it was deleted. The only use (`AppIcon.icns`) was already covered by a direct bundle copy every build script performs, so the mechanism is removed entirely rather than relocated.
+- **`ir:doc-review --fix` mode (#834, #837).** For findings where an existing doc claim is directly contradicted by a code-derived fact, applies the correction in place instead of only filing an issue; wired into `/ir:release` Step 4b so drift from *any* earlier release — not just this one's diff — gets caught. (This is what caught README.md/site/index.html's stale "no hooks" claim, corrected in this release.)
+- **CodeScene badge automation (#835, #802).** A scheduled workflow refreshes the README's CodeScene score badge on every push to main; a manual `codescene-report.yml` fetcher backs the `/ir:codescene-report` skill for on-demand hotspot/trend lookups.
+- **Hexagonal layering enforcement + ARS regression gate (#796, #803).** `core/architecture_test.go` statically enforces domain/ports never importing outward into adapters/application via `go/packages` checks; `tools/ars-gate.sh` flags an Agent Readiness Score regression vs `origin/main` as an advisory (non-blocking) PR check, mirrored locally by `tools/preflight.sh --only arch`.
+- **Shared contract test for consent-gated adapter call sites (#797, #817).** `contracttesting.AssertPermissionGated` behaviorally verifies a permission's Apply/Remove wiring at runtime, complementing the static architecture test.
+- **`ir:test-mac` componentized restart (#833, #838).** Adds a `TARGET=daemon|macos|full` axis so a Go-only or Swift-only change restarts just that component; `MODE=replace` now installs directly into `/Applications/Irrlicht.app` instead of a parallel `/tmp/IrrlichtDev.app` sharing the same bundle id — the root cause of the "prod respawn" pitfall.
+- **CodeScene hotspot cleanup sprint** — eight no-behavior-change refactors splitting files CodeScene flagged as hotspots: `tailer.TailAndProcess`/`processParsedEvent` (#822), `domain/session.go` by concern (#808, #816), `irrlicht.js` into modules (#805, #820), `SessionListView.swift` into per-concern views (#818), `PIDManager`'s liveness sweep/dedup deletion (#810, #819), `irrlichd main()` into named startup phases (#821), `SessionManager` god-object into extensions (#815), and `session_detector_test.go` by scenario group (#814, tightened per review in #824).
+- Dependency bump: `golang.org/x/net` 0.52.0 → 0.55.0 in `core`. (#801)
+- Misc test/tooling hygiene: `SessionRowSnapshotTests` made hermetic against a live daemon (#841); pre-push hook no longer inherits a stray `GIT_DIR`/`GIT_WORK_TREE` when running preflight (#812).
+- Docs: worktree shortcuts + Task Management tidy-up and a git-stash-not-isolated-per-worktree note in AGENTS.md (#789, #825), Karpathy Guidelines section removed from AGENTS.md (#787), `ir:test-mac` doc defaults to replace mode (#786), CodeScene/ARS README badges given their own line plus a workflow badge (#836, #823).
+
 ## [0.5.4] — 2026-06-29
 
 ### A full History view with spend analytics, a backchannel that acts on your agents, and plain-language session summaries.
@@ -1209,7 +1274,8 @@ Four distinct bugs caused long-running Claude Code sessions to bounce between
 - First bundled macOS installer `Irrlicht-0.2.0-mac-installer.pkg` containing
   the daemon, menu bar app, and auto-start LaunchAgent.
 
-[Unreleased]: https://github.com/ingo-eichhorst/Irrlicht/compare/v0.5.4...HEAD
+[Unreleased]: https://github.com/ingo-eichhorst/Irrlicht/compare/v0.5.5...HEAD
+[0.5.5]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.5.5
 [0.5.4]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.5.4
 [0.5.3]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.5.3
 [0.5.2]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.5.2
