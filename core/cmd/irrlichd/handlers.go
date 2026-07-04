@@ -367,8 +367,8 @@ func handleGetHistory(tracker outbound.CostTracker, sessions historySessionListe
 			chart = "cost"
 		}
 		switch chart {
-		case "cost", "tokens", "models", "providers":
-			// implemented (Phase 2)
+		case "cost", "tokens", "co2", "models", "providers":
+			// implemented (Phase 2); co2 added for issue #829
 		case "yield":
 			// implemented (#373) — handled after range resolution below
 		case "agents":
@@ -404,6 +404,8 @@ func handleGetHistory(tracker outbound.CostTracker, sessions historySessionListe
 		switch chart {
 		case "tokens":
 			metric = "tokens"
+		case "co2":
+			metric = "co2"
 		case "models":
 			group = "model"
 		case "providers":
@@ -698,8 +700,10 @@ func buildHistoryResponse(rangeKey, chart, group, scope string, s *outbound.Cost
 		resp.TokenSplit = &historyTokenSplit{Input: s.TokenSplit.Input, Output: s.TokenSplit.Output, Cache: s.TokenSplit.Cache}
 	}
 
-	// Forecast projects USD spend; it isn't meaningful for token counts.
-	if chart != "tokens" && historyForecastEnabled(q) && resp.Total > 0 && len(s.BucketStarts) > 0 {
+	// Forecast projects USD spend; it isn't meaningful for token counts, and
+	// compounding a linear projection on top of an already-modeled CO2e
+	// estimate would overstate precision it doesn't have.
+	if chart != "tokens" && chart != "co2" && historyForecastEnabled(q) && resp.Total > 0 && len(s.BucketStarts) > 0 {
 		resp.Forecast = computeLinearForecast(s.BucketStarts, s.BucketSeconds, resp.Total, historyForecastBuckets(q, len(s.BucketStarts)))
 	}
 	return resp

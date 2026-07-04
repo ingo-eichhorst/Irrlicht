@@ -1,4 +1,5 @@
 import { describe, test, expect, beforeEach } from 'vitest'
+import { formatCO2, co2TierTitle } from './formatters.js'
 import {
   pendingWizardAgents,
   stillPendingForAgents,
@@ -7,6 +8,7 @@ import {
   rowLabel,
   maybeNotifyOnUpdate,
   formatCost,
+  costCellDisplay,
   formatUsageCost,
   pressureClass,
   taskEtaPresentation,
@@ -27,6 +29,7 @@ import {
   historyQuery,
   histTokens,
   histCount,
+  histCO2,
   CHART_LABELS,
   DRILL_NEXT,
   historyRunningSum,
@@ -110,6 +113,52 @@ describe('formatCost', () => {
   test('formats positive values with dollar sign and two decimals', () => {
     expect(formatCost(1.5)).toBe('$1.50')
     expect(formatCost(0.123)).toBe('$0.12')
+  })
+})
+
+describe('formatCO2', () => {
+  test('returns empty string for zero or falsy', () => {
+    expect(formatCO2(0)).toBe('')
+    expect(formatCO2(null)).toBe('')
+    expect(formatCO2(undefined)).toBe('')
+  })
+
+  test('formats sub-gram values in milligrams', () => {
+    expect(formatCO2(0.03)).toBe('30mg CO2e')
+  })
+
+  test('formats gram-range values with one decimal', () => {
+    expect(formatCO2(1.5)).toBe('1.5g CO2e')
+    expect(formatCO2(158.7)).toBe('158.7g CO2e')
+  })
+
+  test('formats kilogram-range values with two decimals', () => {
+    expect(formatCO2(2850)).toBe('2.85kg CO2e')
+  })
+})
+
+describe('co2TierTitle', () => {
+  test('names the provider disclosure for provider_disclosed tier', () => {
+    expect(co2TierTitle('provider_disclosed')).toMatch(/provider-published/)
+  })
+
+  test('discloses the fallback approximation for any other tier', () => {
+    expect(co2TierTitle('fallback')).toMatch(/cross-model fallback/)
+    expect(co2TierTitle(undefined)).toMatch(/cross-model fallback/)
+  })
+})
+
+describe('costCellDisplay', () => {
+  const metrics = { estimated_cost_usd: 1.5, estimated_co2_grams: 30, co2_tier: 'provider_disclosed' }
+
+  test('shows cost by default', () => {
+    expect(costCellDisplay(metrics, 'cost')).toEqual({ text: '$1.50', title: 'Click to show CO2 estimate' })
+  })
+
+  test('shows CO2 with its tier tooltip in co2 mode', () => {
+    const { text, title } = costCellDisplay(metrics, 'co2')
+    expect(text).toBe('30.0g CO2e')
+    expect(title).toMatch(/provider-published/)
   })
 })
 
@@ -790,5 +839,25 @@ describe('agents chart (#751 Phase 3)', () => {
     expect(histCount(2)).toBe('2')
     expect(histCount(2.6)).toBe('3')
     expect(histCount(undefined)).toBe('0')
+  })
+})
+
+describe('co2 chart (issue #829)', () => {
+  test('chart=co2 serializes with project grouping', () => {
+    const q = new URLSearchParams(historyQuery({ range: 'day', chart: 'co2', group: 'project', forecast: true, start: null, end: null, scope: null }))
+    expect(q.get('chart')).toBe('co2')
+    expect(q.get('group')).toBe('project')
+  })
+
+  test('CHART_LABELS includes CO2', () => {
+    expect(CHART_LABELS.co2).toBe('CO2')
+  })
+
+  test('histCO2 is unit-adaptive and always renders a value', () => {
+    expect(histCO2(0)).toBe('0mg')
+    expect(histCO2(0.03)).toBe('30mg')
+    expect(histCO2(158.7)).toBe('158.7g')
+    expect(histCO2(2850)).toBe('2.85kg')
+    expect(histCO2(undefined)).toBe('0mg')
   })
 })

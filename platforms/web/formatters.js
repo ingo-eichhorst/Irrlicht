@@ -29,6 +29,37 @@ export function formatCost(usd) {
   return '$' + usd.toFixed(2);
 }
 
+// formatCO2 renders an estimated CO2e footprint (issue #829). Grams span a
+// wide range across sessions (milligrams for a short chat, kilograms for a
+// long agentic run), so the unit adapts rather than showing e.g. "0.0g".
+export function formatCO2(grams) {
+  if (!grams || grams <= 0) return '';
+  if (grams < 1) return (grams * 1000).toFixed(0) + 'mg CO2e';
+  if (grams < 1000) return grams.toFixed(1) + 'g CO2e';
+  return (grams / 1000).toFixed(2) + 'kg CO2e';
+}
+
+// co2TierTitle explains the confidence behind a CO2 estimate — every figure
+// here is modeled from public disclosures, never measured (no provider
+// exposes per-request energy telemetry), so the tooltip says so rather than
+// presenting a bare number as fact. Mirrors capacity.CO2Tier's Go-side values.
+export function co2TierTitle(tier) {
+  if (tier === 'provider_disclosed') {
+    return 'Estimated CO2e, normalized from a provider-published energy/CO2 disclosure — not a live measurement.';
+  }
+  return 'Estimated CO2e — no public per-model figure exists for this model, so a cross-model fallback average is used. Not a live measurement.';
+}
+
+// costCellDisplay resolves the per-session row's cost/CO2 slot (issue #829)
+// to its text + tooltip for the given display mode, keeping the mode
+// branching out of updateSessionRow's already-large row-rendering function.
+export function costCellDisplay(metrics, mode) {
+  if (mode === 'co2') {
+    return { text: formatCO2(metrics.estimated_co2_grams), title: co2TierTitle(metrics.co2_tier) };
+  }
+  return { text: formatCost(metrics.estimated_cost_usd), title: 'Click to show CO2 estimate' };
+}
+
 export function fmtDuration(secs) {
   const h = Math.floor(secs / 3600);
   const m = Math.floor((secs % 3600) / 60);

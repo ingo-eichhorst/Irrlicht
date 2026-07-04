@@ -51,11 +51,17 @@ type SessionMetrics struct {
 	CumCacheReadTokens     int64   `json:"cum_cache_read_tokens,omitempty"`
 	CumCacheCreationTokens int64   `json:"cum_cache_creation_tokens,omitempty"`
 	EstimatedCostUSD       float64 `json:"estimated_cost_usd,omitempty"`
-	ModelName              string  `json:"model_name,omitempty"`
-	AgentVersion           string  `json:"agent_version,omitempty"`
-	ContextWindow          int64   `json:"context_window,omitempty"`
-	ContextUtilization     float64 `json:"context_utilization_percentage,omitempty"`
-	PressureLevel          string  `json:"pressure_level,omitempty"` // "safe", "caution", "warning", "critical"
+	// EstimatedCO2Grams and CO2Tier mirror EstimatedCostUSD's cumulative-token
+	// derivation (issue #829) — see capacity.EstimateCO2Grams. CO2Tier stores
+	// capacity.CO2Tier's string value; kept plain so this package doesn't take
+	// on more of capacity's API surface than the cost fields already do.
+	EstimatedCO2Grams  float64 `json:"estimated_co2_grams,omitempty"`
+	CO2Tier            string  `json:"co2_tier,omitempty"`
+	ModelName          string  `json:"model_name,omitempty"`
+	AgentVersion       string  `json:"agent_version,omitempty"`
+	ContextWindow      int64   `json:"context_window,omitempty"`
+	ContextUtilization float64 `json:"context_utilization_percentage,omitempty"`
+	PressureLevel      string  `json:"pressure_level,omitempty"` // "safe", "caution", "warning", "critical"
 
 	// ContextWindowUnknown is true when ContextWindow is the 32k sentinel
 	// fallback (no LiteLLM pricing for this model) rather than a known

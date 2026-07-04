@@ -46,9 +46,19 @@ final class HistoryPhase2Tests: XCTestCase {
         XCTAssertEqual(HistoryChart.providers.pinnedGroup, .provider)
         XCTAssertNil(HistoryChart.cost.pinnedGroup)
         XCTAssertNil(HistoryChart.tokens.pinnedGroup)
+        XCTAssertNil(HistoryChart.co2.pinnedGroup)
         XCTAssertTrue(HistoryChart.cost.isCost)
         XCTAssertTrue(HistoryChart.models.isCost)
         XCTAssertFalse(HistoryChart.tokens.isCost)
+        XCTAssertFalse(HistoryChart.co2.isCost)
+    }
+
+    // issue #829: the co2 chart is neither the USD nor the tokens metric.
+    func testChart_isCO2() {
+        XCTAssertTrue(HistoryChart.co2.isCO2)
+        XCTAssertFalse(HistoryChart.cost.isCO2)
+        XCTAssertFalse(HistoryChart.tokens.isCO2)
+        XCTAssertEqual(HistoryChart.co2.label, "CO2")
     }
 
     func testFormat_tokensAndValue() {
@@ -57,6 +67,14 @@ final class HistoryPhase2Tests: XCTestCase {
         XCTAssertEqual(HistoryFormat.tokens(970), "970")
         XCTAssertEqual(HistoryFormat.value(1.5, chart: .cost), "$1.50")
         XCTAssertEqual(HistoryFormat.value(1500, chart: .tokens), "1.5k")
+    }
+
+    // issue #829: unit-adaptive CO2e formatting, matching the web histCO2.
+    func testFormat_co2AndValue() {
+        XCTAssertEqual(HistoryFormat.co2(0.03), "30mg")
+        XCTAssertEqual(HistoryFormat.co2(158.7), "158.7g")
+        XCTAssertEqual(HistoryFormat.co2(2850), "2.85kg")
+        XCTAssertEqual(HistoryFormat.value(158.7, chart: .co2), "158.7g")
     }
 
     func testScope_queryForm() {

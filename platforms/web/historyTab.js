@@ -11,7 +11,7 @@ const HISTORY_COLORS = [
   '#5E5CE6', '#FFD60A', '#30D158', '#BF5AF2', '#64D2FF',
 ];
 const RANGE_LABELS = { day: 'Day', week: 'Week', month: 'Month', year: 'Year', 'this-month': 'This Month', custom: 'Custom' };
-export const CHART_LABELS = { cost: 'Cost', tokens: 'Tokens', models: 'Models', providers: 'Providers', agents: 'Agents' };
+export const CHART_LABELS = { cost: 'Cost', tokens: 'Tokens', co2: 'CO2', models: 'Models', providers: 'Providers', agents: 'Agents' };
 // Drilldown order: clicking a contributor scopes to it and re-groups by the
 // next finer axis. A leaf (no entry) makes that contributor non-drillable.
 export const DRILL_NEXT = { project: 'branch', branch: 'session', provider: 'model', model: 'session' };
@@ -42,11 +42,21 @@ export function histTokens(v) {
 }
 // Integer agent count (concurrency is a whole number of sessions).
 export function histCount(v) { return String(Math.round(Number(v) || 0)); }
+// Compact estimated CO2e footprint (issue #829): unit-adaptive like the
+// session row's formatCO2, but always renders a value — a chart axis needs
+// "0g" at an empty bucket, not the row display's hide-on-zero blank.
+export function histCO2(v) {
+  v = Number(v) || 0;
+  if (v < 1) return (v * 1000).toFixed(0) + 'mg';
+  if (v < 1000) return v.toFixed(1) + 'g';
+  return (v / 1000).toFixed(2) + 'kg';
+}
 // The value formatter for the active chart — dollars for cost/models/providers,
-// token counts for tokens, integer agent counts for agents.
+// token counts for tokens, integer agent counts for agents, grams for co2.
 function histValue(v) {
   if (historyState.chart === 'tokens') return histTokens(v);
   if (historyState.chart === 'agents') return histCount(v);
+  if (historyState.chart === 'co2') return histCO2(v);
   return histDollar(v);
 }
 function histAxisLabel(ts, bucketSeconds) {
@@ -370,7 +380,7 @@ function renderHistoryPanel() {
 
   const contribs = data.top_contributors || [];
   if (!contribs.length) {
-    appendHistoryEmpty(listEl, 'no spend in this range');
+    appendHistoryEmpty(listEl, historyState.chart === 'co2' ? 'no CO2 estimate in this range' : 'no spend in this range');
     return;
   }
   // Drilldown: click a contributor to scope into it (the effective stacking

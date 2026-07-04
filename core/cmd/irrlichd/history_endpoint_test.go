@@ -261,6 +261,32 @@ func TestHandleGetHistory_TokensSplit(t *testing.T) {
 	}
 }
 
+// TestHandleGetHistory_CO2: chart=co2 (issue #829) sums the co2 column like
+// chart=cost sums cost, carries no token_split, and forecasts nothing (an
+// estimate compounded with a linear projection would overstate precision).
+func TestHandleGetHistory_CO2(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "cost")
+	seedCostRows(t, dir, "proj-a", []map[string]any{
+		{"ts": 1050, "project": "proj-a", "session": "s1", "cost": 1.00, "co2": 10},
+		{"ts": 1150, "project": "proj-a", "session": "s1", "cost": 1.40, "co2": 35},
+	})
+	tr := filesystem.NewCostTrackerWithDir(dir)
+
+	rec, resp := doHistory(t, tr, "start=1000&end=1400&bucket=100&chart=co2")
+	if rec.Code != http.StatusOK || resp.Chart != "co2" {
+		t.Fatalf("want 200 chart=co2, got %d/%q", rec.Code, resp.Chart)
+	}
+	if resp.Total != 25 {
+		t.Errorf("co2 total: want 25, got %v", resp.Total)
+	}
+	if resp.TokenSplit != nil {
+		t.Errorf("co2 chart should not carry token_split, got %+v", resp.TokenSplit)
+	}
+	if resp.Forecast != nil {
+		t.Errorf("co2 chart should not forecast, got %+v", resp.Forecast)
+	}
+}
+
 // TestHandleGetHistory_UnknownBucketRule: the unknown bucket is surfaced only at
 // ≥10% of the window total, else dropped.
 func TestHandleGetHistory_UnknownBucketRule(t *testing.T) {

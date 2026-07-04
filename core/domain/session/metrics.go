@@ -104,6 +104,19 @@ type SessionMetrics struct {
 	// cumulative token totals and per-model pricing.
 	EstimatedCostUSD float64 `json:"estimated_cost_usd,omitempty"`
 
+	// EstimatedCO2Grams is the estimated CO2e footprint in grams, computed
+	// from cumulative token totals and per-model energy coefficients (issue
+	// #829). Always a model, never a measurement — no provider exposes
+	// per-request energy telemetry — so it must be surfaced alongside
+	// CO2Tier, not presented as a precise figure.
+	EstimatedCO2Grams float64 `json:"estimated_co2_grams,omitempty"`
+
+	// CO2Tier names the confidence tier behind EstimatedCO2Grams
+	// (capacity.CO2Tier's string value: "provider_disclosed" or "fallback").
+	// Kept as a plain string rather than importing capacity's type, matching
+	// how EstimatedCostUSD stays decoupled from the capacity package.
+	CO2Tier string `json:"co2_tier,omitempty"`
+
 	// Cumulative token totals across all API turns (for cost breakdown).
 	CumInputTokens         int64 `json:"cum_input_tokens,omitempty"`
 	CumOutputTokens        int64 `json:"cum_output_tokens,omitempty"`
@@ -453,6 +466,8 @@ func newMergedMetrics(newM *SessionMetrics) *SessionMetrics {
 		LastWasUserInterrupt:     newM.LastWasUserInterrupt,
 		LastWasToolDenial:        newM.LastWasToolDenial,
 		EstimatedCostUSD:         newM.EstimatedCostUSD,
+		EstimatedCO2Grams:        newM.EstimatedCO2Grams,
+		CO2Tier:                  newM.CO2Tier,
 		LastAssistantText:        newM.LastAssistantText,
 		TaskSummary:              newM.TaskSummary,
 		IntentHeadline:           newM.IntentHeadline,
@@ -509,6 +524,10 @@ func carryForwardScalarFields(merged, oldM *SessionMetrics) {
 	}
 	if merged.EstimatedCostUSD == 0 && oldM.EstimatedCostUSD > 0 {
 		merged.EstimatedCostUSD = oldM.EstimatedCostUSD
+	}
+	if merged.EstimatedCO2Grams == 0 && oldM.EstimatedCO2Grams > 0 {
+		merged.EstimatedCO2Grams = oldM.EstimatedCO2Grams
+		merged.CO2Tier = oldM.CO2Tier
 	}
 	if merged.PermissionMode == "" && oldM.PermissionMode != "" {
 		merged.PermissionMode = oldM.PermissionMode

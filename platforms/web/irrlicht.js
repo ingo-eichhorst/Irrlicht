@@ -1,7 +1,7 @@
 import { isGroupCollapsed, toggleGroupCollapsed } from './collapsedGroups.js';
 import { isSummaryCollapsed, toggleSummaryCollapsed, anySummaryCollapsed, collapseAllSummaries, expandAllSummaries } from './collapsedSummaries.js';
 import {
-  initHistoryTab, historyQuery, histTokens, histCount, CHART_LABELS, DRILL_NEXT, historyRunningSum,
+  initHistoryTab, historyQuery, histTokens, histCount, histCO2, CHART_LABELS, DRILL_NEXT, historyRunningSum,
 } from './historyTab.js';
 import {
   initPermissionsWizard, refreshPermissions, pendingWizardAgents, stillPendingForAgents, buildPermissionAnswers,
@@ -14,7 +14,7 @@ import {
 } from './sessionIdentity.js';
 import { relayFrameKind, seqGap, aggregateConnState, relayWsUrl } from './connectionProtocol.js';
 import {
-  stateIcon, shortModel, formatCost, fmtDuration, formatElapsed, fmtEtaDuration, fmtEtaText,
+  stateIcon, shortModel, formatCost, costCellDisplay, fmtDuration, formatElapsed, fmtEtaDuration, fmtEtaText,
   taskEtaPresentation, shortID, pressureClass, pressureColor, formatTokens, esc, activeSubagentCount,
   cacheBloatBadgeText, cacheBloatExplanation,
 } from './formatters.js';
@@ -224,6 +224,18 @@ import { reconcile, paintRowNum } from './domReconcile.js';
     // macOS's separate usageCostTimeframe (#386).
     export let currentUsageTimeframe = localStorage.getItem('irrlicht_usageCostTimeframe') || 'day';
     if (!COST_TIMEFRAMES.find(t => t.key === currentUsageTimeframe)) currentUsageTimeframe = 'day';
+
+    // costDisplayMode selects what the per-session row's cost slot shows —
+    // 'cost' ($) or 'co2' (estimated CO2e), issue #829. Click-to-cycle rather
+    // than a fourth always-on column, matching the group header's existing
+    // cycleCostTimeframe() interaction pattern below.
+    let costDisplayMode = localStorage.getItem('irrlicht_costDisplayMode') === 'co2' ? 'co2' : 'cost';
+
+    function cycleCostDisplayMode() {
+      costDisplayMode = costDisplayMode === 'cost' ? 'co2' : 'cost';
+      localStorage.setItem('irrlicht_costDisplayMode', costDisplayMode);
+      render();
+    }
 
     // --- Timeline / history state (WebSocket-streamed, see history_snapshot/tick/upgrade) ---
     let timelineHistory = new Map(); // session_id -> {label, states: string[]} for the active granularity
@@ -642,6 +654,10 @@ import { reconcile, paintRowNum } from './domReconcile.js';
         '<span class="row-elapsed"></span>' +
         '<span class="row-created"></span>' +
         '<span class="row-id"></span>';
+      el.querySelector('.row-cost').addEventListener('click', (e) => {
+        e.stopPropagation();
+        cycleCostDisplayMode();
+      });
       updateSessionRow(el, agent, isChild);
       return el;
     }
@@ -653,7 +669,6 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       const ctxPct = metrics.context_utilization_percentage || 0;
       const pressure = metrics.pressure_level || '';
       const branch = agent.git_branch || '';
-      const cost = formatCost(metrics.estimated_cost_usd);
       const isActive = state === 'working' || state === 'waiting';
       const elapsed = formatElapsed(agent.first_seen, metrics.elapsed_seconds, isActive);
 
@@ -810,9 +825,11 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       if (pctEl.textContent !== pctText) pctEl.textContent = pctText;
       pctEl.style.color = ctxPct > 0 ? pressureColor(pressure) : '';
 
-      // Cost
+      // Cost / CO2 (click to cycle, issue #829)
       const costEl = el.querySelector('.row-cost');
+      const { text: cost, title: costTitle } = costCellDisplay(metrics, costDisplayMode);
       if (costEl.textContent !== cost) costEl.textContent = cost;
+      if (costEl.title !== costTitle) costEl.title = costTitle;
 
       // Yield revert marker (#373): ↩ next to cost when the session's work
       // was later git-reverted.
@@ -1948,7 +1965,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
 
 export {
   resolvedTheme, rowLabel, maybeNotifyOnUpdate,
-  formatCost, formatUsageCost, pressureClass, historyPriorityForState,
+  formatCost, costCellDisplay, formatUsageCost, pressureClass, historyPriorityForState,
   taskEtaPresentation,
   lastNotifiedPressure,
   relayFrameKind, aggregateConnState, relayWsUrl, seqGap,
@@ -1956,5 +1973,5 @@ export {
   sessionOrigin, sourceIdOf, localBareIds, isShadowedRemote,
   daemonSessionIds, structureSignature,
   pendingWizardAgents, buildPermissionAnswers, stillPendingForAgents,
-  historyQuery, histTokens, histCount, CHART_LABELS, DRILL_NEXT, historyRunningSum,
+  historyQuery, histTokens, histCount, histCO2, CHART_LABELS, DRILL_NEXT, historyRunningSum,
 };

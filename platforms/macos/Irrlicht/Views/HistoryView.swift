@@ -285,9 +285,9 @@ struct HistoryView: View {
         .font(.caption)
     }
 
-    /// Metrics shown in the Chart dropdown — Cost and Tokens (Yield is its own
-    /// tab; the models/providers presets fold into the Group axis).
-    private var visibleCharts: [HistoryChart] { [.cost, .tokens] }
+    /// Metrics shown in the Chart dropdown — Cost, Tokens, and CO2 (issue #829;
+    /// Yield is its own tab; the models/providers presets fold into the Group axis).
+    private var visibleCharts: [HistoryChart] { [.cost, .tokens, .co2] }
 
     // MARK: Cross-filter menus
 
@@ -1186,10 +1186,22 @@ enum HistoryFormat {
         return String(Int(v.rounded()))
     }
 
-    /// Dollars for the USD charts, token counts for the tokens chart — the
-    /// macOS twin of the web `histValue`.
+    /// Compact estimated CO2e footprint (issue #829), matching the web
+    /// `histCO2` — unit-adaptive and always renders a value (a chart axis
+    /// needs "0mg" at an empty bucket, not SessionMetrics.formattedCO2's
+    /// hide-on-zero blank).
+    static func co2(_ v: Double) -> String {
+        if v < 1 { return String(format: "%.0fmg", v * 1000) }
+        if v < 1000 { return String(format: "%.1fg", v) }
+        return String(format: "%.2fkg", v / 1000)
+    }
+
+    /// Dollars for the USD charts, token counts for the tokens chart, CO2e for
+    /// the co2 chart — the macOS twin of the web `histValue`.
     static func value(_ v: Double, chart: HistoryChart) -> String {
-        chart.isCost ? dollar(v) : tokens(v)
+        if chart.isCost { return dollar(v) }
+        if chart.isCO2 { return co2(v) }
+        return tokens(v)
     }
 
     // Cached formatters — DateFormatter init is expensive and these fire per

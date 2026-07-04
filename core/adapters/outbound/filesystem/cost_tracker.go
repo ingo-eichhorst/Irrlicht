@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"irrlicht/core/domain/session"
+	"irrlicht/core/pkg/capacity"
 	"irrlicht/core/ports/outbound"
 )
 
@@ -46,6 +47,7 @@ type snapshotRow struct {
 	Model     string  `json:"model,omitempty"`    // Metrics.ModelName, falling back to SessionState.Model ("" = unknown)
 	Session   string  `json:"session"`
 	Cost      float64 `json:"cost"`
+	CO2Grams  float64 `json:"co2,omitempty"` // cumulative estimated CO2e grams (issue #829); rows written before this field existed read back as 0
 	CumIn     int64   `json:"cum_in,omitempty"`
 	CumOut    int64   `json:"cum_out,omitempty"`
 	CumRead   int64   `json:"cum_read,omitempty"`
@@ -157,6 +159,7 @@ func (t *CostTracker) RecordSnapshot(state *session.SessionState) error {
 		Model:     modelForRow(state),
 		Session:   state.SessionID,
 		Cost:      m.EstimatedCostUSD,
+		CO2Grams:  m.EstimatedCO2Grams,
 		CumIn:     m.CumInputTokens,
 		CumOut:    m.CumOutputTokens,
 		CumRead:   m.CumCacheReadTokens,
@@ -167,6 +170,7 @@ func (t *CostTracker) RecordSnapshot(state *session.SessionState) error {
 	prev, hasPrev := t.lastWrite[state.SessionID]
 	if hasPrev {
 		unchanged := prev.Cost == row.Cost &&
+			prev.CO2Grams == row.CO2Grams &&
 			prev.CumIn == row.CumIn &&
 			prev.CumOut == row.CumOut &&
 			prev.CumRead == row.CumRead &&
@@ -236,6 +240,7 @@ func (t *CostTracker) RecordBaseline(state *session.SessionState) error {
 		Model:     modelForRow(state),
 		Session:   state.SessionID,
 		Cost:      m.EstimatedCostUSD,
+		CO2Grams:  m.EstimatedCO2Grams,
 		CumIn:     m.CumInputTokens,
 		CumOut:    m.CumOutputTokens,
 		CumRead:   m.CumCacheReadTokens,
@@ -726,9 +731,12 @@ func (t *CostTracker) scanSeries(path string, q outbound.SeriesQuery, f seriesFi
 			aggs[r.Session] = s
 		}
 		var cur float64
-		if q.Metric == "tokens" {
+		switch q.Metric {
+		case "tokens":
 			cur = rowTokenSum(r, f.tokens)
-		} else {
+		case "co2":
+			cur = r.CO2Grams
+		default:
 			cur = r.Cost
 		}
 		curIn := float64(r.CumIn)
@@ -794,6 +802,135 @@ func (t *CostTracker) scanSeries(path string, q outbound.SeriesQuery, f seriesFi
 		}
 		s.advance(cur, curIn, curOut, curRead, curCreate)
 	})
+}
+
+// co2BackfillMarker is written after BackfillCO2 completes successfully — not
+// ".jsonl", so directory scans (here and in CostSeries/Prune) skip it. Makes
+// the migration idempotent: safe to call on every daemon startup without
+// rescanning already-migrated history. A failed run leaves it unwritten so
+// the next startup retries.
+const co2BackfillMarker = ".co2_backfilled"
+
+// BackfillCO2 rewrites every persisted row still missing a CO2Grams estimate
+// — written before issue #829 added the field — using the row's own model
+// name and cumulative token counts. Without this, everyone who already had
+// cost history on disk would see their CO2 History chart start flat at zero
+// on the day they upgraded, instead of reflecting the activity that's
+// already recorded. Runs once per data directory; see co2BackfillMarker.
+func (t *CostTracker) BackfillCO2() error {
+	markerPath := filepath.Join(t.dir, co2BackfillMarker)
+	if _, err := os.Stat(markerPath); err == nil {
+		return nil // already migrated
+	}
+
+	entries, err := os.ReadDir(t.dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return t.writeCO2BackfillMarker(markerPath)
+		}
+		return err
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+			continue
+		}
+		project := strings.TrimSuffix(e.Name(), ".jsonl")
+		if err := t.backfillCO2File(filepath.Join(t.dir, e.Name()), project); err != nil {
+			return err
+		}
+	}
+	return t.writeCO2BackfillMarker(markerPath)
+}
+
+func (t *CostTracker) writeCO2BackfillMarker(path string) error {
+	if err := os.MkdirAll(t.dir, 0700); err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(time.Now().Format(time.RFC3339)+"\n"), 0600)
+}
+
+// backfillCO2File rewrites one project's cost file in place, estimating
+// CO2Grams for any row that doesn't have one yet (CO2Grams == 0 with nonzero
+// cumulative tokens — a real zero-token row has nothing to estimate from and
+// is left alone). Mirrors pruneFile's read-transform-atomic-rename shape.
+// Unparseable lines are carried through byte-for-byte rather than dropped —
+// this migration estimates a derived field, it must never lose data.
+func (t *CostTracker) backfillCO2File(path, project string) error {
+	t.mu.Lock()
+	fm, ok := t.fileMus[project]
+	if !ok {
+		fm = &sync.Mutex{}
+		t.fileMus[project] = fm
+	}
+	t.mu.Unlock()
+
+	fm.Lock()
+	defer fm.Unlock()
+
+	in, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	defer in.Close()
+
+	tmpPath := fmt.Sprintf("%s.tmp.%d.%d", path, os.Getpid(), time.Now().UnixNano())
+	out, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+	if err != nil {
+		return err
+	}
+	w := bufio.NewWriter(out)
+	scanner := bufio.NewScanner(in)
+	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	changed := false
+	writeErr := func() error {
+		for scanner.Scan() {
+			line := scanner.Bytes()
+			if len(line) == 0 {
+				continue
+			}
+			var r snapshotRow
+			toWrite := line
+			if err := json.Unmarshal(line, &r); err == nil {
+				total := r.CumIn + r.CumOut + r.CumRead + r.CumCreate
+				if r.CO2Grams == 0 && total > 0 {
+					grams, _ := capacity.EstimateCO2Grams(r.Model, total)
+					r.CO2Grams = grams
+					changed = true
+					marshaled, err := json.Marshal(r)
+					if err != nil {
+						return err
+					}
+					toWrite = marshaled
+				}
+			}
+			if _, err := w.Write(toWrite); err != nil {
+				return err
+			}
+			if err := w.WriteByte('\n'); err != nil {
+				return err
+			}
+		}
+		return scanner.Err()
+	}()
+	if writeErr == nil {
+		writeErr = w.Flush()
+	}
+	closeErr := out.Close()
+	if writeErr != nil || closeErr != nil {
+		os.Remove(tmpPath)
+		if writeErr != nil {
+			return writeErr
+		}
+		return closeErr
+	}
+	if !changed {
+		os.Remove(tmpPath)
+		return nil
+	}
+	return os.Rename(tmpPath, path)
 }
 
 // Prune rewrites each project file to drop rows older than olderThanDays.
