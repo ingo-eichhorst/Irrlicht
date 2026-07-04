@@ -172,9 +172,10 @@ enum HistoryTokenType: String, CaseIterable, Identifiable {
 }
 
 /// History chart type (#750). Mirrors the web Chart segmented control. cost and
-/// the models/providers presets measure USD; tokens measures token counts.
+/// the models/providers presets measure USD; tokens measures token counts;
+/// co2 (issue #829) measures estimated CO2e grams.
 enum HistoryChart: String, CaseIterable, Identifiable {
-    case cost, tokens, models, providers
+    case cost, tokens, co2, models, providers
     case yieldRatio = "yield" // #373 — per-project productive vs reverted spend
 
     var id: String { rawValue }
@@ -183,14 +184,18 @@ enum HistoryChart: String, CaseIterable, Identifiable {
         switch self {
         case .cost: return "Cost"
         case .tokens: return "Tokens"
+        case .co2: return "CO2"
         case .models: return "Models"
         case .providers: return "Providers"
         case .yieldRatio: return "Yield"
         }
     }
 
-    /// True for the USD metrics (everything but tokens) — they render a $ axis.
-    var isCost: Bool { self != .tokens }
+    /// True for the USD metrics (everything but tokens and co2) — they render a $ axis.
+    var isCost: Bool { self != .tokens && self != .co2 }
+
+    /// True for the co2 metric — renders a CO2e axis (mg/g/kg), not $ or tokens.
+    var isCO2: Bool { self == .co2 }
 
     /// models/providers are presets that pin the stacking axis to that
     /// dimension; cost/tokens leave the group axis to the user.

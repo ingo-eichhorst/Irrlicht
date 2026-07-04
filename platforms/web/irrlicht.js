@@ -1,7 +1,7 @@
 import { isGroupCollapsed, toggleGroupCollapsed } from './collapsedGroups.js';
 import { isSummaryCollapsed, toggleSummaryCollapsed, anySummaryCollapsed, collapseAllSummaries, expandAllSummaries } from './collapsedSummaries.js';
 import {
-  initHistoryTab, historyQuery, histTokens, histCount, CHART_LABELS, DRILL_NEXT, historyRunningSum,
+  initHistoryTab, historyQuery, histTokens, histCount, histCO2, CHART_LABELS, DRILL_NEXT, historyRunningSum,
 } from './historyTab.js';
 import {
   initPermissionsWizard, refreshPermissions, pendingWizardAgents, stillPendingForAgents, buildPermissionAnswers,
@@ -1951,5 +1951,5 @@ export {
   sessionOrigin, sourceIdOf, localBareIds, isShadowedRemote,
   daemonSessionIds, structureSignature,
   pendingWizardAgents, buildPermissionAnswers, stillPendingForAgents,
-  historyQuery, histTokens, histCount, CHART_LABELS, DRILL_NEXT, historyRunningSum,
+  historyQuery, histTokens, histCount, histCO2, CHART_LABELS, DRILL_NEXT, historyRunningSum,
 };

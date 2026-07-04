@@ -46,6 +46,7 @@ type snapshotRow struct {
 	Model     string  `json:"model,omitempty"`    // Metrics.ModelName, falling back to SessionState.Model ("" = unknown)
 	Session   string  `json:"session"`
 	Cost      float64 `json:"cost"`
+	CO2Grams  float64 `json:"co2,omitempty"` // cumulative estimated CO2e grams (issue #829); rows written before this field existed read back as 0
 	CumIn     int64   `json:"cum_in,omitempty"`
 	CumOut    int64   `json:"cum_out,omitempty"`
 	CumRead   int64   `json:"cum_read,omitempty"`
@@ -157,6 +158,7 @@ func (t *CostTracker) RecordSnapshot(state *session.SessionState) error {
 		Model:     modelForRow(state),
 		Session:   state.SessionID,
 		Cost:      m.EstimatedCostUSD,
+		CO2Grams:  m.EstimatedCO2Grams,
 		CumIn:     m.CumInputTokens,
 		CumOut:    m.CumOutputTokens,
 		CumRead:   m.CumCacheReadTokens,
@@ -167,6 +169,7 @@ func (t *CostTracker) RecordSnapshot(state *session.SessionState) error {
 	prev, hasPrev := t.lastWrite[state.SessionID]
 	if hasPrev {
 		unchanged := prev.Cost == row.Cost &&
+			prev.CO2Grams == row.CO2Grams &&
 			prev.CumIn == row.CumIn &&
 			prev.CumOut == row.CumOut &&
 			prev.CumRead == row.CumRead &&
@@ -236,6 +239,7 @@ func (t *CostTracker) RecordBaseline(state *session.SessionState) error {
 		Model:     modelForRow(state),
 		Session:   state.SessionID,
 		Cost:      m.EstimatedCostUSD,
+		CO2Grams:  m.EstimatedCO2Grams,
 		CumIn:     m.CumInputTokens,
 		CumOut:    m.CumOutputTokens,
 		CumRead:   m.CumCacheReadTokens,
@@ -726,9 +730,12 @@ func (t *CostTracker) scanSeries(path string, q outbound.SeriesQuery, f seriesFi
 			aggs[r.Session] = s
 		}
 		var cur float64
-		if q.Metric == "tokens" {
+		switch q.Metric {
+		case "tokens":
 			cur = rowTokenSum(r, f.tokens)
-		} else {
+		case "co2":
+			cur = r.CO2Grams
+		default:
 			cur = r.Cost
 		}
 		curIn := float64(r.CumIn)

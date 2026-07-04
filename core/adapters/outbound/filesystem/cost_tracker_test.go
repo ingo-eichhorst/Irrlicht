@@ -88,6 +88,46 @@ func TestRecordSnapshot_AppendsOnChange(t *testing.T) {
 	}
 }
 
+// TestRecordSnapshot_PersistsCO2AndDetectsChange verifies EstimatedCO2Grams
+// (issue #829) is written to the row, and that a CO2-only change (same cost
+// and token counts) still triggers a new row instead of being silently
+// dropped by the unchanged-since-last-write dedup.
+func TestRecordSnapshot_PersistsCO2AndDetectsChange(t *testing.T) {
+	tr := newTestTracker(t)
+	state := &session.SessionState{
+		SessionID:   "s1",
+		ProjectName: "proj-a",
+		Metrics: &session.SessionMetrics{
+			EstimatedCostUSD:  0.10,
+			EstimatedCO2Grams: 5,
+			CumInputTokens:    100,
+		},
+	}
+	if err := tr.RecordSnapshot(state); err != nil {
+		t.Fatalf("first: %v", err)
+	}
+
+	// Forge an older lastWrite so the interval throttle doesn't also
+	// suppress the second write — isolating the CO2-only-change path.
+	tr.mu.Lock()
+	lw := tr.lastWrite["s1"]
+	lw.TS -= int64(costWriteInterval/time.Second) + 1
+	tr.lastWrite["s1"] = lw
+	tr.mu.Unlock()
+
+	state.Metrics.EstimatedCO2Grams = 9
+	if err := tr.RecordSnapshot(state); err != nil {
+		t.Fatalf("second: %v", err)
+	}
+	rows := readRows(t, tr.filePath("proj-a"))
+	if len(rows) != 2 {
+		t.Fatalf("want 2 rows (CO2-only change must not be deduped), got %d: %+v", len(rows), rows)
+	}
+	if rows[0].CO2Grams != 5 || rows[1].CO2Grams != 9 {
+		t.Fatalf("unexpected CO2Grams sequence: %+v", rows)
+	}
+}
+
 func TestRecordSnapshot_ThrottlesByInterval(t *testing.T) {
 	tr := newTestTracker(t)
 	state := &session.SessionState{
@@ -777,6 +817,26 @@ func TestCostSeries_TokensMetricSplit(t *testing.T) {
 	costRes, _ := tr.CostSeries(outbound.SeriesQuery{Start: 1000, End: 1400, BucketSeconds: 100, Group: "project", Metric: "cost"})
 	if costRes.TokenSplit != nil {
 		t.Errorf("cost metric should leave TokenSplit nil, got %+v", costRes.TokenSplit)
+	}
+}
+
+// TestCostSeries_CO2Metric verifies the co2 metric (issue #829) sums
+// CO2Grams deltas the same way the cost/tokens metrics sum their own
+// columns, and leaves TokenSplit nil (that's tokens-only).
+func TestCostSeries_CO2Metric(t *testing.T) {
+	tr := newTestTracker(t)
+	writeRow(t, tr, "proj-a", snapshotRow{TS: 1050, Project: "proj-a", Session: "s1", CO2Grams: 10})
+	writeRow(t, tr, "proj-a", snapshotRow{TS: 1150, Project: "proj-a", Session: "s1", CO2Grams: 35})
+
+	res, err := tr.CostSeries(outbound.SeriesQuery{Start: 1000, End: 1400, BucketSeconds: 100, Group: "project", Metric: "co2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if abs(res.Totals["proj-a"]-25) > 1e-9 || abs(res.ByKey["proj-a"][1]-25) > 1e-9 {
+		t.Errorf("co2 total: want 25 in bucket 1, got %+v", res.ByKey["proj-a"])
+	}
+	if res.TokenSplit != nil {
+		t.Errorf("co2 metric should leave TokenSplit nil, got %+v", res.TokenSplit)
 	}
 }
 

@@ -29,6 +29,7 @@ import {
   historyQuery,
   histTokens,
   histCount,
+  histCO2,
   CHART_LABELS,
   DRILL_NEXT,
   historyRunningSum,
@@ -838,5 +839,25 @@ describe('agents chart (#751 Phase 3)', () => {
     expect(histCount(2)).toBe('2')
     expect(histCount(2.6)).toBe('3')
     expect(histCount(undefined)).toBe('0')
+  })
+})
+
+describe('co2 chart (issue #829)', () => {
+  test('chart=co2 serializes with project grouping', () => {
+    const q = new URLSearchParams(historyQuery({ range: 'day', chart: 'co2', group: 'project', forecast: true, start: null, end: null, scope: null }))
+    expect(q.get('chart')).toBe('co2')
+    expect(q.get('group')).toBe('project')
+  })
+
+  test('CHART_LABELS includes CO2', () => {
+    expect(CHART_LABELS.co2).toBe('CO2')
+  })
+
+  test('histCO2 is unit-adaptive and always renders a value', () => {
+    expect(histCO2(0)).toBe('0mg')
+    expect(histCO2(0.03)).toBe('30mg')
+    expect(histCO2(158.7)).toBe('158.7g')
+    expect(histCO2(2850)).toBe('2.85kg')
+    expect(histCO2(undefined)).toBe('0mg')
   })
 })

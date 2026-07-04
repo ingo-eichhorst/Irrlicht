@@ -237,7 +237,7 @@ type SeriesQuery struct {
 	End           int64
 	BucketSeconds int64
 	Group         string // project|branch|provider|model|session|token_type
-	Metric        string // cost|tokens ("" defaults to cost)
+	Metric        string // cost|tokens|co2 ("" defaults to cost)
 	ScopeField    string // "" = unscoped; else project|branch|provider|model|session
 	ScopeValue    string
 	Projects      []string // cross-filter: keep only these projects (empty = all)
