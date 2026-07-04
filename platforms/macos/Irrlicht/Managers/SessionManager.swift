@@ -204,6 +204,16 @@ class SessionManager: ObservableObject {
     /// system-suppressed banner. Injectable for tests.
     let focusMonitor: FocusStateProviding
 
+    /// True when running under XCTest. Detected by whether XCTest's runtime
+    /// class is loaded into this process — unlike `canUseUserNotifications`'s
+    /// `XCTestConfigurationFilePath` env var (only set by Xcode's own test
+    /// runner), this also holds for this project's actual test command,
+    /// `swift test`, which never sets that variable. Gates real daemon
+    /// network activity (WebSocket connect, REST hydration, periodic cost
+    /// polling) so unit tests never race against whatever daemon happens to
+    /// be reachable on the machine (issue #832).
+    let isRunningUnitTests = NSClassFromString("XCTestCase") != nil
+
     init(focusMonitor: FocusStateProviding = FocusMonitor()) {
         self.focusMonitor = focusMonitor
 

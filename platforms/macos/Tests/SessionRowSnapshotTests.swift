@@ -13,9 +13,69 @@ final class SessionRowSnapshotTests: XCTestCase {
     private var originalThresholdUnit: Any?
     private var originalUserIntent: Any?
     private var originalSummariesCollapsed: Any?
+    private var savedAgentRegistry: [String: AgentBranding] = [:]
 
     override func setUp() async throws {
         try await super.setUp()
+        // SessionManager() no longer hydrates AgentRegistry from a live daemon
+        // under XCTest (issue #832) — seed the branding entries the fixtures
+        // below render (antigravity ghost rows, a claude-code working row) so
+        // they show the real brand icon deterministically instead of racing a
+        // network call. Mirrors the SVGs in
+        // core/adapters/inbound/agents/{antigravity,claudecode}/agent.go.
+        savedAgentRegistry = AgentRegistry.byName
+        AgentRegistry.byName["antigravity"] = AgentBranding(
+            name: "antigravity",
+            displayName: "Antigravity",
+            iconSVGLight: """
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 100 100">
+              <g fill="none" stroke-width="15" stroke-linecap="round">
+                <path d="M16 82 Q27.3 39.3 38.7 25.1" stroke="#4285F4"/>
+                <path d="M38.7 25.1 Q50 10.9 61.3 25.1" stroke="#EA4335"/>
+                <path d="M61.3 25.1 Q72.7 39.3 84 82" stroke="#34A853"/>
+              </g>
+            </svg>
+            """,
+            iconSVGDark: """
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 100 100">
+              <g fill="none" stroke-width="15" stroke-linecap="round">
+                <path d="M16 82 Q27.3 39.3 38.7 25.1" stroke="#8AB4F8"/>
+                <path d="M38.7 25.1 Q50 10.9 61.3 25.1" stroke="#F28B82"/>
+                <path d="M61.3 25.1 Q72.7 39.3 84 82" stroke="#81C995"/>
+              </g>
+            </svg>
+            """
+        )
+        AgentRegistry.byName["claude-code"] = AgentBranding(
+            name: "claude-code",
+            displayName: "Claude Code",
+            iconSVGLight: """
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 56 56">
+              <rect x="8" y="4" width="40" height="32" rx="4" fill="#D97757"/>
+              <rect x="4" y="16" width="8" height="12" rx="2" fill="#D97757"/>
+              <rect x="44" y="16" width="8" height="12" rx="2" fill="#D97757"/>
+              <rect x="18" y="12" width="8" height="8" rx="1" fill="#4A2820"/>
+              <rect x="30" y="12" width="8" height="8" rx="1" fill="#4A2820"/>
+              <rect x="12" y="36" width="6" height="14" rx="1" fill="#D97757"/>
+              <rect x="22" y="36" width="6" height="10" rx="1" fill="#D97757"/>
+              <rect x="32" y="36" width="6" height="10" rx="1" fill="#D97757"/>
+              <rect x="42" y="36" width="6" height="14" rx="1" fill="#D97757"/>
+            </svg>
+            """,
+            iconSVGDark: """
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 56 56">
+              <rect x="8" y="4" width="40" height="32" rx="4" fill="#D97757"/>
+              <rect x="4" y="16" width="8" height="12" rx="2" fill="#D97757"/>
+              <rect x="44" y="16" width="8" height="12" rx="2" fill="#D97757"/>
+              <rect x="18" y="12" width="8" height="8" rx="1" fill="#4A2820"/>
+              <rect x="30" y="12" width="8" height="8" rx="1" fill="#4A2820"/>
+              <rect x="12" y="36" width="6" height="14" rx="1" fill="#D97757"/>
+              <rect x="22" y="36" width="6" height="10" rx="1" fill="#D97757"/>
+              <rect x="32" y="36" width="6" height="10" rx="1" fill="#D97757"/>
+              <rect x="42" y="36" width="6" height="14" rx="1" fill="#D97757"/>
+            </svg>
+            """
+        )
         // SessionRowView reads several keys via @AppStorage (UserDefaults.standard).
         // Snapshot + restore so the developer's defaults survive the test run.
         let defaults = UserDefaults.standard
@@ -48,6 +108,7 @@ final class SessionRowSnapshotTests: XCTestCase {
         restore(key: ContextPressureThreshold.unitKey, value: originalThresholdUnit)
         restore(key: "userIntentDisplay", value: originalUserIntent)
         restore(key: "summariesCollapsed", value: originalSummariesCollapsed)
+        AgentRegistry.byName = savedAgentRegistry
         try await super.tearDown()
     }
 
