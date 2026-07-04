@@ -354,6 +354,8 @@ struct SessionMetrics: Codable {
     let pressureLevel: String       // pressure level: "safe", "caution", "warning", "critical" ("unknown" if not available)
     let contextWindowUnknown: Bool? // true when daemon has no LiteLLM pricing for the model — render tokens-only, no percentage
     let estimatedCostUSD: Double?   // estimated session cost in USD (nil if not available)
+    let estimatedCO2Grams: Double?  // estimated CO2e footprint in grams — always a model, never a measurement (issue #829)
+    let co2Tier: String?            // confidence tier behind estimatedCO2Grams: "provider_disclosed" or "fallback"
     let lastAssistantText: String?  // last assistant message text, truncated (~200 chars) — full text for the question tooltip
     let taskSummary: String?        // human-readable "what is this session about" (issue #738) — full text for the intent tooltip
     let intentHeadline: String?     // terse one-line version of taskSummary for the sidebar (issue #759)
@@ -375,6 +377,8 @@ struct SessionMetrics: Codable {
         case pressureLevel = "pressure_level"
         case contextWindowUnknown = "context_window_unknown"
         case estimatedCostUSD = "estimated_cost_usd"
+        case estimatedCO2Grams = "estimated_co2_grams"
+        case co2Tier = "co2_tier"
         case lastAssistantText = "last_assistant_text"
         case taskSummary = "task_summary"
         case intentHeadline = "intent_headline"
@@ -398,6 +402,8 @@ struct SessionMetrics: Codable {
         pressureLevel = try c.decodeIfPresent(String.self, forKey: .pressureLevel) ?? "unknown"
         contextWindowUnknown = try c.decodeIfPresent(Bool.self, forKey: .contextWindowUnknown)
         estimatedCostUSD = try c.decodeIfPresent(Double.self, forKey: .estimatedCostUSD)
+        estimatedCO2Grams = try c.decodeIfPresent(Double.self, forKey: .estimatedCO2Grams)
+        co2Tier = try c.decodeIfPresent(String.self, forKey: .co2Tier)
         lastAssistantText = try c.decodeIfPresent(String.self, forKey: .lastAssistantText)
         taskSummary = try c.decodeIfPresent(String.self, forKey: .taskSummary)
         intentHeadline = try c.decodeIfPresent(String.self, forKey: .intentHeadline)
@@ -435,6 +441,8 @@ struct SessionMetrics: Codable {
         pressureLevel: String,
         contextWindowUnknown: Bool?,
         estimatedCostUSD: Double?,
+        estimatedCO2Grams: Double? = nil,
+        co2Tier: String? = nil,
         lastAssistantText: String?,
         taskSummary: String? = nil,
         intentHeadline: String? = nil,
@@ -455,6 +463,8 @@ struct SessionMetrics: Codable {
         self.pressureLevel = pressureLevel
         self.contextWindowUnknown = contextWindowUnknown
         self.estimatedCostUSD = estimatedCostUSD
+        self.estimatedCO2Grams = estimatedCO2Grams
+        self.co2Tier = co2Tier
         self.lastAssistantText = lastAssistantText
         self.taskSummary = taskSummary
         self.intentHeadline = intentHeadline
@@ -478,6 +488,8 @@ struct SessionMetrics: Codable {
         try c.encode(pressureLevel, forKey: .pressureLevel)
         try c.encodeIfPresent(contextWindowUnknown, forKey: .contextWindowUnknown)
         try c.encodeIfPresent(estimatedCostUSD, forKey: .estimatedCostUSD)
+        try c.encodeIfPresent(estimatedCO2Grams, forKey: .estimatedCO2Grams)
+        try c.encodeIfPresent(co2Tier, forKey: .co2Tier)
         try c.encodeIfPresent(lastAssistantText, forKey: .lastAssistantText)
         try c.encodeIfPresent(taskSummary, forKey: .taskSummary)
         try c.encodeIfPresent(intentHeadline, forKey: .intentHeadline)
@@ -592,7 +604,33 @@ struct SessionMetrics: Codable {
         if contextWindowUnknown == true { return "—" }
         return nil
     }
-    
+
+    // Estimated CO2e footprint, shown as an alternate view of the cost slot
+    // (issue #829, click-to-cycle in SessionRowView). Unit-adaptive like the
+    // web dashboard's formatCO2, but without the "CO2e" suffix — the row's
+    // cost column is too narrow for it; co2TierTooltip carries that context.
+    var formattedCO2: String? {
+        guard totalTokens > 0 else { return nil }
+        guard let grams = estimatedCO2Grams, grams > 0 else {
+            if contextWindowUnknown == true { return "—" }
+            return nil
+        }
+        if grams < 1 { return String(format: "%.0fmg", grams * 1000) }
+        if grams < 1000 { return String(format: "%.1fg", grams) }
+        return String(format: "%.2fkg", grams / 1000)
+    }
+
+    // co2TierTooltip explains the confidence behind the CO2 estimate — every
+    // figure here is modeled from public disclosures, never measured (no
+    // provider exposes per-request energy telemetry). Mirrors the web
+    // dashboard's co2TierTitle.
+    var co2TierTooltip: String {
+        if co2Tier == "provider_disclosed" {
+            return "Estimated CO2e, normalized from a provider-published energy/CO2 disclosure — not a live measurement."
+        }
+        return "Estimated CO2e — no public per-model figure exists for this model, so a cross-model fallback average is used. Not a live measurement."
+    }
+
     // Real-time elapsed time for active sessions
     func formattedRealtimeElapsedTime(sessionFirstSeen: Date) -> String {
         let seconds = Int64(Date().timeIntervalSince(sessionFirstSeen))

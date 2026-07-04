@@ -34,6 +34,11 @@ struct SessionRowView: View {
     var activeSubagentCount: Int = 0
     @AppStorage("debugMode") private var debugMode: Bool = false
     @AppStorage("showCostDisplay") private var showCostDisplay: Bool = false
+    // costDisplayMode selects what the cost slot shows — "cost" ($) or "co2"
+    // (estimated CO2e), issue #829. App-wide via @AppStorage so clicking any
+    // row's figure cycles all rows together, mirroring the web dashboard's
+    // localStorage-backed costDisplayMode.
+    @AppStorage("costDisplayMode") private var costDisplayModeRaw: String = "cost"
     @AppStorage("displayMode") private var displayModeRaw: String = DisplayMode.context.rawValue
     @AppStorage("userIntentDisplay") private var userIntentDisplay: Bool = false
     @AppStorage(ContextPressureThreshold.valueKey) private var contextThresholdValue: Double = ContextPressureThreshold.defaultValue
@@ -50,6 +55,28 @@ struct SessionRowView: View {
                 .font(.system(size: 8, weight: .bold))
                 .foregroundColor(IrrColors.pressureHigh)
         }
+    }
+
+    /// Cost/CO2 slot content — click to cycle between $ cost and estimated
+    /// CO2e (issue #829), keeping the mode-branching out of `body` so it
+    /// doesn't add to this already-large view's complexity at each call site.
+    /// `isReverted` preserves the existing yield-revert tooltip nuance in
+    /// cost mode; CO2 mode always shows its confidence-tier tooltip.
+    @ViewBuilder
+    private func costOrCO2Label(_ metrics: SessionMetrics, placeholder: String, isReverted: Bool = false) -> some View {
+        let showingCO2 = costDisplayModeRaw == "co2"
+        let text = showingCO2 ? (metrics.formattedCO2 ?? placeholder) : (metrics.formattedCost ?? placeholder)
+        let tooltip = showingCO2
+            ? metrics.co2TierTooltip
+            : (isReverted ? "Estimated cost — session work was reverted — click to show CO2 estimate" : "Click to show CO2 estimate")
+        Button(action: { costDisplayModeRaw = showingCO2 ? "cost" : "co2" }) {
+            Text(text)
+                .font(.system(size: 9, weight: .medium, design: .monospaced))
+                .foregroundColor(.secondary)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .tooltip(tooltip)
     }
 
     private var contextThreshold: ContextPressureThreshold {
@@ -247,12 +274,9 @@ struct SessionRowView: View {
                         if showCostDisplay {
                             HStack(spacing: 1) {
                                 yieldRevertGlyph
-                                Text(metrics.formattedCost ?? "")
-                                    .font(.system(size: 9, weight: .medium, design: .monospaced))
-                                    .foregroundColor(.secondary)
+                                costOrCO2Label(metrics, placeholder: "", isReverted: session.yieldState == "reverted")
                             }
                             .frame(width: 36, alignment: .leading)
-                            .tooltip(session.yieldState == "reverted" ? "Estimated cost — session work was reverted" : "Estimated session cost")
                         } else {
                             Text(metrics.formattedContextUtilization)
                                 .font(.system(size: 9, design: .monospaced))
@@ -275,9 +299,7 @@ struct SessionRowView: View {
                         if showCostDisplay {
                             HStack(spacing: 1) {
                                 yieldRevertGlyph
-                                Text(metrics.formattedCost ?? "—")
-                                    .font(.system(size: 9, weight: .medium, design: .monospaced))
-                                    .foregroundColor(.secondary)
+                                costOrCO2Label(metrics, placeholder: "—", isReverted: session.yieldState == "reverted")
                             }
                             .frame(width: 36, alignment: .leading)
                         } else {
