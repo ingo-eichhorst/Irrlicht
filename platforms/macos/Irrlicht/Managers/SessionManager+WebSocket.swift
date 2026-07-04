@@ -297,10 +297,19 @@ extension SessionManager {
         // menu-bar counts include other machines' sessions. Local wins on id
         // collision — the same daemon reached via both sources shows once.
         let localIDs = Set(sessionMap.keys)
+        // Local-wins name-collapse (#746, #828): a project the local daemon
+        // publishes and also subscribes back to via the relay echoes with a
+        // drifted session_id that escapes the id-only filter below. Mirrors
+        // recomposeApiGroups()/relayGroups()'s collapse so the flat `sessions`
+        // array (menu bar, cycling) agrees with `apiGroups` (list view) instead
+        // of double-counting the echo.
+        let localProjectNames = Set(localApiGroups.map(\.name))
         // Two different relay daemons sharing a session_id stay distinct (keyed
         // by compound rowID), so build a flat array rather than a bare-id dict
         // — a dict would collide them back into one row (#537).
-        let relayOnly = relaySessionMap.values.filter { !localIDs.contains($0.id) }
+        let relayOnly = relaySessionMap.values.filter {
+            !localIDs.contains($0.id) && !localProjectNames.contains($0.projectName ?? "")
+        }
         let all = Array(sessionMap.values) + relayOnly
 
         // Exclude child sessions (subagents) from the main session list so they
