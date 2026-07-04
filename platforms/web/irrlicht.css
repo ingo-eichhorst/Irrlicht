@@ -759,6 +759,30 @@
       flex-shrink: 0;
     }
 
+    /* Cache-creation regression badge (#813, was #374's bare glyph) — its own
+       row beneath the parent (mirrors macOS SessionRowView.cacheBloatBlock),
+       since the version-attribution string can be a full sentence, too wide
+       for the fixed-width icon row. Indent matches .row-summary-row. */
+    .row-cache-bloat-row {
+      margin: 0 10px 4px 24px;
+      font-family: var(--font-mono);
+    }
+    .row-cache-bloat-row.child { margin-left: 44px; }
+    .row-cache-bloat {
+      display: inline-block;
+      max-width: 100%;
+      font-size: 10px;
+      font-weight: 600;
+      padding: 3px 6px;
+      border-radius: 4px;
+      background: rgba(255, 59, 48, 0.12);
+      color: var(--pressure-high);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      cursor: default;
+    }
+
     /* Task summary + waiting question — collapsible block beneath the parent
        (issue #738). A clickable head (chevron + one-line summary title) and,
        while waiting and expanded, the pending question in a dim rounded box.
@@ -908,14 +932,6 @@
       color: var(--muted); opacity: 0.85;
     }
     .row-origin svg { display: block; }
-    /* Cache-creation regression glyph (#374) — an upward arrow tinted with the
-       warning color, surfaced when the daemon flags a cache-creation
-       regression for the session. */
-    .row-cache-bloat {
-      width: 14px; height: 14px; flex-shrink: 0;
-      display: inline-flex; align-items: center; justify-content: center;
-      color: var(--warning, #e0a000); font-weight: 700; cursor: default;
-    }
     /* Active tool indicator — hidden for now (the overlay doesn't surface it
        in the default row either). Keep the rule + JS update path so we can
        re-enable later, but force-hide via CSS. */
