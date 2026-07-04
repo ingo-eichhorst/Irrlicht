@@ -266,6 +266,68 @@ func TestCheckPIDLiveness_ChildTranscriptNotYetWritten_Kept(t *testing.T) {
 	}
 }
 
+// orphanTranscriptAgeForTest mirrors the unexported orphanTranscriptAge
+// constant (core/application/services/session_detector.go) so the boundary
+// tests below track it instead of hardcoding a value that could silently
+// drift out of sync with the real threshold.
+const orphanTranscriptAgeForTest = 2 * time.Minute
+
+// TestCheckPIDLiveness_ChildTranscriptDeleted_JustUnderGracePeriod_Kept pins
+// down the shield's edge from the "still protected" side: a child just
+// *inside* the grace period, with its transcript already gone, must still be
+// kept — isDeletedTranscript alone can't distinguish "deleted" from "not
+// created yet", so the FirstSeen age gate is the only thing standing between
+// this case and TestCheckPIDLiveness_ChildTranscriptNotYetWritten_Kept's.
+func TestCheckPIDLiveness_ChildTranscriptDeleted_JustUnderGracePeriod_Kept(t *testing.T) {
+	tmp := t.TempDir()
+	deletedTranscript := filepath.Join(tmp, "never-created", "agent-borderline.jsonl")
+
+	repo := newMockRepo()
+	repo.states["agent-borderline"] = &session.SessionState{
+		SessionID:       "agent-borderline",
+		Adapter:         "claude-code",
+		State:           session.StateWorking,
+		ParentSessionID: "parent",
+		PID:             os.Getpid(),
+		TranscriptPath:  deletedTranscript,
+		FirstSeen:       time.Now().Add(-orphanTranscriptAgeForTest + 10*time.Second).Unix(),
+		UpdatedAt:       time.Now().Unix(),
+	}
+
+	newPIDManagerForTest(repo).CheckPIDLiveness()
+
+	if repo.states["agent-borderline"] == nil {
+		t.Fatal("child just inside the grace period should still be shielded, even with a missing transcript")
+	}
+}
+
+// TestCheckPIDLiveness_ChildTranscriptDeleted_JustOverGracePeriod_Reaped is
+// the other edge: once the child ages past the grace period, a missing
+// transcript stops being ambiguous and the shield must release it on the
+// very next sweep tick.
+func TestCheckPIDLiveness_ChildTranscriptDeleted_JustOverGracePeriod_Reaped(t *testing.T) {
+	tmp := t.TempDir()
+	deletedTranscript := filepath.Join(tmp, "never-created", "agent-expired.jsonl")
+
+	repo := newMockRepo()
+	repo.states["agent-expired"] = &session.SessionState{
+		SessionID:       "agent-expired",
+		Adapter:         "claude-code",
+		State:           session.StateWorking,
+		ParentSessionID: "parent",
+		PID:             os.Getpid(),
+		TranscriptPath:  deletedTranscript,
+		FirstSeen:       time.Now().Add(-orphanTranscriptAgeForTest - 10*time.Second).Unix(),
+		UpdatedAt:       time.Now().Unix(),
+	}
+
+	newPIDManagerForTest(repo).CheckPIDLiveness()
+
+	if repo.states["agent-expired"] != nil {
+		t.Fatal("child just past the grace period with a missing transcript should be reaped")
+	}
+}
+
 // TestCheckPIDLiveness_DeadProcessWorking_Reaped guards the end-state the #667
 // fix relies on: once UpdatedAt is allowed to age (the activity bump no longer
 // refreshes it on no-op refresh passes), a working session with pid=0 whose
