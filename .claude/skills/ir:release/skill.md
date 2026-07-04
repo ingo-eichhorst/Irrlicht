@@ -283,47 +283,41 @@ For **patch releases**, skip Step D — the future section stays unchanged. The 
 
 ### 4b. Doc + README sweep (mandatory)
 
-Walk **every** docs page and every top-level README, check each against the
-release's diff, and update any content that this release made stale. Don't
-rely on a hardcoded list — enumerate the targets dynamically so new pages
-can't be silently missed:
+Run the `/ir:doc-review --fix` workflow inline — see
+`.claude/skills/ir:doc-review/SKILL.md` for the full audit (this is that
+skill's "release-inline" use, same pattern as Step 1.5's
+`/ir:refresh-aliases`). Check every in-scope surface against **current
+code-derived truth**, not just this release's diff:
 
-```bash
-# Files in scope for the sweep — top-level site/*.html (the landing page
-# carries its own compatibility grid, separate from site/docs/), the docs
-# pages, and every top-level README.
-ls site/*.html site/docs/*.html
-echo README.md AGENTS.md CONTRIBUTING.md SECURITY.md CODE_OF_CONDUCT.md
+1. Build the code-derived inventories (`ir:doc-review` step 2) and enumerate
+   every in-scope surface (step 3) — README/AGENTS/CONTRIBUTING/SECURITY/
+   CODE_OF_CONDUCT, `docs/**/*.md`, `tools/*/README.md` + `SKILL.md`,
+   `.claude/skills/*/SKILL.md`, and the published site. Don't narrow this to
+   `git diff --name-only $(git describe --tags --abbrev=0)..HEAD` — a
+   diff-only check only catches drift *this* release introduced, and misses
+   drift that went stale in an *earlier* release and was never touched
+   since. That gap is exactly what let README.md and `site/index.html` both
+   keep claiming "no hooks" for several releases after the `claudecode`
+   hooks feature shipped (#834).
+2. Apply the rubric per surface (steps 4–6) and auto-fix every
+   high-confidence finding directly (step 6b) — an existing claim directly
+   contradicted by a code fact, corrected in place with no new content
+   authored. The stale "no hooks" claim above is exactly this shape.
+3. File a GitHub issue (step 7) for anything left — findings that need new
+   content authored or a judgment call (missing docs, unclear sections, new
+   examples).
 
-# What changed in this release — drives which pages are likely affected
-git diff --name-only $(git describe --tags --abbrev=0)..HEAD
-```
+Then:
+- Review every auto-fixed surface yourself — confirm the edit reads
+  correctly in context before it ships, don't just trust that a diff
+  exists.
+- Leave the auto-fixed edits uncommitted; Step 7a's `git add` picks them up
+  alongside the other release artefacts.
+- Treat any newly filed/updated issue as a separate follow-up, not a
+  release blocker — don't let it stall this release.
 
-For each file in scope, read it and ask: *does this release's diff
-invalidate anything written here?* Common triggers, with the doc page that
-typically owns the surface:
-
-| Diff touches… | Likely-affected docs |
-|---|---|
-| `core/adapters/inbound/agents/**` | `site/docs/adapters.html`, README compatibility grid, `AGENTS.md` "Adding a new agent adapter" section |
-| `core/ports/**`, `core/domain/**` | `site/docs/architecture.html`, `site/docs/adapters.html`, `AGENTS.md` if the adapter contract shape changes |
-| `core/cmd/irrlichd/main.go` slice/wiring rename (e.g. `agentCfgs` → `allAgents`) | `site/docs/api-reference.html` (the `GET /api/v1/agents` blurb references the slice name), `site/docs/contributing.html` adapter-PR checklist, `AGENTS.md` |
-| `core/cmd/irrlichd/handlers.go` (HTTP routes / payloads) | `site/docs/api-reference.html` |
-| `core/cmd/irrlicht-ls`, `core/cmd/irrlicht-focus` | `site/docs/cli-tools.html` |
-| `core/application/services/**`, `core/domain/session/**` | `site/docs/state-machine.html`, `site/docs/session-detection.html` |
-| `site/install.sh`, `tools/homebrew-tap/**`, install flow | `site/docs/installation.html`, `site/docs/quickstart.html`, `README.md` install section |
-| Config schema / settings files | `site/docs/configuration.html` |
-| New agent adapter shipped | README compatibility grid + `site/index.html` "Supported Agents & Platforms" grid (search for `tag-planned` / `tag-alpha`) + `site/docs/adapters.html` per-adapter row |
-| Adapter maturity-stage change | Same three places as "new adapter shipped" — README, landing page grid, adapters doc |
-| New platform shipped | README + `site/index.html` "Supported Agents & Platforms" grid (Platforms column) + `site/docs/index.html` overview |
-
-Update only where content is actually outdated — do **not** paraphrase
-correct content for the sake of touching the file. If a doc is fine, leave
-it untouched. When in doubt, prefer to update over leaving stale: a
-half-true doc is worse than a slightly chatty one.
-
-When this sweep finishes, every line you read should either be (a) still
-true on `main` after the release, or (b) edited to be true.
+Do not substitute a narrower, diff-only check for this step — closing that
+gap for good is the point.
 
 ## Step 5: Run Tests
 
@@ -908,12 +902,18 @@ on `main`.
 ### 7a. Stage and commit on a release branch
 
 ```bash
-# Core release artefacts plus any top-level README/doc files the Step 4b
-# sweep edited. The `git add -- ...` form is safe for missing files.
-git add version.json CHANGELOG.md site/ \
+# Core release artefacts plus any doc surface the Step 4b sweep
+# (`/ir:doc-review --fix`) may have auto-fixed. The `git add -- ...` form is
+# safe for missing files/globs.
+git add version.json CHANGELOG.md site/ docs/ \
         platforms/macos/Irrlicht/Resources/Info.plist \
         tools/homebrew-tap/Casks/irrlicht.rb
 git add -- README.md AGENTS.md CONTRIBUTING.md SECURITY.md CODE_OF_CONDUCT.md 2>/dev/null || true
+# ir:doc-review's fuller surface — tool/skill docs the sweep can also touch.
+git add -- tools/*/README.md tools/*/SKILL.md \
+        .claude/skills/*/SKILL.md .claude/skills/*/skill.md \
+        tools/irrlicht-design-system/README.md \
+        tools/irrlicht-design-system/ui_kits/*/README.md 2>/dev/null || true
 
 # Confirm nothing the sweep edited is left unstaged before committing.
 git status --short

@@ -1,6 +1,6 @@
 ---
 name: ir:doc-review
-description: Audit all project documentation for understandability, completeness, and validity using objective, binary criteria, then file one GitHub issue per documentation surface with exact, agent-ready fixes. Every finding is anchored to a quoted location and stamped with a stable ID so independent runs converge. Triggers on "/ir:doc-review", "audit docs", "review documentation", "check the docs", "doc audit". Supports a --report-only dry run.
+description: Audit all project documentation for understandability, completeness, and validity using objective, binary criteria, then file one GitHub issue per documentation surface with exact, agent-ready fixes. Every finding is anchored to a quoted location and stamped with a stable ID so independent runs converge. Triggers on "/ir:doc-review", "audit docs", "review documentation", "check the docs", "doc audit". Supports a --report-only dry run and a --fix mode that applies high-confidence corrections directly instead of filing an issue for them.
 ---
 
 # ir:doc-review — Objective Documentation Audit
@@ -27,6 +27,13 @@ literally** — never invent criteria, never grade on subjective grounds (tone, 
 
 - `--report-only` — run the full audit and print per-surface findings, but file nothing. Use
   this first, and for the convergence check.
+- `--fix` — after scoring (step 5), apply direct edits for the auto-fix-eligible findings
+  defined in step 6b instead of filing an issue for them; every other finding still gets filed
+  as an issue in step 7. This is what `ir:release` Step 4b runs on every release (#834), so
+  drift can't silently accumulate the way the stale "no hooks" claim did — that claim's fix
+  (correcting existing prose to match a code-derived fact, no new content authored) is exactly
+  the auto-fix-eligible shape. Combine with `--report-only` to preview which findings would be
+  auto-fixed vs. filed, without touching any file or opening any issue.
 - An optional path or glob — limit the audit to matching surfaces (default: all in-scope).
 
 ## Workflow
@@ -96,8 +103,38 @@ For each surface with ≥1 finding:
   - Last line — the hidden reconciliation marker (one line, exactly):
     `<!-- ir:doc-review surface=<path> findings=<id1,id2,...> -->`
 
+### 6b. Apply auto-fix-eligible findings directly (only with `--fix`)
+Skip this step entirely unless `--fix` was passed — without it, every finding built in step 6
+falls straight through to step 7 unchanged.
+
+For each finding, decide whether it is **auto-fix eligible** before step 7 runs:
+
+- **Eligible criteria:** V1, V2, V4, V5, V6, C2. These are exactly the findings where an
+  existing claim is directly contradicted by a code-derived inventory/fact
+  (`inventory-sources.md`), and step 6's own "Exact fix" text is a direct in-place correction or
+  removal — no new section, paragraph, or example needs authoring.
+- **Never eligible — always falls through to step 7:** U1–U6 (wording/ordering/audience are
+  judgment calls), C1/C3/C4 (missing mention, missing surface, missing example — these need new
+  content authored, not a correction), and V3 (link/anchor liveness — never blocking per the
+  severity rubric anyway).
+- Even within an eligible criterion, if the "Exact fix" isn't unambiguous from the inventory
+  alone — the claim could be resolved two different ways and picking one is a judgment call —
+  file it in step 7 instead of guessing.
+
+For each eligible finding: re-locate the anchor by its verbatim quote (don't trust the original
+line number — an earlier edit in the same file may have shifted it), apply the "Exact fix" text
+from step 6 verbatim, then immediately run that finding's own "Verification" check. If the quote
+no longer matches the live file, or verification fails after the edit, **revert the edit** and
+leave the finding in the surface's draft issue body for step 7 — never leave a half-applied or
+unverified edit in a doc, and never fuzzy-match a quote that's moved. When a surface has more
+than one eligible finding, apply them bottom-of-file-upward so an earlier edit can't shift a
+later finding's anchor off target.
+
+Remove every successfully auto-fixed finding from its surface's draft issue body (built in step
+6) before step 7 runs, and record it (surface + finding-ID) for the step 8 summary.
+
 ### 7. Dedupe and file (skip entirely if --report-only)
-For each surface with findings:
+For each surface with findings remaining after step 6b (all findings, if `--fix` was not passed):
 1. `gh issue list --repo ingo-eichhorst/Irrlicht --state open --search "in:title docs(<surface>)" --json number,body,title`.
 2. **No match →** `gh issue create` with the title/body above and labels: `documentation`, the
    matching `scope:*` (mapping below), and `needs-triage`.
@@ -116,13 +153,20 @@ Scope-label mapping:
 
 ### 8. Print the run summary
 Always print: surfaces scanned, a findings-by-axis-and-severity table, and — unless
-`--report-only` — the issues created / updated / unchanged with their URLs.
+`--report-only` — the issues created / updated / unchanged with their URLs. When `--fix` was
+set, also print the findings auto-fixed directly (surface + finding-ID, from step 6b) separately
+from the findings that still got filed as issues.
 
 ## Conventions
 
 - `gh` always targets `ingo-eichhorst/Irrlicht`.
 - Reuse existing labels only; never create new labels.
-- The skill **only reports** — it never edits documentation. Auto-fixing is out of scope.
+- Without `--fix`, the skill **only reports** — it never edits documentation. With `--fix`, it
+  edits documentation directly, but only for the auto-fix-eligible findings defined in step 6b;
+  everything else still only gets filed as an issue, same as without the flag.
+- `--fix` never commits or opens a PR itself — it leaves auto-fixed files as uncommitted
+  working-tree changes for whatever invoked it (a release commit via `ir:release` Step 4b, or
+  the user's own review when run standalone) to pick up.
 - External-link liveness is reported but never blocks (see V3).
 - When uncertain whether something is a finding, re-read the criterion: if it isn't a binary
   failure you can quote, drop it. A false positive costs more than a missed nit.
