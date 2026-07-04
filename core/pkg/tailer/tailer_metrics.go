@@ -254,7 +254,7 @@ func (t *TranscriptTailer) computeCumulativeTokens() {
 					modelName, bd.Input, bd.Output, bd.CacheRead, bd.CacheCreation5m, bd.CacheCreation1h)
 			}
 			grams, tier := capacity.EstimateCO2Grams(
-				modelName, bd.Input, bd.Output, bd.CacheRead, bd.CacheCreation5m+bd.CacheCreation1h)
+				modelName, bd.Input+bd.Output+bd.CacheRead+bd.CacheCreation5m+bd.CacheCreation1h)
 			co2Grams += grams
 			co2Tier = capacity.WeakerCO2Tier(co2Tier, tier)
 		}
@@ -271,9 +271,9 @@ func (t *TranscriptTailer) computeCumulativeTokens() {
 						pending.Usage.Input, pending.Usage.Output, pending.Usage.CacheRead,
 						pending.Usage.CacheCreation5m, pending.Usage.CacheCreation1h)
 				}
-				grams, tier := capacity.EstimateCO2Grams(
-					pending.Model, pending.Usage.Input, pending.Usage.Output,
-					pending.Usage.CacheRead, pending.Usage.CacheCreation5m+pending.Usage.CacheCreation1h)
+				grams, tier := capacity.EstimateCO2Grams(pending.Model,
+					pending.Usage.Input+pending.Usage.Output+pending.Usage.CacheRead+
+						pending.Usage.CacheCreation5m+pending.Usage.CacheCreation1h)
 				co2Grams += grams
 				co2Tier = capacity.WeakerCO2Tier(co2Tier, tier)
 			}
@@ -302,15 +302,14 @@ func (t *TranscriptTailer) computeCumulativeTokens() {
 		t.metrics.CumCacheReadTokens = effectiveCumCacheRead
 		t.metrics.CumCacheCreationTokens = effectiveCumCacheCreate
 
-		if t.capacityMgr != nil && t.metrics.ModelName != "" {
-			t.metrics.EstimatedCostUSD = t.capacityMgr.EstimateCostUSD(
-				t.metrics.ModelName, effectiveCumInput, effectiveCumOutput,
-				effectiveCumCacheRead, effectiveCumCacheCreate)
-		}
 		if t.metrics.ModelName != "" {
-			grams, tier := capacity.EstimateCO2Grams(
-				t.metrics.ModelName, effectiveCumInput, effectiveCumOutput,
-				effectiveCumCacheRead, effectiveCumCacheCreate)
+			if t.capacityMgr != nil {
+				t.metrics.EstimatedCostUSD = t.capacityMgr.EstimateCostUSD(
+					t.metrics.ModelName, effectiveCumInput, effectiveCumOutput,
+					effectiveCumCacheRead, effectiveCumCacheCreate)
+			}
+			grams, tier := capacity.EstimateCO2Grams(t.metrics.ModelName,
+				effectiveCumInput+effectiveCumOutput+effectiveCumCacheRead+effectiveCumCacheCreate)
 			t.metrics.EstimatedCO2Grams = grams
 			t.metrics.CO2Tier = string(tier)
 		}

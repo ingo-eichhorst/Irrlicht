@@ -95,15 +95,15 @@ func co2CoefficientsForModel(modelName string) co2Coefficients {
 	return co2Coefficients{tier: CO2TierFallback}
 }
 
-// EstimateCO2Grams estimates the CO2e footprint in grams for the given token
-// breakdown, using whatever tier of coefficient is available for the model.
+// EstimateCO2Grams estimates the CO2e footprint in grams for totalTokens
+// processed by modelName, using whatever tier of coefficient is available.
+// Takes a single pre-summed token count rather than a per-bucket breakdown:
+// unlike $ pricing, no public source distinguishes an energy cost for
+// input/output/cache tokens, so callers sum their buckets before calling.
 // This is always an estimate, never a measurement — no provider exposes
 // per-request energy telemetry — so callers should surface the returned tier
-// alongside the number rather than presenting it as precise. Cache tokens
-// (read or write) are priced the same as input/output tokens: no public
-// source distinguishes a separate energy cost for cache operations.
-func EstimateCO2Grams(modelName string, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens int64) (grams float64, tier CO2Tier) {
-	totalTokens := inputTokens + outputTokens + cacheReadTokens + cacheCreationTokens
+// alongside the number rather than presenting it as precise.
+func EstimateCO2Grams(modelName string, totalTokens int64) (grams float64, tier CO2Tier) {
 	if totalTokens <= 0 {
 		return 0, CO2TierFallback
 	}

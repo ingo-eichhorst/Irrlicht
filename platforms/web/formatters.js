@@ -50,6 +50,16 @@ export function co2TierTitle(tier) {
   return 'Estimated CO2e — no public per-model figure exists for this model, so a cross-model fallback average is used. Not a live measurement.';
 }
 
+// costCellDisplay resolves the per-session row's cost/CO2 slot (issue #829)
+// to its text + tooltip for the given display mode, keeping the mode
+// branching out of updateSessionRow's already-large row-rendering function.
+export function costCellDisplay(metrics, mode) {
+  if (mode === 'co2') {
+    return { text: formatCO2(metrics.estimated_co2_grams), title: co2TierTitle(metrics.co2_tier) };
+  }
+  return { text: formatCost(metrics.estimated_cost_usd), title: 'Click to show CO2 estimate' };
+}
+
 export function fmtDuration(secs) {
   const h = Math.floor(secs / 3600);
   const m = Math.floor((secs % 3600) / 60);

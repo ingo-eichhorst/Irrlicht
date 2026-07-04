@@ -14,7 +14,7 @@ import {
 } from './sessionIdentity.js';
 import { relayFrameKind, seqGap, aggregateConnState, relayWsUrl } from './connectionProtocol.js';
 import {
-  stateIcon, shortModel, formatCost, formatCO2, co2TierTitle, fmtDuration, formatElapsed, fmtEtaDuration, fmtEtaText,
+  stateIcon, shortModel, formatCost, costCellDisplay, fmtDuration, formatElapsed, fmtEtaDuration, fmtEtaText,
   taskEtaPresentation, shortID, pressureClass, pressureColor, formatTokens, esc, activeSubagentCount,
 } from './formatters.js';
 import { reconcile, paintRowNum } from './domReconcile.js';
@@ -669,8 +669,6 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       const ctxPct = metrics.context_utilization_percentage || 0;
       const pressure = metrics.pressure_level || '';
       const branch = agent.git_branch || '';
-      const showCO2 = costDisplayMode === 'co2';
-      const cost = showCO2 ? formatCO2(metrics.estimated_co2_grams) : formatCost(metrics.estimated_cost_usd);
       const isActive = state === 'working' || state === 'waiting';
       const elapsed = formatElapsed(agent.first_seen, metrics.elapsed_seconds, isActive);
 
@@ -837,8 +835,8 @@ import { reconcile, paintRowNum } from './domReconcile.js';
 
       // Cost / CO2 (click to cycle, issue #829)
       const costEl = el.querySelector('.row-cost');
+      const { text: cost, title: costTitle } = costCellDisplay(metrics, costDisplayMode);
       if (costEl.textContent !== cost) costEl.textContent = cost;
-      const costTitle = showCO2 ? co2TierTitle(metrics.co2_tier) : 'Click to show CO2 estimate';
       if (costEl.title !== costTitle) costEl.title = costTitle;
 
       // Yield revert marker (#373): ↩ next to cost when the session's work
@@ -1945,7 +1943,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
 
 export {
   resolvedTheme, rowLabel, maybeNotifyOnUpdate,
-  formatCost, formatCO2, co2TierTitle, formatUsageCost, pressureClass, historyPriorityForState,
+  formatCost, costCellDisplay, formatUsageCost, pressureClass, historyPriorityForState,
   taskEtaPresentation,
   lastNotifiedPressure,
   relayFrameKind, aggregateConnState, relayWsUrl, seqGap,

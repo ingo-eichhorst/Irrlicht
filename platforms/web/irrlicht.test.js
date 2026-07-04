@@ -1,4 +1,5 @@
 import { describe, test, expect, beforeEach } from 'vitest'
+import { formatCO2, co2TierTitle } from './formatters.js'
 import {
   pendingWizardAgents,
   stillPendingForAgents,
@@ -7,8 +8,7 @@ import {
   rowLabel,
   maybeNotifyOnUpdate,
   formatCost,
-  formatCO2,
-  co2TierTitle,
+  costCellDisplay,
   formatUsageCost,
   pressureClass,
   taskEtaPresentation,
@@ -144,6 +144,20 @@ describe('co2TierTitle', () => {
   test('discloses the fallback approximation for any other tier', () => {
     expect(co2TierTitle('fallback')).toMatch(/cross-model fallback/)
     expect(co2TierTitle(undefined)).toMatch(/cross-model fallback/)
+  })
+})
+
+describe('costCellDisplay', () => {
+  const metrics = { estimated_cost_usd: 1.5, estimated_co2_grams: 30, co2_tier: 'provider_disclosed' }
+
+  test('shows cost by default', () => {
+    expect(costCellDisplay(metrics, 'cost')).toEqual({ text: '$1.50', title: 'Click to show CO2 estimate' })
+  })
+
+  test('shows CO2 with its tier tooltip in co2 mode', () => {
+    const { text, title } = costCellDisplay(metrics, 'co2')
+    expect(text).toBe('30.0g CO2e')
+    expect(title).toMatch(/provider-published/)
   })
 })
 

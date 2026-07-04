@@ -3,7 +3,7 @@ package capacity
 import "testing"
 
 func TestEstimateCO2Grams_ZeroTokens(t *testing.T) {
-	grams, tier := EstimateCO2Grams("claude-sonnet-5", 0, 0, 0, 0)
+	grams, tier := EstimateCO2Grams("claude-sonnet-5", 0)
 	if grams != 0 {
 		t.Errorf("grams = %v, want 0", grams)
 	}
@@ -16,7 +16,7 @@ func TestEstimateCO2Grams_FallbackTier(t *testing.T) {
 	// Claude/GPT have no public per-token disclosure, so they land in the
 	// fallback tier: tokens * fallbackWhPerToken * PUE * grid / 1000.
 	for _, model := range []string{"claude-sonnet-5", "gpt-5", "unknown-model-xyz"} {
-		grams, tier := EstimateCO2Grams(model, 1_000_000, 0, 0, 0)
+		grams, tier := EstimateCO2Grams(model, 1_000_000)
 		if tier != CO2TierFallback {
 			t.Errorf("%s: tier = %v, want %v", model, tier, CO2TierFallback)
 		}
@@ -38,7 +38,7 @@ func TestEstimateCO2Grams_ProviderDisclosedTier(t *testing.T) {
 		{"open-mixtral-8x22b", 0.00285},
 	}
 	for _, tt := range tests {
-		grams, tier := EstimateCO2Grams(tt.model, 1000, 0, 0, 0)
+		grams, tier := EstimateCO2Grams(tt.model, 1000)
 		if tier != CO2TierProviderDisclosed {
 			t.Errorf("%s: tier = %v, want %v", tt.model, tier, CO2TierProviderDisclosed)
 		}
@@ -46,14 +46,6 @@ func TestEstimateCO2Grams_ProviderDisclosedTier(t *testing.T) {
 		if grams != want {
 			t.Errorf("%s: grams = %v, want %v", tt.model, grams, want)
 		}
-	}
-}
-
-func TestEstimateCO2Grams_SumsAllTokenBuckets(t *testing.T) {
-	grams, _ := EstimateCO2Grams("gemini-2.5-flash", 100, 200, 300, 400)
-	const want = 0.03
-	if diff := grams - want; diff > 1e-9 || diff < -1e-9 {
-		t.Errorf("grams = %v, want %v", grams, want)
 	}
 }
 
