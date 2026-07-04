@@ -1123,6 +1123,12 @@ struct SessionListView: View {
     }
 
     private var statusColor: Color {
+        // A stalled local reconnect (#843) is a more severe signal than an
+        // ordinary transient "reconnecting" blip — flag it red rather than
+        // yellow even though the auto-retry loop is still quietly running.
+        if sessionManager.useLocalDaemon && sessionManager.localConnectionStalled {
+            return IrrColors.wsDisconnected
+        }
         switch sessionManager.aggregateConnectionState {
         case .connected: return IrrColors.wsConnected
         case .connecting, .reconnecting: return IrrColors.wsConnecting
