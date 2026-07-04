@@ -229,10 +229,9 @@ independent axes:
          cp "$DEBUG_BIN" "$APP_TARGET/Contents/MacOS/Irrlicht"
          rm -rf "$APP_TARGET/Contents/Frameworks/Sparkle.framework"
          cp -R "$DEBUG_SPARKLE" "$APP_TARGET/Contents/Frameworks/Sparkle.framework"
-         # Refresh the SwiftPM resource bundle + icon too, so a developer
-         # iterating on Resources/ assets sees the same result in replace
-         # mode as in separate mode instead of a stale production copy.
-         cp -R "$REPO_ROOT/platforms/macos/.build/arm64-apple-macosx/debug/Irrlicht_Irrlicht.bundle" "$APP_TARGET/Contents/Resources/Irrlicht_Irrlicht.bundle" 2>/dev/null || true
+         # Refresh the icon too, so a developer iterating on Resources/ assets
+         # sees the same result in replace mode as in separate mode instead of
+         # a stale production copy.
          cp "$REPO_ROOT/platforms/macos/Irrlicht/Resources/AppIcon.icns" "$APP_TARGET/Contents/Resources/AppIcon.icns"
          # The SwiftPM debug binary links Sparkle as @rpath/Sparkle.framework but only
          # carries an @loader_path rpath (= Contents/MacOS) — it lacks the bundle-layout
@@ -252,8 +251,6 @@ independent axes:
          mkdir -p "$APP_TARGET/Contents/MacOS" "$APP_TARGET/Contents/Resources"
          cp "$REPO_ROOT/platforms/macos/.build/arm64-apple-macosx/debug/Irrlicht" "$APP_TARGET/Contents/MacOS/Irrlicht"
          cp "$REPO_ROOT/platforms/macos/Irrlicht/Resources/AppIcon.icns" "$APP_TARGET/Contents/Resources/AppIcon.icns"
-         # Copy the SwiftPM resource bundle so Bundle.module works at runtime
-         cp -R "$REPO_ROOT/platforms/macos/.build/arm64-apple-macosx/debug/Irrlicht_Irrlicht.bundle" "$APP_TARGET/Contents/Resources/Irrlicht_Irrlicht.bundle" 2>/dev/null || true
          # Embed Sparkle.framework (required since v0.4.7 auto-update integration)
          mkdir -p "$APP_TARGET/Contents/Frameworks"
          cp -R "$REPO_ROOT/platforms/macos/.build/arm64-apple-macosx/debug/Sparkle.framework" "$APP_TARGET/Contents/Frameworks/"

@@ -126,19 +126,6 @@ cp platforms/web/index.html platforms/web/irrlicht.css platforms/web/irrlicht.js
 # AppIcon — required for menu bar / Finder display.
 cp platforms/macos/Irrlicht/Resources/AppIcon.icns "$APP_CONTENTS/Resources/AppIcon.icns"
 
-# SwiftPM resource bundle — Bundle.module.url(...) aborts during its own
-# initialization if this bundle isn't present (the ?? fallback never runs).
-# Missing this bundle shipped a broken v0.3.4 that crashed at launch.
-SWIFTPM_RESOURCES="platforms/macos/.build/apple/Products/Release/Irrlicht_Irrlicht.bundle"
-if [ ! -d "$SWIFTPM_RESOURCES" ]; then
-    SWIFTPM_RESOURCES=$(find platforms/macos/.build -name "Irrlicht_Irrlicht.bundle" -type d -not -path "*debug*" | head -1)
-fi
-if [ -z "$SWIFTPM_RESOURCES" ] || [ ! -d "$SWIFTPM_RESOURCES" ]; then
-    echo "ERROR: Could not find Irrlicht_Irrlicht.bundle in SwiftPM build output"
-    exit 1
-fi
-cp -R "$SWIFTPM_RESOURCES" "$APP_CONTENTS/Resources/Irrlicht_Irrlicht.bundle"
-
 # Embed daemon and CLI tools inside the app bundle (single-artifact distribution)
 cp "$BUILD_DIR/${DAEMON_NAME}-darwin-universal" "$APP_CONTENTS/MacOS/${DAEMON_NAME}"
 chmod 755 "$APP_CONTENTS/MacOS/${DAEMON_NAME}"
@@ -266,10 +253,6 @@ if [ -n "${DEVELOPER_ID:-}" ]; then
     echo "Signing app bundle with Developer ID..."
     SIGN_IDENTITY="Developer ID Application: ${DEVELOPER_ID}"
     sign_sparkle --sign "$SIGN_IDENTITY" --options runtime --timestamp
-    # Sign the SwiftPM resource bundle — Sequoia AMFI POSIX 153-kills the app
-    # at launch if any nested bundle under Contents/Resources is unsigned.
-    codesign --force --sign "$SIGN_IDENTITY" --options runtime --timestamp \
-        "$APP_CONTENTS/Resources/Irrlicht_Irrlicht.bundle"
     codesign --force --sign "$SIGN_IDENTITY" --options runtime --timestamp \
         "$APP_CONTENTS/MacOS/${DAEMON_NAME}"
     codesign --force --sign "$SIGN_IDENTITY" --options runtime --timestamp \
@@ -291,7 +274,6 @@ if [ -n "${DEVELOPER_ID:-}" ]; then
 else
     echo "Signing app bundle (ad-hoc — set DEVELOPER_ID to use Developer ID cert)..."
     sign_sparkle --sign -
-    codesign --force --sign - "$APP_CONTENTS/Resources/Irrlicht_Irrlicht.bundle"
     codesign --force --sign - "$APP_CONTENTS/MacOS/${DAEMON_NAME}"
     codesign --force --sign - "$APP_CONTENTS/MacOS/irrlicht-focus"
     codesign --force --sign - "$APP_CONTENTS/MacOS/irrlicht-ls"

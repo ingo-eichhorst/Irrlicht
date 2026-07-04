@@ -24,7 +24,7 @@ let package = Package(
                 .product(name: "Sparkle", package: "Sparkle"),
             ],
             path: "Irrlicht",
-            resources: [.copy("Resources")]
+            exclude: ["Resources"]
         ),
         .testTarget(
             name: "IrrlichtTests",

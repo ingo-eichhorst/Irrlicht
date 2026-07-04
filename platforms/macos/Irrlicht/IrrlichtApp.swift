@@ -44,9 +44,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         mainMenu.addItem(editItem)
         NSApp.mainMenu = mainMenu
 
-        // Try Bundle.module (SwiftPM resource bundle) first, then Bundle.main (.app bundle)
-        let iconURL = Bundle.module.url(forResource: "AppIcon", withExtension: "icns", subdirectory: "Resources")
-            ?? Bundle.main.url(forResource: "AppIcon", withExtension: "icns")
+        let iconURL = Bundle.main.url(forResource: "AppIcon", withExtension: "icns")
         if let iconURL, let icon = NSImage(contentsOf: iconURL) {
             NSApp.applicationIconImage = icon
         }

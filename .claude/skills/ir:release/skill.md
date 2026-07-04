@@ -345,13 +345,13 @@ All tests must pass before proceeding.
 > in the bundle; the PKG postinstall symlinks `irrlicht-ls` into
 > `/usr/local/bin` — #608), the Linux tarballs, assembles + DevID-signs the
 > bundle, DevID-signs the DMG file itself (since #652; see the DMG-signature
-> note in step 7 below), notarizes + staples the DMG, builds the
+> note in step 6 below), notarizes + staples the DMG, builds the
 > PKG, and writes `.build/checksums.sha256`. It does **NOT** do four things —
 > do them by hand afterward:
 > 1. **ZIP**: `ditto -c -k --sequesterRsrc --keepParent .build/Irrlicht.app .build/Irrlicht-$NEW_VERSION.zip`
 > 2. **Re-checksum to include the zip**: regenerate `.build/checksums.sha256` over the dmg, pkg, zip, and the three tarballs.
-> 3. **Sparkle-sign the DMG** + add the `site/appcast.xml` `<item>` (Step 6 step 7's Sparkle block).
-> 4. **Smoke-test** the bundle (Step 6 step 8) — but see the port hazard below.
+> 3. **Sparkle-sign the DMG** + add the `site/appcast.xml` `<item>` (Step 6 step 6's Sparkle block).
+> 4. **Smoke-test** the bundle (Step 6 step 7) — but see the port hazard below.
 >
 > **The `focus-status` entitlement is gone (don't re-add a FOCUS_TRUE check).**
 > v0.4.7 STRIPPED `com.apple.developer.focus-status` (AMFI POSIX 153 killed
@@ -511,17 +511,7 @@ PKG, and ZIP land in `/tmp/` as before — only the *assembly* path moves.
 1. Copy Swift binary → `$APP_STAGING/Contents/MacOS/Irrlicht` (from path above).
 2. Copy universal daemon → `$APP_STAGING/Contents/MacOS/irrlichd`.
 3. Copy `AppIcon.icns` → `$APP_STAGING/Contents/Resources/AppIcon.icns`.
-4. **Copy the SwiftPM resource bundle** `Irrlicht_Irrlicht.bundle` →
-   `$APP_STAGING/Contents/Resources/Irrlicht_Irrlicht.bundle`. The Swift code uses
-   `Bundle.module.url(...)` which aborts during its own initialization if
-   the bundle isn't present — the `?? Bundle.main...` fallback never runs.
-   Missing this bundle shipped a broken v0.3.4 that crashed at launch
-   (`EXC_BREAKPOINT` in `resource_bundle_accessor.swift`).
-   ```bash
-   cp -R /Users/ingo/projects/irrlicht/platforms/macos/.build/apple/Products/Release/Irrlicht_Irrlicht.bundle \
-         "$APP_STAGING/Contents/Resources/Irrlicht_Irrlicht.bundle"
-   ```
-5. **Copy the dashboard UI** → `$APP_STAGING/Contents/Resources/web/index.html`.
+4. **Copy the dashboard UI** → `$APP_STAGING/Contents/Resources/web/index.html`.
    The daemon resolves it at runtime via `<exe>/../Resources/web/`
    (`resolveUIDir` in `core/cmd/irrlichd/main.go`). Without this copy,
    `GET /` returns the 503 "Dashboard UI not found" fallback — every
@@ -533,7 +523,7 @@ PKG, and ZIP land in `/tmp/` as before — only the *assembly* path moves.
    cp /Users/ingo/projects/irrlicht/platforms/web/index.html \
       "$APP_STAGING/Contents/Resources/web/index.html"
    ```
-6. **Write a resolved `Info.plist`** to `$APP_STAGING/Contents/Info.plist`.
+5. **Write a resolved `Info.plist`** to `$APP_STAGING/Contents/Info.plist`.
    This is a hand-written file, *not* a copy of `platforms/macos/Irrlicht/Resources/Info.plist`
    (which contains unresolved Xcode variables like `$(PRODUCT_NAME)`). Use
    the full template below verbatim, substituting only `$NEW_VERSION` and
@@ -600,7 +590,7 @@ PKG, and ZIP land in `/tmp/` as before — only the *assembly* path moves.
    </plist>
    ```
 
-7. **Sign with Developer ID, then notarize and staple the DMG.**
+6. **Sign with Developer ID, then notarize and staple the DMG.**
 
    One-time credential setup (skip if already done):
    ```bash
@@ -720,7 +710,7 @@ PKG, and ZIP land in `/tmp/` as before — only the *assembly* path moves.
    commit in step 10 must include `site/appcast.xml` — GitHub Pages serves
    it from `https://irrlicht.io/appcast.xml` so existing installs see the
    new entry.
-8. **Smoke test before packaging** — launch the built app, wait ~2s, confirm
+7. **Smoke test before packaging** — launch the built app, wait ~2s, confirm
    the process is still alive, has spawned `irrlichd`, and that the daemon
    serves the dashboard at `127.0.0.1:7837/`.
 
