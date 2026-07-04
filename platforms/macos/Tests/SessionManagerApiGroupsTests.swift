@@ -393,6 +393,21 @@ final class SessionManagerApiGroupsTests: XCTestCase {
         )
     }
 
+    /// The same relay echo must also collapse in the flat `sessions` array
+    /// (#828) — not just in `apiGroups`. Before the fix, `rebuildSessionsFromMap`
+    /// only deduped relay sessions by id, so the drifted-id echo survived and
+    /// the menu bar (which reads `sessions`) double-counted the project while
+    /// the list view (which reads `apiGroups`) already showed the correct total.
+    func testRelayEcho_sameProjectName_driftedId_collapsesToLocal_inFlatSessions() {
+        sut.sessionMap["local-1"] = makeSession(id: "local-1", projectName: "irrlicht")
+        sut.seedLocalApiGroups([AgentGroup(name: "irrlicht", agents: [makeSession(id: "local-1", projectName: "irrlicht")])])
+        sut.handleRelayMessage(relayPush(source: "ghostDaemon", sessionId: "drifted-9", project: "irrlicht"))
+
+        let irrlicht = sut.sessions.filter { $0.projectName == "irrlicht" }
+        XCTAssertEqual(irrlicht.count, 1, "the menu bar's flat session list must also collapse the relay echo")
+        XCTAssertNil(irrlicht.first?.daemonID, "the surviving row is the local one")
+    }
+
     /// A relay-only project with no local equivalent still appears — the
     /// name-collapse only suppresses collisions, not genuine remote projects.
     func testRelayOnly_differentProject_stillAppears() {
@@ -478,13 +493,15 @@ final class SessionManagerApiGroupsTests: XCTestCase {
     private func makeSession(
         id: String,
         cost: Double = 0,
-        children: [SessionState]? = nil
+        children: [SessionState]? = nil,
+        projectName: String? = nil
     ) -> SessionState {
         SessionState(
             id: id,
             state: .working,
             model: "test-model",
             cwd: "/tmp",
+            projectName: projectName,
             firstSeen: Date(timeIntervalSince1970: 0),
             updatedAt: Date(timeIntervalSince1970: 0),
             metrics: SessionMetrics(
