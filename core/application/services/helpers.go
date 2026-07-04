@@ -28,6 +28,13 @@ func isDBBackedTranscriptPath(path string) bool {
 // isStaleTranscript reports whether the transcript file at path has not been
 // modified within orphanTranscriptAge. Returns false for empty paths, stat
 // errors, or DB-backed paths (whose staleness is managed by the adapter).
+//
+// A missing file deliberately returns false here rather than true: plenty of
+// legitimate sessions (freshly created, or ones built directly as test
+// fixtures) reference a transcript path that doesn't exist on disk yet, and
+// treating that the same as "definitely gone" would delete them on sight. See
+// isDeletedTranscript for the narrower, age-gated check that does treat a
+// missing file as an orphan signal.
 func isStaleTranscript(path string) bool {
 	if path == "" || isDBBackedTranscriptPath(path) {
 		return false
@@ -37,6 +44,21 @@ func isStaleTranscript(path string) bool {
 		return false
 	}
 	return time.Since(info.ModTime()) > orphanTranscriptAge
+}
+
+// isDeletedTranscript reports whether the transcript file at path is
+// confirmed gone (os.IsNotExist) rather than merely old or never-yet-written.
+// Distinct from isStaleTranscript's mtime check: a file that once existed and
+// has now been deleted outright (e.g. its worktree was torn down) is a
+// stronger, unambiguous orphan signal — but on its own it can't distinguish
+// "deleted" from "not created yet", so callers must additionally gate on the
+// session's own age (see reapStaleChild) before treating it as fatal.
+func isDeletedTranscript(path string) bool {
+	if path == "" || isDBBackedTranscriptPath(path) {
+		return false
+	}
+	_, err := os.Stat(path)
+	return os.IsNotExist(err)
 }
 
 // isNewestTranscriptInDir reports whether the transcript at path has the
