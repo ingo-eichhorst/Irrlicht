@@ -43,5 +43,6 @@ go run ./cmd/eta-research \
 
 The committed fixtures alone are single-round-per-turn scenarios and don't form
 multi-round episodes, so the trustworthy accuracy numbers require a local corpus
-of real transcripts (never committed). The CI test (`go test ./...`) exercises
+of real transcripts (never committed). A local test (`go test ./...` from `tools/eta-research/`) exercises
 the scorer and estimators on synthetic episodes — no corpus required.
+(Not currently wired into CI.)

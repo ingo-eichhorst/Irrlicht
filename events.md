@@ -49,7 +49,7 @@ Pre-sessions (`proc-<pid>`) are synthetic sessions created by the process scanne
 |------|-----------|---------|
 | Discovery | `lsof -t <transcript>` | One-shot on session creation; retried async on activity if PID=0 |
 | Registration | `EVFILT_PROC NOTE_EXIT` | kqueue watches the PID for exit |
-| Liveness sweep | `syscall.Kill(pid, 0)` | Every 5s, checks all sessions; deletes dead ones |
+| Liveness sweep | `syscall.Kill(pid, 0)` | Every 5s, backing off to 15s after 3 consecutive clean sweeps; checks all sessions and deletes dead ones |
 | Startup cleanup | `syscall.Kill(pid, 0)` | Synchronous in `seedFromDisk`; dead PIDs deleted before kqueue registration |
 
 ---

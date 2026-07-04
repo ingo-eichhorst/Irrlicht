@@ -88,6 +88,83 @@
       <h1>Changelog</h1>
       <p class="page-subtitle">All notable changes to Irrlicht, following Keep a Changelog conventions.</p>
 
+      <h2>v0.5.5 <small>(2026-07-04)</small></h2>
+
+      <h3>CO2 estimates next to cost, a self-explaining cache-regression badge, and reconnect reliability fixes.</h3>
+
+      <h3>Highlights</h3>
+
+      <h4>Estimated CO2 footprint alongside cost</h4>
+
+      <figure style="margin: 0.5rem 0 1rem; max-width: 480px;">
+        <picture>
+          <source srcset="../assets/releases/v0.5.5/co2-footprint.webp" type="image/webp">
+          <img src="../assets/releases/v0.5.5/co2-footprint.png" alt="A session row's cost column reading 7.1g CO2e instead of a dollar amount, with two more rows showing 9.3g CO2e and 2.0g CO2e" style="display:block; width:100%; height:auto; border-radius:6px; border:1px solid var(--border);">
+        </picture>
+      </figure>
+
+      <p>Click a session&rsquo;s cost figure and it now cycles to an estimated CO2e footprint, with a hover tooltip disclosing how confident the number is &mdash; provider-disclosed coefficients where a provider publishes them (Gemini, Mistral), a cross-model average otherwise.</p>
+
+      <p><strong>Why it matters:</strong> cost isn&rsquo;t the only budget that matters. Now you can see a session&rsquo;s environmental footprint with the same glance you&rsquo;d check its price &mdash; no separate tool, no export. (<a href="https://github.com/ingo-eichhorst/Irrlicht/issues/829" target="_blank" rel="noopener">#829</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/831" target="_blank" rel="noopener">#831</a>)</p>
+
+      <h4>Cache-regression badge explains itself</h4>
+
+      <figure style="margin: 0.5rem 0 1rem; max-width: 420px;">
+        <picture>
+          <source srcset="../assets/releases/v0.5.5/cache-bloat-badge.webp" type="image/webp">
+          <img src="../assets/releases/v0.5.5/cache-bloat-badge.png" alt="A red badge under a session row reading claude-code 2.1.143 +14K cache tokens vs 2.1.98" style="display:block; width:100%; height:auto; border-radius:6px; border:1px solid var(--border);">
+        </picture>
+      </figure>
+
+      <p>The badge that flags a session whose prompt-cache reuse has regressed now always shows which agent version caused it (or a compact &ldquo;cache &uarr;&rdquo; fallback), with the full plain-language explanation on hover &mdash; instead of a bare icon you had to guess at.</p>
+
+      <p><strong>Why it matters:</strong> when caching quietly breaks and a session starts costing more per turn, you immediately know why and which update triggered it, not just that something changed. (<a href="https://github.com/ingo-eichhorst/Irrlicht/issues/813" target="_blank" rel="noopener">#813</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/826" target="_blank" rel="noopener">#826</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/827" target="_blank" rel="noopener">#827</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/842" target="_blank" rel="noopener">#842</a>)</p>
+
+      <h3>Fixed</h3>
+      <ul>
+        <li><strong>History &rarr; Usage tab: grouping by Model no longer buckets everything under &ldquo;unknown&rdquo;</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/issues/792" target="_blank" rel="noopener">#792</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/793" target="_blank" rel="noopener">#793</a>) &mdash; a wrong source field meant every session landed in one aggregate bucket regardless of which model was actually used.</li>
+        <li><strong>History&rsquo;s tab switcher moved into the header, controls collapsed to one row</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/issues/785" target="_blank" rel="noopener">#785</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/788" target="_blank" rel="noopener">#788</a>) &mdash; the Usage/Yield/Quota picker now lives in the header instead of a static label, and Range/Chart/Group/Forecast controls sit on one scrollable row instead of three stacked ones.</li>
+        <li><strong>Menu bar app recovers when the daemon it&rsquo;s connected to restarts</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/issues/843" target="_blank" rel="noopener">#843</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/845" target="_blank" rel="noopener">#845</a>) &mdash; local-daemon traffic now rides its own recyclable connection with a visible &ldquo;daemon unreachable &mdash; retrying&rdquo; state, instead of retrying forever against a wedged one.</li>
+        <li><strong>Relay connections recover from the same wedged-restart failure mode</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/846" target="_blank" rel="noopener">#846</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/848" target="_blank" rel="noopener">#848</a>) &mdash; mirrors the local-daemon fix for a restarted standalone <code>irrlichtrelay</code>.</li>
+        <li><strong>Menu bar session count no longer double-counts relay-echoed sessions</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/issues/828" target="_blank" rel="noopener">#828</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/830" target="_blank" rel="noopener">#830</a>) &mdash; a local daemon that also publishes to a relay it subscribes to could overcount a project&rsquo;s sessions in the menu bar dots/badge.</li>
+        <li><strong>&ldquo;Expand All Task Summaries&rdquo; toggle now persists across restarts</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/issues/799" target="_blank" rel="noopener">#799</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/800" target="_blank" rel="noopener">#800</a>).</li>
+        <li><strong>Antigravity sessions bound to a non-interactive background poller no longer show as phantom menu-bar circles</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/issues/784" target="_blank" rel="noopener">#784</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/791" target="_blank" rel="noopener">#791</a>) &mdash; a known third-party helper process is now recognized and excluded at admission time.</li>
+        <li><strong>FocusMonitor&rsquo;s remaining crash path on the macOS 26 SDK closed</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/issues/782" target="_blank" rel="noopener">#782</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/790" target="_blank" rel="noopener">#790</a>).</li>
+        <li><strong>Subagents whose worktree/transcript disappeared mid-run are reaped</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/850" target="_blank" rel="noopener">#850</a>) &mdash; instead of lingering as phantom sessions.</li>
+        <li><strong>Daemon route-registration startup race fixed</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/issues/794" target="_blank" rel="noopener">#794</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/795" target="_blank" rel="noopener">#795</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/798" target="_blank" rel="noopener">#798</a>).</li>
+      </ul>
+
+      <h3>Changed / Docs / Distribution</h3>
+      <ul>
+        <li><strong>Dropped a fragile SwiftPM resource-bundle dependency</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/issues/844" target="_blank" rel="noopener">#844</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/847" target="_blank" rel="noopener">#847</a>) &mdash; removes a crash mode where a dev build&rsquo;s <code>.app</code> could outlive the worktree it was built from.</li>
+        <li><strong>Doc-review sweep gained a <code>--fix</code> mode</strong>, wired into the release process itself, and the README&rsquo;s CodeScene score badge now auto-refreshes on every push to main (<a href="https://github.com/ingo-eichhorst/Irrlicht/issues/834" target="_blank" rel="noopener">#834</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/835" target="_blank" rel="noopener">#835</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/837" target="_blank" rel="noopener">#837</a>).</li>
+      </ul>
+
+      <h3>Technical appendix</h3>
+      <ul>
+        <li><strong>Estimated CO2 footprint (#829, #831)</strong> &mdash; <code>capacity.EstimateCO2Grams</code>: a tiered CO2e estimation formula using provider-disclosed coefficients for Gemini and Mistral, falling back to a cross-model average (Epoch AI) for everything else, including Claude and GPT. Wired through the tailer&rsquo;s existing cumulative-token computation into <code>SessionMetrics.EstimatedCO2Grams</code> + <code>CO2Tier</code>, mirroring <code>EstimatedCostUSD</code>&rsquo;s plumbing. Ships as a click-to-cycle web dashboard surface first; CLI/macOS parity and historical/aggregate tracking are deferred follow-ups.</li>
+        <li><strong>Cache-regression badge explanation (#813, #826, #827, #842)</strong> &mdash; an always-visible badge on both macOS and web showing the version attribution (or a compact <code>cache &uarr;</code> fallback), composed once daemon-side into <code>cache_bloat_explanation</code> instead of each client re-deriving the copy independently.</li>
+        <li><strong>History Group=Model fix (#792, #793)</strong> &mdash; <code>RecordSnapshot</code>/<code>RecordBaseline</code> stamped each cost row&rsquo;s <code>Model</code> field from <code>SessionState.Model</code>, which is never assigned in production code, so every row landed in the aggregate &ldquo;unknown&rdquo; bucket. Falls back to <code>Metrics.ModelName</code>, mirroring the session-list handler&rsquo;s existing pattern.</li>
+        <li><strong>History header/controls redesign (#785, #788)</strong> &mdash; moves the Usage/Yield/Quota tab picker into the header, flattens the controls onto one horizontally-scrollable row, and gives the popover a hard fixed height independent of width.</li>
+        <li><strong>Local-daemon reconnect recovery (#843, #845)</strong> &mdash; fixes a reset-every-attempt backoff bug plus a <code>URLSession.shared</code> wedge against a restarted daemon, via a dedicated recyclable <code>URLSession</code> and a surfaced &ldquo;daemon unreachable &mdash; retrying&rdquo; state.</li>
+        <li><strong>Relay reconnect recovery (#846, #848)</strong> &mdash; the same wedged-<code>URLSession.shared</code> fix, this time for a restarted standalone <code>irrlichtrelay</code>.</li>
+        <li><strong>Relay-echo dedup in the flat sessions array (#828, #830)</strong> &mdash; mirrors the existing <code>apiGroups</code> name-based collapse into <code>rebuildSessionsFromMap()</code>, which only deduped by id and missed the echoed session&rsquo;s drifted id.</li>
+        <li><strong>Antigravity non-interactive host rejection (#784, #791)</strong> &mdash; a known third-party helper (CodexBar) keeps an Antigravity CLI process running in the background to poll quota; a synchronous ancestry check at PID-discovery time (<code>PIDManager.AllowsSession</code>) now excludes processes whose ancestry doesn&rsquo;t resolve to a known terminal/IDE.</li>
+        <li><strong>FocusMonitor KVC crash path (#782, #790)</strong> &mdash; <code>isFocusActive</code>&rsquo;s remaining <code>value(forKey:)</code> reads now use the same <code>responds(to:)</code>-guarded selector dispatch as the earlier singleton-lookup fix.</li>
+        <li><strong>Subagent reaping on deleted transcript (#850)</strong> &mdash; adds <code>isDeletedTranscript</code> (confirmed-gone via <code>os.IsNotExist</code>) so a subagent whose parent PID was reused by an unrelated process is reaped instead of surviving forever.</li>
+        <li><strong>Daemon route-registration startup race (#794, #795, #798)</strong> &mdash; plus a flaky CI test and preflight tooling fix bundled in the same PR.</li>
+        <li><strong>SwiftPM resource-bundle removal (#844, #847)</strong> &mdash; <code>Bundle.module</code>&rsquo;s only use (<code>AppIcon.icns</code>) was already covered by a direct bundle copy, so the fragile SwiftPM mechanism is removed entirely.</li>
+        <li><strong><code>ir:doc-review --fix</code> mode (#834, #837)</strong> &mdash; auto-corrects doc claims directly contradicted by a code-derived fact; wired into <code>/ir:release</code> Step 4b so drift from any earlier release gets caught, not just this one&rsquo;s diff. This is what caught README.md/site/index.html&rsquo;s stale &ldquo;no hooks&rdquo; claim, corrected in this release.</li>
+        <li><strong>CodeScene badge automation (#835, #802)</strong> &mdash; a scheduled workflow refreshes the README&rsquo;s CodeScene badge on every push to main; a manual fetcher backs the <code>/ir:codescene-report</code> skill.</li>
+        <li><strong>Hexagonal layering enforcement + ARS regression gate (#796, #803)</strong> &mdash; <code>core/architecture_test.go</code> statically enforces domain/ports import direction; <code>tools/ars-gate.sh</code> flags an Agent Readiness Score regression as an advisory PR check.</li>
+        <li><strong>Shared contract test for consent-gated adapter call sites (#797, #817)</strong> &mdash; <code>contracttesting.AssertPermissionGated</code> behaviorally verifies a permission&rsquo;s Apply/Remove wiring at runtime.</li>
+        <li><strong><code>ir:test-mac</code> componentized restart (#833, #838)</strong> &mdash; a <code>TARGET=daemon|macos|full</code> axis restarts just the changed component; <code>MODE=replace</code> now installs directly into <code>/Applications/Irrlicht.app</code> instead of a same-bundle-id parallel <code>/tmp</code> copy.</li>
+        <li><strong>CodeScene hotspot cleanup sprint</strong> &mdash; eight no-behavior-change refactors splitting flagged hotspots: <code>tailer.TailAndProcess</code>/<code>processParsedEvent</code> (#822), <code>domain/session.go</code> by concern (#808, #816), <code>irrlicht.js</code> into modules (#805, #820), <code>SessionListView.swift</code> into per-concern views (#818), <code>PIDManager</code>&rsquo;s liveness sweep/dedup deletion (#810, #819), <code>irrlichd main()</code> into named startup phases (#821), <code>SessionManager</code> god-object into extensions (#815), and <code>session_detector_test.go</code> by scenario group (#814, #824).</li>
+        <li><strong>Dependency bump</strong> &mdash; <code>golang.org/x/net</code> 0.52.0 &rarr; 0.55.0 in <code>core</code> (#801).</li>
+        <li><strong>Misc test/tooling hygiene</strong> &mdash; <code>SessionRowSnapshotTests</code> made hermetic against a live daemon (#841); pre-push hook no longer inherits a stray <code>GIT_DIR</code>/<code>GIT_WORK_TREE</code> (#812).</li>
+        <li><strong>Docs</strong> &mdash; worktree shortcuts + Task Management tidy-up and a git-stash note in AGENTS.md (#789, #825), Karpathy Guidelines section removed (#787), <code>ir:test-mac</code> doc defaults to replace mode (#786), CodeScene/ARS README badges given their own line plus a workflow badge (#836, #823).</li>
+      </ul>
+
       <h2>v0.5.4 <small>(2026-06-29)</small></h2>
 
       <h3>A full History view with spend analytics, a backchannel that acts on your agents, and plain-language session summaries.</h3>

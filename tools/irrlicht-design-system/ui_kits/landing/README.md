@@ -6,13 +6,13 @@ Recreation of the `irrlicht.io` marketing page — the poetic, spacious face of 
 
 - `SiteHeader.jsx` — wordmark left, minimal nav right (docs / GitHub)
 - `Hero.jsx` — oversized serif wordmark with gradient fill, phonetic subtitle, tagline
-- `LightsSignature.jsx` — the three glowing orbs (purple/orange/green) with captions
+- `LightsSignature` (defined inside `Hero.jsx`) — the three glowing orbs (purple/orange/green) with captions
 - `InstallBlock.jsx` — terminal pill with `brew install` command and copy button
-- `FeatureTrio.jsx` — three-column feature cards (menu bar · real-time · zero-config)
-- `SiteFooter.jsx` — tiny tracked footer with dictionary-style etymology
+- `FeatureTrio` (defined inside `InstallBlock.jsx`) — three-column feature cards (menu bar · real-time · zero-config)
+- `SiteFooter` (defined inside `SiteHeader.jsx`) — tiny tracked footer with dictionary-style etymology
 
 ## Source of truth
 
-Visual cues from `irrlicht.io` landing page (dark cosmic background, serif hero, the three lights as hero motif). Since the marketing page is deployed rather than in-repo, this is a careful recreation — flag for verification with real screenshots.
+Visual cues lifted directly from `site/index.html` (the in-repo `irrlicht.io` marketing page) — dark cosmic background, serif hero, the three lights as hero motif. Keep this kit in sync with `site/index.html` when the marketing page changes.
 
 Open `index.html` to see the full assembled marketing page.
