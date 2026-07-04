@@ -13,9 +13,16 @@ import Foundation
 /// forever even once a healthy daemon was listening again; only an app
 /// relaunch (a fresh process, and so a fresh URLSession) recovered.
 ///
+/// The fix's first cut confirmed a connection only once an application
+/// message arrived — which a daemon with zero tracked sessions may never
+/// send, permanently stranding the UI on "Connecting…" and eventually
+/// mis-flagging a perfectly healthy idle connection as stalled. `connect()`
+/// now also confirms via a protocol-level ping/pong, so an idle-but-healthy
+/// connection is recognized without waiting on app traffic.
+///
 /// `connect()` itself does real networking and isn't exercised here (see
 /// SessionManagerTests's issue #832 note on why tests never dial the real
-/// daemon); these tests pin the two state transitions it delegates to.
+/// daemon); these tests pin the state transitions it delegates to.
 @MainActor
 final class SessionManagerReconnectTests: XCTestCase {
     private var sut: SessionManager!
@@ -46,6 +53,22 @@ final class SessionManagerReconnectTests: XCTestCase {
         XCTAssertEqual(sut.connectionState, .connected)
     }
 
+    /// `connect()` confirms via whichever signal arrives first — a ping/pong
+    /// (needed because a daemon with zero tracked sessions may never push a
+    /// single application message) or a received message. Both must land on
+    /// the same idempotent call, so a second confirmation after the state is
+    /// already `.connected` is a no-op rather than re-arming the counters.
+    func testRecordConfirmedLocalConnect_isIdempotent() {
+        sut.recordConfirmedLocalConnect()
+        XCTAssertEqual(sut.connectionState, .connected)
+
+        sut.consecutiveLocalConnectFailures = 2 // as if a failure was mid-flight
+        sut.recordConfirmedLocalConnect()
+
+        XCTAssertEqual(sut.consecutiveLocalConnectFailures, 2,
+                       "a second confirmation on an already-connected cycle must not touch state again")
+    }
+
     func testRecordFailedLocalConnectAttempt_doesNotRecycleBeforeThreshold() {
         let originalSession = sut.localURLSession
 
@@ -72,15 +95,18 @@ final class SessionManagerReconnectTests: XCTestCase {
         XCTAssertEqual(sut.consecutiveLocalConnectFailures, 0, "the streak resets after recycling")
     }
 
-    func testStartWebSocket_clearsStaleFailureState() {
+    func testResetLocalConnectBackoff_clearsStaleFailureState() {
+        // Exercises the reset helper directly rather than `startWebSocket()`
+        // itself, which would also schedule a live `connect()` dial (#843).
+        sut.reconnectDelay = 8.0
         sut.consecutiveLocalConnectFailures = sut.localConnectFailuresBeforeSessionRecycle
         sut.localConnectionStalled = true
 
-        sut.startWebSocket()
+        sut.resetLocalConnectBackoff()
 
+        XCTAssertEqual(sut.reconnectDelay, 1.0)
         XCTAssertEqual(sut.consecutiveLocalConnectFailures, 0)
         XCTAssertFalse(sut.localConnectionStalled)
-        sut.stopWebSocket() // cancel the scheduled connect before it can dial out
     }
 
     func testStopWebSocket_clearsStalledFlag() {

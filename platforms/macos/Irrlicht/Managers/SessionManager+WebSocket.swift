@@ -13,10 +13,17 @@ extension SessionManager {
     func startWebSocket() {
         guard connectionState == .disconnected else { return }
         connectionState = .connecting
+        resetLocalConnectBackoff()
+        scheduleConnect(after: 0)
+    }
+
+    /// Clears backoff/failure state for a fresh connect cycle. Split out of
+    /// `startWebSocket()` so it's unit-testable without also triggering a
+    /// live `scheduleConnect()` dial (#843).
+    func resetLocalConnectBackoff() {
         reconnectDelay = 1.0
         consecutiveLocalConnectFailures = 0
         localConnectionStalled = false
-        scheduleConnect(after: 0)
     }
 
     func stopWebSocket() {
@@ -56,21 +63,30 @@ extension SessionManager {
         lastPushSeq = 0 // fresh stream, fresh seq cursor (#600)
 
         // `resume()` returns before the WebSocket handshake is known good —
-        // the HTTP upgrade itself can still fail — so `confirmed` only flips
-        // once a message actually arrives. Resetting the backoff/failure
-        // streak (and declaring "connected") any earlier defeated the
-        // exponential backoff entirely: every attempt reset `reconnectDelay`
-        // to 1.0 before failing, so a dead daemon got hammered every ~1.1s
-        // forever instead of backing off (#843).
-        var confirmed = false
+        // the HTTP upgrade itself can still fail — so declaring "connected"
+        // (and resetting the backoff/failure streak) any earlier defeated
+        // the exponential backoff entirely: every attempt reset
+        // `reconnectDelay` to 1.0 before failing, so a dead daemon got
+        // hammered every ~1.1s forever instead of backing off (#843).
+        //
+        // A daemon with no tracked sessions can go the entire cycle without
+        // pushing a single application message, so waiting on `receive()`
+        // alone would never confirm a perfectly healthy idle connection —
+        // send a protocol-level ping right away too. Whichever signal wins
+        // the race calls `recordConfirmedLocalConnect()`, which is
+        // idempotent (`connectionState` gates it) so there's no double-fire.
+        task.sendPing { [weak self] error in
+            guard error == nil else { return }
+            Task { @MainActor [weak self] in
+                guard let self, self.webSocketTask === task else { return }
+                self.recordConfirmedLocalConnect()
+            }
+        }
+
         do {
             while !Task.isCancelled {
                 let message = try await task.receive()
-                if !confirmed {
-                    confirmed = true
-                    recordConfirmedLocalConnect()
-                    print("🔌 WebSocket connected to irrlichd")
-                }
+                recordConfirmedLocalConnect()
                 switch message {
                 case .string(let text):
                     handleWsMessage(text)
@@ -88,14 +104,15 @@ extension SessionManager {
 
         guard connectionState != .disconnected && !Task.isCancelled else { return }
 
-        if !confirmed {
-            // Hydration and the socket both came back empty, even though
-            // `resume()` said the attempt started fine. A stuck OS-level
-            // connection cache pinned to this URLSession instance can cause
-            // exactly that — failing forever against a healthy daemon that
-            // restarted on the same port — until something discards it
-            // (previously only an app relaunch; #843). Recycle it ourselves
-            // once failures pile up rather than waiting on that.
+        if connectionState != .connected {
+            // Neither the ping nor hydration nor the socket ever confirmed
+            // anything, even though `resume()` said the attempt started
+            // fine. A stuck OS-level connection cache pinned to this
+            // URLSession instance can cause exactly that — failing forever
+            // against a healthy daemon that restarted on the same port —
+            // until something discards it (previously only an app relaunch;
+            // #843). Recycle it ourselves once failures pile up rather than
+            // waiting on that.
             if recordFailedLocalConnectAttempt() {
                 print("🔌 Local daemon unreachable after repeated attempts — recreating URLSession")
             }
@@ -110,16 +127,18 @@ extension SessionManager {
         scheduleConnect(after: delay)
     }
 
-    /// Applied once a reconnect attempt's WebSocket delivers its first
-    /// message — the only reliable proof the daemon on the other end is
-    /// actually the one answering, since `resume()` returns before the
-    /// upgrade is confirmed. Split out of `connect()` so the state
-    /// transition is unit-testable without a live socket (#843).
+    /// Applied once a reconnect attempt's WebSocket is confirmed alive — a
+    /// successful ping/pong or an arrived message, whichever comes first.
+    /// Idempotent (gated on `connectionState`) since both signals race for
+    /// the same cycle. Split out of `connect()` so the state transition is
+    /// unit-testable without a live socket (#843).
     func recordConfirmedLocalConnect() {
+        guard connectionState != .connected else { return }
         reconnectDelay = 1.0
         consecutiveLocalConnectFailures = 0
         localConnectionStalled = false
         connectionState = .connected
+        print("🔌 WebSocket connected to irrlichd")
     }
 
     /// Applied once a reconnect attempt's hydration + WebSocket both come
