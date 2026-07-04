@@ -78,8 +78,16 @@ extension SessionManager {
     func startRelay() {
         guard relayConnectionState == .disconnected else { return }
         relayConnectionState = .connecting
-        relayReconnectDelay = 1.0
+        resetRelayConnectBackoff()
         scheduleRelayConnect(after: 0)
+    }
+
+    /// Clears backoff/failure state for a fresh relay connect cycle. Mirrors
+    /// `resetLocalConnectBackoff()` (#846).
+    func resetRelayConnectBackoff() {
+        relayReconnectDelay = 1.0
+        consecutiveRelayConnectFailures = 0
+        relayConnectionStalled = false
     }
 
     func stopRelay() {
@@ -88,6 +96,7 @@ extension SessionManager {
         relayWebSocketTask?.cancel(with: .normalClosure, reason: nil)
         relayWebSocketTask = nil
         relayConnectionState = .disconnected
+        relayConnectionStalled = false
         relayDaemons.removeAll()
         if !relaySessionMap.isEmpty {
             relaySessionMap.removeAll()
@@ -112,7 +121,7 @@ extension SessionManager {
             relayConnectionState = .disconnected
             return
         }
-        let task = URLSession.shared.webSocketTask(with: url)
+        let task = relayURLSession.webSocketTask(with: url)
         relayWebSocketTask = task
         task.resume()
         relayConnectionState = .connected
@@ -128,8 +137,8 @@ extension SessionManager {
             try? await task.send(.string(helloStr))
         }
 
+        var confirmed = false
         do {
-            var confirmed = false
             while !Task.isCancelled {
                 let message = try await task.receive()
                 // Reset the backoff only once the relay actually delivers a
@@ -138,7 +147,7 @@ extension SessionManager {
                 // reconnect loop against an unreachable relay.
                 if !confirmed {
                     confirmed = true
-                    relayReconnectDelay = 1.0
+                    recordConfirmedRelayConnect()
                 }
                 switch message {
                 case .string(let text):
@@ -151,6 +160,19 @@ extension SessionManager {
             }
         } catch {
             print("🔌 Relay disconnected: \(error.localizedDescription)")
+        }
+
+        // The cycle closed without ever confirming a frame — the same
+        // stuck-URLSession failure mode #843 fixed for the local daemon can
+        // strand the relay link the same way if `irrlichtrelay` restarts on
+        // the same host:port while a client is connected. Recycle
+        // `relayURLSession` once failures pile up rather than waiting on an
+        // app relaunch (#846). A 4401 (rejected token, handled below) isn't a
+        // wedged connection, so it doesn't count toward the streak.
+        if !confirmed && task.closeCode.rawValue != 4401 {
+            if recordFailedRelayConnectAttempt() {
+                print("🔌 Relay unreachable after repeated attempts — recreating URLSession")
+            }
         }
 
         // The link is down, so we no longer know the remote state: drop the
@@ -181,6 +203,32 @@ extension SessionManager {
         relayConnectionState = .reconnecting
         relayReconnectDelay = min(relayReconnectDelay * 2, maxReconnectDelay)
         scheduleRelayConnect(after: delay)
+    }
+
+    /// Applied once a relay reconnect attempt's WebSocket is confirmed alive
+    /// by an arrived frame. Mirrors `recordConfirmedLocalConnect()` for the
+    /// relay path (#846).
+    func recordConfirmedRelayConnect() {
+        relayReconnectDelay = 1.0
+        consecutiveRelayConnectFailures = 0
+        relayConnectionStalled = false
+    }
+
+    /// Applied once a relay reconnect attempt's cycle closes without ever
+    /// confirming a frame. Bumps the failure streak and, once it crosses
+    /// `relayConnectFailuresBeforeSessionRecycle`, recycles `relayURLSession`
+    /// and flags the connection as stalled. Returns whether it recycled, for
+    /// logging. Mirrors `recordFailedLocalConnectAttempt()` (#843) for the
+    /// relay path (#846).
+    @discardableResult
+    func recordFailedRelayConnectAttempt() -> Bool {
+        consecutiveRelayConnectFailures += 1
+        guard consecutiveRelayConnectFailures >= relayConnectFailuresBeforeSessionRecycle else { return false }
+        relayURLSession.invalidateAndCancel()
+        relayURLSession = URLSession(configuration: .ephemeral)
+        consecutiveRelayConnectFailures = 0
+        relayConnectionStalled = true
+        return true
     }
 
     /// Normalizes a user-entered relay address into a ws(s):// stream URL.
@@ -344,7 +392,8 @@ extension SessionManager {
                     lines.append("\(label) — connected")
                 }
             } else {
-                lines.append("\(relayServerURL) — \(relayConnectionState.shortLabel)")
+                let stalledSuffix = relayConnectionStalled ? " (relay unreachable — retrying)" : ""
+                lines.append("\(relayServerURL) — \(relayConnectionState.shortLabel)\(stalledSuffix)")
             }
         }
         return lines.isEmpty ? connectionState.tooltip : lines.joined(separator: "\n")

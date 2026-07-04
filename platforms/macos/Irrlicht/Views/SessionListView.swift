@@ -1124,15 +1124,20 @@ struct SessionListView: View {
 
     private var statusColor: Color {
         let aggregate = sessionManager.aggregateConnectionState
-        // A stalled local reconnect (#843) is a more severe signal than an
-        // ordinary transient "reconnecting" blip — flag it red rather than
-        // yellow even though the auto-retry loop is still quietly running.
-        // Only when it isn't masked by another healthy source, though — a
-        // relay connection can be carrying the session list just fine while
-        // the local daemon link is stuck, and the aggregate already reports
-        // that (`.connected` wins in `aggregateConnectionState`).
-        if aggregate != .connected && sessionManager.useLocalDaemon && sessionManager.localConnectionStalled {
-            return IrrColors.wsDisconnected
+        // A stalled reconnect — local (#843) or relay (#846) — is a more
+        // severe signal than an ordinary transient "reconnecting" blip —
+        // flag it red rather than yellow even though the auto-retry loop is
+        // still quietly running. Only when it isn't masked by another
+        // healthy source, though — the other connection can be carrying the
+        // session list just fine while this one is stuck, and the aggregate
+        // already reports that (`.connected` wins in `aggregateConnectionState`).
+        if aggregate != .connected {
+            if sessionManager.useLocalDaemon && sessionManager.localConnectionStalled {
+                return IrrColors.wsDisconnected
+            }
+            if sessionManager.useRelayServer && !sessionManager.relayServerURL.isEmpty && sessionManager.relayConnectionStalled {
+                return IrrColors.wsDisconnected
+            }
         }
         switch aggregate {
         case .connected: return IrrColors.wsConnected
