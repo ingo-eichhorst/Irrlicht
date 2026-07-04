@@ -198,6 +198,74 @@ func TestCheckPIDLiveness_StaleTranscript_Deleted(t *testing.T) {
 	}
 }
 
+// TestCheckPIDLiveness_ChildTranscriptDeleted_Reaped guards against a ghost
+// subagent surviving forever once its backing transcript file has been
+// deleted outright (e.g. its worktree was torn down mid-run), rather than
+// merely gone stale. Before this fix, reapStaleChild only checked
+// isStaleTranscript, which passes a missing file straight through as "not
+// stale" (os.Stat's error is indistinguishable from "not old enough yet"), so
+// a working child whose transcript no longer exists at all was never reaped —
+// it isn't Ready, and isStaleTranscript never returned true for it. The
+// child's own PID is alive (subagents inherit their parent's PID rather than
+// owning one — see the comment on isStartupZombie), so seed-time PID-liveness
+// checks can't catch it either; this periodic sweep is the only backstop, and
+// its parent ("long-gone-parent") is already gone from the repo, matching the
+// observed production case. FirstSeen is set well beyond orphanTranscriptAge
+// so the fresh-session grace period (see the sibling NotYetWritten test)
+// doesn't shield it.
+func TestCheckPIDLiveness_ChildTranscriptDeleted_Reaped(t *testing.T) {
+	tmp := t.TempDir()
+	deletedTranscript := filepath.Join(tmp, "never-created", "agent-orphan.jsonl")
+
+	repo := newMockRepo()
+	repo.states["agent-orphan"] = &session.SessionState{
+		SessionID:       "agent-orphan",
+		Adapter:         "claude-code",
+		State:           session.StateWorking,
+		ParentSessionID: "long-gone-parent",
+		PID:             os.Getpid(), // alive, but inherited — not its own process
+		TranscriptPath:  deletedTranscript,
+		FirstSeen:       time.Now().Add(-10 * time.Minute).Unix(),
+		UpdatedAt:       time.Now().Unix(),
+	}
+
+	newPIDManagerForTest(repo).CheckPIDLiveness()
+
+	if repo.states["agent-orphan"] != nil {
+		t.Fatal("child session whose transcript file no longer exists at all should be reaped, not kept forever")
+	}
+}
+
+// TestCheckPIDLiveness_ChildTranscriptNotYetWritten_Kept is the safety
+// counterpart: a child created moments ago, whose transcript file hasn't been
+// written yet, must NOT be reaped just because the path doesn't exist —
+// isDeletedTranscript can't tell "deleted" apart from "not created yet", so
+// reapStaleChild only trusts it once the child is older than
+// orphanTranscriptAge. Without this guard a normal spawn-to-first-write race
+// would delete brand-new subagents.
+func TestCheckPIDLiveness_ChildTranscriptNotYetWritten_Kept(t *testing.T) {
+	tmp := t.TempDir()
+	notYetWritten := filepath.Join(tmp, "not-yet-written", "agent-fresh.jsonl")
+
+	repo := newMockRepo()
+	repo.states["agent-fresh"] = &session.SessionState{
+		SessionID:       "agent-fresh",
+		Adapter:         "claude-code",
+		State:           session.StateWorking,
+		ParentSessionID: "parent",
+		PID:             os.Getpid(),
+		TranscriptPath:  notYetWritten,
+		FirstSeen:       time.Now().Unix(),
+		UpdatedAt:       time.Now().Unix(),
+	}
+
+	newPIDManagerForTest(repo).CheckPIDLiveness()
+
+	if repo.states["agent-fresh"] == nil {
+		t.Fatal("freshly created child whose transcript hasn't been written yet must not be reaped")
+	}
+}
+
 // TestCheckPIDLiveness_DeadProcessWorking_Reaped guards the end-state the #667
 // fix relies on: once UpdatedAt is allowed to age (the activity bump no longer
 // refreshes it on no-op refresh passes), a working session with pid=0 whose

@@ -956,17 +956,28 @@ func (pm *PIDManager) sweepStaleSnapshot(snap livenessSnapshot) {
 }
 
 // reapStaleChild deletes snap when it's a finished or zombie subagent (ready,
-// or its transcript stopped updating) and notifies onChildDeleted so the
-// parent — which may have been held in `working` solely because of this
-// child — gets re-evaluated. Without that nudge the parent stays stuck until
-// its own next transcript event, which may never come for a finished
-// session. DB-backed adapters are exempt: they manage their own subagent
-// lifetime via maxAge.
+// its transcript stopped updating, or its transcript is confirmed deleted)
+// and notifies onChildDeleted so the parent — which may have been held in
+// `working` solely because of this child — gets re-evaluated. Without that
+// nudge the parent stays stuck until its own next transcript event, which may
+// never come for a finished session. DB-backed adapters are exempt: they
+// manage their own subagent lifetime via maxAge.
 func (pm *PIDManager) reapStaleChild(snap livenessSnapshot) {
 	if strings.Contains(snap.transcriptPath, "?session=") {
 		return
 	}
-	if snap.sessionState != session.StateReady && !isStaleTranscript(snap.transcriptPath) {
+	// A subagent whose transcript has been deleted outright (its worktree
+	// was torn down mid-run, or similar) is orphaned regardless of its own
+	// State or inherited PID — subagents share their parent's PID rather than
+	// owning one, so a live PID proves nothing about this specific child, and
+	// the sweep is its only backstop (see the comment on isStartupZombie).
+	// isDeletedTranscript can't tell "deleted" apart from "not written yet",
+	// so it's only trusted once the child has existed for orphanTranscriptAge
+	// — long past any normal spawn-to-first-write race.
+	transcriptGone := isStaleTranscript(snap.transcriptPath) ||
+		(isDeletedTranscript(snap.transcriptPath) &&
+			time.Since(time.Unix(snap.state.FirstSeen, 0)) > orphanTranscriptAge)
+	if snap.sessionState != session.StateReady && !transcriptGone {
 		return
 	}
 	reason := "child ready — liveness sweep"
