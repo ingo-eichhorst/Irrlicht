@@ -1,0 +1,77 @@
+name: Update CodeScene Badge
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  badge:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Fetch current code health score
+        env:
+          CODESCENE_API_TOKEN: ${{ secrets.CODESCENE_API_TOKEN }}
+          CODESCENE_PROJECT_ID: "82148"
+        run: |
+          SCORE=$(tools/codescene-report.sh "analyses/latest" | jq -r '.high_level_metrics.current_score')
+          if [ -z "$SCORE" ] || [ "$SCORE" = "null" ]; then
+            echo "::error::could not read high_level_metrics.current_score from analyses/latest"
+            exit 1
+          fi
+          echo "SCORE=$SCORE" >> "$GITHUB_ENV"
+          echo "Code health: ${SCORE}/10"
+
+      - name: Determine badge color
+        run: |
+          # CodeScene's own bands: 8-10 healthy, 4-7.99 warning, 0-3.99 alert.
+          whole="${SCORE%.*}"
+          if [ "$whole" -ge 8 ]; then
+            COLOR="brightgreen"
+          elif [ "$whole" -ge 4 ]; then
+            COLOR="yellow"
+          else
+            COLOR="red"
+          fi
+          echo "COLOR=$COLOR" >> "$GITHUB_ENV"
+
+      - name: Update Gist with code health score
+        env:
+          GIST_SECRET: ${{ secrets.GIST_SECRET }}
+          # Reuses the same badges gist as coverage.yml (adds a second file to it).
+          COVERAGE_GIST_ID: ${{ secrets.COVERAGE_GIST_ID }}
+        run: |
+          if [ -z "$GIST_SECRET" ]; then
+            echo "::error::GIST_SECRET is not set in repository secrets"
+            exit 1
+          fi
+          if [ -z "$COVERAGE_GIST_ID" ]; then
+            echo "::error::COVERAGE_GIST_ID is not set in repository secrets"
+            exit 1
+          fi
+          MESSAGE=$(printf '%.1f/10' "$SCORE")
+          BADGE_JSON="{\"schemaVersion\":1,\"label\":\"code health\",\"message\":\"${MESSAGE}\",\"color\":\"${COLOR}\"}"
+          jq -n --arg content "$BADGE_JSON" '{"files":{"codescene.json":{"content":$content}}}' > /tmp/gist-payload.json
+          # curl writes "000" to %{http_code} when no response was received (DNS/TLS/connect failure).
+          http_code=$(curl -sS -o /tmp/gist-response.json -w '%{http_code}' \
+            --connect-timeout 10 --max-time 30 \
+            --retry 3 --retry-delay 2 --retry-all-errors \
+            -X PATCH \
+            -H "Authorization: token $GIST_SECRET" \
+            -H "Content-Type: application/json" \
+            -d @/tmp/gist-payload.json \
+            "https://api.github.com/gists/$COVERAGE_GIST_ID")
+          echo "HTTP $http_code"
+          if [ "$http_code" -lt 200 ] || [ "$http_code" -ge 300 ]; then
+            echo "::error::Gist update failed (HTTP $http_code)"
+            if [ -s /tmp/gist-response.json ]; then
+              cat /tmp/gist-response.json
+            else
+              echo "(no response body — likely transport failure)"
+            fi
+            exit 1
+          fi

@@ -61,6 +61,17 @@ Before marking a ticket done, run the full suite — every layer must pass:
   whether the regression is worth addressing before merging. Deterministic
   and workflow-agnostic: it fires on any push, not tied to a specific agent
   skill.
+- Code health: CodeScene posts a "CodeScene Code Health Review" check on every
+  PR automatically (via the CodeScene GitHub App, configured on codescene.io
+  project 82148 — not a workflow in this repo). Like the ARS score, it's
+  advisory, not a merge gate: neither branch protection nor the "Protect
+  Main" ruleset requires it to pass. A red result is a prompt to look
+  closer, not something to chase to green before merging or releasing. The
+  README's CodeScene badge shows the live score, auto-refreshed on every
+  push to `main` by `.github/workflows/codescene-badge.yml`. For a deeper
+  on-demand look (hotspots, trend) with no PR needed, run
+  `/ir:codescene-report`, which wraps the manual `codescene-report.yml`
+  workflow.
 - Permission gating: `contracttesting.AssertPermissionGated` (`core/internal/contracttesting/permission_gate.go`)
   is the behavioral counterpart to the architecture test — it can't be checked
   statically because gating happens at runtime, by an adapter (or the shared
