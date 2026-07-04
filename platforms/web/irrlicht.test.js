@@ -7,6 +7,8 @@ import {
   rowLabel,
   maybeNotifyOnUpdate,
   formatCost,
+  formatCO2,
+  co2TierTitle,
   formatUsageCost,
   pressureClass,
   taskEtaPresentation,
@@ -110,6 +112,38 @@ describe('formatCost', () => {
   test('formats positive values with dollar sign and two decimals', () => {
     expect(formatCost(1.5)).toBe('$1.50')
     expect(formatCost(0.123)).toBe('$0.12')
+  })
+})
+
+describe('formatCO2', () => {
+  test('returns empty string for zero or falsy', () => {
+    expect(formatCO2(0)).toBe('')
+    expect(formatCO2(null)).toBe('')
+    expect(formatCO2(undefined)).toBe('')
+  })
+
+  test('formats sub-gram values in milligrams', () => {
+    expect(formatCO2(0.03)).toBe('30mg CO2e')
+  })
+
+  test('formats gram-range values with one decimal', () => {
+    expect(formatCO2(1.5)).toBe('1.5g CO2e')
+    expect(formatCO2(158.7)).toBe('158.7g CO2e')
+  })
+
+  test('formats kilogram-range values with two decimals', () => {
+    expect(formatCO2(2850)).toBe('2.85kg CO2e')
+  })
+})
+
+describe('co2TierTitle', () => {
+  test('names the provider disclosure for provider_disclosed tier', () => {
+    expect(co2TierTitle('provider_disclosed')).toMatch(/provider-published/)
+  })
+
+  test('discloses the fallback approximation for any other tier', () => {
+    expect(co2TierTitle('fallback')).toMatch(/cross-model fallback/)
+    expect(co2TierTitle(undefined)).toMatch(/cross-model fallback/)
   })
 })
 

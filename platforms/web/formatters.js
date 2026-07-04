@@ -29,6 +29,27 @@ export function formatCost(usd) {
   return '$' + usd.toFixed(2);
 }
 
+// formatCO2 renders an estimated CO2e footprint (issue #829). Grams span a
+// wide range across sessions (milligrams for a short chat, kilograms for a
+// long agentic run), so the unit adapts rather than showing e.g. "0.0g".
+export function formatCO2(grams) {
+  if (!grams || grams <= 0) return '';
+  if (grams < 1) return (grams * 1000).toFixed(0) + 'mg CO2e';
+  if (grams < 1000) return grams.toFixed(1) + 'g CO2e';
+  return (grams / 1000).toFixed(2) + 'kg CO2e';
+}
+
+// co2TierTitle explains the confidence behind a CO2 estimate — every figure
+// here is modeled from public disclosures, never measured (no provider
+// exposes per-request energy telemetry), so the tooltip says so rather than
+// presenting a bare number as fact. Mirrors capacity.CO2Tier's Go-side values.
+export function co2TierTitle(tier) {
+  if (tier === 'provider_disclosed') {
+    return 'Estimated CO2e, normalized from a provider-published energy/CO2 disclosure — not a live measurement.';
+  }
+  return 'Estimated CO2e — no public per-model figure exists for this model, so a cross-model fallback average is used. Not a live measurement.';
+}
+
 export function fmtDuration(secs) {
   const h = Math.floor(secs / 3600);
   const m = Math.floor((secs % 3600) / 60);

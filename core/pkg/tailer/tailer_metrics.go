@@ -242,7 +242,8 @@ func (t *TranscriptTailer) computeCumulativeTokens() {
 	if len(t.cumByModel) > 0 || t.cumProviderCostUSD > 0 {
 		// New path: price per-model, sum provider-reported costs.
 		var totalInput, totalOutput, totalCacheRead, totalCacheCreate int64
-		var pricedCost float64
+		var pricedCost, co2Grams float64
+		var co2Tier capacity.CO2Tier
 		for modelName, bd := range t.cumByModel {
 			totalInput += bd.Input
 			totalOutput += bd.Output
@@ -252,6 +253,10 @@ func (t *TranscriptTailer) computeCumulativeTokens() {
 				pricedCost += t.capacityMgr.EstimateCostFromBreakdown(
 					modelName, bd.Input, bd.Output, bd.CacheRead, bd.CacheCreation5m, bd.CacheCreation1h)
 			}
+			grams, tier := capacity.EstimateCO2Grams(
+				modelName, bd.Input, bd.Output, bd.CacheRead, bd.CacheCreation5m+bd.CacheCreation1h)
+			co2Grams += grams
+			co2Tier = capacity.WeakerCO2Tier(co2Tier, tier)
 		}
 		// Include the pending contribution from stateful parsers (Claude Code).
 		if pc, ok := t.parser.(pendingContributor); ok {
@@ -266,6 +271,11 @@ func (t *TranscriptTailer) computeCumulativeTokens() {
 						pending.Usage.Input, pending.Usage.Output, pending.Usage.CacheRead,
 						pending.Usage.CacheCreation5m, pending.Usage.CacheCreation1h)
 				}
+				grams, tier := capacity.EstimateCO2Grams(
+					pending.Model, pending.Usage.Input, pending.Usage.Output,
+					pending.Usage.CacheRead, pending.Usage.CacheCreation5m+pending.Usage.CacheCreation1h)
+				co2Grams += grams
+				co2Tier = capacity.WeakerCO2Tier(co2Tier, tier)
 			}
 		}
 		t.metrics.CumInputTokens = totalInput
@@ -273,6 +283,8 @@ func (t *TranscriptTailer) computeCumulativeTokens() {
 		t.metrics.CumCacheReadTokens = totalCacheRead
 		t.metrics.CumCacheCreationTokens = totalCacheCreate
 		t.metrics.EstimatedCostUSD = pricedCost + t.cumProviderCostUSD
+		t.metrics.EstimatedCO2Grams = co2Grams
+		t.metrics.CO2Tier = string(co2Tier)
 	} else {
 		// Legacy path: scalar accumulators (testParser and pre-Contribution adapters).
 		effectiveCumInput := t.cumInputTokens
@@ -295,7 +307,20 @@ func (t *TranscriptTailer) computeCumulativeTokens() {
 				t.metrics.ModelName, effectiveCumInput, effectiveCumOutput,
 				effectiveCumCacheRead, effectiveCumCacheCreate)
 		}
+		if t.metrics.ModelName != "" {
+			t.metrics.EstimatedCO2Grams, t.metrics.CO2Tier = co2GramsAndTier(
+				t.metrics.ModelName, effectiveCumInput, effectiveCumOutput,
+				effectiveCumCacheRead, effectiveCumCacheCreate)
+		}
 	}
+}
+
+// co2GramsAndTier is a thin wrapper returning the tier as a plain string,
+// matching how SessionMetrics.CO2Tier stays decoupled from the capacity
+// package's CO2Tier type (see metrics.go's EstimatedCO2Grams comment).
+func co2GramsAndTier(modelName string, input, output, cacheRead, cacheCreate int64) (float64, string) {
+	grams, tier := capacity.EstimateCO2Grams(modelName, input, output, cacheRead, cacheCreate)
+	return grams, string(tier)
 }
 
 // computeMetrics calculates messages per minute and elapsed time

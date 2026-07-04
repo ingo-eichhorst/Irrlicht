@@ -68,6 +68,8 @@ func (mc *MetricsConverter) Convert(m *tailer.SessionMetrics) *session.SessionMe
 		LastWasUserInterrupt:              m.LastWasUserInterrupt,
 		LastWasToolDenial:                 m.LastWasToolDenial,
 		EstimatedCostUSD:                  m.EstimatedCostUSD,
+		EstimatedCO2Grams:                 m.EstimatedCO2Grams,
+		CO2Tier:                           m.CO2Tier,
 		CumInputTokens:                    m.CumInputTokens,
 		CumOutputTokens:                   m.CumOutputTokens,
 		CumCacheReadTokens:                m.CumCacheReadTokens,
