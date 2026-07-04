@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"irrlicht/core/domain/session"
+	"irrlicht/core/pkg/capacity"
 	"irrlicht/core/ports/outbound"
 )
 
@@ -966,5 +967,60 @@ func TestCostSeries_TokenTypeFilter(t *testing.T) {
 	}
 	if res.TokenSplit == nil || abs(res.TokenSplit.Input-100) > 1e-9 || res.TokenSplit.Output != 0 || res.TokenSplit.Cache != 0 {
 		t.Errorf("token_type=input split: want in=100 out=0 cache=0, got %+v", res.TokenSplit)
+	}
+}
+
+// TestBackfillCO2_EstimatesFromModelAndTokens verifies pre-#829 rows (no CO2
+// column) get an estimate derived from their own model + cumulative tokens,
+// while a row that already has a CO2 value is left untouched.
+func TestBackfillCO2_EstimatesFromModelAndTokens(t *testing.T) {
+	tr := newTestTracker(t)
+	writeRow(t, tr, "proj-a", snapshotRow{TS: 1050, Project: "proj-a", Session: "s1", Model: "gemini-2.5-flash", Cost: 1.00, CumIn: 800, CumOut: 200})
+	// Already-migrated row: CO2Grams must survive untouched even though it's
+	// nonzero-tokens (the ==0 check must not clobber a real 0.5-value coincidence).
+	writeRow(t, tr, "proj-a", snapshotRow{TS: 1150, Project: "proj-a", Session: "s2", Model: "gemini-2.5-flash", Cost: 2.00, CumIn: 1000, CumOut: 0, CO2Grams: 0.5})
+	// Zero-token row: nothing to estimate from, must stay 0.
+	writeRow(t, tr, "proj-a", snapshotRow{TS: 1250, Project: "proj-a", Session: "s3", Cost: 0})
+
+	if err := tr.BackfillCO2(); err != nil {
+		t.Fatal(err)
+	}
+	rows := readRows(t, tr.filePath("proj-a"))
+	if len(rows) != 3 {
+		t.Fatalf("want 3 rows preserved, got %d", len(rows))
+	}
+	wantGrams, _ := capacity.EstimateCO2Grams("gemini-2.5-flash", 1000)
+	if abs(rows[0].CO2Grams-wantGrams) > 1e-9 {
+		t.Errorf("row 0: want backfilled CO2Grams %v, got %v", wantGrams, rows[0].CO2Grams)
+	}
+	if rows[1].CO2Grams != 0.5 {
+		t.Errorf("row 1: pre-existing CO2Grams must be untouched, got %v", rows[1].CO2Grams)
+	}
+	if rows[2].CO2Grams != 0 {
+		t.Errorf("row 2: zero-token row should stay 0, got %v", rows[2].CO2Grams)
+	}
+}
+
+// TestBackfillCO2_IdempotentViaMarker verifies a second call is a no-op (the
+// marker file short-circuits it) even if a row's CO2Grams would otherwise
+// look backfillable — proving the migration runs at most once per data dir.
+func TestBackfillCO2_IdempotentViaMarker(t *testing.T) {
+	tr := newTestTracker(t)
+	writeRow(t, tr, "proj-a", snapshotRow{TS: 1050, Project: "proj-a", Session: "s1", Model: "gemini-2.5-flash", CumIn: 1000})
+	if err := tr.BackfillCO2(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(tr.Dir(), ".co2_backfilled")); err != nil {
+		t.Fatalf("marker file not written: %v", err)
+	}
+	// Reset the row's CO2Grams back to 0 as if a second migration attempt
+	// might re-touch it, then confirm BackfillCO2 skips the scan entirely.
+	writeRow(t, tr, "proj-b", snapshotRow{TS: 1050, Project: "proj-b", Session: "s2", Model: "gemini-2.5-flash", CumIn: 1000})
+	if err := tr.BackfillCO2(); err != nil {
+		t.Fatal(err)
+	}
+	rows := readRows(t, tr.filePath("proj-b"))
+	if rows[0].CO2Grams != 0 {
+		t.Errorf("second BackfillCO2 call should no-op via the marker, but proj-b was migrated: %+v", rows[0])
 	}
 }

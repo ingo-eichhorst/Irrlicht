@@ -137,9 +137,9 @@ func pruneDeadProcSessions(fsRepo *filesystem.SessionRepository, logger outbound
 }
 
 // initCostTracker opens the append-only per-project cost JSONL store,
-// prunes rows older than 400 days (so per-year queries stay fast), and
-// records a baseline row for every existing session so rates are
-// computable without waiting for new activity.
+// backfills CO2 estimates onto pre-#829 rows, prunes rows older than 400 days
+// (so per-year queries stay fast), and records a baseline row for every
+// existing session so rates are computable without waiting for new activity.
 func initCostTracker(logger outbound.Logger, fsRepo *filesystem.SessionRepository) outbound.CostTracker {
 	var costTracker *filesystem.CostTracker
 	if dir := stateStoreDir("cost"); dir != "" {
@@ -151,6 +151,13 @@ func initCostTracker(logger outbound.Logger, fsRepo *filesystem.SessionRepositor
 			logger.LogError("startup", "", fmt.Sprintf("failed to init cost tracker: %v", err))
 			return nil
 		}
+	}
+	// One-time migration (issue #829): estimate CO2 for history recorded
+	// before the field existed, so upgrading doesn't leave the CO2 chart
+	// flat at zero for activity that's already on disk. Idempotent — see
+	// BackfillCO2's marker file.
+	if err := costTracker.BackfillCO2(); err != nil {
+		logger.LogError("startup", "", fmt.Sprintf("cost tracker CO2 backfill failed: %v", err))
 	}
 	// Attribute wrapper agents (pi, opencode) to the subscription they
 	// inherit, so per-provider spend matches the dashboard's quota chip
