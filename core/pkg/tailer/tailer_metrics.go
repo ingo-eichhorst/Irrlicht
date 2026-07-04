@@ -308,19 +308,13 @@ func (t *TranscriptTailer) computeCumulativeTokens() {
 				effectiveCumCacheRead, effectiveCumCacheCreate)
 		}
 		if t.metrics.ModelName != "" {
-			t.metrics.EstimatedCO2Grams, t.metrics.CO2Tier = co2GramsAndTier(
+			grams, tier := capacity.EstimateCO2Grams(
 				t.metrics.ModelName, effectiveCumInput, effectiveCumOutput,
 				effectiveCumCacheRead, effectiveCumCacheCreate)
+			t.metrics.EstimatedCO2Grams = grams
+			t.metrics.CO2Tier = string(tier)
 		}
 	}
-}
-
-// co2GramsAndTier is a thin wrapper returning the tier as a plain string,
-// matching how SessionMetrics.CO2Tier stays decoupled from the capacity
-// package's CO2Tier type (see metrics.go's EstimatedCO2Grams comment).
-func co2GramsAndTier(modelName string, input, output, cacheRead, cacheCreate int64) (float64, string) {
-	grams, tier := capacity.EstimateCO2Grams(modelName, input, output, cacheRead, cacheCreate)
-	return grams, string(tier)
 }
 
 // computeMetrics calculates messages per minute and elapsed time
