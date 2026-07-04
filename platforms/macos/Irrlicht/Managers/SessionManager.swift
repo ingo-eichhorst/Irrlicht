@@ -173,6 +173,23 @@ class SessionManager: ObservableObject {
     var relayConnectTask: Task<Void, Never>?
     var relayReconnectDelay: TimeInterval = 1.0
     @Published var relayConnectionState: ConnectionState = .disconnected
+    /// Dedicated session for relay traffic, mirroring `localURLSession`: a
+    /// standalone `irrlichtrelay` restarting on the same port can wedge
+    /// `URLSession.shared` the same way a restarted local daemon could (#843),
+    /// so the relay path gets its own recyclable instance too (#846).
+    /// `URLSession.shared` stays in use elsewhere (ActivationClient,
+    /// BackchannelRulesClient, PublishClient, HistoryView) for one-off calls
+    /// unrelated to this reconnect loop.
+    var relayURLSession = URLSession(configuration: .ephemeral)
+    /// Consecutive relay-connect cycles that never got a single frame back
+    /// from the relay. Reset on any confirmed message.
+    var consecutiveRelayConnectFailures = 0
+    /// After this many consecutive failures, recycle `relayURLSession` (#846).
+    let relayConnectFailuresBeforeSessionRecycle = 3
+    /// True once a `relayURLSession` recycle hasn't yet been followed by a
+    /// confirmed reconnect — surfaces alongside `localConnectionStalled` in
+    /// the connection tooltip (#846).
+    @Published var relayConnectionStalled = false
     /// Relay-sourced sessions, keyed by session id.
     var relaySessionMap: [String: SessionState] = [:]
     /// Daemons the relay reports connected: daemon_id → label, for the tooltip.
