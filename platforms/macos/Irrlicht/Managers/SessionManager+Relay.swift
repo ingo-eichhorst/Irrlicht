@@ -22,7 +22,13 @@ extension SessionManager {
 
     /// Diffs the current Sources config against the last applied one and
     /// reconnects only on change. Cheap to call on every UserDefaults change.
+    /// Under XCTest this is a no-op (issue #832) — every SessionManager()
+    /// built by a test would otherwise dial the real local daemon (both here
+    /// and via the `UserDefaults.didChangeNotification` observer any test's
+    /// `defaults.set(...)` fires), racing snapshot/state assertions against
+    /// whatever daemon happens to be reachable on the machine.
     func sourcesSettingsChanged() {
+        guard !isRunningUnitTests else { return }
         let cfg = "\(useLocalDaemon)|\(useRelayServer)|\(relayServerURL)"
         guard cfg != lastSourceConfig else { return }
         lastSourceConfig = cfg

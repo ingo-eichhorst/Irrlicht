@@ -108,8 +108,10 @@ extension SessionManager {
 
     /// Starts periodic re-hydration so group-level cost values (which arrive
     /// as part of /api/v1/sessions and are not pushed via WebSocket deltas)
-    /// stay fresh. Idempotent.
+    /// stay fresh. Idempotent. No-op under XCTest (issue #832) — a real
+    /// daemon round-trip has no business running on a timer during unit tests.
     func startProjectCostsPolling() {
+        guard !isRunningUnitTests else { return }
         projectCostsTimer?.invalidate()
         projectCostsTimer = Timer.scheduledTimer(withTimeInterval: projectCostsRefreshInterval, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
