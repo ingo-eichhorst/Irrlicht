@@ -25,7 +25,7 @@ extension SessionManager {
     func hydrateAgents() async {
         guard let url = URL(string: "\(DaemonEndpoint.httpBase)/api/v1/agents") else { return }
         do {
-            let (data, response) = try await URLSession.shared.data(from: url)
+            let (data, response) = try await localURLSession.data(from: url)
             guard (response as? HTTPURLResponse)?.statusCode == 200 else { return }
             let entries = try JSONDecoder().decode([AgentBranding].self, from: data)
             AgentRegistry.byName = Dictionary(uniqueKeysWithValues: entries.map { ($0.name, $0) })
@@ -41,7 +41,7 @@ extension SessionManager {
     func refreshPermissions() async {
         guard let url = URL(string: "\(DaemonEndpoint.httpBase)/api/v1/permissions") else { return }
         do {
-            let (data, response) = try await URLSession.shared.data(from: url)
+            let (data, response) = try await localURLSession.data(from: url)
             guard (response as? HTTPURLResponse)?.statusCode == 200 else { return }
             permissionsSnapshot = try JSONDecoder().decode(PermissionsSnapshot.self, from: data)
         } catch {
@@ -65,7 +65,7 @@ extension SessionManager {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         do {
             request.httpBody = try JSONEncoder().encode(["answers": answers])
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await localURLSession.data(for: request)
             guard (response as? HTTPURLResponse)?.statusCode == 200 else { return false }
             permissionsSnapshot = try JSONDecoder().decode(PermissionsSnapshot.self, from: data)
             return true
@@ -84,7 +84,7 @@ extension SessionManager {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         do {
             request.httpBody = try JSONEncoder().encode(["data": text])
-            let (_, response) = try await URLSession.shared.data(for: request)
+            let (_, response) = try await localURLSession.data(for: request)
             return (response as? HTTPURLResponse)?.statusCode == 200
         } catch {
             print("⌨️ sendInput failed: \(error.localizedDescription)")
@@ -98,7 +98,7 @@ extension SessionManager {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         do {
-            let (_, response) = try await URLSession.shared.data(for: request)
+            let (_, response) = try await localURLSession.data(for: request)
             return (response as? HTTPURLResponse)?.statusCode == 200
         } catch {
             print("⌨️ interrupt failed: \(error.localizedDescription)")
@@ -128,7 +128,7 @@ extension SessionManager {
         guard useLocalDaemon else { return }
         guard let url = URL(string: "\(DaemonEndpoint.httpBase)/api/v1/sessions") else { return }
         do {
-            let (data, response) = try await URLSession.shared.data(from: url)
+            let (data, response) = try await localURLSession.data(from: url)
             guard (response as? HTTPURLResponse)?.statusCode == 200 else { return }
             let decoder = JSONDecoder()
             let payload = try decoder.decode(SessionsResponse.self, from: data)

@@ -125,6 +125,22 @@ class SessionManager: ObservableObject {
     var connectTask: Task<Void, Never>?
     var reconnectDelay: TimeInterval = 1.0
     let maxReconnectDelay: TimeInterval = 30.0
+    /// Dedicated session for all local-daemon traffic (WebSocket + REST
+    /// hydration) instead of `URLSession.shared`. An OS-level connection
+    /// cache pinned to one URLSession instance can get stuck against a host
+    /// that restarted on the same port, failing forever even once the new
+    /// process is healthy (#843) — recreating the instance (see `connect()`)
+    /// discards whatever cached state caused that.
+    var localURLSession = URLSession(configuration: .ephemeral)
+    /// Consecutive local-connect cycles that never got a single byte back
+    /// from the daemon. Reset on any confirmed message.
+    var consecutiveLocalConnectFailures = 0
+    /// After this many consecutive failures, recycle `localURLSession` (#843).
+    let localConnectFailuresBeforeSessionRecycle = 3
+    /// True once a `localURLSession` recycle hasn't yet been followed by a
+    /// confirmed reconnect — surfaces the "this isn't a normal transient
+    /// blip anymore" state in the connection tooltip/dot (#843).
+    @Published var localConnectionStalled = false
     var sessionMap: [String: SessionState] = [:]
     /// Last stamped push `seq` received on the stream. 0 = fresh cursor
     /// (reset on every (re)connect). See #600.

@@ -335,7 +335,8 @@ extension SessionManager {
     var connectionTooltip: String {
         var lines: [String] = []
         if useLocalDaemon {
-            lines.append("Local — \(connectionState.shortLabel)")
+            let stalledSuffix = localConnectionStalled ? " (daemon unreachable — retrying)" : ""
+            lines.append("Local — \(connectionState.shortLabel)\(stalledSuffix)")
         }
         if useRelayServer && !relayServerURL.isEmpty {
             if relayConnectionState == .connected && !relayDaemons.isEmpty {
