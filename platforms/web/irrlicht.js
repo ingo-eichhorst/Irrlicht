@@ -665,36 +665,70 @@ import { reconcile, paintRowNum } from './domReconcile.js';
     function updateSessionRow(el, agent, isChild) {
       const state = agent.state || 'ready';
       const metrics = agent.metrics || {};
-      const model = shortModel(metrics.model_name || agent.model || '');
-      const ctxPct = metrics.context_utilization_percentage || 0;
-      const pressure = metrics.pressure_level || '';
-      const branch = agent.git_branch || '';
       const isActive = state === 'working' || state === 'waiting';
-      const elapsed = formatElapsed(agent.first_seen, metrics.elapsed_seconds, isActive);
 
-      // State icon — only update if state changed
+      // Each column updates independently; the renderRow* helpers below own
+      // one concern each and touch only their own .row-* element(s) + dataset
+      // caches, so this call order is cosmetic. Split out of what used to be
+      // one ~270-line function (issue #872).
+      //
+      // Several per-row concerns are NOT rendered here — they emit as their
+      // own collapsible rows beneath the parent (see render()):
+      //   · Task summary + waiting question  → createSummaryRow
+      //   · Task progress dots               → createTaskListRow
+      //     (mirrors TaskListView, SessionListView.swift:746–769)
+      //   · Cache-creation regression badge (#813) → createCacheBloatRow
+      //     (the version attribution can be a full sentence — too wide for
+      //      the fixed-width icon row; mirrors macOS's cacheBloatBlock)
+      // The agent number is painted into .row-num by the render loop after
+      // this returns (renderRowRoleBadge sets an iconOverride flag it reads).
+      renderRowStateIcon(el, state);
+      renderRowAdapterIcon(el, agent);
+      renderRowBranch(el, agent);
+      renderRowOrigin(el, agent);
+      renderRowSubBadge(el, agent);
+      renderRowBgBadge(el, agent);
+      renderRowContextBar(el, metrics);
+      renderRowCost(el, metrics, agent);
+      renderRowModel(el, metrics, agent);
+      renderRowElapsed(el, agent, metrics, isActive);
+      renderRowEta(el, metrics, state);
+      renderRowCreated(el, agent);
+      renderRowId(el, agent);
+      renderRowRoleBadge(el, agent);
+      renderRowTool(el, metrics, state);
+
+      // Per-row history canvas is repainted by repaintHistory() on the
+      // history-event WS path — no need to repaint here on every session
+      // update (data didn't change).
+    }
+
+    // State icon — only update if state changed.
+    function renderRowStateIcon(el, state) {
       if (el.dataset.state !== state) {
         el.dataset.state = state;
         el.querySelector('.row-state-icon').innerHTML = stateIcon(state);
       }
+    }
 
-      // Adapter icon (issue #260) — looked up in the registry the daemon
-      // publishes at /api/v1/agents. Hidden when the registry has no entry
-      // for this adapter (e.g. older daemons, or before the registry fetch
-      // completes); other row columns (project, branch, ID) already
-      // disambiguate, so a missing icon doesn't impair the row's meaning.
-      // The dataset cache only advances on a successful populate so a
-      // late-arriving registry repopulates rows on the next update without
-      // needing a full re-render. The cache also keys on the current theme
-      // so toggling light/dark re-renders the icon with the matching variant.
-      //
-      // SVGs are rendered inside an <img> with a base64 data: URL rather
-      // than via innerHTML. The browser's image-loading sandbox blocks
-      // <script> and on*= handlers in SVGs loaded this way, so even a
-      // tampered daemon binary cannot inject script into the dashboard.
-      // (btoa requires Latin-1; current SVGs are pure ASCII. If a future
-      // adapter ships an SVG with non-ASCII glyphs, swap the encoder to
-      // btoa(unescape(encodeURIComponent(svg))).)
+    // Adapter icon (issue #260) — looked up in the registry the daemon
+    // publishes at /api/v1/agents. Hidden when the registry has no entry
+    // for this adapter (e.g. older daemons, or before the registry fetch
+    // completes); other row columns (project, branch, ID) already
+    // disambiguate, so a missing icon doesn't impair the row's meaning.
+    // The dataset cache only advances on a successful populate so a
+    // late-arriving registry repopulates rows on the next update without
+    // needing a full re-render. The cache also keys on the current theme
+    // so toggling light/dark re-renders the icon with the matching variant.
+    //
+    // SVGs are rendered inside an <img> with a base64 data: URL rather
+    // than via innerHTML. The browser's image-loading sandbox blocks
+    // <script> and on*= handlers in SVGs loaded this way, so even a
+    // tampered daemon binary cannot inject script into the dashboard.
+    // (btoa requires Latin-1; current SVGs are pure ASCII. If a future
+    // adapter ships an SVG with non-ASCII glyphs, swap the encoder to
+    // btoa(unescape(encodeURIComponent(svg))).)
+    function renderRowAdapterIcon(el, agent) {
       const adapterKey = agent.adapter || '';
       const cachedAdapter = el.dataset.adapter || '';
       const cachedTheme = el.dataset.adapterTheme || '';
@@ -727,29 +761,19 @@ import { reconcile, paintRowNum } from './domReconcile.js';
         el.dataset.adapter = adapterKey;
         el.dataset.adapterPopulated = '0';
       }
+    }
 
-      // Agent number — set from outside via data attribute
-      // (set by render loop)
-
-      // Branch
+    // Branch
+    function renderRowBranch(el, agent) {
+      const branch = agent.git_branch || '';
       const branchEl = el.querySelector('.row-branch');
-      if (branchEl.textContent !== branch) branchEl.textContent = branch || '\u2014';
+      if (branchEl.textContent !== branch) branchEl.textContent = branch || '—';
+    }
 
-      // Task summary + waiting question render in their own collapsible row
-      // beneath the parent (see createSummaryRow / render() emit).
-
-      // Task progress dots render in a separate row beneath the parent
-      // (see createTaskListRow / render() emit). Mirrors TaskListView in
-      // SessionListView.swift:746–769.
-
-      // Subagent count badge — small filled circle next to the working
-      // icon when the parent has active sub-agents. Mirrors macOS at
-      // SessionListView.swift:481-490. Toggling .has-sub on the row
-      // shrinks the branch column so columns downstream still align with
-      // rows that don't have a badge.
-      // Origin glyph (#538) — a cloud marks a session delivered by a relay
-      // (remote daemon); local-socket sessions show nothing, so a local-only
-      // dashboard is visually unchanged. Tooltip = the daemon's hostname.
+    // Origin glyph (#538) — a cloud marks a session delivered by a relay
+    // (remote daemon); local-socket sessions show nothing, so a local-only
+    // dashboard is visually unchanged. Tooltip = the daemon's hostname.
+    function renderRowOrigin(el, agent) {
       const originEl = el.querySelector('.row-origin');
       if (sessionOrigin(agent) === 'remote') {
         if (!originEl.dataset.on) {
@@ -761,12 +785,14 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       } else if (originEl.style.display !== 'none') {
         originEl.style.display = 'none';
       }
+    }
 
-      // Cache-creation regression badge (#813) renders as its own row beneath
-      // the parent (see createCacheBloatRow / render() emit) — the version
-      // attribution can be a full sentence, too wide for this fixed-width
-      // icon row (mirrors macOS's cacheBloatBlock).
-
+    // Subagent count badge — small filled circle next to the working
+    // icon when the parent has active sub-agents. Mirrors macOS at
+    // SessionListView.swift:481-490. Toggling .has-sub on the row
+    // shrinks the branch column so columns downstream still align with
+    // rows that don't have a badge.
+    function renderRowSubBadge(el, agent) {
       const subBadge = el.querySelector('.row-sub-badge');
       const activeSubs = activeSubagentCount(agent);
       if (activeSubs > 0) {
@@ -777,11 +803,13 @@ import { reconcile, paintRowNum } from './domReconcile.js';
         subBadge.style.display = 'none';
         el.classList.remove('has-sub');
       }
+    }
 
-      // Background-agent badge (#744) — a moon glyph marks a Claude Code Agent
-      // View background agent that keeps running detached in the daemon pool
-      // after its window is closed. Always shown for kind:bg; the amber
-      // .is-detached state emphasizes "no open window owns this".
+    // Background-agent badge (#744) — a moon glyph marks a Claude Code Agent
+    // View background agent that keeps running detached in the daemon pool
+    // after its window is closed. Always shown for kind:bg; the amber
+    // .is-detached state emphasizes "no open window owns this".
+    function renderRowBgBadge(el, agent) {
       const bgBadge = el.querySelector('.row-bg-badge');
       const bg = agent.background;
       if (bg) {
@@ -803,18 +831,22 @@ import { reconcile, paintRowNum } from './domReconcile.js';
         bgBadge.classList.remove('is-detached');
         el.classList.remove('has-bg');
       }
+    }
 
-      // Context bar
+    // Context bar + token/pct overlays. The token count renders as an overlay
+    // inside the context bar so the row stays compact (mirrors macOS
+    // ContextBar's `label` slot at SessionListView.swift:432-439). The
+    // standalone .row-ctx-pct lives on only when Settings hides the cost
+    // column (showCostDisplay off), in which case it shows the % utilization
+    // instead.
+    function renderRowContextBar(el, metrics) {
+      const ctxPct = metrics.context_utilization_percentage || 0;
+      const pressure = metrics.pressure_level || '';
       const fill = el.querySelector('.row-ctx-fill');
       const ctxWidth = Math.min(100, ctxPct).toFixed(1) + '%';
       if (fill.style.width !== ctxWidth) fill.style.width = ctxWidth;
       fill.className = 'row-ctx-fill ' + pressureClass(pressure);
 
-      // Token count — rendered as an overlay inside the context bar so
-      // the row stays compact (mirrors macOS ContextBar's `label` slot at
-      // SessionListView.swift:432-439). The standalone .row-ctx-pct lives
-      // on only when Settings hides the cost column (showCostDisplay off),
-      // in which case it shows the % utilization instead.
       const totalTok = metrics.total_tokens || 0;
       const labelEl = el.querySelector('.row-ctx-label');
       const labelText = totalTok > 0 ? formatTokens(totalTok) : '';
@@ -824,32 +856,41 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       const pctText = ctxPct > 0 ? ctxPct.toFixed(0) + '%' : '';
       if (pctEl.textContent !== pctText) pctEl.textContent = pctText;
       pctEl.style.color = ctxPct > 0 ? pressureColor(pressure) : '';
+    }
 
-      // Cost / CO2 (click to cycle, issue #829)
+    // Cost / CO2 (click to cycle, issue #829) + yield revert marker (#373):
+    // ↩ next to cost when the session's work was later git-reverted.
+    function renderRowCost(el, metrics, agent) {
       const costEl = el.querySelector('.row-cost');
       const { text: cost, title: costTitle } = costCellDisplay(metrics, costDisplayMode);
       if (costEl.textContent !== cost) costEl.textContent = cost;
       if (costEl.title !== costTitle) costEl.title = costTitle;
 
-      // Yield revert marker (#373): ↩ next to cost when the session's work
-      // was later git-reverted.
       const yieldEl = el.querySelector('.row-yield-revert');
       if (yieldEl) yieldEl.style.display = (agent.yield_state === 'reverted') ? '' : 'none';
+    }
 
-      // Model
+    // Model
+    function renderRowModel(el, metrics, agent) {
+      const model = shortModel(metrics.model_name || agent.model || '');
       const modelEl = el.querySelector('.row-model');
       if (modelEl.textContent !== model) modelEl.textContent = model;
+    }
 
-      // Elapsed
+    // Elapsed
+    function renderRowElapsed(el, agent, metrics, isActive) {
+      const elapsed = formatElapsed(agent.first_seen, metrics.elapsed_seconds, isActive);
       const elapsedEl = el.querySelector('.row-elapsed');
       elapsedEl.textContent = elapsed;
       elapsedEl.dataset.firstSeen = isActive ? (agent.first_seen || '') : '';
       elapsedEl.dataset.elapsedStored = metrics.elapsed_seconds || '';
       elapsedEl.dataset.active = isActive ? '1' : '0';
+    }
 
-      // Task-completion ETA chip (issue #558) — agent-authored estimate,
-      // shown only while working. The 1s tickElapsed loop re-derives the
-      // countdown from the dataset between polls.
+    // Task-completion ETA chip (issue #558) — agent-authored estimate,
+    // shown only while working. The 1s tickElapsed loop re-derives the
+    // countdown from the dataset between polls.
+    function renderRowEta(el, metrics, state) {
       const etaEl = el.querySelector('.row-eta');
       const etaInfo = taskEtaPresentation(metrics, state, Date.now() / 1000);
       if (etaInfo) {
@@ -865,10 +906,12 @@ import { reconcile, paintRowNum } from './domReconcile.js';
         etaEl.style.display = 'none';
         etaEl.dataset.eta = '';
       }
+    }
 
-      // Created chip — only stamp the first_seen on the element; the 1s
-      // tickElapsed loop owns the textContent. first_seen is immutable per
-      // session so this is a constant after row creation.
+    // Created chip — only stamp the first_seen on the element; the 1s
+    // tickElapsed loop owns the textContent. first_seen is immutable per
+    // session so this is a constant after row creation.
+    function renderRowCreated(el, agent) {
       const createdEl = el.querySelector('.row-created');
       if (createdEl) {
         const fs = String(agent.first_seen || '');
@@ -877,17 +920,21 @@ import { reconcile, paintRowNum } from './domReconcile.js';
           if (!fs) createdEl.textContent = '';
         }
       }
+    }
 
-      // Short ID
+    // Short ID
+    function renderRowId(el, agent) {
       const idEl = el.querySelector('.row-id');
       const sid = shortID(agent.session_id);
       if (idEl.textContent !== sid) idEl.textContent = sid;
+    }
 
-      // Role badge — icon + role name when both are present. When only an
-      // icon is set (no role string), the icon replaces the agent number in
-      // .row-num — matches macOS at SessionListView.swift:469-479. The
-      // render loop puts the numeric agentNum into .row-num after this fn
-      // returns, so we set a flag the loop reads back.
+    // Role badge — icon + role name when both are present. When only an
+    // icon is set (no role string), the icon replaces the agent number in
+    // .row-num — matches macOS at SessionListView.swift:469-479. The
+    // render loop puts the numeric agentNum into .row-num after this fn
+    // returns, so we set a flag the loop reads back.
+    function renderRowRoleBadge(el, agent) {
       const roleBadge = el.querySelector('.row-role-badge');
       const role = agent.role || '';
       const numEl = el.querySelector('.row-num');
@@ -903,11 +950,13 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       if ((numEl.dataset.iconOverride || '') !== wantIcon) {
         numEl.dataset.iconOverride = wantIcon;
       }
+    }
 
-      // Active tool label — shown only when agent is working and inside a tool call.
-      // When no tool is open but the session is held working by a live Bash
-      // background process (run_in_background), surface that instead so the row
-      // explains why it's still working past the turn's end. See issue #445.
+    // Active tool label — shown only when agent is working and inside a tool call.
+    // When no tool is open but the session is held working by a live Bash
+    // background process (run_in_background), surface that instead so the row
+    // explains why it's still working past the turn's end. See issue #445.
+    function renderRowTool(el, metrics, state) {
       const toolEl = el.querySelector('.row-tool');
       const tools = metrics.last_open_tool_names || [];
       const bgCount = metrics.background_process_count || 0;
@@ -927,10 +976,6 @@ import { reconcile, paintRowNum } from './domReconcile.js';
         toolEl.style.display = 'none';
         toolEl.title = '';
       }
-
-      // Per-row history canvas is repainted by repaintHistory() on the
-      // history-event WS path — no need to repaint here on every session
-      // update (data didn't change).
     }
 
     // --- Render ---
