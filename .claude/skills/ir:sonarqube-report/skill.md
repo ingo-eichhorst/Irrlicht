@@ -1,6 +1,6 @@
 ---
 name: "ir:sonarqube-report"
-description: "On-demand SonarQube Cloud (SonarCloud) code-quality report — fetches open issues for this repo's connected project, sorted worst-first, with concrete file:line locations, rule keys, and fix guidance. Runs entirely locally via tools/sonarqube-report.sh (SONAR_TOKEN lives in a local .env, not a CI secret). Use when the user says '/ir:sonarqube-report', 'run a sonarqube report', 'sonar report', 'what needs fixing', 'show me the sonarqube issues', or wants concrete, actionable code-quality findings (as opposed to /ir:codescene-report's hotspot/trend view, which doesn't exist anymore)."
+description: "On-demand SonarQube Cloud (SonarCloud) code-quality report — fetches open issues for this repo's connected project, sorted worst-first, with concrete file:line locations, rule keys, fix guidance, source-to-sink taint traces for security findings, and a Security Hotspots check. Runs entirely locally via tools/sonarqube-report.sh (SONAR_TOKEN lives in a local .env, not a CI secret). Use when the user says '/ir:sonarqube-report', 'run a sonarqube report', 'sonar report', 'what needs fixing', 'show me the sonarqube issues', or wants concrete, actionable code-quality findings (as opposed to /ir:codescene-report's hotspot/trend view, which doesn't exist anymore)."
 ---
 
 # SonarQube Report (on demand)
@@ -56,11 +56,35 @@ From each entry in the `issues` array, pull out:
   Code taxonomy: MAINTAINABILITY / RELIABILITY / SECURITY ×
   INFO/LOW/MEDIUM/HIGH/BLOCKER); prefer this over the older top-level
   `severity`/`type` fields when summarizing
+- `flows` — if present and non-empty, this is a taint trace (source → sink
+  across possibly multiple files/lines), not just noise. The one-line
+  `message` alone is often too generic to act on for security-class rules
+  (e.g. `gosecurity:S2083`'s message is always "don't construct the path
+  from user-controlled data" regardless of the actual data path) — for
+  any BLOCKER/CRITICAL issue with a non-empty `flows`, include the
+  source→sink steps (each location's `msg` + `component`/`textRange`) in
+  the summary. Don't drop this for brevity; it's usually the only part
+  that's actually actionable.
 
 `paging.total` is the full open-issue count — the fetched page (100) may
 not be all of them; say so if `paging.total > 100`.
 
-### 3. Deeper detail on one rule (optional)
+### 3. Check Security Hotspots
+
+Hotspots are a separate category from regular issues — rules needing a
+human judgment call (e.g. hardcoded crypto, permissive CORS) rather than
+a clear-cut violation — and `issues/search` never returns them:
+
+```bash
+tools/sonarqube-report.sh "hotspots/search?organization=<org>&projectKey=<key>&ps=50"
+```
+
+Always run this, even though it's frequently empty — a report that skips
+it silently reads as "no hotspots" when the truth is "didn't check."
+Each entry has a `status` (`TO_REVIEW` / `REVIEWED`); only unreviewed ones
+belong in the summary.
+
+### 4. Deeper detail on one rule (optional)
 
 If the user wants the full remediation writeup for a specific rule, not
 just its one-line message:
@@ -69,24 +93,32 @@ just its one-line message:
 tools/sonarqube-report.sh "rules/show?key=<rule>&organization=<org>"
 ```
 
-### 4. Summarize
+### 5. Summarize
 
 Report back concisely:
 
 ```
 SonarQube report — <repo>
-<paging.total> open issues (showing worst <N>)
+<paging.total> open issues (showing worst <N>) · <hotspot count> security hotspots to review
 
   <severity>  <file>:<line>  [<rule>]
     <message>  (effort: <effort>)
+    [if flows present:]
+    source → sink: <file>:<line> "<msg>" → ... → <file>:<line> "<msg>"
+  ...
+
+Security Hotspots (TO_REVIEW):
+  <file>:<line>  [<rule>]  <message>
   ...
 ```
 
 Sort worst-first (already the case if the default fetch was used) and
-show at most 10 — this is meant to be a quick read, not the full dump. If
-the user wants to dig into one file or rule, re-run step 1 with narrower
-`componentKeys`/`rules` query params, or step 3 for the rule's full
-writeup.
+show at most 10 issues — this is meant to be a quick read, not the full
+dump. Always mention the hotspot count, even when it's zero — that's the
+point of checking it explicitly rather than letting it be a silent gap.
+If the user wants to dig into one file or rule, re-run step 1 with
+narrower `componentKeys`/`rules` query params, or step 4 for the rule's
+full writeup.
 
 ## Constraints
 
