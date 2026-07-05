@@ -160,6 +160,9 @@ func runSeed(outDir, appPath string, clean, restart, force bool, scenario scenar
 	now := time.Now()
 	for _, src := range scenario.File.Sessions {
 		s := src.materialize(now)
+		if err := ensureSessionCWD(s.CWD); err != nil {
+			fmt.Printf("warning: could not create cwd %s for session %s (%v) — the daemon will reap this session as an orphan at startup unless the directory exists\n", s.CWD, s.SessionID, err)
+		}
 		path := filepath.Join(outDir, s.SessionID+".json")
 		data, err := json.MarshalIndent(s, "", "  ")
 		if err != nil {
@@ -419,6 +422,20 @@ func moveAllJSON(src, dst string) (int, error) {
 		moved++
 	}
 	return moved, nil
+}
+
+// ensureSessionCWD best-effort creates cwd so the daemon's orphan-at-seed
+// check (PIDManager.seedAlivePIDs, which deletes any seeded session whose
+// cwd doesn't exist) doesn't reap this session before it can be
+// screenshotted. Mirrors cwdMissing's own empty/relative-path skip.
+func ensureSessionCWD(cwd string) error {
+	if cwd == "" || !filepath.IsAbs(cwd) {
+		return nil
+	}
+	if _, err := os.Stat(cwd); err == nil {
+		return nil
+	}
+	return os.MkdirAll(cwd, 0o755)
 }
 
 func defaultInstancesDir() (string, error) {

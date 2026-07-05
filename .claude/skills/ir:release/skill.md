@@ -763,7 +763,24 @@ PKG, and ZIP land in `/tmp/` as before — only the *assembly* path moves.
      fi
      exit 1
    fi
-   pgrep -f "$APP/Contents/MacOS/irrlichd" >/dev/null || { echo "FAIL: daemon not spawned"; }
+   # Daemon-spawn check — retry like the dashboard check below. A one-shot
+   # pgrep here raced during the v0.5.5 release (reported FAIL while the
+   # daemon was actually fine seconds later), which just produces ambiguity:
+   # a future run either has to manually re-verify a false alarm, or risks
+   # waving off a real failure as "probably that same race."
+   DAEMON_OK=0
+   for i in 1 2 3 4 5 6 7 8; do
+     if pgrep -f "$APP/Contents/MacOS/irrlichd" >/dev/null; then
+       DAEMON_OK=1; break
+     fi
+     sleep 1
+   done
+   if [ "$DAEMON_OK" -ne 1 ]; then
+     echo "FAIL: daemon not spawned — DO NOT SHIP"
+     pkill -f "$APP/Contents/MacOS/Irrlicht" 2>/dev/null
+     exit 1
+   fi
+   echo "OK daemon spawned"
 
    # Dashboard reachability — catches missing Resources/web/index.html
    # (v0.4.4 shipping defect). The grep on `<title>` is a stable marker in
