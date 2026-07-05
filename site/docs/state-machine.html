@@ -442,7 +442,7 @@
           <tr>
             <td><code>hook_received</code></td>
             <td>Agent hooks</td>
-            <td>Reserved for agent hook delivery (<code>HookName</code>/<code>HookData</code>); future work tracked by issue #108, not yet emitted.</td>
+            <td>Emitted by <code>dispatchHookActivity</code> whenever a claudecode permission hook (<code>PreToolUse</code>/<code>PostToolUse</code>/etc.) or a manual <code>/compact</code> (<code>PreCompact</code>) fires; carries the hook name in <code>HookName</code>. The sibling <code>HookData</code> field exists but is currently always empty.</td>
           </tr>
           <tr>
             <td><code>presession_created</code></td>

@@ -30,9 +30,8 @@ literally** — never invent criteria, never grade on subjective grounds (tone, 
   file nothing. Use this first, and for the convergence check.
 - An optional path or glob — limit the audit to matching surfaces (default: all in-scope).
 
-Without `--report-only`, every run fixes what it finds. This is what `ir:release` Step 4b runs
-on every release (#834, #837), so drift can't silently accumulate the way the stale "no hooks"
-claim once did.
+`ir:release` Step 4b runs this fix-by-default workflow on every release (#834, #837), so drift
+can't silently accumulate the way the stale "no hooks" claim once did.
 
 ## Workflow
 
@@ -92,13 +91,18 @@ reuses it verbatim for whatever remains unresolved):
 - **Exact fix** — the specific replacement text / precise addition / reference to correct.
   Agent-ready imperative, no "consider" or "maybe". For C1/C3/C4 (missing content) this means
   actually drafting the missing section/example/mention, grounded in the authoritative
-  code-derived source — not just describing that something is missing.
+  code-derived source — not just describing that something is missing. When the authoritative
+  source is a comment claiming something is "reserved", "not yet implemented", or "future work",
+  verify that against actual call sites/behavior (grep for where the constant/function is really
+  used) before repeating the comment as fact — comments go stale faster than code, and a drafted
+  fix that just echoes a stale comment is itself a new validity defect.
 - **Verification** — the concrete re-check (e.g. "the path resolves", "the grid lists all 7
   adapters", "the count matches `All()`").
 
 ### 6b. Apply every determinable fix directly
-Skip this step entirely if `--report-only` was passed — every finding then falls straight
-through to step 7 unchanged, and nothing is edited.
+Skip this step entirely if `--report-only` was passed — every finding then stays unresolved and
+flows straight to step 8's report. Step 7 (which files/closes issues) is also skipped under
+`--report-only`, so nothing is edited and no GitHub issue is touched either.
 
 Otherwise, for each finding: re-locate the anchor by its verbatim quote (don't trust the
 original line number — an earlier edit in the same file may have shifted it), apply the "Exact
@@ -122,7 +126,14 @@ fix" text from step 6, then immediately run that finding's own "Verification" ch
 Record every successfully applied fix (surface + finding-ID) for the step 8 summary.
 
 ### 7. File or close issues only for what's left unresolved (skip entirely if --report-only)
-This should be the rare exception, not the common case — most runs file nothing.
+
+First, fetch every currently-open doc-review issue **once**, up front — this single list drives
+both the create-or-update loop and the close-stale-issues step below, so a surface with zero
+unresolved findings this run (nothing to loop over otherwise) can still be checked for a stale
+issue to close:
+`gh issue list --repo ingo-eichhorst/Irrlicht --state open --search "in:title docs(" --json number,title,body`
+Extract each returned issue's surface from its title (`docs(<surface>): …`) into a
+surface→issue-number map.
 
 For each surface with ≥1 **unresolved** finding after step 6b:
 - **Title:** `docs(<surface>): <N> findings — <c> Critical / <m> Major / <n> Minor / <k> Nit`
@@ -135,15 +146,15 @@ For each surface with ≥1 **unresolved** finding after step 6b:
     verification check failed).
   - Last line — the hidden reconciliation marker (one line, exactly):
     `<!-- ir:doc-review surface=<path> findings=<id1,id2,...> -->`
-- `gh issue list --repo ingo-eichhorst/Irrlicht --state open --search "in:title docs(<surface>)" --json number,body,title`.
-  - **No match →** `gh issue create` with the title/body above and labels: `documentation`, the
-    matching `scope:*` (mapping below), and `needs-triage`.
-  - **Match →** read the existing body's marker and compare its finding-ID set to the new one.
-    If the sets differ, rebuild title+body and `gh issue edit <N> --body-file … --title …` in a
-    single call. If identical, leave the issue untouched.
+- **No entry for this surface in the map →** `gh issue create` with the title/body above and
+  labels: `documentation`, the matching `scope:*` (mapping below), and `needs-triage`.
+- **Entry found →** read the existing body's marker and compare its finding-ID set to the new
+  one. If the sets differ, rebuild title+body and `gh issue edit <N> --body-file … --title …` in
+  a single call. If identical, leave the issue untouched.
 
-For each surface that has an existing **open** `docs(<surface>): …` issue but zero unresolved
-findings this run (everything got fixed directly, or the prior findings no longer reproduce):
+For each surface **in the map** (has an existing open issue) that does **not** appear in the
+≥1-unresolved-finding loop above — everything got fixed directly, or the prior findings no
+longer reproduce:
 `gh issue close <N> --comment "All findings resolved directly by ir:doc-review — see the fixes to <surface>."`
 
 Never open a second issue for a surface that already has one. Leave priority and
