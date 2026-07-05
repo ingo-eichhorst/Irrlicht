@@ -65,6 +65,8 @@ Field definitions:
 - `category` — `"agent"` or `"orchestrator"`.
 - `first_seen` — ISO date when this entry was first added. Never change it once set.
 
+Top-level `archived` array (sibling to `agents`) holds entries moved out per rule 8. Same shape as an `agents` entry plus an `archived_reason` string (why it was archived, cited from the search that found it). The HTML generator only reads `data["agents"]`, so anything here is automatically excluded from both the ranked table and the "No public repo" group — no generator change needed. If a run finds the entry is no longer archived (`archived: false` again), move it back into `agents` and drop `archived_reason`.
+
 ### Snapshot strategy
 
 Snapshots accumulate over successive runs. No back-filling.
@@ -89,10 +91,10 @@ An agent is "NEW" only if both:
 
 ## Irrlicht support mapping
 
-The canonical source of truth is `core/adapters/inbound/agents/` + `core/adapters/inbound/orchestrators/`. As of this writing:
+The canonical source of truth is `core/adapters/inbound/agents/` (registered in `all.go`'s `All()`) + `core/adapters/inbound/orchestrators/`. As of this writing:
 
-- `live`: Claude Code (`anthropics/claude-code`), OpenAI Codex (`openai/codex`), Pi (`earendil-works/pi`, renamed from `badlogic/pi-mono` in v0.74), Gas Town (`gastownhall/gastown`), Aider (`Aider-AI/aider`), OpenCode (`anomalyco/opencode`).
-- `planned`: Gemini CLI, Cursor, Amp, Claude Squad, Qwen Code, Crush, Continue, Goose, Kilo Code, Paperclip, Ruflo, Multiclaude, SWE-agent.
+- `live`: Claude Code (`anthropics/claude-code`), OpenAI Codex (`openai/codex`), Pi (`earendil-works/pi`, renamed from `badlogic/pi-mono` in v0.74), Aider (`Aider-AI/aider`), OpenCode (`anomalyco/opencode`), Kiro (adapter targets Kiro CLI specifically, `AdapterName "kiro-cli"`; product repo `kirodotdev/Kiro`), Gemini CLI (`google-gemini/gemini-cli`), Antigravity (closed-source, no public repo), Gas Town (`gastownhall/gastown`).
+- `planned`: Cursor, Claude Squad, Qwen Code, Crush, Continue, Goose, Kilo Code, Paperclip, Ruflo, Multiclaude, SWE-agent.
 - Everything else: `none`.
 
 Before each run, `ls core/adapters/inbound/agents/` and `ls core/adapters/inbound/orchestrators/` to confirm the list is still correct. If the set of live adapters has changed, update this section and apply the change to `agent-data.json`.

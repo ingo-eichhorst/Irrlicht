@@ -1,13 +1,13 @@
 {
-  "last_updated": "2026-05-31",
+  "last_updated": "2026-07-05",
   "agents": [
     {
       "name": "Claw Code",
       "github_repo": "ultraworkers/claw-code",
       "category": "agent",
       "website": "https://github.com/ultraworkers/claw-code",
-      "description": "Rust CLI agent harness that wraps Claude via the Anthropic API; star count inflated by viral self-promotion in the README (\"fastest repo to 100K stars\").",
-      "stars": 191505,
+      "description": "An agent-managed museum exhibit, built in Rust with Gajae-Code / LazyCodex — developed and maintained with no human intervention.",
+      "stars": 194570,
       "language": "Rust",
       "license": "MIT",
       "interface": "CLI",
@@ -16,6 +16,10 @@
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-07-05",
+          "stars": 194570
+        },
         {
           "date": "2026-05-15",
           "stars": 191505
@@ -36,7 +40,7 @@
       "category": "agent",
       "website": "https://opencode.ai",
       "description": "The open source coding agent.",
-      "stars": 160573,
+      "stars": 182478,
       "language": "TypeScript",
       "license": "MIT",
       "interface": "CLI",
@@ -45,6 +49,10 @@
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-07-05",
+          "stars": 182478
+        },
         {
           "date": "2026-05-15",
           "stars": 160573
@@ -65,8 +73,8 @@
       "category": "agent",
       "website": "https://www.anthropic.com/claude-code",
       "description": "Claude Code is an agentic coding tool that lives in your terminal, understands your codebase, and helps you code faster by executing routine tasks, explaining complex code, and handling git workflows - all through natural language commands.",
-      "stars": 123761,
-      "language": "Shell",
+      "stars": 136132,
+      "language": "Python",
       "license": null,
       "interface": "CLI",
       "pricing": "Paid (usage-based)",
@@ -74,6 +82,10 @@
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-07-05",
+          "stars": 136132
+        },
         {
           "date": "2026-05-15",
           "stars": 123761
@@ -94,15 +106,19 @@
       "category": "agent",
       "website": "https://github.com/google-gemini/gemini-cli",
       "description": "An open-source AI agent that brings the power of Gemini directly into your terminal.",
-      "stars": 104022,
+      "stars": 105752,
       "language": "TypeScript",
       "license": "Apache-2.0",
       "interface": "CLI",
       "pricing": "Free (open source)",
-      "irrlicht_support": "planned",
+      "irrlicht_support": "live",
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-07-05",
+          "stars": 105752
+        },
         {
           "date": "2026-05-15",
           "stars": 104022
@@ -123,7 +139,7 @@
       "category": "agent",
       "website": "https://github.com/openai/codex",
       "description": "Lightweight coding agent that runs in your terminal",
-      "stars": 82811,
+      "stars": 95588,
       "language": "Rust",
       "license": "Apache-2.0",
       "interface": "CLI",
@@ -132,6 +148,10 @@
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-07-05",
+          "stars": 95588
+        },
         {
           "date": "2026-05-15",
           "stars": 82811
@@ -152,7 +172,7 @@
       "category": "agent",
       "website": "https://github.com/OpenHands/OpenHands",
       "description": "🙌 OpenHands: AI-Driven Development",
-      "stars": 73613,
+      "stars": 79471,
       "language": "Python",
       "license": "NOASSERTION",
       "interface": "CLI / Web",
@@ -161,6 +181,10 @@
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-07-05",
+          "stars": 79471
+        },
         {
           "date": "2026-05-15",
           "stars": 73613
@@ -176,12 +200,45 @@
       ]
     },
     {
+      "name": "Pi",
+      "github_repo": "earendil-works/pi",
+      "category": "agent",
+      "website": "https://github.com/earendil-works/pi",
+      "description": "AI agent toolkit: unified LLM API, agent loop, TUI, coding agent CLI",
+      "stars": 67727,
+      "language": "TypeScript",
+      "license": "MIT",
+      "interface": "CLI",
+      "pricing": "Free (open source)",
+      "irrlicht_support": "live",
+      "first_seen": "2026-04-05",
+      "alternative_metrics": null,
+      "stars_history": [
+        {
+          "date": "2026-07-05",
+          "stars": 67727
+        },
+        {
+          "date": "2026-05-15",
+          "stars": 49664
+        },
+        {
+          "date": "2026-04-24",
+          "stars": 39373
+        },
+        {
+          "date": "2026-04-12",
+          "stars": 34689
+        }
+      ]
+    },
+    {
       "name": "Cline",
       "github_repo": "cline/cline",
       "category": "agent",
       "website": "https://cline.bot",
       "description": "Autonomous coding agent as an SDK, IDE extension, or CLI assistant.",
-      "stars": 61809,
+      "stars": 64294,
       "language": "TypeScript",
       "license": "Apache-2.0",
       "interface": "IDE extension (VS Code)",
@@ -190,6 +247,10 @@
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-07-05",
+          "stars": 64294
+        },
         {
           "date": "2026-05-15",
           "stars": 61809
@@ -210,7 +271,7 @@
       "category": "agent",
       "website": "https://www.warp.dev",
       "description": "Warp is an agentic development environment, born out of the terminal.",
-      "stars": 58530,
+      "stars": 62818,
       "language": "Rust",
       "license": "AGPL-3.0",
       "interface": "Desktop app (Terminal)",
@@ -219,6 +280,10 @@
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-07-05",
+          "stars": 62818
+        },
         {
           "date": "2026-05-15",
           "stars": 58530
@@ -234,41 +299,12 @@
       ]
     },
     {
-      "name": "Pi",
-      "github_repo": "earendil-works/pi",
-      "category": "agent",
-      "website": "https://github.com/badlogic/pi-mono",
-      "description": "Mario Zechner's AI agent toolkit (CLI coding agent, unified LLM API, TUI/web libraries, Slack bot, vLLM pods); repo and `@earendil-works/*` packages moved to `earendil-works/pi` in v0.74.",
-      "stars": 49664,
-      "language": "TypeScript",
-      "license": "MIT",
-      "interface": "CLI",
-      "pricing": "Free (open source)",
-      "irrlicht_support": "live",
-      "first_seen": "2026-04-05",
-      "alternative_metrics": null,
-      "stars_history": [
-        {
-          "date": "2026-05-15",
-          "stars": 49664
-        },
-        {
-          "date": "2026-04-24",
-          "stars": 39373
-        },
-        {
-          "date": "2026-04-12",
-          "stars": 34689
-        }
-      ]
-    },
-    {
       "name": "Goose",
       "github_repo": "aaif-goose/goose",
       "category": "agent",
       "website": "https://block.github.io/goose/",
-      "description": "Extensible open-source agent (install/execute/edit/test with any LLM); originated at Block before transfer to the `aaif-goose` org.",
-      "stars": 45230,
+      "description": "an open source, extensible AI agent that goes beyond code suggestions - install, execute, edit, and test with any LLM",
+      "stars": 50663,
       "language": "Rust",
       "license": "Apache-2.0",
       "interface": "CLI / Desktop app",
@@ -277,6 +313,10 @@
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-07-05",
+          "stars": 50663
+        },
         {
           "date": "2026-05-15",
           "stars": 45230
@@ -297,7 +337,7 @@
       "category": "agent",
       "website": "https://aider.chat",
       "description": "aider is AI pair programming in your terminal",
-      "stars": 44842,
+      "stars": 47065,
       "language": "Python",
       "license": "Apache-2.0",
       "interface": "CLI",
@@ -306,6 +346,10 @@
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-07-05",
+          "stars": 47065
+        },
         {
           "date": "2026-05-15",
           "stars": 44842
@@ -325,8 +369,8 @@
       "github_repo": "continuedev/continue",
       "category": "agent",
       "website": "https://continue.dev",
-      "description": "⏩ Source-controlled AI checks, enforceable in CI. Powered by the open-source Continue CLI",
-      "stars": 33196,
+      "description": "open-source coding agent",
+      "stars": 34690,
       "language": "TypeScript",
       "license": "Apache-2.0",
       "interface": "IDE extension / CLI",
@@ -335,6 +379,10 @@
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-07-05",
+          "stars": 34690
+        },
         {
           "date": "2026-05-15",
           "stars": 33196
@@ -355,7 +403,7 @@
       "category": "agent",
       "website": "https://cursor.com",
       "description": "Proprietary AI-first code editor (the GitHub repo hosts issues only; editor source is closed).",
-      "stars": 32875,
+      "stars": 33006,
       "language": null,
       "license": null,
       "interface": "Desktop app (IDE)",
@@ -364,6 +412,10 @@
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-07-05",
+          "stars": 33006
+        },
         {
           "date": "2026-05-15",
           "stars": 32875
@@ -379,70 +431,12 @@
       ]
     },
     {
-      "name": "Void",
-      "github_repo": "voideditor/void",
-      "category": "agent",
-      "website": "https://voideditor.com",
-      "description": "Open-source AI code editor (VS Code fork).",
-      "stars": 28752,
-      "language": "TypeScript",
-      "license": "Apache-2.0",
-      "interface": "Desktop app (IDE)",
-      "pricing": "Free (open source)",
-      "irrlicht_support": "none",
-      "first_seen": "2026-04-05",
-      "alternative_metrics": null,
-      "stars_history": [
-        {
-          "date": "2026-05-15",
-          "stars": 28752
-        },
-        {
-          "date": "2026-04-24",
-          "stars": 28644
-        },
-        {
-          "date": "2026-04-12",
-          "stars": 28553
-        }
-      ]
-    },
-    {
-      "name": "Qwen Code",
-      "github_repo": "QwenLM/qwen-code",
-      "category": "agent",
-      "website": "https://qwen.ai/qwencode",
-      "description": "An open-source AI agent that lives in your terminal.",
-      "stars": 24401,
-      "language": "TypeScript",
-      "license": "Apache-2.0",
-      "interface": "CLI",
-      "pricing": "Free (open source)",
-      "irrlicht_support": "planned",
-      "first_seen": "2026-04-10",
-      "alternative_metrics": null,
-      "stars_history": [
-        {
-          "date": "2026-05-15",
-          "stars": 24401
-        },
-        {
-          "date": "2026-04-24",
-          "stars": 23813
-        },
-        {
-          "date": "2026-04-12",
-          "stars": 22823
-        }
-      ]
-    },
-    {
       "name": "Crush",
       "github_repo": "charmbracelet/crush",
       "category": "agent",
       "website": "https://charm.land/crush",
       "description": "Glamourous agentic coding for all 💘",
-      "stars": 24298,
+      "stars": 26077,
       "language": "Go",
       "license": "NOASSERTION",
       "interface": "CLI",
@@ -451,6 +445,10 @@
       "first_seen": "2026-04-10",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-07-05",
+          "stars": 26077
+        },
         {
           "date": "2026-05-15",
           "stars": 24298
@@ -466,31 +464,35 @@
       ]
     },
     {
-      "name": "Roo Code",
-      "github_repo": "RooCodeInc/Roo-Code",
+      "name": "Qwen Code",
+      "github_repo": "QwenLM/qwen-code",
       "category": "agent",
-      "website": "https://roocode.com",
-      "description": "Roo Code gives you a whole dev team of AI agents in your code editor.",
-      "stars": 24073,
+      "website": "https://qwen.ai/qwencode",
+      "description": "An open-source AI coding agent that lives in your terminal.",
+      "stars": 25787,
       "language": "TypeScript",
       "license": "Apache-2.0",
-      "interface": "IDE extension (VS Code)",
+      "interface": "CLI",
       "pricing": "Free (open source)",
-      "irrlicht_support": "none",
-      "first_seen": "2026-04-05",
+      "irrlicht_support": "planned",
+      "first_seen": "2026-04-10",
       "alternative_metrics": null,
       "stars_history": [
         {
+          "date": "2026-07-05",
+          "stars": 25787
+        },
+        {
           "date": "2026-05-15",
-          "stars": 24073
+          "stars": 24401
         },
         {
           "date": "2026-04-24",
-          "stars": 23345
+          "stars": 23813
         },
         {
           "date": "2026-04-12",
-          "stars": 23088
+          "stars": 22823
         }
       ]
     },
@@ -500,7 +502,7 @@
       "category": "agent",
       "website": "https://kilo.ai",
       "description": "Kilo is the all-in-one agentic engineering platform. Build, ship, and iterate faster with the most popular open source coding agent.",
-      "stars": 19304,
+      "stars": 25591,
       "language": "TypeScript",
       "license": "MIT",
       "interface": "IDE extension / CLI",
@@ -509,6 +511,10 @@
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-07-05",
+          "stars": 25591
+        },
         {
           "date": "2026-05-15",
           "stars": 19304
@@ -529,7 +535,7 @@
       "category": "agent",
       "website": "https://swe-agent.com",
       "description": "SWE-agent takes a GitHub issue and tries to automatically fix it, using your LM of choice. It can also be employed for offensive cybersecurity or competitive coding challenges. [NeurIPS 2024]",
-      "stars": 19225,
+      "stars": 19705,
       "language": "Python",
       "license": "MIT",
       "interface": "CLI",
@@ -538,6 +544,10 @@
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-07-05",
+          "stars": 19705
+        },
         {
           "date": "2026-05-15",
           "stars": 19225
@@ -558,7 +568,7 @@
       "category": "agent",
       "website": "https://plandex.ai",
       "description": "Open source AI coding agent. Designed for large projects and real world tasks.",
-      "stars": 15365,
+      "stars": 15502,
       "language": "Go",
       "license": "MIT",
       "interface": "CLI",
@@ -567,6 +577,10 @@
       "first_seen": "2026-04-10",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-07-05",
+          "stars": 15502
+        },
         {
           "date": "2026-05-15",
           "stars": 15365
@@ -587,7 +601,7 @@
       "category": "agent",
       "website": "https://github.com/langchain-ai/open-swe",
       "description": "An Open-Source Asynchronous Coding Agent",
-      "stars": 9802,
+      "stars": 10103,
       "language": "Python",
       "license": "MIT",
       "interface": "Web",
@@ -596,6 +610,10 @@
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-07-05",
+          "stars": 10103
+        },
         {
           "date": "2026-05-15",
           "stars": 9802
@@ -616,7 +634,7 @@
       "category": "agent",
       "website": "https://sweep.dev",
       "description": "Sweep: AI coding assistant for JetBrains",
-      "stars": 7713,
+      "stars": 7700,
       "language": "Jupyter Notebook",
       "license": "NOASSERTION",
       "interface": "IDE extension (JetBrains)",
@@ -625,6 +643,10 @@
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-07-05",
+          "stars": 7700
+        },
         {
           "date": "2026-05-15",
           "stars": 7713
@@ -645,7 +667,7 @@
       "category": "agent",
       "website": "https://forgecode.dev",
       "description": "AI enabled pair programmer for Claude, GPT, O Series, Grok, Deepseek, Gemini and 300+ models",
-      "stars": 7295,
+      "stars": 7445,
       "language": "Rust",
       "license": "Apache-2.0",
       "interface": "CLI",
@@ -654,6 +676,10 @@
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-07-05",
+          "stars": 7445
+        },
         {
           "date": "2026-05-15",
           "stars": 7295
@@ -669,12 +695,33 @@
       ]
     },
     {
+      "name": "Kiro",
+      "github_repo": "kirodotdev/Kiro",
+      "category": "agent",
+      "website": "https://kiro.dev",
+      "description": "Kiro is an agentic IDE that works alongside you from prototype to production.",
+      "stars": 3965,
+      "language": "TypeScript",
+      "license": null,
+      "interface": "Desktop app (IDE) / CLI",
+      "pricing": "Freemium",
+      "irrlicht_support": "live",
+      "first_seen": "2026-04-10",
+      "alternative_metrics": null,
+      "stars_history": [
+        {
+          "date": "2026-07-05",
+          "stars": 3965
+        }
+      ]
+    },
+    {
       "name": "RA.Aid",
       "github_repo": "ai-christianson/RA.Aid",
       "category": "agent",
       "website": "https://www.ra-aid.ai",
       "description": "Develop software autonomously.",
-      "stars": 2224,
+      "stars": 2223,
       "language": "Python",
       "license": "Apache-2.0",
       "interface": "CLI",
@@ -683,6 +730,10 @@
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-07-05",
+          "stars": 2223
+        },
         {
           "date": "2026-05-15",
           "stars": 2224
@@ -703,7 +754,7 @@
       "category": "agent",
       "website": "https://www.factory.ai",
       "description": "Factory - Agent-Native Software Development",
-      "stars": 876,
+      "stars": 1007,
       "language": null,
       "license": null,
       "interface": "Web / CLI",
@@ -712,6 +763,10 @@
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-07-05",
+          "stars": 1007
+        },
         {
           "date": "2026-05-15",
           "stars": 876
@@ -732,7 +787,7 @@
       "category": "agent",
       "website": "https://trypear.ai",
       "description": "PearAI: Open Source AI Code Editor (Fork of VSCode). The PearAI Submodule (https://github.com/trypear/pearai-submodule) is a fork of Continue.",
-      "stars": 689,
+      "stars": 703,
       "language": "TypeScript",
       "license": "MIT",
       "interface": "Desktop app (IDE)",
@@ -741,6 +796,10 @@
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-07-05",
+          "stars": 703
+        },
         {
           "date": "2026-05-15",
           "stars": 689
@@ -761,7 +820,7 @@
       "category": "agent",
       "website": "https://codegen.com",
       "description": "Python wrapper for the Codegen API - run code agents at scale",
-      "stars": 521,
+      "stars": 519,
       "language": "Python",
       "license": "Apache-2.0",
       "interface": "SDK / Web",
@@ -770,6 +829,10 @@
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-07-05",
+          "stars": 519
+        },
         {
           "date": "2026-05-15",
           "stars": 521
@@ -785,30 +848,11 @@
       ]
     },
     {
-      "name": "Antigravity",
-      "github_repo": null,
-      "category": "agent",
-      "website": "https://antigravity.google/product/antigravity-cli",
-      "description": "Google's Go-based agent-first development platform with a terminal CLI; replaced Gemini CLI on 2026-05-19 (Gemini CLI requests stop 2026-06-18). Distributed as a closed binary via install script.",
-      "stars": null,
-      "language": null,
-      "license": null,
-      "interface": "Desktop app (IDE) / CLI",
-      "pricing": "Freemium",
-      "irrlicht_support": "none",
-      "first_seen": "2026-05-31",
-      "alternative_metrics": {
-        "source": "Google I/O 2026; Google Developers Blog 'Transitioning Gemini CLI to Antigravity CLI'; no independent funding/user data",
-        "measured_date": "2026-05-31"
-      },
-      "stars_history": []
-    },
-    {
       "name": "Amazon Q Developer",
       "github_repo": null,
       "category": "agent",
       "website": "https://aws.amazon.com/q/developer/",
-      "description": "AWS's AI coding assistant (completions, transformations, agentic refactors).",
+      "description": "AWS's AI coding assistant (completions, transformations, agentic refactors). AWS announced IDE plugins and paid subscriptions are being sunset (new signups blocked 2026-05-15, end of support 2027-04-30), superseded by Kiro.",
       "stars": null,
       "language": null,
       "license": null,
@@ -817,8 +861,8 @@
       "irrlicht_support": "none",
       "first_seen": "2026-04-05",
       "alternative_metrics": {
-        "source": "AWS product; no independent user/funding disclosures",
-        "measured_date": "2026-04-24"
+        "source": "AWS DevOps Blog, 'Amazon Q Developer end-of-support announcement', 2026-04-30",
+        "measured_date": "2026-07-05"
       },
       "stars_history": []
     },
@@ -836,8 +880,27 @@
       "irrlicht_support": "planned",
       "first_seen": "2026-04-05",
       "alternative_metrics": {
-        "source": "Amp spin-out announcement (Q1 2026); inherits Sourcegraph Cody lineage",
-        "measured_date": "2026-04-24"
+        "source": "Sourcegraph spins out Amp as standalone company (backed by Craft/Redpoint/Sequoia/Goldcrest/a16z); no new standalone round disclosed as of 2026-07-05",
+        "measured_date": "2026-07-05"
+      },
+      "stars_history": []
+    },
+    {
+      "name": "Antigravity",
+      "github_repo": null,
+      "category": "agent",
+      "website": "https://antigravity.google/product/antigravity-cli",
+      "description": "Google's Go-based agent-first development platform with a terminal CLI; replaced Gemini CLI on 2026-05-19 (Gemini CLI requests stop 2026-06-18). Distributed as a closed binary via install script.",
+      "stars": null,
+      "language": null,
+      "license": null,
+      "interface": "Desktop app (IDE) / CLI",
+      "pricing": "Freemium",
+      "irrlicht_support": "live",
+      "first_seen": "2026-05-31",
+      "alternative_metrics": {
+        "source": "Google I/O 2026; Google Developers Blog 'Transitioning Gemini CLI to Antigravity CLI'; no independent funding/user data (checked 2026-07-05)",
+        "measured_date": "2026-07-05"
       },
       "stars_history": []
     },
@@ -856,27 +919,8 @@
       "first_seen": "2026-04-05",
       "alternative_metrics": {
         "funding_millions_usd": 252,
-        "source": "Crunchbase; TechCrunch Series B coverage",
-        "measured_date": "2026-04-24"
-      },
-      "stars_history": []
-    },
-    {
-      "name": "CodeGPT",
-      "github_repo": null,
-      "category": "agent",
-      "website": "https://www.codegpt.co",
-      "description": "Full-stack AI agent platform with a codebase knowledge graph.",
-      "stars": null,
-      "language": null,
-      "license": null,
-      "interface": "IDE extension / Web",
-      "pricing": "Freemium",
-      "irrlicht_support": "none",
-      "first_seen": "2026-04-05",
-      "alternative_metrics": {
-        "source": "no public metrics found",
-        "measured_date": "2026-04-24"
+        "source": "Augment Inc. $227M Series B (~$977M post-money); TechCrunch/Augment blog coverage; no change since last check (checked 2026-07-05)",
+        "measured_date": "2026-07-05"
       },
       "stars_history": []
     },
@@ -894,8 +938,28 @@
       "irrlicht_support": "none",
       "first_seen": "2026-04-05",
       "alternative_metrics": {
-        "source": "no public metrics found",
-        "measured_date": "2026-04-24"
+        "funding_millions_usd": 1.5,
+        "source": "Crunchbase; YC F24 ~$500K seed, ~$1.5M total raised (checked 2026-07-05)",
+        "measured_date": "2026-07-05"
+      },
+      "stars_history": []
+    },
+    {
+      "name": "CodeGPT",
+      "github_repo": null,
+      "category": "agent",
+      "website": "https://www.codegpt.co",
+      "description": "Full-stack AI agent platform with a codebase knowledge graph.",
+      "stars": null,
+      "language": null,
+      "license": null,
+      "interface": "IDE extension / Web",
+      "pricing": "Freemium",
+      "irrlicht_support": "none",
+      "first_seen": "2026-04-05",
+      "alternative_metrics": {
+        "source": "no public metrics found (checked 2026-07-05)",
+        "measured_date": "2026-07-05"
       },
       "stars_history": []
     },
@@ -913,8 +977,9 @@
       "irrlicht_support": "none",
       "first_seen": "2026-04-05",
       "alternative_metrics": {
-        "source": "no public funding/user data found",
-        "measured_date": "2026-04-24"
+        "funding_millions_usd": 8,
+        "source": "Cosine newsroom (cosine.sh/newsroom); ~$8M seed, ~Dec 2025 (checked 2026-07-05). Named as model partner in a UK 'Sovereign AI Coalition' (2026-06-08) but that's a partnership, not company funding.",
+        "measured_date": "2026-07-05"
       },
       "stars_history": []
     },
@@ -923,7 +988,7 @@
       "github_repo": null,
       "category": "agent",
       "website": "https://devin.ai",
-      "description": "Cognition AI's autonomous software-engineer agent; parent company merged Windsurf (Cascade IDE) into its stack in 2025.",
+      "description": "Cognition AI's autonomous software-engineer agent; parent company also owns Windsurf (Cascade IDE, merged into its stack in 2025).",
       "stars": null,
       "language": null,
       "license": null,
@@ -932,10 +997,10 @@
       "irrlicht_support": "none",
       "first_seen": "2026-04-05",
       "alternative_metrics": {
-        "funding_millions_usd": 696,
-        "valuation_billions_usd": 10.2,
-        "source": "Cognition's Sep 2025 $400M round (Founders Fund, Lux, 8VC); Wikipedia; CNBC",
-        "measured_date": "2026-04-24"
+        "funding_millions_usd": 1000,
+        "valuation_billions_usd": 26,
+        "source": "TechCrunch/Bloomberg: Cognition AI raised $1B+ at $25B pre-money (~$26B post-money) valuation, announced 2026-05-27; reported ARR grew from $37M (May 2025) to $492M. Figure is Cognition-parent-level, attributed to Devin as its flagship product.",
+        "measured_date": "2026-07-05"
       },
       "stars_history": []
     },
@@ -953,28 +1018,9 @@
       "irrlicht_support": "none",
       "first_seen": "2026-04-05",
       "alternative_metrics": {
-        "estimated_users": "20000000+",
-        "source": "GitHub Q4 2025 disclosures; exact figure varies by source",
-        "measured_date": "2026-04-24"
-      },
-      "stars_history": []
-    },
-    {
-      "name": "Kiro",
-      "github_repo": null,
-      "category": "agent",
-      "website": "https://kiro.dev",
-      "description": "AWS-backed agentic IDE with spec-driven development and autonomous task execution.",
-      "stars": null,
-      "language": null,
-      "license": null,
-      "interface": "Desktop app (IDE)",
-      "pricing": "Freemium",
-      "irrlicht_support": "none",
-      "first_seen": "2026-04-10",
-      "alternative_metrics": {
-        "source": "AWS-backed product; no independent funding data",
-        "measured_date": "2026-04-24"
+        "estimated_users": "4700000",
+        "source": "Microsoft Jan 28 2026 earnings call: ~4.7M paid GitHub Copilot subscribers. CORRECTION: prior '20000000+' figure conflated this with Microsoft 365 Copilot's ~20M paid seats (disclosed on Microsoft's Apr 29 2026 call) — a different product; do not merge again.",
+        "measured_date": "2026-07-05"
       },
       "stars_history": []
     },
@@ -992,8 +1038,8 @@
       "irrlicht_support": "none",
       "first_seen": "2026-04-05",
       "alternative_metrics": {
-        "source": "no public metrics found",
-        "measured_date": "2026-04-24"
+        "source": "no public metrics found (checked 2026-07-05). Caution: Crunchbase/Tracxn listings for 'Morph' often refer to an unrelated crypto/L2 blockchain company, not MorphLLM (YC S23 coding-agent infra).",
+        "measured_date": "2026-07-05"
       },
       "stars_history": []
     },
@@ -1012,8 +1058,8 @@
       "first_seen": "2026-04-05",
       "alternative_metrics": {
         "funding_millions_usd": 626,
-        "source": "Crunchbase; Nvidia strategic investment reports",
-        "measured_date": "2026-04-24"
+        "source": "Crunchbase; Nvidia strategic investment reports. Context: FT (via Techmeme, ~2026-04-02) reported a planned $2B Series C with an up-to-$1B Nvidia anchor collapsed after a CoreWeave data-center deal fell through; total raised remains ~$625-626M, unresolved as of 2026-07-05.",
+        "measured_date": "2026-07-05"
       },
       "stars_history": []
     },
@@ -1032,8 +1078,8 @@
       "first_seen": "2026-04-05",
       "alternative_metrics": {
         "funding_millions_usd": 120,
-        "source": "TechCrunch / Ctech Series B (Mar 2026)",
-        "measured_date": "2026-04-24"
+        "source": "TechCrunch, 'Qodo bets on code verification as AI coding scales, raises $70M' (2026-03-30) -> $120M total; no change since last check (checked 2026-07-05)",
+        "measured_date": "2026-07-05"
       },
       "stars_history": []
     },
@@ -1053,8 +1099,8 @@
       "alternative_metrics": {
         "estimated_users": "1000000",
         "funding_millions_usd": 102,
-        "source": "Tabnine press releases; Crunchbase",
-        "measured_date": "2026-04-24"
+        "source": "Tabnine press releases; Tracxn company profile; no change since last check (checked 2026-07-05)",
+        "measured_date": "2026-07-05"
       },
       "stars_history": []
     },
@@ -1074,8 +1120,8 @@
       "alternative_metrics": {
         "funding_millions_usd": null,
         "acquisition_price_millions_usd": 250,
-        "source": "Cognition AI press release (Dec 2025); TechCrunch coverage",
-        "measured_date": "2026-04-24"
+        "source": "Cognition AI acquired Windsurf/Codeium (Dec 2025, ~$250M). Cognition (parent) itself raised $1B+ at ~$26B post-money on 2026-05-27 (TechCrunch/Bloomberg) but no Windsurf-specific standalone figure exists post-fold-in.",
+        "measured_date": "2026-07-05"
       },
       "stars_history": []
     },
@@ -1093,8 +1139,8 @@
       "irrlicht_support": "none",
       "first_seen": "2026-04-05",
       "alternative_metrics": {
-        "source": "early-stage; no public metrics",
-        "measured_date": "2026-04-24"
+        "source": "no credible new disclosure (checked 2026-07-05). A low-quality aggregator (Signalbase) claim of a '$100K seed' (~Mar 2026, no named investors) was evaluated and rejected as not credible. Last verifiable figure: Scale Venture Partners-led ~$2.1M round (Sep 2025) — not independently reconfirmed this run, so left unset rather than carried forward unverified.",
+        "measured_date": "2026-07-05"
       },
       "stars_history": []
     },
@@ -1104,7 +1150,7 @@
       "category": "orchestrator",
       "website": "https://paperclip.ing",
       "description": "The open-source app everyone uses to manage agents at work",
-      "stars": 65560,
+      "stars": 72750,
       "language": "TypeScript",
       "license": "MIT",
       "interface": "Web",
@@ -1113,6 +1159,10 @@
       "first_seen": "2026-04-10",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-07-05",
+          "stars": 72750
+        },
         {
           "date": "2026-05-15",
           "stars": 65560
@@ -1132,8 +1182,8 @@
       "github_repo": "ruvnet/ruflo",
       "category": "orchestrator",
       "website": "https://github.com/ruvnet/ruflo",
-      "description": "Agent orchestration platform for Claude: multi-agent swarms, RAG integration, Claude Code / Codex integration.",
-      "stars": 51261,
+      "description": "🌊 The leading agent meta-harness. Deploy intelligent multi-player swarms, coordinate autonomous workflows, and build conversational AI systems. Features adaptive memory, self-learning intelligence, RAG integration, and native Claude Code / Codex / Hermes and many more Integrated",
+      "stars": 63063,
       "language": "TypeScript",
       "license": "MIT",
       "interface": "CLI / SDK",
@@ -1142,6 +1192,10 @@
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-07-05",
+          "stars": 63063
+        },
         {
           "date": "2026-05-15",
           "stars": 51261
@@ -1162,7 +1216,7 @@
       "category": "orchestrator",
       "website": "https://www.agno.com",
       "description": "Build, run, and manage agent platforms.",
-      "stars": 40134,
+      "stars": 40999,
       "language": "Python",
       "license": "Apache-2.0",
       "interface": "SDK / Web",
@@ -1171,6 +1225,10 @@
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-07-05",
+          "stars": 40999
+        },
         {
           "date": "2026-05-15",
           "stars": 40134
@@ -1191,7 +1249,7 @@
       "category": "orchestrator",
       "website": "https://github.com/OpenBMB/ChatDev",
       "description": "ChatDev 2.0: Dev All through LLM-powered Multi-Agent Collaboration",
-      "stars": 33093,
+      "stars": 33658,
       "language": "Python",
       "license": "Apache-2.0",
       "interface": "CLI / Web",
@@ -1200,6 +1258,10 @@
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-07-05",
+          "stars": 33658
+        },
         {
           "date": "2026-05-15",
           "stars": 33093
@@ -1219,8 +1281,8 @@
       "github_repo": "stitionai/devika",
       "category": "orchestrator",
       "website": "https://github.com/stitionai/devika",
-      "description": "Open-source agentic software engineer (originally an open alternative to Devin).",
-      "stars": 19507,
+      "description": "Devika is the first open-source implementation of an Agentic Software Engineer. Initially started as an open-source alternative to Devin.",
+      "stars": 19535,
       "language": "Python",
       "license": "MIT",
       "interface": "Web",
@@ -1229,6 +1291,10 @@
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-07-05",
+          "stars": 19535
+        },
         {
           "date": "2026-05-15",
           "stars": 19507
@@ -1249,7 +1315,7 @@
       "category": "orchestrator",
       "website": "https://github.com/gastownhall/gastown",
       "description": "Gas Town - multi-agent workspace manager",
-      "stars": 15195,
+      "stars": 16235,
       "language": "Go",
       "license": "MIT",
       "interface": "CLI",
@@ -1258,6 +1324,10 @@
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-07-05",
+          "stars": 16235
+        },
         {
           "date": "2026-05-15",
           "stars": 15195
@@ -1273,49 +1343,24 @@
       ]
     },
     {
-      "name": "Claude Squad",
-      "github_repo": "smtg-ai/claude-squad",
-      "category": "orchestrator",
-      "website": "https://github.com/smtg-ai/claude-squad",
-      "description": "Manage multiple AI terminal agents like Claude Code, Codex, OpenCode, and Amp.",
-      "stars": 7475,
-      "language": "Go",
-      "license": "AGPL-3.0",
-      "interface": "CLI (tmux)",
-      "pricing": "Free (open source)",
-      "irrlicht_support": "planned",
-      "first_seen": "2026-04-05",
-      "alternative_metrics": null,
-      "stars_history": [
-        {
-          "date": "2026-05-15",
-          "stars": 7475
-        },
-        {
-          "date": "2026-04-24",
-          "stars": 7145
-        },
-        {
-          "date": "2026-04-12",
-          "stars": 6961
-        }
-      ]
-    },
-    {
       "name": "Composio",
-      "github_repo": "ComposioHQ/agent-orchestrator",
+      "github_repo": "AgentWrapper/agent-orchestrator",
       "category": "orchestrator",
       "website": "https://composio.dev",
       "description": "Agentic orchestrator for parallel coding agents — plans tasks, spawns agents, and autonomously handles CI fixes, merge conflicts, and code reviews.",
-      "stars": 7047,
-      "language": "TypeScript",
-      "license": "MIT",
+      "stars": 8053,
+      "language": "Go",
+      "license": "Apache-2.0",
       "interface": "CLI / Web",
       "pricing": "Freemium",
       "irrlicht_support": "none",
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-07-05",
+          "stars": 8053
+        },
         {
           "date": "2026-05-15",
           "stars": 7047
@@ -1331,12 +1376,45 @@
       ]
     },
     {
+      "name": "Claude Squad",
+      "github_repo": "smtg-ai/claude-squad",
+      "category": "orchestrator",
+      "website": "https://github.com/smtg-ai/claude-squad",
+      "description": "Manage multiple AI terminal agents like Claude Code, Codex, OpenCode, and Amp.",
+      "stars": 8023,
+      "language": "Go",
+      "license": "AGPL-3.0",
+      "interface": "CLI (tmux)",
+      "pricing": "Free (open source)",
+      "irrlicht_support": "planned",
+      "first_seen": "2026-04-05",
+      "alternative_metrics": null,
+      "stars_history": [
+        {
+          "date": "2026-07-05",
+          "stars": 8023
+        },
+        {
+          "date": "2026-05-15",
+          "stars": 7475
+        },
+        {
+          "date": "2026-04-24",
+          "stars": 7145
+        },
+        {
+          "date": "2026-04-12",
+          "stars": 6961
+        }
+      ]
+    },
+    {
       "name": "Emdash",
       "github_repo": "generalaction/emdash",
       "category": "orchestrator",
       "website": "https://github.com/generalaction/emdash",
-      "description": "Emdash is the Open-Source Agentic Development Environment (YC W26). Run multiple coding agents in parallel. Use any provider.",
-      "stars": 4710,
+      "description": "Emdash is the Open-Source Agentic Development Environment (🧡 YC W26). Run multiple coding agents in parallel. Use any provider.",
+      "stars": 5070,
       "language": "TypeScript",
       "license": "Apache-2.0",
       "interface": "Desktop app (Electron)",
@@ -1345,6 +1423,10 @@
       "first_seen": "2026-05-31",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-07-05",
+          "stars": 5070
+        },
         {
           "date": "2026-05-31",
           "stars": 4710
@@ -1356,8 +1438,8 @@
       "github_repo": "darrenhinde/OpenAgentsControl",
       "category": "orchestrator",
       "website": "https://github.com/darrenhinde/OpenAgentsControl",
-      "description": "AI agent framework for plan-first development workflows with approval-based execution. Multi-language support (TypeScript, Python, Go, Rust) with automatic testing, code review, and validation built for OpenCode.",
-      "stars": 4187,
+      "description": "AI agent framework for plan-first development workflows with approval-based execution. Multi-language support (TypeScript, Python, Go, Rust) with automatic testing, code review, and validation built for OpenCode",
+      "stars": 4484,
       "language": "TypeScript",
       "license": "MIT",
       "interface": "CLI / SDK",
@@ -1367,8 +1449,37 @@
       "alternative_metrics": null,
       "stars_history": [
         {
+          "date": "2026-07-05",
+          "stars": 4484
+        },
+        {
           "date": "2026-05-31",
           "stars": 4187
+        }
+      ]
+    },
+    {
+      "name": "Bernstein",
+      "github_repo": "sipyourdrink-ltd/bernstein",
+      "category": "orchestrator",
+      "website": "https://bernstein.run",
+      "description": "Audit-grade multi-agent orchestration for CLI coding agents (Claude Code, Codex, Gemini CLI, +40 more). HMAC-chained audit log, signed agent cards, per-artefact lineage, air-gap deploy. The orchestrator your compliance team will sign off on. https://bernstein.run",
+      "stars": 634,
+      "language": "Python",
+      "license": "Apache-2.0",
+      "interface": "CLI",
+      "pricing": "Free (open source)",
+      "irrlicht_support": "none",
+      "first_seen": "2026-05-31",
+      "alternative_metrics": null,
+      "stars_history": [
+        {
+          "date": "2026-07-05",
+          "stars": 634
+        },
+        {
+          "date": "2026-05-31",
+          "stars": 530
         }
       ]
     },
@@ -1378,7 +1489,7 @@
       "category": "orchestrator",
       "website": "https://github.com/dlorenc/multiclaude",
       "description": "Parallel Claude Code instances in tmux with a Brownian-ratchet CI model.",
-      "stars": 548,
+      "stars": 555,
       "language": "Go",
       "license": null,
       "interface": "CLI (tmux)",
@@ -1387,6 +1498,10 @@
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-07-05",
+          "stars": 555
+        },
         {
           "date": "2026-05-15",
           "stars": 548
@@ -1402,33 +1517,12 @@
       ]
     },
     {
-      "name": "Bernstein",
-      "github_repo": "sipyourdrink-ltd/bernstein",
-      "category": "orchestrator",
-      "website": "https://bernstein.run",
-      "description": "Audit-grade multi-agent orchestration for CLI coding agents (Claude Code, Codex, Gemini CLI, +40 more). HMAC-chained audit log, signed agent cards, per-artefact lineage, air-gap deploy.",
-      "stars": 530,
-      "language": "Python",
-      "license": "Apache-2.0",
-      "interface": "CLI",
-      "pricing": "Free (open source)",
-      "irrlicht_support": "none",
-      "first_seen": "2026-05-31",
-      "alternative_metrics": null,
-      "stars_history": [
-        {
-          "date": "2026-05-31",
-          "stars": 530
-        }
-      ]
-    },
-    {
       "name": "Stoneforge",
       "github_repo": "stoneforge-ai/stoneforge",
       "category": "orchestrator",
       "website": "https://stoneforge.ai",
       "description": "A web dashboard and runtime for orchestrating AI coding agents",
-      "stars": 143,
+      "stars": 160,
       "language": "TypeScript",
       "license": "Apache-2.0",
       "interface": "Web",
@@ -1437,6 +1531,10 @@
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-07-05",
+          "stars": 160
+        },
         {
           "date": "2026-05-15",
           "stars": 143
@@ -1456,16 +1554,20 @@
       "github_repo": "nxtg-ai/forge-orchestrator",
       "category": "orchestrator",
       "website": "https://forge.nxtg.ai",
-      "description": "Rust-based multi-AI task orchestrator with file locking and drift detection.",
-      "stars": 116,
+      "description": "Forge Orchestrator: Multi-AI task orchestration. File locking, knowledge capture, drift detection. Rust.",
+      "stars": 128,
       "language": "Rust",
-      "license": "NOASSERTION",
+      "license": null,
       "interface": "CLI",
       "pricing": "Free (open source)",
       "irrlicht_support": "none",
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-07-05",
+          "stars": 128
+        },
         {
           "date": "2026-05-15",
           "stars": 116
@@ -1479,6 +1581,68 @@
           "stars": 108
         }
       ]
+    }
+  ],
+  "archived": [
+    {
+      "name": "Roo Code",
+      "github_repo": "RooCodeInc/Roo-Code",
+      "category": "agent",
+      "website": "https://roocode.com",
+      "description": "Roo Code gives you a whole dev team of AI agents in your code editor.",
+      "stars": 24304,
+      "language": "TypeScript",
+      "license": "Apache-2.0",
+      "interface": "IDE extension (VS Code)",
+      "pricing": "Free (open source)",
+      "irrlicht_support": "none",
+      "first_seen": "2026-04-05",
+      "alternative_metrics": null,
+      "stars_history": [
+        {
+          "date": "2026-05-15",
+          "stars": 24073
+        },
+        {
+          "date": "2026-04-24",
+          "stars": 23345
+        },
+        {
+          "date": "2026-04-12",
+          "stars": 23088
+        }
+      ],
+      "archived_reason": "Repo archived by owner 2026-05-15 after hitting 3M installs; original team is \"going all-in on Roomote\" per project changelog, and a community team is arranging an official handoff to keep the VS Code extension maintained."
+    },
+    {
+      "name": "Void",
+      "github_repo": "voideditor/void",
+      "category": "agent",
+      "website": "https://voideditor.com",
+      "description": "Open-source AI code editor (VS Code fork).",
+      "stars": 28822,
+      "language": "TypeScript",
+      "license": "Apache-2.0",
+      "interface": "Desktop app (IDE)",
+      "pricing": "Free (open source)",
+      "irrlicht_support": "none",
+      "first_seen": "2026-04-05",
+      "alternative_metrics": null,
+      "stars_history": [
+        {
+          "date": "2026-05-15",
+          "stars": 28752
+        },
+        {
+          "date": "2026-04-24",
+          "stars": 28644
+        },
+        {
+          "date": "2026-04-12",
+          "stars": 28553
+        }
+      ],
+      "archived_reason": "Repo archived by owner 2026-06-02; team paused active development to \"explore novel coding ideas\" per GitHub issue #926 discussion. Not replaced by a named successor. Last release remains usable."
     }
   ]
 }
