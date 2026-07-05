@@ -58,11 +58,18 @@ const compactHoldTimeout = 5 * time.Minute
 // writes for an actively-running subagent. Background Task agents routinely
 // sit with no writes for 5-15 seconds while waiting on API responses —
 // session b27fdaef-6de4-403a-b277-790fe8d803bb showed a 9-second gap that
-// falsely tripped a 2-second window and re-created the child session on
-// the very next write. 30 seconds comfortably covers normal API latency
-// while still being 4× faster than the 2-minute stale-transcript sweep,
-// which is the fallback cleanup path for anything this function misses.
-const SubagentQuietWindow = 30 * time.Second
+// falsely tripped a 2-second window (bumped to 30s to fix). A background
+// research subagent making several WebSearch/WebFetch calls sits on a
+// coarser latency budget than a single API round-trip: session
+// d491a5f9-fc21-4fd1-a1df-f9dfcdc91fec (issue #881) showed a genuine
+// 61-second gap between transcript writes mid-run, which the 30-second
+// window falsely tripped — the child was promoted and deleted, and the
+// parent surfaced "ready" for 67 seconds before the subagent's real
+// completion landed. 90 seconds keeps comfortable headroom over that
+// observed worst case while staying well short of the 2-minute
+// stale-transcript sweep, which is the fallback cleanup path for anything
+// this function misses.
+const SubagentQuietWindow = 90 * time.Second
 
 // debounceEntry holds debounce state for a single session.
 type debounceEntry struct {
