@@ -283,7 +283,7 @@ For **patch releases**, skip Step D — the future section stays unchanged. The 
 
 ### 4b. Doc + README sweep (mandatory)
 
-Run the `/ir:doc-review --fix` workflow inline — see
+Run the `/ir:doc-review` workflow inline — see
 `.claude/skills/ir:doc-review/SKILL.md` for the full audit (this is that
 skill's "release-inline" use, same pattern as Step 1.5's
 `/ir:refresh-aliases`). Check every in-scope surface against **current
@@ -299,20 +299,18 @@ code-derived truth**, not just this release's diff:
    since. That gap is exactly what let README.md and `site/index.html` both
    keep claiming "no hooks" for several releases after the `claudecode`
    hooks feature shipped (#834).
-2. Apply the rubric per surface (steps 4–6) and auto-fix every
-   high-confidence finding directly (step 6b) — an existing claim directly
-   contradicted by a code fact, corrected in place with no new content
-   authored. The stale "no hooks" claim above is exactly this shape.
-3. File a GitHub issue (step 7) for anything left — findings that need new
-   content authored or a judgment call (missing docs, unclear sections, new
-   examples).
+2. Apply the rubric per surface (steps 4–6) and fix every finding directly
+   in place (step 6b) — including drafting missing content, not just
+   correcting claims that contradict a code fact. The stale "no hooks"
+   claim above is exactly the simplest case of this shape.
+3. File a GitHub issue (step 7) only for the rare finding left unresolved —
+   a genuinely ambiguous fix, or one that failed its own verification check.
 
 Then:
-- Review every auto-fixed surface yourself — confirm the edit reads
-  correctly in context before it ships, don't just trust that a diff
-  exists.
-- Leave the auto-fixed edits uncommitted; Step 7a's `git add` picks them up
-  alongside the other release artefacts.
+- Review every fixed surface yourself — confirm the edit reads correctly
+  in context before it ships, don't just trust that a diff exists.
+- Leave the fixes uncommitted; Step 7a's `git add` picks them up alongside
+  the other release artefacts.
 - Treat any newly filed/updated issue as a separate follow-up, not a
   release blocker — don't let it stall this release.
 
@@ -529,18 +527,19 @@ PKG, and ZIP land in `/tmp/` as before — only the *assembly* path moves.
    the full template below verbatim, substituting only `$NEW_VERSION` and
    the build number.
 
-   **Coupling rule:** the build now uses Developer ID signing with the
-   entitlements file, so `com.apple.developer.focus-status` is properly
-   claimed. `FocusMonitor.swift` detects the Developer ID signature at
-   runtime and loads `INFocusStatusCenter` via `NSClassFromString` —
-   no static `Intents.framework` link. (#357 tracks the eventual cleanup
-   to static `import Intents` once we confirm the dynamic gate is no
-   longer needed.)
+   **Coupling rule:** the entitlement is **not** currently claimed.
+   `com.apple.developer.focus-status` was stripped in v0.4.7 (AMFI POSIX
+   153 killed launches); `Irrlicht.entitlements` is an empty `<dict/>`
+   until #357 restores it with a provisioning profile. `FocusMonitor.swift`
+   still detects the Developer ID signature at runtime and loads
+   `INFocusStatusCenter` via `NSClassFromString` — no static
+   `Intents.framework` link — so Focus-status support degrades gracefully
+   without the entitlement.
 
    | Key | Include for ad-hoc? | Include for DevID (current)? |
    |---|---|---|
    | `NSAppleEventsUsageDescription` | Yes | Yes |
-   | `NSFocusStatusUsageDescription` | **No** — the runtime gate keeps Intents.framework unloaded on ad-hoc builds; the key + a statically linked Intents causes a TCC SIGABRT (v0.4.3). | **Yes** — DevID is in place (#233/#357). The entitlement is authorized and the key is included in the template. |
+   | `NSFocusStatusUsageDescription` | **No** — the runtime gate keeps Intents.framework unloaded on ad-hoc builds; the key + a statically linked Intents causes a TCC SIGABRT (v0.4.3). | **Yes (key only)** — the Info.plist key is harmless without the entitlement; `com.apple.developer.focus-status` itself is not currently claimed (stripped in v0.4.7, tracked by #357). |
    | Anything new | Audit the source. If the relevant Swift code uses `import <Framework>` directly, the binary will link the framework, and TCC may preflight at startup. Either gate the source (FocusMonitor pattern) or skip the usage description until DevID. |
 
    ```xml
@@ -799,10 +798,13 @@ PKG, and ZIP land in `/tmp/` as before — only the *assembly* path moves.
       symbol just before `__TCC_CRASHING_DUE_TO_PRIVACY_VIOLATION__` is
       the API or framework the preflight checked.
    3. Compare `codesign -d --entitlements -` output against the prior
-      release. The DevID-signed binary should carry exactly
-      `com.apple.developer.focus-status`. Extra or missing entitlements
-      vs. `Irrlicht.entitlements` indicate a codesign step error — fix
-      and re-sign before shipping (v0.4.3 mode: AMFI kills mismatched
+      release. `Irrlicht.entitlements` is an empty `<dict/>` (the
+      `com.apple.developer.focus-status` entitlement was stripped in
+      v0.4.7 and stays out until #357 restores it with a provisioning
+      profile), so the DevID-signed binary should carry no extra
+      entitlements beyond that empty dict. Extra entitlements vs.
+      `Irrlicht.entitlements` indicate a codesign step error — fix and
+      re-sign before shipping (v0.4.3 mode: AMFI kills mismatched
       entitlements with POSIX 153, fixed in #356).
    4. If steps 1–3 all clear, copy the bundle to `/Applications/` (kill
       the prior install first) and retry. A real shipping defect will
@@ -893,7 +895,7 @@ on `main`.
 
 ```bash
 # Core release artefacts plus any doc surface the Step 4b sweep
-# (`/ir:doc-review --fix`) may have auto-fixed. The `git add -- ...` form is
+# (`/ir:doc-review`) may have fixed. The `git add -- ...` form is
 # safe for missing files/globs.
 git add version.json CHANGELOG.md site/ docs/ \
         platforms/macos/Irrlicht/Resources/Info.plist \

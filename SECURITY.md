@@ -2,8 +2,9 @@
 
 ## Supported versions
 
-Irrlicht is a single-artifact macOS app and ships as rolling releases. Only
-the **latest release** published on
+Irrlicht ships as rolling releases: a single-artifact macOS app, plus a
+daemon-only Linux build (no menu-bar UI). Only the **latest release**
+published on
 [GitHub Releases](https://github.com/ingo-eichhorst/Irrlicht/releases/latest)
 receives security fixes. If you're on an older version, please update before
 reporting.

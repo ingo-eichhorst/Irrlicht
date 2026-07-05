@@ -69,11 +69,16 @@ grep -rhoE 'os\.Getenv\("[A-Z_]+"\)' core --include='*.go' \
 
 The **config inventory** that completeness checks against is the user-facing subset only:
 
-- **Include:** every var matching `^IRRLICHT_`, plus the documented externals `NO_COLOR`,
-  `GT_BIN`, `GT_ROOT` (Gas Town orchestrator config).
+- **Include:** every var matching `^IRRLICHT_` that the grep recipe below can actually see — i.e.
+  passed to a Go `os.Getenv("...")` call as a string literal under `core/` — plus the documented
+  externals `NO_COLOR`, `GT_BIN`, `GT_ROOT` (Gas Town orchestrator config).
 - **Exclude (not user config):** `HOME`, `XDG_CONFIG_HOME` (standard OS env); and all
   test/build/helper vars — `GO_WANT_*`, `OBSERVER_HELPER_*`, `GASTOWN_FIXTURES_DIR`, and
   anything only read under `_test.go`.
+- **Out of the recipe's reach (verify by hand):** vars read via a named Go constant rather than a
+  string literal — e.g. `IRRLICHT_UI_DIR`, read as `os.Getenv(envUIDir)` in
+  `core/cmd/irrlichd/main.go` / `paths.go` — and vars read from Swift rather than Go, e.g.
+  `IRRLICHT_DAEMON_PORT` in `platforms/macos/Irrlicht/Managers/DaemonEndpoint.swift`.
 
 ```bash
 grep -rhoE 'os\.Getenv\("(IRRLICHT_[A-Z_]+|NO_COLOR|GT_BIN|GT_ROOT)"\)' core --include='*.go' \

@@ -229,11 +229,13 @@
 
       <p>Defined as a sealed-sum across three orthogonal axes in <code>core/domain/agent/</code>: <code>Identity</code> (name + branding), <code>Process</code> (how to find the OS process), and <code>Source</code> (where the conversation lives).</p>
 
-<pre><code>// Top-level declaration — Identity × Process × Source.
+<pre><code>// Top-level declaration — Identity × Process × Source × Control × Permissions.
 type Agent struct {
-    Identity Identity
-    Process  Process
-    Source   Source
+    Identity    Identity
+    Process     Process
+    Source      Source
+    Control     Control     // backchannel write-back capability (issue #724); zero value = not controllable
+    Permissions []Permission // consent-gated capabilities the daemon may exercise
 }
 
 type Identity struct {
@@ -247,8 +249,10 @@ type Identity struct {
 // PIDForSession lives here rather than on Source so every variant gets
 // it uniformly.
 type Process struct {
-    Match         ProcessMatcher
-    PIDForSession PIDDiscoverFunc
+    Match            ProcessMatcher
+    PIDForSession    PIDDiscoverFunc
+    ExcludeArgv      func(argv []string) bool // reject a matched PID by argv shape; nil = never exclude
+    RequireKnownHost bool                     // gate admission on OS-level process ancestry (issue #784)
 }
 
 type PIDDiscoverFunc func(
@@ -274,8 +278,11 @@ type Source interface{ isSource() }
 // JSONL transcripts under a fixed $HOME-relative directory tree
 // (Claude Code, Codex, Pi).
 type FilesUnderRoot struct {
-    Dir    string     // path relative to $HOME, e.g. ".claude/projects"
-    Parser FileParser // JSONLineParser or RawLineParser
+    Dir               string                    // path relative to $HOME, e.g. ".claude/projects"
+    Parser            FileParser                // JSONLineParser or RawLineParser
+    DirByOS           map[string]string         // per-GOOS override of Dir, e.g. Windows %APPDATA%
+    ExtraDirs         []string                  // additional roots watched alongside Dir
+    SessionIDFromPath func(path string) string  // override: derive session ID from path, not filename stem
 }
 
 // One transcript per running process inside its CWD (aider).
@@ -296,6 +303,28 @@ type FileParser interface{ isFileParser() }
 
 type JSONLineParser struct { NewParser func() LineParser }
 type RawLineParser  struct { NewParser func() RawParser }
+
+// Control declares whether and how the daemon may write input back into a
+// discovered session's terminal backend (issue #724, the "backchannel").
+type Control struct {
+    SupportsInput bool              // true for interactive TUI/REPL agents (false for headless stores)
+    Interrupt     InterruptMethod   // how an interrupt is delivered (none / Ctrl-C / signal)
+    Presets       map[string]string // backchannel preset id → this agent's literal command text
+}
+
+// Permission declares one consent-gated capability: what it touches, what
+// feature it unlocks, and (for modify-kind entries) how to apply/undo it.
+// Nothing is exercised until the user grants it (issue #570).
+type Permission struct {
+    Key             string          // stable identifier, e.g. "hooks", "transcripts"
+    Kind            permission.Kind // modify (writes a file) or observe (reads only)
+    Title           string          // short label for the wizard row
+    FeatureUnlocked string          // what granting enables
+    Touches         string          // what the daemon reads/writes when granted
+    Detail          string          // expanded (i) text: exact paths/commands, how to undo
+    Apply           func() error    // performs the modification on grant (nil for observe-kind)
+    Remove          func() error    // undoes it on revoke (nil for observe-kind)
+}
 </code></pre>
 
       <p>Which canonical scenarios apply to an adapter is no longer a static per-adapter declaration. It is judged per (scenario, adapter) cell by the <code>assess</code> verb of the <code>/ir:onboarding-factory</code> skill across three pillars (agent capability / daemon sensor capture / driver capability), recorded in each cell's <code>replaydata/agents/&lt;name&gt;/scenarios/&lt;cell&gt;/metadata.json</code>. None of it is read by Go daemon code.</p>
@@ -374,6 +403,7 @@ type Event struct {
     Size            int64
     CWD             string // working directory of the agent process
     ParentSessionID string // empty unless this is a subagent
+    Terminal        bool   // true when this activity event ends the agent's turn (fast-path debounce)
 }
 
 // The port the daemon consumes. Each per-watcher drain goroutine in
@@ -479,7 +509,7 @@ type Watcher interface {
         <li>Exports an <code>agent.Agent</code> from <code>Agent()</code> with the right <code>Source</code> variant (<code>FilesUnderRoot</code> / <code>FilesUnderCWD</code> / <code>ProcessOwnedStore</code>), parser, and PID-discovery hook</li>
         <li>Registered in the <code>allAgents</code> slice in <code>core/cmd/irrlichd/main.go</code></li>
         <li>Emits all three lifecycle states: <code>working</code>, <code>waiting</code>, <code>ready</code></li>
-        <li><code>replaydata/agents/&lt;name&gt;/capabilities.json</code> populated against <code>replaydata/agents/features.json</code></li>
+        <li>Scenario cells assessed via the <code>assess</code> verb of <code>/ir:onboarding-factory</code>, recorded in <code>replaydata/agents/&lt;name&gt;/scenarios/&lt;cell&gt;/metadata.json</code></li>
         <li><code>baseline-hello</code> and <code>full-lifecycle-toolcall</code> fixtures committed and replay green via <code>tools/replay-fixtures.sh</code></li>
       </ul>
 
@@ -501,7 +531,7 @@ type Watcher interface {
 
       <p><strong>For adapters, additionally:</strong></p>
       <ul class="checklist">
-        <li><strong>All</strong> scenarios in <code>replaydata/agents/scenarios.json</code> whose <code>requires</code> is covered by the adapter's capabilities replay green</li>
+        <li><strong>All</strong> scenario cells assessed <code>agent_supports: yes</code> (or <code>partial</code>) replay green &mdash; verdict recorded per cell in <code>replaydata/agents/&lt;name&gt;/scenarios/&lt;cell&gt;/metadata.json</code></li>
         <li>Model + cost extraction wired through <code>core/adapters/outbound/metrics/</code></li>
         <li>Subagent / parent-child linkage emits <code>ParentSessionID</code> where the agent supports subagents</li>
       </ul>
