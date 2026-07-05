@@ -134,6 +134,17 @@ func (r *mockRepo) updatedAtOf(sessionID string) int64 {
 	return 0
 }
 
+// transcriptPathOf reads a session's TranscriptPath under r.mu (race-free;
+// background goroutines mutate the shared *SessionState — issue #606).
+func (r *mockRepo) transcriptPathOf(sessionID string) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if s, ok := r.states[sessionID]; ok {
+		return s.TranscriptPath
+	}
+	return ""
+}
+
 // waitForCondition polls fn until it returns true or the timeout elapses. The
 // generic poll-for-condition replacement for fixed sleeps in tests whose
 // completion signal isn't a saved State value (issue #606).

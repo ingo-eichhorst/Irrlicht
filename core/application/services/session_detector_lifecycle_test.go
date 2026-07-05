@@ -134,6 +134,89 @@ func TestSessionDetector_Removed_SkipsTerminalState(t *testing.T) {
 	}
 }
 
+// A transcript "removal" that is really a relocation to a sibling project-dir
+// slug (the same session cd'ing between the main repo and a git worktree) must
+// NOT flip the live session to ready — it should re-point tracking at the moved
+// file. The detection is direction-agnostic, so both entering a worktree
+// (main→worktree slug) and closing one (worktree→main slug) are covered.
+// Regression test for issue #877.
+func TestSessionDetector_Removed_TranscriptRelocation_StaysAlive(t *testing.T) {
+	const (
+		mainSlug = "-Users-test"
+		wtSlug   = "-Users-test--claude-worktrees-877"
+	)
+	tests := []struct {
+		name     string
+		fromSlug string // slug the transcript is renamed away from (the "removed" path)
+		toSlug   string // slug it moved to (the surviving path)
+	}{
+		{name: "enter worktree", fromSlug: mainSlug, toSlug: wtSlug},
+		{name: "close worktree", fromSlug: wtSlug, toSlug: mainSlug},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			toDir := filepath.Join(root, tc.toSlug)
+			if err := os.MkdirAll(toDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			// The "from" path is intentionally absent (renamed away); only the
+			// destination copy exists on disk — exactly what Claude Code leaves
+			// after a cwd change.
+			fromPath := filepath.Join(root, tc.fromSlug, "reloc1.jsonl")
+			toPath := filepath.Join(toDir, "reloc1.jsonl")
+			if err := os.WriteFile(toPath, []byte("{}\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			tw := newMockAgentWatcher()
+			pw := newMockProcessWatcher()
+			repo := newMockRepo()
+
+			repo.states["reloc1"] = &session.SessionState{
+				SessionID:      "reloc1",
+				State:          session.StateWorking,
+				TranscriptPath: fromPath,
+				FirstSeen:      time.Now().Unix(),
+				UpdatedAt:      time.Now().Unix(),
+			}
+
+			det := newDetector(tw, pw, repo)
+
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan error, 1)
+			go func() { done <- det.Run(ctx) }()
+
+			tw.ch <- agent.Event{
+				Type:           agent.EventRemoved,
+				SessionID:      "reloc1",
+				TranscriptPath: fromPath,
+			}
+
+			// Poll for the transcript-path follow via the race-free probe rather
+			// than a fixed sleep (issue #606 flaky sibling) — background
+			// goroutines mutate the shared *SessionState pointer, so a bare
+			// Load().TranscriptPath read races.
+			waitForCondition(func() bool {
+				return repo.transcriptPathOf("reloc1") == toPath
+			}, time.Second)
+			cancel()
+			<-done
+
+			if got := repo.transcriptPathOf("reloc1"); got != toPath {
+				t.Errorf("transcript_path: got %q, want %q (must follow the moved file)", got, toPath)
+			}
+			// The session must never have been flipped to ready.
+			repo.mu.Lock()
+			gotState := repo.lastSavedState["reloc1"]
+			repo.mu.Unlock()
+			if gotState == session.StateReady {
+				t.Errorf("state: got %q, want working (a relocation must not force ready)", gotState)
+			}
+		})
+	}
+}
+
 func TestSessionDetector_ExistingSession_UpdatesTranscriptPath(t *testing.T) {
 	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()

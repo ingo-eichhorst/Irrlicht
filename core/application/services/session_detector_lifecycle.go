@@ -2,6 +2,7 @@ package services
 
 import (
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"irrlicht/core/domain/agent"
@@ -11,6 +12,18 @@ import (
 )
 
 func (d *SessionDetector) onRemoved(ev agent.Event) {
+	// A .jsonl "removal" is often a *relocation*, not a deletion. Claude Code
+	// derives a session's project-dir slug from its cwd, so when a session cd's
+	// into a git worktree it moves its transcript to a new slug (same session
+	// id, new path). fsnotify reports the old path's rename as a deletion
+	// (fswatcher collapses Rename→Removed), but the session is alive and still
+	// working. Re-point tracking at the surviving copy instead of forcing the
+	// session to ready (issue #877).
+	if newPath := relocatedTranscript(ev.TranscriptPath); newPath != "" {
+		d.onRelocated(ev, newPath)
+		return
+	}
+
 	d.log.LogInfo("session-detector", ev.SessionID, "session removed")
 
 	// Cancel any pending debounce timer for this session.
@@ -47,6 +60,77 @@ func (d *SessionDetector) onRemoved(ev agent.Event) {
 	d.pidMgr.WithSessionStateLock(func() {
 		d.onRemovedLocked(state, ev)
 	})
+}
+
+// onRelocated handles a transcript that moved to a new project-dir slug rather
+// than being deleted (see relocatedTranscript). The session is alive and keeps
+// its current state — the fix for a session spuriously flipping to ready when
+// it cd's into a git worktree (issue #877). Tracking is re-pointed at the
+// surviving file so subsequent activity events and metric refreshes follow it.
+func (d *SessionDetector) onRelocated(ev agent.Event, newPath string) {
+	newProjectDir := filepath.Base(filepath.Dir(newPath))
+	d.log.LogInfo("session-detector", ev.SessionID,
+		fmt.Sprintf("transcript relocated to %s — session still alive, not marking ready", newProjectDir))
+
+	// Keep the project-dir tracking current for parent derivation.
+	d.mu.Lock()
+	d.projectSessions[ev.SessionID] = newProjectDir
+	d.mu.Unlock()
+
+	state, err := d.repo.Load(ev.SessionID)
+	if err != nil || state == nil {
+		return
+	}
+
+	// Re-point the session (and the metrics tailer) at the surviving file. Under
+	// the PIDManager's state lock — a PID-discovery goroutine may still be in
+	// flight for this session, writing state.PID/UpdatedAt on this same pointer
+	// (issue #606).
+	d.pidMgr.WithSessionStateLock(func() {
+		if state.TranscriptPath == newPath {
+			return // an activity event already followed the move
+		}
+		// Drop the tailer cache for the now-gone path. The new-path tailer
+		// re-reads the full (moved) file on the next activity event, so
+		// cumulative metrics are rebuilt intact.
+		d.enricher.PruneMetrics(state.TranscriptPath)
+		state.TranscriptPath = newPath
+		state.UpdatedAt = time.Now().Unix()
+		if err := d.repo.Save(state); err != nil {
+			d.log.LogError("session-detector", ev.SessionID,
+				fmt.Sprintf("failed to save relocated transcript path: %v", err))
+			return
+		}
+		d.broadcast(outbound.PushTypeUpdated, state)
+	})
+}
+
+// relocatedTranscript reports whether a transcript that fsnotify flagged as
+// removed actually still exists under a *different* project-dir slug — i.e. it
+// was moved, not deleted. Returns the surviving path, or "" for a genuine
+// removal.
+//
+// The scan is scoped to the sibling project dirs of the removed path
+// (<projectsRoot>/*/<file>), so it stays adapter-agnostic: layouts that don't
+// place transcripts exactly one level under a shared root simply find no match
+// and fall through to the normal removal path. filepath.Glob only returns paths
+// that exist, and the removed path no longer does, so any other match is a live
+// relocated copy.
+func relocatedTranscript(removedPath string) string {
+	if removedPath == "" {
+		return ""
+	}
+	projectsRoot := filepath.Dir(filepath.Dir(removedPath))
+	matches, err := filepath.Glob(filepath.Join(projectsRoot, "*", filepath.Base(removedPath)))
+	if err != nil {
+		return ""
+	}
+	for _, m := range matches {
+		if m != removedPath {
+			return m
+		}
+	}
+	return ""
 }
 
 // onRemovedLocked finishes removal handling for an already-loaded session. It
