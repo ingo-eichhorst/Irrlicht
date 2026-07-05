@@ -100,12 +100,15 @@
       <ul>
         <li><code>--version</code>, <code>-v</code> &mdash; Print version and exit</li>
         <li><code>--diagnose</code> &mdash; Write a redacted diagnostics bundle (<code>irrlicht-diag.tar.gz</code>) to the current directory and exit, without starting the daemon. For headless installs that can't reach the <code>GET /debug/bundle</code> endpoint. Honors <code>IRRLICHT_HOME</code></li>
+        <li><code>--uninstall-hooks</code> &mdash; Remove irrlicht's Claude Code hooks from <code>~/.claude/settings.json</code>, record the hooks permission as denied if it was previously granted (so it isn't silently re-installed on next start), and exit without starting the daemon</li>
+        <li><code>--uninstall-task-eta</code> &mdash; Remove irrlicht's managed task-eta and task-summary blocks from <code>~/.claude/CLAUDE.md</code> and exit without starting the daemon</li>
+        <li><code>--record</code> &mdash; Enable lifecycle recording of session events to <code>&lt;dataDir&gt;/recordings</code> (equivalent to <code>IRRLICHT_RECORD=1</code>); the daemon starts normally otherwise</li>
       </ul>
 
       <h3>What It Does</h3>
 
       <ul>
-        <li>Watches Claude Code, Codex, Pi, Aider, Kiro CLI, and Antigravity transcripts; OpenCode's SQLite WAL; Gemini CLI's transcripts; plus the Gas Town orchestrator</li>
+        <li>Watches Claude Code, Codex, Pi, Aider, Kiro CLI, and Antigravity transcripts; OpenCode's SQLite WAL; Gemini CLI's transcripts; plus the Gas Town orchestrator (a multi-agent coordinator layer distinct from the per-agent <a href="adapters.html">adapters</a> above)</li>
         <li>Tracks session state via deterministic state machine</li>
         <li>Serves HTTP API on <code>localhost:7837</code></li>
         <li>Serves WebSocket stream for real-time updates</li>
@@ -139,7 +142,7 @@
         <li><code>--id &lt;prefix&gt;</code> &mdash; Filter by session ID prefix (case-insensitive)</li>
         <li><code>--state working|waiting|ready</code> &mdash; Filter by session state</li>
         <li><code>--project &lt;substring&gt;</code> &mdash; Filter by project name (case-insensitive substring)</li>
-        <li><code>--adapter &lt;name&gt;</code> &mdash; Filter by agent adapter (e.g. <code>claude-code</code>, <code>codex</code>)</li>
+        <li><code>--adapter &lt;name&gt;</code> &mdash; Filter by <a href="adapters.html">agent adapter</a> (the per-agent integration, e.g. <code>claude-code</code>, <code>codex</code>)</li>
       </ul>
 
       <h3>Output Format</h3>
@@ -176,6 +179,12 @@ ready    api-server   e5f6g7h8 gpt-5 3% 400k codex  (1m ago)</code></pre>
       <h3>Usage</h3>
 
       <pre><code>irrlicht-focus &lt;sessionID&gt;</code></pre>
+
+      <h3>Example</h3>
+
+      <pre><code>irrlicht-focus 52d087d1</code></pre>
+
+      <p>Brings the terminal/IDE window for session <code>52d087d1</code> (see <code>irrlicht-ls</code> above for session IDs) to the foreground; exits <code>0</code> on success.</p>
 
       <h3>Arguments</h3>
 
@@ -225,6 +234,19 @@ irrlichtrelay --version</code></pre>
         <li><code>--max-conns-per-ip</code> &mdash; Max concurrent connections per remote IP; <code>0</code> disables (meaningless behind a proxy/NAT &mdash; see <code>--max-conns</code>) (default <code>32</code>)</li>
         <li><code>--version</code>, <code>-v</code> &mdash; Print version and exit</li>
       </ul>
+
+      <h3>token Flags</h3>
+
+      <ul>
+        <li><code>--tokens-file</code> &mdash; Path to the tokens file (default empty &rarr; <code>&lt;data-dir&gt;/tokens.json</code>)</li>
+        <li><code>--data-dir</code> &mdash; State directory for the tokens file (default empty &rarr; <code>$IRRLICHT_HOME</code> or <code>~/.local/share/irrlicht</code>)</li>
+        <li><code>--label</code> &mdash; Human label for the issued token (<code>issue</code> only)</li>
+        <li><code>--workspace</code> &mdash; Tenant workspace the issued token is scoped to (<code>issue</code> only; empty means the default single-tenant workspace)</li>
+      </ul>
+
+      <p>Example:</p>
+
+      <pre><code>irrlichtrelay token issue --label "laptop" --workspace default</code></pre>
 
       <h3>Security Note</h3>
 

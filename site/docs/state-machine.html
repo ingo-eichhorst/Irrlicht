@@ -371,6 +371,112 @@
       </ul>
       <p>This is a deliberate design choice. From the user's perspective, a cancelled turn is equivalent to a completed turn &mdash; the agent is idle and waiting for the next message. The three-state model (<span class="badge badge-working">working</span> / <span class="badge badge-waiting">waiting</span> / <span class="badge badge-ready">ready</span>) remains clean and unambiguous.</p>
 
+      <!-- ─── Lifecycle Event Kinds ─── -->
+      <h2>Lifecycle Event Kinds</h2>
+      <p>Underneath the three-state model, the daemon records a lower-level stream of typed events for session recording and replay &mdash; not just transcript-derived state transitions but also process lifecycle, filesystem, debounce, and parent-child signals. Each event carries a <code>Kind</code> discriminant (<code>core/domain/lifecycle/event.go</code>); this table enumerates all 18 constants, grouped as the source file itself groups them.</p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Kind</th>
+            <th>Category</th>
+            <th>When it fires</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>transcript_new</code></td>
+            <td>Transcript events</td>
+            <td>fswatcher/AgentWatcher detects a session's <code>.jsonl</code> transcript file appearing for the first time.</td>
+          </tr>
+          <tr>
+            <td><code>transcript_activity</code></td>
+            <td>Transcript events</td>
+            <td>fswatcher/AgentWatcher observes further writes to an already-known transcript file.</td>
+          </tr>
+          <tr>
+            <td><code>transcript_removed</code></td>
+            <td>Transcript events</td>
+            <td>fswatcher/AgentWatcher sees a tracked transcript file deleted.</td>
+          </tr>
+          <tr>
+            <td><code>pid_discovered</code></td>
+            <td>Process lifecycle</td>
+            <td>The process scanner (e.g. <code>pgrep -x claude</code>) finds a new agent PID that isn't already tracked.</td>
+          </tr>
+          <tr>
+            <td><code>process_spawned</code></td>
+            <td>Process lifecycle</td>
+            <td>A new agent process is observed starting.</td>
+          </tr>
+          <tr>
+            <td><code>process_exited</code></td>
+            <td>Process lifecycle</td>
+            <td>A tracked agent process exits (kqueue <code>NOTE_EXIT</code>).</td>
+          </tr>
+          <tr>
+            <td><code>file_event</code></td>
+            <td>Filesystem</td>
+            <td>Reserved for debounced create/write/remove/rename events on the agent's working directory (per <code>.specs/onboard-agent/07-10-recorder-fidelity.md</code>, WS08); the type is defined but emission is wired by a follow-up PR, not yet live.</td>
+          </tr>
+          <tr>
+            <td><code>state_transition</code></td>
+            <td>State machine</td>
+            <td>Emitted as the output of <code>ClassifyState</code> whenever a session's state changes; carries <code>PrevState</code>/<code>NewState</code>/<code>Reason</code> plus a <code>ClassifierInputs</code> snapshot explaining why.</td>
+          </tr>
+          <tr>
+            <td><code>parent_linked</code></td>
+            <td>Parent-child linkage</td>
+            <td>A subagent (child) session is linked to its parent session via <code>ParentSessionID</code>.</td>
+          </tr>
+          <tr>
+            <td><code>debounce_coalesced</code></td>
+            <td>Debounce</td>
+            <td>Multiple rapid events within the debounce window are coalesced into one; <code>CoalescedCount</code> records how many, for faithful replay.</td>
+          </tr>
+          <tr>
+            <td><code>debounce_terminal</code></td>
+            <td>Debounce</td>
+            <td>A terminal event bypasses the debounce window entirely and is recorded immediately rather than coalesced.</td>
+          </tr>
+          <tr>
+            <td><code>hook_received</code></td>
+            <td>Agent hooks</td>
+            <td>Reserved for agent hook delivery (<code>HookName</code>/<code>HookData</code>); future work tracked by issue #108, not yet emitted.</td>
+          </tr>
+          <tr>
+            <td><code>presession_created</code></td>
+            <td>Pre-sessions</td>
+            <td>The process scanner creates a synthetic pre-session (<code>proc-&lt;pid&gt;</code>) for a detected process that has no transcript yet.</td>
+          </tr>
+          <tr>
+            <td><code>presession_removed</code></td>
+            <td>Pre-sessions</td>
+            <td>A pre-session is cleaned up &mdash; either superseded once its real transcript appears, or discarded because the process exited before any transcript showed up.</td>
+          </tr>
+          <tr>
+            <td><code>task_delta</code></td>
+            <td>Tasks</td>
+            <td>Emitted once per <code>TaskDelta</code> the tailer folds into a session's task list (create / update / assign_id), carrying <code>TaskOp</code>, <code>TaskID</code>, <code>TaskSubject</code>, and <code>TaskStatus</code>.</td>
+          </tr>
+          <tr>
+            <td><code>ui_detected</code></td>
+            <td>Terminal / UI</td>
+            <td>A terminal-backend read-back finds a transcript-invisible UI state on the rendered terminal screen (today: the trust/permission dialog); <code>UIKind</code> is empty on the clearing edge.</td>
+          </tr>
+          <tr>
+            <td><code>terminal_frame</code></td>
+            <td>Terminal / UI</td>
+            <td>Reserved for raw terminal frame capture (pipe-pane plus a screen-buffer parser); defined but not emitted yet.</td>
+          </tr>
+          <tr>
+            <td><code>cache_bloat_detected</code></td>
+            <td>Cache-creation regression</td>
+            <td>Emitted once per (project, regressing version) pair within a daemon process lifetime, the first time a working session's median cache-creation per turn exceeds the project's p25 baseline &times; threshold (issue #374); consumed by the <code>ir:agent-releases</code> workflow.</td>
+          </tr>
+        </tbody>
+      </table>
+
       <!-- ─── Bottom nav ─── -->
       <div class="docs-nav-bottom">
         <a href="light-system.html">

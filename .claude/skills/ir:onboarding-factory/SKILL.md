@@ -46,8 +46,8 @@ unattended / scheduled run. The goal is **a valid report and a reviewable PR by
 morning, with every cell that *can* be observed actually observed** — not just
 the easy ones. Run **fully autonomously**: never call `AskUserQuestion` /
 `ExitPlanMode` / block on a prompt mid-run — make the sensible call, document it,
-and keep going. Emit a one-line status at each stage boundary (see
-[[feedback_overnight_pushthrough]]); the final PR body *is* the morning report.
+and keep going. Emit a one-line status at each stage boundary; the final PR
+body *is* the morning report.
 
 This is more than the standard sweep. Work three passes until the matrix stops
 moving:

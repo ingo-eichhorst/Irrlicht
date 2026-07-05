@@ -15,7 +15,7 @@
 
 </div>
 
-> 🟣 working · 🟠 waiting · 🟢 ready — one ambient dot per session, multi-agent, zero manual setup.
+> 🟣 working · 🟠 waiting · 🟢 ready — one ambient dot per session, multi-agent, one-click setup.
 
 ## Install
 
@@ -65,7 +65,7 @@ Stages: `stable` production-ready · `beta` feature-complete, edge cases remain 
 | Cursor Agent   | planned |
 | Amp            | planned |
 
-**Orchestrators**
+**Orchestrators** (tools that coordinate multiple agent sessions/rigs, rather than being a single coding agent)
 
 | Orchestrator          | Stage   |
 | --------------------- | ------- |

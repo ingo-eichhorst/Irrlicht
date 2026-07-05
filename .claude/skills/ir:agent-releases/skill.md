@@ -1,6 +1,6 @@
 ---
 name: "ir:agent-releases"
-description: "Check latest releases of coding agents monitored by irrlicht (Claude Code, OpenAI Codex, Pi, Gas Town) and report new features that impact session monitoring. Use when user says 'agent releases', 'check releases', 'agent updates', '/ir:agent-releases', or wants to know if upstream agent changes affect irrlicht."
+description: "Check latest releases of coding agents monitored by irrlicht (Claude Code, OpenAI Codex, Pi, Gas Town, Aider, OpenCode, Gemini CLI, Kiro CLI, Antigravity) and report new features that impact session monitoring. Use when user says 'agent releases', 'check releases', 'agent updates', '/ir:agent-releases', or wants to know if upstream agent changes affect irrlicht."
 ---
 
 # Agent Release Monitor for Irrlicht
@@ -36,6 +36,30 @@ Use WebSearch and WebFetch to find recent releases for each agent. Search in thi
 #### Gas Town
 - Search: `"Gas Town" orchestrator OR "gastown" coding agent release`
 - Note: Gas Town may be internal/limited. If no results found, note "no public releases found" and move on.
+
+#### Aider
+- Search: `"aider" changelog OR release notes site:aider.chat OR site:github.com/Aider-AI`
+- Also check: `https://github.com/Aider-AI/aider/blob/main/HISTORY.md`
+- Focus on: chat history file format (`.aider.chat.history.md`), CLI process naming, config file changes
+
+#### OpenCode
+- Search: `"opencode" changelog OR release notes site:github.com/anomalyco`
+- Also check: `https://github.com/anomalyco/opencode/releases`
+- Focus on: session database schema (`~/.local/share/opencode/opencode.db`), process name, config file changes
+
+#### Gemini CLI
+- Search: `"Gemini CLI" changelog OR release notes site:github.com/google-gemini`
+- Also check: `https://github.com/google-gemini/gemini-cli/releases`
+- Focus on: session transcript format under `~/.gemini/tmp/`, process naming (`bin/gemini`), heap-bump worker re-exec behavior
+
+#### Kiro CLI
+- Search: `"Kiro CLI" OR "AWS Kiro" changelog OR release notes site:github.com/kirodotdev`
+- Also check: `https://github.com/kirodotdev/Kiro/releases`
+- Focus on: session transcript format under `~/.kiro/sessions/cli/`, sidecar metadata schema, process naming
+
+#### Antigravity
+- Search: `"Google Antigravity" IDE changelog OR release notes`
+- Note: Antigravity is closed-source with no public GitHub repo; check the official product site/blog. If no results found, note "no public releases found" and move on.
 
 ### 3. Analyze Impact
 

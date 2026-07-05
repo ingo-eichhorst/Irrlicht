@@ -139,7 +139,7 @@ Subagent sessions run independent state machines with the same 3 states.
 | Axis | Values |
 |------|--------|
 | **CompactionState** | `not_compacting` / `compacting` / `post_compact` -- overlaid on `working` |
-| **Adapter** | `claude-code` / `codex` / future -- identifies source agent |
+| **Adapter** | `claude-code` / `codex` / `pi` / `aider` / `opencode` / `kiro-cli` / `gemini-cli` / `antigravity` -- identifies source agent |
 | **PressureLevel** | `safe` / `caution` / `warning` / `critical` -- context window utilization |
 
 ---
@@ -149,7 +149,7 @@ Subagent sessions run independent state machines with the same 3 states.
 Session files: `~/Library/Application Support/Irrlicht/instances/<sessionID>.json`
 Atomic writes via temp file + rename. Real-time updates fan out via WebSocket (`session_created`, `session_updated`, `session_deleted`).
 
-Memory store merges disk on `ListAll` to pick up sessions created externally (e.g. by `irrlicht-hook`).
+Memory store merges disk on `ListAll` to pick up sessions created externally (e.g. by the claudecode hooks receiver, `POST /api/v1/hooks/claudecode`).
 
 ## Session Discovery Paths
 
@@ -157,3 +157,9 @@ Memory store merges disk on `ListAll` to pick up sessions created externally (e.
 |-----------|-------------------|
 | Claude Code | `~/.claude/projects/**/*.jsonl` |
 | OpenAI Codex | `~/.codex/**/*.jsonl` |
+| Pi | `~/.pi/agent/sessions/**/*.jsonl` |
+| Aider | `<project-cwd>/.aider.chat.history.md` |
+| OpenCode | `~/.local/share/opencode/opencode.db` (SQLite, polled — not a JSONL glob) |
+| Kiro CLI | `~/.kiro/sessions/cli/*.jsonl` |
+| Gemini CLI | `~/.gemini/tmp/**/chats/*.jsonl` |
+| Antigravity | `~/.gemini/antigravity-cli/brain/**/transcript.jsonl` (CLI) and `~/.gemini/antigravity/brain/**/transcript.jsonl` (IDE) |

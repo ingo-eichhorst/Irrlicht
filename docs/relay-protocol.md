@@ -20,9 +20,10 @@ irrlichd ──(daemon role)──▶ irrlichtrelay ◀──(client role)──
 - A client may connect to the local daemon **and/or** a relay at once and merges
   the sessions into one list. The daemon speaks **raw** `PushMessage` frames (no
   handshake); the relay speaks the **envelope** below.
-- v0 is deliberately thin: **no auth, no TLS, no persistence, single node, one
-  relay per daemon.** Relay state is in-memory and rebuilt from each daemon's
-  reconnect `daemon_snapshot`.
+- v0 is deliberately thin: **no persistence, single node, one relay per
+  daemon.** Auth and TLS are supported but off by default (see
+  [Auth, TLS, and origins](#auth-tls-and-origins)). Relay state is in-memory
+  and rebuilt from each daemon's reconnect `daemon_snapshot`.
 
 ## Versioning
 
@@ -65,7 +66,7 @@ set headers on a WebSocket — one channel serves daemon, macOS, and web alike.
 ```jsonc
 { "type": "daemon_snapshot",
   "sessions": [ <SessionState>, ... ],   // the daemon's current sessions
-  "agents":   [ <AgentInfo>, ... ] }     // its adapter registry (/api/v1/agents shape)
+  "agents":   [ <AgentInfo>, ... ] }     // its **adapter** registry (the daemon's per-agent-type integrations; /api/v1/agents shape)
 ```
 
 Sent once per (re)connect to reconcile the relay's cache. The relay replaces
@@ -104,6 +105,21 @@ trust the daemon's stamp) and re-emits to every client. **Clients read `.msg`
 and process it exactly as a raw daemon frame.** `focus_requested` is filtered at
 the forwarder (host-local; meaningless cross-host, wiki §5.4).
 
+### `control` (client → relay → daemon, upstream)
+
+```jsonc
+{ "type": "control", "target_daemon": "uuid", "session_id": "proc-1234",
+  "action": "input" | "interrupt", "data": "…" }                    // input only
+```
+
+The first client→relay→daemon frame in an otherwise one-way protocol (issue
+#724): a client asks a specific daemon to inject input or an interrupt into
+one of its sessions. The relay routes the frame to the addressed daemon
+within the client's own token-derived workspace, then drops
+`target_daemon`; the daemon re-gates it through the same consent path
+(backchannel toggle, per-agent consent, controllability) as a local request
+before forwarding to its `InputService`.
+
 ## Client behavior
 
 A single client handler covers both source kinds: it always sends a client
@@ -130,7 +146,7 @@ without an empty first paint, and serves the `platforms/web/` dashboard:
 
 | Endpoint              | Body                                                            |
 | --------------------- | -------------------------------------------------------------- |
-| `GET /api/v1/sessions` | `{ "groups": [...] }` — `BuildDashboard` over the cached sessions (grouped by project; no orchestrator state in v0). |
+| `GET /api/v1/sessions` | `{ "groups": [...] }` — `BuildDashboard` over the cached sessions (grouped by project; no **orchestrator** (Gas Town) state in v0). |
 | `GET /api/v1/agents`   | union of every connected daemon's registry, deduped by `name`. |
 | `GET /api/v1/version`  | the relay's own build version.                                 |
 | `GET /` (+ assets)     | the dashboard, served from disk (`IRRLICHT_UI_DIR` override, else dev/bundle lookup). |

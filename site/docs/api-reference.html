@@ -319,6 +319,10 @@ curl -X POST http://127.0.0.1:7837/api/v1/sessions/52d087d1-.../input \
 
       <p>Default-OFF toggle gating whether the relay forwarder acts on inbound control frames (the outer remote-control gate, for driving sessions from a relay-served client). Same verbs and loopback/cross-origin rules; replies <code>{"relay_control_enabled": bool}</code>. A standalone/headless daemon can instead enable it at startup via <code>IRRLICHT_RELAY_CONTROL=on</code>.</p>
 
+      <h3>GET / POST / DELETE /api/v1/activation/task-eta</h3>
+
+      <p>Legacy alias (issue #558) over the <code>claude-code</code> adapter&rsquo;s <code>instructions</code> permission (issue #577), kept so the macOS Settings toggle&rsquo;s wire shape stays stable. <code>GET</code> reads the state, <code>POST</code> grants, <code>DELETE</code> revokes, each replying <code>{"task_eta_enabled": bool}</code>. <strong>Loopback only</strong>; the mutating verbs reject cross-origin browser requests, since the granted effect rewrites <code>~/.claude/CLAUDE.md</code>.</p>
+
       <h3>GET / PUT /api/v1/backchannel/rules</h3>
 
       <p>The event&rarr;action rule set (e.g. context pressure &rarr; <code>/compact</code>). <code>GET</code> returns the current rules; <code>PUT</code> replaces the set with <code>{"rules": [&hellip;]}</code>. The rule engine fires through the same backchannel write path, so the same master-toggle + per-adapter <code>control</code> gates apply. <strong>Loopback only</strong>; <code>PUT</code> rejects cross-origin browser requests.</p>
