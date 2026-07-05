@@ -134,6 +134,70 @@ func TestSessionDetector_Removed_SkipsTerminalState(t *testing.T) {
 	}
 }
 
+// A transcript "removal" that is really a relocation to a new project-dir slug
+// (the same session cd'ing into a git worktree) must NOT flip the live session
+// to ready — it should re-point tracking at the moved file. Regression test for
+// issue #877.
+func TestSessionDetector_Removed_TranscriptRelocation_StaysAlive(t *testing.T) {
+	root := t.TempDir()
+	oldDir := filepath.Join(root, "-Users-test")
+	newDir := filepath.Join(root, "-Users-test--claude-worktrees-877")
+	if err := os.MkdirAll(newDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// The old path is intentionally absent (moved away); only the new copy
+	// exists on disk — exactly what Claude Code leaves after a worktree cd.
+	oldPath := filepath.Join(oldDir, "reloc1.jsonl")
+	newPath := filepath.Join(newDir, "reloc1.jsonl")
+	if err := os.WriteFile(newPath, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	repo.states["reloc1"] = &session.SessionState{
+		SessionID:      "reloc1",
+		State:          session.StateWorking,
+		TranscriptPath: oldPath,
+		FirstSeen:      time.Now().Unix(),
+		UpdatedAt:      time.Now().Unix(),
+	}
+
+	det := newDetector(tw, pw, repo)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	tw.ch <- agent.Event{
+		Type:           agent.EventRemoved,
+		SessionID:      "reloc1",
+		TranscriptPath: oldPath,
+	}
+
+	// Poll for the transcript-path follow via the race-free probe rather than a
+	// fixed sleep (issue #606 flaky sibling) — background goroutines mutate the
+	// shared *SessionState pointer, so a bare Load().TranscriptPath read races.
+	waitForCondition(func() bool {
+		return repo.transcriptPathOf("reloc1") == newPath
+	}, time.Second)
+	cancel()
+	<-done
+
+	if got := repo.transcriptPathOf("reloc1"); got != newPath {
+		t.Errorf("transcript_path: got %q, want %q (must follow the moved file)", got, newPath)
+	}
+	// The session must never have been flipped to ready.
+	repo.mu.Lock()
+	gotState := repo.lastSavedState["reloc1"]
+	repo.mu.Unlock()
+	if gotState == session.StateReady {
+		t.Errorf("state: got %q, want working (a relocation must not force ready)", gotState)
+	}
+}
+
 func TestSessionDetector_ExistingSession_UpdatesTranscriptPath(t *testing.T) {
 	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
