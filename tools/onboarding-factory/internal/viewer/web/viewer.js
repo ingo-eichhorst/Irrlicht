@@ -3,6 +3,16 @@
 // 1×/2×/5×/10×/20×/25×/100×, adaptive fast-forward, state-change
 // reason panel showing rule_id + signal_ref + evidence.
 
+import {
+  deriveEventOffsets, findOffsetBefore, findOffsetAfter,
+} from './playbackTimeline.js';
+import {
+  paintStateBand, paintEventDots, paintTurns, paintExpectedLane,
+} from './playbackView.js';
+import {
+  startReplay, replayStatus, setReplaySpeed, pauseReplay, resumeReplay, stopReplay, seekReplay,
+} from './replayClient.js';
+
 const SPEED_PRESETS = [1, 2, 5, 10, 25, 100];
 
 // inferDriverLabel returns "Interactive (tmux REPL)" when the adapter
@@ -2212,7 +2222,7 @@ function renderPlayback(s, detailData, archiveName) {
       for (const x of speedButtons) x.style.fontWeight = "400";
       b.style.fontWeight = "700";
       // If a playback is running, push the new speed live.
-      try { await fetch(`/api/replay/speed?speed=${sp}`, {method: "POST"}); } catch {}
+      try { await setReplaySpeed(sp); } catch {}
     };
     ctl.appendChild(b);
     speedButtons.push(b);
@@ -2364,332 +2374,11 @@ function renderPlayback(s, detailData, archiveName) {
   let events = [];       // raw EventMarker list from /api/replay/start
   let turns = [];        // raw TurnMarker list from /api/replay/start
 
-  // State colors. Consolidated to 3 high-signal colors that match what
-  // the dashboard uses for session badges, plus a neutral gap color.
-  const STATE_COLOR = {
-    ready:   "#4ade80", // green
-    working: "#8b5cf6", // purple
-    waiting: "#f59e0b", // amber
-  };
-
-  // STATE_PRIORITY drives the aggregation rule when multiple sessions
-  // are alive at the same moment (parent + subagents). The band shows
-  // the highest-priority state among active sessions, so the user sees
-  // "working" for the entire span any session is working — matching how
-  // the macOS app's state bar treats the whole run.
-  const STATE_PRIORITY = {working: 3, waiting: 2, ready: 1};
-
-  function renderStateBand() {
-    stateBand.innerHTML = "";
-    if (!totalMs) return;
-
-    // 1. Build per-session timelines.
-    //    aliveFrom[sid] = offset of first event for the session
-    //    aliveUntil[sid] = offset of the EARLIEST session-end signal
-    //                     (process_exited, transcript_removed, or
-    //                     presession_removed). For SIGKILL/crash
-    //                     scenarios, process_exited fires first and
-    //                     transcript_removed may not appear at all,
-    //                     so process_exited has to count.
-    //    transitions[sid] = sorted [{offset, state}, ...]
-    const aliveFrom = {};
-    const aliveUntil = {};
-    const transitionsBySid = {};
-    for (const e of events) {
-      if (!e.session_id) continue;
-      if (aliveFrom[e.session_id] === undefined) aliveFrom[e.session_id] = e.offset_ms;
-      if (e.kind === "process_exited" || e.kind === "transcript_removed" || e.kind === "presession_removed") {
-        if (aliveUntil[e.session_id] === undefined || e.offset_ms < aliveUntil[e.session_id]) {
-          aliveUntil[e.session_id] = e.offset_ms;
-        }
-      }
-      if (e.kind === "state_transition" && e.new_state) {
-        (transitionsBySid[e.session_id] = transitionsBySid[e.session_id] || [])
-          .push({offset: e.offset_ms, state: e.new_state});
-      }
-    }
-    for (const sid of Object.keys(transitionsBySid)) {
-      transitionsBySid[sid].sort((a, b) => a.offset - b.offset);
-    }
-
-    // 2. Collect every distinct boundary offset. The aggregate state is
-    //    constant between consecutive boundaries, so segments are bound
-    //    by these points.
-    const boundarySet = new Set([0, totalMs]);
-    for (const sid of Object.keys(aliveFrom)) {
-      boundarySet.add(aliveFrom[sid]);
-      if (aliveUntil[sid] !== undefined) boundarySet.add(aliveUntil[sid]);
-      for (const t of (transitionsBySid[sid] || [])) boundarySet.add(t.offset);
-    }
-    const boundaries = [...boundarySet].sort((a, b) => a - b);
-
-    // 3. For each interval [boundaries[i], boundaries[i+1]), compute the
-    //    aggregate state by taking the max-priority state across active
-    //    sessions. A session's state at offset T is its last
-    //    state_transition.new_state at or before T, defaulting to ready
-    //    (sessions start in ready by convention).
-    function sessionStateAt(sid, t) {
-      const list = transitionsBySid[sid] || [];
-      let st = "ready";
-      for (const trans of list) {
-        if (trans.offset <= t) st = trans.state;
-        else break;
-      }
-      return st;
-    }
-
-    function aggregateAt(t) {
-      let best = null;
-      let bestPriority = 0;
-      for (const sid of Object.keys(aliveFrom)) {
-        if (t < aliveFrom[sid]) continue;
-        if (aliveUntil[sid] !== undefined && t >= aliveUntil[sid]) continue;
-        const st = sessionStateAt(sid, t);
-        const pri = STATE_PRIORITY[st] || 0;
-        if (pri > bestPriority) { bestPriority = pri; best = st; }
-      }
-      return best;
-    }
-
-    // 4. Walk boundaries and emit one segment per change.
-    const segments = [];
-    let curStart = boundaries[0];
-    let curState = aggregateAt(curStart);
-    for (let i = 1; i < boundaries.length; i++) {
-      const t = boundaries[i];
-      const st = aggregateAt(t);
-      if (st !== curState) {
-        if (curState !== null) segments.push({start: curStart, end: t, state: curState});
-        curStart = t;
-        curState = st;
-      }
-    }
-    if (curState !== null && curStart < totalMs) {
-      segments.push({start: curStart, end: totalMs, state: curState});
-    }
-
-    // 5. Render. Coalesce so the user sees a single working span instead
-    //    of many short ones when subagents finish in sequence under a
-    //    still-working parent.
-    for (const seg of segments) {
-      const color = STATE_COLOR[seg.state] || "#cfcdc0";
-      const left = (seg.start / totalMs) * 100;
-      const width = ((seg.end - seg.start) / totalMs) * 100;
-      const region = document.createElement("div");
-      region.style.cssText = `position: absolute; top: 0; bottom: 0; left: ${left}%; width: ${width}%; background: ${color};`;
-      region.setAttribute("data-tip", `${seg.state}\n+${(seg.start/1000).toFixed(2)}s → +${(seg.end/1000).toFixed(2)}s (${((seg.end-seg.start)/1000).toFixed(2)}s)`);
-      stateBand.appendChild(region);
-    }
-  }
-
-  // isPresession returns true for "proc-<PID>" session ids — irrlicht's
-  // convention for a sighting before any transcript file exists. A real
-  // session gets a UUID id once its transcript appears. Distinguishing
-  // the two matters for the tooltip language: a transcript_removed on a
-  // pre-session is a *handoff* (the UUID transcript took over), not an
-  // ended conversation.
-  function isPresession(sid) {
-    return typeof sid === "string" && sid.startsWith("proc-");
-  }
-
-  // eventStyle classifies an event into a (color, size, label) triple.
-  // Takes the WHOLE event so it can disambiguate by session id — e.g.
-  // pid_discovered on proc-* (initial PID sighting) vs. pid_discovered
-  // on a UUID (the same PID being re-bound to the upgraded session).
-  // Salience tiers — bumped so the cursor lands them easily in the 18px
-  // lane:
-  //
-  //   lifecycle   (14px blue/gray)  — session/presession appear or vanish
-  //   process     (14px green)      — process identity confirmed / parent linked
-  //   transition  (14px purple)     — state_transition (overlays the state band)
-  //   activity    (10px violet)     — transcript_activity (every transcript line)
-  //   bookkeeping (7px slate, 60%)  — debounce_coalesced, hook_received, file_event
-  //
-  // Tooltip text is plain English — no raw event_kind strings — so the
-  // user doesn't need to memorize colors.
-  function eventStyle(ev) {
-    const kind = ev.kind;
-    const pre = isPresession(ev.session_id);
-    switch (kind) {
-      case "transcript_new":
-        return pre
-          ? {color: "#3b82f6", size: 14, opacity: 1, label: "Process detected — waiting for transcript"}
-          : {color: "#3b82f6", size: 14, opacity: 1, label: "Session started — transcript created"};
-      case "presession_created":
-        return {color: "#3b82f6", size: 14, opacity: 1, label: "Pre-session opened — process matched before transcript"};
-      case "presession_removed":
-        return {color: "#64748b", size: 14, opacity: 1, label: "Pre-session handed off — UUID session took over"};
-      case "transcript_removed":
-        return pre
-          ? {color: "#64748b", size: 14, opacity: 1, label: "Pre-session transcript dropped"}
-          : {color: "#64748b", size: 14, opacity: 1, label: "Session ended — transcript closed"};
-      case "process_exited":
-        return {color: "#64748b", size: 14, opacity: 1, label: "Process exited"};
-      case "process_spawned":
-        return {color: "#22c55e", size: 14, opacity: 1, label: "Process spawned"};
-      case "pid_discovered":
-        return pre
-          ? {color: "#22c55e", size: 14, opacity: 1, label: "PID identified for pre-session"}
-          : {color: "#22c55e", size: 14, opacity: 1, label: "PID re-bound to UUID session (handoff)"};
-      case "parent_linked":
-        return {color: "#22c55e", size: 14, opacity: 1, label: "Linked to parent — child/subagent attached"};
-      case "state_transition":
-        return {color: "#8b5cf6", size: 14, opacity: 1, label: ev.new_state ? `State changed → ${ev.new_state}` : "State changed"};
-      case "transcript_activity":
-        return {color: "#a78bfa", size: 10, opacity: 0.95, label: "Transcript updated — new lines written"};
-      case "debounce_coalesced":
-        return {color: "#94a3b8", size: 7, opacity: 0.6, label: "Bookkeeping — multiple updates coalesced"};
-      case "hook_received":
-        return {color: "#94a3b8", size: 8, opacity: 0.7, label: "Hook event received"};
-      case "file_event":
-        return {color: "#94a3b8", size: 7, opacity: 0.6, label: "Filesystem event"};
-      default:
-        return {color: "#94a3b8", size: 7, opacity: 0.5, label: kind};
-    }
-  }
-
-  function renderEventDots() {
-    eventLane.innerHTML = "";
-    if (!totalMs) return;
-    for (const ev of events) {
-      const st = eventStyle(ev);
-      const pct = Math.max(0, Math.min(100, (ev.offset_ms / totalMs) * 100));
-      const dot = document.createElement("div");
-      const sz = st.size;
-      dot.style.cssText = `position: absolute; left: ${pct}%; top: ${(18 - sz) / 2}px; ` +
-        `width: ${sz}px; height: ${sz}px; background: ${st.color}; opacity: ${st.opacity}; ` +
-        `border-radius: 50%; transform: translateX(-${sz/2}px); ` +
-        `border: 1.5px solid white; box-shadow: 0 0 0 1px rgba(0,0,0,0.1); cursor: help;`;
-      const lines = [st.label, `+${(ev.offset_ms / 1000).toFixed(2)}s`];
-      if (ev.session_id && ev.kind !== "debounce_coalesced" && ev.kind !== "file_event") {
-        lines.push(`session: ${ev.session_id}`);
-      }
-      dot.setAttribute("data-tip", lines.join("\n"));
-      eventLane.appendChild(dot);
-    }
-  }
-
-  function renderTurns() {
-    turnLane.innerHTML = "";
-    if (!totalMs || !turns.length) return;
-    for (const t of turns) {
-      const pct = Math.max(0, Math.min(100, (t.offset_ms / totalMs) * 100));
-      const tick = document.createElement("div");
-      const isUser = t.role === "user";
-      const color = isUser ? "#2563eb" : "#0d9488";
-      // User ticks anchor to top, assistant to bottom — same-instant
-      // pairs stack without overlap. Width bumped to 5px, height to
-      // 10px so the cursor can hit them easily.
-      const top = isUser ? "1px" : "11px";
-      tick.style.cssText = `position: absolute; left: ${pct}%; top: ${top}; ` +
-        `width: 5px; height: 10px; background: ${color}; transform: translateX(-2.5px); ` +
-        `border-radius: 2px; cursor: help;`;
-      const roleLabel = isUser ? "User" : "Assistant";
-      const offsetLabel = `+${(t.offset_ms / 1000).toFixed(2)}s`;
-      tick.setAttribute("data-tip", `${roleLabel}\n${offsetLabel}\n${t.text || ""}`);
-      turnLane.appendChild(tick);
-    }
-  }
-
   function renderMarkers() {
-    renderStateBand();
-    renderEventDots();
-    renderTurns();
-    renderExpectedLane();
-  }
-
-  // renderExpectedLane paints one marker per spec-grounded phase from
-  // the validator report. Positions come from each phase's
-  // matched_ts (passed) or anchor_ts + max_delay_ms (failed). Color
-  // encodes pass/fail; shape encodes state-vs-lifecycle. Hover via
-  // the shared tooltip overlay shows phase name, spec text, actual
-  // vs target, and the validator's pass/fail reason.
-  function renderExpectedLane() {
-    expectedLane.innerHTML = "";
-    if (!totalMs) return;
-    const rep = detailData && detailData.expected;
-    if (!rep || !Array.isArray(rep.phases) || rep.phases.length === 0) {
-      // No expected.jsonl — render a thin grey hint instead of leaving the lane mysteriously empty.
-      const note = document.createElement("div");
-      note.style.cssText = "position: absolute; left: 0; top: 0; font-size: 10px; color: #aaa; padding: 2px 4px;";
-      note.textContent = "expected: not configured";
-      expectedLane.appendChild(note);
-      return;
-    }
-    // The validator anchors matched_ts to events[0].Ts (the
-    // recording's first event) and exposes it as
-    // rep.recording_start. Use that to convert each phase's
-    // absolute matched_ts into an offset_ms compatible with the
-    // EventMarker positions on the scrubber.
-    const startMs = rep.recording_start ? Date.parse(rep.recording_start) : NaN;
-    const defs = Array.isArray(rep.definitions) ? rep.definitions : [];
-    for (let i = 0; i < rep.phases.length; i++) {
-      const ph = rep.phases[i];
-      const def = defs[i] || {};
-      const matchedMs = ph.matched_ts ? Date.parse(ph.matched_ts) : NaN;
-      const offsetMs = Number.isFinite(matchedMs) && Number.isFinite(startMs)
-        ? matchedMs - startMs
-        : null;
-      // Failed phases without a match still need positioning — they
-      // anchor at the validator's "should-have-been-here" point,
-      // which is anchor_ts + max_delay_ms. Without anchor info on
-      // the wire (we don't pass anchor_ts in the result yet), we
-      // park them at the lane's start with a "?" marker.
-      const pos = offsetMs !== null ? Math.max(0, Math.min(100, (offsetMs / totalMs) * 100)) : null;
-      const pass = ph.pass;
-      const marker = document.createElement("div");
-      const isState = !!def.expected_state;
-      const baseColor = isState
-        ? (def.expected_state === "working" ? "#8b5cf6"
-           : def.expected_state === "waiting" ? "#f59e0b"
-           : "#4ade80") // ready
-        : "#3b82f6"; // lifecycle kind (blue)
-      const rimColor = pass ? "#22c55e" : "#dc2626";
-      if (pos === null) {
-        // Failed AND unmatched — pin to left edge with a "?" so the
-        // operator notices something is wrong but isn't misled into
-        // thinking it's at offset 0.
-        marker.style.cssText =
-          `position: absolute; left: 2px; top: 1px; ` +
-          `width: 12px; height: 12px; ` +
-          `background: ${rimColor}; color: white; ` +
-          `border-radius: 50%; ` +
-          `font-size: 9px; font-weight: 700; text-align: center; line-height: 12px; ` +
-          `cursor: help;`;
-        marker.textContent = "?";
-      } else if (isState) {
-        marker.style.cssText =
-          `position: absolute; left: ${pos}%; top: 2px; ` +
-          `width: 10px; height: 10px; transform: translateX(-5px); ` +
-          `background: ${baseColor}; ` +
-          `border: 2px solid ${rimColor}; ` +
-          `border-radius: 50%; ` +
-          `cursor: help;`;
-      } else {
-        // Lifecycle marker — rectangular tag with the kind's first 2 chars.
-        const label = (def.kind || "").slice(0, 3).toUpperCase();
-        marker.style.cssText =
-          `position: absolute; left: ${pos}%; top: 1px; ` +
-          `padding: 0 3px; height: 12px; line-height: 12px; ` +
-          `transform: translateX(-50%); ` +
-          `background: ${baseColor}; color: white; ` +
-          `border: 1.5px solid ${rimColor}; ` +
-          `border-radius: 3px; ` +
-          `font-size: 9px; font-weight: 700; ` +
-          `cursor: help;`;
-        marker.textContent = label;
-      }
-      const lines = [`${ph.phase} — ${pass ? "PASS" : "FAIL"}`];
-      if (def.text) lines.push(def.text);
-      if (offsetMs !== null) {
-        let delta = `+${Math.round(offsetMs)} ms from recording start`;
-        if (def.max_delay_ms) delta += ` (target ≤ ${def.max_delay_ms} ms from anchor)`;
-        lines.push(delta);
-      }
-      if (ph.reason) lines.push(`reason: ${ph.reason}`);
-      marker.setAttribute("data-tip", lines.join("\n"));
-      expectedLane.appendChild(marker);
-    }
+    paintStateBand(stateBand, events, totalMs);
+    paintEventDots(eventLane, events, totalMs);
+    paintTurns(turnLane, turns, totalMs);
+    paintExpectedLane(expectedLane, detailData && detailData.expected, totalMs);
   }
 
   // Dashboard iframe (hidden until playback starts).
@@ -2707,31 +2396,27 @@ function renderPlayback(s, detailData, archiveName) {
   let totalMs = 0;
 
   async function startPlayback() {
-    const resp = await fetch("/api/replay/start", {
-      method: "POST",
-      headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({
-        agent: s.agent,
-        subtree: s.subtree,
-        scenario: s.id,
-        speed: currentSpeed,
-        recording: archiveName || "",
-      }),
+    const res = await startReplay({
+      agent: s.agent,
+      subtree: s.subtree,
+      scenario: s.id,
+      speed: currentSpeed,
+      recording: archiveName || "",
     });
-    if (!resp.ok) {
+    if (!res.ok) {
       // Never pop a blocking modal — a scenario with no events.jsonl/usable
       // transcript (e.g. an un-recorded cell opened via a deep link) just has
       // nothing to play. Log non-blocking for debugging and bail quietly.
-      console.warn(`replay start failed: ${resp.status} ${await resp.text()}`);
+      console.warn(`replay start failed: ${res.status} ${res.error}`);
       return;
     }
-    const body = await resp.json();
+    const body = res.body;
     totalMs = body.total_ms || 0;
     events = Array.isArray(body.events) ? body.events : [];
     turns = Array.isArray(body.turns) ? body.turns : [];
     // Deduplicate offsets so a cluster of same-instant events doesn't
     // ping the prev/next buttons multiple times in one click.
-    eventOffsets = [...new Set(events.map(e => e.offset_ms))].sort((a, b) => a - b);
+    eventOffsets = deriveEventOffsets(events);
     // Append a cache-buster so re-clicking Play actually reloads the
     // dashboard inside the iframe (setting iframe.src to the same URL is
     // a no-op in browsers — the WebSocket inside stays open with stale
@@ -2757,8 +2442,7 @@ function renderPlayback(s, detailData, archiveName) {
 
   async function updateStatus() {
     try {
-      const resp = await fetch("/api/replay/status");
-      const st = await resp.json();
+      const st = await replayStatus();
       if (!st.active) {
         clearInterval(pollTimer); pollTimer = null;
         return;
@@ -2774,11 +2458,11 @@ function renderPlayback(s, detailData, archiveName) {
   btnPlay.onclick = startPlayback;
   btnPause.onclick = async () => {
     const isResume = btnPause.textContent.startsWith("▶");
-    await fetch(isResume ? "/api/replay/resume" : "/api/replay/pause", {method: "POST"});
+    await (isResume ? resumeReplay() : pauseReplay());
     updateStatus();
   };
   btnStop.onclick = async () => {
-    await fetch("/api/replay/stop", {method: "POST"});
+    await stopReplay();
     btnPlay.disabled = false;
     btnPause.disabled = true;
     btnStop.disabled = true;
@@ -2808,7 +2492,7 @@ function renderPlayback(s, detailData, archiveName) {
     // an event lands on the one BEFORE it, not the same one.
     const target = findOffsetBefore(eventOffsets, cur - 1);
     if (target == null) return;
-    await fetch(`/api/replay/seek?offset_ms=${target}`, {method: "POST"});
+    await seekReplay(target);
     // Snap the scrubber immediately so the next poll doesn't visually
     // bounce back.
     scrub.value = String(target);
@@ -2818,11 +2502,11 @@ function renderPlayback(s, detailData, archiveName) {
     const cur = Number(scrub.value) || 0;
     const target = findOffsetAfter(eventOffsets, cur + 1);
     if (target == null) return;
-    await fetch(`/api/replay/seek?offset_ms=${target}`, {method: "POST"});
+    await seekReplay(target);
     scrub.value = String(target);
   };
   scrub.oninput = async () => {
-    await fetch(`/api/replay/seek?offset_ms=${scrub.value}`, {method: "POST"});
+    await seekReplay(scrub.value);
   };
 
   // Auto-start playback when the scenario opens. The user can still
@@ -2914,23 +2598,4 @@ export function renderMarkdown(md) {
   }
   flushPara(); flushList();
   return out.join("\n");
-}
-
-// findOffsetBefore returns the greatest offset < `cur`, or null if none.
-// Linear scan is fine — typical scenarios have <100 events.
-function findOffsetBefore(sorted, cur) {
-  let best = null;
-  for (const v of sorted) {
-    if (v < cur) best = v;
-    else break;
-  }
-  return best;
-}
-
-// findOffsetAfter returns the smallest offset > `cur`, or null if none.
-function findOffsetAfter(sorted, cur) {
-  for (const v of sorted) {
-    if (v > cur) return v;
-  }
-  return null;
 }
