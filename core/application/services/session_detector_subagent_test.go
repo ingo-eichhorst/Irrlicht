@@ -200,10 +200,10 @@ func TestSessionDetector_OrphanedSubagentsFinishWhenParentTurnDone(t *testing.T)
 		},
 	})
 
-	// Two orphaned children: real stale transcript files (mtime 60s ago)
-	// so finishOrphanedChildren's quiet-window check (30s) treats them as
+	// Two orphaned children: real stale transcript files (mtime 100s ago)
+	// so finishOrphanedChildren's quiet-window check (90s) treats them as
 	// silent and promotes them.
-	staleMtime := time.Now().Add(-60 * time.Second)
+	staleMtime := time.Now().Add(-100 * time.Second)
 	for _, childID := range []string{"child-orphan-a", "child-orphan-b"} {
 		childPath := filepath.Join(tmpDir, childID+".jsonl")
 		if err := os.WriteFile(childPath, []byte(""), 0644); err != nil {
@@ -702,10 +702,10 @@ func TestSessionDetector_OrphanedChildrenFinish_WhenParentEndsWaitingWithQuestio
 		},
 	})
 
-	// Orphaned child: stale transcript (60s > SubagentQuietWindow), no open
+	// Orphaned child: stale transcript (100s > SubagentQuietWindow), no open
 	// tools — its work is done, only the stop_reason:null quirk keeps it
 	// classified as working.
-	staleMtime := time.Now().Add(-60 * time.Second)
+	staleMtime := time.Now().Add(-100 * time.Second)
 	childPath := filepath.Join(tmpDir, "child-of-asker.jsonl")
 	if err := os.WriteFile(childPath, []byte(""), 0644); err != nil {
 		t.Fatal(err)
@@ -797,7 +797,7 @@ func TestSessionDetector_PermissionWaitingDoesNotFastForwardChildren(t *testing.
 		},
 	})
 
-	staleMtime := time.Now().Add(-60 * time.Second)
+	staleMtime := time.Now().Add(-100 * time.Second)
 	childPath := filepath.Join(tmpDir, "child-of-perm.jsonl")
 	if err := os.WriteFile(childPath, []byte(""), 0644); err != nil {
 		t.Fatal(err)
@@ -975,7 +975,7 @@ func TestSessionDetector_ParentBadgeCleared_AfterReadyCleanup(t *testing.T) {
 		},
 	})
 
-	staleMtime := time.Now().Add(-60 * time.Second)
+	staleMtime := time.Now().Add(-100 * time.Second)
 	childPath := filepath.Join(tmpDir, "child-cleared.jsonl")
 	if err := os.WriteFile(childPath, []byte(""), 0644); err != nil {
 		t.Fatal(err)
@@ -1288,7 +1288,7 @@ func TestSessionDetector_ChildDeletionIsRecorded(t *testing.T) {
 		},
 	})
 
-	staleMtime := time.Now().Add(-60 * time.Second)
+	staleMtime := time.Now().Add(-100 * time.Second)
 	childPath := filepath.Join(tmpDir, "child-recorded.jsonl")
 	if err := os.WriteFile(childPath, []byte(""), 0644); err != nil {
 		t.Fatal(err)
