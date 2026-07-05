@@ -80,8 +80,27 @@ uninstall_previous() {
         pkill -f 'Irrlicht[^/]*\.app/Contents/MacOS/Irrlicht' 2>/dev/null || true
         removed_something=1
     fi
-    if pgrep -x irrlichd >/dev/null 2>&1; then
-        pkill -x irrlichd 2>/dev/null || true
+    # Stop any irrlichd bound to our port. Matching by process name alone
+    # (like the .app pkill above) would silently kill an unrelated irrlichd
+    # — a dev `--record` daemon on a different port, or another user's
+    # process. Scope the kill to whatever is actually listening on 7837;
+    # when we can't confirm that (no lsof), warn instead of guessing.
+    if command -v lsof >/dev/null 2>&1; then
+        daemon_pids=$(lsof -ti tcp:7837 -sTCP:LISTEN 2>/dev/null || true)
+        for pid in $daemon_pids; do
+            case "$(basename "$(ps -o comm= -p "$pid" 2>/dev/null)" 2>/dev/null)" in
+                irrlichd)
+                    kill "$pid" 2>/dev/null || true
+                    removed_something=1
+                    ;;
+            esac
+        done
+    elif pgrep -x irrlichd >/dev/null 2>&1; then
+        for pid in $(pgrep -x irrlichd); do
+            cmd=$(ps -o comm= -p "$pid" 2>/dev/null)
+            warn "Stopping irrlichd (pid $pid, $cmd) — no lsof available to confirm it's bound to port 7837"
+            kill "$pid" 2>/dev/null || true
+        done
         removed_something=1
     fi
 
