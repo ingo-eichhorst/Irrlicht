@@ -17,12 +17,20 @@
 #                                      linux-replay Docker image (opt-in:
 #                                      needs Docker, by far the slowest gate)
 #
+# The `security` group has no matching workflow — GitHub Actions doesn't run
+# it yet (see .claude/skills/ir:release/skill.md's Step 5.5, which runs the
+# same tools/security-scan.sh at release time). It's local-only for now
+# because govulncheck/gosec/npm audit cost real time (~1 minute) and are
+# more valuable as a pre-push gate than on every PR push; a GH Actions
+# equivalent can be added later without changing tools/security-scan.sh.
+#
 # Usage:
 #   tools/preflight.sh                 # everything except the Linux gate
 #   tools/preflight.sh --linux         # + full Linux parity via Docker
 #   tools/preflight.sh --only go       # just the go-test.yml-equivalent gates
 #   tools/preflight.sh --only web      # just the two npm test trees
 #   tools/preflight.sh --only arch     # just the ARS architecture gate
+#   tools/preflight.sh --only security # just govulncheck + gosec + npm audit
 #   tools/preflight.sh --only linux    # just the Linux Docker gate
 #
 # PLATFORMS overrides the Linux gate's docker --platform (default: linux/amd64,
@@ -96,6 +104,13 @@ fi
 # ---- arch group (mirrors ars-gate.yml) -----------------------------------
 if want arch; then
   run_gate "ARS architecture gate" tools/ars-gate.sh
+fi
+
+# ---- security group (mirrors tools/security-scan.sh's local mode; the same
+# script's full mode, with GitHub Dependabot/CodeQL alert checks, runs at
+# release time from ir:release's Step 5.5, not here) ------------------------
+if want security; then
+  run_gate "security scan (govulncheck + gosec + npm audit)" tools/security-scan.sh --local
 fi
 
 # ---- linux group (mirrors linux.yml, opt-in: --linux or --only linux) ---
