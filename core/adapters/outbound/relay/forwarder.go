@@ -348,6 +348,9 @@ func shouldForward(msg outbound.PushMessage) bool {
 }
 
 // jitter returns a random duration in [0, d/2] to spread reconnect attempts.
+// math/rand is intentional here (SonarQube go:S2245): this only smooths
+// thundering-herd reconnects, nothing security-sensitive that would call for
+// crypto/rand.
 func jitter(d time.Duration) time.Duration {
 	if d <= 0 {
 		return 0

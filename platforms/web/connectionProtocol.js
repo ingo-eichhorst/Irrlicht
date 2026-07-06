@@ -44,6 +44,12 @@ export function relayWsUrl(raw) {
   let u = (raw || '').trim();
   if (!u) return '';
   u = u.replace(/^http:/i, 'ws:').replace(/^https:/i, 'wss:');
+  // Defaulting a bare host to ws:// (not wss://) is intentional (SonarQube
+  // javascript:S5332): the relay's documented default posture is an
+  // unencrypted trusted-LAN deployment with TLS/auth as an opt-in the
+  // operator adds themselves (see examples/relay/Dockerfile) — a caller who
+  // wants TLS types `https://`/`wss://` and the mapping above already
+  // honors that.
   if (!/^wss?:\/\//i.test(u)) u = 'ws://' + u;
   u = u.replace(/\/+$/, '');
   if (!/\/api\/v1\/sessions\/stream$/.test(u)) u += '/api/v1/sessions/stream';

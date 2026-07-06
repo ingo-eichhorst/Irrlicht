@@ -169,7 +169,7 @@ function folderToCoverageId(folder, agent) {
     if (!agents || Object.keys(agents).length === 0) continue;
     const totalCount = Object.values(agents).reduce((n, arr) => n + arr.length, 0);
     const subtreeDet = makeSidebarGroup("subtree-group", `sidebar.subtree.${subtree}`, subtree, totalCount, activePath.subtree === subtree);
-    for (const agent of Object.keys(agents).sort()) {
+    for (const agent of Object.keys(agents).sort((a, b) => a.localeCompare(b))) {
       const agentDet = makeSidebarGroup("agent-group", `sidebar.agent.${subtree}.${agent}`, agent, agents[agent].length, activePath.subtree === subtree && activePath.agent === agent);
       // Sort by catalog code (e.g. "5.4") so the order mirrors the overview
       // matrix. Resolve the folder→coverage_id per-agent so a variant-folder
@@ -1211,7 +1211,7 @@ function renderScenariosMatrix(detail) {
   for (const sc of catalog.scenarios) {
     for (const a of Object.keys(sc.by_adapter || {})) adapterSet.add(a);
   }
-  const adapters = [...adapterSet].sort();
+  const adapters = [...adapterSet].sort((a, b) => a.localeCompare(b));
 
   const recIndex = new Map();
   for (const r of scenariosList) {
@@ -1318,9 +1318,14 @@ async function loadScenario(s, initialArchive, focus) {
   const detail = document.getElementById("detail");
   detail.innerHTML = `<p>Loading…</p>`;
 
+  // s.agent/s.subtree/s.id come from the URL hash (sidebarActivePath /
+  // route()) — encode each segment before it lands in a fetch path so a
+  // hash crafted with `/`, `?`, or `#` can't retarget the request
+  // (SonarQube jssecurity:S7044 / S8476).
+  const recordingPath = `${encodeURIComponent(s.agent)}/${encodeURIComponent(s.subtree)}/${encodeURIComponent(s.id)}`;
   const [data, archives, recipes, catalog] = await Promise.all([
-    fetch(`/api/scenarios/${s.agent}/${s.subtree}/${s.id}`).then(r => r.json()),
-    fetch(`/api/scenarios/${s.agent}/${s.subtree}/${s.id}/recordings`).then(r => r.ok ? r.json() : []).catch(() => []),
+    fetch(`/api/scenarios/${recordingPath}`).then(r => r.json()),
+    fetch(`/api/scenarios/${recordingPath}/recordings`).then(r => r.ok ? r.json() : []).catch(() => []),
     // Recipes for the new Recipe panel target on this page (anchor:
     // recipe). Same payload the coverage page uses. Look up the
     // by_adapter entry under the scenario name and agent slug.
@@ -1952,8 +1957,11 @@ function renderRecordingHistory(s, latestData, archives, initialArchive, recipeE
     if (arch) {
       manifestBox.append(renderManifestFields(arch, "expected_pass_rate (at promote)", /*alwaysEllipsis=*/true));
     }
+    // s.agent/s.subtree/s.id come from the URL hash (see loadScenario) —
+    // encode each segment before it lands in a fetch path (SonarQube
+    // jssecurity:S7044 / S8476).
     const archDetail = await fetch(
-      `/api/scenarios/${s.agent}/${s.subtree}/${s.id}/recordings/${encodeURIComponent(value)}`
+      `/api/scenarios/${encodeURIComponent(s.agent)}/${encodeURIComponent(s.subtree)}/${encodeURIComponent(s.id)}/recordings/${encodeURIComponent(value)}`
     ).then(r => r.json());
     const archData = {
       ...latestData,
@@ -2061,7 +2069,7 @@ function renderToolCalls(data) {
   }
   const chips = document.createElement("div");
   chips.style.cssText = "display: flex; gap: 6px; margin-bottom: 8px; flex-wrap: wrap;";
-  for (const name of Object.keys(byName).sort()) {
+  for (const name of Object.keys(byName).sort((a, b) => a.localeCompare(b))) {
     const chip = document.createElement("span");
     const isAgent = name === "Agent";
     chip.style.cssText = `padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; ` +
@@ -2308,6 +2316,7 @@ function renderPlayback(s, detailData, archiveName) {
   scrub.max = "100";
   scrub.value = "0";
   scrub.className = "timeline-scrubber";
+  scrub.setAttribute("aria-label", "Playback position");
   scrub.disabled = true;
   bandWrap.appendChild(scrub);
   scrubWrap.appendChild(bandWrap);
@@ -2434,7 +2443,7 @@ function renderPlayback(s, detailData, archiveName) {
       // Never pop a blocking modal — a scenario with no events.jsonl/usable
       // transcript (e.g. an un-recorded cell opened via a deep link) just has
       // nothing to play. Log non-blocking for debugging and bail quietly.
-      console.warn(`replay start failed: ${res.status} ${res.error}`);
+      console.warn(`replay start failed: ${res.status} ${JSON.stringify(res.error)}`);
       return;
     }
     const body = res.body;

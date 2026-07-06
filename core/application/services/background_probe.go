@@ -7,7 +7,13 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"irrlicht/core/pkg/pathutil"
 )
+
+// lsofPath is resolved once from a fixed set of trusted directories rather
+// than trusted PATH, per go:S4036.
+var lsofPath = pathutil.MustResolve("lsof")
 
 // backgroundProbe answers "does any of these output files still have a live
 // writer?" — the daemon's authoritative liveness check for Claude Code Bash
@@ -47,7 +53,7 @@ func anyLiveOutputWriter(outputPaths []string) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	args := append([]string{"-t", "--"}, outputPaths...)
-	out, _ := exec.CommandContext(ctx, "lsof", args...).Output() //nolint:errcheck — exit 1 (some path unheld) still carries live PIDs on stdout
+	out, _ := exec.CommandContext(ctx, lsofPath, args...).Output() //nolint:errcheck — exit 1 (some path unheld) still carries live PIDs on stdout
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {

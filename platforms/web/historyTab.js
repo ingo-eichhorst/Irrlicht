@@ -125,7 +125,7 @@ function fetchHistory() {
         for (const c of (data.top_contributors || [])) {
           if (c.label && c.label !== 'unknown') set.add(c.label);
         }
-        historyState.known[data.group] = [...set].sort();
+        historyState.known[data.group] = [...set].sort((a, b) => a.localeCompare(b));
       }
       renderHistory();
     });

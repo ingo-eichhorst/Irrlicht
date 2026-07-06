@@ -22,8 +22,14 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends python3 jq \
     && rm -rf /var/lib/apt/lists/*
 
+# Run the build/test as a non-root user rather than the image's root default
+# (docker:S6471) — this container only ever runs our own test suite, but
+# least privilege costs nothing here.
+RUN useradd --create-home --uid 10001 runner
+ENV HOME=/home/runner
 WORKDIR /src
-COPY . .
+COPY --chown=runner:runner . .
+USER runner
 
 # Compile gate: nothing below matters if the tree doesn't build on Linux.
 RUN cd core && go build ./...

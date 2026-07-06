@@ -24,12 +24,16 @@ RUN go build -trimpath -ldflags "-X main.Version=${VERSION}" \
 
 # ---- runtime: the binary + a baked-in dashboard snapshot ----
 FROM debian:bookworm-slim AS runtime
+# Run as a non-root user rather than the image's root default (docker:S6471)
+# — 7839 is unprivileged so this needs no capability grants.
+RUN useradd --no-create-home --uid 10001 relay
 COPY --from=build /out/irrlichtrelay /usr/local/bin/irrlichtrelay
 # Bake the live dashboard so http://<host>:7839 serves it. NOTE: this is a
 # snapshot — unlike the daemon's live disk-serve, web edits need an image
 # rebuild. Only the three runtime files (no tests / node_modules).
-COPY platforms/web/index.html platforms/web/irrlicht.css platforms/web/irrlicht.js /web/
+COPY --chown=relay:relay platforms/web/index.html platforms/web/irrlicht.css platforms/web/irrlicht.js /web/
 ENV IRRLICHT_UI_DIR=/web
+USER relay
 EXPOSE 7839
 # Bind 0.0.0.0 (NOT the loopback default) so the published port is reachable
 # from outside the container; the compose file publishes it on the host

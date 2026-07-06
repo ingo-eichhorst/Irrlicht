@@ -14,6 +14,15 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+
+	"irrlicht/core/pkg/pathutil"
+)
+
+// psPath and plutilPath are resolved once from a fixed set of trusted
+// directories rather than trusted PATH, per go:S4036.
+var (
+	psPath     = pathutil.MustResolve("ps")
+	plutilPath = pathutil.MustResolve("plutil")
 )
 
 // processTTY returns the controlling TTY of pid in the form "/dev/ttysNNN",
@@ -28,7 +37,7 @@ func processTTY(pid int) string {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "ps", "-o", "tty=", "-p", strconv.Itoa(pid)).Output()
+	out, err := exec.CommandContext(ctx, psPath, "-o", "tty=", "-p", strconv.Itoa(pid)).Output()
 	if err != nil {
 		return ""
 	}
@@ -102,7 +111,7 @@ func bundleIDForAppPath(appPath string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	plist := appPath + "/Contents/Info.plist"
-	out, err := exec.CommandContext(ctx, "plutil", "-extract", "CFBundleIdentifier", "raw", "-o", "-", plist).Output()
+	out, err := exec.CommandContext(ctx, plutilPath, "-extract", "CFBundleIdentifier", "raw", "-o", "-", plist).Output()
 	if err != nil {
 		return ""
 	}
@@ -324,7 +333,7 @@ func parseKittenLsForPID(out []byte, sessionPID int) string {
 func readProcInfo(pid int) (ppid int, cmd string, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "ps", "-o", "ppid=,comm=", "-p", strconv.Itoa(pid)).Output()
+	out, err := exec.CommandContext(ctx, psPath, "-o", "ppid=,comm=", "-p", strconv.Itoa(pid)).Output()
 	if err != nil {
 		return 0, "", fmt.Errorf("ps pid %d: %w", pid, err)
 	}

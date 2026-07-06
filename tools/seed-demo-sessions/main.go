@@ -28,10 +28,20 @@ import (
 	"time"
 
 	"irrlicht/core/domain/session"
+	"irrlicht/core/pkg/pathutil"
 )
 
 //go:embed scenarios/*.json
 var embeddedScenarios embed.FS
+
+// openPath, killPath, psPath, and pgrepPath are resolved once from a fixed
+// set of trusted directories rather than trusted PATH, per go:S4036.
+var (
+	openPath  = pathutil.MustResolve("open")
+	killPath  = pathutil.MustResolve("kill")
+	psPath    = pathutil.MustResolve("ps")
+	pgrepPath = pathutil.MustResolve("pgrep")
+)
 
 // scenarioFile is the on-disk shape of a scenario JSON file.
 type scenarioFile struct {
@@ -488,7 +498,7 @@ func launchApp(appPath string) error {
 	if appPath == "" {
 		return fmt.Errorf("no app bundle found; pass --app PATH")
 	}
-	cmd := exec.Command("open", "-g", appPath)
+	cmd := exec.Command(openPath, "-g", appPath)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("open %s: %w (%s)", appPath, err, strings.TrimSpace(string(out)))
 	}
@@ -505,7 +515,7 @@ func stopProcessByPath(path, label string) {
 	}
 	fmt.Printf("stopping %s (%d pid%s)\n", label, len(pids), pluralS(len(pids)))
 	for _, pid := range pids {
-		_ = exec.Command("kill", pid).Run()
+		_ = exec.Command(killPath, pid).Run()
 	}
 }
 
@@ -516,7 +526,7 @@ func stopProcessByName(name, label string) {
 	}
 	fmt.Printf("stopping %s (%d pid%s) — --force\n", label, len(pids), pluralS(len(pids)))
 	for _, pid := range pids {
-		_ = exec.Command("kill", pid).Run()
+		_ = exec.Command(killPath, pid).Run()
 	}
 }
 
@@ -531,7 +541,7 @@ func listOtherDaemons(appPath string) {
 	}
 	var others []string
 	for _, pid := range pids {
-		out, err := exec.Command("ps", "-o", "command=", "-p", pid).Output()
+		out, err := exec.Command(psPath, "-o", "command=", "-p", pid).Output()
 		if err != nil {
 			continue
 		}
@@ -551,7 +561,7 @@ func pgrepFull(needle string) []string {
 	if needle == "" {
 		return nil
 	}
-	out, err := exec.Command("pgrep", "-f", needle).Output()
+	out, err := exec.Command(pgrepPath, "-f", needle).Output()
 	if err != nil {
 		return nil
 	}
