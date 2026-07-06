@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'vitest'
-import { agentsPerPage, inferDriverLabel, paginateAgents, renderMarkdown } from './viewer.js'
+import { agentsPerPage, inferDriverLabel, paginateAgents, renderMarkdown, renderManifestFields } from './viewer.js'
 
 describe('renderMarkdown', () => {
   test('## / ### headings → h4 / h5', () => {
@@ -143,5 +143,49 @@ describe('paginateAgents', () => {
       visible: ['opencode', 'kiro-cli'],
       page: 2, pages: 3, start: 4, end: 6,
     })
+  })
+})
+
+describe('renderManifestFields', () => {
+  function fieldsToText(m, passRateLabel, alwaysEllipsis) {
+    const box = document.createElement('div')
+    box.append(renderManifestFields(m, passRateLabel, alwaysEllipsis))
+    return box
+  }
+
+  test('field values render as text, never as markup (no innerHTML injection)', () => {
+    const box = fieldsToText({
+      promoted_at: '<img src=x onerror=alert(1)>',
+      daemon_version: '0.3.0',
+      agent_cli_version: '1.0',
+      recipe_hash: 'abcd1234',
+      expected_pass_rate: '10/10',
+      recording_started_at: '2026-05-01T10:00:00Z',
+    }, 'expected_pass_rate', false)
+    expect(box.querySelector('img')).toBeNull()
+    expect(box.textContent).toContain('<img src=x onerror=alert(1)>')
+  })
+
+  test('recipe_hash is truncated to 16 chars and wrapped in <code>', () => {
+    const box = fieldsToText({ recipe_hash: 'a'.repeat(40) }, 'expected_pass_rate', false)
+    const code = box.querySelector('code')
+    expect(code.textContent).toBe('a'.repeat(16))
+  })
+
+  test('alwaysEllipsis=false omits the ellipsis when recipe_hash is empty', () => {
+    const box = fieldsToText({}, 'expected_pass_rate', false)
+    expect(box.textContent).not.toContain('…')
+  })
+
+  test('alwaysEllipsis=true appends the ellipsis even when recipe_hash is empty', () => {
+    const box = fieldsToText({}, 'expected_pass_rate (at promote)', true)
+    expect(box.textContent).toContain('…')
+    expect(box.textContent).toContain('expected_pass_rate (at promote):')
+  })
+
+  test('missing fields fall back to placeholders, not "undefined"', () => {
+    const box = fieldsToText({}, 'expected_pass_rate', false)
+    expect(box.textContent).toContain('expected_pass_rate: —')
+    expect(box.textContent).not.toContain('undefined')
   })
 })

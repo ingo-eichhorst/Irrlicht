@@ -1,9 +1,11 @@
 package viewer
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 // RecordingStore is the filesystem repository for the replaydata tree. It
@@ -44,6 +46,31 @@ func (st RecordingStore) readFile(path string) ([]byte, bool) {
 func (st RecordingStore) exists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+// SafeArchiveName is a recording-archive directory name that has already
+// been checked against path traversal (no ".." segment, no path
+// separator). The zero value is invalid — construct via NewSafeArchiveName.
+// archiveFilePath is the only thing that accepts this type, so a future
+// call site building a path under an archive dir can't skip the check by
+// passing a raw string instead.
+type SafeArchiveName string
+
+// NewSafeArchiveName validates name and returns it as a SafeArchiveName. An
+// archive name is joined one path segment below <scenarioDir>/recordings/,
+// so a ".." segment or an embedded separator would let it escape that
+// directory.
+func NewSafeArchiveName(name string) (SafeArchiveName, error) {
+	if name == "" || strings.Contains(name, "..") || strings.ContainsRune(name, filepath.Separator) {
+		return "", fmt.Errorf("invalid archive name %q", name)
+	}
+	return SafeArchiveName(name), nil
+}
+
+// archiveFilePath resolves relPath under scenarioDir/recordings/<name>.
+// relPath may be "" to get the archive directory itself.
+func (st RecordingStore) archiveFilePath(scenarioDir string, name SafeArchiveName, relPath string) string {
+	return filepath.Join(scenarioDir, "recordings", string(name), relPath)
 }
 
 // listScenarios walks replaydata/agents/<agent>/{scenarios,regressions}/<id>
