@@ -325,6 +325,40 @@ cd /Users/ingo/projects/irrlicht/core && go test ./... -count=1
 
 All tests must pass before proceeding.
 
+## Step 5.5: Security Scan Gate
+
+Run before Step 6's ~5 minute Swift+DMG build, same fail-fast principle as
+the Step 7b race-guard check and the Step 6 smoke test.
+
+```bash
+tools/security-scan.sh
+```
+
+This checks, across every module in `go.work` and both web trees:
+
+- Open GitHub Dependabot alerts (Critical/High severity)
+- Open GitHub CodeQL code-scanning alerts (Critical/High severity)
+- `govulncheck` — any finding whose vulnerable symbol lives in a called
+  third-party dependency is blocking; a finding confined to `stdlib` (a Go
+  toolchain patch-level issue, not an application code fix) is logged but
+  doesn't block
+- `gosec` — High-severity + High-confidence findings are blocking; lower
+  severity/confidence findings are logged for visibility
+- `npm audit --audit-level=high` in `platforms/web` and
+  `tools/onboarding-factory/internal/viewer/web`
+
+**Abort the release on any non-zero exit.** The script names the failing
+tool, the specific finding (alert URL, OSV/CVE id, or gosec rule), and a
+fix-or-suppress path in its output — read that before deciding how to
+proceed. Do not re-run with `--local` to skip the GitHub alert checks; that
+flag exists only for `tools/preflight.sh`'s pre-push gate, which doesn't
+have (and shouldn't need) a `gh` call on every push.
+
+A check that can't run at all — missing tool, `gh` auth/scope failure — is
+a hard failure, not a skip. If the Dependabot/CodeQL checks fail with a 404
+from `gh api`, the token is missing the `security_events` scope:
+`gh auth refresh -s security_events`.
+
 ## Step 6: Build Artifacts
 
 > **⚠️ AUTHORITATIVE BUILD PATH — read before running the manual commands below.**

@@ -41,6 +41,17 @@ Include as much of the following as you can:
 Please give us a reasonable window to ship a fix before any public disclosure.
 We'll coordinate timing with you.
 
+## Proactive scanning
+
+Beyond the reactive process above, every release runs a security gate
+(`tools/security-scan.sh`, invoked from `.claude/skills/ir:release/skill.md`)
+before artifacts are built: open GitHub Dependabot and CodeQL alerts,
+`govulncheck`, `gosec`, and `npm audit` across every Go module and web
+tree. Critical/High findings abort the release. The same local checks
+(without the GitHub alert queries) run via `tools/preflight.sh --only
+security` as part of the pre-push gate. GitHub CodeQL default setup covers
+Go and JavaScript/TypeScript continuously, independent of releases.
+
 ## Scope
 
 In scope:
