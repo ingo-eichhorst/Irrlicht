@@ -1797,6 +1797,32 @@ function truncate(s, n) {
   return s.slice(0, n - 1) + "…";
 }
 
+// Renders the manifestBox field list (promoted_at, daemon_version, ...) via
+// DOM construction rather than an innerHTML template literal, so a manifest
+// value can never be interpreted as markup regardless of what a recording's
+// manifest.json contains. alwaysEllipsis matches the archive case, which
+// appends "…" after recipe_hash unconditionally; the newest-recording case
+// only appends it when a hash is present.
+export function renderManifestFields(m, passRateLabel, alwaysEllipsis) {
+  const frag = document.createDocumentFragment();
+  const row = (label, ...valueParts) => {
+    const b = document.createElement("b");
+    b.textContent = `${label}:`;
+    frag.append(b, " ", ...valueParts, document.createElement("br"));
+  };
+  row("promoted_at", m.promoted_at || "");
+  row("daemon_version", m.daemon_version || "");
+  row("agent_cli_version", m.agent_cli_version || "");
+  const code = document.createElement("code");
+  code.textContent = (m.recipe_hash || "").slice(0, 16);
+  row("recipe_hash", code, (alwaysEllipsis || m.recipe_hash) ? "…" : "");
+  row(passRateLabel, m.expected_pass_rate || "—");
+  const last = document.createElement("b");
+  last.textContent = "recording_started_at:";
+  frag.append(last, " ", m.recording_started_at || "");
+  return frag;
+}
+
 // renderRecordingHistory is the TOP-LEVEL controller for the scenario detail
 // page. It owns:
 //   - a selector with options [(none), ...recordings newest-first]. Every
@@ -1847,6 +1873,7 @@ function renderRecordingHistory(s, latestData, archives, initialArchive, recipeE
     return `${ts}${ver}${pass}`;
   }
 
+
   // Every recording lives under recordings/<name>/ — there is no separate
   // "Latest" entry. The list is newest-first by name; the newest (the one the
   // ScenarioDetail's recording-derived fields describe) is latestData.latest_recording.
@@ -1888,7 +1915,7 @@ function renderRecordingHistory(s, latestData, archives, initialArchive, recipeE
     // Reset the spec panel and the below-container before deciding
     // what to render. The Spec expectations panel always re-renders;
     // below-container is conditionally populated.
-    manifestBox.innerHTML = "";
+    manifestBox.replaceChildren();
     below.innerHTML = "";
 
     if (value === "__none__") {
@@ -1896,7 +1923,9 @@ function renderRecordingHistory(s, latestData, archives, initialArchive, recipeE
       // result/delta columns, or the summary chip. The point is "here's
       // the spec" — there's no recording to validate against.
       expHost.replaceChildren(renderExpected(latestData, "spec"));
-      manifestBox.innerHTML = `<i>No recording selected — only Spec expectations rendered. Pick a recording to see captured behavior.</i>`;
+      const i = document.createElement("i");
+      i.textContent = "No recording selected — only Spec expectations rendered. Pick a recording to see captured behavior.";
+      manifestBox.appendChild(i);
       return;
     }
 
@@ -1906,16 +1935,13 @@ function renderRecordingHistory(s, latestData, archives, initialArchive, recipeE
       expHost.replaceChildren(renderExpected(latestData));
       const lm = latestData.latest_manifest;
       if (lm) {
-        manifestBox.innerHTML = `
-          <b>promoted_at:</b> ${escapeHtml(lm.promoted_at || "")}<br>
-          <b>daemon_version:</b> ${escapeHtml(lm.daemon_version || "")}<br>
-          <b>agent_cli_version:</b> ${escapeHtml(lm.agent_cli_version || "")}<br>
-          <b>recipe_hash:</b> <code>${escapeHtml((lm.recipe_hash || "").slice(0, 16))}${lm.recipe_hash ? "…" : ""}</code><br>
-          <b>expected_pass_rate:</b> ${escapeHtml(lm.expected_pass_rate || "—")}<br>
-          <b>recording_started_at:</b> ${escapeHtml(lm.recording_started_at || "")}
-        `;
+        manifestBox.append(renderManifestFields(lm, "expected_pass_rate", /*alwaysEllipsis=*/false));
       } else {
-        manifestBox.innerHTML = `<i>Showing the newest recording (<code>recordings/${escapeHtml(newestName)}/</code>).</i>`;
+        const i = document.createElement("i");
+        const code = document.createElement("code");
+        code.textContent = `recordings/${newestName}/`;
+        i.append("Showing the newest recording (", code, ").");
+        manifestBox.appendChild(i);
       }
       renderRecordingPanels(latestData, /*recordingName=*/newestName);
       return;
@@ -1924,14 +1950,7 @@ function renderRecordingHistory(s, latestData, archives, initialArchive, recipeE
     // An older recording selected.
     const arch = (archives || []).find(a => a.name === value);
     if (arch) {
-      manifestBox.innerHTML = `
-        <b>promoted_at:</b> ${escapeHtml(arch.promoted_at || "")}<br>
-        <b>daemon_version:</b> ${escapeHtml(arch.daemon_version || "")}<br>
-        <b>agent_cli_version:</b> ${escapeHtml(arch.agent_cli_version || "")}<br>
-        <b>recipe_hash:</b> <code>${escapeHtml((arch.recipe_hash || "").slice(0, 16))}…</code><br>
-        <b>expected_pass_rate (at promote):</b> ${escapeHtml(arch.expected_pass_rate || "—")}<br>
-        <b>recording_started_at:</b> ${escapeHtml(arch.recording_started_at || "")}
-      `;
+      manifestBox.append(renderManifestFields(arch, "expected_pass_rate (at promote)", /*alwaysEllipsis=*/true));
     }
     const archDetail = await fetch(
       `/api/scenarios/${s.agent}/${s.subtree}/${s.id}/recordings/${encodeURIComponent(value)}`
@@ -1952,11 +1971,19 @@ function renderRecordingHistory(s, latestData, archives, initialArchive, recipeE
       if (frozenRate === freshRate) {
         driftNote.style.background = "#fafaf2";
         driftNote.style.color = "#555";
-        driftNote.innerHTML = `<b>No drift:</b> archive's frozen pass rate (${escapeHtml(frozenRate)}) matches a fresh evaluation against today's spec.`;
+        const b = document.createElement("b");
+        b.textContent = "No drift:";
+        driftNote.append(b, ` archive's frozen pass rate (${frozenRate}) matches a fresh evaluation against today's spec.`);
       } else {
         driftNote.style.background = "#fff7d6";
         driftNote.style.color = "#8a4500";
-        driftNote.innerHTML = `<b>Drift detected:</b> at promote time the archive showed <code>${escapeHtml(frozenRate)}</code>; today's spec rates the same archive as <code>${escapeHtml(freshRate)}</code>.`;
+        const b = document.createElement("b");
+        b.textContent = "Drift detected:";
+        const codeFrozen = document.createElement("code");
+        codeFrozen.textContent = frozenRate;
+        const codeFresh = document.createElement("code");
+        codeFresh.textContent = freshRate;
+        driftNote.append(b, " at promote time the archive showed ", codeFrozen, "; today's spec rates the same archive as ", codeFresh, ".");
       }
       manifestBox.appendChild(driftNote);
     }

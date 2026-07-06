@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"path/filepath"
 	"sort"
-	"strings"
 
 	"irrlicht/tools/onboarding-factory/internal/validate"
 )
@@ -38,36 +37,39 @@ func (s *Server) handleRecordingsList(w http.ResponseWriter, scenarioDir string)
 // for one archived recording. Mirrors the main scenario-detail shape but
 // pulls from recordings/<name>/ and re-validates against the CURRENT
 // top-level expected.jsonl (the drift signal).
-func (s *Server) handleArchivedRecording(w http.ResponseWriter, scenarioDir, name string) {
+func (s *Server) handleArchivedRecording(w http.ResponseWriter, scenarioDir, rawName string) {
 	// Defense in depth — the URL slug regex constrained agent + id, not the
-	// archive name. Disallow path traversal here.
-	if strings.Contains(name, "..") || strings.ContainsRune(name, filepath.Separator) {
+	// archive name. NewSafeArchiveName disallows path traversal, and every
+	// path built below is only reachable through the SafeArchiveName it
+	// returns, so a future call site can't bypass the check.
+	name, err := NewSafeArchiveName(rawName)
+	if err != nil {
 		http.Error(w, "invalid archive name", http.StatusBadRequest)
 		return
 	}
 	store := s.store()
-	archiveDir := filepath.Join(scenarioDir, "recordings", name)
+	archiveDir := store.archiveFilePath(scenarioDir, name, "")
 	if !store.exists(archiveDir) {
 		http.Error(w, "archive not found", http.StatusNotFound)
 		return
 	}
-	d := ArchivedRecordingDetail{Name: name}
-	if b, ok := store.readFile(filepath.Join(archiveDir, "manifest.json")); ok {
+	d := ArchivedRecordingDetail{Name: string(name)}
+	if b, ok := store.readFile(store.archiveFilePath(scenarioDir, name, "manifest.json")); ok {
 		if err := json.Unmarshal(b, &d.Manifest); err != nil {
 			logViewerError("handleArchivedRecording: malformed manifest.json in archive %q: %v", name, err)
 		}
-		d.Manifest.Name = name
+		d.Manifest.Name = string(name)
 	}
-	d.Transitions = readTransitionsRaw(filepath.Join(archiveDir, "events.jsonl"))
+	d.Transitions = readTransitionsRaw(store.archiveFilePath(scenarioDir, name, "events.jsonl"))
 	// Re-evaluate the archive against the CURRENT top-level expected.jsonl.
 	// Drift signal: archive may have passed at promote-time but fail today
 	// because the spec moved.
 	if rep, err := validate.ValidateExpectedAgainst(
 		filepath.Join(scenarioDir, "expected.jsonl"),
-		filepath.Join(archiveDir, "events.jsonl"),
+		store.archiveFilePath(scenarioDir, name, "events.jsonl"),
 	); err == nil && rep != nil {
 		d.Expected = rep
 	}
-	d.Tools = extractToolCalls(filepath.Join(archiveDir, "transcript.jsonl"))
+	d.Tools = extractToolCalls(store.archiveFilePath(scenarioDir, name, "transcript.jsonl"))
 	writeJSON(w, d)
 }
