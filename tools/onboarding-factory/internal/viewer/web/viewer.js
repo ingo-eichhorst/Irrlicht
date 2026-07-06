@@ -4,7 +4,7 @@
 // reason panel showing rule_id + signal_ref + evidence.
 
 import {
-  deriveEventOffsets, findOffsetBefore, findOffsetAfter,
+  deriveEventOffsets, findOffsetBefore, findOffsetAfter, resolveDashboardIframeUrl,
 } from './playbackTimeline.js';
 import {
   paintStateBand, paintEventDots, paintTurns, paintExpectedLane,
@@ -2417,17 +2417,26 @@ function renderPlayback(s, detailData, archiveName) {
     // Deduplicate offsets so a cluster of same-instant events doesn't
     // ping the prev/next buttons multiple times in one click.
     eventOffsets = deriveEventOffsets(events);
-    // Append a cache-buster so re-clicking Play actually reloads the
-    // dashboard inside the iframe (setting iframe.src to the same URL is
-    // a no-op in browsers — the WebSocket inside stays open with stale
-    // state). The query param is harmless to the dashboard's relative
-    // fetches.
-    const url = body.dashboard_url;
-    iframe.src = url + (url.includes("?") ? "&" : "?") + "pb=" + body.playback_id;
-    iframeWrap.style.display = "block";
-    iframeLabel.textContent = `${body.dashboard_url}` +
-      (totalMs ? ` — total ${(totalMs/1000).toFixed(1)}s` : "") +
-      (events.length ? ` — ${events.length} events` : "");
+    // resolveDashboardIframeUrl rejects anything but an http(s), same-origin
+    // URL (dashboard_url is server-provided) and appends a cache-buster so
+    // re-clicking Play actually reloads the dashboard inside the iframe
+    // (setting iframe.src to the same URL is normally a no-op in browsers —
+    // the WebSocket inside stays open with stale state). The replay itself
+    // is already running server-side by this point, so a rejected URL only
+    // blanks the iframe — it doesn't stop the rest of the timeline (scrubber,
+    // event markers, status polling) from wiring up below.
+    const safeUrl = resolveDashboardIframeUrl(body.dashboard_url, body.playback_id, window.location.origin);
+    if (safeUrl) {
+      iframe.src = safeUrl;
+      iframeWrap.style.display = "block";
+      iframeLabel.textContent = `${body.dashboard_url}` +
+        (totalMs ? ` — total ${(totalMs/1000).toFixed(1)}s` : "") +
+        (events.length ? ` — ${events.length} events` : "");
+    } else {
+      console.warn(`replay start: rejected unsafe dashboard_url ${JSON.stringify(body.dashboard_url)}`);
+      iframe.src = "about:blank";
+      iframeWrap.style.display = "none";
+    }
     btnPlay.disabled = true;
     btnPause.disabled = false;
     btnStop.disabled = false;

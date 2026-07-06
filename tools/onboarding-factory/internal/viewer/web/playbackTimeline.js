@@ -307,3 +307,24 @@ export function findOffsetAfter(sorted, cur) {
   }
   return null;
 }
+
+// resolveDashboardIframeUrl validates a server-provided dashboard_url before
+// it's assigned to an iframe's src. Rejects anything that isn't an http(s)
+// URL on the viewer's own origin (e.g. a `javascript:` scheme, or a URL
+// pointing at a third-party host) by returning null. On success, appends
+// `pb=<playbackId>` as a cache-buster so re-clicking Play reloads the
+// dashboard even though setting iframe.src to an unchanged URL is normally
+// a no-op. Pure.
+export function resolveDashboardIframeUrl(dashboardUrl, playbackId, origin) {
+  if (typeof dashboardUrl !== "string" || dashboardUrl.trim() === "") return null;
+  let parsed;
+  try {
+    parsed = new URL(dashboardUrl, origin);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+  if (parsed.origin !== origin) return null;
+  parsed.searchParams.set("pb", playbackId);
+  return parsed.toString();
+}
