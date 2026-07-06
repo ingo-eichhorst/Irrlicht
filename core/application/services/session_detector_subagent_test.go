@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,6 +15,80 @@ import (
 	"irrlicht/core/ports/inbound"
 	"irrlicht/core/ports/outbound"
 )
+
+// workflowChildMetrics returns a funcMetrics that reports a live, mid-tool-call
+// subagent for any Workflow-tool fan-out path (.../subagents/workflows/...)
+// and falls back to nil (no-op merge) for everything else — the parent's own
+// fake, non-backed transcript path included. Used by the #889 regression
+// tests below to give freshly-discovered children real metrics, since
+// mockMetrics.ComputeMetrics always returns nil.
+func workflowChildMetrics() *funcMetrics {
+	return &funcMetrics{fn: func(path, adapter string) (*session.SessionMetrics, error) {
+		if !strings.Contains(path, "subagents/workflows") {
+			return nil, nil
+		}
+		return &session.SessionMetrics{
+			LastEventType:     "tool_use",
+			HasOpenToolCall:   true,
+			LastOpenToolNames: []string{"Bash"},
+		}, nil
+	}}
+}
+
+// setupWorkflowChildDiscovery reproduces the #889 bug precondition: a parent
+// whose turn is already done and sitting at ready (no children discovered
+// yet), then fires a new Workflow-tool child transcript for it — path shape
+// matching the fan-out layout from issue #565,
+// .../<parent>/subagents/workflows/<runID>/<childSessionID>.jsonl — and waits
+// for the parent to be held working. Returns the running detector so callers
+// can either assert immediately or drive further scenarios (e.g. the
+// stale-session sweep) before calling cancel/done themselves.
+func setupWorkflowChildDiscovery(t *testing.T, parentID, childSessionID, runID string) (repo *mockRepo, det *services.SessionDetector, cancel context.CancelFunc, done chan error) {
+	t.Helper()
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo = newMockRepo()
+
+	det = newDetectorWithMetrics(tw, pw, repo, workflowChildMetrics())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done = make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	time.Sleep(20 * time.Millisecond)
+
+	now := time.Now().Unix()
+	repo.Save(&session.SessionState{
+		SessionID:      parentID,
+		State:          session.StateReady,
+		TranscriptPath: "/home/.claude/projects/-Users-test/" + parentID + ".jsonl",
+		FirstSeen:      now,
+		UpdatedAt:      now,
+		EventCount:     5,
+		Metrics: &session.SessionMetrics{
+			LastEventType:     "turn_done",
+			HasOpenToolCall:   false,
+			LastAssistantText: "The background workflow is running. I'll be notified when it completes.",
+		},
+	})
+
+	runDir := filepath.Join(t.TempDir(), parentID, "subagents", "workflows", runID)
+	if err := os.MkdirAll(runDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	childPath := filepath.Join(runDir, childSessionID+".jsonl")
+	writeOldTranscript(t, childPath, 0)
+
+	tw.ch <- agent.Event{
+		Type:           agent.EventNewSession,
+		SessionID:      childSessionID,
+		ProjectDir:     runID,
+		TranscriptPath: childPath,
+	}
+
+	waitForSessionState(repo, parentID, session.StateWorking, time.Second)
+	return repo, det, cancel, done
+}
 
 // --- parent-child state propagation tests ------------------------------------
 
@@ -81,6 +156,94 @@ func TestSessionDetector_ParentHeldWorking_WhenChildrenActive(t *testing.T) {
 
 	cancel()
 	<-done
+}
+
+// TestSessionDetector_ParentHeldWorking_WhenNewChildDiscoveredWhileReady
+// reproduces issue #889: a parent running a background Workflow-tool call can
+// have its own turn-done fire while it has zero active children — either
+// because the workflow's first subagent hasn't been discovered yet, or
+// because a pipeline stage boundary left it with none for a moment. With no
+// active children, hasActiveChildren finds nothing and the classifier flips
+// the parent to ready. Moments later the next stage's subagent transcript
+// appears — proof the background job is still running — but before this fix
+// nothing re-evaluated the parent at that point: the new child itself starts
+// in the generic "ready until proven otherwise" state too, so waiting for its
+// own content-based classification left the parent showing ready for as long
+// as tens of seconds in production.
+//
+// holdParentWorkingForNewChild closes this by forcing an already-ready parent
+// back to working the instant a new child of it is discovered, rather than
+// waiting for either the child's own next activity pass or an incidental
+// hook event on the parent to catch it.
+func TestSessionDetector_ParentHeldWorking_WhenNewChildDiscoveredWhileReady(t *testing.T) {
+	repo, _, cancel, done := setupWorkflowChildDiscovery(t, "parent-wf-889", "agent-review1", "wf_a1b2c3")
+	cancel()
+	<-done
+
+	parent, _ := repo.Load("parent-wf-889")
+	if parent == nil {
+		t.Fatal("parent session should still exist")
+	}
+	if parent.State != session.StateWorking {
+		t.Errorf("parent state: got %q, want working — new child discovered while ready must hold it", parent.State)
+	}
+
+	child, _ := repo.Load("agent-review1")
+	if child == nil {
+		t.Fatal("child session should have been created")
+	}
+	if child.ParentSessionID != "parent-wf-889" {
+		t.Errorf("child ParentSessionID: got %q, want %q", child.ParentSessionID, "parent-wf-889")
+	}
+	if child.State != session.StateWorking {
+		t.Errorf("child state: got %q, want working — classified against its own metrics at creation, not left at the generic ready bootstrap", child.State)
+	}
+}
+
+// TestSessionDetector_ParentHeldWorking_SurvivesStaleSessionRefresh guards
+// the other half of issue #889's fix: holdParentWorkingForNewChild alone only
+// flips the parent's State in memory for one instant. If the newly-discovered
+// child were left at its generic bootstrap ready state, hasActiveChildren
+// would not count it as active, and the periodic stale-session refresh
+// (staleWorkingRefreshInterval, 5s) would re-run the classifier against the
+// parent's unchanged turn-done metrics, find no active children, and silently
+// flip the parent straight back to ready — reproducing #889 a few seconds
+// later instead of fixing it. Classifying the child against its own metrics
+// at creation (in onNewSession) closes this: the child persists as working,
+// so hasActiveChildren keeps holding the parent on every subsequent sweep.
+func TestSessionDetector_ParentHeldWorking_SurvivesStaleSessionRefresh(t *testing.T) {
+	repo, det, cancel, done := setupWorkflowChildDiscovery(t, "parent-wf-sweep", "agent-review2", "wf_d4e5f6")
+
+	// Age both parent and child well past staleWorkingRefreshInterval (5s) so
+	// the sweep's staleness gate doesn't skip them, then run it directly
+	// instead of waiting on the real ticker.
+	stale := time.Now().Add(-10 * time.Minute).Unix()
+	parent, _ := repo.Load("parent-wf-sweep")
+	parent.UpdatedAt = stale
+	repo.Save(parent)
+	child, _ := repo.Load("agent-review2")
+	child.UpdatedAt = stale
+	repo.Save(child)
+
+	det.RunStaleSessionRefreshForTest()
+
+	// Poll instead of a fixed sleep: the sweep dispatches through the same
+	// async event-loop path as a real transcript event.
+	waitForCondition(func() bool {
+		p, _ := repo.Load("parent-wf-sweep")
+		return p != nil && p.State == session.StateWorking
+	}, time.Second)
+
+	cancel()
+	<-done
+
+	parent, _ = repo.Load("parent-wf-sweep")
+	if parent == nil {
+		t.Fatal("parent session should still exist")
+	}
+	if parent.State != session.StateWorking {
+		t.Errorf("parent state after stale-session refresh: got %q, want working — the child must still count as active", parent.State)
+	}
 }
 
 func TestSessionDetector_ParentReleasedToReady_WhenChildFinishes(t *testing.T) {
