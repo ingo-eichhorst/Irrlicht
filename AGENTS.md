@@ -5,7 +5,8 @@
 - "wt+plan" = create a worktree for the following issue. move into the worktree and plan execution
 - "wt+exec" = create a worktree for the following issue. move into the worktree, plan and directly execute
 - "wt+full" = create a worktree for the following issue. move into the worktree, plan, directly execute and start the code-review skill on low, then fix all issues and open a PR.
-- "wt+close" = make sure all contents of the worktree are pushed to a pr. Then close the worktree, move back to main and delete the worktree
+- "wt+close" = make sure all contents of the worktree are pushed to a pr. Then merge to main and close the worktree, move back to main and delete the worktree
+- NEVER RUN: workflow skill if not explicitly requested (too expensive)
 
 Worktrees share the parent repo's `.git` dir, so **`git stash` is not
 isolated per worktree** — it's a single shared stack. Concurrent agents
