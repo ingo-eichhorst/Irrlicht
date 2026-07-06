@@ -10,6 +10,7 @@
 
 [![CodeScene](https://img.shields.io/endpoint?url=https%3A%2F%2Fgist.githubusercontent.com%2Fingo-eichhorst%2F9f14c8e5f25c1ccf5d6500c1685fd9fb%2Fraw%2Fcodescene.json)](https://github.com/ingo-eichhorst/Irrlicht/actions/workflows/codescene-badge.yml)
 [![ARS](https://img.shields.io/badge/ARS-Agent--Ready%208.1%2F10-green)](https://github.com/ingo-eichhorst/agent-readyness)
+[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=ingo-eichhorst_Irrlicht&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=ingo-eichhorst_Irrlicht)
 
 [🌐 Landing Page](https://ingo-eichhorst.github.io/Irrlicht/) · [📖 Documentation](https://ingo-eichhorst.github.io/Irrlicht/docs/quickstart.html) · [📦 Latest Release](https://github.com/ingo-eichhorst/Irrlicht/releases/latest)
 
