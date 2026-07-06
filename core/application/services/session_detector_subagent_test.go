@@ -35,6 +35,61 @@ func workflowChildMetrics() *funcMetrics {
 	}}
 }
 
+// setupWorkflowChildDiscovery reproduces the #889 bug precondition: a parent
+// whose turn is already done and sitting at ready (no children discovered
+// yet), then fires a new Workflow-tool child transcript for it — path shape
+// matching the fan-out layout from issue #565,
+// .../<parent>/subagents/workflows/<runID>/<childSessionID>.jsonl — and waits
+// for the parent to be held working. Returns the running detector so callers
+// can either assert immediately or drive further scenarios (e.g. the
+// stale-session sweep) before calling cancel/done themselves.
+func setupWorkflowChildDiscovery(t *testing.T, parentID, childSessionID, runID string) (repo *mockRepo, det *services.SessionDetector, cancel context.CancelFunc, done chan error) {
+	t.Helper()
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo = newMockRepo()
+
+	det = newDetectorWithMetrics(tw, pw, repo, workflowChildMetrics())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done = make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	time.Sleep(20 * time.Millisecond)
+
+	now := time.Now().Unix()
+	repo.Save(&session.SessionState{
+		SessionID:      parentID,
+		State:          session.StateReady,
+		TranscriptPath: "/home/.claude/projects/-Users-test/" + parentID + ".jsonl",
+		FirstSeen:      now,
+		UpdatedAt:      now,
+		EventCount:     5,
+		Metrics: &session.SessionMetrics{
+			LastEventType:     "turn_done",
+			HasOpenToolCall:   false,
+			LastAssistantText: "The background workflow is running. I'll be notified when it completes.",
+		},
+	})
+
+	runDir := filepath.Join(t.TempDir(), parentID, "subagents", "workflows", runID)
+	if err := os.MkdirAll(runDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	childPath := filepath.Join(runDir, childSessionID+".jsonl")
+	writeOldTranscript(t, childPath, 0)
+
+	tw.ch <- agent.Event{
+		Type:           agent.EventNewSession,
+		SessionID:      childSessionID,
+		ProjectDir:     runID,
+		TranscriptPath: childPath,
+	}
+
+	waitForSessionState(repo, parentID, session.StateWorking, time.Second)
+	return repo, det, cancel, done
+}
+
 // --- parent-child state propagation tests ------------------------------------
 
 func TestSessionDetector_ParentHeldWorking_WhenChildrenActive(t *testing.T) {
@@ -121,55 +176,7 @@ func TestSessionDetector_ParentHeldWorking_WhenChildrenActive(t *testing.T) {
 // waiting for either the child's own next activity pass or an incidental
 // hook event on the parent to catch it.
 func TestSessionDetector_ParentHeldWorking_WhenNewChildDiscoveredWhileReady(t *testing.T) {
-	tw := newMockAgentWatcher()
-	pw := newMockProcessWatcher()
-	repo := newMockRepo()
-
-	det := newDetectorWithMetrics(tw, pw, repo, workflowChildMetrics())
-
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- det.Run(ctx) }()
-
-	time.Sleep(20 * time.Millisecond)
-
-	now := time.Now().Unix()
-
-	// Parent: already flipped to ready — its turn ended before any
-	// subagent of the just-dispatched background workflow was discovered.
-	repo.Save(&session.SessionState{
-		SessionID:      "parent-wf-889",
-		State:          session.StateReady,
-		TranscriptPath: "/home/.claude/projects/-Users-test/parent-wf-889.jsonl",
-		FirstSeen:      now,
-		UpdatedAt:      now,
-		EventCount:     5,
-		Metrics: &session.SessionMetrics{
-			LastEventType:     "turn_done",
-			HasOpenToolCall:   false,
-			LastAssistantText: "The background workflow is running. I'll be notified when it completes.",
-		},
-	})
-
-	// The workflow's first subagent transcript appears. Path shape matches
-	// the Workflow-tool fan-out layout (issue #565):
-	// .../<parent>/subagents/workflows/<run-id>/agent-<id>.jsonl
-	tmpDir := t.TempDir()
-	runDir := filepath.Join(tmpDir, "parent-wf-889", "subagents", "workflows", "wf_a1b2c3")
-	if err := os.MkdirAll(runDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-	childPath := filepath.Join(runDir, "agent-review1.jsonl")
-	writeOldTranscript(t, childPath, 0)
-
-	tw.ch <- agent.Event{
-		Type:           agent.EventNewSession,
-		SessionID:      "agent-review1",
-		ProjectDir:     "wf_a1b2c3",
-		TranscriptPath: childPath,
-	}
-
-	waitForSessionState(repo, "parent-wf-889", session.StateWorking, time.Second)
+	repo, _, cancel, done := setupWorkflowChildDiscovery(t, "parent-wf-889", "agent-review1", "wf_a1b2c3")
 	cancel()
 	<-done
 
@@ -205,50 +212,7 @@ func TestSessionDetector_ParentHeldWorking_WhenNewChildDiscoveredWhileReady(t *t
 // at creation (in onNewSession) closes this: the child persists as working,
 // so hasActiveChildren keeps holding the parent on every subsequent sweep.
 func TestSessionDetector_ParentHeldWorking_SurvivesStaleSessionRefresh(t *testing.T) {
-	tw := newMockAgentWatcher()
-	pw := newMockProcessWatcher()
-	repo := newMockRepo()
-
-	det := newDetectorWithMetrics(tw, pw, repo, workflowChildMetrics())
-
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- det.Run(ctx) }()
-
-	time.Sleep(20 * time.Millisecond)
-
-	now := time.Now().Unix()
-
-	repo.Save(&session.SessionState{
-		SessionID:      "parent-wf-sweep",
-		State:          session.StateReady,
-		TranscriptPath: "/home/.claude/projects/-Users-test/parent-wf-sweep.jsonl",
-		FirstSeen:      now,
-		UpdatedAt:      now,
-		EventCount:     5,
-		Metrics: &session.SessionMetrics{
-			LastEventType:     "turn_done",
-			HasOpenToolCall:   false,
-			LastAssistantText: "The background workflow is running. I'll be notified when it completes.",
-		},
-	})
-
-	tmpDir := t.TempDir()
-	runDir := filepath.Join(tmpDir, "parent-wf-sweep", "subagents", "workflows", "wf_d4e5f6")
-	if err := os.MkdirAll(runDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-	childPath := filepath.Join(runDir, "agent-review2.jsonl")
-	writeOldTranscript(t, childPath, 0)
-
-	tw.ch <- agent.Event{
-		Type:           agent.EventNewSession,
-		SessionID:      "agent-review2",
-		ProjectDir:     "wf_d4e5f6",
-		TranscriptPath: childPath,
-	}
-
-	waitForSessionState(repo, "parent-wf-sweep", session.StateWorking, time.Second)
+	repo, det, cancel, done := setupWorkflowChildDiscovery(t, "parent-wf-sweep", "agent-review2", "wf_d4e5f6")
 
 	// Age both parent and child well past staleWorkingRefreshInterval (5s) so
 	// the sweep's staleness gate doesn't skip them, then run it directly
