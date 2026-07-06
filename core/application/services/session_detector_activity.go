@@ -179,6 +179,22 @@ func (d *SessionDetector) onNewSession(id agent.Identity, ev agent.Event) {
 		// Resolve git metadata and compute initial metrics.
 		d.enricher.EnrichNewSession(state, ev)
 
+		// A child's own first activity event may not arrive for a while — the
+		// same background-workflow discovery lag that leaves its parent
+		// needing holdParentWorkingForNewChild below. Classify it against its
+		// own freshly-computed metrics now instead of leaving it at the
+		// generic "ready until proven otherwise" bootstrap: a child stuck at
+		// ready doesn't count as active in hasActiveChildren, so the parent's
+		// hold below can't survive past the child's own next activity pass —
+		// e.g. the periodic stale-session sweep would see the parent's own
+		// turn-done metrics unchanged, find no active children, and flip it
+		// straight back to ready (issue #889).
+		if state.ParentSessionID != "" {
+			if newState, _ := ClassifyState(state.State, state.Metrics); newState != state.State {
+				state.State = newState
+			}
+		}
+
 		if err := d.repo.Save(state); err != nil {
 			d.log.LogError("session-detector", ev.SessionID,
 				fmt.Sprintf("failed to save new session: %v", err))
@@ -193,9 +209,18 @@ func (d *SessionDetector) onNewSession(id agent.Identity, ev agent.Event) {
 		}
 
 		// Record initial state transition.
-		d.record(lifecycle.Event{Kind: lifecycle.KindStateTransition, SessionID: ev.SessionID, NewState: session.StateReady, Reason: "new session created"})
+		d.record(lifecycle.Event{Kind: lifecycle.KindStateTransition, SessionID: ev.SessionID, NewState: state.State, Reason: "new session created"})
 
 		d.broadcast(outbound.PushTypeCreated, state)
+
+		// This child's parent may have already flipped to ready before this
+		// child was discovered (e.g. a background Workflow-tool run whose
+		// turn-done fired while it had no active children yet). Hold it
+		// working now instead of waiting for the parent's own next
+		// transcript/hook event to catch it (issue #889).
+		if state.ParentSessionID != "" {
+			d.holdParentWorkingForNewChild(state.ParentSessionID)
+		}
 
 		// When a real transcript session arrives, remove any pre-sessions for
 		// the same project. Match by projectDir first (Claude Code layout),

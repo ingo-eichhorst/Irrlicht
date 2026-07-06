@@ -164,6 +164,50 @@ func (d *SessionDetector) hasActiveChildren(parentID string) bool {
 	return false
 }
 
+// holdParentWorkingForNewChild forces a parent session that is sitting at
+// ready back to working the moment a new child of it is discovered.
+//
+// A background Workflow-tool run can legitimately have zero active children
+// for a stretch: before its first subagent's transcript appears, or between
+// pipeline stages (a stage's children finish and are cleaned up before the
+// next stage's children are discovered). If the parent's own turn-done fires
+// during one of those windows, hasActiveChildren finds nothing and the
+// classifier flips the parent to ready — even though the child just
+// discovered here proves the background job is still running. The child
+// itself starts in the generic "ready until content proves otherwise" state
+// too, so waiting for it to be classified as working is too slow; its mere
+// existence as this parent's child is already sufficient evidence.
+//
+// This is the mirror image of reevaluateParent, which only ever pulls a
+// held-working parent down to ready — it never pushes a wrongly-ready parent
+// back up. See issue #889.
+//
+// Runs under WithSessionStateLock, matching every other load-modify-save of
+// an already-existing SessionState in this package: the parent may have its
+// own PID-discovery goroutine in flight (assignPIDLocked writes state.PID/
+// UpdatedAt on the same shared pointer), and without the lock this would
+// race it (issue #606).
+func (d *SessionDetector) holdParentWorkingForNewChild(parentID string) {
+	d.pidMgr.WithSessionStateLock(func() {
+		parent, err := d.repo.Load(parentID)
+		if err != nil || parent == nil || parent.State != session.StateReady {
+			return
+		}
+		d.record(lifecycle.Event{Kind: lifecycle.KindStateTransition, SessionID: parentID, PrevState: parent.State, NewState: session.StateWorking, Reason: "new child discovered while ready — holding working"})
+		parent.State = session.StateWorking
+		parent.UpdatedAt = time.Now().Unix()
+		d.refreshSubagentSummary(parent)
+		if err := d.repo.Save(parent); err != nil {
+			d.log.LogError("session-detector", parentID,
+				fmt.Sprintf("failed to hold parent working for new child: %v", err))
+			return
+		}
+		d.log.LogInfo("session-detector", parentID,
+			"holding parent working — new child discovered while ready")
+		d.broadcast(outbound.PushTypeUpdated, parent)
+	})
+}
+
 // reevaluateParent checks whether a parent session should transition now that
 // a child's state has changed. If the parent's own turn is done (IsAgentDone)
 // and no more active children remain, the parent transitions to ready (or

@@ -308,6 +308,14 @@ func (d *SessionDetector) RunPIDLivenessSweepForTest() {
 	d.pidMgr.CheckPIDLiveness()
 }
 
+// RunStaleSessionRefreshForTest runs one iteration of the stale-working
+// refresh synchronously. Intended for tests that need to exercise the
+// periodic re-classification pass without waiting for the real
+// staleWorkingRefreshInterval ticker.
+func (d *SessionDetector) RunStaleSessionRefreshForTest() {
+	d.refreshStaleSessions()
+}
+
 // CleanupZombies runs a one-shot startup sweep that deletes persisted
 // sessions whose process is provably gone. Call before the daemon starts
 // serving requests so the API never returns stale records inherited from a
