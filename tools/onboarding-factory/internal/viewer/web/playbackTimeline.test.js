@@ -2,6 +2,7 @@ import { describe, test, expect } from 'vitest'
 import {
   isPresession, eventStyle, computeStateBand, computeEventDots, computeTurns,
   computeExpectedLane, deriveEventOffsets, findOffsetBefore, findOffsetAfter,
+  resolveDashboardIframeUrl,
 } from './playbackTimeline.js'
 
 describe('isPresession', () => {
@@ -201,5 +202,40 @@ describe('findOffsetBefore / findOffsetAfter', () => {
     expect(findOffsetAfter(sorted, -1)).toBe(100)
     expect(findOffsetAfter(sorted, 300)).toBeNull()
     expect(findOffsetAfter([], 50)).toBeNull()
+  })
+})
+
+describe('resolveDashboardIframeUrl', () => {
+  const origin = 'http://localhost:5173'
+  test('relative same-origin path resolves and gets a pb cache-buster', () => {
+    expect(resolveDashboardIframeUrl('/dashboard', 'pb-1', origin))
+      .toBe('http://localhost:5173/dashboard?pb=pb-1')
+  })
+  test('absolute same-origin URL with an existing query string keeps it and adds pb', () => {
+    expect(resolveDashboardIframeUrl('http://localhost:5173/dashboard?foo=bar', 'pb-2', origin))
+      .toBe('http://localhost:5173/dashboard?foo=bar&pb=pb-2')
+  })
+  test('javascript: scheme is rejected', () => {
+    expect(resolveDashboardIframeUrl('javascript:alert(1)', 'pb-3', origin)).toBeNull()
+  })
+  test('data: scheme is rejected', () => {
+    expect(resolveDashboardIframeUrl('data:text/html,<script>alert(1)</script>', 'pb-4', origin)).toBeNull()
+  })
+  test('cross-origin http(s) URL is rejected', () => {
+    expect(resolveDashboardIframeUrl('https://evil.example/dashboard', 'pb-5', origin)).toBeNull()
+  })
+  test('protocol-relative URL pointing off-origin is rejected', () => {
+    expect(resolveDashboardIframeUrl('//evil.example/dashboard', 'pb-6', origin)).toBeNull()
+  })
+  test('unparseable URL is rejected', () => {
+    expect(resolveDashboardIframeUrl('http://', 'pb-7', origin)).toBeNull()
+  })
+  test('nullish or empty dashboard_url is rejected', () => {
+    expect(resolveDashboardIframeUrl(null, 'pb-8', origin)).toBeNull()
+    expect(resolveDashboardIframeUrl(undefined, 'pb-8', origin)).toBeNull()
+    expect(resolveDashboardIframeUrl('', 'pb-8', origin)).toBeNull()
+  })
+  test('whitespace-only dashboard_url is rejected, not silently resolved to the origin root', () => {
+    expect(resolveDashboardIframeUrl('   ', 'pb-9', origin)).toBeNull()
   })
 })
