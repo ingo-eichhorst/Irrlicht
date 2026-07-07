@@ -217,7 +217,11 @@ trap cleanup EXIT
 # sidesteps TUI-input timing entirely: vibe boots, submits the prompt, and stays
 # interactive. Empty when the first step isn't a send (then we fall back to the
 # tmux-send path with a readiness wait).
-FIRST_PROMPT="$(jq -r '.[0] | select(.type=="send" or .type=="slash") | .text // empty' <<<"$SCRIPT_JSON" 2>/dev/null || true)"
+# Only a `send` first step becomes vibe's launch positional prompt. A leading
+# slash is a COMMAND (e.g. /loop): passed as the positional, vibe runs it once as
+# a plain user message instead of registering it (a scheduled loop never starts),
+# so a first-step slash must be typed into the live REPL via the bare-launch path.
+FIRST_PROMPT="$(jq -r '.[0] | select(.type=="send") | .text // empty' <<<"$SCRIPT_JSON" 2>/dev/null || true)"
 FIRST_SEND_PENDING=0
 
 launch_repl() {
@@ -395,6 +399,12 @@ while IFS= read -r step; do
 done < <(jq -c '.[]' <<<"$SCRIPT_JSON")
 
 # --- Write the staging contract (shared) -------------------------------------
+# A recipe with no wait_turn step (e.g. autonomous-loop, driven entirely by
+# sleeps around /loop) never calls resolve_transcript during dispatch, so the
+# active slot's transcript is still unbound. Bind it now — the session dir exists
+# by end-of-run — so the contract carries a real session id instead of "missing".
+resolve_transcript || true
+#
 # emit_session_contract writes session.uuid + transcript.path (slot 1) plus the
 # multi-session session.uuids / transcript.paths lists from SES_TRANSCRIPT, and
 # combines the per-slot stdout (_lib/drive/contracts.sh). It needs each slot's
