@@ -626,27 +626,24 @@ func (d *SessionDetector) processActivityLocked(id agent.Identity, state *sessio
 		// cleanupChildren either way (finishOrphanedChildren's quiet-window
 		// and open-tool guards already leave a truly running child alone).
 		parentHeldWorking := false
+		holdWorkingIfChildrenActive := func(logMsg string) {
+			if !d.holdIfChildrenActive(state.SessionID) {
+				return
+			}
+			d.log.LogInfo(logComponentSessionDetector, ev.SessionID, logMsg)
+			newState = session.StateWorking
+			reason = ""
+			parentHeldWorking = true
+		}
 		if state.ParentSessionID == "" {
 			switch {
 			case newState == session.StateReady:
-				if d.holdIfChildrenActive(state.SessionID) {
-					d.log.LogInfo(logComponentSessionDetector, ev.SessionID,
-						"holding parent working — active children still running")
-					newState = session.StateWorking
-					reason = ""
-					parentHeldWorking = true
-				}
+				holdWorkingIfChildrenActive("holding parent working — active children still running")
 			case newState == session.StateWaiting && state.Metrics != nil && state.Metrics.IsAgentDone():
 				// Turn-done waiting (question/cue). Permission-prompt
 				// waiting never reaches here: its open tool call makes
 				// IsAgentDone return false.
-				if d.holdIfChildrenActive(state.SessionID) {
-					d.log.LogInfo(logComponentSessionDetector, ev.SessionID,
-						"holding parent working — active children still running (turn ended in waiting cue)")
-					newState = session.StateWorking
-					reason = ""
-					parentHeldWorking = true
-				}
+				holdWorkingIfChildrenActive("holding parent working — active children still running (turn ended in waiting cue)")
 			}
 		}
 
