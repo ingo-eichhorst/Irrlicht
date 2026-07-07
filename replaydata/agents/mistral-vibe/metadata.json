@@ -1,0 +1,10 @@
+{
+  "id": "mistral-vibe",
+  "name": "Mistral Vibe",
+  "provider": "mistral",
+  "prerequisites": [
+    "install the Mistral Vibe CLI so the 'vibe' binary is on PATH: 'uv tool install mistral-vibe' or 'curl -LsSf https://mistral.ai/vibe/install.sh | bash'",
+    "provide a Mistral API key (MISTRAL_API_KEY env var, or let 'vibe' save it to ~/.vibe/.env on first run — from console.mistral.ai)",
+    "config file ~/.vibe/config.toml selecting a model/provider (e.g. Devstral 2 or Mistral Medium 3.5)"
+  ]
+}
