@@ -346,18 +346,26 @@ func (t *CostTracker) CostsInWindows(windowSeconds map[string]int64) (byProject,
 			return nil, nil, err
 		}
 		fallback := strings.TrimSuffix(e.Name(), costFileExt)
-		for _, s := range agg {
-			projectKey := s.project
-			if projectKey == "" {
-				projectKey = fallback
-			}
-			addContributions(s, projectKey, byProject)
-			if s.provider != "" {
-				addContributions(s, s.provider, byProvider)
-			}
-		}
+		foldSessionWindows(agg, fallback, byProject, byProvider)
 	}
 	return byProject, byProvider, nil
+}
+
+// foldSessionWindows folds one file's per-session window aggregates into the
+// project and provider rollups: byProject is keyed by project (falling back
+// to fallback when a session's rows carried no project); byProvider is keyed
+// by billing provider and only receives sessions with a known provider.
+func foldSessionWindows(agg map[string]*sessionWindows, fallback string, byProject, byProvider map[string]map[string]float64) {
+	for _, s := range agg {
+		projectKey := s.project
+		if projectKey == "" {
+			projectKey = fallback
+		}
+		addContributions(s, projectKey, byProject)
+		if s.provider != "" {
+			addContributions(s, s.provider, byProvider)
+		}
+	}
 }
 
 // newWindowMap allocates an outer timeframe→inner-map structure with one empty
@@ -425,30 +433,37 @@ func (t *CostTracker) scanWindows(path string, cutoffs map[string]int64) (map[st
 			s.provider = r.Provider
 		}
 		for k, cutoff := range cutoffs {
-			w := s.windows[k]
-			if r.TS < cutoff {
-				w.baseline = r.Cost
-				w.hasBaseline = true
-				w.baselineInside = false
-				continue
-			}
-			if !w.hasBaseline {
-				w.baseline = r.Cost
-				w.hasBaseline = true
-				w.baselineInside = true
-			} else if w.baselineInside && r.Cost < w.baseline {
-				w.baseline = r.Cost
-			}
-			if !w.hasMax || r.Cost > w.max {
-				w.max = r.Cost
-				w.hasMax = true
-			}
+			updateWindowAgg(s.windows[k], r.TS, r.Cost, cutoff)
 		}
 	})
 	if err != nil {
 		return nil, err
 	}
 	return agg, nil
+}
+
+// updateWindowAgg folds one row into one window's baseline/max aggregator,
+// implementing scanWindows' rule: baseline = cost at the row just before
+// cutoff if one exists, otherwise the minimum cost observed inside the
+// window; max = running maximum cost observed at/after the cutoff.
+func updateWindowAgg(w *windowAgg, ts int64, cost float64, cutoff int64) {
+	if ts < cutoff {
+		w.baseline = cost
+		w.hasBaseline = true
+		w.baselineInside = false
+		return
+	}
+	if !w.hasBaseline {
+		w.baseline = cost
+		w.hasBaseline = true
+		w.baselineInside = true
+	} else if w.baselineInside && cost < w.baseline {
+		w.baseline = cost
+	}
+	if !w.hasMax || cost > w.max {
+		w.max = cost
+		w.hasMax = true
+	}
 }
 
 // scanCostFile streams one cost file, invoking perRow for each parsed snapshot
@@ -717,16 +732,7 @@ func (t *CostTracker) CostSeries(q outbound.SeriesQuery) (*outbound.CostSeriesRe
 func (t *CostTracker) scanSeries(path string, q outbound.SeriesQuery, f seriesFilter, bucketSeconds int64, n int, fallback string, out *outbound.CostSeriesResult) error {
 	aggs := make(map[string]*seriesAgg)
 	return scanCostFile(path, func(r snapshotRow) {
-		if q.ScopeField != "" && rowKey(r, q.ScopeField, fallback) != q.ScopeValue {
-			return
-		}
-		// Cross-filters skip non-matching rows (like scope). Project/provider
-		// are session-constant in practice, so a skipped row carries its
-		// baseline forward exactly as the scope drilldown already does.
-		if f.projects != nil && !f.projects[rowKey(r, "project", fallback)] {
-			return
-		}
-		if f.providers != nil && !f.providers[providerKey(r)] {
+		if scanSeriesRowExcluded(r, q, f, fallback) {
 			return
 		}
 		s := aggs[r.Session]
@@ -734,87 +740,137 @@ func (t *CostTracker) scanSeries(path string, q outbound.SeriesQuery, f seriesFi
 			s = &seriesAgg{}
 			aggs[r.Session] = s
 		}
-		var cur float64
-		switch q.Metric {
-		case "tokens":
-			cur = rowTokenSum(r, f.tokens)
-		case "co2":
-			cur = r.CO2Grams
-		default:
-			cur = r.Cost
-		}
+		cur := seriesMetricValue(r, q, f.tokens)
 		curIn := float64(r.CumIn)
 		curOut := float64(r.CumOut)
 		curRead := float64(r.CumRead)
 		curCreate := float64(r.CumCreate)
 
-		switch {
-		case r.TS < q.Start:
-			// Pre-range row: advance the baseline so the first in-range delta
-			// measures spend since the last snapshot.
-			//
-			// godre:S1871 — this body is identical to the !s.hasPrev branch
-			// below (advance, then return), but the two guard on unrelated
-			// conditions (time-window position vs. a missing baseline) and
-			// are kept as separate cases deliberately: merging them would
-			// require reordering relative to the r.TS >= q.End case between
-			// them, which changes behavior in the degenerate q.Start >
-			// q.End case (both guards could then be true for the same row,
-			// and case order decides the outcome).
-			s.advance(cur, curIn, curOut, curRead, curCreate)
-			return
-		case r.TS >= q.End:
-			return
-		case !s.hasPrev:
-			// First observation with no pre-range baseline: seed, no delta.
-			s.advance(cur, curIn, curOut, curRead, curCreate)
+		if s.seedOrSkip(r, q, cur, curIn, curOut, curRead, curCreate) {
 			return
 		}
 
 		// The guards above filter rows to [Start, End), so the index is always
 		// within [0, n-1] — no clamp needed.
 		idx := int((r.TS - q.Start) / bucketSeconds)
-		if f.groupByToken {
-			addBand(out, "input", idx, n, curIn-s.prevIn, f.tokens)
-			addBand(out, "output", idx, n, curOut-s.prevOut, f.tokens)
-			addBand(out, "cache_read", idx, n, curRead-s.prevRead, f.tokens)
-			addBand(out, "cache_creation", idx, n, curCreate-s.prevCreate, f.tokens)
-		} else if d := cur - s.prev; d > 0 {
-			key := rowKey(r, q.Group, fallback)
-			dst := out.ByKey[key]
-			if dst == nil {
-				dst = make([]float64, n)
-				out.ByKey[key] = dst
-			}
-			dst[idx] += d
-			out.Totals[key] += d
-		}
+		accumulateGroupedDelta(out, r, q, f, fallback, idx, n, s, cur, curIn, curOut, curRead, curCreate)
 		if out.TokenSplit != nil {
-			if f.tokens["input"] {
-				if d := curIn - s.prevIn; d > 0 {
-					out.TokenSplit.Input += d
-				}
-			}
-			if f.tokens["output"] {
-				if d := curOut - s.prevOut; d > 0 {
-					out.TokenSplit.Output += d
-				}
-			}
-			var cache float64
-			if f.tokens["cache_read"] {
-				if d := curRead - s.prevRead; d > 0 {
-					cache += d
-				}
-			}
-			if f.tokens["cache_creation"] {
-				if d := curCreate - s.prevCreate; d > 0 {
-					cache += d
-				}
-			}
-			out.TokenSplit.Cache += cache
+			accumulateTokenSplit(out.TokenSplit, f, s, curIn, curOut, curRead, curCreate)
 		}
 		s.advance(cur, curIn, curOut, curRead, curCreate)
 	})
+}
+
+// scanSeriesRowExcluded reports whether a row falls outside the query's scope
+// drilldown or cross-filters. Cross-filters skip non-matching rows (like
+// scope). Project/provider are session-constant in practice, so a skipped
+// row carries its baseline forward exactly as the scope drilldown already
+// does.
+func scanSeriesRowExcluded(r snapshotRow, q outbound.SeriesQuery, f seriesFilter, fallback string) bool {
+	if q.ScopeField != "" && rowKey(r, q.ScopeField, fallback) != q.ScopeValue {
+		return true
+	}
+	if f.projects != nil && !f.projects[rowKey(r, "project", fallback)] {
+		return true
+	}
+	if f.providers != nil && !f.providers[providerKey(r)] {
+		return true
+	}
+	return false
+}
+
+// seriesMetricValue resolves a row's value on the query's selected metric:
+// the token sum over the filter's selected token kinds, the CO2 estimate, or
+// (the default) cost.
+func seriesMetricValue(r snapshotRow, q outbound.SeriesQuery, tokens map[string]bool) float64 {
+	switch q.Metric {
+	case "tokens":
+		return rowTokenSum(r, tokens)
+	case "co2":
+		return r.CO2Grams
+	default:
+		return r.Cost
+	}
+}
+
+// seedOrSkip implements scanSeries' pre-range/window-end/first-observation
+// short-circuits for one row. Returns true when the row was fully handled
+// here (the caller stops processing it): a pre-range row or a session's
+// first observation with no pre-range baseline both seed s's running values
+// with no delta; a row at/after the window end contributes nothing.
+//
+// godre:S1871 — the pre-range and first-observation cases share an identical
+// body (advance, then report handled), but they guard on unrelated
+// conditions (time-window position vs. a missing baseline) and are kept as
+// separate cases deliberately: merging them would require reordering
+// relative to the window-end case between them, which changes behavior in
+// the degenerate q.Start > q.End case (both guards could then be true for
+// the same row, and case order decides the outcome).
+func (s *seriesAgg) seedOrSkip(r snapshotRow, q outbound.SeriesQuery, cur, curIn, curOut, curRead, curCreate float64) bool {
+	switch {
+	case r.TS < q.Start:
+		s.advance(cur, curIn, curOut, curRead, curCreate)
+		return true
+	case r.TS >= q.End:
+		return true
+	case !s.hasPrev:
+		s.advance(cur, curIn, curOut, curRead, curCreate)
+		return true
+	}
+	return false
+}
+
+// accumulateGroupedDelta folds one row's contribution into out's per-key
+// series at bucket idx: when grouping by token type, each selected token
+// kind contributes its own band (addBand); otherwise the row's positive
+// delta on the query's metric is folded into its group key's series.
+func accumulateGroupedDelta(out *outbound.CostSeriesResult, r snapshotRow, q outbound.SeriesQuery, f seriesFilter, fallback string, idx, n int, s *seriesAgg, cur, curIn, curOut, curRead, curCreate float64) {
+	if f.groupByToken {
+		addBand(out, "input", idx, n, curIn-s.prevIn, f.tokens)
+		addBand(out, "output", idx, n, curOut-s.prevOut, f.tokens)
+		addBand(out, "cache_read", idx, n, curRead-s.prevRead, f.tokens)
+		addBand(out, "cache_creation", idx, n, curCreate-s.prevCreate, f.tokens)
+		return
+	}
+	if d := cur - s.prev; d > 0 {
+		key := rowKey(r, q.Group, fallback)
+		dst := out.ByKey[key]
+		if dst == nil {
+			dst = make([]float64, n)
+			out.ByKey[key] = dst
+		}
+		dst[idx] += d
+		out.Totals[key] += d
+	}
+}
+
+// accumulateTokenSplit folds one row's per-kind deltas into ts, honoring the
+// filter's selected token kinds — used alongside the grouped series so a
+// tokens-metric query can report the input/output/cache split regardless of
+// its Group axis.
+func accumulateTokenSplit(ts *outbound.TokenSplit, f seriesFilter, s *seriesAgg, curIn, curOut, curRead, curCreate float64) {
+	if f.tokens["input"] {
+		if d := curIn - s.prevIn; d > 0 {
+			ts.Input += d
+		}
+	}
+	if f.tokens["output"] {
+		if d := curOut - s.prevOut; d > 0 {
+			ts.Output += d
+		}
+	}
+	var cache float64
+	if f.tokens["cache_read"] {
+		if d := curRead - s.prevRead; d > 0 {
+			cache += d
+		}
+	}
+	if f.tokens["cache_creation"] {
+		if d := curCreate - s.prevCreate; d > 0 {
+			cache += d
+		}
+	}
+	ts.Cache += cache
 }
 
 // co2BackfillMarker is written after BackfillCO2 completes successfully — not
@@ -897,37 +953,7 @@ func (t *CostTracker) backfillCO2File(path, project string) error {
 	w := bufio.NewWriter(out)
 	scanner := bufio.NewScanner(in)
 	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-	changed := false
-	writeErr := func() error {
-		for scanner.Scan() {
-			line := scanner.Bytes()
-			if len(line) == 0 {
-				continue
-			}
-			var r snapshotRow
-			toWrite := line
-			if err := json.Unmarshal(line, &r); err == nil {
-				total := r.CumIn + r.CumOut + r.CumRead + r.CumCreate
-				if r.CO2Grams == 0 && total > 0 {
-					grams, _ := capacity.EstimateCO2Grams(r.Model, total)
-					r.CO2Grams = grams
-					changed = true
-					marshaled, err := json.Marshal(r)
-					if err != nil {
-						return err
-					}
-					toWrite = marshaled
-				}
-			}
-			if _, err := w.Write(toWrite); err != nil {
-				return err
-			}
-			if err := w.WriteByte('\n'); err != nil {
-				return err
-			}
-		}
-		return scanner.Err()
-	}()
+	changed, writeErr := backfillLines(scanner, w)
 	if writeErr == nil {
 		writeErr = w.Flush()
 	}
@@ -944,6 +970,57 @@ func (t *CostTracker) backfillCO2File(path, project string) error {
 		return nil
 	}
 	return os.Rename(tmpPath, path)
+}
+
+// processBackfillLine returns the bytes to write for one row, estimating and
+// filling in CO2Grams when the row is missing one (CO2Grams == 0 with nonzero
+// cumulative tokens — a real zero-token row has nothing to estimate from and
+// is left alone). Malformed lines are carried through byte-for-byte, matching
+// backfillCO2File's never-lose-data contract. changed reports whether the
+// line was rewritten.
+func processBackfillLine(line []byte) (toWrite []byte, changed bool, err error) {
+	var r snapshotRow
+	if err := json.Unmarshal(line, &r); err != nil {
+		return line, false, nil
+	}
+	total := r.CumIn + r.CumOut + r.CumRead + r.CumCreate
+	if r.CO2Grams != 0 || total == 0 {
+		return line, false, nil
+	}
+	grams, _ := capacity.EstimateCO2Grams(r.Model, total)
+	r.CO2Grams = grams
+	marshaled, err := json.Marshal(r)
+	if err != nil {
+		return nil, false, err
+	}
+	return marshaled, true, nil
+}
+
+// backfillLines streams scanner, writing each row (backfilled via
+// processBackfillLine when needed) to w, and reports whether any row was
+// rewritten. Factored out of backfillCO2File so the caller's flush/close/
+// rename finalization stays flat.
+func backfillLines(scanner *bufio.Scanner, w *bufio.Writer) (changed bool, err error) {
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		toWrite, lineChanged, err := processBackfillLine(line)
+		if err != nil {
+			return changed, err
+		}
+		if lineChanged {
+			changed = true
+		}
+		if _, err := w.Write(toWrite); err != nil {
+			return changed, err
+		}
+		if err := w.WriteByte('\n'); err != nil {
+			return changed, err
+		}
+	}
+	return changed, scanner.Err()
 }
 
 // Prune rewrites each project file to drop rows older than olderThanDays.
@@ -1012,35 +1089,8 @@ func (t *CostTracker) pruneFile(path, project string, cutoff int64, survivors ma
 	w := bufio.NewWriter(out)
 	scanner := bufio.NewScanner(in)
 	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-	kept := 0
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
-		}
-		var r snapshotRow
-		if err := json.Unmarshal(line, &r); err != nil {
-			continue
-		}
-		if r.TS < cutoff {
-			continue
-		}
-		if _, err := w.Write(line); err != nil {
-			out.Close()
-			os.Remove(tmpPath)
-			return err
-		}
-		if err := w.WriteByte('\n'); err != nil {
-			out.Close()
-			os.Remove(tmpPath)
-			return err
-		}
-		if r.Session != "" {
-			survivors[r.Session] = struct{}{}
-		}
-		kept++
-	}
-	if err := scanner.Err(); err != nil {
+	kept, err := pruneLines(scanner, w, cutoff, survivors)
+	if err != nil {
 		out.Close()
 		os.Remove(tmpPath)
 		return err
@@ -1059,6 +1109,49 @@ func (t *CostTracker) pruneFile(path, project string, cutoff int64, survivors ma
 		return os.Remove(path)
 	}
 	return os.Rename(tmpPath, path)
+}
+
+// filterPruneLine reports whether a row survives pruning (parses and is at or
+// after cutoff) and, when it does, the session ID to record as a survivor.
+func filterPruneLine(line []byte, cutoff int64) (keep bool, sessionID string) {
+	var r snapshotRow
+	if err := json.Unmarshal(line, &r); err != nil {
+		return false, ""
+	}
+	if r.TS < cutoff {
+		return false, ""
+	}
+	return true, r.Session
+}
+
+// pruneLines streams scanner, writing surviving rows (at or after cutoff) to
+// w and recording each survivor's session ID, returning the count kept.
+// Factored out of pruneFile so the caller's cleanup-on-error handling stays
+// flat; a write error here is reported to the caller exactly like the
+// post-loop scanner.Err() check, so both cases funnel through the same
+// cleanup path.
+func pruneLines(scanner *bufio.Scanner, w *bufio.Writer, cutoff int64, survivors map[string]struct{}) (kept int, err error) {
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		keep, sid := filterPruneLine(line, cutoff)
+		if !keep {
+			continue
+		}
+		if _, err := w.Write(line); err != nil {
+			return kept, err
+		}
+		if err := w.WriteByte('\n'); err != nil {
+			return kept, err
+		}
+		if sid != "" {
+			survivors[sid] = struct{}{}
+		}
+		kept++
+	}
+	return kept, scanner.Err()
 }
 
 func (t *CostTracker) filePath(project string) string {

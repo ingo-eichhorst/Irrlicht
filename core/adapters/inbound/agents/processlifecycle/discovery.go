@@ -157,6 +157,25 @@ func narrowByCWD(pids []int, cwd string, disambiguate func([]int) int) int {
 	if resolved, err := filepath.EvalSymlinks(cwd); err == nil {
 		cwd = resolved
 	}
+	matches := matchingCWDPids(pids, cwd)
+	switch len(matches) {
+	case 0:
+		return 0
+	case 1:
+		return matches[0]
+	default:
+		if disambiguate != nil {
+			return disambiguate(matches)
+		}
+		// Default: highest PID (most recently started on macOS).
+		return highestPID(matches)
+	}
+}
+
+// matchingCWDPids filters pids to those whose CWD equals cwd exactly,
+// excluding the daemon's own PID. PIDs whose CWD cannot be read (race
+// against process exit, restricted permissions) are skipped silently.
+func matchingCWDPids(pids []int, cwd string) []int {
 	myPID := os.Getpid()
 	var matches []int
 	for _, pid := range pids {
@@ -171,24 +190,19 @@ func narrowByCWD(pids []int, cwd string, disambiguate func([]int) int) int {
 			matches = append(matches, pid)
 		}
 	}
-	switch len(matches) {
-	case 0:
-		return 0
-	case 1:
-		return matches[0]
-	default:
-		if disambiguate != nil {
-			return disambiguate(matches)
+	return matches
+}
+
+// highestPID returns the largest PID in pids (most recently started on
+// macOS), or 0 for an empty slice.
+func highestPID(pids []int) int {
+	best := 0
+	for _, p := range pids {
+		if p > best {
+			best = p
 		}
-		// Default: highest PID (most recently started on macOS).
-		best := 0
-		for _, p := range matches {
-			if p > best {
-				best = p
-			}
-		}
-		return best
 	}
+	return best
 }
 
 // DiscoverPIDByTranscriptWriter finds the process that has a transcript file

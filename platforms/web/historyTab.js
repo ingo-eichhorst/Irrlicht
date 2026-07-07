@@ -156,11 +156,9 @@ function renderHistory() {
   }
 }
 
-function paintHistoryChart() {
-  const canvas = document.getElementById('history-chart');
-  const wrap = document.getElementById('history-chart-wrap');
-  if (!canvas || !wrap) return;
-  const data = historyState.data;
+// setupHistoryCanvas sizes the canvas for the current DPR/layout, clears
+// it, and returns the 2D context plus the CSS-pixel plot dimensions.
+function setupHistoryCanvas(canvas, wrap) {
   const dpr = window.devicePixelRatio || 1;
   const w = canvas.offsetWidth || wrap.clientWidth || 600;
   const h = canvas.offsetHeight || 340;
@@ -169,21 +167,13 @@ function paintHistoryChart() {
   const ctx = canvas.getContext('2d');
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
+  return { ctx, w, h };
+}
 
-  const buckets = data?.bucket_starts || [];
-  const B = buckets.length;
-  const hasData = !!(data && data.total > 0 && B > 0);
-  wrap.classList.toggle('empty', !hasData);
-  if (!hasData) return;
-
-  const cs = getComputedStyle(document.documentElement);
-  const muted = (cs.getPropertyValue('--muted') || '#888').trim();
-  const waiting = (cs.getPropertyValue('--waiting') || '#FF9500').trim();
-  const gridColor = 'rgba(128,140,170,0.18)';
-
-  // Per-project matrix aligned to buckets. Project order follows
-  // top_contributors (so side-panel dots match chart colors), then any
-  // extra projects from the series.
+// buildHistoryMatrix lays out one row per project — top_contributors order
+// first (so side-panel dots match chart colors), then any extra projects
+// seen only in the series — and fills a [project][bucket] value matrix.
+function buildHistoryMatrix(data, buckets, B) {
   const projects = [];
   const idx = new Map();
   for (const c of (data.top_contributors || [])) {
@@ -199,26 +189,24 @@ function paintHistoryChart() {
     const r = idx.get(pt.project), c = tsIdx.get(pt.ts);
     if (r != null && c != null) matrix[r][c] += pt.value;
   }
-  // Cumulative for the stacked cost/token area charts: each band becomes a
-  // running total climbing to its grand total at the right edge. Agents (a
-  // concurrency count, not a flow) stays a per-bucket rate.
-  const cumulative = historyState.chart !== 'agents';
-  if (cumulative) for (let r = 0; r < matrix.length; r++) matrix[r] = historyRunningSum(matrix[r]);
+  return { projects, matrix };
+}
 
+// historyForecastSeries resolves the forecast points in display space:
+// continuing the cumulative climb from the grand total, or the flat
+// per-bucket projected rate when incremental.
+function historyForecastSeries(data, cumulative, grandTotal) {
   const fc = (historyState.forecast && data.forecast && Array.isArray(data.forecast.series)) ? data.forecast.series : [];
-  const H = fc.length;
-  // Grand cumulative total = the stack's right-edge height; it anchors the
-  // forecast when cumulative.
-  let grandTotal = 0;
-  for (let r = 0; r < matrix.length; r++) grandTotal += matrix[r][B - 1] || 0;
-  // Forecast points in display space: continue the cumulative climb from the
-  // grand total, or stay at the per-bucket projected rate when incremental.
   const fcY = cumulative
     ? historyRunningSum(fc.map(p => p.value)).map(v => grandTotal + v)
     : fc.map(p => p.value);
+  return { H: fc.length, fcY };
+}
 
-  // Y scale = the tallest stacked column (sum across bands per bucket), also
-  // covering the forecast points.
+// historyMaxY finds the Y-axis scale: the tallest stacked column (summed
+// across bands per bucket), also covering the forecast points, with 12%
+// headroom.
+function historyMaxY(matrix, projects, B, fcY) {
   let maxY = 0;
   for (let c = 0; c < B; c++) {
     let s = 0;
@@ -227,16 +215,12 @@ function paintHistoryChart() {
   }
   for (const v of fcY) if (v > maxY) maxY = v;
   if (maxY <= 0) maxY = 1;
-  maxY *= 1.12;
+  return maxY * 1.12;
+}
 
-  const padL = 46, padR = 12, padT = 12, padB = 22;
-  const plotW = Math.max(1, w - padL - padR);
-  const plotH = Math.max(1, h - padT - padB);
-  const N = B + H;
-  const xAt = (i) => (N <= 1 ? padL : padL + plotW * (i / (N - 1)));
-  const yAt = (v) => padT + plotH * (1 - v / maxY);
-
-  // Y gridlines + dollar labels (drawn first, behind the areas).
+// drawHistoryGridlines draws the Y gridlines and their value labels,
+// underneath where the stacked areas will be drawn.
+function drawHistoryGridlines(ctx, w, padL, padR, muted, gridColor, maxY, yAt) {
   ctx.font = '10px ui-monospace, monospace';
   ctx.textBaseline = 'middle';
   ctx.textAlign = 'right';
@@ -253,8 +237,10 @@ function paintHistoryChart() {
     ctx.fillStyle = muted;
     ctx.fillText(histValue(v), padL - 6, y);
   }
+}
 
-  // Stacked areas, bottom-up.
+// drawHistoryStackedAreas draws the bottom-up stacked project bands.
+function drawHistoryStackedAreas(ctx, projects, matrix, B, xAt, yAt) {
   const baseline = new Array(B).fill(0);
   for (let r = 0; r < projects.length; r++) {
     ctx.beginPath();
@@ -268,33 +254,173 @@ function paintHistoryChart() {
     ctx.fill();
     for (let c = 0; c < B; c++) baseline[c] += matrix[r][c];
   }
+}
 
-  // Forecast: a dashed line into the future. Cumulative charts continue the
-  // climb from the grand total to ≈forecast.projected; incremental charts
-  // hold a flat line at the projected per-bucket rate, anchored at the
-  // forecast's own first value so an empty trailing bucket (the in-progress
-  // current minute) doesn't draw a spurious dip-and-spike to the axis.
-  if (H > 0) {
-    ctx.save();
-    ctx.setLineDash([4, 3]);
-    ctx.strokeStyle = waiting;
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.moveTo(xAt(B - 1), yAt(cumulative ? grandTotal : fcY[0]));
-    for (let k = 0; k < H; k++) ctx.lineTo(xAt(B + k), yAt(fcY[k]));
-    ctx.stroke();
-    ctx.restore();
-  }
+// drawHistoryForecastLine draws the dashed forecast continuation. Cumulative
+// charts continue the climb from the grand total to ≈forecast.projected;
+// incremental charts hold a flat line at the projected per-bucket rate,
+// anchored at the forecast's own first value so an empty trailing bucket
+// (the in-progress current minute) doesn't draw a spurious dip-and-spike.
+function drawHistoryForecastLine(ctx, B, H, xAt, yAt, cumulative, grandTotal, fcY, waiting) {
+  if (H <= 0) return;
+  ctx.save();
+  ctx.setLineDash([4, 3]);
+  ctx.strokeStyle = waiting;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(xAt(B - 1), yAt(cumulative ? grandTotal : fcY[0]));
+  for (let k = 0; k < H; k++) ctx.lineTo(xAt(B + k), yAt(fcY[k]));
+  ctx.stroke();
+  ctx.restore();
+}
 
-  // X axis time labels.
+// drawHistoryXAxisLabels draws up to 6 evenly-spaced time labels.
+function drawHistoryXAxisLabels(ctx, buckets, B, bucketSeconds, muted, h, padB, xAt) {
   ctx.fillStyle = muted;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
   const labelCount = Math.min(6, B);
   for (let i = 0; i < labelCount; i++) {
     const c = Math.round(i * (B - 1) / Math.max(1, labelCount - 1));
-    ctx.fillText(histAxisLabel(buckets[c], data.bucket_seconds), xAt(c), h - padB + 5);
+    ctx.fillText(histAxisLabel(buckets[c], bucketSeconds), xAt(c), h - padB + 5);
   }
+}
+
+function paintHistoryChart() {
+  const canvas = document.getElementById('history-chart');
+  const wrap = document.getElementById('history-chart-wrap');
+  if (!canvas || !wrap) return;
+  const data = historyState.data;
+  const { ctx, w, h } = setupHistoryCanvas(canvas, wrap);
+
+  const buckets = data?.bucket_starts || [];
+  const B = buckets.length;
+  const hasData = !!(data && data.total > 0 && B > 0);
+  wrap.classList.toggle('empty', !hasData);
+  if (!hasData) return;
+
+  const cs = getComputedStyle(document.documentElement);
+  const muted = (cs.getPropertyValue('--muted') || '#888').trim();
+  const waiting = (cs.getPropertyValue('--waiting') || '#FF9500').trim();
+  const gridColor = 'rgba(128,140,170,0.18)';
+
+  const { projects, matrix } = buildHistoryMatrix(data, buckets, B);
+  // Cumulative for the stacked cost/token area charts: each band becomes a
+  // running total climbing to its grand total at the right edge. Agents (a
+  // concurrency count, not a flow) stays a per-bucket rate.
+  const cumulative = historyState.chart !== 'agents';
+  if (cumulative) for (let r = 0; r < matrix.length; r++) matrix[r] = historyRunningSum(matrix[r]);
+
+  // Grand cumulative total = the stack's right-edge height; it anchors the
+  // forecast when cumulative.
+  let grandTotal = 0;
+  for (let r = 0; r < matrix.length; r++) grandTotal += matrix[r][B - 1] || 0;
+  const { H, fcY } = historyForecastSeries(data, cumulative, grandTotal);
+
+  // Y scale = the tallest stacked column (sum across bands per bucket), also
+  // covering the forecast points.
+  const maxY = historyMaxY(matrix, projects, B, fcY);
+
+  const padL = 46, padR = 12, padT = 12, padB = 22;
+  const plotW = Math.max(1, w - padL - padR);
+  const plotH = Math.max(1, h - padT - padB);
+  const N = B + H;
+  const xAt = (i) => (N <= 1 ? padL : padL + plotW * (i / (N - 1)));
+  const yAt = (v) => padT + plotH * (1 - v / maxY);
+
+  // Y gridlines + dollar labels (drawn first, behind the areas).
+  drawHistoryGridlines(ctx, w, padL, padR, muted, gridColor, maxY, yAt);
+
+  // Stacked areas, bottom-up.
+  drawHistoryStackedAreas(ctx, projects, matrix, B, xAt, yAt);
+
+  // Forecast: a dashed line into the future.
+  drawHistoryForecastLine(ctx, B, H, xAt, yAt, cumulative, grandTotal, fcY, waiting);
+
+  // X axis time labels.
+  drawHistoryXAxisLabels(ctx, buckets, B, data.bucket_seconds, muted, h, padB, xAt);
+}
+
+// buildHistoryStatRow builds one contributor list-item: colored dot, label,
+// value — the shared shape behind every history-panel breakdown list.
+function buildHistoryStatRow(i, label, value) {
+  const li = document.createElement('li');
+  const dot = document.createElement('span'); dot.className = 'dot'; dot.style.background = historyColorFor(i);
+  const lab = document.createElement('span'); lab.className = 'label'; lab.textContent = label;
+  const val = document.createElement('span'); val.className = 'val'; val.textContent = value;
+  li.append(dot, lab, val);
+  return li;
+}
+
+// renderAgentsPanel fills the side panel for the agents chart: concurrency
+// summarizes as a peak headline + avg/current sub-line, and ranks the
+// projects that ran the most agents at once. No forecast or drilldown —
+// concurrency is reconstructed per project only.
+function renderAgentsPanel(data, totalEl, fcEl, listEl) {
+  const conc = data.concurrency || { peak: 0, average: 0, current: 0 };
+  if (totalEl) totalEl.textContent = histCount(conc.peak) + ' peak';
+  if (fcEl) fcEl.textContent = 'avg ' + (Number(conc.average) || 0).toFixed(1) + ' · now ' + histCount(conc.current);
+  if (!listEl) return;
+  listEl.innerHTML = '';
+  const projects = data.top_contributors || [];
+  if (!projects.length) {
+    appendHistoryEmpty(listEl, 'no agents in this range');
+    return;
+  }
+  projects.forEach((c, i) => listEl.appendChild(buildHistoryStatRow(i, c.label, histCount(c.value))));
+}
+
+// renderTokensPanel fills the side panel for the tokens chart: an
+// input/output/cache breakdown, or — when grouping by token_type — the
+// stacked bands themselves, listed with friendly labels.
+function renderTokensPanel(data, listEl) {
+  if (historyState.group === 'token_type') {
+    const contribs = data.top_contributors || [];
+    if (!contribs.length) {
+      appendHistoryEmpty(listEl, 'no token usage in this range');
+      return;
+    }
+    contribs.forEach((c, i) =>
+      listEl.appendChild(buildHistoryStatRow(i, TOKEN_TYPE_LABEL[c.label] || c.label, histTokens(c.value))));
+    return;
+  }
+  const split = data.token_split;
+  if (!split || data.total <= 0) {
+    appendHistoryEmpty(listEl, 'no token usage in this range');
+    return;
+  }
+  [['Input', split.input], ['Output', split.output], ['Cache', split.cache]].forEach(([label, v], i) =>
+    listEl.appendChild(buildHistoryStatRow(i, label, histTokens(v))));
+}
+
+// wireDrillableRow makes a contributor row clickable/keyboard-activatable to
+// drill into it, scoping the view and re-grouping by the next finer axis.
+function wireDrillableRow(li, drillField, label) {
+  li.classList.add('drillable');
+  li.tabIndex = 0;
+  li.setAttribute('role', 'button');
+  li.title = 'Drill into ' + label;
+  const drill = () => drillInto(drillField, label);
+  li.addEventListener('click', drill);
+  li.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); drill(); } });
+}
+
+// renderContributorsPanel fills the default (cost/co2/models/providers)
+// contributor ranking, wiring drilldown when the grouped axis supports it.
+// The synthetic "unknown" bucket and leaf axes aren't drillable.
+function renderContributorsPanel(data, listEl) {
+  const contribs = data.top_contributors || [];
+  if (!contribs.length) {
+    appendHistoryEmpty(listEl, historyState.chart === 'co2' ? 'no CO2 estimate in this range' : 'no spend in this range');
+    return;
+  }
+  const drillField = data.group;
+  const drillable = !!DRILL_NEXT[drillField];
+  contribs.forEach((c, i) => {
+    const li = buildHistoryStatRow(i, c.label, histValue(c.value));
+    if (drillable && c.label !== 'unknown') wireDrillableRow(li, drillField, c.label);
+    listEl.appendChild(li);
+  });
 }
 
 function renderHistoryPanel() {
@@ -307,28 +433,8 @@ function renderHistoryPanel() {
   const chartLabel = CHART_LABELS[historyState.chart] || 'Total';
   if (titleEl) titleEl.textContent = chartLabel + ' · ' + (RANGE_LABELS[historyState.range] || historyState.range);
 
-  // Agents: the panel summarizes concurrency (peak headline, avg/current
-  // sub-line) and ranks the projects that ran the most agents at once. No
-  // forecast or drilldown — concurrency is reconstructed per project only.
   if (historyState.chart === 'agents') {
-    const conc = data.concurrency || { peak: 0, average: 0, current: 0 };
-    if (totalEl) totalEl.textContent = histCount(conc.peak) + ' peak';
-    if (fcEl) fcEl.textContent = 'avg ' + (Number(conc.average) || 0).toFixed(1) + ' · now ' + histCount(conc.current);
-    if (!listEl) return;
-    listEl.innerHTML = '';
-    const projects = data.top_contributors || [];
-    if (!projects.length) {
-      appendHistoryEmpty(listEl, 'no agents in this range');
-      return;
-    }
-    projects.forEach((c, i) => {
-      const li = document.createElement('li');
-      const dot = document.createElement('span'); dot.className = 'dot'; dot.style.background = historyColorFor(i);
-      const label = document.createElement('span'); label.className = 'label'; label.textContent = c.label;
-      const val = document.createElement('span'); val.className = 'val'; val.textContent = histCount(c.value);
-      li.append(dot, label, val);
-      listEl.appendChild(li);
-    });
+    renderAgentsPanel(data, totalEl, fcEl, listEl);
     return;
   }
 
@@ -342,69 +448,12 @@ function renderHistoryPanel() {
   if (!listEl) return;
   listEl.innerHTML = '';
 
-  // Tokens: the side panel is an input/output/cache breakdown, not a
-  // contributor ranking — except when grouping by token_type, where the
-  // stacked bands themselves are the breakdown (listed with friendly labels).
   if (historyState.chart === 'tokens') {
-    if (historyState.group === 'token_type') {
-      const contribs = data.top_contributors || [];
-      if (!contribs.length) {
-        appendHistoryEmpty(listEl, 'no token usage in this range');
-        return;
-      }
-      contribs.forEach((c, i) => {
-        const li = document.createElement('li');
-        const dot = document.createElement('span'); dot.className = 'dot'; dot.style.background = historyColorFor(i);
-        const lab = document.createElement('span'); lab.className = 'label'; lab.textContent = TOKEN_TYPE_LABEL[c.label] || c.label;
-        const val = document.createElement('span'); val.className = 'val'; val.textContent = histTokens(c.value);
-        li.append(dot, lab, val);
-        listEl.appendChild(li);
-      });
-      return;
-    }
-    const split = data.token_split;
-    if (!split || data.total <= 0) {
-      appendHistoryEmpty(listEl, 'no token usage in this range');
-      return;
-    }
-    [['Input', split.input], ['Output', split.output], ['Cache', split.cache]].forEach(([label, v], i) => {
-      const li = document.createElement('li');
-      const dot = document.createElement('span'); dot.className = 'dot'; dot.style.background = historyColorFor(i);
-      const lab = document.createElement('span'); lab.className = 'label'; lab.textContent = label;
-      const val = document.createElement('span'); val.className = 'val'; val.textContent = histTokens(v);
-      li.append(dot, lab, val);
-      listEl.appendChild(li);
-    });
+    renderTokensPanel(data, listEl);
     return;
   }
 
-  const contribs = data.top_contributors || [];
-  if (!contribs.length) {
-    appendHistoryEmpty(listEl, historyState.chart === 'co2' ? 'no CO2 estimate in this range' : 'no spend in this range');
-    return;
-  }
-  // Drilldown: click a contributor to scope into it (the effective stacking
-  // axis is data.group). The synthetic "unknown" bucket and leaf axes aren't
-  // drillable.
-  const drillField = data.group;
-  const drillable = !!DRILL_NEXT[drillField];
-  contribs.forEach((c, i) => {
-    const li = document.createElement('li');
-    const dot = document.createElement('span'); dot.className = 'dot'; dot.style.background = historyColorFor(i);
-    const label = document.createElement('span'); label.className = 'label'; label.textContent = c.label;
-    const val = document.createElement('span'); val.className = 'val'; val.textContent = histValue(c.value);
-    li.append(dot, label, val);
-    if (drillable && c.label !== 'unknown') {
-      li.classList.add('drillable');
-      li.tabIndex = 0;
-      li.setAttribute('role', 'button');
-      li.title = 'Drill into ' + c.label;
-      const drill = () => drillInto(drillField, c.label);
-      li.addEventListener('click', drill);
-      li.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); drill(); } });
-    }
-    listEl.appendChild(li);
-  });
+  renderContributorsPanel(data, listEl);
 }
 
 function appendHistoryEmpty(listEl, text) {
@@ -419,6 +468,34 @@ function historyFilterOptions(dim) {
   return (historyState.known[dim] || []).map(v => [v, v]);
 }
 
+// buildHistoryFilterOption renders one filter dropdown's checkbox row.
+function buildHistoryFilterOption(dim, val, label, sel) {
+  const lab = document.createElement('label');
+  const cb = document.createElement('input');
+  cb.type = 'checkbox'; cb.value = val; cb.checked = sel.has(val);
+  cb.addEventListener('change', () => toggleHistoryFilter(dim, val, cb.checked));
+  const span = document.createElement('span'); span.textContent = label;
+  lab.append(cb, span);
+  return lab;
+}
+
+// renderHistoryFilterDetail populates one dimension's <details> filter menu
+// and its summary text.
+function renderHistoryFilterDetail(det, dim, sel) {
+  const menu = det.querySelector('.menu');
+  if (menu) {
+    menu.innerHTML = '';
+    const opts = historyFilterOptions(dim);
+    for (const [val, label] of opts) {
+      menu.appendChild(buildHistoryFilterOption(dim, val, label, sel));
+    }
+    if (!opts.length) appendHistoryEmpty(menu, 'none seen yet');
+  }
+  const sum = det.querySelector('summary');
+  const dimLabel = dim === 'token_type' ? 'Token type' : dim[0].toUpperCase() + dim.slice(1);
+  if (sum) sum.textContent = dimLabel + ': ' + (sel.size ? sel.size + ' selected' : 'All');
+}
+
 // renderHistoryFilters repopulates the per-dimension filter dropdowns,
 // hiding the dimension currently being grouped on (never both axis and
 // filter) and the token_type filter outside the tokens metric.
@@ -431,24 +508,7 @@ function renderHistoryFilters() {
     det.hidden = hidden;
     if (hidden) { det.open = false; continue; }
     const sel = new Set(historyState.filters[dim] || []);
-    const menu = det.querySelector('.menu');
-    if (menu) {
-      menu.innerHTML = '';
-      const opts = historyFilterOptions(dim);
-      for (const [val, label] of opts) {
-        const lab = document.createElement('label');
-        const cb = document.createElement('input');
-        cb.type = 'checkbox'; cb.value = val; cb.checked = sel.has(val);
-        cb.addEventListener('change', () => toggleHistoryFilter(dim, val, cb.checked));
-        const span = document.createElement('span'); span.textContent = label;
-        lab.append(cb, span);
-        menu.appendChild(lab);
-      }
-      if (!opts.length) appendHistoryEmpty(menu, 'none seen yet');
-    }
-    const sum = det.querySelector('summary');
-    const dimLabel = dim === 'token_type' ? 'Token type' : dim[0].toUpperCase() + dim.slice(1);
-    if (sum) sum.textContent = dimLabel + ': ' + (sel.size ? sel.size + ' selected' : 'All');
+    renderHistoryFilterDetail(det, dim, sel);
   }
 }
 

@@ -153,19 +153,7 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 		agents = []string{*agent}
 	}
 
-	view := statusView{Agents: agents}
-	for _, sh := range shard.LoadAll(*repoRoot) {
-		if *scenario != "" && sh.Name != *scenario && sh.ID != *scenario {
-			continue
-		}
-		sv := scenarioView{ID: sh.ID, Name: sh.Name, Cells: map[string]cellView{}}
-		for _, a := range agents {
-			if cs, ok := m.Cell(a, sh.Name); ok {
-				sv.Cells[a] = cellViewOf(cs)
-			}
-		}
-		view.Scenarios = append(view.Scenarios, sv)
-	}
+	view := buildStatusView(m, *repoRoot, agents, *scenario)
 
 	if *asJSON {
 		if err := writeJSON(stdout, view); err != nil {
@@ -176,6 +164,25 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 	}
 	printStatusText(stdout, view)
 	return exitOK
+}
+
+// buildStatusView projects the matrix + catalog shards (optionally filtered
+// to one scenario) into the per-cell view `of status` renders or encodes.
+func buildStatusView(m *matrix.Matrix, repoRoot string, agents []string, scenarioFilter string) statusView {
+	view := statusView{Agents: agents}
+	for _, sh := range shard.LoadAll(repoRoot) {
+		if scenarioFilter != "" && sh.Name != scenarioFilter && sh.ID != scenarioFilter {
+			continue
+		}
+		sv := scenarioView{ID: sh.ID, Name: sh.Name, Cells: map[string]cellView{}}
+		for _, a := range agents {
+			if cs, ok := m.Cell(a, sh.Name); ok {
+				sv.Cells[a] = cellViewOf(cs)
+			}
+		}
+		view.Scenarios = append(view.Scenarios, sv)
+	}
+	return view
 }
 
 func printStatusText(stdout io.Writer, view statusView) {

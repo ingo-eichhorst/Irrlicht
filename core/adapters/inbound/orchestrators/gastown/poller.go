@@ -123,228 +123,278 @@ func (p *poller) mapToOrchestratorState(
 		sessions, _ = p.sessions.ListAll()
 	}
 
-	// Build session index: CWD → session for fast lookup.
-	type sessionInfo struct {
-		sessionID string
-		state     string
-	}
-	cwdToSession := make(map[string]sessionInfo)
+	idx := buildSessionIndex(sessions)
+
+	state.GlobalAgents = buildGlobalAgents(gtRoot, boot, idx)
+	state.Codebases = buildCodebases(gtRoot, rigs, polecats, dogs, sessions, idx)
+
+	return state
+}
+
+// sessionInfo is the session id/state pair a sessionIndex maps a CWD to.
+type sessionInfo struct {
+	sessionID string
+	state     string
+}
+
+// sessionIndex maps a cleaned session CWD to its session info, for fast
+// CWD-under-path matching via match.
+type sessionIndex map[string]sessionInfo
+
+// buildSessionIndex builds a CWD → session lookup from all active sessions.
+func buildSessionIndex(sessions []*session.SessionState) sessionIndex {
+	idx := make(sessionIndex)
 	for _, s := range sessions {
 		if s.CWD == "" {
 			continue
 		}
-		cwdToSession[filepath.Clean(s.CWD)] = sessionInfo{
+		idx[filepath.Clean(s.CWD)] = sessionInfo{
 			sessionID: s.SessionID,
 			state:     s.State,
 		}
 	}
+	return idx
+}
 
-	// matchSession checks if any session has a CWD under the given path.
-	matchSession := func(basePath string) (string, string) {
-		basePath = filepath.Clean(basePath)
-		for cwd, info := range cwdToSession {
-			rel, err := filepath.Rel(basePath, cwd)
-			if err != nil {
-				continue
-			}
-			if len(rel) > 0 && rel[0] != '.' {
-				return info.sessionID, info.state
-			}
-			if rel == "." {
-				return info.sessionID, info.state
-			}
+// match checks if any indexed session has a CWD under basePath.
+func (idx sessionIndex) match(basePath string) (string, string) {
+	basePath = filepath.Clean(basePath)
+	for cwd, info := range idx {
+		rel, err := filepath.Rel(basePath, cwd)
+		if err != nil {
+			continue
 		}
-		return "", ""
+		if len(rel) > 0 && rel[0] != '.' {
+			return info.sessionID, info.state
+		}
+		if rel == "." {
+			return info.sessionID, info.state
+		}
 	}
+	return "", ""
+}
 
-	// Global agents (mayor, deacon).
+// buildGlobalAgents assembles the mayor, deacon, and (when present) boot
+// watchdog agents.
+func buildGlobalAgents(gtRoot string, boot *bootStatus, idx sessionIndex) []orchestrator.GlobalAgent {
 	globalAgents := []orchestrator.GlobalAgent{}
-	mayorMeta := roleMeta[RoleMayor]
-	if mayorSID, mayorState := matchSession(filepath.Join(gtRoot, "mayor")); mayorSID != "" {
-		globalAgents = append(globalAgents, orchestrator.GlobalAgent{
-			Role:        RoleMayor,
-			Icon:        mayorMeta.Icon,
-			Description: mayorMeta.Desc,
-			SessionID:   mayorSID,
-			State:       mayorState,
-		})
-	} else {
-		globalAgents = append(globalAgents, orchestrator.GlobalAgent{
-			Role:        RoleMayor,
-			Icon:        mayorMeta.Icon,
-			Description: mayorMeta.Desc,
-			State:       "idle",
-		})
-	}
-	deaconMeta := roleMeta[RoleDeacon]
-	if deaconSID, deaconState := matchSession(filepath.Join(gtRoot, "deacon")); deaconSID != "" {
-		globalAgents = append(globalAgents, orchestrator.GlobalAgent{
-			Role:        RoleDeacon,
-			Icon:        deaconMeta.Icon,
-			Description: deaconMeta.Desc,
-			SessionID:   deaconSID,
-			State:       deaconState,
-		})
-	} else {
-		globalAgents = append(globalAgents, orchestrator.GlobalAgent{
-			Role:        RoleDeacon,
-			Icon:        deaconMeta.Icon,
-			Description: deaconMeta.Desc,
-			State:       "idle",
-		})
-	}
-	// Boot agent (deacon watchdog).
-	bootMeta := roleMeta[RoleBoot]
+	globalAgents = append(globalAgents, buildSimpleGlobalAgent(RoleMayor, filepath.Join(gtRoot, "mayor"), idx))
+	globalAgents = append(globalAgents, buildSimpleGlobalAgent(RoleDeacon, filepath.Join(gtRoot, "deacon"), idx))
 	if boot != nil {
-		bootAgent := orchestrator.GlobalAgent{
-			Role:        RoleBoot,
-			Icon:        bootMeta.Icon,
-			Description: bootMeta.Desc,
-		}
-		if sid, sState := matchSession(filepath.Join(gtRoot, "deacon", "dogs", "boot")); sid != "" {
-			bootAgent.SessionID = sid
-			bootAgent.State = sState
-		} else if boot.Running || boot.SessionAlive {
-			bootAgent.State = "working"
-		} else {
-			bootAgent.State = "idle"
-		}
-		globalAgents = append(globalAgents, bootAgent)
+		globalAgents = append(globalAgents, buildBootAgent(gtRoot, boot, idx))
 	}
+	return globalAgents
+}
 
-	state.GlobalAgents = globalAgents
+// buildSimpleGlobalAgent builds a global agent whose state comes entirely
+// from a session match at path, falling back to "idle" when unmatched. Used
+// for the mayor and deacon, which share this exact rule.
+func buildSimpleGlobalAgent(role, path string, idx sessionIndex) orchestrator.GlobalAgent {
+	meta := roleMeta[role]
+	agent := orchestrator.GlobalAgent{
+		Role:        role,
+		Icon:        meta.Icon,
+		Description: meta.Desc,
+	}
+	if sid, sState := idx.match(path); sid != "" {
+		agent.SessionID = sid
+		agent.State = sState
+	} else {
+		agent.State = "idle"
+	}
+	return agent
+}
 
+// buildBootAgent builds the boot watchdog global agent, which additionally
+// falls back to a "working"/"idle" heuristic from the boot status when no
+// session matches.
+func buildBootAgent(gtRoot string, boot *bootStatus, idx sessionIndex) orchestrator.GlobalAgent {
+	bootMeta := roleMeta[RoleBoot]
+	bootAgent := orchestrator.GlobalAgent{
+		Role:        RoleBoot,
+		Icon:        bootMeta.Icon,
+		Description: bootMeta.Desc,
+	}
+	if sid, sState := idx.match(filepath.Join(gtRoot, "deacon", "dogs", "boot")); sid != "" {
+		bootAgent.SessionID = sid
+		bootAgent.State = sState
+	} else if boot.Running || boot.SessionAlive {
+		bootAgent.State = "working"
+	} else {
+		bootAgent.State = "idle"
+	}
+	return bootAgent
+}
+
+// buildCodebases maps each rig to a Codebase, sorted by name.
+func buildCodebases(
+	gtRoot string,
+	rigs []rigState,
+	polecats []polecatState,
+	dogs []dogState,
+	sessions []*session.SessionState,
+	idx sessionIndex,
+) []orchestrator.Codebase {
 	// Group polecats by rig.
 	polecatsByRig := make(map[string][]polecatState)
 	for _, pc := range polecats {
 		polecatsByRig[pc.Rig] = append(polecatsByRig[pc.Rig], pc)
 	}
 
-	// Build codebases from rigs.
 	codebases := make([]orchestrator.Codebase, 0, len(rigs))
 	for _, rig := range rigs {
-		cb := orchestrator.Codebase{
-			Name:   rig.Name,
-			Status: rig.Status,
-		}
-
-		// Main worktree: witness + refinery + crew workers.
-		mainWorktree := orchestrator.Worktree{
-			Path:   filepath.Join(gtRoot, rig.Name),
-			IsMain: true,
-		}
-
-		mainWorkers := []orchestrator.Worker{}
-
-		// Witness worker.
-		witnessMeta := roleMeta[RoleWitness]
-		witnessWorker := orchestrator.Worker{
-			Role:        RoleWitness,
-			Icon:        witnessMeta.Icon,
-			Description: witnessMeta.Desc,
-			State:       rig.Witness,
-		}
-		if sid, sState := matchSession(filepath.Join(gtRoot, rig.Name, "witness")); sid != "" {
-			witnessWorker.SessionID = sid
-			witnessWorker.State = sState
-		}
-		mainWorkers = append(mainWorkers, witnessWorker)
-
-		// Refinery worker.
-		refineryMeta := roleMeta[RoleRefinery]
-		refineryWorker := orchestrator.Worker{
-			Role:        RoleRefinery,
-			Icon:        refineryMeta.Icon,
-			Description: refineryMeta.Desc,
-			State:       rig.Refinery,
-		}
-		if sid, sState := matchSession(filepath.Join(gtRoot, rig.Name, "refinery")); sid != "" {
-			refineryWorker.SessionID = sid
-			refineryWorker.State = sState
-		}
-		mainWorkers = append(mainWorkers, refineryWorker)
-
-		// Crew workers.
-		crewMeta := roleMeta[RoleCrew]
-		for _, s := range sessions {
-			if s.CWD == "" {
-				continue
-			}
-			ri := deriveRole(s.CWD, gtRoot)
-			if ri == nil || ri.Role != RoleCrew || ri.Rig != rig.Name {
-				continue
-			}
-			mainWorkers = append(mainWorkers, orchestrator.Worker{
-				Role:        RoleCrew,
-				Icon:        crewMeta.Icon,
-				Description: crewMeta.Desc,
-				Name:        ri.Name,
-				SessionID:   s.SessionID,
-				State:       s.State,
-			})
-		}
-
-		mainWorktree.Workers = mainWorkers
-		worktrees := []orchestrator.Worktree{mainWorktree}
-
-		// Polecat worktrees.
-		rigPolecats := polecatsByRig[rig.Name]
-		for _, pc := range rigPolecats {
-			pcWorktree := orchestrator.Worktree{
-				Path:   filepath.Join(gtRoot, rig.Name, "polecats", pc.Name),
-				IsMain: false,
-			}
-
-			polecatMeta := roleMeta[RolePolecat]
-			pcWorker := orchestrator.Worker{
-				Role:        RolePolecat,
-				Icon:        polecatMeta.Icon,
-				Description: polecatMeta.Desc,
-				Name:        pc.Name,
-				ID:          pc.Issue,
-				State:       pc.State,
-			}
-
-			if sid, sState := matchSession(filepath.Join(gtRoot, rig.Name, "polecats", pc.Name)); sid != "" {
-				pcWorker.SessionID = sid
-				pcWorker.State = sState
-			}
-
-			pcWorktree.Workers = []orchestrator.Worker{pcWorker}
-			worktrees = append(worktrees, pcWorktree)
-		}
-
-		// Dog workers assigned to this rig.
-		dogMeta := roleMeta[RoleDog]
-		for _, dog := range dogs {
-			if _, ok := dog.Worktrees[rig.Name]; !ok {
-				continue
-			}
-			dogWorker := orchestrator.Worker{
-				Role:        RoleDog,
-				Icon:        dogMeta.Icon,
-				Description: dogMeta.Desc,
-				Name:        dog.Name,
-				State:       dog.State,
-			}
-			if sid, sState := matchSession(filepath.Join(gtRoot, "deacon", "dogs", dog.Name, rig.Name)); sid != "" {
-				dogWorker.SessionID = sid
-				dogWorker.State = sState
-			}
-			mainWorkers = append(mainWorkers, dogWorker)
-		}
-		mainWorktree.Workers = mainWorkers
-
-		cb.Worktrees = worktrees
-		codebases = append(codebases, cb)
+		codebases = append(codebases, buildRigCodebase(gtRoot, rig, polecatsByRig[rig.Name], dogs, sessions, idx))
 	}
 
 	sort.Slice(codebases, func(i, j int) bool {
 		return codebases[i].Name < codebases[j].Name
 	})
-	state.Codebases = codebases
+	return codebases
+}
 
-	return state
+// buildRigCodebase builds one rig's Codebase: a main worktree (witness +
+// refinery + crew + dog workers) plus one worktree per assigned polecat.
+func buildRigCodebase(
+	gtRoot string,
+	rig rigState,
+	rigPolecats []polecatState,
+	dogs []dogState,
+	sessions []*session.SessionState,
+	idx sessionIndex,
+) orchestrator.Codebase {
+	cb := orchestrator.Codebase{
+		Name:   rig.Name,
+		Status: rig.Status,
+	}
+
+	// Main worktree: witness + refinery + crew workers.
+	mainWorktree := orchestrator.Worktree{
+		Path:   filepath.Join(gtRoot, rig.Name),
+		IsMain: true,
+	}
+
+	mainWorkers := buildMainWorkers(gtRoot, rig, sessions, idx)
+	mainWorktree.Workers = mainWorkers
+	worktrees := []orchestrator.Worktree{mainWorktree}
+
+	// Polecat worktrees.
+	worktrees = append(worktrees, buildPolecatWorktrees(gtRoot, rig, rigPolecats, idx)...)
+
+	// Dog workers assigned to this rig.
+	mainWorkers = appendDogWorkers(mainWorkers, gtRoot, rig, dogs, idx)
+	mainWorktree.Workers = mainWorkers
+
+	cb.Worktrees = worktrees
+	return cb
+}
+
+// buildMainWorkers builds the witness, refinery, and crew workers for a
+// rig's main worktree.
+func buildMainWorkers(gtRoot string, rig rigState, sessions []*session.SessionState, idx sessionIndex) []orchestrator.Worker {
+	mainWorkers := []orchestrator.Worker{}
+
+	// Witness worker.
+	witnessMeta := roleMeta[RoleWitness]
+	witnessWorker := orchestrator.Worker{
+		Role:        RoleWitness,
+		Icon:        witnessMeta.Icon,
+		Description: witnessMeta.Desc,
+		State:       rig.Witness,
+	}
+	if sid, sState := idx.match(filepath.Join(gtRoot, rig.Name, "witness")); sid != "" {
+		witnessWorker.SessionID = sid
+		witnessWorker.State = sState
+	}
+	mainWorkers = append(mainWorkers, witnessWorker)
+
+	// Refinery worker.
+	refineryMeta := roleMeta[RoleRefinery]
+	refineryWorker := orchestrator.Worker{
+		Role:        RoleRefinery,
+		Icon:        refineryMeta.Icon,
+		Description: refineryMeta.Desc,
+		State:       rig.Refinery,
+	}
+	if sid, sState := idx.match(filepath.Join(gtRoot, rig.Name, "refinery")); sid != "" {
+		refineryWorker.SessionID = sid
+		refineryWorker.State = sState
+	}
+	mainWorkers = append(mainWorkers, refineryWorker)
+
+	// Crew workers.
+	crewMeta := roleMeta[RoleCrew]
+	for _, s := range sessions {
+		if s.CWD == "" {
+			continue
+		}
+		ri := deriveRole(s.CWD, gtRoot)
+		if ri == nil || ri.Role != RoleCrew || ri.Rig != rig.Name {
+			continue
+		}
+		mainWorkers = append(mainWorkers, orchestrator.Worker{
+			Role:        RoleCrew,
+			Icon:        crewMeta.Icon,
+			Description: crewMeta.Desc,
+			Name:        ri.Name,
+			SessionID:   s.SessionID,
+			State:       s.State,
+		})
+	}
+
+	return mainWorkers
+}
+
+// buildPolecatWorktrees builds one worktree per polecat assigned to rig.
+func buildPolecatWorktrees(gtRoot string, rig rigState, rigPolecats []polecatState, idx sessionIndex) []orchestrator.Worktree {
+	worktrees := make([]orchestrator.Worktree, 0, len(rigPolecats))
+	for _, pc := range rigPolecats {
+		pcWorktree := orchestrator.Worktree{
+			Path:   filepath.Join(gtRoot, rig.Name, "polecats", pc.Name),
+			IsMain: false,
+		}
+
+		polecatMeta := roleMeta[RolePolecat]
+		pcWorker := orchestrator.Worker{
+			Role:        RolePolecat,
+			Icon:        polecatMeta.Icon,
+			Description: polecatMeta.Desc,
+			Name:        pc.Name,
+			ID:          pc.Issue,
+			State:       pc.State,
+		}
+
+		if sid, sState := idx.match(filepath.Join(gtRoot, rig.Name, "polecats", pc.Name)); sid != "" {
+			pcWorker.SessionID = sid
+			pcWorker.State = sState
+		}
+
+		pcWorktree.Workers = []orchestrator.Worker{pcWorker}
+		worktrees = append(worktrees, pcWorktree)
+	}
+	return worktrees
+}
+
+// appendDogWorkers appends one worker per dog assigned to rig to mainWorkers.
+func appendDogWorkers(mainWorkers []orchestrator.Worker, gtRoot string, rig rigState, dogs []dogState, idx sessionIndex) []orchestrator.Worker {
+	dogMeta := roleMeta[RoleDog]
+	for _, dog := range dogs {
+		if _, ok := dog.Worktrees[rig.Name]; !ok {
+			continue
+		}
+		dogWorker := orchestrator.Worker{
+			Role:        RoleDog,
+			Icon:        dogMeta.Icon,
+			Description: dogMeta.Desc,
+			Name:        dog.Name,
+			State:       dog.State,
+		}
+		if sid, sState := idx.match(filepath.Join(gtRoot, "deacon", "dogs", dog.Name, rig.Name)); sid != "" {
+			dogWorker.SessionID = sid
+			dogWorker.State = sState
+		}
+		mainWorkers = append(mainWorkers, dogWorker)
+	}
+	return mainWorkers
 }
 
 // --- gt CLI helpers ----------------------------------------------------------

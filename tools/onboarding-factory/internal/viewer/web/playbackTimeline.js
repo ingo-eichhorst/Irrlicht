@@ -86,22 +86,17 @@ export function eventStyle(ev) {
   }
 }
 
-// computeStateBand folds the event list into the aggregate state-band
-// segments, each already positioned (leftPct/widthPct), colored, and
-// carrying its tooltip text. Returns [] when there's no duration to lay
-// out against. Pure.
-export function computeStateBand(events, totalMs) {
-  if (!totalMs) return [];
-
-  // 1. Build per-session timelines.
-  //    aliveFrom[sid] = offset of first event for the session
-  //    aliveUntil[sid] = offset of the EARLIEST session-end signal
-  //                     (process_exited, transcript_removed, or
-  //                     presession_removed). For SIGKILL/crash
-  //                     scenarios, process_exited fires first and
-  //                     transcript_removed may not appear at all, so
-  //                     process_exited has to count.
-  //    transitions[sid] = sorted [{offset, state}, ...]
+// buildSessionTimelines derives, from the raw event list:
+//    aliveFrom[sid] = offset of first event for the session
+//    aliveUntil[sid] = offset of the EARLIEST session-end signal
+//                     (process_exited, transcript_removed, or
+//                     presession_removed). For SIGKILL/crash
+//                     scenarios, process_exited fires first and
+//                     transcript_removed may not appear at all, so
+//                     process_exited has to count.
+//    transitionsBySid[sid] = sorted [{offset, state}, ...]
+// Pure. Extracted from computeStateBand (step 1).
+function buildSessionTimelines(events) {
   const aliveFrom = {};
   const aliveUntil = {};
   const transitionsBySid = {};
@@ -121,55 +116,61 @@ export function computeStateBand(events, totalMs) {
   for (const sid of Object.keys(transitionsBySid)) {
     transitionsBySid[sid].sort((a, b) => a.offset - b.offset);
   }
+  return {aliveFrom, aliveUntil, transitionsBySid};
+}
 
-  // 2. Collect every distinct boundary offset. The aggregate state is
-  //    constant between consecutive boundaries, so segments are bound by
-  //    these points.
+// collectStateBandBoundaries gathers every distinct boundary offset. The
+// aggregate state is constant between consecutive boundaries, so segments
+// are bound by these points. Pure. Extracted from computeStateBand (step 2).
+function collectStateBandBoundaries(aliveFrom, aliveUntil, transitionsBySid, totalMs) {
   const boundarySet = new Set([0, totalMs]);
   for (const sid of Object.keys(aliveFrom)) {
     boundarySet.add(aliveFrom[sid]);
     if (aliveUntil[sid] !== undefined) boundarySet.add(aliveUntil[sid]);
     for (const t of (transitionsBySid[sid] || [])) boundarySet.add(t.offset);
   }
-  const boundaries = [...boundarySet].sort((a, b) => a - b);
+  return [...boundarySet].sort((a, b) => a - b);
+}
 
-  // 3. For each interval [boundaries[i], boundaries[i+1]), compute the
-  //    aggregate state by taking the max-priority state across active
-  //    sessions. A session's state at offset T is its last
-  //    state_transition.new_state at or before T, defaulting to ready
-  //    (sessions start in ready by convention).
-  const sessionStateAt = (sid, t) => {
-    const list = transitionsBySid[sid] || [];
-    let st = "ready";
-    for (const trans of list) {
-      if (trans.offset <= t) st = trans.state;
-      else break;
-    }
-    return st;
-  };
+// sessionStateAt returns a session's state at offset T: its last
+// state_transition.new_state at or before T, defaulting to ready (sessions
+// start in ready by convention). Pure.
+function sessionStateAt(transitionsBySid, sid, t) {
+  const list = transitionsBySid[sid] || [];
+  let st = "ready";
+  for (const trans of list) {
+    if (trans.offset <= t) st = trans.state;
+    else break;
+  }
+  return st;
+}
 
-  const aggregateAt = (t) => {
-    let best = null;
-    let bestPriority = 0;
-    for (const sid of Object.keys(aliveFrom)) {
-      if (t < aliveFrom[sid]) continue;
-      if (aliveUntil[sid] !== undefined && t >= aliveUntil[sid]) continue;
-      const st = sessionStateAt(sid, t);
-      const pri = STATE_PRIORITY[st] || 0;
-      if (pri > bestPriority) { bestPriority = pri; best = st; }
-    }
-    return best;
-  };
+// aggregateStateAt computes the aggregate state at offset T by taking the
+// max-priority state across sessions active at T. Pure.
+function aggregateStateAt(aliveFrom, aliveUntil, transitionsBySid, t) {
+  let best = null;
+  let bestPriority = 0;
+  for (const sid of Object.keys(aliveFrom)) {
+    if (t < aliveFrom[sid]) continue;
+    if (aliveUntil[sid] !== undefined && t >= aliveUntil[sid]) continue;
+    const st = sessionStateAt(transitionsBySid, sid, t);
+    const pri = STATE_PRIORITY[st] || 0;
+    if (pri > bestPriority) { bestPriority = pri; best = st; }
+  }
+  return best;
+}
 
-  // 4. Walk boundaries and emit one segment per change. Coalescing here
-  //    means the user sees a single working span instead of many short
-  //    ones when subagents finish in sequence under a still-working parent.
+// buildStateSegments walks the boundaries and emits one segment per state
+// change. Coalescing here means the user sees a single working span
+// instead of many short ones when subagents finish in sequence under a
+// still-working parent. Pure. Extracted from computeStateBand (step 4).
+function buildStateSegments(boundaries, aliveFrom, aliveUntil, transitionsBySid, totalMs) {
   const segments = [];
   let curStart = boundaries[0];
-  let curState = aggregateAt(curStart);
+  let curState = aggregateStateAt(aliveFrom, aliveUntil, transitionsBySid, curStart);
   for (let i = 1; i < boundaries.length; i++) {
     const t = boundaries[i];
-    const st = aggregateAt(t);
+    const st = aggregateStateAt(aliveFrom, aliveUntil, transitionsBySid, t);
     if (st !== curState) {
       if (curState !== null) segments.push({start: curStart, end: t, state: curState});
       curStart = t;
@@ -179,9 +180,13 @@ export function computeStateBand(events, totalMs) {
   if (curState !== null && curStart < totalMs) {
     segments.push({start: curStart, end: totalMs, state: curState});
   }
+  return segments;
+}
 
-  // 5. Attach display attributes (position/color/tooltip) so the painter
-  //    stays a trivial loop.
+// attachSegmentDisplay attaches display attributes (position/color/tooltip)
+// to each segment so the painter stays a trivial loop. Pure. Extracted from
+// computeStateBand (step 5).
+function attachSegmentDisplay(segments, totalMs) {
   return segments.map(seg => ({
     start: seg.start,
     end: seg.end,
@@ -191,6 +196,18 @@ export function computeStateBand(events, totalMs) {
     widthPct: ((seg.end - seg.start) / totalMs) * 100,
     tip: `${seg.state}\n+${(seg.start / 1000).toFixed(2)}s → +${(seg.end / 1000).toFixed(2)}s (${((seg.end - seg.start) / 1000).toFixed(2)}s)`,
   }));
+}
+
+// computeStateBand folds the event list into the aggregate state-band
+// segments, each already positioned (leftPct/widthPct), colored, and
+// carrying its tooltip text. Returns [] when there's no duration to lay
+// out against. Pure.
+export function computeStateBand(events, totalMs) {
+  if (!totalMs) return [];
+  const {aliveFrom, aliveUntil, transitionsBySid} = buildSessionTimelines(events);
+  const boundaries = collectStateBandBoundaries(aliveFrom, aliveUntil, transitionsBySid, totalMs);
+  const segments = buildStateSegments(boundaries, aliveFrom, aliveUntil, transitionsBySid, totalMs);
+  return attachSegmentDisplay(segments, totalMs);
 }
 
 // computeEventDots positions every event as a dot on the event lane,
@@ -251,35 +268,58 @@ export function computeExpectedLane(rep, totalMs) {
   for (let i = 0; i < rep.phases.length; i++) {
     const ph = rep.phases[i];
     const def = defs[i] || {};
-    const matchedMs = ph.matched_ts ? Date.parse(ph.matched_ts) : Number.NaN;
-    const offsetMs = Number.isFinite(matchedMs) && Number.isFinite(startMs)
-      ? matchedMs - startMs
-      : null;
-    // Failed phases without a match still need positioning — they anchor
-    // at the validator's "should-have-been-here" point. Without anchor
-    // info on the wire we park them at the lane's start with a "?" marker.
-    const pos = offsetMs !== null ? Math.max(0, Math.min(100, (offsetMs / totalMs) * 100)) : null;
-    const pass = ph.pass;
-    const isState = !!def.expected_state;
-    const baseColor = isState
-      ? (def.expected_state === "working" ? "#8b5cf6"
-         : def.expected_state === "waiting" ? "#f59e0b"
-         : "#4ade80") // ready
-      : "#3b82f6"; // lifecycle kind (blue)
-    const rimColor = pass ? "#22c55e" : "#dc2626";
-    const type = pos === null ? "unmatched" : (isState ? "state" : "lifecycle");
-    const label = (def.kind || "").slice(0, 3).toUpperCase();
-    const lines = [`${ph.phase} — ${pass ? "PASS" : "FAIL"}`];
-    if (def.text) lines.push(def.text);
-    if (offsetMs !== null) {
-      let delta = `+${Math.round(offsetMs)} ms from recording start`;
-      if (def.max_delay_ms) delta += ` (target ≤ ${def.max_delay_ms} ms from anchor)`;
-      lines.push(delta);
-    }
-    if (ph.reason) lines.push(`reason: ${ph.reason}`);
-    markers.push({type, pos, baseColor, rimColor, label, tip: lines.join("\n")});
+    markers.push(buildExpectedMarker(ph, def, startMs, totalMs));
   }
   return {note: null, markers};
+}
+
+// expectedMarkerColor picks the marker's base color: state phases are
+// colored by their expected_state (working/waiting/ready), lifecycle
+// phases get a neutral blue. Pure. Extracted from computeExpectedLane.
+function expectedMarkerColor(def) {
+  if (!def.expected_state) return "#3b82f6"; // lifecycle kind (blue)
+  if (def.expected_state === "working") return "#8b5cf6";
+  if (def.expected_state === "waiting") return "#f59e0b";
+  return "#4ade80"; // ready
+}
+
+// expectedMarkerTooltip builds the marker's hover text: phase name + pass/
+// fail, the spec's human text, the timing delta (with its target window if
+// one was configured), and the validator's failure reason if any. Pure.
+// Extracted from computeExpectedLane.
+function expectedMarkerTooltip(ph, def, offsetMs) {
+  const lines = [`${ph.phase} — ${ph.pass ? "PASS" : "FAIL"}`];
+  if (def.text) lines.push(def.text);
+  if (offsetMs !== null) {
+    let delta = `+${Math.round(offsetMs)} ms from recording start`;
+    if (def.max_delay_ms) delta += ` (target ≤ ${def.max_delay_ms} ms from anchor)`;
+    lines.push(delta);
+  }
+  if (ph.reason) lines.push(`reason: ${ph.reason}`);
+  return lines.join("\n");
+}
+
+// buildExpectedMarker computes one phase's marker: position (from
+// matched_ts relative to the recording start), color/rim/type, label, and
+// tooltip. Failed phases without a match still need positioning — they
+// anchor at the validator's "should-have-been-here" point. Without anchor
+// info on the wire we park them at the lane's start with a "?" marker.
+// Pure. Extracted from computeExpectedLane.
+function buildExpectedMarker(ph, def, startMs, totalMs) {
+  const matchedMs = ph.matched_ts ? Date.parse(ph.matched_ts) : Number.NaN;
+  const offsetMs = Number.isFinite(matchedMs) && Number.isFinite(startMs)
+    ? matchedMs - startMs
+    : null;
+  const pos = offsetMs !== null ? Math.max(0, Math.min(100, (offsetMs / totalMs) * 100)) : null;
+  const isState = !!def.expected_state;
+  return {
+    type: pos === null ? "unmatched" : (isState ? "state" : "lifecycle"),
+    pos,
+    baseColor: expectedMarkerColor(def),
+    rimColor: ph.pass ? "#22c55e" : "#dc2626",
+    label: (def.kind || "").slice(0, 3).toUpperCase(),
+    tip: expectedMarkerTooltip(ph, def, offsetMs),
+  };
 }
 
 // deriveEventOffsets returns the sorted, de-duplicated offset_ms values so

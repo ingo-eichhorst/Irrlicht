@@ -56,36 +56,51 @@ func DeriveGasTownRole(cwd, gtRoot string, iconFn ...IconLookup) *RoleInfo {
 	case parts[0] == "mayor":
 		ri = &RoleInfo{Role: "mayor"}
 	case parts[0] == "deacon":
-		if len(parts) >= 3 && parts[1] == "dogs" {
-			if parts[2] == "boot" {
-				ri = &RoleInfo{Role: "boot"}
-			} else if len(parts) >= 4 {
-				ri = &RoleInfo{Role: "dog", Name: parts[2], Rig: parts[3]}
-			}
-		}
-		if ri == nil {
-			ri = &RoleInfo{Role: "deacon"}
-		}
+		ri = deriveDeaconRole(parts)
 	case len(parts) >= 2:
-		rig := parts[0]
-		switch parts[1] {
-		case "witness":
-			ri = &RoleInfo{Role: "witness", Rig: rig}
-		case "refinery":
-			ri = &RoleInfo{Role: "refinery", Rig: rig}
-		case "polecats":
-			if len(parts) >= 3 {
-				ri = &RoleInfo{Role: "polecat", Rig: rig, Name: parts[2]}
-			}
-		case "crew":
-			if len(parts) >= 3 {
-				ri = &RoleInfo{Role: "crew", Rig: rig, Name: parts[2]}
-			}
-		}
+		ri = deriveRigRole(parts)
 	}
 
 	if ri != nil && len(iconFn) > 0 && iconFn[0] != nil {
 		ri.Icon = iconFn[0](ri.Role)
 	}
 	return ri
+}
+
+// deriveDeaconRole handles the deacon subtree: the deacon itself, its boot
+// dog ($GT_ROOT/deacon/dogs/boot), and named per-rig dogs
+// ($GT_ROOT/deacon/dogs/<name>/<rig>). Falls back to plain "deacon" when
+// parts doesn't match a more specific dog pattern.
+func deriveDeaconRole(parts []string) *RoleInfo {
+	if len(parts) >= 3 && parts[1] == "dogs" {
+		if parts[2] == "boot" {
+			return &RoleInfo{Role: "boot"}
+		}
+		if len(parts) >= 4 {
+			return &RoleInfo{Role: "dog", Name: parts[2], Rig: parts[3]}
+		}
+	}
+	return &RoleInfo{Role: "deacon"}
+}
+
+// deriveRigRole handles rig-relative roles: witness, refinery, and the named
+// polecats/<name> and crew/<name> patterns. Returns nil when parts[1] isn't
+// a recognized rig role, or a named role is missing its name segment.
+func deriveRigRole(parts []string) *RoleInfo {
+	rig := parts[0]
+	switch parts[1] {
+	case "witness":
+		return &RoleInfo{Role: "witness", Rig: rig}
+	case "refinery":
+		return &RoleInfo{Role: "refinery", Rig: rig}
+	case "polecats":
+		if len(parts) >= 3 {
+			return &RoleInfo{Role: "polecat", Rig: rig, Name: parts[2]}
+		}
+	case "crew":
+		if len(parts) >= 3 {
+			return &RoleInfo{Role: "crew", Rig: rig, Name: parts[2]}
+		}
+	}
+	return nil
 }

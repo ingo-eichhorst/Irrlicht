@@ -46,30 +46,9 @@ func readLineCapped(r *bufio.Reader, max int64) ([]byte, int64, error) {
 
 		switch err {
 		case nil:
-			if skipping {
-				return nil, consumed, errLineTooLong
-			}
-			line := chunk[:len(chunk)-1] // drop '\n'
-			if len(line) > 0 && line[len(line)-1] == '\r' {
-				line = line[:len(line)-1]
-			}
-			if buf == nil {
-				out := make([]byte, len(line))
-				copy(out, line)
-				return out, consumed, nil
-			}
-			buf = append(buf, line...)
-			return buf, consumed, nil
+			return completeLine(chunk, buf, skipping, consumed)
 		case bufio.ErrBufferFull:
-			if skipping {
-				continue
-			}
-			if consumed > max {
-				buf = nil // release accumulated bytes for GC
-				skipping = true
-				continue
-			}
-			buf = append(buf, chunk...)
+			buf, skipping = accumulateChunk(chunk, buf, skipping, consumed, max)
 		case io.EOF:
 			if consumed == 0 {
 				return nil, 0, io.EOF
@@ -79,4 +58,42 @@ func readLineCapped(r *bufio.Reader, max int64) ([]byte, int64, error) {
 			return nil, 0, err
 		}
 	}
+}
+
+// completeLine finishes a line read that ended in '\n' (the nil-error case
+// from ReadSlice): it trims the newline and any trailing '\r', and stitches
+// together any bytes already accumulated in buf from earlier
+// bufio.ErrBufferFull chunks. skipping means the line already exceeded max
+// and its bytes were discarded, so the caller reports errLineTooLong instead
+// of returning content.
+func completeLine(chunk, buf []byte, skipping bool, consumed int64) ([]byte, int64, error) {
+	if skipping {
+		return nil, consumed, errLineTooLong
+	}
+	line := chunk[:len(chunk)-1] // drop '\n'
+	if len(line) > 0 && line[len(line)-1] == '\r' {
+		line = line[:len(line)-1]
+	}
+	if buf == nil {
+		out := make([]byte, len(line))
+		copy(out, line)
+		return out, consumed, nil
+	}
+	buf = append(buf, line...)
+	return buf, consumed, nil
+}
+
+// accumulateChunk handles a bufio.ErrBufferFull chunk (the reader's internal
+// buffer filled before a '\n' was found): below max it appends the chunk to
+// buf; once consumed exceeds max it switches to skipping mode, releasing buf
+// so the remaining oversized-line bytes are dropped without being retained
+// for GC. Once already skipping, buf is left untouched (nil).
+func accumulateChunk(chunk, buf []byte, skipping bool, consumed, max int64) ([]byte, bool) {
+	if skipping {
+		return buf, skipping
+	}
+	if consumed > max {
+		return nil, true
+	}
+	return append(buf, chunk...), skipping
 }

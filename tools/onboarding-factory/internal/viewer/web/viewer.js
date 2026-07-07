@@ -88,7 +88,11 @@ function folderToCoverageId(folder, agent) {
   return folder;
 }
 
-(async function init() {
+// loadInitData fetches the three starting payloads (scenarios, catalog,
+// recipes) in parallel, populates the module-level caches, and returns the
+// raw scenarios list so init() can decide whether to render the sidebar
+// tree or the empty-state note.
+async function loadInitData() {
   const [scenarios, catResp, recipesResp] = await Promise.all([
     fetch("/api/scenarios").then(r => r.json()),
     fetch("/api/catalog").then(async r => {
@@ -106,9 +110,13 @@ function folderToCoverageId(folder, agent) {
       if (r.coverage_id) recipesByCoverageId.set(r.coverage_id, r);
     }
   }
-  // Re-render the overview when a window resize changes how many agent
-  // columns fit (debounced; no-op on detail pages and when the fit count
-  // is unchanged). Registered once for both init paths below.
+  return scenarios;
+}
+
+// registerOverviewResizeListener re-renders the overview when a window
+// resize changes how many agent columns fit (debounced; no-op on detail
+// pages and when the fit count is unchanged). Registered once, from init().
+function registerOverviewResizeListener() {
   let resizeTimer = 0;
   window.addEventListener("resize", () => {
     clearTimeout(resizeTimer);
@@ -120,100 +128,158 @@ function folderToCoverageId(folder, agent) {
       if (agentsPerPage(main?.clientWidth || 1200) !== lastPerPage) loadOverview();
     }, 150);
   });
+}
 
-  // Map scenario id → catalog code (e.g. "5.4") so the sidebar can
-  // prefix labels and sort in the same order as the overview matrix.
-  // Regression-subtree recordings aren't in the catalog and stay
-  // uncoded — they fall through to alphabetical at the end.
+// buildCodeById maps scenario id → catalog code (e.g. "5.4") so the
+// sidebar can prefix labels and sort in the same order as the overview
+// matrix. Regression-subtree recordings aren't in the catalog and stay
+// uncoded — they fall through to alphabetical at the end.
+function buildCodeById() {
   const codeById = new Map();
   if (catalog && Array.isArray(catalog.scenarios)) {
     for (const sc of catalog.scenarios) {
       if (sc.code && sc.id) codeById.set(sc.id, sc.code);
     }
   }
-  const sidebar = document.getElementById("scenarios");
-  sidebar.innerHTML = "";
+  return codeById;
+}
 
-  // Overview button — always present. Click sets the hash; the router
-  // hashchange handler does the actual view swap.
+// buildOverviewButton creates the always-present "📊 Overview" sidebar
+// button. Click sets the hash; the router hashchange handler does the
+// actual view swap.
+function buildOverviewButton() {
   const overviewBtn = document.createElement("button");
   overviewBtn.className = "scn overview-btn";
   overviewBtn.dataset.route = "overview";
   overviewBtn.textContent = "📊 Overview";
   overviewBtn.addEventListener("click", () => navigate("#/"));
-  sidebar.appendChild(overviewBtn);
+  return overviewBtn;
+}
 
-  if (!scenarios || scenarios.length === 0) {
-    const note = document.createElement("div");
-    note.style.cssText = "padding: 8px; font-size: 12px; color: #888;";
-    note.textContent = "No recordings found under replaydata/agents/.";
-    sidebar.appendChild(note);
-    // Wire router even without recordings — overview view still works.
-    window.addEventListener("hashchange", route);
-    route();
-    return;
-  }
-  // Group by subtree (scenarios vs regressions) first, then by agent.
-  // Each level is a <details>/<summary> so the list stays scannable
-  // even when many recordings accumulate. Open/closed state persists
-  // in localStorage; the path leading to the currently-selected
-  // recording is force-expanded on render.
+// renderEmptySidebarNote shows the "no recordings" note in the sidebar
+// when /api/scenarios comes back empty.
+function renderEmptySidebarNote(sidebar) {
+  const note = document.createElement("div");
+  note.style.cssText = "padding: 8px; font-size: 12px; color: #888;";
+  note.textContent = "No recordings found under replaydata/agents/.";
+  sidebar.appendChild(note);
+}
+
+// groupScenariosBySubtree buckets scenarios by subtree (scenarios vs
+// regressions), then by agent, preserving discovery order within each
+// agent's list.
+function groupScenariosBySubtree(scenarios) {
   const bySubtree = {scenarios: {}, regressions: {}};
   for (const s of scenarios) {
     if (!bySubtree[s.subtree]) bySubtree[s.subtree] = {};
     bySubtree[s.subtree][s.agent] ||= [];
     bySubtree[s.subtree][s.agent].push(s);
   }
+  return bySubtree;
+}
+
+// buildRecordingButton builds one sidebar leaf button for a recording.
+// <button> rather than <a> so the element is reliably click-triggerable
+// from any input source (mouse, keyboard, accessibility tools, Chrome
+// MCP). data-rec-key lets the router find this button when restoring
+// active state from a deep link.
+function buildRecordingButton(s, codeById) {
+  const el = document.createElement("button");
+  el.className = "scn";
+  el.dataset.recKey = `${s.agent}/${s.subtree}/${s.id}`;
+  // Label by the resolved coverage_id (+ catalog code) so variant-folder
+  // recordings (e.g. agent-question-pending → user-blocking-question) read
+  // like their catalog row instead of the raw folder name.
+  const cid = folderToCoverageId(s.id, s.agent);
+  const code = codeById.get(cid);
+  // The on-disk folder is kept as a parenthetical ONLY when it's a genuine
+  // variant. Folders are id-prefixed (<dashed-code>_<name>), so a standard
+  // cell's folder is just the code + name already shown — appending it
+  // would be redundant noise. Show it only when the folder isn't the
+  // canonical <dashed-code>_<name> (the 2 real variants:
+  // user-esc-interrupt→2-20_interrupted-turn, user-blocking-question→
+  // 2-17_agent-question-pending); the detail breadcrumb shows it regardless.
+  const canonicalFolder = code ? `${code.replaceAll(/\./g, "-")}_${cid}` : cid;
+  const labelId = s.id === canonicalFolder ? cid : `${cid} (${s.id})`;
+  el.textContent = code ? `${code} ${labelId}` : labelId;
+  el.addEventListener("click", () => navigate(`#/recording/${s.agent}/${s.subtree}/${s.id}`));
+  return el;
+}
+
+// buildAgentGroup builds one agent's collapsible group within a subtree.
+// Sort by catalog code (e.g. "5.4") so the order mirrors the overview
+// matrix. Resolve the folder→coverage_id per-agent so a variant-folder
+// cell sorts by the SAME code its label shows. Items without a code
+// (regression-only / orphan folders) sort to the end, alphabetically.
+function buildAgentGroup(subtree, agent, agentScenarios, codeById, activePath) {
+  const agentDet = makeSidebarGroup(
+    "agent-group", `sidebar.agent.${subtree}.${agent}`, agent, agentScenarios.length,
+    activePath.subtree === subtree && activePath.agent === agent,
+  );
+  agentScenarios.sort((a, b) => {
+    const [as, ai] = parseCatalogCode(codeById.get(folderToCoverageId(a.id, agent)));
+    const [bs, bi] = parseCatalogCode(codeById.get(folderToCoverageId(b.id, agent)));
+    if (as !== bs) return as - bs;
+    if (ai !== bi) return ai - bi;
+    return a.id.localeCompare(b.id);
+  });
+  for (const s of agentScenarios) {
+    agentDet.appendChild(buildRecordingButton(s, codeById));
+  }
+  return agentDet;
+}
+
+// buildSubtreeGroup builds one subtree's ("scenarios"/"regressions")
+// collapsible group, containing one agent group per agent with recordings
+// in that subtree.
+function buildSubtreeGroup(subtree, agentsMap, codeById, activePath) {
+  const totalCount = Object.values(agentsMap).reduce((n, arr) => n + arr.length, 0);
+  const subtreeDet = makeSidebarGroup("subtree-group", `sidebar.subtree.${subtree}`, subtree, totalCount, activePath.subtree === subtree);
+  for (const agent of Object.keys(agentsMap).sort((a, b) => a.localeCompare(b))) {
+    subtreeDet.appendChild(buildAgentGroup(subtree, agent, agentsMap[agent], codeById, activePath));
+  }
+  return subtreeDet;
+}
+
+// renderSidebarGroups builds the full scenarios/regressions × agent tree
+// under the sidebar's overview button. Group by subtree (scenarios vs
+// regressions) first, then by agent. Each level is a <details>/<summary>
+// so the list stays scannable even when many recordings accumulate.
+// Open/closed state persists in localStorage; the path leading to the
+// currently-selected recording is force-expanded on render.
+function renderSidebarGroups(sidebar, scenarios, codeById) {
+  const bySubtree = groupScenariosBySubtree(scenarios);
   const activePath = sidebarActivePath();
   for (const subtree of ["scenarios", "regressions"]) {
     const agents = bySubtree[subtree];
     if (!agents || Object.keys(agents).length === 0) continue;
-    const totalCount = Object.values(agents).reduce((n, arr) => n + arr.length, 0);
-    const subtreeDet = makeSidebarGroup("subtree-group", `sidebar.subtree.${subtree}`, subtree, totalCount, activePath.subtree === subtree);
-    for (const agent of Object.keys(agents).sort((a, b) => a.localeCompare(b))) {
-      const agentDet = makeSidebarGroup("agent-group", `sidebar.agent.${subtree}.${agent}`, agent, agents[agent].length, activePath.subtree === subtree && activePath.agent === agent);
-      // Sort by catalog code (e.g. "5.4") so the order mirrors the overview
-      // matrix. Resolve the folder→coverage_id per-agent so a variant-folder
-      // cell sorts by the SAME code its label shows. Items without a code
-      // (regression-only / orphan folders) sort to the end, alphabetically.
-      agents[agent].sort((a, b) => {
-        const [as, ai] = parseCatalogCode(codeById.get(folderToCoverageId(a.id, agent)));
-        const [bs, bi] = parseCatalogCode(codeById.get(folderToCoverageId(b.id, agent)));
-        if (as !== bs) return as - bs;
-        if (ai !== bi) return ai - bi;
-        return a.id.localeCompare(b.id);
-      });
-      for (const s of agents[agent]) {
-        // <button> rather than <a> so the element is reliably
-        // click-triggerable from any input source (mouse, keyboard,
-        // accessibility tools, Chrome MCP). data-rec-key lets the
-        // router find this button when restoring active state from
-        // a deep link.
-        const el = document.createElement("button");
-        el.className = "scn";
-        el.dataset.recKey = `${s.agent}/${s.subtree}/${s.id}`;
-        // Label by the resolved coverage_id (+ catalog code) so variant-folder
-        // recordings (e.g. agent-question-pending → user-blocking-question) read
-        // like their catalog row instead of the raw folder name.
-        const cid = folderToCoverageId(s.id, s.agent);
-        const code = codeById.get(cid);
-        // The on-disk folder is kept as a parenthetical ONLY when it's a genuine
-        // variant. Folders are id-prefixed (<dashed-code>_<name>), so a standard
-        // cell's folder is just the code + name already shown — appending it
-        // would be redundant noise. Show it only when the folder isn't the
-        // canonical <dashed-code>_<name> (the 2 real variants:
-        // user-esc-interrupt→2-20_interrupted-turn, user-blocking-question→
-        // 2-17_agent-question-pending); the detail breadcrumb shows it regardless.
-        const canonicalFolder = code ? `${code.replaceAll(/\./g, "-")}_${cid}` : cid;
-        const labelId = s.id === canonicalFolder ? cid : `${cid} (${s.id})`;
-        el.textContent = code ? `${code} ${labelId}` : labelId;
-        el.addEventListener("click", () => navigate(`#/recording/${s.agent}/${s.subtree}/${s.id}`));
-        agentDet.appendChild(el);
-      }
-      subtreeDet.appendChild(agentDet);
-    }
-    sidebar.appendChild(subtreeDet);
+    sidebar.appendChild(buildSubtreeGroup(subtree, agents, codeById, activePath));
   }
+}
+
+(async function init() {
+  const scenarios = await loadInitData();
+  // Re-render the overview when a window resize changes how many agent
+  // columns fit (debounced; no-op on detail pages and when the fit count
+  // is unchanged). Registered once for both init paths below.
+  registerOverviewResizeListener();
+
+  const codeById = buildCodeById();
+  const sidebar = document.getElementById("scenarios");
+  sidebar.innerHTML = "";
+
+  // Overview button — always present. Click sets the hash; the router
+  // hashchange handler does the actual view swap.
+  sidebar.appendChild(buildOverviewButton());
+
+  if (!scenarios || scenarios.length === 0) {
+    renderEmptySidebarNote(sidebar);
+    // Wire router even without recordings — overview view still works.
+    window.addEventListener("hashchange", route);
+    route();
+    return;
+  }
+  renderSidebarGroups(sidebar, scenarios, codeById);
   // Wire the router and dispatch the initial route. Deep links land
   // directly on the requested view; bare `/` falls through to overview.
   window.addEventListener("hashchange", route);
@@ -424,37 +490,72 @@ function loadOverview() {
 // unobservable / n.a. / unknown), rolled up daemon-side from
 // agent_supports + daemon_capability + driver_capability + the measured
 // recording status. Notes (if any) show in the tooltip.
-function renderCoverageMatrix(detail) {
-  // catalog.agents is [{id, onboarded}, …] — extract ids for column iteration.
-  const agents = (catalog.agents || []).map(a => typeof a === "string" ? a : a.id);
-  // Recording lookup: only "scenarios" subtree counts here; regression
-  // captures are not part of the coverage matrix.
-  const recIndex = new Map();
-  for (const r of scenariosList) {
-    if (r.subtree === "scenarios") recIndex.set(`${r.agent}/${r.id}`, r);
-  }
-
-  // Window the agent columns to what fits the pane (2–4); the pager in the
-  // panel header walks through the rest. The clamped page is written back so
-  // it survives re-renders.
-  const main = document.getElementById("main");
-  const perPage = agentsPerPage(main?.clientWidth || 1200);
-  lastPerPage = perPage;
-  const pg = paginateAgents(agents, agentPage, perPage);
-  agentPage = pg.page;
-
-  // Scenarios are agent-agnostic now (no section/feature) — list them flat in
-  // catalog (code) order; the per-row code chip carries the "<section>.<index>".
-  const panel = document.createElement("div");
-  panel.className = "panel";
+// buildCoverageHead builds the coverage panel's header (title + agent
+// pager when there's more than one page of agent columns). Extracted from
+// renderCoverageMatrix.
+function buildCoverageHead(agents, pg) {
   const head = document.createElement("div");
   head.style.cssText = "display: flex; align-items: baseline; gap: 12px; justify-content: space-between; flex-wrap: wrap;";
   const h3 = document.createElement("h3");
   h3.textContent = `Scenario coverage — ${catalog.scenarios.length} scenarios × ${agents.length} agents`;
   head.appendChild(h3);
   if (pg.pages > 1) head.appendChild(renderAgentPager(pg, agents));
-  panel.appendChild(head);
+  return head;
+}
 
+// buildCoverageCell builds one scenario×agent cell: an em-dash when the
+// agent has no coverage entry, otherwise the 7-segment pipeline strip.
+// recIndex is keyed by on-disk folder name; sc.id is the coverage_id.
+// Resolve coverage_id → folder via recipesByCoverageId so the
+// pipeline-strip chip lands on the recording detail page (not
+// /scenario/...) when folder name and coverage_id diverge. folder_by_agent
+// is per-agent (variant-folder aware); fall back to the recipe name then
+// the coverage_id. Extracted from renderCoverageMatrix.
+function buildCoverageCell(sc, agent, recIndex) {
+  const cov = sc.coverage?.[agent];
+  const cell = document.createElement("td");
+  cell.style.textAlign = "center";
+  cell.style.padding = "4px";
+  if (!cov) {
+    cell.textContent = "—";
+    cell.style.color = "#ccc";
+    cell.title = `${agent}: no entry`;
+    return cell;
+  }
+  const recipe = recipesByCoverageId.get(sc.id);
+  const folder = recipe?.folder_by_agent?.[agent] || recipe?.name || sc.id;
+  const rec = recIndex.get(`${agent}/${folder}`);
+  const strip = renderPipelineStrip(agent, sc.id, cov, rec);
+  cell.appendChild(strip);
+  return cell;
+}
+
+// buildCoverageRow builds one scenario's table row: the name cell (code
+// chip + coverage_id, clickable through to the scenario detail page) plus
+// one cell per visible agent column. Extracted from renderCoverageMatrix.
+function buildCoverageRow(sc, pg, recIndex) {
+  const row = document.createElement("tr");
+  const nameCell = document.createElement("td");
+  nameCell.style.cssText = "cursor: pointer;";
+  const nameLink = document.createElement("button");
+  nameLink.style.cssText = "background: transparent; border: 0; padding: 0; text-align: left; cursor: pointer; font: inherit; color: inherit;";
+  const codeChip = sc.code
+    ? `<span style="display: inline-block; min-width: 28px; padding: 1px 5px; margin-right: 6px; background: #e8e6da; color: #555; border-radius: 3px; font-size: 10px; font-weight: 600; font-family: monospace; vertical-align: 1px;">${escapeHtml(sc.code)}</span>`
+    : "";
+  nameLink.innerHTML = `${codeChip}<span style="font-weight: 600; color: #1f56a8; text-decoration: underline;">${sc.id}</span>`;
+  nameLink.addEventListener("click", () => navigate(`#/scenario/${sc.id}`));
+  nameCell.appendChild(nameLink);
+  row.appendChild(nameCell);
+  for (const agent of pg.visible) {
+    row.appendChild(buildCoverageCell(sc, agent, recIndex));
+  }
+  return row;
+}
+
+// buildCoverageTable builds the full scenario × agent matrix table (header
+// row + one body row per catalog scenario). Extracted from
+// renderCoverageMatrix.
+function buildCoverageTable(pg, recIndex) {
   const table = document.createElement("table");
   table.className = "overview-matrix";
   const thead = document.createElement("thead");
@@ -469,50 +570,18 @@ function renderCoverageMatrix(detail) {
 
   const tbody = document.createElement("tbody");
   for (const sc of catalog.scenarios) {
-    const row = document.createElement("tr");
-    const nameCell = document.createElement("td");
-    nameCell.style.cssText = "cursor: pointer;";
-    const nameLink = document.createElement("button");
-    nameLink.style.cssText = "background: transparent; border: 0; padding: 0; text-align: left; cursor: pointer; font: inherit; color: inherit;";
-    const codeChip = sc.code
-      ? `<span style="display: inline-block; min-width: 28px; padding: 1px 5px; margin-right: 6px; background: #e8e6da; color: #555; border-radius: 3px; font-size: 10px; font-weight: 600; font-family: monospace; vertical-align: 1px;">${escapeHtml(sc.code)}</span>`
-      : "";
-    nameLink.innerHTML = `${codeChip}<span style="font-weight: 600; color: #1f56a8; text-decoration: underline;">${sc.id}</span>`;
-    nameLink.addEventListener("click", () => navigate(`#/scenario/${sc.id}`));
-    nameCell.appendChild(nameLink);
-    row.appendChild(nameCell);
-    for (const agent of pg.visible) {
-      const cov = sc.coverage?.[agent];
-      const cell = document.createElement("td");
-      cell.style.textAlign = "center";
-      cell.style.padding = "4px";
-      if (!cov) {
-        cell.textContent = "—";
-        cell.style.color = "#ccc";
-        cell.title = `${agent}: no entry`;
-        row.appendChild(cell);
-        continue;
-      }
-      // recIndex is keyed by on-disk folder name; sc.id is the
-      // coverage_id. Resolve coverage_id → folder via recipesByCoverageId
-      // so the pipeline-strip chip lands on the recording detail page
-      // (not /scenario/...) when folder name and coverage_id diverge.
-      // folder_by_agent is per-agent (variant-folder aware); fall back to the
-      // recipe name then the coverage_id.
-      const recipe = recipesByCoverageId.get(sc.id);
-      const folder = recipe?.folder_by_agent?.[agent] || recipe?.name || sc.id;
-      const rec = recIndex.get(`${agent}/${folder}`);
-      const strip = renderPipelineStrip(agent, sc.id, cov, rec);
-      cell.appendChild(strip);
-      row.appendChild(cell);
-    }
-    tbody.appendChild(row);
+    tbody.appendChild(buildCoverageRow(sc, pg, recIndex));
   }
   table.appendChild(tbody);
-  panel.appendChild(table);
-  detail.appendChild(panel);
+  return table;
+}
 
-  // Pipeline status — count cells by where they are in the workflow.
+// computeCoverageStages counts cells by where they are in the workflow
+// (blocked / awaiting recipe / awaiting spec / awaiting recording /
+// recorded), plus divergence between the capability verdict and the
+// measured outcome (mirrors renderPipelineStrip's outline logic).
+// Extracted from renderCoverageMatrix.
+function computeCoverageStages(agents) {
   const stages = {blocked: 0, awaitingRecipe: 0, awaitingSpec: 0, awaitingRecording: 0, recorded: 0, divergent: 0};
   let total = 0, withEntry = 0;
   for (const sc of catalog.scenarios) {
@@ -534,7 +603,6 @@ function renderCoverageMatrix(detail) {
       if (!specOK) { stages.awaitingSpec++; continue; }
       if (recCount === 0) { stages.awaitingRecording++; continue; }
       stages.recorded++;
-      // Divergence flags (mirror renderPipelineStrip's outline logic)
       const capable = (daemon === "full" && driver === "ready");
       const verdictBlocks = (daemon === "incapable" || daemon === "bug" ||
         String(driver).startsWith("gap:"));
@@ -548,6 +616,13 @@ function renderCoverageMatrix(detail) {
       }
     }
   }
+  return {stages, total, withEntry};
+}
+
+// buildCoverageSummary renders the "Pipeline: N blocked → N awaiting
+// recipe → …" status line beneath the matrix. Extracted from
+// renderCoverageMatrix.
+function buildCoverageSummary(stages, total, withEntry) {
   const sum = document.createElement("div");
   sum.style.cssText = "margin-top: 10px; display: flex; gap: 12px; font-size: 11px; color: #555; flex-wrap: wrap; align-items: center;";
   sum.innerHTML = `
@@ -564,11 +639,15 @@ function renderCoverageMatrix(detail) {
     ${stages.divergent > 0 ? `<span style="margin-left:14px;color:#c0392b;font-weight:600;background:#fff5f5;padding:1px 6px;border-radius:8px;">⚠ <b>${stages.divergent}</b> divergent</span>` : ""}
     <span style="margin-left:14px;color:#888;">${withEntry}/${total} cells assessed</span>
   `;
-  panel.appendChild(sum);
+  return sum;
+}
 
-  // Explainer / legend — describes the 7-segment strip and the full
-  // state vocabulary for each segment. Each row lists one segment, what
-  // it tests, and every glyph that can appear in it with its meaning.
+// buildCoverageLegend renders the static explainer describing the
+// 7-segment strip and the full state vocabulary for each segment. Each
+// row lists one segment, what it tests, and every glyph that can appear
+// in it with its meaning. Pure (no inputs). Extracted from
+// renderCoverageMatrix.
+function buildCoverageLegend() {
   const legend = document.createElement("div");
   legend.style.cssText = "margin-top: 10px; padding: 10px 12px; background: #fafaf2; border: 1px solid #e8e6da; border-radius: 4px; font-size: 11px; color: #444;";
   // Helper: render one inline state chip + its label.
@@ -623,7 +702,44 @@ function renderCoverageMatrix(detail) {
       <div style="margin-top:4px;color:#888;">Click a cell to open the recording (or scenario detail if none).</div>
     </div>
   `;
-  panel.appendChild(legend);
+  return legend;
+}
+
+function renderCoverageMatrix(detail) {
+  // catalog.agents is [{id, onboarded}, …] — extract ids for column iteration.
+  const agents = (catalog.agents || []).map(a => typeof a === "string" ? a : a.id);
+  // Recording lookup: only "scenarios" subtree counts here; regression
+  // captures are not part of the coverage matrix.
+  const recIndex = new Map();
+  for (const r of scenariosList) {
+    if (r.subtree === "scenarios") recIndex.set(`${r.agent}/${r.id}`, r);
+  }
+
+  // Window the agent columns to what fits the pane (2–4); the pager in the
+  // panel header walks through the rest. The clamped page is written back so
+  // it survives re-renders.
+  const main = document.getElementById("main");
+  const perPage = agentsPerPage(main?.clientWidth || 1200);
+  lastPerPage = perPage;
+  const pg = paginateAgents(agents, agentPage, perPage);
+  agentPage = pg.page;
+
+  // Scenarios are agent-agnostic now (no section/feature) — list them flat in
+  // catalog (code) order; the per-row code chip carries the "<section>.<index>".
+  const panel = document.createElement("div");
+  panel.className = "panel";
+  panel.appendChild(buildCoverageHead(agents, pg));
+  panel.appendChild(buildCoverageTable(pg, recIndex));
+  detail.appendChild(panel);
+
+  // Pipeline status — count cells by where they are in the workflow.
+  const {stages, total, withEntry} = computeCoverageStages(agents);
+  panel.appendChild(buildCoverageSummary(stages, total, withEntry));
+
+  // Explainer / legend — describes the 7-segment strip and the full
+  // state vocabulary for each segment. Each row lists one segment, what
+  // it tests, and every glyph that can appear in it with its meaning.
+  panel.appendChild(buildCoverageLegend());
 }
 
 // renderAgentPager builds the ◀ "1–4 of 6 agents" ▶ control for the

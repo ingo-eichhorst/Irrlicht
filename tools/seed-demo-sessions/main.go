@@ -167,20 +167,8 @@ func runSeed(outDir, appPath string, clean, restart, force bool, scenario scenar
 		}
 	}
 
-	now := time.Now()
-	for _, src := range scenario.File.Sessions {
-		s := src.materialize(now)
-		if err := ensureSessionCWD(s.CWD); err != nil {
-			fmt.Printf("warning: could not create cwd %s for session %s (%v) — the daemon will reap this session as an orphan at startup unless the directory exists\n", s.CWD, s.SessionID, err)
-		}
-		path := filepath.Join(outDir, s.SessionID+".json")
-		data, err := json.MarshalIndent(s, "", "  ")
-		if err != nil {
-			return fmt.Errorf("marshal %s: %w", s.SessionID, err)
-		}
-		if err := os.WriteFile(path, data, 0o600); err != nil {
-			return fmt.Errorf("write %s: %w", path, err)
-		}
+	if err := writeScenarioSessions(outDir, scenario.File.Sessions, time.Now()); err != nil {
+		return err
 	}
 	fmt.Printf("wrote scenario %q (%d sessions) to %s\n", scenario.Name, len(scenario.File.Sessions), outDir)
 
@@ -195,6 +183,28 @@ func runSeed(outDir, appPath string, clean, restart, force bool, scenario scenar
 	return nil
 }
 
+// writeScenarioSessions materializes each scenario session against now and
+// writes it to <outDir>/<sessionID>.json. A session whose cwd can't be
+// created gets a warning (not a failure) — the daemon will just reap it as
+// an orphan at startup.
+func writeScenarioSessions(outDir string, sessions []*scenarioSession, now time.Time) error {
+	for _, src := range sessions {
+		s := src.materialize(now)
+		if err := ensureSessionCWD(s.CWD); err != nil {
+			fmt.Printf("warning: could not create cwd %s for session %s (%v) — the daemon will reap this session as an orphan at startup unless the directory exists\n", s.CWD, s.SessionID, err)
+		}
+		path := filepath.Join(outDir, s.SessionID+".json")
+		data, err := json.MarshalIndent(s, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshal %s: %w", s.SessionID, err)
+		}
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			return fmt.Errorf("write %s: %w", path, err)
+		}
+	}
+	return nil
+}
+
 func runRestore(outDir, appPath string, restart, force bool) error {
 	if restart {
 		if err := stopApp(appPath, force); err != nil {
@@ -202,6 +212,28 @@ func runRestore(outDir, appPath string, restart, force bool) error {
 		}
 	}
 
+	demos, err := removeDemoFiles(outDir)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("removed %d demo session files\n", demos)
+
+	if err := restoreLatestBackup(filepath.Dir(outDir), outDir); err != nil {
+		return err
+	}
+
+	if restart {
+		if err := launchApp(appPath); err != nil {
+			return err
+		}
+		fmt.Printf("relaunched %s\n", appPath)
+	}
+	return nil
+}
+
+// removeDemoFiles deletes every demo-*.json file directly inside outDir and
+// reports how many it removed.
+func removeDemoFiles(outDir string) (int, error) {
 	entries, _ := os.ReadDir(outDir)
 	demos := 0
 	for _, e := range entries {
@@ -209,13 +241,18 @@ func runRestore(outDir, appPath string, restart, force bool) error {
 			continue
 		}
 		if err := os.Remove(filepath.Join(outDir, e.Name())); err != nil {
-			return fmt.Errorf("remove %s: %w", e.Name(), err)
+			return demos, fmt.Errorf("remove %s: %w", e.Name(), err)
 		}
 		demos++
 	}
-	fmt.Printf("removed %d demo session files\n", demos)
+	return demos, nil
+}
 
-	parent := filepath.Dir(outDir)
+// restoreLatestBackup finds the most recent instances.bak.<ts>/ sibling of
+// outDir (inside parent) and moves its *.json files back into outDir,
+// removing the backup dir afterward if it's left empty. A no-op — not an
+// error — when there are no backups to restore.
+func restoreLatestBackup(parent, outDir string) error {
 	parentEntries, err := os.ReadDir(parent)
 	if err != nil {
 		return fmt.Errorf("read %s: %w", parent, err)
@@ -228,69 +265,41 @@ func runRestore(outDir, appPath string, restart, force bool) error {
 	}
 	if len(backups) == 0 {
 		fmt.Println("no backups found; nothing to restore")
-	} else {
-		sort.Strings(backups)
-		latest := backups[len(backups)-1]
-		src := filepath.Join(parent, latest)
-		moved, err := moveAllJSON(src, outDir)
-		if err != nil {
-			return err
-		}
-		fmt.Printf("restored %d files from %s\n", moved, src)
-		if rest, _ := os.ReadDir(src); len(rest) == 0 {
-			_ = os.Remove(src)
-		}
+		return nil
 	}
-
-	if restart {
-		if err := launchApp(appPath); err != nil {
-			return err
-		}
-		fmt.Printf("relaunched %s\n", appPath)
+	sort.Strings(backups)
+	latest := backups[len(backups)-1]
+	src := filepath.Join(parent, latest)
+	moved, err := moveAllJSON(src, outDir)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("restored %d files from %s\n", moved, src)
+	if rest, _ := os.ReadDir(src); len(rest) == 0 {
+		_ = os.Remove(src)
 	}
 	return nil
 }
 
 // loadScenarios reads scenarios from `dir` if non-empty, otherwise from the
 // embedded scenarios/*.json bundled at build time.
-func loadScenarios(dir string) ([]scenarioInfo, error) {
-	type entry struct {
-		name string
-		read func() ([]byte, error)
-	}
-	var entries []entry
+// scenarioEntry is one discovered scenario file location, lazily read so
+// loadScenarios doesn't pay the read cost for entries it never parses.
+type scenarioEntry struct {
+	name string
+	read func() ([]byte, error)
+}
 
+func loadScenarios(dir string) ([]scenarioInfo, error) {
+	var entries []scenarioEntry
+	var err error
 	if dir != "" {
-		dirEntries, err := os.ReadDir(dir)
-		if err != nil {
-			return nil, fmt.Errorf("read scenarios dir %s: %w", dir, err)
-		}
-		for _, e := range dirEntries {
-			if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
-				continue
-			}
-			path := filepath.Join(dir, e.Name())
-			entries = append(entries, entry{
-				name: strings.TrimSuffix(e.Name(), ".json"),
-				read: func() ([]byte, error) { return os.ReadFile(path) },
-			})
-		}
+		entries, err = scenarioEntriesFromDir(dir)
 	} else {
-		dirEntries, err := fs.ReadDir(embeddedScenarios, "scenarios")
-		if err != nil {
-			return nil, fmt.Errorf("read embedded scenarios: %w", err)
-		}
-		for _, e := range dirEntries {
-			if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
-				continue
-			}
-			name := strings.TrimSuffix(e.Name(), ".json")
-			path := filepath.Join("scenarios", e.Name())
-			entries = append(entries, entry{
-				name: name,
-				read: func() ([]byte, error) { return embeddedScenarios.ReadFile(path) },
-			})
-		}
+		entries, err = scenarioEntriesFromEmbedded()
+	}
+	if err != nil {
+		return nil, err
 	}
 
 	var out []scenarioInfo
@@ -311,6 +320,49 @@ func loadScenarios(dir string) ([]scenarioInfo, error) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
+}
+
+// scenarioEntriesFromDir lists the *.json scenario files in an on-disk dir
+// (the --scenarios-dir override).
+func scenarioEntriesFromDir(dir string) ([]scenarioEntry, error) {
+	dirEntries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("read scenarios dir %s: %w", dir, err)
+	}
+	var entries []scenarioEntry
+	for _, e := range dirEntries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		path := filepath.Join(dir, e.Name())
+		entries = append(entries, scenarioEntry{
+			name: strings.TrimSuffix(e.Name(), ".json"),
+			read: func() ([]byte, error) { return os.ReadFile(path) },
+		})
+	}
+	return entries, nil
+}
+
+// scenarioEntriesFromEmbedded lists the *.json scenario files bundled at
+// build time under scenarios/ (the default source).
+func scenarioEntriesFromEmbedded() ([]scenarioEntry, error) {
+	dirEntries, err := fs.ReadDir(embeddedScenarios, "scenarios")
+	if err != nil {
+		return nil, fmt.Errorf("read embedded scenarios: %w", err)
+	}
+	var entries []scenarioEntry
+	for _, e := range dirEntries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		name := strings.TrimSuffix(e.Name(), ".json")
+		path := filepath.Join("scenarios", e.Name())
+		entries = append(entries, scenarioEntry{
+			name: name,
+			read: func() ([]byte, error) { return embeddedScenarios.ReadFile(path) },
+		})
+	}
+	return entries, nil
 }
 
 func chooseScenario(scenarios []scenarioInfo, name string) (scenarioInfo, error) {

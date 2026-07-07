@@ -112,43 +112,51 @@ func validateCatalog(repoRoot string, add func(path, msg string)) map[string]boo
 	}
 	seenID := map[string]bool{}
 	for _, raw := range doc.Scenarios {
-		var fields map[string]json.RawMessage
-		if json.Unmarshal(raw, &fields) != nil {
-			add(catalogRelPath, "a scenario entry is not a JSON object")
-			continue
-		}
-		var s struct{ ID, Name string }
-		_ = json.Unmarshal(raw, &s)
-		loc := "scenario " + s.Name
-		if s.Name == "" {
-			loc = "scenario id=" + s.ID
-		}
-		for k := range fields {
-			if !allowedScenarioKeys[k] {
-				add(loc, fmt.Sprintf("unexpected field %q (allowed: id, name, description, acceptance_criteria, process)", k))
-			}
-		}
-		if s.ID == "" {
-			add(loc, "missing id")
-		} else if !idRe.MatchString(s.ID) {
-			add(loc, fmt.Sprintf("id %q is not <section>.<index>", s.ID))
-		} else if seenID[s.ID] {
-			add(loc, fmt.Sprintf("duplicate id %q", s.ID))
-		}
-		seenID[s.ID] = true
-		if s.Name == "" {
-			add(loc, "missing name")
-		} else {
-			if !nameRe.MatchString(s.Name) {
-				add(loc, fmt.Sprintf("name %q is not a kebab slug", s.Name))
-			}
-			if names[s.Name] {
-				add(loc, fmt.Sprintf("duplicate name %q", s.Name))
-			}
-			names[s.Name] = true
-		}
+		validateScenarioEntry(raw, seenID, names, add)
 	}
 	return names
+}
+
+// validateScenarioEntry validates one catalog scenario entry: its field set
+// against allowedScenarioKeys, and its id/name well-formedness + uniqueness,
+// recording into seenID/names as it goes (mirroring validateCatalog's
+// original inline bookkeeping across the whole catalog).
+func validateScenarioEntry(raw json.RawMessage, seenID map[string]bool, names map[string]bool, add func(path, msg string)) {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) != nil {
+		add(catalogRelPath, "a scenario entry is not a JSON object")
+		return
+	}
+	var s struct{ ID, Name string }
+	_ = json.Unmarshal(raw, &s)
+	loc := "scenario " + s.Name
+	if s.Name == "" {
+		loc = "scenario id=" + s.ID
+	}
+	for k := range fields {
+		if !allowedScenarioKeys[k] {
+			add(loc, fmt.Sprintf("unexpected field %q (allowed: id, name, description, acceptance_criteria, process)", k))
+		}
+	}
+	if s.ID == "" {
+		add(loc, "missing id")
+	} else if !idRe.MatchString(s.ID) {
+		add(loc, fmt.Sprintf("id %q is not <section>.<index>", s.ID))
+	} else if seenID[s.ID] {
+		add(loc, fmt.Sprintf("duplicate id %q", s.ID))
+	}
+	seenID[s.ID] = true
+	if s.Name == "" {
+		add(loc, "missing name")
+	} else {
+		if !nameRe.MatchString(s.Name) {
+			add(loc, fmt.Sprintf("name %q is not a kebab slug", s.Name))
+		}
+		if names[s.Name] {
+			add(loc, fmt.Sprintf("duplicate name %q", s.Name))
+		}
+		names[s.Name] = true
+	}
 }
 
 // validateCells checks each agent's scenarios/ cells: metadata.json parses,

@@ -165,6 +165,32 @@ function formatClockTime(unixSec) {
 // Fold session snapshots into one bucket per provider. Rules mirror
 // macOS mergeIntoBuckets: subscription beats usage; fresh beats stale;
 // among same-staleness snapshots, the highest sampled_at wins.
+// mergeChipIntoBucket folds one more session's snapshot into an existing
+// provider bucket, applying the subscription-beats-usage / fresh-beats-
+// stale / newest-sampled_at-wins precedence (mirrors Swift's mergeIntoBuckets).
+function mergeChipIntoBucket(existing, snap, s, mode, imm, stale) {
+  // Subscription wins over usage when both are seen (rare — one OAuth
+  // account on both paths). Bars are the richer signal, but only when
+  // the subscription snap is at least as fresh as the usage snap.
+  if (existing.mode === 'usage' && mode === 'subscription' && (!stale || existing.isStale)) {
+    existing.mode = 'subscription';
+    existing.snapshot = snap;
+    existing.session = s;
+    existing.imminent = imm;
+    existing.isStale = stale;
+  } else if (existing.isStale && !stale) {
+    // Always prefer fresh over stale, regardless of sampled_at.
+    existing.snapshot = snap;
+    existing.session = s;
+    existing.imminent = imm;
+    existing.isStale = false;
+  } else if (existing.isStale === stale && (snap.sampled_at || 0) > (existing.snapshot.sampled_at || 0)) {
+    existing.snapshot = snap;
+    existing.session = s;
+    existing.imminent = imm;
+  }
+}
+
 function bucketChips(sessions, nowMs) {
   const buckets = new Map();
   for (const s of sessions) {
@@ -196,31 +222,52 @@ function bucketChips(sessions, nowMs) {
       });
       continue;
     }
-    // Subscription wins over usage when both are seen (rare — one OAuth
-    // account on both paths). Bars are the richer signal, but only when
-    // the subscription snap is at least as fresh as the usage snap.
-    if (existing.mode === 'usage' && mode === 'subscription' && (!stale || existing.isStale)) {
-      existing.mode = 'subscription';
-      existing.snapshot = snap;
-      existing.session = s;
-      existing.imminent = imm;
-      existing.isStale = stale;
-    } else if (existing.isStale && !stale) {
-      // Always prefer fresh over stale, regardless of sampled_at.
-      existing.snapshot = snap;
-      existing.session = s;
-      existing.imminent = imm;
-      existing.isStale = false;
-    } else if (existing.isStale === stale && (snap.sampled_at || 0) > (existing.snapshot.sampled_at || 0)) {
-      existing.snapshot = snap;
-      existing.session = s;
-      existing.imminent = imm;
-    }
+    mergeChipIntoBucket(existing, snap, s, mode, imm, stale);
     existing.totalCostUSD += cost;
   }
   return Array.from(buckets.values()).sort((a, b) =>
     a.key < b.key ? -1 : a.key > b.key ? 1 : 0
   );
+}
+
+// subscriptionWindowLine renders one quota window's tooltip line: percent
+// used, pace verdict (if computable), and reset countdown.
+function subscriptionWindowLine(w, nowMs) {
+  const used = Math.round(w.used_percent || 0);
+  const label = quotaWindowLabel(w.window_minutes || 0);
+  const pace = paceFor(w, nowMs);
+  let line = label + ': ' + used + '% used';
+  if (pace != null) {
+    const delta = used - Math.round(pace);
+    const verdict = delta > 0 ? (delta + 'pt over pace')
+                  : delta < 0 ? ((-delta) + 'pt under pace')
+                  : 'on pace';
+    line += ' · ' + verdict;
+  }
+  if (w.resets_at) line += ' · resets in ' + formatTimeUntil(w.resets_at);
+  return line;
+}
+
+// subscriptionForecastLine returns the cap-forecast tooltip line, or null
+// when there's neither a projected ETA nor any observed usage to reason
+// about.
+function subscriptionForecastLine(chip) {
+  const eta = chip.session?.metrics?.rate_limit_forecast_eta;
+  if (eta) return 'Projected cap: ' + formatClockTime(eta);
+  if ((chip.snapshot.windows || []).some(w => (w.used_percent || 0) > 0)) {
+    return "Forecast: won't hit cap this window";
+  }
+  return null;
+}
+
+// usageCreditsLine returns the credits sub-line for usage-mode chips, or
+// null when there's nothing worth reporting.
+function usageCreditsLine(c) {
+  if (!c) return null;
+  if (c.unlimited === true) return 'Credits: unlimited';
+  if (typeof c.balance === 'number') return 'Credits balance: $' + c.balance.toFixed(2);
+  if (c.has_credits) return 'Credits: available';
+  return null;
 }
 
 function quotaTooltip(chip, nowMs) {
@@ -230,32 +277,14 @@ function quotaTooltip(chip, nowMs) {
   if (chip.isStale) lines.push('⚠️ snapshot pre-dates current window — waiting for next statusline tick');
   if (chip.mode === 'subscription') {
     for (const w of (chip.snapshot.windows || [])) {
-      const used = Math.round(w.used_percent || 0);
-      const label = quotaWindowLabel(w.window_minutes || 0);
-      const pace = paceFor(w, nowMs);
-      let line = label + ': ' + used + '% used';
-      if (pace != null) {
-        const delta = used - Math.round(pace);
-        const verdict = delta > 0 ? (delta + 'pt over pace')
-                      : delta < 0 ? ((-delta) + 'pt under pace')
-                      : 'on pace';
-        line += ' · ' + verdict;
-      }
-      if (w.resets_at) line += ' · resets in ' + formatTimeUntil(w.resets_at);
-      lines.push(line);
+      lines.push(subscriptionWindowLine(w, nowMs));
     }
-    const eta = chip.session?.metrics?.rate_limit_forecast_eta;
-    if (eta) lines.push('Projected cap: ' + formatClockTime(eta));
-    else if ((chip.snapshot.windows || []).some(w => (w.used_percent || 0) > 0))
-      lines.push("Forecast: won't hit cap this window");
+    const forecast = subscriptionForecastLine(chip);
+    if (forecast) lines.push(forecast);
   } else {
     lines.push(formatUsageCost(chip.totalCostUSD) + ' · cumulative spend across active sessions');
-    const c = chip.snapshot.credits;
-    if (c) {
-      if (c.unlimited === true) lines.push('Credits: unlimited');
-      else if (typeof c.balance === 'number') lines.push('Credits balance: $' + c.balance.toFixed(2));
-      else if (c.has_credits) lines.push('Credits: available');
-    }
+    const creditsLine = usageCreditsLine(chip.snapshot.credits);
+    if (creditsLine) lines.push(creditsLine);
   }
   if (chip.snapshot.reached_type) lines.push('⚠️ rate limit reached: ' + chip.snapshot.reached_type);
   return lines.join('\n');

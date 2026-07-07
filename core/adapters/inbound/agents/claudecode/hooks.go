@@ -121,31 +121,36 @@ func scanValueForMarkers(v interface{}, observedAt time.Time) (*tailer.TaskEstim
 	var est *tailer.TaskEstimate
 	var sum *tailer.TaskSummary
 	var q *tailer.TaskQuestion
-	var walk func(v interface{})
-	walk = func(v interface{}) {
-		switch val := v.(type) {
-		case string:
-			if found := tailer.ScanTaskEstimate(val, observedAt); found != nil {
-				est = found // latest valid wins, matching the transcript scan
-			}
-			if found := tailer.ScanTaskSummary(val, observedAt); found != nil {
-				sum = found
-			}
-			if found := tailer.ScanTaskQuestion(val, observedAt); found != nil {
-				q = found
-			}
-		case map[string]interface{}:
-			for _, child := range val {
-				walk(child)
-			}
-		case []interface{}:
-			for _, child := range val {
-				walk(child)
-			}
+	walkMarkerValue(v, observedAt, &est, &sum, &q)
+	return est, sum, q
+}
+
+// walkMarkerValue is the recursive walk behind scanValueForMarkers, pulled out
+// of the closure it used to be so the switch/loops below aren't scored as
+// nested inside an enclosing function literal. est/sum/q are accumulated by
+// pointer since the walk must propagate a find back up through recursive
+// map/slice traversal; latest valid of each wins, matching the transcript scan.
+func walkMarkerValue(v interface{}, observedAt time.Time, est **tailer.TaskEstimate, sum **tailer.TaskSummary, q **tailer.TaskQuestion) {
+	switch val := v.(type) {
+	case string:
+		if found := tailer.ScanTaskEstimate(val, observedAt); found != nil {
+			*est = found // latest valid wins, matching the transcript scan
+		}
+		if found := tailer.ScanTaskSummary(val, observedAt); found != nil {
+			*sum = found
+		}
+		if found := tailer.ScanTaskQuestion(val, observedAt); found != nil {
+			*q = found
+		}
+	case map[string]interface{}:
+		for _, child := range val {
+			walkMarkerValue(child, observedAt, est, sum, q)
+		}
+	case []interface{}:
+		for _, child := range val {
+			walkMarkerValue(child, observedAt, est, sum, q)
 		}
 	}
-	walk(v)
-	return est, sum, q
 }
 
 // ConsentGranter reports whether the user has granted a permission (issue
@@ -218,59 +223,9 @@ func NewHookHandler(target HookTarget, markers MarkerTarget, gate ConsentGranter
 		case HookPermissionRequest, HookPostToolUse, HookPostToolUseFailure:
 			dispatch()
 		case HookPreCompact:
-			// A manual /compact replaces the context; the compaction window
-			// (tens of seconds to minutes) writes nothing to the transcript, so
-			// without this hook the session stays frozen in its pre-compact
-			// state instead of showing working (#657). Force working now; the
-			// compact_boundary then releases it back to ready (#656). The
-			// installer matches "manual"; the trigger check here is
-			// defense-in-depth so an auto-compaction (already working, fires
-			// mid-turn) never gets a spurious working blip.
-			if payload.Trigger == compactTriggerManual {
-				log.LogInfo(logComponentHookReceiver, sessionID,
-					fmt.Sprintf("received %s (trigger=%s)", payload.HookEventName, payload.Trigger))
-				target.HandleCompactHook(sessionID, payload.TranscriptPath, payload.Trigger)
-			} else {
-				log.LogInfo(logComponentHookReceiver, sessionID,
-					fmt.Sprintf("ignored %s (trigger=%q, not manual)", payload.HookEventName, payload.Trigger))
-			}
+			handlePreCompactHook(target, log, sessionID, payload)
 		case HookPreToolUse:
-			// Marker scan first, for ALL tools (#604): the rules block lets
-			// the agent carry its progress marker in a tool input (e.g. the
-			// Bash description), and the payload reaches the daemon even
-			// when the transcript drops the surrounding prose.
-			if markers != nil {
-				// The question marker rides end-of-turn assistant prose, not a
-				// tool-input carrier, so the hook path (tool inputs only) drops it
-				// (#759): the transcript text-block scan delivers it, and the
-				// deterministic compactor covers the no-marker case regardless.
-				est, sum, _ := scanToolInput(payload.ToolInput, time.Now())
-				if est != nil {
-					log.LogInfo(logComponentHookReceiver, sessionID,
-						fmt.Sprintf("task-estimate marker via %s tool input: %d/%d", payload.ToolName, est.CompletedRounds, est.TotalRounds))
-					markers.IngestTaskEstimate(payload.TranscriptPath, &session.TaskEstimate{
-						TotalRounds:     est.TotalRounds,
-						CompletedRounds: est.CompletedRounds,
-						Risk:            est.Risk,
-						Confidence:      est.Confidence,
-						UpdatedAt:       est.ObservedAt,
-					})
-				}
-				// Task-summary marker (#738) — same carrier, same drop-bypass.
-				if sum != nil {
-					log.LogInfo(logComponentHookReceiver, sessionID,
-						fmt.Sprintf("task-summary marker via %s tool input", payload.ToolName))
-					markers.IngestTaskSummary(payload.TranscriptPath, sum.Text, sum.ObservedAt)
-				}
-			}
-			// Only dispatch for user-input tools; reject anything else even
-			// if the settings.json matcher was misconfigured to be broader.
-			if payload.ToolName == toolAskUserQuestion || payload.ToolName == toolExitPlanMode {
-				dispatch()
-			} else {
-				log.LogInfo(logComponentHookReceiver, sessionID,
-					fmt.Sprintf("ignored PreToolUse for unexpected tool %q", payload.ToolName))
-			}
+			handlePreToolUseHook(markers, log, sessionID, payload, dispatch)
 		default:
 			// Unrecognized hook event — accept but ignore.
 			log.LogInfo(logComponentHookReceiver, sessionID,
@@ -278,5 +233,71 @@ func NewHookHandler(target HookTarget, markers MarkerTarget, gate ConsentGranter
 		}
 
 		w.WriteHeader(http.StatusOK)
+	}
+}
+
+// handlePreCompactHook processes a PreCompact hook event. A manual /compact
+// replaces the context; the compaction window (tens of seconds to minutes)
+// writes nothing to the transcript, so without this hook the session stays
+// frozen in its pre-compact state instead of showing working (#657). Force
+// working now; the compact_boundary then releases it back to ready (#656).
+// The installer matches "manual"; the trigger check here is defense-in-depth
+// so an auto-compaction (already working, fires mid-turn) never gets a
+// spurious working blip.
+func handlePreCompactHook(target HookTarget, log outbound.Logger, sessionID string, payload hookPayload) {
+	if payload.Trigger == compactTriggerManual {
+		log.LogInfo(logComponentHookReceiver, sessionID,
+			fmt.Sprintf("received %s (trigger=%s)", payload.HookEventName, payload.Trigger))
+		target.HandleCompactHook(sessionID, payload.TranscriptPath, payload.Trigger)
+	} else {
+		log.LogInfo(logComponentHookReceiver, sessionID,
+			fmt.Sprintf("ignored %s (trigger=%q, not manual)", payload.HookEventName, payload.Trigger))
+	}
+}
+
+// handlePreToolUseHook processes a PreToolUse hook event: scans the tool
+// input for task-estimate/task-summary markers for ALL tools (#604), then
+// dispatches (via dispatch) only for the user-input tools (AskUserQuestion /
+// ExitPlanMode) — rejecting anything else even if the settings.json matcher
+// was misconfigured to be broader.
+func handlePreToolUseHook(markers MarkerTarget, log outbound.Logger, sessionID string, payload hookPayload, dispatch func()) {
+	// Marker scan first, for ALL tools (#604): the rules block lets
+	// the agent carry its progress marker in a tool input (e.g. the
+	// Bash description), and the payload reaches the daemon even
+	// when the transcript drops the surrounding prose.
+	if markers != nil {
+		scanAndIngestMarkers(markers, log, sessionID, payload)
+	}
+	if payload.ToolName == toolAskUserQuestion || payload.ToolName == toolExitPlanMode {
+		dispatch()
+	} else {
+		log.LogInfo(logComponentHookReceiver, sessionID,
+			fmt.Sprintf("ignored PreToolUse for unexpected tool %q", payload.ToolName))
+	}
+}
+
+// scanAndIngestMarkers scans a PreToolUse payload's tool input for
+// task-estimate (#604) and task-summary (#738) markers and forwards any found
+// to markers. The question marker rides end-of-turn assistant prose, not a
+// tool-input carrier, so the hook path (tool inputs only) drops it (#759):
+// the transcript text-block scan delivers it, and the deterministic
+// compactor covers the no-marker case regardless.
+func scanAndIngestMarkers(markers MarkerTarget, log outbound.Logger, sessionID string, payload hookPayload) {
+	est, sum, _ := scanToolInput(payload.ToolInput, time.Now())
+	if est != nil {
+		log.LogInfo(logComponentHookReceiver, sessionID,
+			fmt.Sprintf("task-estimate marker via %s tool input: %d/%d", payload.ToolName, est.CompletedRounds, est.TotalRounds))
+		markers.IngestTaskEstimate(payload.TranscriptPath, &session.TaskEstimate{
+			TotalRounds:     est.TotalRounds,
+			CompletedRounds: est.CompletedRounds,
+			Risk:            est.Risk,
+			Confidence:      est.Confidence,
+			UpdatedAt:       est.ObservedAt,
+		})
+	}
+	if sum != nil {
+		log.LogInfo(logComponentHookReceiver, sessionID,
+			fmt.Sprintf("task-summary marker via %s tool input", payload.ToolName))
+		markers.IngestTaskSummary(payload.TranscriptPath, sum.Text, sum.ObservedAt)
 	}
 }

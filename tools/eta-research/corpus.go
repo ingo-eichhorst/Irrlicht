@@ -131,13 +131,7 @@ func episodesFromTranscript(path string) []Episode {
 		if base != nil {
 			anchor = base.UpdatedAt
 		}
-		if cur == nil || anchor != curAnchor {
-			if cur != nil && len(cur.Turns) > 0 {
-				eps = append(eps, *cur)
-			}
-			cur = &Episode{Source: path}
-			curAnchor = anchor
-		}
+		eps, cur, curAnchor = advanceEpisode(eps, cur, curAnchor, anchor, path)
 		cur.Turns = append(cur.Turns, Turn{
 			VirtualUnix:    s.VirtualTime.Unix(),
 			Est:            est,
@@ -153,6 +147,20 @@ func episodesFromTranscript(path string) []Episode {
 		finalizeEpisode(&eps[i])
 	}
 	return eps
+}
+
+// advanceEpisode closes out the current episode and opens a new one when the
+// task anchor changes (a new task / user message), matching the tailer's own
+// re-anchoring. It is a no-op — returning cur and curAnchor unchanged — when
+// the current episode is still open for this anchor.
+func advanceEpisode(eps []Episode, cur *Episode, curAnchor int64, anchor int64, path string) ([]Episode, *Episode, int64) {
+	if cur != nil && anchor == curAnchor {
+		return eps, cur, curAnchor
+	}
+	if cur != nil && len(cur.Turns) > 0 {
+		eps = append(eps, *cur)
+	}
+	return eps, &Episode{Source: path}, anchor
 }
 
 // finalizeEpisode sets the ground-truth completion to the episode's last marker

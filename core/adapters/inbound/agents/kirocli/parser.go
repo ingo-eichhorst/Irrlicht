@@ -64,76 +64,11 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 		ev.ClearToolNames = true
 
 	case "AssistantMessage":
-		var toolUses []tailer.ToolUse
-		var lastText string
-		for _, item := range content {
-			block, ok := item.(map[string]interface{})
-			if !ok {
-				continue
-			}
-			switch block["kind"] {
-			case "toolUse":
-				if d, ok := block["data"].(map[string]interface{}); ok {
-					id, _ := d["toolUseId"].(string)
-					name, _ := d["name"].(string)
-					if name != "" {
-						toolUses = append(toolUses, tailer.ToolUse{ID: id, Name: name})
-					}
-					if name == "todo_list" {
-						input, _ := d["input"].(map[string]interface{})
-						p.appendTodoListDeltas(input, ev)
-					}
-				}
-			case "text":
-				if text, ok := block["data"].(string); ok && text != "" {
-					lastText = text
-					if est := tailer.ScanTaskEstimate(text, ev.Timestamp); est != nil {
-						ev.TaskEstimate = est
-					}
-					if s := tailer.ScanTaskSummary(text, ev.Timestamp); s != nil {
-						ev.TaskSummary = s
-					}
-				}
-			}
-		}
-		if len(toolUses) > 0 {
-			// Mid-turn: the model is invoking tools and will produce more
-			// events; keep the session working.
-			ev.EventType = "assistant"
-			ev.ToolUses = toolUses
-		} else {
-			// Text-only assistant message = end of the user turn.
-			ev.EventType = "turn_done"
-			p.applySidecarMetrics(ev)
-		}
-		ev.AssistantText = tailer.TruncateAssistantText(lastText)
+		p.parseAssistantMessage(content, ev)
 
 	case "ToolResults":
 		ev.EventType = "tool_result"
-		for _, item := range content {
-			block, ok := item.(map[string]interface{})
-			if !ok || block["kind"] != "toolResult" {
-				continue
-			}
-			d, ok := block["data"].(map[string]interface{})
-			if !ok {
-				continue
-			}
-			if id, _ := d["toolUseId"].(string); id != "" {
-				ev.ToolResultIDs = append(ev.ToolResultIDs, id)
-			}
-			// status is the tool HARNESS verdict, not the command's: a shell
-			// command exiting non-zero is still status:"success" (the exit
-			// code is payload data), while tool-input validation failures AND
-			// user-cancelled tools (Esc) are both status:"error" — kiro has
-			// no separate cancelled status (live-probed on 2.6.0, #592
-			// finding 3). A cancellation is distinguishable only via
-			// data.results[id].result == "Cancelled", should that ever
-			// matter.
-			if status, _ := d["status"].(string); status != "" && status != "success" {
-				ev.IsError = true
-			}
-		}
+		parseKiroToolResults(content, ev)
 
 	case "Clear":
 		// /clear continues in the SAME session file (no new UUID); the
@@ -154,6 +89,84 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 	}
 
 	return ev
+}
+
+// parseAssistantMessage handles the "AssistantMessage" kind: mid-turn
+// messages carry toolUse blocks and keep the session working; a text-only
+// message is the end of the turn.
+func (p *Parser) parseAssistantMessage(content []interface{}, ev *tailer.ParsedEvent) {
+	var toolUses []tailer.ToolUse
+	var lastText string
+	for _, item := range content {
+		block, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		switch block["kind"] {
+		case "toolUse":
+			if d, ok := block["data"].(map[string]interface{}); ok {
+				id, _ := d["toolUseId"].(string)
+				name, _ := d["name"].(string)
+				if name != "" {
+					toolUses = append(toolUses, tailer.ToolUse{ID: id, Name: name})
+				}
+				if name == "todo_list" {
+					input, _ := d["input"].(map[string]interface{})
+					p.appendTodoListDeltas(input, ev)
+				}
+			}
+		case "text":
+			if text, ok := block["data"].(string); ok && text != "" {
+				lastText = text
+				if est := tailer.ScanTaskEstimate(text, ev.Timestamp); est != nil {
+					ev.TaskEstimate = est
+				}
+				if s := tailer.ScanTaskSummary(text, ev.Timestamp); s != nil {
+					ev.TaskSummary = s
+				}
+			}
+		}
+	}
+	if len(toolUses) > 0 {
+		// Mid-turn: the model is invoking tools and will produce more
+		// events; keep the session working.
+		ev.EventType = "assistant"
+		ev.ToolUses = toolUses
+	} else {
+		// Text-only assistant message = end of the user turn.
+		ev.EventType = "turn_done"
+		p.applySidecarMetrics(ev)
+	}
+	ev.AssistantText = tailer.TruncateAssistantText(lastText)
+}
+
+// parseKiroToolResults handles the "ToolResults" kind: collects tool-result
+// IDs and flags an error when the tool harness reported a non-success status.
+func parseKiroToolResults(content []interface{}, ev *tailer.ParsedEvent) {
+	for _, item := range content {
+		block, ok := item.(map[string]interface{})
+		if !ok || block["kind"] != "toolResult" {
+			continue
+		}
+		d, ok := block["data"].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if id, _ := d["toolUseId"].(string); id != "" {
+			ev.ToolResultIDs = append(ev.ToolResultIDs, id)
+		}
+		// status is the tool HARNESS verdict, not the command's: a shell
+		// command exiting non-zero is still status:"success" (the exit
+		// code is payload data), while tool-input validation failures AND
+		// user-cancelled tools (Esc) are both status:"error" — kiro has
+		// no separate cancelled status (live-probed on 2.6.0, #592
+		// finding 3). A cancellation is distinguishable only via
+		// data.results[id].result == "Cancelled", should that ever
+		// matter.
+		if status, _ := d["status"].(string); status != "" && status != "success" {
+			ev.IsError = true
+		}
+	}
 }
 
 // applySidecarMetrics fills model and context-utilization metadata from the

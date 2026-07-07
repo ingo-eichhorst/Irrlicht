@@ -227,27 +227,38 @@ func upgradeStaleHookCommands(hooksMap map[string]interface{}, event string) boo
 	}
 	upgraded := false
 	for _, g := range arr {
-		group, ok := g.(map[string]interface{})
+		if upgradeGroupHookCommand(g) {
+			upgraded = true
+		}
+	}
+	return upgraded
+}
+
+// upgradeGroupHookCommand rewrites the command of any inner hook entry in a
+// single matcher group that contains hookSentinel but isn't the canonical
+// installedHookCommand. Returns true if any entry was rewritten.
+func upgradeGroupHookCommand(g interface{}) bool {
+	group, ok := g.(map[string]interface{})
+	if !ok {
+		return false
+	}
+	innerHooks, ok := group["hooks"].([]interface{})
+	if !ok {
+		return false
+	}
+	upgraded := false
+	for _, h := range innerHooks {
+		hook, ok := h.(map[string]interface{})
 		if !ok {
 			continue
 		}
-		innerHooks, ok := group["hooks"].([]interface{})
+		cmd, ok := hook["command"].(string)
 		if !ok {
 			continue
 		}
-		for _, h := range innerHooks {
-			hook, ok := h.(map[string]interface{})
-			if !ok {
-				continue
-			}
-			cmd, ok := hook["command"].(string)
-			if !ok {
-				continue
-			}
-			if strings.Contains(cmd, hookSentinel) && cmd != installedHookCommand {
-				hook["command"] = installedHookCommand
-				upgraded = true
-			}
+		if strings.Contains(cmd, hookSentinel) && cmd != installedHookCommand {
+			hook["command"] = installedHookCommand
+			upgraded = true
 		}
 	}
 	return upgraded

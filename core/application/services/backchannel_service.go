@@ -142,33 +142,42 @@ func (e *BackchannelEngine) evaluate(s *session.SessionState) []backchannel.Rule
 	now := e.now()
 	var fire []backchannel.Rule
 	for _, r := range e.rules.Rules() {
-		if !r.Enabled {
-			continue
+		if e.shouldFireLocked(r, s.Adapter, sid, prev, cur, prevUtil, util, prevTokens, tokens, now) {
+			fire = append(fire, r)
 		}
-		if r.Adapter != "" && r.Adapter != s.Adapter {
-			continue
-		}
-		if !triggered(r.Trigger, prev, cur, prevUtil, util, prevTokens, tokens) {
-			continue
-		}
-		// Firing is gated on the master-toggle here (after bookkeeping, so a
-		// later enable doesn't replay a stale edge).
-		if e.enabled == nil || !e.enabled() {
-			continue
-		}
-		key := r.ID + "\x00" + sid
-		if last, ok := e.lastFired[key]; ok && now.Sub(last) < time.Duration(r.Cooldown())*time.Second {
-			continue
-		}
-		if e.overCapLocked(sid, now) {
-			e.logger.LogInfo("backchannel", sid, "rule "+r.ID+" suppressed: per-session action cap reached")
-			continue
-		}
-		e.lastFired[key] = now
-		e.recordFireLocked(sid, now)
-		fire = append(fire, r)
 	}
 	return fire
+}
+
+// shouldFireLocked evaluates a single rule against this transition and, if it
+// should fire, records the fire bookkeeping (lastFired + recent). Caller
+// holds e.mu. Mirrors evaluate's original inline per-rule loop body exactly.
+func (e *BackchannelEngine) shouldFireLocked(r backchannel.Rule, adapter, sid, prev, cur string, prevUtil, util float64, prevTokens, tokens int64, now time.Time) bool {
+	if !r.Enabled {
+		return false
+	}
+	if r.Adapter != "" && r.Adapter != adapter {
+		return false
+	}
+	if !triggered(r.Trigger, prev, cur, prevUtil, util, prevTokens, tokens) {
+		return false
+	}
+	// Firing is gated on the master-toggle here (after bookkeeping, so a
+	// later enable doesn't replay a stale edge).
+	if e.enabled == nil || !e.enabled() {
+		return false
+	}
+	key := r.ID + "\x00" + sid
+	if last, ok := e.lastFired[key]; ok && now.Sub(last) < time.Duration(r.Cooldown())*time.Second {
+		return false
+	}
+	if e.overCapLocked(sid, now) {
+		e.logger.LogInfo("backchannel", sid, "rule "+r.ID+" suppressed: per-session action cap reached")
+		return false
+	}
+	e.lastFired[key] = now
+	e.recordFireLocked(sid, now)
+	return true
 }
 
 // forget drops all per-session bookkeeping when a session ends, so the maps

@@ -2,17 +2,47 @@ package gastown
 
 import "testing"
 
+// deriveRoleCase is one TestDeriveRole table case.
+type deriveRoleCase struct {
+	name     string
+	cwd      string
+	wantNil  bool
+	wantRole string
+	wantRig  string
+	wantName string
+}
+
+// verifyDeriveRoleCase checks deriveRole's result against a table case's
+// expectations, shared across TestDeriveRole's subtests.
+func verifyDeriveRoleCase(t *testing.T, tt deriveRoleCase, got *RoleInfo) {
+	t.Helper()
+
+	if tt.wantNil {
+		if got != nil {
+			t.Fatalf("deriveRole(%q) = %+v, want nil", tt.cwd, got)
+		}
+		return
+	}
+
+	if got == nil {
+		t.Fatalf("deriveRole(%q) = nil, want role=%q", tt.cwd, tt.wantRole)
+	}
+
+	if got.Role != tt.wantRole {
+		t.Errorf("Role = %q, want %q", got.Role, tt.wantRole)
+	}
+	if got.Rig != tt.wantRig {
+		t.Errorf("Rig = %q, want %q", got.Rig, tt.wantRig)
+	}
+	if got.Name != tt.wantName {
+		t.Errorf("Name = %q, want %q", got.Name, tt.wantName)
+	}
+}
+
 func TestDeriveRole(t *testing.T) {
 	gtRoot := "/Users/ingo/gt"
 
-	tests := []struct {
-		name     string
-		cwd      string
-		wantNil  bool
-		wantRole string
-		wantRig  string
-		wantName string
-	}{
+	tests := []deriveRoleCase{
 		{
 			name:     "mayor root",
 			cwd:      "/Users/ingo/gt/mayor",
@@ -107,27 +137,7 @@ func TestDeriveRole(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := deriveRole(tt.cwd, gtRoot)
-
-			if tt.wantNil {
-				if got != nil {
-					t.Fatalf("deriveRole(%q) = %+v, want nil", tt.cwd, got)
-				}
-				return
-			}
-
-			if got == nil {
-				t.Fatalf("deriveRole(%q) = nil, want role=%q", tt.cwd, tt.wantRole)
-			}
-
-			if got.Role != tt.wantRole {
-				t.Errorf("Role = %q, want %q", got.Role, tt.wantRole)
-			}
-			if got.Rig != tt.wantRig {
-				t.Errorf("Rig = %q, want %q", got.Rig, tt.wantRig)
-			}
-			if got.Name != tt.wantName {
-				t.Errorf("Name = %q, want %q", got.Name, tt.wantName)
-			}
+			verifyDeriveRoleCase(t, tt, got)
 		})
 	}
 }

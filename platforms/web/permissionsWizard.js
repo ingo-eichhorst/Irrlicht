@@ -42,22 +42,25 @@ export function stillPendingForAgents(snap, names) {
 // (auto wizard) every displayed pending item is answered explicitly;
 // in review mode unchanged already-answered items are skipped. Pure;
 // exported for tests.
+// permissionAnswerFor decides the single answer entry (or null to skip)
+// for one agent+permission pair given the draft toggle state.
+function permissionAnswerFor(a, p, draft, onlyPending) {
+  const k = a.name + '/' + p.key;
+  if (!(k in draft)) return null;
+  const grant = !!draft[k];
+  if (p.state === 'pending') return { agent: a.name, permission: p.key, grant };
+  if (onlyPending) return null;
+  if (grant !== (p.state === 'granted')) return { agent: a.name, permission: p.key, grant };
+  return null;
+}
+
 export function buildPermissionAnswers(snap, draft, onlyPending) {
   const out = [];
   if (!snap || !Array.isArray(snap.agents)) return out;
   for (const a of snap.agents) {
     for (const p of (a.permissions || [])) {
-      const k = a.name + '/' + p.key;
-      if (!(k in draft)) continue;
-      const grant = !!draft[k];
-      if (p.state === 'pending') {
-        out.push({ agent: a.name, permission: p.key, grant });
-        continue;
-      }
-      if (onlyPending) continue;
-      if (grant !== (p.state === 'granted')) {
-        out.push({ agent: a.name, permission: p.key, grant });
-      }
+      const answer = permissionAnswerFor(a, p, draft, onlyPending);
+      if (answer) out.push(answer);
     }
   }
   return out;
@@ -110,6 +113,37 @@ function closePermissionsWizard() {
   permissionsWizardAgents = null;
 }
 
+// setWizardHeaderText fills the title/intro copy for the given mode.
+function setWizardHeaderText(title, intro, auto) {
+  if (title) title.textContent = auto ? 'Agent detected — choose permissions' : 'Agent permissions';
+  if (intro) {
+    intro.textContent = auto
+      ? 'irrlicht monitors coding agents only with your consent. Choose what it may do for each detected agent.'
+      : 'Everything irrlicht may read or modify, per agent. Toggling off undoes the modification and stops all reading.';
+  }
+}
+
+// buildAgentPermSection renders one agent's permission group (heading +
+// detected badge + rows), or null when it has nothing to show.
+function buildAgentPermSection(a, perms) {
+  if (!perms.length) return null;
+  const section = document.createElement('div');
+  section.className = 'perm-agent';
+  const h = document.createElement('h3');
+  h.textContent = a.display_name || a.name;
+  if (a.detected) {
+    const badge = document.createElement('span');
+    badge.className = 'perm-detected';
+    badge.textContent = 'running';
+    h.appendChild(badge);
+  }
+  section.appendChild(h);
+  for (const p of perms) {
+    section.appendChild(renderPermissionRow(a, p));
+  }
+  return section;
+}
+
 // renderPermissionsWizard rebuilds the overlay body. Auto mode shows
 // the LOCKED agents' unanswered items only (an upgrade that adds one
 // new permission re-asks just that one); review mode shows everything
@@ -124,31 +158,12 @@ function renderPermissionsWizard() {
     ? (permissionsSnapshot.agents || []).filter(a =>
         (permissionsWizardAgents || []).includes(a.name))
     : (permissionsSnapshot.agents || []);
-  if (title) title.textContent = auto ? 'Agent detected — choose permissions' : 'Agent permissions';
-  if (intro) {
-    intro.textContent = auto
-      ? 'irrlicht monitors coding agents only with your consent. Choose what it may do for each detected agent.'
-      : 'Everything irrlicht may read or modify, per agent. Toggling off undoes the modification and stops all reading.';
-  }
+  setWizardHeaderText(title, intro, auto);
   body.innerHTML = '';
   for (const a of agents) {
     const perms = auto ? a.permissions.filter(p => p.state === 'pending') : a.permissions;
-    if (!perms.length) continue;
-    const section = document.createElement('div');
-    section.className = 'perm-agent';
-    const h = document.createElement('h3');
-    h.textContent = a.display_name || a.name;
-    if (a.detected) {
-      const badge = document.createElement('span');
-      badge.className = 'perm-detected';
-      badge.textContent = 'running';
-      h.appendChild(badge);
-    }
-    section.appendChild(h);
-    for (const p of perms) {
-      section.appendChild(renderPermissionRow(a, p));
-    }
-    body.appendChild(section);
+    const section = buildAgentPermSection(a, perms);
+    if (section) body.appendChild(section);
   }
 }
 

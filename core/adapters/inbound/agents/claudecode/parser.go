@@ -149,11 +149,7 @@ func handleAttachmentEvent(raw map[string]interface{}, ev *tailer.ParsedEvent) {
 	// origin.kind task-notification in handleTaskNotification. A terminal one
 	// ends a tracked Bash background process by its <task-id>. See issue #445.
 	if kind == "queued_command" || cmdMode == "task-notification" {
-		if prompt, _ := att["prompt"].(string); prompt != "" {
-			if id := extractXMLField(prompt, xmlFieldTaskID); id != "" && backgroundStatusTerminated(prompt) {
-				ev.TerminatedBackgroundTaskIDs = append(ev.TerminatedBackgroundTaskIDs, id)
-			}
-		}
+		recordTerminatedQueuedCommand(att, ev)
 		return
 	}
 	if kind != "task_reminder" {
@@ -166,6 +162,24 @@ func handleAttachmentEvent(raw map[string]interface{}, ev *tailer.ParsedEvent) {
 		// (Claude is telling us nothing is active).
 		return
 	}
+	snap := buildTaskSnapshot(contentArr)
+	ev.TaskSnapshot = &snap
+}
+
+// recordTerminatedQueuedCommand extracts a terminated background-task id from
+// a queued_command / task-notification attachment's prompt text, appending it
+// to ev when found. See issue #445.
+func recordTerminatedQueuedCommand(att map[string]interface{}, ev *tailer.ParsedEvent) {
+	if prompt, _ := att["prompt"].(string); prompt != "" {
+		if id := extractXMLField(prompt, xmlFieldTaskID); id != "" && backgroundStatusTerminated(prompt) {
+			ev.TerminatedBackgroundTaskIDs = append(ev.TerminatedBackgroundTaskIDs, id)
+		}
+	}
+}
+
+// buildTaskSnapshot converts a task_reminder attachment's content array into
+// TaskSnapshotEntry values, skipping malformed or id-less entries.
+func buildTaskSnapshot(contentArr []interface{}) []tailer.TaskSnapshotEntry {
 	snap := make([]tailer.TaskSnapshotEntry, 0, len(contentArr))
 	for _, item := range contentArr {
 		entry, ok := item.(map[string]interface{})
@@ -186,7 +200,7 @@ func handleAttachmentEvent(raw map[string]interface{}, ev *tailer.ParsedEvent) {
 			Status:     status,
 		})
 	}
-	ev.TaskSnapshot = &snap
+	return snap
 }
 
 // handleSystemEvent maps turn_duration / stop_hook_summary and the manual

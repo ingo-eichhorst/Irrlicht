@@ -206,36 +206,11 @@ func (f *Forwarder) Run(ctx context.Context) {
 // or a write fails.
 func (f *Forwarder) runOnce(ctx context.Context) error {
 	f.setState(PublishConnecting, "")
-	conn, _, err := f.dialer.DialContext(ctx, f.url, nil)
+	conn, err := f.handshake(ctx)
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
-
-	if err := conn.WriteJSON(Hello{
-		Type:            MsgHello,
-		ProtocolVersion: ProtocolVersion,
-		Role:            RoleDaemon,
-		DaemonID:        f.identity.DaemonID,
-		DaemonLabel:     f.identity.DaemonLabel,
-		Token:           f.token,
-	}); err != nil {
-		return err
-	}
-
-	// Wait for the relay's reply before declaring the link up. The relay sends
-	// a hello_ack once it has accepted our token; an auth-enabled relay that
-	// rejects the token closes here with CloseRevoked (4401) instead. Reading
-	// this reply before sending the snapshot makes the auth verdict race-free:
-	// Run classifies a CloseRevoked close as auth_failed regardless of whether
-	// it arrives now or mid-stream. We don't act on the ack's contents (v1 has
-	// nothing to negotiate), only on whether the relay accepted us.
-	conn.SetReadLimit(maxRelayFrameBytes)
-	conn.SetReadDeadline(time.Now().Add(helloAckTimeout))
-	if _, _, err := conn.ReadMessage(); err != nil {
-		return err
-	}
-	conn.SetReadDeadline(time.Time{}) // clear; the read pump reads with no deadline
 
 	// Subscribe BEFORE capturing the snapshot. Otherwise a broadcast that
 	// fires between snapshotState() and Subscribe() is in neither the snapshot
@@ -256,8 +231,52 @@ func (f *Forwarder) runOnce(ctx context.Context) error {
 	f.setState(PublishConnected, "")
 	f.logInfo(fmt.Sprintf("connected to relay %s as %q (%s)", f.url, f.identity.DaemonLabel, f.identity.DaemonID))
 
-	// Read pump: dispatch inbound control frames (issue #724) and surface the
-	// relay closing the socket (incl. a mid-stream revoke close).
+	readErr := f.startControlReadPump(conn)
+	return f.forwardLoop(ctx, conn, ch, readErr)
+}
+
+// handshake dials the relay and completes the hello/hello_ack exchange.
+// Wait for the relay's reply before declaring the link up. The relay sends
+// a hello_ack once it has accepted our token; an auth-enabled relay that
+// rejects the token closes here with CloseRevoked (4401) instead. Reading
+// this reply before sending the snapshot makes the auth verdict race-free:
+// Run classifies a CloseRevoked close as auth_failed regardless of whether
+// it arrives now or mid-stream. We don't act on the ack's contents (v1 has
+// nothing to negotiate), only on whether the relay accepted us. On error the
+// dialed connection, if any, is closed before returning.
+func (f *Forwarder) handshake(ctx context.Context) (*websocket.Conn, error) {
+	conn, _, err := f.dialer.DialContext(ctx, f.url, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := conn.WriteJSON(Hello{
+		Type:            MsgHello,
+		ProtocolVersion: ProtocolVersion,
+		Role:            RoleDaemon,
+		DaemonID:        f.identity.DaemonID,
+		DaemonLabel:     f.identity.DaemonLabel,
+		Token:           f.token,
+	}); err != nil {
+		conn.Close()
+		return nil, err
+	}
+
+	conn.SetReadLimit(maxRelayFrameBytes)
+	conn.SetReadDeadline(time.Now().Add(helloAckTimeout))
+	if _, _, err := conn.ReadMessage(); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	conn.SetReadDeadline(time.Time{}) // clear; the read pump reads with no deadline
+
+	return conn, nil
+}
+
+// startControlReadPump runs a read pump that dispatches inbound relay
+// control frames (issue #724) and surfaces the relay closing the socket
+// (incl. a mid-stream revoke close) on the returned channel.
+func (f *Forwarder) startControlReadPump(conn *websocket.Conn) <-chan error {
 	readErr := make(chan error, 1)
 	go func() {
 		for {
@@ -274,7 +293,13 @@ func (f *Forwarder) runOnce(ctx context.Context) error {
 			}
 		}
 	}()
+	return readErr
+}
 
+// forwardLoop forwards push events to the relay until ctx is cancelled, the
+// read pump reports the relay dropped the connection (readErr), or a write
+// fails.
+func (f *Forwarder) forwardLoop(ctx context.Context, conn *websocket.Conn, ch chan outbound.PushMessage, readErr <-chan error) error {
 	for {
 		select {
 		case <-ctx.Done():

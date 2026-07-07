@@ -127,44 +127,43 @@ export function fmtEtaText(remaining, highSecs) {
 // collapses to a point ("~5m left") and widens as wall clock passes
 // without fresh progress — never a bare countdown (#616). Mirrored in
 // SessionListView.swift's taskEtaPresentation.
-export function taskEtaPresentation(metrics, state, nowSec) {
-  const est = metrics?.task_estimate;
-  const eta = metrics?.task_completion_eta;
-  if (state !== 'working' || !est) return null;
-  const sourceLabel = est.source === 'tasks' ? 'from task list'
-    : est.source === 'subagents' ? 'from subagents' : 'agent-reported';
-  // No completed rounds yet: no MEASURED rate, but the daemon projects from
-  // a corpus prior (#753) so a real number appears at the very first marker
-  // instead of "estimating…" (the agent has committed to a plan, #604/#602).
-  // Widen the range generously (2×) to signal a population prior, not a
-  // measured rate; with no projection (e.g. a subagent aggregate) fall back
-  // to the progress-only "estimating…" chip.
-  if (est.completed_rounds <= 0) {
-    if (est.total_rounds <= 0) return null;
-    const age = est.updated_at > 0 ? Math.max(0, Math.floor(nowSec - est.updated_at)) : 0;
-    const zeroStale = est.updated_at > 0 && age > 180;
-    let zeroTitle = 'Task ETA — ' + sourceLabel + ' 0/' + est.total_rounds + ' rounds';
-    if (est.updated_at > 0) zeroTitle += ', updated ' + fmtDuration(age) + ' ago';
-    if (!eta) return { text: 'estimating…', stale: zeroStale, title: zeroTitle };
-    const rem0 = Math.max(0, Math.floor(eta - nowSec));
-    const high0 = est.updated_at > 0
-      ? Math.max(rem0, Math.floor((eta - est.updated_at) * 2))
-      : Math.floor(rem0 * 2);
-    return { text: fmtEtaText(rem0, high0), stale: zeroStale, title: zeroTitle + ' · rough prior' };
-  }
-  // Progress without a projection (e.g. a subagent aggregate whose
-  // children carry no etas yet, #626): show a rounds-only chip rather
-  // than hiding one that was visible moments ago.
-  if (!eta) {
-    const age = est.updated_at > 0 ? Math.max(0, Math.floor(nowSec - est.updated_at)) : 0;
-    let roundsTitle = 'Task ETA — ' + sourceLabel + ' ' + est.completed_rounds + '/' + est.total_rounds + ' rounds';
-    if (est.updated_at > 0) roundsTitle += ', updated ' + fmtDuration(age) + ' ago';
-    return {
-      text: est.completed_rounds + '/' + est.total_rounds,
-      stale: est.updated_at > 0 && age > 180,
-      title: roundsTitle,
-    };
-  }
+// Zero completed rounds: no MEASURED rate yet, but the daemon projects from
+// a corpus prior (#753) so a real number appears at the very first marker
+// instead of "estimating…" (the agent has committed to a plan, #604/#602).
+// Widen the range generously (2×) to signal a population prior, not a
+// measured rate; with no projection (e.g. a subagent aggregate) fall back
+// to the progress-only "estimating…" chip.
+function zeroRoundsEtaPresentation(est, eta, nowSec, sourceLabel) {
+  if (est.total_rounds <= 0) return null;
+  const age = est.updated_at > 0 ? Math.max(0, Math.floor(nowSec - est.updated_at)) : 0;
+  const zeroStale = est.updated_at > 0 && age > 180;
+  let zeroTitle = 'Task ETA — ' + sourceLabel + ' 0/' + est.total_rounds + ' rounds';
+  if (est.updated_at > 0) zeroTitle += ', updated ' + fmtDuration(age) + ' ago';
+  if (!eta) return { text: 'estimating…', stale: zeroStale, title: zeroTitle };
+  const rem0 = Math.max(0, Math.floor(eta - nowSec));
+  const high0 = est.updated_at > 0
+    ? Math.max(rem0, Math.floor((eta - est.updated_at) * 2))
+    : Math.floor(rem0 * 2);
+  return { text: fmtEtaText(rem0, high0), stale: zeroStale, title: zeroTitle + ' · rough prior' };
+}
+
+// Progress without a projection (e.g. a subagent aggregate whose children
+// carry no etas yet, #626): show a rounds-only chip rather than hiding one
+// that was visible moments ago.
+function roundsOnlyEtaPresentation(est, nowSec, sourceLabel) {
+  const age = est.updated_at > 0 ? Math.max(0, Math.floor(nowSec - est.updated_at)) : 0;
+  let roundsTitle = 'Task ETA — ' + sourceLabel + ' ' + est.completed_rounds + '/' + est.total_rounds + ' rounds';
+  if (est.updated_at > 0) roundsTitle += ', updated ' + fmtDuration(age) + ' ago';
+  return {
+    text: est.completed_rounds + '/' + est.total_rounds,
+    stale: est.updated_at > 0 && age > 180,
+    title: roundsTitle,
+  };
+}
+
+// Progress with a projected eta: range whose HIGH bound is pinned at the
+// last marker — see taskEtaPresentation's doc comment for the full rationale.
+function projectedEtaPresentation(est, eta, nowSec, sourceLabel) {
   const remaining = Math.max(0, Math.floor(eta - nowSec));
   const frac = est.total_rounds > 0 ? est.completed_rounds / est.total_rounds : 0;
   // 1.5× padding while the rate is barely measurable, bare projected
@@ -183,6 +182,17 @@ export function taskEtaPresentation(metrics, state, nowSec) {
   let title = 'Task ETA — ' + sourceLabel + ' ' + est.completed_rounds + '/' + est.total_rounds + ' rounds';
   if (est.updated_at > 0) title += ', updated ' + fmtDuration(ageSec) + ' ago';
   return { text: text, stale: stale, title: title };
+}
+
+export function taskEtaPresentation(metrics, state, nowSec) {
+  const est = metrics?.task_estimate;
+  const eta = metrics?.task_completion_eta;
+  if (state !== 'working' || !est) return null;
+  const sourceLabel = est.source === 'tasks' ? 'from task list'
+    : est.source === 'subagents' ? 'from subagents' : 'agent-reported';
+  if (est.completed_rounds <= 0) return zeroRoundsEtaPresentation(est, eta, nowSec, sourceLabel);
+  if (!eta) return roundsOnlyEtaPresentation(est, nowSec, sourceLabel);
+  return projectedEtaPresentation(est, eta, nowSec, sourceLabel);
 }
 
 export function shortID(id) { return id ? displaySessionId(id).slice(0, 6) : ''; }

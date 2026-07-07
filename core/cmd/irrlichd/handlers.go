@@ -173,31 +173,48 @@ func attachGroupCosts(groups []*session.AgentGroup, byTf map[string]map[string]f
 		if g == nil {
 			continue
 		}
-		costs := make(map[string]float64, len(costTimeframeSeconds))
+		var costs map[string]float64
 		if g.Type == "gastown" {
-			projects := collectProjectNames(g)
-			for tf := range costTimeframeSeconds {
-				var sum float64
-				for p := range projects {
-					if v, ok := byTf[tf][p]; ok {
-						sum += v
-					}
-				}
-				if sum > 0 {
-					costs[tf] = sum
-				}
-			}
+			costs = gastownGroupCosts(g, byTf)
 		} else {
-			for tf := range costTimeframeSeconds {
-				if v, ok := byTf[tf][g.Name]; ok {
-					costs[tf] = v
-				}
-			}
+			costs = regularGroupCosts(g, byTf)
 		}
 		if len(costs) > 0 {
 			g.Costs = costs
 		}
 	}
+}
+
+// gastownGroupCosts sums the distinct project costs across every session
+// beneath an orchestrator group (rigs span projects), counting a shared
+// project once — the per-timeframe half of attachGroupCosts' gastown branch.
+func gastownGroupCosts(g *session.AgentGroup, byTf map[string]map[string]float64) map[string]float64 {
+	costs := make(map[string]float64, len(costTimeframeSeconds))
+	projects := collectProjectNames(g)
+	for tf := range costTimeframeSeconds {
+		var sum float64
+		for p := range projects {
+			if v, ok := byTf[tf][p]; ok {
+				sum += v
+			}
+		}
+		if sum > 0 {
+			costs[tf] = sum
+		}
+	}
+	return costs
+}
+
+// regularGroupCosts returns a plain project group's own trailing-window
+// costs, keyed by the group's name.
+func regularGroupCosts(g *session.AgentGroup, byTf map[string]map[string]float64) map[string]float64 {
+	costs := make(map[string]float64, len(costTimeframeSeconds))
+	for tf := range costTimeframeSeconds {
+		if v, ok := byTf[tf][g.Name]; ok {
+			costs[tf] = v
+		}
+	}
+	return costs
 }
 
 // collectProjectNames returns the distinct, non-empty ProjectNames of every
@@ -822,41 +839,7 @@ func buildYieldResponse(rangeKey, group string, start, end int64, lister history
 		return resp
 	}
 
-	type agg struct {
-		productive, reverted, unknown float64
-		revertedCount                 int
-	}
-	byProject := make(map[string]*agg)
-	for _, st := range sessions {
-		if st == nil || st.YieldState == "" {
-			continue // not a completed, ready-captured session
-		}
-		if st.UpdatedAt < start || st.UpdatedAt >= end {
-			continue
-		}
-		cost := 0.0
-		if st.Metrics != nil {
-			cost = st.Metrics.EstimatedCostUSD
-		}
-		project := st.ProjectName
-		if project == "" {
-			project = "unknown"
-		}
-		a := byProject[project]
-		if a == nil {
-			a = &agg{}
-			byProject[project] = a
-		}
-		switch st.YieldState {
-		case session.YieldReverted:
-			a.reverted += cost
-			a.revertedCount++
-		case session.YieldProductive:
-			a.productive += cost
-		default: // YieldUnknown
-			a.unknown += cost
-		}
-	}
+	byProject := aggregateYieldBySession(sessions, start, end)
 
 	// Project order: total (productive+reverted) desc, then name.
 	names := make([]string, 0, len(byProject))
@@ -874,20 +857,7 @@ func buildYieldResponse(rangeKey, group string, start, end int64, lister history
 
 	for _, p := range names {
 		a := byProject[p]
-		total := a.productive + a.reverted
-		y := 0.0
-		if total > 0 {
-			y = a.productive / total
-		}
-		resp.Projects = append(resp.Projects, historyYieldProject{
-			Project:        p,
-			ProductiveCost: a.productive,
-			RevertedCost:   a.reverted,
-			UnknownCost:    a.unknown,
-			TotalCost:      total,
-			Yield:          y,
-			RevertedCount:  a.revertedCount,
-		})
+		resp.Projects = append(resp.Projects, yieldProjectRow(p, a))
 		resp.ProductiveCost += a.productive
 		resp.RevertedCost += a.reverted
 		resp.UnknownCost += a.unknown
@@ -897,6 +867,74 @@ func buildYieldResponse(rangeKey, group string, start, end int64, lister history
 		resp.Yield = resp.ProductiveCost / resp.TotalCost
 	}
 	return resp
+}
+
+// yieldAgg accumulates one project's productive/reverted/unknown spend while
+// aggregateYieldBySession walks completed sessions.
+type yieldAgg struct {
+	productive, reverted, unknown float64
+	revertedCount                 int
+}
+
+// aggregateYieldBySession folds completed (ready) sessions within [start,end)
+// into per-project productive/reverted/unknown spend, the core windowing and
+// bucketing step of buildYieldResponse. Sessions are windowed by UpdatedAt —
+// their completion time — so a revert detected later never moves a session
+// into a newer window. Only sessions that have gone ready (non-empty
+// YieldState) are counted; spend from sessions still in flight is excluded.
+func aggregateYieldBySession(sessions []*session.SessionState, start, end int64) map[string]*yieldAgg {
+	byProject := make(map[string]*yieldAgg)
+	for _, st := range sessions {
+		if st == nil || st.YieldState == "" {
+			continue // not a completed, ready-captured session
+		}
+		if st.UpdatedAt < start || st.UpdatedAt >= end {
+			continue
+		}
+		cost := 0.0
+		if st.Metrics != nil {
+			cost = st.Metrics.EstimatedCostUSD
+		}
+		project := st.ProjectName
+		if project == "" {
+			project = "unknown"
+		}
+		a := byProject[project]
+		if a == nil {
+			a = &yieldAgg{}
+			byProject[project] = a
+		}
+		switch st.YieldState {
+		case session.YieldReverted:
+			a.reverted += cost
+			a.revertedCount++
+		case session.YieldProductive:
+			a.productive += cost
+		default: // YieldUnknown
+			a.unknown += cost
+		}
+	}
+	return byProject
+}
+
+// yieldProjectRow builds one project's row of the chart=yield response —
+// unknown (non-git) spend is reported separately and kept out of the ratio's
+// denominator.
+func yieldProjectRow(project string, a *yieldAgg) historyYieldProject {
+	total := a.productive + a.reverted
+	y := 0.0
+	if total > 0 {
+		y = a.productive / total
+	}
+	return historyYieldProject{
+		Project:        project,
+		ProductiveCost: a.productive,
+		RevertedCost:   a.reverted,
+		UnknownCost:    a.unknown,
+		TotalCost:      total,
+		Yield:          y,
+		RevertedCount:  a.revertedCount,
+	}
 }
 
 // historyForecastEnabled defaults to on; ?forecast=false|0 disables it.
