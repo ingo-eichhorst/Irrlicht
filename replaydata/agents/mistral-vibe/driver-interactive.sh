@@ -402,7 +402,26 @@ slash_cmd() { # <text>
   if [[ "$FIRST_SEND_PENDING" == "1" ]]; then
     send_text "$text"; return
   fi
-  if [[ " $ROTATING_SLASHES $FORK_SLASHES " == *" $text "* ]]; then
+  if [[ " $FORK_SLASHES " == *" $text "* ]]; then
+    # FORK (/rewind): vibe forks to a NEW session dir in the SAME process, and
+    # the ORIGINAL session PERSISTS (verify wants both rows). So — unlike a
+    # rotating slash, which abandons the old session in place — bind + freeze the
+    # original into its slot and ALLOCATE A NEW SLOT (reusing the same tmux name +
+    # cwd, so the picker keys still land on the live process) for the forked
+    # session. emit_session_contract then lists BOTH session ids so curation
+    # unions the original's turns and the post-rewind fork.
+    resolve_transcript || true
+    local old_tmux="$SESSION" old_cwd="${SES_CWD[$ACTIVE]}"
+    save_active
+    SES_ALIVE[$ACTIVE]=0
+    PRE_LAUNCH_DIRS="$(find "$HOME/.vibe/logs/session" -maxdepth 1 -type d -name 'session_*' 2>/dev/null | sort)"
+    type_enter "$text"
+    alloc_slot "$old_tmux" "$old_cwd"
+    SES_ALIVE[$ACTIVE]=1
+    echo "[driver] slash[s$ACTIVE]: $text → FORK; original frozen (sid=$(daemon_sid "${SES_TRANSCRIPT[$((ACTIVE-1))]}")), new slot awaits forked dir" >&2
+    return 0
+  fi
+  if [[ " $ROTATING_SLASHES " == *" $text "* ]]; then
     PRE_LAUNCH_DIRS="$(find "$HOME/.vibe/logs/session" -maxdepth 1 -type d -name 'session_*' 2>/dev/null | sort)"
     type_enter "$text"
     TRANSCRIPT=""; UUID=""
