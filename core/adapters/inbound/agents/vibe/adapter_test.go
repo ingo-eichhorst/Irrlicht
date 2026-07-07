@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"irrlicht/core/domain/agent"
+	"irrlicht/core/domain/backchannel"
 )
 
 func TestAgent_Identity(t *testing.T) {
@@ -43,6 +44,29 @@ func TestAgent_Process_CommandPattern(t *testing.T) {
 	}
 	if Agent().Process.PIDForSession == nil {
 		t.Error("expected PIDForSession")
+	}
+}
+
+func TestAgent_Control_Backchannel(t *testing.T) {
+	a := Agent()
+	if !a.Control.SupportsInput {
+		t.Error("expected Control.SupportsInput (vibe is an interactive REPL)")
+	}
+	if a.Control.Interrupt != agent.InterruptCtrlC {
+		t.Errorf("Interrupt = %v, want InterruptCtrlC", a.Control.Interrupt)
+	}
+	if got := a.Control.Presets[backchannel.PresetCompact]; got != "/compact" {
+		t.Errorf("compact preset = %q, want /compact", got)
+	}
+	// An adapter that forwards input MUST declare the shared control consent gate.
+	var hasControl bool
+	for _, p := range a.Permissions {
+		if p.Key == agent.ControlPermissionKey {
+			hasControl = true
+		}
+	}
+	if !hasControl {
+		t.Error("expected agent.ControlPermission() among Permissions")
 	}
 }
 

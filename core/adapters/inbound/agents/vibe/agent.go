@@ -2,6 +2,7 @@ package vibe
 
 import (
 	"irrlicht/core/domain/agent"
+	"irrlicht/core/domain/backchannel"
 	"irrlicht/core/domain/permission"
 )
 
@@ -13,9 +14,10 @@ const PermissionKeyTranscripts = "transcripts"
 // directory (sessionIDFromPath) since the transcript filename is the constant
 // messages.jsonl. The CommandPattern matcher binds the Python `vibe` process
 // for liveness (an ExactName match on "vibe" would never fire — the OS process
-// name is the interpreter). No Control is declared: Vibe's backchannel
-// (interactive input injection) is unverified, so the adapter is read-only
-// until a live drive confirms it.
+// name is the interpreter). Control is declared because Vibe runs an interactive
+// Textual TUI/REPL that reads terminal input, so the daemon can forward replies,
+// interrupts (Ctrl-C), and the /compact preset through its terminal backend —
+// gated behind the ControlPermission and the backchannel beta toggle.
 func Agent() agent.Agent {
 	return agent.Agent{
 		Identity: agent.Identity{
@@ -35,7 +37,15 @@ func Agent() agent.Agent {
 				NewParser: func() agent.LineParser { return &Parser{} },
 			},
 		},
+		Control: agent.Control{
+			SupportsInput: true,
+			Interrupt:     agent.InterruptCtrlC,
+			Presets: map[string]string{
+				backchannel.PresetCompact: "/compact",
+			},
+		},
 		Permissions: []agent.Permission{
+			agent.ControlPermission(),
 			{
 				Key:             PermissionKeyTranscripts,
 				Kind:            permission.KindObserve,
