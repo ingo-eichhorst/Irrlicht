@@ -18,17 +18,17 @@
       "daemon_capability": "full",
       "driver_capability": "gap:wait_turn",
       "confidence": 0.82,
-      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: gap:wait_turn\n\n## Reasoning\n\nMistral Vibe is a full agentic coding CLI: each turn streams many tool calls and results before a terminal answer. The real 336-event session at ~/.vibe/logs/session/session_20260706_101952_48e134e3/ is exactly such a workload — 10 user prompts, 168 assistant messages (158 carrying OpenAI-shape `tool_calls[]`), 158 `tool` results, all tool calls auto-agreed (tool_calls_agreed=158, rejected=0, hook_denied=0). It is a clean 10-turn arc with no permission gate stalling any turn.\n\nThe adapter's parser (core/adapters/inbound/agents/vibe/parser.go) implements exactly the no-flicker-within-turn contract this scenario asserts: `user` → `user_message` (opens the turn), `assistant` with non-empty `tool_calls[]` → `assistant_message` with ToolUses (keeps the session WORKING mid-turn, L67-71), `tool` → `tool_result` (L77-81), and a text-only terminal `assistant` → `turn_done` (settles to READY, L72-75). So a turn stays continuously WORKING across every intra-turn assistant-fragment/tool-call/tool-result boundary and settles to READY only on the terminal text message — precisely the acceptance invariant. The scenario's 'at least one tool call' bullet is satisfiable and deterministic here because vibe auto-executes tools (no permission gate), unlike modern claudecode (Sonnet refusing auto-mode) whose recipe had to fall back to plain prompts.\n\ndaemon=full: the per-turn ready→working→ready arc, no intra-turn flicker, and never-stuck invariant are all produced from the local messages.jsonl the FilesUnderRoot source tails. Model (mistral-medium-3.5) and context-token count flow from the sibling meta.json sidecar (config.active_model, stats.context_tokens on turn_done). The daemon-lacks list (per-event timestamps, cost, Control, subagent-linking) does not intersect this scenario's spec-required observables — the arc, counts, and final state are all captured — so the gaps are caveats, not a downgrade.\n\ndriver=gap:wait_turn: the freshly-scaffolded driver-interactive.sh sets DRIVE_ELICITS=\"send slash sleep\"; the recipe needs `wait_turn` to block between turns, and that seam is still the stubbed not_implemented SEAM 2 (driver-interactive.sh L168-169). record ports the real turn-done poll from a reference driver before driving.\n\n## Provenance\n\nPROVISIONAL on emission timing only in the general sense; the specific arc is corroborated by the live 336-event transcript replaying cleanly (verified during adapter construction, commit e943e261). A long real engineering session cannot be reproduced deterministically, so the recipe is a compressed proxy: 4 tool-eliciting turns. The no-flicker invariant generalises from the proxy because it is a property of every individual turn.",
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: gap:wait_turn\n\n## Reasoning\n\nMistral Vibe is a full agentic coding CLI: each turn streams many tool calls and results before a terminal answer. The real 336-event session at ~/.vibe/logs/session/session_20260706_101952_48e134e3/ is exactly such a workload \u2014 10 user prompts, 168 assistant messages (158 carrying OpenAI-shape `tool_calls[]`), 158 `tool` results, all tool calls auto-agreed (tool_calls_agreed=158, rejected=0, hook_denied=0). It is a clean 10-turn arc with no permission gate stalling any turn.\n\nThe adapter's parser (core/adapters/inbound/agents/vibe/parser.go) implements exactly the no-flicker-within-turn contract this scenario asserts: `user` \u2192 `user_message` (opens the turn), `assistant` with non-empty `tool_calls[]` \u2192 `assistant_message` with ToolUses (keeps the session WORKING mid-turn, L67-71), `tool` \u2192 `tool_result` (L77-81), and a text-only terminal `assistant` \u2192 `turn_done` (settles to READY, L72-75). So a turn stays continuously WORKING across every intra-turn assistant-fragment/tool-call/tool-result boundary and settles to READY only on the terminal text message \u2014 precisely the acceptance invariant. The scenario's 'at least one tool call' bullet is satisfiable and deterministic here because vibe auto-executes tools (no permission gate), unlike modern claudecode (Sonnet refusing auto-mode) whose recipe had to fall back to plain prompts.\n\ndaemon=full: the per-turn ready\u2192working\u2192ready arc, no intra-turn flicker, and never-stuck invariant are all produced from the local messages.jsonl the FilesUnderRoot source tails. Model (mistral-medium-3.5) and context-token count flow from the sibling meta.json sidecar (config.active_model, stats.context_tokens on turn_done). The daemon-lacks list (per-event timestamps, cost, Control, subagent-linking) does not intersect this scenario's spec-required observables \u2014 the arc, counts, and final state are all captured \u2014 so the gaps are caveats, not a downgrade.\n\ndriver=gap:wait_turn: the freshly-scaffolded driver-interactive.sh sets DRIVE_ELICITS=\"send slash sleep\"; the recipe needs `wait_turn` to block between turns, and that seam is still the stubbed not_implemented SEAM 2 (driver-interactive.sh L168-169). record ports the real turn-done poll from a reference driver before driving.\n\n## Provenance\n\nPROVISIONAL on emission timing only in the general sense; the specific arc is corroborated by the live 336-event transcript replaying cleanly (verified during adapter construction, commit e943e261). A long real engineering session cannot be reproduced deterministically, so the recipe is a compressed proxy: 4 tool-eliciting turns. The no-flicker invariant generalises from the proxy because it is a property of every individual turn.",
       "caveats": [
         "Compressed proxy: the recipe runs 4 tool-eliciting turns, not an hours-long session. The no-flicker-within-turn invariant generalises because it is a property of each individual turn (each already interleaves multiple assistant_message/tool_result events before settling).",
-        "The vibe JSONL carries no per-event timestamp, cost, or usage; timestamps fall back to tailer.ParseTimestamp (time.Now on live tailing). This does not affect the state arc but means cost is never emitted — the spec asserts cost_nonzero:false.",
+        "The vibe JSONL carries no per-event timestamp, cost, or usage; timestamps fall back to tailer.ParseTimestamp (time.Now on live tailing). This does not affect the state arc but means cost is never emitted \u2014 the spec asserts cost_nonzero:false.",
         "No Control and no ParentSessionID wiring: irrelevant to this single-session lifecycle scenario, but a subagent-heavy real session would surface child turns as the parent's own working span rather than linked children."
       ],
       "sources": [
         {
           "kind": "file",
           "ref": "core/adapters/inbound/agents/vibe/parser.go",
-          "note": "ParseLine L49-90: user→user_message, assistant+tool_calls→assistant_message (working, L67-71), text-only assistant→turn_done (settle, L72-75), tool→tool_result — the no-flicker-within-turn contract."
+          "note": "ParseLine L49-90: user\u2192user_message, assistant+tool_calls\u2192assistant_message (working, L67-71), text-only assistant\u2192turn_done (settle, L72-75), tool\u2192tool_result \u2014 the no-flicker-within-turn contract."
         },
         {
           "kind": "file",
@@ -38,12 +38,12 @@
         {
           "kind": "file",
           "ref": "~/.vibe/logs/session/session_20260706_101952_48e134e3/messages.jsonl",
-          "note": "Real 336-event long agentic session: 10 users, 168 assistant (158 with tool_calls), 158 tool results, 10 text-only turn_done. meta.json: 158 tool_calls_agreed, 0 rejected — auto-executed, no permission gate. Replays as a clean per-turn working→ready arc with 0 flickers."
+          "note": "Real 336-event long agentic session: 10 users, 168 assistant (158 with tool_calls), 158 tool results, 10 text-only turn_done. meta.json: 158 tool_calls_agreed, 0 rejected \u2014 auto-executed, no permission gate. Replays as a clean per-turn working\u2192ready arc with 0 flickers."
         },
         {
           "kind": "file",
           "ref": "replaydata/agents/mistral-vibe/driver-interactive.sh",
-          "note": "L113 DRIVE_ELICITS=\"send slash sleep\"; L168-169 wait_turn is the stubbed not_implemented SEAM 2 → driver=gap:wait_turn."
+          "note": "L113 DRIVE_ELICITS=\"send slash sleep\"; L168-169 wait_turn is the stubbed not_implemented SEAM 2 \u2192 driver=gap:wait_turn."
         }
       ]
     },
@@ -105,12 +105,14 @@
       ],
       "verify": [
         "events.jsonl shows the session entering ready after launch",
-        "for EACH of the 4 turns: exactly one ready→working transition, at least one tool_use/tool_result inside the working span for the first three turns, exactly one working→ready at turn end",
+        "for EACH of the 4 turns: exactly one ready\u2192working transition, at least one tool_use/tool_result inside the working span for the first three turns, exactly one working\u2192ready at turn end",
         "no state_transition to ready fires inside any turn's working span (no intra-turn flicker between tool-call/result pairs)",
-        "no state_transition to waiting fires (vibe auto-executes tools — no permission gate)",
+        "no state_transition to waiting fires (vibe auto-executes tools \u2014 no permission gate)",
         "final session state is ready"
       ],
-      "settings": {},
+      "settings": {
+        "bypass_tool_permissions": true
+      },
       "timeout_seconds": 600
     }
   }
