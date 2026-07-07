@@ -1,0 +1,73 @@
+{
+  "scenario_id": "provider-failover-midturn",
+  "metadata": {
+    "agent_supports": "no",
+    "daemon_capability": "incapable",
+    "driver_capability": "ready",
+    "agent_cli_version": "2.19.0",
+    "daemon_version": "0.5.5+6a16e49.dirty",
+    "confidence": 0.82,
+    "notes": "agent_supports: no (vibe has no automatic mid-turn provider/model failover — only same-provider backoff retry, then a turn-level RateLimitError); daemon_capability: incapable; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "provider-failover-midturn",
+      "agent": "mistral-vibe",
+      "assessed_at": "2026-07-07T00:00:00Z",
+      "agent_supports": "no",
+      "daemon_capability": "incapable",
+      "driver_capability": "ready",
+      "confidence": 0.82,
+      "body": "## Verdict\n\nagent_supports: no\ndaemon_capability: incapable; driver_capability: ready\n\n## Scenario signal\n\n`provider-failover-midturn` (5.5) asserts three user-observable bullets: (a) `ModelName` changes mid-turn with no user action, (b) state stays `working` through the failover with no flicker to `ready`, (c) after the turn completes, `→ ready` with the FALLBACK model's name visible. The defining primitive is an AUTOMATIC in-turn provider/model swap on a primary error (rate limit, 5xx, timeout) that continues the SAME turn under a secondary model. The canonical spec frames this around adapters with explicit auto-fallback chains (Aider auto-fallback, Crush, Goose).\n\n## agent_supports: no\n\nMistral Vibe 2.19.0 supports multiple `providers` (2 entries) and multiple `models`, each `models[]` entry bound to a provider (mistral / llamacpp) via its `provider` field, plus `api_retry_max_elapsed_time`. But this is a MANUAL selection surface, not an automatic failover chain:\n\n- `AgentLoop._select_backend` (agent_loop.py L724-731) resolves EXACTLY ONE provider for the whole request: `provider = self.config.get_active_provider()` → `get_provider_for_model(get_active_model())`. `get_active_model()` (_settings.py L445-451) just looks up `self.active_model` (a config string, default `devstral-2`/`mistral-medium-3.5`) in `self.models`. There is NO second provider passed to the backend.\n- Resilience is same-provider backoff retry ONLY: `create_backend(..., retry_max_elapsed_time=self.config.api_retry_max_elapsed_time)` builds a Mistral SDK `RetryConfig(strategy=\"backoff\", BackoffStrategy(..., max_elapsed_time=...))` (mistral.py L204-243) that retries the SAME endpoint. There is no `models[].provider` cascade, `fallback_model`, `secondary`, or `next-provider` primitive anywhere in the config schema or agent loop.\n- On retry exhaustion the loop RAISES a turn-level error: `raise RateLimitError(provider.name, active_model.name)` (agent_loop.py L1693, L1773). That surfaces as an aborted turn the user retries (scenario 2.14 turn-aborted-by-error) — NOT a silent fallback continuation under a second model.\n- A binary/source scan for `failover`/`fallback`/`next.*model`/`switch.*model` finds no automatic model/provider switch code path; `active_model` is only ever mutated by the user's `/model` command (a manual switch = scenario 5.3 model-switch-midsession), never by an error handler.\n\nBecause vibe implements zero automatic mid-turn provider/model failover — only same-provider backoff then a turn error — the scenario's defining behavior does not exist in the agent. This is stricter than the sibling `partial` verdicts (claudecode/codex) DELIBERATELY: those agents were called `partial` because a provider abstraction merely exists; vibe's only error-resilience mechanism (backoff retry of the identical provider) is definitively NOT a failover, so `no` is the honest floor.\n\n## daemon_capability: incapable (moot but documented)\n\nEven if vibe DID fail over, irrlicht could not observe the scenario's distinguishing signal. The daemon derives `ModelName` solely from `meta.json.config.active_model` via `Parser.applySidecar` (parser.go L98-115: `ev.ModelName = tailer.NormalizeModelName(st.model)`, `st.model = raw.Config.ActiveModel`, sidecar.go L59-73). `config.active_model` is the user's CONFIGURED model string, re-serialized into meta.json on every `save_interaction` (session_logger.py L338 `\"config\": base_config.model_dump(...)`); it is not mutated by a retry or a hypothetical failover, so a provider swap would leave `active_model` unchanged — bullet (a) never fires. The per-line `messages.jsonl` transcript carries NO model/provider/route field at all (parser.go docstring L26-28: \"The JSONL carries no timestamp, cwd, model, or usage\"), so a transport-layer provider swap leaves zero trace in the events stream. This is an architecture limit (no trace exists / the model-name extraction cannot represent provider identity), not a parser bug — there is nothing in `events.jsonl` to mis-handle. Matches the claudecode/codex `daemon=incapable` finding for this row.\n\n## driver_capability: ready (not the blocker)\n\nThe scaffolded `driver-interactive.sh` already implements `send`/`wait_turn`/`sleep`/`slash` (the step vocabulary a failover recipe would need). The real recording blocker is fault injection — eliciting a failover requires a failing primary provider (a mock/egress block returning 429/5xx), which is an environment prereq, not a driver step-type gap. Since the cell is frozen on the agent axis, the driver is moot; marked `ready` to mirror the sibling framing.\n\n## Conclusion\n\nFrozen / applicable_false. Vibe has no automatic mid-turn provider/model failover (only same-provider backoff retry → turn-level RateLimitError), so the scenario's defining behavior is absent from the agent; and even a hypothetical failover is invisible to the daemon (config.active_model is not mutated; the JSONL carries no provider field). The genuinely-observable subsets are already covered: state stays `working` through a transient error → `turn-aborted-by-error` (2.14); post-turn ModelName validity → `model-identification` (5.2); a MANUAL model switch → `model-switch-midsession` (5.3). No recipe, no recording. Unblocks only if vibe ships a documented automatic in-turn provider-failover chain AND surfaces the active provider/model per event in a way the sidecar or transcript records AND the vibe parser learns to extract it.",
+      "caveats": [
+        "agent=no is anchored to source, not docs: agent_loop.py resolves a single provider per turn and retries it with backoff, then raises RateLimitError; there is no fallback-model code path. If a future vibe release adds an automatic `models[].provider` cascade / `fallback_model` and mutates `config.active_model` on failover, this upgrades — the daemon would then observe the ModelName change on the very next event because applySidecar re-reads config.active_model per line.",
+        "Verdict is stricter than the claudecode/codex `partial` siblings by design: those cite a mere provider abstraction; vibe's only resilience is same-provider backoff (definitively not a failover), so `no` is the honest floor. The route (frozen / applicable_false) is identical either way.",
+        "Even under a hypothetical failover that DID change models, the change would be observationally indistinguishable from `model-switch-midsession` (5.3) — vibe emits no signal tying a model change to a provider failover vs a user `/model` switch.",
+        "Mock/synthetic fixture REJECTED (same rationale as claudecode/codex 5.5): this harness records REAL CLI sessions and has no synthetic-fixture mechanism; a vibe provider failover doesn't exist to record, and even if faked, config.active_model would not move and the JSONL carries no provider field — a mock would fabricate events vibe never emits, worse than an honest documentation-only frozen cell."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "~/.local/share/uv/tools/mistral-vibe/lib/python3.13/site-packages/vibe/core/agent_loop.py L724-731",
+          "note": "_select_backend resolves ONE provider per request via get_active_provider() and passes only retry_max_elapsed_time (backoff) to create_backend — no second/fallback provider. Retry is same-provider only."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.local/share/uv/tools/mistral-vibe/lib/python3.13/site-packages/vibe/core/agent_loop.py L1693,L1773",
+          "note": "On retry-exhausted rate limit the loop RAISES RateLimitError(provider.name, active_model.name) — a turn-level error the user retries, not a silent fallback continuation under a second model."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.local/share/uv/tools/mistral-vibe/lib/python3.13/site-packages/vibe/core/llm/backend/mistral.py L204-243",
+          "note": "Backend retry is a Mistral-SDK RetryConfig(strategy=backoff, BackoffStrategy(max_elapsed_time=...)) against the SAME endpoint — not a provider/model cascade."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.local/share/uv/tools/mistral-vibe/lib/python3.13/site-packages/vibe/core/config/_settings.py L445-476",
+          "note": "get_active_model()/get_provider_for_model()/get_active_provider() are pure config lookups on the single active_model string; multiple providers/models exist for MANUAL selection, with no automatic failover chain."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/vibe/parser.go L98-115 + sidecar.go L59-73",
+          "note": "applySidecar sets ModelName only from meta.json config.active_model (the user's configured model, not mutated on retry/failover); a provider swap would leave active_model unchanged — so the daemon cannot observe the scenario's mid-turn ModelName change. daemon=incapable."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/vibe/parser.go L26-28",
+          "note": "Parser docstring: the messages.jsonl transcript carries no timestamp, cwd, model, or usage per line — provider/route identity is never written to the events stream the daemon tails."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/codex/scenarios/5-5_provider-failover-midturn/metadata.json",
+          "note": "Sibling reference for this row (codex agent=partial, daemon=incapable, driver=ready, frozen/applicable_false). vibe is stricter on the agent axis (no automatic failover at all) but lands on the same frozen route."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "notes": "applicable: false (frozen, 2026-07-07: agent_supports=no, daemon_capability=incapable). Mistral Vibe has no automatic mid-turn provider/model failover — _select_backend resolves one provider per turn and retries it with backoff, then raises a turn-level RateLimitError (agent_loop.py L724-731,L1693). Multiple providers/models in config are a MANUAL selection surface (/model = scenario 5.3), not a failover chain. Even a hypothetical failover is invisible: the daemon reads ModelName only from meta.json config.active_model (not mutated on failover) and the JSONL carries no provider field. Observable subsets are covered by turn-aborted-by-error (2.14), model-identification (5.2), model-switch-midsession (5.3). No recipe, no recording. Unblocks only if vibe ships a documented automatic in-turn provider-failover chain that mutates config.active_model AND the parser extracts it.",
+      "script": []
+    }
+  }
+}
