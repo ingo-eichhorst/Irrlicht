@@ -312,6 +312,15 @@ wait_turn() {
 }
 
 # --- AGENT-SPECIFIC SEAM 3: send text -----------------------------------------
+# type_enter types text into the live REPL and submits it. The brief pause lets
+# the Textual TUI's input handler render the typed text before Enter lands, so
+# Enter isn't dropped mid-render. No turn accounting — callers own that.
+type_enter() { # <text>
+  tmux send-keys -t "$SESSION" -l -- "$1"
+  sleep 0.3
+  tmux send-keys -t "$SESSION" Enter
+}
+
 send_text() { # <text>
   # The first send/slash of a run is already delivered as the launch positional
   # prompt (see launch_repl) — just account for the turn, don't re-type it into
@@ -322,13 +331,43 @@ send_text() { # <text>
     echo "[driver] send[s$ACTIVE]: (delivered at launch) ${1:0:60} (expecting turn $EXPECTED_TURNS)" >&2
     return 0
   fi
-  tmux send-keys -t "$SESSION" -l -- "$1"
-  # Brief pause so the Textual TUI's input handler renders the typed text before
-  # Enter lands, so Enter isn't dropped mid-render.
-  sleep 0.3
-  tmux send-keys -t "$SESSION" Enter
+  type_enter "$1"
   EXPECTED_TURNS=$((EXPECTED_TURNS + 1))
   echo "[driver] send[s$ACTIVE]: ${1:0:60} (expecting turn $EXPECTED_TURNS)" >&2
+}
+
+# A session-rotating slash (/clear, /compact, /new) makes vibe mint a NEW
+# ~/.vibe/logs/session/<id>/ dir under the SAME process + cwd (agent_loop.py
+# _reset_session → session_logger.reset_session recomputes save_folder to a fresh
+# session_<ts>_<hash> dir). The daemon surfaces that as a new session_id plus a
+# transcript_removed on the prior same-PID session (#169 cleanup). A plain send
+# would keep counting turns on the stale dir and time out, so after typing the
+# command we re-arm SEAM-3 transcript resolution: snapshot the CURRENT dirs as
+# pre-existing BEFORE typing (the new dir is created lazily on the next user
+# message, so the set-diff in resolve_transcript then picks exactly it), clear the
+# active slot's cached transcript, and reset the turn baseline (the new dir starts
+# empty — the following send's answer is turn 1 in it).
+ROTATING_SLASHES="/clear /compact /new"
+slash_cmd() { # <text>
+  local text="$1"
+  # A rotating slash can't be the launch positional (vibe needs a real prompt to
+  # boot a session first); a non-rotating first slash just delegates to send.
+  if [[ "$FIRST_SEND_PENDING" == "1" ]]; then
+    send_text "$text"; return
+  fi
+  if [[ " $ROTATING_SLASHES " == *" $text "* ]]; then
+    PRE_LAUNCH_DIRS="$(find "$HOME/.vibe/logs/session" -maxdepth 1 -type d -name 'session_*' 2>/dev/null | sort)"
+    type_enter "$text"
+    TRANSCRIPT=""; UUID=""
+    SES_TRANSCRIPT[$ACTIVE]=""; SES_UUID[$ACTIVE]=""
+    EXPECTED_TURNS=0
+    echo "[driver] slash[s$ACTIVE]: $text → session rotation; re-resolving transcript on next wait_turn" >&2
+    return 0
+  fi
+  # Non-rotating slash (e.g. /help): types into the REPL but yields no assistant
+  # turn, so don't bump EXPECTED_TURNS.
+  type_enter "$text"
+  echo "[driver] slash[s$ACTIVE]: $text (no turn expected)" >&2
 }
 
 # --- Step dispatch: ALL standard arms present; stubs fail loudly -------------
@@ -337,7 +376,8 @@ EXPECTED_TURNS=0
 while IFS= read -r step; do
   type="$(jq -r '.type' <<<"$step")"
   case "$type" in
-    send|slash)      send_text "$(jq -r '.text' <<<"$step")" ;;
+    send)            send_text "$(jq -r '.text' <<<"$step")" ;;
+    slash)           slash_cmd "$(jq -r '.text' <<<"$step")" ;;
     wait_turn)       wait_turn || break ;;
     sleep)           sleep "$(jq -r '.seconds // 1' <<<"$step")" ;;
     interrupt)       not_implemented interrupt || break ;;       # TODO(mistral-vibe): Escape/Ctrl-C the in-flight turn
