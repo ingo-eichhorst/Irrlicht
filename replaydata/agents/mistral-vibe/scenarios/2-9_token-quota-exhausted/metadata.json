@@ -1,0 +1,79 @@
+{
+  "scenario_id": "token-quota-exhausted",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "incapable",
+    "driver_capability": "gap:429-mock",
+    "agent_cli_version": "2.19.0",
+    "daemon_version": "0.5.5+91ca4fe",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes; daemon_capability: incapable (429 turn-end never persisted to messages.jsonl); driver_capability: gap:429-mock"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "token-quota-exhausted",
+      "agent": "mistral-vibe",
+      "assessed_at": "2026-07-07T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "incapable",
+      "driver_capability": "gap:429-mock",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: incapable; driver_capability: gap:429-mock\nroute: frozen\n\n## Reasoning\n\nMistral Vibe DOES hit token/quota exhaustion: when the Mistral API returns HTTP 429, `vibe/core/agent_loop.py` raises a `RateLimitError` (agent_loop.py:1692-1693 non-streaming and 1772-1773 streaming, gated by `_should_raise_rate_limit_error` at agent_loop.py:232-233 → `BackendError.status == 429`). The retryable-error set in `vibe/core/utils/retry.py:23` includes 429, but once retries are exhausted the `RateLimitError` surfaces. So `agent_supports = yes`.\n\n**Why daemon = incapable (not full, not bug).** The irrlicht vibe adapter is a transcript tailer: `FilesUnderRoot` on `~/.vibe/logs/session/<id>/messages.jsonl` plus the `meta.json` sidecar (core/adapters/inbound/agents/vibe/agent.go, parser.go, sidecar.go). It derives state purely from persisted transcript lines — `role:user` → `user_message` (opens the turn → working), `role:assistant` with no `tool_calls` → `turn_done` (settles → ready). The daemon can only observe the scenario's `working → ready` arc if a turn-end line is written to `messages.jsonl`.\n\nOn a 429 that line is **never written**:\n\n1. In `_chat` / `_chat_streaming` the assistant message is appended to `self.messages` ONLY on a successful response (agent_loop.py:1682 and 1765). The 429 raises `RateLimitError` in the surrounding `except` BEFORE any append, so no assistant/turn_done message ever enters the in-memory list.\n2. `_conversation_loop` persists via a `finally: await self._save_messages()` (agent_loop.py:1097). `save_interaction` writes only the incremental `self.messages` tail (session_logger.py:298-306) — i.e. just the `role:user` prompt that was appended at agent_loop.py:1034. No assistant line, no turn_done.\n3. The error itself is TUI-only: the Textual app catches the exception (cli/textual_ui/app.py:1922-1934), resolves it to a `RateLimitError` string via `_resolve_turn_error_message`/`_rate_limit_message` (app.py:1953-1966), and mounts an ephemeral `ErrorMessage` widget (app.py:1934). That widget is UI state, never persisted to `messages.jsonl`. The vibe parser has NO RateLimit/429/quota handling at all (grep of the adapter is empty) — unlike codex's `rate_limits` / `rate_limit_reached_type` snapshot path — so even the quota SEMANTICS are invisible.\n\nConsequence in the daemon: after the 429 the last persisted line is `role:user`, so `SessionMetrics.LastEventType == \"user_message\"`. `IsAgentDone()` (core/domain/session/metrics.go:388-427) returns true only for `turn_done` / `assistant` / `assistant_output` — not `user_message` — so it stays false. `ClassifyState` (core/application/services/state_classifier.go:22-117) has NO wall-clock / idle → ready path; the only routes to ready are rule 2 (`IsAgentDone` → turn_done) and rule 3 (ESC/tool-denial, which needs `LastEventType==\"user\"` + interrupt flags the vibe parser never sets). Neither fires. The live vibe process stays alive (the TUI returns to the prompt), so there is no `process_exited` fallback either. **The session sticks in `working`; the scenario's `working → ready` / final `ready` is unobservable.** No transcript trace of the turn-end exists → `incapable`, not `bug` (the daemon does not mis-handle a trace; there is no trace).\n\n**Context vs quota.** `meta.json` carries `config.auto_compact_threshold = 200000` — the CONTEXT-exhaustion path (a `ContextTooLongError`, auto-compacted / `/rewind` + `/compact`) is distinct from this QUOTA (429) path. Both are surfaced only as TUI `ErrorMessage` widgets and neither is persisted, so the daemon can observe neither as a state transition. This cell is strictly the 429 quota-exhausted variant.\n\n## Driver pillar (secondary — the cell is frozen on daemon regardless)\n\nThe interactive driver `replaydata/agents/mistral-vibe/driver-interactive.sh` is freshly scaffolded: `DRIVE_ELICITS=\"send slash sleep\"` and `wait_turn` is stubbed (`not_implemented`), so it cannot even detect turn completion yet. Separately — as with the codex sibling — there is no Mistral/OpenAI-compatible 429 mock harness analogous to `tools/onboarding-factory/recording/mock-openai-429` / `mock-gemini-429`, and no way to burn the real Mistral account quota on demand. So `driver = gap:429-mock` (a `wait_turn` port would also be required). This is moot for routing: even a fully-ported driver + a working 429 mock could not make the turn-end observable, because vibe writes nothing to the transcript on a 429.\n\n## Route\n\n`agent=yes` + `daemon=incapable` → **frozen**. Not recordable: irrlicht fundamentally cannot observe a vibe quota-exhausted turn settling to ready. The cell becomes recordable only if Vibe starts persisting the failed turn (an error/turn_done line in `messages.jsonl`) AND the adapter learns to settle on it — an upstream + adapter change, not tooling.",
+      "caveats": [
+        "The vibe adapter has NO RateLimit/429/quota parsing (grep of core/adapters/inbound/agents/vibe/ is empty) — unlike codex's rate_limits snapshot. Even the quota semantics are invisible; the scenario's lifecycle arc is the only thing at stake and it too is unobservable.",
+        "On a 429, only the role:user prompt is persisted (finally-save at agent_loop.py:1097); the assistant/turn_done line is never written because RateLimitError raises before the append at agent_loop.py:1682/1765. The error is a TUI-only ErrorMessage widget (app.py:1934).",
+        "Session sticks in working: LastEventType stays user_message → IsAgentDone false, and ClassifyState has no idle→ready path. The live vibe process stays alive so there is no process_exited fallback either.",
+        "Context-exhaustion (auto_compact_threshold=200000, ContextTooLongError) is a distinct code path from quota (429); both are TUI-only and equally unobservable. This cell is strictly the 429 variant.",
+        "Driver is freshly scaffolded (DRIVE_ELICITS='send slash sleep', wait_turn stubbed) and there is no Mistral/OpenAI 429 mock — but that is secondary: the daemon cannot observe the arc even with a working driver.",
+        "Becomes recordable only if upstream Vibe persists the failed turn to messages.jsonl AND the adapter settles the session on it — an upstream + adapter change, not a tooling task."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "vibe site-packages: core/agent_loop.py:232-233,1682,1692-1693,1765,1772-1773",
+          "note": "429 → BackendError.status==429 → RateLimitError raised in _chat/_chat_streaming BEFORE self.messages.append(assistant); no turn-end message ever enters the message list."
+        },
+        {
+          "kind": "file",
+          "ref": "vibe site-packages: core/agent_loop.py:1034,1097",
+          "note": "_conversation_loop appends only the role:user message then persists via finally: _save_messages() — so on a 429 messages.jsonl gains just the user prompt, no assistant/turn_done."
+        },
+        {
+          "kind": "file",
+          "ref": "vibe site-packages: core/session/session_logger.py:257-306 (persist_messages/save_interaction)",
+          "note": "Only the incremental self.messages tail (LLMMessage list) is written to messages.jsonl. The RateLimitError is not in that list."
+        },
+        {
+          "kind": "file",
+          "ref": "vibe site-packages: cli/textual_ui/app.py:1922-1934,1953-1966",
+          "note": "RateLimitError is caught in the TUI and rendered as an ephemeral ErrorMessage widget (_rate_limit_message); never persisted."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/vibe/parser.go:42-115 + sidecar.go:55-79",
+          "note": "State derives only from persisted lines: role:user→user_message (working), role:assistant no tool_calls→turn_done (ready). No 429/RateLimit handling. Sidecar reads cwd/active_model/context_tokens only (not session_cost)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/metrics.go:388-427 (IsAgentDone) + core/application/services/state_classifier.go:22-117 (ClassifyState)",
+          "note": "IsAgentDone true only for turn_done/assistant; ClassifyState has no idle→ready path. With LastEventType=user_message and no process exit, the session sticks in working."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.vibe/logs/session/<id>/meta.json (live inspection)",
+          "note": "config.active_model=mistral-medium-3.5, config.auto_compact_threshold=200000, stats.context_tokens present; stats.session_cost present but NOT read by the adapter (cost_nonzero=false)."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/mistral-vibe/driver-interactive.sh:113 (DRIVE_ELICITS) + :168-170 (wait_turn stub)",
+          "note": "Freshly scaffolded driver: DRIVE_ELICITS='send slash sleep', wait_turn not_implemented. Secondary to the daemon=incapable freeze."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "notes": "Not recordable (route: frozen; daemon=incapable). Mistral Vibe DOES hit quota exhaustion (429 → RateLimitError, agent_loop.py:1692/1772), but the failed turn is NEVER persisted to messages.jsonl: RateLimitError raises before the assistant append (agent_loop.py:1682/1765), _conversation_loop's finally-save writes only the role:user prompt (agent_loop.py:1097), and the error is a TUI-only ErrorMessage widget (app.py:1934). With no turn_done line, LastEventType stays user_message, IsAgentDone is false, and ClassifyState (no idle→ready path) holds the session in working — the scenario's working→ready is unobservable. The vibe adapter has no RateLimit/429 parsing at all (unlike codex). Secondary driver gaps: the scaffolded driver stubs wait_turn (DRIVE_ELICITS='send slash sleep') and there is no Mistral/OpenAI 429 mock (analogous to mock-openai-429/mock-gemini-429). The cell becomes recordable only if upstream Vibe persists the failed turn AND the adapter settles on it — an upstream + adapter change, not tooling. See assessment.body."
+    }
+  }
+}
