@@ -2,12 +2,12 @@
   "scenario_id": "model-context-display",
   "metadata": {
     "agent_supports": "yes",
-    "daemon_capability": "bug",
+    "daemon_capability": "full",
     "driver_capability": "gap:wait_turn",
     "agent_cli_version": "2.19.0",
-    "daemon_version": "0.5.5+e943e26",
-    "confidence": 0.85,
-    "notes": "agent=yes daemon=bug (context-window bar unresolved: mistral not in capacity map) driver=gap:wait_turn"
+    "daemon_version": "0.5.5+5e22e47",
+    "confidence": 0.8,
+    "notes": "agent=yes daemon=full (model chip + context bar both render; bar from sidecar auto_compact_threshold) driver=gap:wait_turn"
   },
   "details": {
     "assessment": {
@@ -16,57 +16,57 @@
       "agent": "mistral-vibe",
       "assessed_at": "2026-07-07T00:00:00Z",
       "agent_supports": "yes",
-      "daemon_capability": "bug",
+      "daemon_capability": "full",
       "driver_capability": "gap:wait_turn",
-      "confidence": 0.85,
-      "known_failing": true,
-      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: bug (model name displays; the context-window BAR does NOT render for mistral models)\ndriver_capability: gap:wait_turn\nroute: driver-gap\n\n## Why this cell exists\n\n1.8 is the first-contact visibility check (#599): after one trivial turn the dashboard must show WHICH model the session runs AND HOW FULL its context is. The scenario's acceptance is explicit that BOTH halves land — `metrics.model_name` non-empty/!=unknown, `metrics.context_window > 0`, and `metrics.context_utilization_percentage > 0`. For mistral-vibe the model half works and the context half does not, so this cell splits: the daemon is `bug` on the context-window bar.\n\n## Agent (yes)\n\nVibe writes a sibling `meta.json` sidecar next to every `~/.vibe/logs/session/<id>/messages.jsonl`, rewritten after each turn. `config.active_model` and `stats.context_tokens` are both populated from the first turn. Confirmed against the LIVE surface: 6 local sidecars all carry `active_model: \"mistral-medium-3.5\"` with `context_tokens` populated (e.g. 136662, 146631, 31309). So the agent exposes both metrics from first contact.\n\n## Daemon (bug) — model displays, context bar does not\n\nThe vibe parser's `applySidecar` (parser.go L98-115) sets `ev.ModelName = NormalizeModelName(st.model)` on every event and `ev.Tokens = &TokenSnapshot{Total: st.contextTokens}` on `turn_done`. It deliberately does NOT set `ContextWindow` — the window is resolved downstream by `ComputeContextUtilization` (tailer_metrics.go L512-543) via the capacity map, keyed on the normalized model name.\n\nModel name: `NormalizeModelName(\"mistral-medium-3.5\")` returns `\"mistral-medium-3.5\"` verbatim (no alias transform — confirmed by running it) → non-empty, != unknown. The `metrics.model_name` acceptance bullet PASSES.\n\nContext bar: `mistral-medium-3.5` is absent from the capacity context-window/alias map. The ONLY mistral entry in `core/pkg/capacity` is the CO2 tier (`co2.go`: `\"mistral\": {gCO2PerToken: 0.00285}`); there is no context-window entry and no alias in `aliases.go` for any mistral/medium/devstral/magistral model. So `capacityMgr.GetModelCapacity(\"mistral-medium-3.5\").ContextWindow` returns 0, `ComputeContextUtilization` hits the guard at tailer_metrics.go L527-528 and returns `(0, 0, \"unknown\", true)` — `ContextWindow=0`, `ContextUtilization=0`, `ContextWindowUnknown=true`. Both `context_window > 0` and `context_utilization_percentage > 0` acceptance bullets FAIL. Because the scenario's acceptance REQUIRES the utilization bar, this is a spec-required observable the daemon mis-handles → daemon=bug (not a caveat). The fix is product/data — add mistral models (window + alias) to `core/pkg/capacity`; a known follow-up. Not `incapable`: the mechanism exists (Tokens + ModelName are emitted); only the capacity data is missing.\n\nCost: the sidecar also carries `stats.session_cost` + per-million prices, but the adapter does NOT emit cost (per-turn cost is not backfillable) — the spec does not assert `cost_nonzero`.\n\n## Driver (gap:wait_turn)\n\nThe recipe elicits the behavior with `send` → `wait_turn` → `sleep`; the acceptance is checked AFTER the first turn completes, so `wait_turn` is load-bearing. mistral-vibe's `driver-interactive.sh` is freshly scaffolded: `DRIVE_ELICITS=\"send slash sleep\"` and SEAM 2 (`wait_turn`, L168-170) is a loud `not_implemented` stub, so `recipe-lint`'s `driver_elicits_from_file` does NOT list `wait_turn` → any recipe needing it is a semantic gap. SEAM 3 (resolve session_id + transcript path, L158) is also a TODO stub, so the session contract currently records nothing. This is tooling work, not an observability limit: `record` ports SEAM 2 (+ SEAM 3) from the reference driver (e.g. drive-claudecode-interactive.sh) before it drives.\n\n## Route: driver-gap\n\nWith daemon=bug AND driver=gap:*, the routing table lands on driver-gap: `record` ports the missing `wait_turn` step, then drives; the recording will exercise the daemon=bug (context bar) which is preserved as `known_failing` so `record` surfaces an issue: payload for the capacity-map follow-up. The recipe + spec are kept intact and assert the CORRECT (full) behavior.",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full (model name AND context-utilization bar both render)\ndriver_capability: gap:wait_turn\nroute: driver-gap\n\n## Why this cell exists\n\n1.8 is the first-contact visibility check (#599): after one trivial turn the dashboard must show WHICH model the session runs AND HOW FULL its context is. Acceptance requires BOTH halves — `metrics.model_name` non-empty/!=unknown, `metrics.context_window > 0`, and `metrics.context_utilization_percentage > 0`. This is a RE-ASSESSMENT: the cell was previously daemon=bug (model displayed but the context bar never rendered because mistral was absent from core/pkg/capacity's window map). Commit 4d3c2327 fixed it, so the daemon pillar is now full.\n\n## Agent (yes)\n\nVibe writes a sibling `meta.json` sidecar next to every `~/.vibe/logs/session/<id>/messages.jsonl`, rewritten after each turn. `config.active_model`, `config.auto_compact_threshold`, and `stats.context_tokens` are all populated from the first turn. Confirmed against the LIVE surface: sidecars carry `active_model: \"mistral-medium-3.5\"`, `auto_compact_threshold: 200000`, and `context_tokens` populated (e.g. 22418, 136662). The agent exposes model + context budget + context usage from first contact.\n\n## Daemon (full) — model chip AND context bar both render\n\nModel name: applySidecar (parser.go L132) sets `ev.ModelName = NormalizeModelName(st.model)` on every event; `NormalizeModelName(\"mistral-medium-3.5\")` returns it verbatim (non-empty, != unknown). The `metrics.model_name` bullet PASSES.\n\nContext bar (the fix): parser.go L138-139 now sets `ev.ContextWindow = st.contextWindow` on `turn_done`, where `st.contextWindow` is decoded from `config.auto_compact_threshold` (sidecar.go L72-73,L91) — vibe's OWN token budget before it compacts, the meaningful \"context full\" mark for a vibe session, read per-session so it stays correct if the user reconfigures it. This sidesteps the capacity-map gap entirely: instead of resolving the window from a (missing) capacity entry keyed on model name, the daemon takes the live per-session threshold as an explicit `ContextWindow` override. With a non-zero `ev.ContextWindow` reaching the tailer, `ComputeContextUtilization` (tailer_metrics.go) resolves `effectiveContextWindow > 0` and returns a non-zero utilization instead of the `(0,0,\"unknown\",true)` guard. Token count also lands (`ev.Tokens = TokenSnapshot{Total: st.contextTokens}` on turn_done). So `context_window > 0` and `context_utilization_percentage > 0` BOTH pass. metrics_test.go L52-53 pins `ContextWindow == 200000` (the sidecar threshold) as a regression guard.\n\nCost: the sidecar carries `stats.session_cost` + per-million prices, but the adapter does NOT emit authoritative cost — vibe's prices are user-configurable (a local llamacpp model is $0), so cost is a documented gap (the fix commit's own follow-up). The spec does not assert `cost_nonzero`.\n\n## Driver (gap:wait_turn)\n\nThe recipe elicits the behavior with `send` -> `wait_turn` -> `sleep`; the acceptance is checked AFTER the first turn completes, so `wait_turn` is load-bearing. mistral-vibe's `driver-interactive.sh` still carries `DRIVE_ELICITS=\"send slash sleep\"` and SEAM 2 (`wait_turn`, L168-170) is a loud `not_implemented` stub, so `recipe-lint`'s `driver_elicits_from_file` returns only `send slash sleep` -> any recipe needing `wait_turn` is a semantic gap. SEAM 3 (resolve session_id + transcript path, L158) is also a TODO stub. This is tooling work, not an observability limit: `record` ports SEAM 2 (+ SEAM 3) from a reference driver (e.g. drive-claudecode-interactive.sh) before it drives.\n\n## Route: driver-gap\n\ndaemon=full but driver=gap:wait_turn -> the routing table lands on driver-gap: `record` ports the missing `wait_turn` step (+ SEAM 3 transcript resolution), then drives. The recording will exercise the now-full daemon path (model chip + context bar), and the spec asserts that full behavior. No `known_failing` framing remains.",
       "caveats": [
-        "known_failing daemon=bug is narrow: ONLY the context-window bar (context_window / context_utilization). Model name and token count both surface correctly. The fix is a capacity-map addition (mistral window + alias in core/pkg/capacity), not an adapter change.",
-        "The driver gap is the operational blocker that must close first: wait_turn (SEAM 2) and transcript-path resolution (SEAM 3) are stubbed in the scaffolded driver — record ports them from the claudecode reference driver before recording.",
-        "The daemon=full path for model display is confirmed by reading the parser + tailer, but is PROVISIONAL on emission until a live recording (the sidecar is rewritten every turn; the tailer must pick up the post-turn context_tokens). record promotes it from provisional to settled.",
+        "The daemon=full path is confirmed by reading the parser + sidecar + the metrics_test regression guard (ContextWindow==200000) and the fix commit's end-to-end note, but is PROVISIONAL on live emission until a recording — the sidecar is rewritten every turn and the tailer must pick up the post-turn context_tokens + threshold. record promotes provisional -> settled.",
+        "context_window is the session's auto_compact_threshold (vibe's compaction budget), NOT a published model window — deliberately so: it is sourced live per session and stays correct if reconfigured. context_utilization is context_tokens / threshold.",
+        "The driver gap is the operational blocker that must close before recording: wait_turn (SEAM 2) and transcript-path resolution (SEAM 3) are stubbed in the scaffolded driver — record ports them from a reference driver first.",
+        "Cost stays a documented gap: vibe's prices are user-configurable (local llamacpp = $0), so the adapter does not emit authoritative cost. The spec asserts model + tokens + context, not cost.",
         "model_name is the agent's own normalized label; mistral-medium-3.5 is a concrete id (not a routing alias), so the 'auto counts' acceptance allowance is not exercised here."
       ],
       "sources": [
         {
           "kind": "file",
-          "ref": "core/adapters/inbound/agents/vibe/parser.go L98-115",
-          "note": "applySidecar sets ev.ModelName = NormalizeModelName(st.model) on every event and ev.Tokens = TokenSnapshot{Total: st.contextTokens} on turn_done, but does NOT set ContextWindow — the window is resolved downstream by the capacity map."
+          "ref": "core/adapters/inbound/agents/vibe/parser.go L132,L138-139",
+          "note": "applySidecar sets ev.ModelName = NormalizeModelName(st.model) on every event; on turn_done it sets ev.Tokens = TokenSnapshot{Total: st.contextTokens} and, per the fix, ev.ContextWindow = st.contextWindow when > 0 — an explicit per-session window override that renders the context bar without a capacity-map entry."
         },
         {
           "kind": "file",
-          "ref": "core/adapters/inbound/agents/vibe/sidecar.go L55-78",
-          "note": "readSidecar decodes config.active_model -> model and stats.context_tokens -> contextTokens (and environment.working_directory -> cwd). No cost field is decoded — the adapter never emits cost."
+          "ref": "core/adapters/inbound/agents/vibe/sidecar.go L29-33,L72-73,L91",
+          "note": "contextWindow is decoded from config.auto_compact_threshold (raw.Config.AutoCompactThreshold -> st.contextWindow). This is vibe's compaction budget, sourced live per session — the meaningful 'context full' mark."
         },
         {
           "kind": "file",
-          "ref": "core/pkg/capacity/co2.go + aliases.go",
-          "note": "The ONLY mistral entry in core/pkg/capacity is the CO2 tier (\"mistral\": {gCO2PerToken: 0.00285}). No context-window entry and no alias for mistral/medium/devstral/magistral — so GetModelCapacity(\"mistral-medium-3.5\").ContextWindow == 0."
+          "ref": "core/adapters/inbound/agents/vibe/metrics_test.go L30,L52-53",
+          "note": "Regression guard: a sidecar with auto_compact_threshold:200000 + context_tokens:9000 yields SessionMetrics.ContextWindow == 200000 — proves the context-window bar now resolves for mistral models."
+        },
+        {
+          "kind": "url",
+          "ref": "commit 4d3c2327 feat(vibe): render the context-utilization bar from the compaction threshold",
+          "note": "The fix for the previous daemon=bug: emit ev.ContextWindow from the sidecar's auto_compact_threshold instead of adding mistral to the capacity window map (the live threshold beats a guessed published window; the sample session ran to 136k > mistral-medium's nominal window). End-to-end tested through the production tailer."
         },
         {
           "kind": "file",
-          "ref": "core/pkg/tailer/tailer_metrics.go L512-543 (esp. L523-528)",
-          "note": "ComputeContextUtilization: with no override and GetModelCapacity(...).ContextWindow == 0, effectiveContextWindow <= 0 -> returns (0, 0, \"unknown\", true). context_window and context_utilization both 0 for mistral models — the context-bar half of the acceptance fails."
-        },
-        {
-          "kind": "file",
-          "ref": "core/pkg/tailer/parser.go L532 NormalizeModelName",
-          "note": "NormalizeModelName(\"mistral-medium-3.5\") returns \"mistral-medium-3.5\" verbatim (verified by running it) — model_name is non-empty and != unknown, so the model-display half of the acceptance passes."
+          "ref": "core/pkg/tailer/parser.go NormalizeModelName",
+          "note": "NormalizeModelName(\"mistral-medium-3.5\") returns it verbatim (no alias transform) — model_name is non-empty and != unknown, so the model-display half of the acceptance passes."
         },
         {
           "kind": "file",
           "ref": "replaydata/agents/mistral-vibe/driver-interactive.sh L113,L168-170,L158",
-          "note": "DRIVE_ELICITS=\"send slash sleep\"; SEAM 2 wait_turn is a not_implemented stub; SEAM 3 (session_id+transcript path) is a TODO. recipe-lint's driver_elicits_from_file excludes wait_turn -> driver=gap:wait_turn."
+          "note": "DRIVE_ELICITS=\"send slash sleep\"; SEAM 2 wait_turn is a not_implemented stub; SEAM 3 (session_id + transcript path) is a TODO. recipe-lint's driver_elicits_from_file returns only 'send slash sleep' -> driver=gap:wait_turn."
         },
         {
           "kind": "file",
-          "ref": "~/.vibe/logs/session/*/meta.json (6 live sidecars)",
-          "note": "Live surface: every sidecar carries config.active_model=\"mistral-medium-3.5\" with stats.context_tokens populated (136662, 146631, 31309, ...) — confirms the agent exposes model + context from first contact and pins the model id from the live surface, not docs."
+          "ref": "~/.vibe/logs/session/*/meta.json (live sidecars)",
+          "note": "Live surface: sidecars carry config.active_model=\"mistral-medium-3.5\", config.auto_compact_threshold=200000, and stats.context_tokens populated (22418, 136662, ...) — confirms the agent exposes model + budget + usage from first contact and pins the model id + threshold from the live surface, not docs."
         },
         {
           "kind": "spec",
           "ref": "replaydata/agents/scenarios.json scenario 1.8 model-context-display",
-          "note": "Acceptance requires model_name non-empty/!=unknown AND context_window > 0 AND context_utilization_percentage > 0 after the first turn — the context-bar bullets are what mistral-vibe fails today."
+          "note": "Acceptance requires model_name non-empty/!=unknown AND context_window > 0 AND context_utilization_percentage > 0 after the first turn — all three now land for mistral-vibe post-fix."
         }
       ]
     },
@@ -74,13 +74,13 @@
       "applicable": true,
       "preconditions": [
         "vibe CLI (v2.19.0) on PATH and authenticated (MISTRAL_API_KEY or ~/.vibe/.env)",
-        "~/.vibe/config.toml selecting a model (mistral-medium-3.5 observed live)",
+        "~/.vibe/config.toml selecting a model (mistral-medium-3.5 observed live) with auto_compact_threshold set (200000 observed live)",
         "irrlichd is recording with the transcripts permission granted",
-        "driver SEAM 2 (wait_turn) and SEAM 3 (transcript-path resolution) ported from the reference driver before recording (driver-gap route)"
+        "driver SEAM 2 (wait_turn) and SEAM 3 (transcript-path resolution) ported from a reference driver before recording (driver-gap route)"
       ],
       "setup": [
         "Launch vibe in a fresh empty cwd so a new ~/.vibe/logs/session/<id>/ is created",
-        "Assertions on model_name / context_window / context_utilization are checked AFTER the first turn_done; context_window/utilization are known_failing today (capacity-map gap)"
+        "Assertions on model_name / context_window / context_utilization are checked AFTER the first turn_done"
       ],
       "script": [
         {
@@ -97,10 +97,10 @@
       ],
       "verify": [
         "events.jsonl shows one ready->working->ready cycle on the session",
-        "SessionMetrics.ModelName after turn_done is 'mistral-medium-3.5' (non-empty, != unknown) — PASSES",
-        "SessionMetrics token count after turn_done is > 0 (context_tokens from the sidecar) — PASSES",
-        "SessionMetrics.ContextWindow after turn_done is > 0 — KNOWN_FAILING today (mistral absent from capacity map; ContextWindowUnknown=true)",
-        "SessionMetrics.ContextUtilization after turn_done is > 0 — KNOWN_FAILING today (window unresolved)",
+        "SessionMetrics.ModelName after turn_done is 'mistral-medium-3.5' (non-empty, != unknown)",
+        "SessionMetrics token count after turn_done is > 0 (context_tokens from the sidecar)",
+        "SessionMetrics.ContextWindow after turn_done is > 0 (auto_compact_threshold from the sidecar)",
+        "SessionMetrics.ContextUtilization after turn_done is > 0 (context_tokens / threshold)",
         "final session state is ready"
       ],
       "settings": {},
