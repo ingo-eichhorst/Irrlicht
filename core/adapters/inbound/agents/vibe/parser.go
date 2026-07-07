@@ -36,6 +36,11 @@ type Parser struct {
 	// todos folds vibe's whole-list `todo` tool snapshots into task-progress
 	// deltas; one reconciler per transcript scan.
 	todos tailer.TodoReconciler
+	// lastPromptTokens / lastCompletionTokens are the session-cumulative token
+	// counts already emitted as contributions, so each turn contributes only its
+	// delta exactly once (dedup across re-reads of the same static sidecar).
+	lastPromptTokens     int64
+	lastCompletionTokens int64
 }
 
 // SetTranscriptPath implements tailer.TranscriptPathAware: the tailer injects
@@ -126,8 +131,40 @@ func (p *Parser) applySidecar(ev *tailer.ParsedEvent) {
 	if st.model != "" {
 		ev.ModelName = tailer.NormalizeModelName(st.model)
 	}
-	if ev.EventType == "turn_done" && st.contextTokens > 0 {
-		ev.Tokens = &tailer.TokenSnapshot{Total: st.contextTokens}
+	if ev.EventType == "turn_done" {
+		if st.contextTokens > 0 {
+			ev.Tokens = &tailer.TokenSnapshot{Total: st.contextTokens}
+		}
+		p.emitContribution(st, ev)
+	}
+}
+
+// emitContribution attaches the turn's usage as the DELTA of the session-
+// cumulative token counts since the last emit. The sidecar retains only
+// cumulative totals (not per-turn history), so the delta is the only
+// backfill-safe unit: live-tail sees each turn's real delta; a backfill of a
+// finished transcript emits the whole session's cumulative once (on the first
+// turn_done) and nothing thereafter — the session TOTAL is correct either way,
+// only the per-turn split is lost on backfill (the data isn't retained to
+// reconstruct it). Cost is left to the capacity price map keyed on Model
+// (ProviderCostUSD is not set — it would short-circuit token accumulation).
+func (p *Parser) emitContribution(st *sidecarState, ev *tailer.ParsedEvent) {
+	dPrompt := st.sessionPromptTokens - p.lastPromptTokens
+	dCompletion := st.sessionCompletionTokens - p.lastCompletionTokens
+	if dPrompt < 0 {
+		dPrompt = 0
+	}
+	if dCompletion < 0 {
+		dCompletion = 0
+	}
+	if dPrompt == 0 && dCompletion == 0 {
+		return
+	}
+	p.lastPromptTokens = st.sessionPromptTokens
+	p.lastCompletionTokens = st.sessionCompletionTokens
+	ev.Contribution = &tailer.PerTurnContribution{
+		Model: tailer.NormalizeModelName(st.model),
+		Usage: tailer.UsageBreakdown{Input: dPrompt, Output: dCompletion},
 	}
 }
 

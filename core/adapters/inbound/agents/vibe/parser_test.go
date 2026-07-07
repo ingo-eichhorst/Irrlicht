@@ -186,7 +186,7 @@ func TestParser_SidecarEnrichment(t *testing.T) {
 	if err := os.WriteFile(transcript, []byte("{}"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	meta := `{"environment":{"working_directory":"/Users/x/proj"},"config":{"active_model":"mistral-medium-3.5"},"stats":{"context_tokens":136662}}`
+	meta := `{"environment":{"working_directory":"/Users/x/proj"},"config":{"active_model":"mistral-medium-3.5"},"stats":{"context_tokens":136662,"session_prompt_tokens":10000,"session_completion_tokens":400}}`
 	if err := os.WriteFile(filepath.Join(dir, "meta.json"), []byte(meta), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -194,7 +194,7 @@ func TestParser_SidecarEnrichment(t *testing.T) {
 	p := &Parser{}
 	p.SetTranscriptPath(transcript)
 
-	// A mid-turn assistant tool call: cwd + model attached, no tokens yet.
+	// A mid-turn assistant tool call: cwd + model attached, no tokens/contribution.
 	mid := p.ParseLine(line(t, `{"role":"assistant","tool_calls":[{"id":"a","function":{"name":"bash"}}],"message_id":"m1"}`))
 	if mid.CWD != "/Users/x/proj" {
 		t.Errorf("mid CWD = %q, want /Users/x/proj", mid.CWD)
@@ -202,11 +202,12 @@ func TestParser_SidecarEnrichment(t *testing.T) {
 	if mid.ModelName == "" {
 		t.Errorf("mid ModelName empty, want the sidecar model")
 	}
-	if mid.Tokens != nil {
-		t.Errorf("mid Tokens = %+v, want nil off turn_done", mid.Tokens)
+	if mid.Tokens != nil || mid.Contribution != nil {
+		t.Errorf("mid should carry no tokens/contribution off turn_done, got %+v / %+v", mid.Tokens, mid.Contribution)
 	}
 
-	// The terminal assistant message: context tokens land here.
+	// The terminal assistant message: context tokens + the usage contribution
+	// (the full session cumulative on this first turn_done) land here.
 	done := p.ParseLine(line(t, `{"role":"assistant","content":"done","message_id":"m2"}`))
 	if done.EventType != "turn_done" {
 		t.Fatalf("EventType = %q, want turn_done", done.EventType)
@@ -216,6 +217,22 @@ func TestParser_SidecarEnrichment(t *testing.T) {
 	}
 	if done.CWD != "/Users/x/proj" {
 		t.Errorf("done CWD = %q", done.CWD)
+	}
+	if done.Contribution == nil {
+		t.Fatal("done should carry a usage Contribution")
+	}
+	if done.Contribution.Usage.Input != 10000 || done.Contribution.Usage.Output != 400 {
+		t.Errorf("Contribution usage = %+v, want Input 10000 Output 400", done.Contribution.Usage)
+	}
+	if done.Contribution.Model == "" {
+		t.Errorf("Contribution.Model empty, want the model so cost buckets correctly")
+	}
+
+	// A SECOND turn_done reading the SAME (unchanged) sidecar must NOT re-emit
+	// the cumulative usage — the dedup that keeps backfill from double-counting.
+	done2 := p.ParseLine(line(t, `{"role":"assistant","content":"again","message_id":"m3"}`))
+	if done2.Contribution != nil {
+		t.Errorf("second turn_done on unchanged sidecar re-emitted usage: %+v", done2.Contribution)
 	}
 }
 

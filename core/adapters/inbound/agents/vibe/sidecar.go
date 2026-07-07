@@ -19,6 +19,13 @@ type sidecarState struct {
 	cwd           string
 	model         string
 	contextTokens int64
+	// sessionPromptTokens / sessionCompletionTokens are the session-CUMULATIVE
+	// LLM token counts (monotonic). The parser emits their per-turn DELTA as the
+	// turn's usage contribution, which is correct on live-tail (each turn_done
+	// reads a fresh cumulative) and on backfill (the first turn_done emits the
+	// whole session cumulative once; later ones see no delta).
+	sessionPromptTokens     int64
+	sessionCompletionTokens int64
 }
 
 // sidecarCache memoizes the last decode by (mtime, size) so a backfill of a
@@ -60,7 +67,9 @@ func readSidecar(transcriptPath string, cache *sidecarCache) *sidecarState {
 			ActiveModel string `json:"active_model"`
 		} `json:"config"`
 		Stats struct {
-			ContextTokens int64 `json:"context_tokens"`
+			ContextTokens          int64 `json:"context_tokens"`
+			SessionPromptTokens    int64 `json:"session_prompt_tokens"`
+			SessionCompletionToken int64 `json:"session_completion_tokens"`
 		} `json:"stats"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
@@ -68,9 +77,11 @@ func readSidecar(transcriptPath string, cache *sidecarCache) *sidecarState {
 	}
 
 	st := &sidecarState{
-		cwd:           raw.Environment.WorkingDirectory,
-		model:         raw.Config.ActiveModel,
-		contextTokens: raw.Stats.ContextTokens,
+		cwd:                     raw.Environment.WorkingDirectory,
+		model:                   raw.Config.ActiveModel,
+		contextTokens:           raw.Stats.ContextTokens,
+		sessionPromptTokens:     raw.Stats.SessionPromptTokens,
+		sessionCompletionTokens: raw.Stats.SessionCompletionToken,
 	}
 	cache.mtime = fi.ModTime()
 	cache.size = fi.Size()
