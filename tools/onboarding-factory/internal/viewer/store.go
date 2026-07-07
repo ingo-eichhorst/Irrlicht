@@ -35,8 +35,16 @@ func (st RecordingStore) scenarioDir(agent, subtree, id string) string {
 // st.agentsDir() — the backstop readFile/exists/listArchiveDirs funnel every
 // lookup through: whatever hand-built path a caller passes (however its
 // pieces were assembled upstream), it can never resolve to a file outside
-// the replaydata/agents tree this store exists to serve.
+// the replaydata/agents tree this store exists to serve. The leading
+// strings.Contains(path, "..") check is the same idiom as
+// viewer.NewSafeArchiveName/replay.hasParentTraversal — the one CodeQL's
+// go/path-injection query recognizes as a barrier; the filepath.Rel check
+// below it is an additional (CodeQL-invisible, but still real) backstop for
+// an already-clean absolute path that simply isn't under agentsDir at all.
 func (st RecordingStore) underRoot(path string) bool {
+	if strings.Contains(path, "..") {
+		return false
+	}
 	rel, err := filepath.Rel(st.agentsDir(), filepath.Clean(path))
 	if err != nil {
 		return false
