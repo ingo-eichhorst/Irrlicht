@@ -19,10 +19,10 @@
       "daemon_capability": "full",
       "driver_capability": "gap:wait_turn",
       "confidence": 0.8,
-      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: gap:wait_turn\n\n## Reasoning\n\nSelf-correction is ordinary Mistral Vibe behaviour: the agent invokes a tool (OpenAI-shape `tool_calls[]` with a nested `function.name`), the tool returns a failing result, and the model emits another `assistant` message with fresh `tool_calls[]` to retry. Vibe v2.19.0 runs a normal tool-use REPL, so a failing-then-corrected loop inside one turn is nothing special.\n\nThe scenario's three state assertions map cleanly onto the vibe parser (parser.go):\n\n**Bullet 1 — `ready → working`.** The first `user` line maps to `user_message` (parser.go:50-55, opens the turn); the first `assistant` line carrying `tool_calls[]` maps to `assistant_message` (parser.go:67-71) which keeps the session working.\n\n**Bullet 2 — state stays `working` across all retry cycles, no flicker.** This is the core invariant and it holds structurally. The parser only settles to `turn_done` (→ ready) on a text-only assistant message with NO `tool_calls` (parser.go:72-75). Every retry cycle is MORE `assistant_message` (working) + `tool_result` events within the same working episode. A `tool` line maps to `tool_result` (parser.go:77-82) and — unlike kiro/antigravity — the vibe adapter reads NO status/error field, so it never sets `IsError` and a failing tool result is not a distinct signal; it is just continued activity that does not touch state. There is no permission/AskUser gate in this flow, so no `waiting` either. Hence the session stays continuously `working` from the first tool call until the terminal text-only assistant message.\n\n**Bullet 3 — final `working → ready`.** When the model stops calling tools and emits its final answer text (no `tool_calls`), the parser emits `turn_done` (parser.go:72-75) and the session settles to ready. If vibe instead asked the user it would surface as a plain user-facing message, but vibe has no distinct question channel the adapter reads, so the honest terminal state here is ready.\n\n## Daemon sensor capture\n\nSource is `FilesUnderRoot` over `~/.vibe/logs/session/<id>/messages.jsonl` (agent.go:31-37); the meta.json sidecar supplies cwd, model NAME, and context_tokens (sidecar.go:55-78). Every retry iteration is one append to messages.jsonl, so the whole arc is observable from the tailed transcript. `daemon=full` for the state topology this scenario asserts.\n\n## Driver pillar — gap:wait_turn\n\nThe interactive driver is freshly scaffolded: `DRIVE_ELICITS=\"send slash sleep\"` (driver-interactive.sh) — `wait_turn` is present only as a stubbed arm, not genuinely elicited, so recipe-lint reports a semantic gap for the recipe's `wait_turn` step. `record` must port SEAM 2 (turn-completion poll) from a reference driver before it can drive this cell. This is tooling work, not an observability limit — the recipe + spec stand.",
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: gap:wait_turn\n\n## Reasoning\n\nSelf-correction is ordinary Mistral Vibe behaviour: the agent invokes a tool (OpenAI-shape `tool_calls[]` with a nested `function.name`), the tool returns a failing result, and the model emits another `assistant` message with fresh `tool_calls[]` to retry. Vibe v2.19.0 runs a normal tool-use REPL, so a failing-then-corrected loop inside one turn is nothing special.\n\nThe scenario's three state assertions map cleanly onto the vibe parser (parser.go):\n\n**Bullet 1 \u2014 `ready \u2192 working`.** The first `user` line maps to `user_message` (parser.go:50-55, opens the turn); the first `assistant` line carrying `tool_calls[]` maps to `assistant_message` (parser.go:67-71) which keeps the session working.\n\n**Bullet 2 \u2014 state stays `working` across all retry cycles, no flicker.** This is the core invariant and it holds structurally. The parser only settles to `turn_done` (\u2192 ready) on a text-only assistant message with NO `tool_calls` (parser.go:72-75). Every retry cycle is MORE `assistant_message` (working) + `tool_result` events within the same working episode. A `tool` line maps to `tool_result` (parser.go:77-82) and \u2014 unlike kiro/antigravity \u2014 the vibe adapter reads NO status/error field, so it never sets `IsError` and a failing tool result is not a distinct signal; it is just continued activity that does not touch state. There is no permission/AskUser gate in this flow, so no `waiting` either. Hence the session stays continuously `working` from the first tool call until the terminal text-only assistant message.\n\n**Bullet 3 \u2014 final `working \u2192 ready`.** When the model stops calling tools and emits its final answer text (no `tool_calls`), the parser emits `turn_done` (parser.go:72-75) and the session settles to ready. If vibe instead asked the user it would surface as a plain user-facing message, but vibe has no distinct question channel the adapter reads, so the honest terminal state here is ready.\n\n## Daemon sensor capture\n\nSource is `FilesUnderRoot` over `~/.vibe/logs/session/<id>/messages.jsonl` (agent.go:31-37); the meta.json sidecar supplies cwd, model NAME, and context_tokens (sidecar.go:55-78). Every retry iteration is one append to messages.jsonl, so the whole arc is observable from the tailed transcript. `daemon=full` for the state topology this scenario asserts.\n\n## Driver pillar \u2014 gap:wait_turn\n\nThe interactive driver is freshly scaffolded: `DRIVE_ELICITS=\"send slash sleep\"` (driver-interactive.sh) \u2014 `wait_turn` is present only as a stubbed arm, not genuinely elicited, so recipe-lint reports a semantic gap for the recipe's `wait_turn` step. `record` must port SEAM 2 (turn-completion poll) from a reference driver before it can drive this cell. This is tooling work, not an observability limit \u2014 the recipe + spec stand.",
       "caveats": [
-        "The vibe adapter sets NO IsError on tool_result (parser.go:77-82) — there is no status field in the sample tool shape, unlike kiro/antigravity. So the daemon sees the retry as continued working activity, not a distinct error signal. The scenario's acceptance is purely state-topological (no-flicker + final ready), which does NOT require an error flag, so daemon stays full; but any future assertion wanting to distinguish 'errored then recovered' from 'two normal tool calls' cannot be satisfied for vibe.",
-        "PROVISIONAL on emission: whether vibe actually writes a text-only terminal assistant message (turn_done) after the recovery cycle — vs. keeping tool_calls open — is a property of what the agent emits, not something the parser read can confirm. A live record promotes this from provisional to settled.",
+        "The vibe adapter sets NO IsError on tool_result (parser.go:77-82) \u2014 there is no status field in the sample tool shape, unlike kiro/antigravity. So the daemon sees the retry as continued working activity, not a distinct error signal. The scenario's acceptance is purely state-topological (no-flicker + final ready), which does NOT require an error flag, so daemon stays full; but any future assertion wanting to distinguish 'errored then recovered' from 'two normal tool calls' cannot be satisfied for vibe.",
+        "PROVISIONAL on emission: whether vibe actually writes a text-only terminal assistant message (turn_done) after the recovery cycle \u2014 vs. keeping tool_calls open \u2014 is a property of what the agent emits, not something the parser read can confirm. A live record promotes this from provisional to settled.",
         "Recording must use a deterministic failing-then-passing tool sequence (e.g. bash 'false' then bash 'echo recovered') so the retry count is reproducible across captures.",
         "driver=gap:wait_turn: record must port the wait_turn seam (SEAM 2) into driver-interactive.sh before driving; DRIVE_ELICITS currently lists only send/slash/sleep."
       ],
@@ -30,27 +30,27 @@
         {
           "kind": "file",
           "ref": "core/adapters/inbound/agents/vibe/parser.go",
-          "note": "Role map: user→user_message (50-55); assistant+tool_calls→assistant_message/working (67-71); text-only assistant→turn_done (72-75); tool→tool_result with NO IsError (77-82). The terminal-turn_done gate is what keeps the session working across retry cycles."
+          "note": "Role map: user\u2192user_message (50-55); assistant+tool_calls\u2192assistant_message/working (67-71); text-only assistant\u2192turn_done (72-75); tool\u2192tool_result with NO IsError (77-82). The terminal-turn_done gate is what keeps the session working across retry cycles."
         },
         {
           "kind": "file",
           "ref": "core/adapters/inbound/agents/vibe/agent.go",
-          "note": "FilesUnderRoot over ~/.vibe/logs/session (31-37) — every retry append is tailed; CommandPattern process match (27-30) binds the python vibe process."
+          "note": "FilesUnderRoot over ~/.vibe/logs/session (31-37) \u2014 every retry append is tailed; CommandPattern process match (27-30) binds the python vibe process."
         },
         {
           "kind": "file",
           "ref": "core/adapters/inbound/agents/vibe/sidecar.go",
-          "note": "meta.json sidecar → cwd, model NAME (config.active_model), context_tokens (55-78); no cost, timestamps, or control."
+          "note": "meta.json sidecar \u2192 cwd, model NAME (config.active_model), context_tokens (55-78); no cost, timestamps, or control."
         },
         {
           "kind": "file",
           "ref": "replaydata/agents/mistral-vibe/driver-interactive.sh",
-          "note": "DRIVE_ELICITS=\"send slash sleep\" — wait_turn is a stubbed arm only, so the recipe's wait_turn is a semantic gap → driver=gap:wait_turn until record ports SEAM 2."
+          "note": "DRIVE_ELICITS=\"send slash sleep\" \u2014 wait_turn is a stubbed arm only, so the recipe's wait_turn is a semantic gap \u2192 driver=gap:wait_turn until record ports SEAM 2."
         },
         {
           "kind": "file",
           "ref": ".specs/agent-scenarios.md",
-          "note": "Feature: Self-correction iteration — the three no-flicker state bullets the daemon pillar is judged against."
+          "note": "Feature: Self-correction iteration \u2014 the three no-flicker state bullets the daemon pillar is judged against."
         },
         {
           "kind": "file",
@@ -64,7 +64,7 @@
       "preconditions": [
         "vibe CLI on PATH (~/.local/bin/vibe, v2.19.0) and authenticated (Mistral API key)",
         "irrlichd is recording (run-cell.sh isolated mode, or --attach against a --record daemon)",
-        "driver seam ported by record: SEAM 2 wait_turn poll (DRIVE_ELICITS currently lacks wait_turn — gap:wait_turn)",
+        "driver seam ported by record: SEAM 2 wait_turn poll (DRIVE_ELICITS currently lacks wait_turn \u2014 gap:wait_turn)",
         "the retry tool commands are auto-approved so neither attempt trips a permission gate"
       ],
       "setup": [
@@ -85,15 +85,17 @@
         }
       ],
       "verify": [
-        "events.jsonl shows exactly one ready→working transition for the session_<ts>_<hash> session",
+        "events.jsonl shows exactly one ready\u2192working transition for the session_<ts>_<hash> session",
         "events.jsonl contains at least 2 tool-call events inside the working span (the failing attempt and the recovery)",
         "events.jsonl contains NO state_transition to ready between the failing tool_result and the recovery tool call",
         "events.jsonl contains NO state_transition to waiting at any point during the working span",
-        "events.jsonl shows exactly one working→ready transition at the terminal text-only assistant message",
+        "events.jsonl shows exactly one working\u2192ready transition at the terminal text-only assistant message",
         "final session state is ready",
         "meta.json sidecar supplies model mistral-medium-3.5 and a non-zero context_tokens on turn_done"
       ],
-      "settings": {},
+      "settings": {
+        "bypass_tool_permissions": true
+      },
       "timeout_seconds": 180
     }
   }
