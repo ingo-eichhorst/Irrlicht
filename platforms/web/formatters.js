@@ -190,7 +190,7 @@ export function taskEtaPresentation(metrics, state, nowSec) {
   if (state !== 'working' || !est) return null;
   const sourceLabel = est.source === 'tasks' ? 'from task list'
     : est.source === 'subagents' ? 'from subagents' : 'agent-reported';
-  if (est.completed_rounds <= 0) return zeroRoundsEtaPresentation(est, eta, nowSec, sourceLabel);
+  if (!(est.completed_rounds > 0)) return zeroRoundsEtaPresentation(est, eta, nowSec, sourceLabel);
   if (!eta) return roundsOnlyEtaPresentation(est, nowSec, sourceLabel);
   return projectedEtaPresentation(est, eta, nowSec, sourceLabel);
 }

@@ -96,19 +96,34 @@ type Meta struct {
 	TranscriptExtensions map[string]string `json:"transcript_extensions"`
 }
 
+// sanitizePathComponent returns name reduced to a single, safe path segment:
+// "" if name is empty, ".", "..", or contains a path separator after taking
+// its final element — filepath.Base alone isn't enough here since
+// filepath.Base("..") returns ".." unchanged (".." IS its own last element),
+// which would otherwise let AgentCellDir's callers escape the agents/<adapter>/
+// sandbox by one level. A caller that gets "" back will simply fail to find
+// anything on disk, which is the safe outcome for a rejected input.
+func sanitizePathComponent(name string) string {
+	name = filepath.Base(name)
+	if name == "." || name == ".." {
+		return ""
+	}
+	return name
+}
+
 // AgentCellDir returns the directory that holds one (adapter, scenario) cell:
 // replaydata/agents/<adapter>/scenarios/<folder>. Folder is the on-disk
 // recording folder — the dashed-id-prefixed scenario name for standard cells
 // (e.g. 5-4_architect-editor-pair), or a prefixed variant name otherwise.
 //
-// adapter and folder are reduced to their final path element before joining
-// — a defense-in-depth backstop (this package has no HTTP layer of its own
-// to enforce it) against a caller passing a path-separator- or
+// adapter and folder are reduced to a single safe path segment before
+// joining — a defense-in-depth backstop (this package has no HTTP layer of
+// its own to enforce it) against a caller passing a path-separator- or
 // "../"-containing value through to the filesystem. The viewer's HTTP
 // handler already restricts these to a `^[a-z0-9][a-z0-9_-]*$` slug before
 // they ever reach here, so this is a no-op for every legitimate caller.
 func AgentCellDir(repoRoot, adapter, folder string) string {
-	return filepath.Join(repoRoot, "replaydata", "agents", filepath.Base(adapter), "scenarios", filepath.Base(folder))
+	return filepath.Join(repoRoot, "replaydata", "agents", sanitizePathComponent(adapter), "scenarios", sanitizePathComponent(folder))
 }
 
 // LoadAgentCell reads replaydata/agents/<adapter>/scenarios/<folder>/metadata.json
@@ -134,7 +149,7 @@ func LoadAgentCell(repoRoot, adapter, folder string) (*ShardAgent, bool) {
 // Empty map on any error; never returns an error.
 func LoadAdapterCells(repoRoot, adapter string) map[string]*ShardAgent {
 	out := map[string]*ShardAgent{}
-	scenDir := filepath.Join(repoRoot, "replaydata", "agents", filepath.Base(adapter), "scenarios")
+	scenDir := filepath.Join(repoRoot, "replaydata", "agents", sanitizePathComponent(adapter), "scenarios")
 	entries, err := os.ReadDir(scenDir)
 	if err != nil {
 		return out
@@ -248,7 +263,7 @@ func FolderForScenario(repoRoot, name string) string {
 // of cell write/spec and of verify all go through it so a cell's metadata.json,
 // expected.jsonl, and recordings never split across two folders.
 func AgentFolderForScenario(repoRoot, adapter, name string) string {
-	scenDir := filepath.Join(repoRoot, "replaydata", "agents", filepath.Base(adapter), "scenarios")
+	scenDir := filepath.Join(repoRoot, "replaydata", "agents", sanitizePathComponent(adapter), "scenarios")
 	if entries, err := os.ReadDir(scenDir); err == nil {
 		for _, e := range entries {
 			if !e.IsDir() {
