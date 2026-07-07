@@ -113,7 +113,7 @@ SES_MARKER=(); SES_CWD=(); SES_ALIVE=()
 # Tool-executing recipes: set the recipe's settings.bypass_tool_permissions=true
 # and launch_repl adds `vibe --auto-approve` so tool calls run unattended (not a
 # step type — a launch-mode toggle, so it stays out of DRIVE_ELICITS).
-DRIVE_ELICITS="send slash sleep wait_turn exit_clean restart sigkill"
+DRIVE_ELICITS="send slash sleep wait_turn exit_clean restart sigkill resume"
 DRIVE_SLASH_REQUIRES_STEP_TYPE=false
 RUN_CWD="${IRRLICHT_ONBOARD_CWD:-$STAGING/cwd}"
 mkdir -p "$RUN_CWD"
@@ -461,6 +461,34 @@ step_sigkill() {
   sleep 1
 }
 
+# step_resume — relaunch the SAME session in a new process lifetime. The
+# preceding exit_clean already tore down the first lifetime; resume relaunches
+# `vibe --resume <session-id>` in the SAME slot + cwd. Vibe reopens the ORIGINAL
+# session_<ts>_<shortid> dir (cli.py load_session → resume_existing_session) and
+# APPENDS to its messages.jsonl, so the daemon sees ONE session_id across both
+# lifetimes — not a new session. The resume arg is the meta.json session_id
+# (find_session_by_id shortens it to the 8-char dir suffix and globs); the dir
+# name's trailing chunk is that same short id, used as a fallback. Keep the slot's
+# TRANSCRIPT/UUID/EXPECTED_TURNS so the next send counts turn 2 in the SAME
+# transcript (resolve_transcript is a no-op with TRANSCRIPT still cached) — no
+# new slot is allocated (that would double-list the session).
+step_resume() {
+  resolve_transcript || true
+  local sdir resume_id=""
+  if [[ -n "$TRANSCRIPT" ]]; then
+    sdir="$(dirname "$TRANSCRIPT")"
+    resume_id="$(jq -r '.session_id // empty' "$sdir/meta.json" 2>/dev/null || true)"
+  fi
+  [[ -z "$resume_id" && -n "$UUID" ]] && resume_id="${UUID##*_}"
+  tmux kill-session -t "$SESSION" 2>/dev/null || true
+  sleep 1
+  SESSION="mistral-vibedrv-$$-$(date +%s)-resume${ACTIVE}"
+  SES_SESSION[$ACTIVE]="$SESSION"
+  SES_ALIVE[$ACTIVE]=1
+  echo "[driver] resume[s$ACTIVE]: relaunch vibe --resume $resume_id (same dir=$(daemon_sid "$TRANSCRIPT"))" >&2
+  boot_vibe_active "" "$resume_id"
+}
+
 # --- Step dispatch: ALL standard arms present; stubs fail loudly -------------
 launch_repl
 EXPECTED_TURNS=0
@@ -475,7 +503,7 @@ while IFS= read -r step; do
     keys)            not_implemented keys || break ;;            # TODO(mistral-vibe): tmux send-keys raw sequence
     reset_session)   not_implemented reset_session || break ;;   # TODO(mistral-vibe): in-REPL /clear|/new → new id, SAME slot; re-resolve SES_TRANSCRIPT[$ACTIVE] (SEAM 3)
     restart)         step_restart ;;
-    resume)          not_implemented resume || break ;;          # TODO(mistral-vibe): relaunch same id+cwd (1 session, 2 PIDs) — reuse the active slot
+    resume)          step_resume ;;
     sigkill)         step_sigkill ;;
     exit_clean)      step_exit_clean ;;
     start_session)   not_implemented start_session || break ;;   # TODO(mistral-vibe): save_active; alloc_slot; launch a CONCURRENT session, keep the first alive
