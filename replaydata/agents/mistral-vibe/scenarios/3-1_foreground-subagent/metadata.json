@@ -70,12 +70,13 @@
       ],
       "setup": [
         "Driver generates a fresh cwd under <staging>/cwd/",
-        "A README.md with a single H1 heading is seeded into the cwd so the subagent has a deterministic file to read"
+        "A README.md with a single H1 heading is seeded into the cwd so the subagent has a deterministic file to read",
+        "RESHAPE (record): the staging cwd is a fresh empty dir, so the seeded-README task cannot run. Task changed to a self-contained explore-subagent prompt (no file dependency); bypass_tool_permissions=true so the Task tool + child auto-execute. Daemon observables (child session under <parent>/agents/, parent_linked, parent stays working) are independent of the child task content."
       ],
       "script": [
         {
           "type": "send",
-          "text": "Use the Task tool to launch a subagent (agent: explore) that reads the README.md in the current directory and reports its first heading. Wait for the subagent to finish, then reply 'done'."
+          "text": "Use your Task tool to launch a subagent (agent: explore) that writes a short three-sentence summary of what version control is and why it is useful. Wait for the subagent to finish, then reply with just the word: done"
         },
         {
           "type": "wait_turn"
@@ -92,7 +93,9 @@
         "the parent stays working until the child ends, then a single working→ready",
         "final parent state is ready"
       ],
-      "settings": {},
+      "settings": {
+        "bypass_tool_permissions": true
+      },
       "timeout_seconds": 240
     }
   }
