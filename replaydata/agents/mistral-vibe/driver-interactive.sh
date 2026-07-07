@@ -217,11 +217,14 @@ trap cleanup EXIT
 # sidesteps TUI-input timing entirely: vibe boots, submits the prompt, and stays
 # interactive. Empty when the first step isn't a send (then we fall back to the
 # tmux-send path with a readiness wait).
-# Only a `send` first step becomes vibe's launch positional prompt. A leading
-# slash is a COMMAND (e.g. /loop): passed as the positional, vibe runs it once as
-# a plain user message instead of registering it (a scheduled loop never starts),
-# so a first-step slash must be typed into the live REPL via the bare-launch path.
-FIRST_PROMPT="$(jq -r '.[0] | select(.type=="send") | .text // empty' <<<"$SCRIPT_JSON" 2>/dev/null || true)"
+# Only a plain `send` first step becomes vibe's launch positional prompt. Two
+# kinds of first step must instead be typed into the live REPL (bare-launch path):
+#   - a slash COMMAND (e.g. /loop): as the positional, vibe runs it once as a
+#     plain user message instead of registering it (a scheduled loop never starts);
+#   - a `!`-prefixed SHELL ESCAPE (e.g. !echo hello): as the positional, vibe
+#     sends it to the LLM (which runs it as a bash TOOL call — a full working
+#     turn) instead of intercepting the `!` in the REPL as a direct shell escape.
+FIRST_PROMPT="$(jq -r '.[0] | select(.type=="send" and ((.text // "") | startswith("!") | not)) | .text // empty' <<<"$SCRIPT_JSON" 2>/dev/null || true)"
 FIRST_SEND_PENDING=0
 
 launch_repl() {
@@ -326,6 +329,16 @@ type_enter() { # <text>
 }
 
 send_text() { # <text>
+  # A leading '!' is a vibe SHELL ESCAPE: the REPL runs it directly in a subshell
+  # and writes a !-result line that the daemon parser skips (#5e0b4f5c) — it is
+  # NOT an LLM turn, so type it but do NOT bump EXPECTED_TURNS (else wait_turn
+  # would wait for a turn that never comes). Never the launch positional (excluded
+  # from FIRST_PROMPT above), so FIRST_SEND_PENDING is irrelevant here.
+  if [[ "$1" == "!"* ]]; then
+    type_enter "$1"
+    echo "[driver] send[s$ACTIVE]: shell-escape ${1:0:60} (no turn expected)" >&2
+    return 0
+  fi
   # The first send/slash of a run is already delivered as the launch positional
   # prompt (see launch_repl) — just account for the turn, don't re-type it into
   # the TUI. Every later send types into the now-live REPL.
