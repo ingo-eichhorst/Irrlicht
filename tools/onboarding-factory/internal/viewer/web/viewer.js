@@ -2589,7 +2589,11 @@ function renderPlayback(s, detailData, archiveName) {
       // Never pop a blocking modal — a scenario with no events.jsonl/usable
       // transcript (e.g. an un-recorded cell opened via a deep link) just has
       // nothing to play. Log non-blocking for debugging and bail quietly.
-      console.warn("replay start failed:", res.status, res.error);
+      // Strip control characters and cap length before logging the server's
+      // error text (SonarQube jssecurity:S5145 — res.error is a fetch
+      // response body, tainted regardless of same-origin trust).
+      const safeError = String(res.error || "").replace(/[\r\n]+/g, " ").slice(0, 300);
+      console.warn("replay start failed:", res.status, safeError);
       return;
     }
     const body = res.body;

@@ -828,7 +828,7 @@ func seriesMetricValue(r snapshotRow, q outbound.SeriesQuery, tokens map[string]
 // first observation with no pre-range baseline both seed s's running values
 // with no delta; a row at/after the window end contributes nothing.
 //
-// godre:S1871 — the pre-range and first-observation cases share an identical
+// go:S1871 — the pre-range and first-observation cases share an identical
 // body (advance, then report handled), but they guard on unrelated
 // conditions (time-window position vs. a missing baseline) and are kept as
 // separate cases deliberately: merging them would require reordering

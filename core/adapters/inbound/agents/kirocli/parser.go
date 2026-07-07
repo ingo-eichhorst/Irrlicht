@@ -74,7 +74,7 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 		// /clear continues in the SAME session file (no new UUID); the
 		// marker itself carries no state transition.
 		//
-		// godre:S1871 — same body as default below, kept as its own case
+		// go:S1871 — same body as default below, kept as its own case
 		// deliberately: this documents "Clear" as a recognized, understood
 		// marker kind (as opposed to default's true catch-all for kinds this
 		// parser doesn't know about), so default can later change — e.g. to
@@ -128,7 +128,7 @@ func (p *Parser) parseAssistantMessage(content []interface{}, ev *tailer.ParsedE
 
 // parseAssistantToolUseBlock extracts a "toolUse" content block into a
 // ToolUse entry. ok is false when the block carries no data or no name (the
-// caller then adds nothing to its toolUses slice). A todo_list tool's
+// caller then adds nothing to its toolUses slice). The kiro checklist tool's
 // create/complete deltas are appended onto ev as a side effect regardless of
 // the ok result — mirrors parseAssistantMessage's original inline body
 // exactly (go:S3776 extraction, no behavior change).
