@@ -1,0 +1,82 @@
+{
+  "scenario_id": "tool-gate-permission-prompt",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "incapable",
+    "driver_capability": "ready",
+    "agent_cli_version": "2.19.0",
+    "daemon_version": "0.5.5+12d0e9a.dirty",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes (vibe TUI prompts for approval on an ASK tool without --yolo); daemon_capability: incapable (held prompt is a TUI-only in-memory Future, never written to messages.jsonl); driver_capability: ready (entry-only recipe needs only send+sleep)"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "tool-gate-permission-prompt",
+      "agent": "mistral-vibe",
+      "assessed_at": "2026-07-07T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "incapable",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes (Mistral Vibe 2.19.0 prompts the user for tool approval whenever a tool resolves to `ToolPermission.ASK` and neither `--yolo`/`--auto-approve` nor a stored approved-rule covers it)\ndaemon_capability: incapable (the held approval prompt is a live TUI-only state — an in-memory `asyncio.Future` resolved by a Textual widget event — and nothing is written to the watched `messages.jsonl` while the prompt is open)\ndriver_capability: ready (an entry-only recipe, modelled on claudecode's, needs only `send` + `sleep`, both in the vibe scaffold's DRIVE_ELICITS)\n\n## Scenario signal\n\n`tool-gate-permission-prompt` asserts the user-observable arc `ready → working → waiting` when a tool invocation opens a permission prompt, `waiting → working → ready` after the user resolves it, and a delayed post-tool signal NOT bouncing the session. The load-bearing observable is the `working → waiting` episode held while the prompt is up (acceptance: \"a waiting episode occurs and is user-visible\"; \"final state: waiting\"). This mirrors the committed codex sibling verdict exactly.\n\n## Agent supports it (agent_supports: yes)\n\nVibe's agent loop gates tool execution in `_should_execute_tool` (agent_loop.py:1497): when `bypass_tool_permissions` is false and a tool resolves to `ToolPermission.ASK` with uncovered `required_permissions`, it calls `_ask_approval` (agent_loop.py:1542), which awaits `self.approval_callback(...)`. The CLI exposes this bypass as `--auto-approve, --yolo` (vibe --help: \"Approves all tool calls without prompting\"); without it, an ASK tool blocks on the interactive prompt. `permissions.py` defines the `ToolPermission.ASK`/`ALWAYS`/`NEVER` classifier surface and per-tool `resolve_permission` (e.g. read_file → ALWAYS, cited in the auto-classified-permission cell; bash/edit/web_fetch declare ASK). So vibe unambiguously HAS the blocking approval gate the scenario asserts.\n\n## Daemon cannot observe it (daemon_capability: incapable)\n\nThe vibe adapter is `FilesUnderRoot` over `~/.vibe/logs/session/<id>/messages.jsonl` plus a `meta.json` sidecar (agent.go), with a JSONL parser (parser.go). There is NO HTTP hook channel of the Claude-Code kind, and the adapter declares NO Control (read-only, backchannel unverified). The held prompt produces no trace the daemon can turn into `waiting`:\n\n1. **The prompt is TUI-only, in-memory.** `_approval_callback` (app.py:1799) switches to a Textual approval widget (`_switch_to_approval_app`) and awaits an `asyncio.Future` `_pending_approval` (app.py:481), resolved by the `ApprovalApp.ApprovalGranted`/`Denied` widget messages (app.py:990-1021). Nothing is persisted while the prompt is open.\n2. **`messages.jsonl` is not flushed until AFTER the prompt resolves.** The turn loop calls `_save_messages()` (agent_loop.py:1076) only AFTER `_perform_llm_turn()` returns, and `_perform_llm_turn` (agent_loop.py:1129) runs `_handle_tool_calls` — which is what blocks on the approval callback — to completion first. There is no mid-stream save inside `_stream_assistant_events`. So the assistant `tool_calls` line AND the `role:tool` result line both flush together in the SAME save, AFTER the user answers. The daemon therefore sees: user_message (→ working), then a GAP with zero writes while the prompt is held, then everything at once → turn_done (→ ready). It CANNOT distinguish \"waiting for permission\" from \"LLM thinking / tool running\".\n3. **No parser branch, no rule fires.** parser.go emits only `user_message` / `assistant_message` (with tool_uses) / `turn_done` / `tool_result`; it has no PermissionPending equivalent. `state_classifier.go` rule 0 (`PermissionPending` → waiting) is fed exclusively by claudecode's HTTP `HandlePermissionHook` and is dead for vibe. Even if the tool_call line landed early (it doesn't), a generic open tool call is not in `NeedsUserAttention` (rule 1: AskUserQuestion/ExitPlanMode/question) nor `OpenToolStalled` (rule 1b: Edit/Write/MultiEdit/NotebookEdit) → stays `working`.\n\nNet: a held vibe approval prompt leaves NO trace in the watched Source — the tool_call itself isn't even flushed until approval — so the daemon shows `working` throughout and never `waiting`. That is `incapable` (no trace in the Source / architecture-transport limit on the FilesUnderRoot adapter), NOT a `bug` (no spec-required observable is mis-handled; the pending state is simply outside the read path). Same shape as the committed codex and opencode verdicts for this scenario.\n\n## Driver is ready (driver_capability: ready)\n\nThe reference claudecode recipe captures ENTRY into waiting and STOPS (send a tool-inducing prompt + sleep; it never resolves the prompt). A vibe recipe modelled the same way needs only `send` + `sleep`, both present in the scaffold's `DRIVE_ELICITS=\"send slash sleep\"`. So there is no driver gap for the entry-only shape. (A resolve-half recording — answering the y/n prompt — would need a `keys` step the fresh scaffold lacks → gap:keys; but that is moot here because the daemon is incapable → the cell is frozen and nothing records.)\n\n## Route\n\nincapable daemon → **frozen** (routing table: yes | incapable | any → frozen). irrlicht fundamentally cannot observe the held vibe approval prompt today, so no recipe and no recording are authored. This would unblock only if vibe began persisting an approval-request / pending-permission marker into `messages.jsonl` (or exposed an out-of-band hook the adapter could wire) AND the vibe parser learned to translate the held prompt into a `working → waiting` transition.",
+      "caveats": [
+        "daemon=incapable, not bug: the approval prompt is a live Textual widget backed by an in-memory asyncio.Future (_pending_approval), and _save_messages() flushes only after _perform_llm_turn() (including _handle_tool_calls, which awaits the approval) completes — so both the assistant tool_calls line and the tool result line land AFTER approval, in one save. The daemon sees a write-gap classified as working, never a waiting episode. No spec-required observable is mis-handled; the pending state is not in the read path.",
+        "agent_supports=yes is source-confirmed but not live-driven: no live vibe session was driven through a held ASK prompt while watching messages.jsonl in real time. The emission claim (nothing lands in messages.jsonl while the prompt is open) is grounded in the loop's save ordering (agent_loop.py:1076 after _perform_llm_turn) and the TUI-only callback (app.py:1799), not a live probe. Confidence 0.85 reflects this.",
+        "driver_capability=ready for the entry-only recipe (send+sleep, both in DRIVE_ELICITS). A resolve-half recording would need a keys y/n step the fresh scaffold lacks (gap:keys) — moot because the route is frozen on the incapable daemon pillar.",
+        "meta.json stats carry tool_calls_agreed / rejected counts, but those are aggregate post-hoc telemetry, not a per-request pending marker, and are only rewritten after the turn — they cannot surface a live held prompt either."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/vibe/agent.go",
+          "note": "vibe Source is FilesUnderRoot over ~/.vibe/logs/session with a JSONL parser + meta.json sidecar; NO HTTP hook channel and NO Control declared (read-only) — so the hook-fed PermissionPending (rule 0) path can never fire for vibe."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/vibe/parser.go",
+          "note": "Parser emits only user_message / assistant_message (with tool_uses) / turn_done / tool_result. No PermissionPending / waiting / permission-pending branch — nothing maps a held approval prompt to working→waiting."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go",
+          "note": "The three waiting paths: rule 0 PermissionPending (hook-only, dead for vibe), rule 1 NeedsUserAttention (AskUserQuestion/ExitPlanMode/question only), rule 1b OpenToolStalled (Edit/Write/MultiEdit/NotebookEdit only). A generic open tool call matches none → working."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/merlin/.local/share/uv/tools/mistral-vibe/lib/python3.13/site-packages/vibe/core/agent_loop.py",
+          "note": "_should_execute_tool (:1497) → _ask_approval (:1542) awaits self.approval_callback; the turn loop calls _save_messages() (:1076) only AFTER _perform_llm_turn() (:1129) returns, and _perform_llm_turn runs _handle_tool_calls (which blocks on approval) first — so the tool_calls line and tool result flush together, post-approval. No mid-stream save."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/merlin/.local/share/uv/tools/mistral-vibe/lib/python3.13/site-packages/vibe/cli/textual_ui/app.py",
+          "note": "_approval_callback (:1799) switches to a Textual approval widget and awaits the in-memory asyncio.Future _pending_approval (:481), resolved by ApprovalApp.ApprovalGranted/Denied widget messages (:990-1021) — TUI-only, never persisted to messages.jsonl."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/merlin/.local/share/uv/tools/mistral-vibe/lib/python3.13/site-packages/vibe/core/tools/permissions.py",
+          "note": "ToolPermission ASK/ALWAYS/NEVER classifier surface (PermissionStore, resolve_permission per tool); read_file resolves ALWAYS (cited in auto-classified-permission), bash/edit/web_fetch declare ASK — the source of the blocking prompt when --yolo is off."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/merlin/.local/bin/vibe (2.19.0) --help",
+          "note": "'--auto-approve, --yolo  Approves all tool calls without prompting' — without it, an ASK tool blocks on the interactive TUI approval prompt (bypass_tool_permissions in agent_loop.py)."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/mistral-vibe/driver-interactive.sh",
+          "note": "Freshly scaffolded driver: DRIVE_ELICITS=\"send slash sleep\". The entry-only recipe (send tool-inducing prompt + sleep) needs only send+sleep → driver=ready; a resolve-half (keys y/n) would be gap:keys but is moot under the frozen route."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/codex/scenarios/2-19_tool-gate-permission-prompt/metadata.json",
+          "note": "Committed sibling precedent, same scenario, same shape: non-hook FilesUnderRoot agent with a blocking approval gate held as live protocol/TUI state never written to the watched JSONL → daemon=incapable → frozen. opencode's cell is the same verdict."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "note": "Route is frozen on daemon=incapable — no recipe authored. The held vibe approval prompt is a TUI-only in-memory asyncio.Future (_pending_approval) and messages.jsonl is not flushed until after the prompt resolves, so the daemon never observes a waiting episode. Re-assess and author an interactive recipe (send a tool-inducing prompt without --yolo to elicit the ASK prompt, then a `keys` step to answer y/n) only if a future vibe version persists a pending-permission marker into messages.jsonl AND the vibe parser maps a held prompt to a working→waiting transition."
+    }
+  }
+}
