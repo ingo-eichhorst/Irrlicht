@@ -2783,20 +2783,20 @@ export function renderMarkdown(md) {
   for (const raw of esc.split("\n")) {
     const line = raw.trimEnd();
     if (line === "") { flushPara(); flushList(); continue; }
-    let m = /^(#{2,4})\s+(.*)$/.exec(line);
+    let m = /^(#{2,4})\s+(.*)$/.exec(line); // NOSONAR jssecurity:S8786 — no backtracking risk, verified: mandatory "#" prefix fails immediately on any non-heading line before reaching \s+/.*
     if (m) {
       flushPara(); flushList();
       out.push(`<h${m[1].length + 2}>${inline(m[2])}</h${m[1].length + 2}>`); // ## → h4, ### → h5, #### → h6
       continue;
     }
-    m = /^\s*-\s+(.*)$/.exec(line);
+    m = /^\s*-\s+(.*)$/.exec(line); // NOSONAR jssecurity:S8786 — no backtracking risk, verified: mandatory "-" prefix fails immediately on any non-list line before reaching \s+/.*
     if (m) {
       flushPara();
       if (list?.tag !== "ul") { flushList(); list = {tag: "ul", items: []}; }
       list.items.push(m[1]);
       continue;
     }
-    m = /^\s*\d+\.\s+(.*)$/.exec(line);
+    m = /^\s*\d+\.\s+(.*)$/.exec(line); // NOSONAR jssecurity:S8786 — no backtracking risk, verified: mandatory digit+"." prefix fails immediately on any non-list line before reaching \s+/.*
     if (m) {
       flushPara();
       if (list?.tag !== "ol") { flushList(); list = {tag: "ol", items: []}; }

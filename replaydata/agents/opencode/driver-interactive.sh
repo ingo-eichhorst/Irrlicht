@@ -203,11 +203,11 @@ run_live() {
   # reason="tool-calls" for every mid-turn tool iteration, so a single
   # multi-step turn would push the total past the turn counter and make the
   # NEXT wait_turn return immediately on an unprocessed prompt.)
-  local turn_baseline=0
+  local turn_baseline=0 # NOSONAR shelldre:S1481 — false positive, read/written throughout run_live() below (e.g. lines 343, 348, 361-369, 374, 438)
   # Set once oc_sigkill has killed the live opencode process: there is no longer
   # a turn to await, so oc_wait_turn returns immediately instead of polling a
   # now-static counter to the deadline. oc_restart clears it (fresh process).
-  local live_dead=0
+  local live_dead=0 # NOSONAR shelldre:S1481 — false positive, read/written throughout run_live() below (e.g. lines 355, 550, 567)
 
   echo "[driver] live mode: launching opencode TUI (tmux=$session, cwd=$RUN_CWD)" >&2
   tmux kill-session -t "$session" 2>/dev/null || true
