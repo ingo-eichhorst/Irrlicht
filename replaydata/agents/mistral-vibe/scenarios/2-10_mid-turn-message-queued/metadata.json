@@ -68,8 +68,12 @@
       ],
       "script": [
         {
+          "type": "sleep",
+          "seconds": 2
+        },
+        {
           "type": "send",
-          "text": "Write a detailed 500-word description, in full paragraphs, of a slow walk through a forest on an autumn morning. Take your time and be thorough."
+          "text": "Use the bash tool to run exactly this command and nothing else: sleep 8 — then reply with just the word done"
         },
         {
           "type": "sleep",
@@ -77,7 +81,7 @@
         },
         {
           "type": "send",
-          "text": "also, once you have finished the description, tell me what 6 times 7 is"
+          "text": "also, once you have finished, tell me what 6 times 7 is"
         },
         {
           "type": "wait_turn"
@@ -101,7 +105,9 @@
         "events.jsonl eventually shows a working→ready transition for the queued turn; final session state is ready",
         "messages.jsonl contains a SECOND user line (the queued follow-up) appearing only after turn 1's terminal assistant message — never interleaved mid-turn"
       ],
-      "settings": {},
+      "settings": {
+        "bypass_tool_permissions": true
+      },
       "timeout_seconds": 240
     }
   }
