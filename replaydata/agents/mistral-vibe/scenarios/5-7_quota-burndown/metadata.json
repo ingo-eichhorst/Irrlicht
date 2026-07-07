@@ -1,0 +1,67 @@
+{
+  "scenario_id": "quota-burndown",
+  "metadata": {
+    "agent_supports": "no",
+    "daemon_capability": "n/a",
+    "driver_capability": "ready",
+    "agent_cli_version": "2.19.0",
+    "daemon_version": "0.5.5+6a16e49.dirty",
+    "confidence": 0.88,
+    "notes": "agent=no (PAYG API-key: no provider subscription rate-limit usage window to burn down); daemon=n/a; driver=ready → frozen. Mirrors aider."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "quota-burndown",
+      "agent": "mistral-vibe",
+      "agent_supports": "no",
+      "daemon_capability": "n/a",
+      "driver_capability": "ready",
+      "confidence": 0.88,
+      "body": "## Verdict\n\nagent_supports: no\ndaemon_capability: n/a; driver_capability: ready\n\n→ route: frozen\n\n## The scenario, restated for mistral-vibe\n\nquota-burndown asserts a PROVIDER-MANAGED rate-limit usage window that rises monotonically across turns: `RateLimitSnapshot.Windows[0].UsedPercent` after turn N ≥ after turn N-1, `SampledAt` advancing each turn, and no spurious reset to 0 (the window approaches the cap without resetting). Codex evidences this natively: each `token_count` event carries `rate_limits.primary.used_percent`, which `extractCodexRateLimits` reads DIRECTLY into `RateLimitSnapshot.Windows[].UsedPercent` on replay (codex/parser.go). The question for vibe is whether the agent surfaces any such subscription/rate-limit usage window at all.\n\n## agent_supports: no — vibe is PAYG API-key, no subscription quota to burn down\n\nVibe runs pay-per-token against the user's own Mistral (or OpenAI-compatible) API key (metadata prerequisites: MISTRAL_API_KEY / ~/.vibe/.env). There is no Pro/Max-style subscription cap with a remaining-percent/reset window to burn down. Three independent reads confirm vibe surfaces no rate-limit usage window:\n\n1. **`RateLimitError` is a transient 429, not a usage window.** vibe/core/types.py:660 defines `RateLimitError` with the message \"Rate limits exceeded. Please wait a moment before trying again.\" It is raised on a provider API failure inside the agent loop (agent_loop.py:1692-1693, 1772-1773, gated by `_should_raise_rate_limit_error` at line 232) — a momentary throttle at the provider boundary, carrying NO remaining-percent, reset window, or `used_percent`. It never persists a burndown snapshot.\n\n2. **`AgentStats` is COST/token accounting, not a rate-limit remaining figure.** types.py:49 `AgentStats` carries `context_tokens` (line 59) and a computed `session_cost` (line 105, dollars from token pricing). Cost accumulation is the sibling 5-1 token-accounting concern; it has no cap in PAYG, so it is not a `Windows[].UsedPercent` approaching a limit.\n\n3. **`context_tokens` (the only usage figure the adapter reads) is a CONTEXT window that RESETS — it explicitly fails the scenario.** The sole quantitative usage the vibe adapter reads from meta.json is `stats.context_tokens` (sidecar.go), a context-window size, surfaced to the user as an inline warning \"You have used X% of your total context\" (middleware.py:131-135). It is reset to 0 on compaction (agent_loop.py:2008; AgentStats.reset types.py:137), so it is neither monotonic nor a subscription rate-limit — it directly violates the scenario's \"no reset to 0 / approaches the cap without resetting\" and is the distinct context-utilization concern, not a quota burndown.\n\nBecause the agent surfaces no provider rate-limit usage window, agent_supports = no. Per the two-axis model (#476): daemon_capability = `n/a` (no observation question when the feature doesn't exist at the agent layer) and driver_capability = `ready` (the freshly-scaffolded interactive driver already has every step type — send/slash/sleep/wait_turn/... — but there is nothing to drive or record).\n\n## Why the vibe adapter emits no RateLimit snapshot\n\nThe vibe parser (parser.go) emits user_message / assistant_message / turn_done / tool_result and, from the meta.json sidecar, enriches cwd + model + a context-token count on turn_done. A grep for `RateLimit|rate_limit|quota|used_percent|window` over the vibe adapter returns nothing — unlike codex, which emits a RateLimitSnapshot from its token_count events. This is CORRECT: there is no rate-limit usage window in vibe's transcript or meta.json for the parser to read.\n\n## Contrast with the calibration siblings\n\n- **codex (agent=yes / daemon=full):** carries `rate_limits.primary.used_percent` INSIDE its tailed transcript on every token_count event — a real OpenAI subscription rate-limit window. vibe has no analogue.\n- **kiro-cli / claudecode (agent=yes / daemon=incapable):** subscription products with a real credit/capacity burndown that exists only out-of-band (kiro sidecar credits, claude statusline HTTP) — the agent HAS the feature but the signal is unrepresentable in the tailed fixture. vibe differs: it has no subscription burndown at all.\n- **aider (agent=no / daemon=n/a):** PAYG via API key, no subscription cap to burn down, cost_tracking off, no rate-limit extraction — the exact shape of vibe. This cell mirrors aider.\n\n## Conclusion / route\n\nFROZEN (agent=no). Vibe is a PAYG API-key agent with no provider-managed subscription rate-limit usage window; its only usage figures are cost/token accounting and a resettable context-window count — neither is the monotonic-toward-cap rate-limit burndown the scenario asserts. This is an agent-layer absence, not a daemon or driver gap. Unblock: only if Mistral/vibe ever ships a subscription tier that emits a rate-limit usage window (remaining % + reset) into vibe's transcript or meta.json — then re-assess (daemon would move off n/a, pending a RateLimit path in the vibe adapter).",
+      "caveats": [
+        "agent_supports=no — this cell is authored as an assessment only; the recipe is applicable:false and the spec is meta-only (no lifecycle phases, no recording).",
+        "Distinct from token-accounting (sibling 5-1, agent=yes): vibe DOES emit per-session cost (session_cost) and a context-token count via meta.json. quota-burndown is specifically a PROVIDER rate-limit usage window (Windows[].UsedPercent toward a cap), which vibe does not surface.",
+        "vibe's `RateLimitError` (types.py:660) is a transient provider 429 raised on API failure — a 'please wait a moment' throttle, not a persistent burndown snapshot with a remaining percent or reset window.",
+        "vibe's context_tokens % (middleware.py) is a CONTEXT-window utilization warning that resets to 0 on compaction (agent_loop.py:2008) — it violates the scenario's 'no reset to 0' and is the distinct context-utilization concern, not a subscription rate-limit quota.",
+        "Re-assess only if a future Mistral/vibe subscription tier emits a rate-limit usage window into vibe's transcript or meta.json; then daemon_capability moves off n/a, pending parser support in the vibe adapter."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/vibe/parser.go",
+          "note": "vibe parser emits user_message/assistant_message/turn_done/tool_result and enriches cwd+model+context-token count from the meta.json sidecar; grep for RateLimit|rate_limit|quota|used_percent|window over the vibe adapter returns nothing — no rate-limit usage window exists to track burndown against (unlike codex, which emits a RateLimitSnapshot from token_count events)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/vibe/sidecar.go:55-79",
+          "note": "The vibe meta.json sidecar the adapter reads carries only environment.working_directory, config.active_model, and stats.context_tokens — cwd, model, and a context-window token count. No rate-limit/quota/used_percent/remaining field; stats is cost/token accounting, not a subscription usage window."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/merlin/.local/share/uv/tools/mistral-vibe/lib/python3.13/site-packages/vibe/core/types.py:49,105,137,660",
+          "note": "vibe 2.19.0 source: AgentStats (line 49) = context_tokens + computed session_cost (line 105, dollars); reset() zeroes context_tokens (line 137). RateLimitError (line 660) = transient 'Rate limits exceeded. Please wait a moment' throttle. No rate-limit usage window / remaining-percent / reset-window type anywhere — vibe is PAYG API-key with no subscription quota to burn down."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/merlin/.local/share/uv/tools/mistral-vibe/lib/python3.13/site-packages/vibe/core/agent_loop.py:1692,2008",
+          "note": "RateLimitError is raised on a provider API failure inside the agent loop (lines 1692-1693, 1772-1773 via _should_raise_rate_limit_error at 232) — a transient 429, never a persisted burndown snapshot. context_tokens is reset to 0 on compaction (line 2008), so the only usage figure vibe surfaces is non-monotonic and context-scoped, not a rate-limit quota."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/codex/parser.go",
+          "note": "Contrast (daemon=full sibling): codex carries rate_limits.primary.used_percent inside its tailed transcript on every token_count event; extractCodexRateLimits reads it into RateLimitSnapshot.Windows[].UsedPercent on replay — the signal quota-burndown asserts, structurally absent from vibe's transcript and meta.json."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/aider/scenarios/5-7_quota-burndown/metadata.json",
+          "note": "Calibration: aider (agent=no / daemon=n/a / driver=ready → frozen) for the same scenario, for the identical reason — PAYG via API key, no Pro/Max subscription cap to burn down, no rate-limit extraction. vibe mirrors this exactly. Distinct from kiro-cli/claudecode (agent=yes/incapable), which ARE subscription products with an out-of-band credit/quota burndown."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "notes": "Not recordable: frozen on agent=no. vibe is a PAYG API-key agent (Mistral / OpenAI-compatible provider) with no provider-managed subscription rate-limit usage window to burn down. RateLimitError (types.py:660) is a transient 429 throttle, not a persisted usage window; AgentStats is cost/token accounting (types.py:49,105); the only usage figure the adapter reads is a context-token count that resets on compaction (sidecar.go; agent_loop.py:2008) — not the monotonic Windows[].UsedPercent-toward-cap the scenario asserts. The vibe parser emits no RateLimit snapshot (grep over the adapter finds none), unlike codex. driver_capability is ready (the scaffolded interactive driver has every step type) but moot — there is nothing to drive or record. Contrast codex/quota-burndown (daemon=full): rate_limits.primary.used_percent inside the tailed transcript. Unblock: only if vibe ships a subscription tier emitting a rate-limit usage window into its transcript/meta.json. See assessment."
+    }
+  }
+}
