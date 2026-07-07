@@ -3,7 +3,7 @@
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
-    "driver_capability": "gap:keys",
+    "driver_capability": "ready",
     "agent_cli_version": "2.19.0",
     "daemon_version": "0.4.x+e943e261",
     "confidence": 0.8,
@@ -17,7 +17,7 @@
       "assessed_at": "2026-07-07T00:00:00Z",
       "agent_supports": "yes",
       "daemon_capability": "full",
-      "driver_capability": "gap:keys",
+      "driver_capability": "ready",
       "confidence": 0.8,
       "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full (+ parent-link caveat)\ndriver_capability: gap:keys\n\nMistral Vibe is the FORK variant of checkpoint-rewind (like codex), but stronger: its rewind restores BOTH files and conversation, and — critically for the daemon pillar — the rewind does NOT truncate or rewrite the append-only messages.jsonl in place; it forks to a brand-new session directory the FilesUnderRoot watcher mints as a fresh session row.\n\n## agent_supports: yes\n\nVibe ships a real rewind affordance, reachable live in v2.19.0:\n- `/rewind` slash command (cli/commands.py:154, aliases `/rewind`, description \"Rewind to a previous message\", handler `_start_rewind_mode`), plus an `Alt+↑↓` / `Ctrl+P/N` shortcut (cli/commands.py:243).\n- It opens a `RewindApp` bottom-panel TUI picker (cli/textual_ui/widgets/rewind_app.py) that navigates the list of prior user messages and offers TWO actions: `EDIT_AND_RESTORE` (restore files + edit the message) and `EDIT_ONLY` (conversation only).\n- `RewindManager.rewind_to_message(..., restore_files=...)` (core/rewind/manager.py) truncates the conversation to the chosen user message AND, when restore_files is set, writes the file snapshots captured at that checkpoint back to disk (`_restore_checkpoint`). Checkpoints are auto-created per user message (agent_loop.py:798 `create_checkpoint`).\n\nThis is `yes`, not `partial`: vibe covers BOTH halves of \"files and/or conversation\" (codex is `partial` because it reverts conversation only; vibe's EDIT_AND_RESTORE reverts files too).\n\n## daemon_capability: full (+ caveat)\n\nThe Source is `FilesUnderRoot{Dir: ~/.vibe/logs/session}` with `SessionIDFromPath` = the `<session-id>` directory (adapter.go:56, agent.go:31). The daemon tails messages.jsonl as APPEND-ONLY. The task's central risk — a rewind that TRUNCATES or REWRITES messages.jsonl would defeat the append-oriented tailer — does NOT occur:\n\n1. Rewind FORKS. `RewindManager.rewind_to_message` calls `_reset_session` (agent_loop.py:1848), which mints a NEW session_id (`generate_session_id`, parent = old id) and repoints the SessionLogger to a fresh directory (session_logger.py:393 `reset_session`). The truncated pre-rewind history is then re-saved into the NEW `<new_session_id>/messages.jsonl`.\n2. The ORIGINAL messages.jsonl is never mutated. `persist_messages` opens the file in `\"a\"` (append) mode (session_logger.py:247) and `save_interaction` only appends messages BEYOND the metadata `total_messages` counter (session_logger.py:300-306) — it can only grow a file, never truncate/rewrite it. The pre-rewind save appends nothing (everything was already persisted turn-by-turn), so the original file lingers frozen and its session row stays `ready`.\n\nSo the daemon observes exactly the codex-fork shape: a NEW session_id directory appears under the watched root → a new session row in `ready`, and turn 3 drives a clean `ready → working → ready` on it. Every user-observable signal the scenario asserts is emitted today. Confirmed against live data: all 6 real transcripts under ~/.vibe/logs/session carry a `parent_session_id` field in meta.json (null when unforked — it would carry the old id on a fork).\n\n### Caveat (not a bug): parent linkage label is lost\n\n`parent_session_id` lands in the FORK's meta.json, but the vibe sidecar parser reads ONLY `environment.working_directory`, `config.active_model`, and `stats.context_tokens` (sidecar.go:55-65) — it never reads `parent_session_id`, and nothing in the adapter populates `ParentSessionID`. So the daemon surfaces the fork as an INDEPENDENT new session, not a parent-linked child. Under the caveats-over-downgrades rule this stays `full` + caveat, NOT `bug`: the scenario's spec-required observable is \"a (linked) new session_id appears with a clean arc,\" which IS satisfied — the new row appears and transitions correctly; only the provenance LABEL is dropped. Identical shape to the codex/checkpoint-rewind sibling (codex parser skips session_meta; forked_from_id dropped).\n\n## driver_capability: gap:keys\n\nThe recipe drives the rewind through the `RewindApp` TUI picker, which needs arrow-key navigation + action selection (rewind_app.py BINDINGS: up/down move, enter/1/2 select). The freshly scaffolded driver's semantic manifest is `DRIVE_ELICITS=\"send slash sleep\"` (driver-interactive.sh:113) — the `keys` arm is present-but-stubbed (`not_implemented`), so recipe-lint flags any recipe needing it as a semantic_gap before recording. `wait_turn` is ALSO stubbed (a baseline gap the whole column shares — see mistral-vibe/session-start = gap:wait_turn). Following the sibling convention of naming the scenario-DISTINCTIVE missing primitive (session-resume = gap:resume, session-end = gap:sigkill), the distinctive gap here is `keys` (the picker). This is tooling work, not an observability limit: `record` ports the `keys` (and `wait_turn`) seam from a reference driver, then drives.\n\n## Model / observations\n\nActive model confirmed from the live sidecars: `mistral-medium-3.5` (config.active_model, passes NormalizeModelName unchanged), context_tokens present (e.g. 22418) → tokens_nonzero. Cost is NOT asserted — the daemon emits no per-turn cost for vibe (the JSONL and sidecar carry no cost figure).",
       "caveats": [
@@ -77,7 +77,8 @@
         "record must confirm the exact RewindApp picker keystrokes: navigate to an earlier user message, then choose EDIT_AND_RESTORE (files+conversation) vs EDIT_ONLY — the keys below are a best-effort mirror of claudecode's /rewind picker"
       ],
       "setup": [
-        "Create an empty cwd under <staging>/cwd/ (vibe mints its own session_<ts>_<hash> id; UUID arg is ignored)"
+        "Create an empty cwd under <staging>/cwd/ (vibe mints its own session_<ts>_<hash> id; UUID arg is ignored)",
+        "Key sequence matches vibe reality: with no file changes the RewindApp shows a SINGLE option (Edit message from here), so Enter selects it → fork; vibe then pre-fills the input with the rewound message, so C-c clears it before the post-rewind send"
       ],
       "script": [
         {
@@ -112,27 +113,19 @@
         },
         {
           "type": "keys",
-          "keys": "Up"
-        },
-        {
-          "type": "sleep",
-          "seconds": 1
-        },
-        {
-          "type": "keys",
           "keys": "Enter"
         },
         {
           "type": "sleep",
-          "seconds": 1
+          "seconds": 3
         },
         {
           "type": "keys",
-          "keys": "1"
+          "keys": "C-c"
         },
         {
           "type": "sleep",
-          "seconds": 4
+          "seconds": 1
         },
         {
           "type": "send",
