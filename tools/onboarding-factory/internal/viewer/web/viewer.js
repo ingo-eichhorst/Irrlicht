@@ -20,6 +20,15 @@ const SPEED_PRESETS = [1, 2, 5, 10, 25, 100];
 // lowercase-alnum-dash-underscore slugs, never containing "/", "?", or "#".
 const RECORDING_SLUG_RE = /^[a-z0-9][a-z0-9_-]*$/;
 
+// Strip control characters and cap length before logging a server-provided
+// string (SonarQube jssecurity:S5145 — fetch response fields are tainted
+// regardless of same-origin trust). Uses String(), not `value || ""`, so
+// null/undefined/empty/garbage stay distinguishable in the log instead of
+// all collapsing to the same blank output.
+function sanitizeForLog(value) {
+  return String(value).replace(/[\r\n]+/g, " ").slice(0, 300);
+}
+
 // inferDriverLabel returns "Interactive (tmux REPL)" when the adapter
 // entry has a non-empty script array, "Headless one-shot" otherwise.
 // Pure function — exported for unit tests.
@@ -2589,11 +2598,7 @@ function renderPlayback(s, detailData, archiveName) {
       // Never pop a blocking modal — a scenario with no events.jsonl/usable
       // transcript (e.g. an un-recorded cell opened via a deep link) just has
       // nothing to play. Log non-blocking for debugging and bail quietly.
-      // Strip control characters and cap length before logging the server's
-      // error text (SonarQube jssecurity:S5145 — res.error is a fetch
-      // response body, tainted regardless of same-origin trust).
-      const safeError = String(res.error || "").replace(/[\r\n]+/g, " ").slice(0, 300);
-      console.warn("replay start failed:", res.status, safeError);
+      console.warn("replay start failed:", res.status, sanitizeForLog(res.error));
       return;
     }
     const body = res.body;
@@ -2619,7 +2624,7 @@ function renderPlayback(s, detailData, archiveName) {
         (totalMs ? ` — total ${(totalMs/1000).toFixed(1)}s` : "") +
         (events.length ? ` — ${events.length} events` : "");
     } else {
-      console.warn(`replay start: rejected unsafe dashboard_url ${JSON.stringify(body.dashboard_url)}`);
+      console.warn(`replay start: rejected unsafe dashboard_url ${sanitizeForLog(body.dashboard_url)}`);
       iframe.src = "about:blank";
       iframeWrap.style.display = "none";
     }

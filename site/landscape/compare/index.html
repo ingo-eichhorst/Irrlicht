@@ -839,8 +839,8 @@ document.addEventListener('DOMContentLoaded', function() {
         var cellA = a.children[idx], cellB = b.children[idx];
         var valA = (cellA.getAttribute('data-sort') || cellA.textContent).trim();
         var valB = (cellB.getAttribute('data-sort') || cellB.textContent).trim();
-        var numA = parseFloat(valA), numB = parseFloat(valB);
-        if (!isNaN(numA) && !isNaN(numB)) {
+        var numA = Number.parseFloat(valA), numB = Number.parseFloat(valB);
+        if (!Number.isNaN(numA) && !Number.isNaN(numB)) {
           return sortAsc ? numA - numB : numB - numA;
         }
         if (valA === '\u2014' || valA === '') return 1;
