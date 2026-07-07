@@ -273,16 +273,19 @@ func buildRigCodebase(
 		IsMain: true,
 	}
 
+	// Build the main worktree's full worker set — including dogs assigned to
+	// this rig — BEFORE copying mainWorktree into the worktrees slice below.
+	// Worktree is a value type, so mutating mainWorktree.Workers after that
+	// copy only updates the disconnected local variable, not worktrees[0]
+	// (a real bug this fix closes: a rig's deacon-managed dog was silently
+	// dropped from the returned Codebase).
 	mainWorkers := buildMainWorkers(gtRoot, rig, sessions, idx)
+	mainWorkers = appendDogWorkers(mainWorkers, gtRoot, rig, dogs, idx)
 	mainWorktree.Workers = mainWorkers
 	worktrees := []orchestrator.Worktree{mainWorktree}
 
 	// Polecat worktrees.
 	worktrees = append(worktrees, buildPolecatWorktrees(gtRoot, rig, rigPolecats, idx)...)
-
-	// Dog workers assigned to this rig.
-	mainWorkers = appendDogWorkers(mainWorkers, gtRoot, rig, dogs, idx)
-	mainWorktree.Workers = mainWorkers
 
 	cb.Worktrees = worktrees
 	return cb

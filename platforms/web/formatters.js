@@ -134,7 +134,10 @@ export function fmtEtaText(remaining, highSecs) {
 // measured rate; with no projection (e.g. a subagent aggregate) fall back
 // to the progress-only "estimating…" chip.
 function zeroRoundsEtaPresentation(est, eta, nowSec, sourceLabel) {
-  if (est.total_rounds <= 0) return null;
+  // Same undefined-handling fix as taskEtaPresentation's completed_rounds
+  // check above: `undefined <= 0` is false, so a missing total_rounds must
+  // be checked explicitly or this falls through to render "0/undefined".
+  if (est.total_rounds == null || est.total_rounds <= 0) return null;
   const age = est.updated_at > 0 ? Math.max(0, Math.floor(nowSec - est.updated_at)) : 0;
   const zeroStale = est.updated_at > 0 && age > 180;
   let zeroTitle = 'Task ETA — ' + sourceLabel + ' 0/' + est.total_rounds + ' rounds';
