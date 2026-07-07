@@ -229,7 +229,7 @@ struct BackchannelRulesView: View {
                     .fixedSize()
 
                     if action.wrappedValue.preset == nil {
-                        TextField("/compact", text: Binding(
+                        TextField("/compact", text: Binding(  // NOSONAR (swift:S1075) — slash-command placeholder text, not a URI
                             get: { action.wrappedValue.data ?? "" },
                             set: { action.wrappedValue.data = $0 }
                         ))

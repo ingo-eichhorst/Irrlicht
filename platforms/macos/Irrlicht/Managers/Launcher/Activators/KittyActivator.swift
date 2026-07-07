@@ -79,10 +79,10 @@ struct KittyActivator: HostActivator {
     private static let kittenPath: String? = {
         let home = ProcessInfo.processInfo.environment["HOME"] ?? ""
         let candidates = [
-            "/Applications/kitty.app/Contents/MacOS/kitten",
-            "/usr/local/bin/kitten",
-            "/opt/homebrew/bin/kitten",
-            home + "/.local/bin/kitten",
+            "/Applications/kitty.app/Contents/MacOS/kitten",  // NOSONAR (swift:S1075) — local filesystem/binary path, not a network endpoint
+            "/usr/local/bin/kitten",  // NOSONAR (swift:S1075) — local filesystem/binary path, not a network endpoint
+            "/opt/homebrew/bin/kitten",  // NOSONAR (swift:S1075) — local filesystem/binary path, not a network endpoint
+            home + "/.local/bin/kitten",  // NOSONAR (swift:S1075) — local filesystem/binary path, not a network endpoint
         ]
         return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
     }()

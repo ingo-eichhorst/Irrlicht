@@ -69,7 +69,7 @@ final class SoundPlayerTests: XCTestCase {
     func testResolveMissingCustomFallsBackToPing() {
         let defaults = UserDefaults.standard
         let event = NotificationEvent.contextPressure
-        let missing = SoundChoice.custom(installedFilename: "IrrlichtCustom-doesnotexist.caf", displayPath: "/tmp/x.mp3")
+        let missing = SoundChoice.custom(installedFilename: "IrrlichtCustom-doesnotexist.caf", displayPath: "/tmp/x.mp3")  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
         defaults.set(missing.rawValue, forKey: event.soundKey)
         defer { defaults.removeObject(forKey: event.soundKey) }
 
@@ -84,7 +84,7 @@ final class SoundPlayerTests: XCTestCase {
     // MARK: - installCustom
 
     func testInstallCustomPassthroughCopiesAiff() throws {
-        let src = URL(fileURLWithPath: "/System/Library/Sounds/Glass.aiff")
+        let src = URL(fileURLWithPath: "/System/Library/Sounds/Glass.aiff")  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
         try XCTSkipUnless(FileManager.default.fileExists(atPath: src.path), "system Glass.aiff missing")
 
         let installed = try waitInstall(src: src, event: .ready)
@@ -172,7 +172,7 @@ final class SoundPlayerTests: XCTestCase {
     func testInstallCustomReplacesStaleVariant() throws {
         // First install a .aiff, then install a .wav for the same event and
         // confirm the .aiff is gone.
-        let aiffSrc = URL(fileURLWithPath: "/System/Library/Sounds/Pop.aiff")
+        let aiffSrc = URL(fileURLWithPath: "/System/Library/Sounds/Pop.aiff")  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
         try XCTSkipUnless(FileManager.default.fileExists(atPath: aiffSrc.path), "system Pop.aiff missing")
 
         let installedA = try waitInstall(src: aiffSrc, event: .waiting)

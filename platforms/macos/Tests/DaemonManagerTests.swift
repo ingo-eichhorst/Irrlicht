@@ -42,11 +42,11 @@ final class DaemonManagerTests: XCTestCase {
 
     func testBuildDaemonEnvSetsBindAddrAndPreservesBase() {
         let env = DaemonManager.buildDaemonEnv(
-            base: ["PATH": "/usr/bin"],
+            base: ["PATH": "/usr/bin"],  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
             bindAddr: "127.0.0.1:7838"
         )
         XCTAssertEqual(env["IRRLICHT_BIND_ADDR"], "127.0.0.1:7838")
-        XCTAssertEqual(env["PATH"], "/usr/bin", "base environment must be preserved")
+        XCTAssertEqual(env["PATH"], "/usr/bin", "base environment must be preserved")  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
     }
 
     func testBuildDaemonEnvStripsInheritedRelayVars() {
@@ -57,13 +57,13 @@ final class DaemonManagerTests: XCTestCase {
         // daemon would publish to a stale relay the user never configured until
         // the app's corrective PUT landed.
         let env = DaemonManager.buildDaemonEnv(
-            base: ["IRRLICHT_RELAY_URL": "wss://stale", "IRRLICHT_RELAY_TOKEN": "stale", "PATH": "/usr/bin"],
+            base: ["IRRLICHT_RELAY_URL": "wss://stale", "IRRLICHT_RELAY_TOKEN": "stale", "PATH": "/usr/bin"],  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
             bindAddr: "127.0.0.1:7837"
         )
         XCTAssertNil(env["IRRLICHT_RELAY_URL"], "inherited relay URL must be stripped")
         XCTAssertNil(env["IRRLICHT_RELAY_TOKEN"], "inherited relay token must be stripped")
         XCTAssertEqual(env["IRRLICHT_BIND_ADDR"], "127.0.0.1:7837")
-        XCTAssertEqual(env["PATH"], "/usr/bin", "unrelated base vars must be preserved")
+        XCTAssertEqual(env["PATH"], "/usr/bin", "unrelated base vars must be preserved")  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
     }
 
     func testPublishSettingsDidChangeDoesNotRelaunchDaemon() {

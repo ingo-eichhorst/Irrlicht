@@ -1181,7 +1181,7 @@ struct SessionListView_Previews: PreviewProvider {
                         id: "sess_abc123def456",
                         state: .working,
                         model: "claude-sonnet-4-6",
-                        cwd: "/Users/user/projects/multi-cc-bar",
+                        cwd: "/Users/user/projects/multi-cc-bar",  // NOSONAR (swift:S1075) — SwiftUI preview fixture, never runs in production
                         gitBranch: "main",
                         projectName: "multi-cc-bar",
                         firstSeen: Date().addingTimeInterval(-180),

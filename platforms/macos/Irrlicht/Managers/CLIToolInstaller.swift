@@ -8,7 +8,7 @@ enum CLIToolInstaller {
     /// Candidate bin directories, in preference order. `/usr/local/bin` is on
     /// the default PATH but usually root-owned; `/opt/homebrew/bin` is
     /// user-writable on Apple Silicon Homebrew setups.
-    static let defaultCandidates = ["/usr/local/bin", "/opt/homebrew/bin"]
+    static let defaultCandidates = ["/usr/local/bin", "/opt/homebrew/bin"]  // NOSONAR (swift:S1075) — local filesystem/binary path, not a network endpoint
 
     enum Status: Equatable {
         case unavailable          // binary not in this bundle (dev builds)
@@ -36,7 +36,7 @@ enum CLIToolInstaller {
         guard let source = bundledLs else { return .unavailable }
         let fm = FileManager.default
         for dir in candidates {
-            let link = dir + "/irrlicht-ls"
+            let link = dir + "/irrlicht-ls"  // NOSONAR (swift:S1075) — local filesystem/binary path, not a network endpoint
             if let dest = try? fm.destinationOfSymbolicLink(atPath: link),
                URL(fileURLWithPath: dest).standardizedFileURL == source.standardizedFileURL {
                 return .installed(path: link)
@@ -87,7 +87,7 @@ enum CLIToolInstaller {
         guard let dir = chooseTarget(candidates: candidates) else {
             return .failed(message: "No writable bin directory found. Run: sudo ln -sf \"\(source.path)\" /usr/local/bin/irrlicht-ls")
         }
-        let link = dir + "/irrlicht-ls"
+        let link = dir + "/irrlicht-ls"  // NOSONAR (swift:S1075) — local filesystem/binary path, not a network endpoint
         if let message = clearLinkSite(link) {
             return .failed(message: message)
         }
