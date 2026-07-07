@@ -1,6 +1,7 @@
 package vibe
 
 import (
+	"encoding/json"
 	"strings"
 
 	"irrlicht/core/pkg/tailer"
@@ -32,6 +33,9 @@ type Parser struct {
 	path string
 	// sidecar memoizes the last meta.json read by (mtime, size).
 	sidecar sidecarCache
+	// todos folds vibe's whole-list `todo` tool snapshots into task-progress
+	// deltas; one reconciler per transcript scan.
+	todos tailer.TodoReconciler
 }
 
 // SetTranscriptPath implements tailer.TranscriptPathAware: the tailer injects
@@ -81,6 +85,7 @@ func (p *Parser) ParseLine(raw map[string]any) *tailer.ParsedEvent {
 			// events; keep the session working.
 			ev.EventType = "assistant_message"
 			ev.ToolUses = toolUses
+			p.appendTodoDeltas(raw, ev)
 		} else {
 			// No tool calls — this is the terminal message of the turn.
 			ev.EventType = "turn_done"
@@ -123,6 +128,62 @@ func (p *Parser) applySidecar(ev *tailer.ParsedEvent) {
 	}
 	if ev.EventType == "turn_done" && st.contextTokens > 0 {
 		ev.Tokens = &tailer.TokenSnapshot{Total: st.contextTokens}
+	}
+}
+
+// appendTodoDeltas translates vibe's builtin `todo` tool into task-progress
+// deltas so its checklist surfaces in the session `tasks` field the same way
+// claudecode's TodoWrite and opencode's todowrite do. Vibe's todo tool is a
+// whole-list-replace: an assistant tool_call `todo` with
+// arguments={"action":"write","todos":[{"id","content","status","priority"}]}
+// carries the FULL list every call. Todos are keyed by their visible content
+// (matching the shared TodoReconciler convention); `cancelled` todos are dropped,
+// mirroring vibe's own UI which excludes them from the plan. Non-`write` actions
+// (e.g. a read/list) carry no state change and are ignored.
+func (p *Parser) appendTodoDeltas(raw map[string]any, ev *tailer.ParsedEvent) {
+	tcs, _ := raw["tool_calls"].([]any)
+	for _, t := range tcs {
+		tc, ok := t.(map[string]any)
+		if !ok {
+			continue
+		}
+		fn, ok := tc["function"].(map[string]any)
+		if !ok {
+			continue
+		}
+		if name, _ := fn["name"].(string); name != "todo" {
+			continue
+		}
+
+		// arguments is a JSON string in practice; tolerate a decoded object too.
+		var argsBytes []byte
+		switch a := fn["arguments"].(type) {
+		case string:
+			argsBytes = []byte(a)
+		case map[string]any:
+			argsBytes, _ = json.Marshal(a)
+		default:
+			continue
+		}
+		var args struct {
+			Action string `json:"action"`
+			Todos  []struct {
+				Content string `json:"content"`
+				Status  string `json:"status"`
+			} `json:"todos"`
+		}
+		if json.Unmarshal(argsBytes, &args) != nil || args.Action != "write" {
+			continue
+		}
+
+		todos := make([]tailer.Todo, 0, len(args.Todos))
+		for _, td := range args.Todos {
+			if td.Content == "" || td.Status == "cancelled" {
+				continue
+			}
+			todos = append(todos, tailer.Todo{Key: td.Content, Status: td.Status})
+		}
+		p.todos.Reconcile(todos, ev)
 	}
 }
 

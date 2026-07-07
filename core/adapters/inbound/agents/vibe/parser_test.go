@@ -109,6 +109,53 @@ func TestParser_AssistantTextOnly_TurnDone(t *testing.T) {
 	}
 }
 
+// The builtin `todo` tool (whole-list-replace) is decoded into task deltas +
+// a snapshot so the checklist surfaces in the session tasks field.
+func TestParser_TodoTool_TaskDeltas(t *testing.T) {
+	p := &Parser{}
+	// First write: two pending todos → two creates, snapshot of 2.
+	ev1 := p.ParseLine(line(t, `{"role":"assistant","tool_calls":[{"id":"tc1","function":{"name":"todo","arguments":"{\"action\":\"write\",\"todos\":[{\"id\":\"1\",\"content\":\"bump java\",\"status\":\"pending\",\"priority\":\"high\"},{\"id\":\"2\",\"content\":\"upgrade dw\",\"status\":\"pending\",\"priority\":\"high\"}]}"}}],"message_id":"a1"}`))
+	creates := 0
+	for _, d := range ev1.TaskDeltas {
+		if d.Op == tailer.TaskOpCreate {
+			creates++
+		}
+	}
+	if creates != 2 {
+		t.Errorf("first write: got %d creates, want 2 (deltas=%+v)", creates, ev1.TaskDeltas)
+	}
+	if ev1.TaskSnapshot == nil || len(*ev1.TaskSnapshot) != 2 {
+		t.Fatalf("first write: snapshot = %v, want 2 entries", ev1.TaskSnapshot)
+	}
+
+	// Second write: same list, first now in_progress → an Update, no new creates.
+	ev2 := p.ParseLine(line(t, `{"role":"assistant","tool_calls":[{"id":"tc2","function":{"name":"todo","arguments":"{\"action\":\"write\",\"todos\":[{\"id\":\"1\",\"content\":\"bump java\",\"status\":\"in_progress\",\"priority\":\"high\"},{\"id\":\"2\",\"content\":\"upgrade dw\",\"status\":\"pending\",\"priority\":\"high\"}]}"}}],"message_id":"a2"}`))
+	var gotUpdate bool
+	for _, d := range ev2.TaskDeltas {
+		if d.Op == tailer.TaskOpCreate {
+			t.Errorf("second write should create nothing, got create %+v", d)
+		}
+		if d.Op == tailer.TaskOpUpdate && d.Status == tailer.TaskStatusInProgress {
+			gotUpdate = true
+		}
+	}
+	if !gotUpdate {
+		t.Errorf("second write: expected an in_progress Update, deltas=%+v", ev2.TaskDeltas)
+	}
+}
+
+// A cancelled todo is dropped from the tracked list (vibe excludes it from the plan).
+func TestParser_TodoTool_DropsCancelled(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(line(t, `{"role":"assistant","tool_calls":[{"id":"tc","function":{"name":"todo","arguments":"{\"action\":\"write\",\"todos\":[{\"id\":\"1\",\"content\":\"keep\",\"status\":\"pending\"},{\"id\":\"2\",\"content\":\"drop\",\"status\":\"cancelled\"}]}"}}],"message_id":"a"}`))
+	if ev.TaskSnapshot == nil || len(*ev.TaskSnapshot) != 1 {
+		t.Fatalf("snapshot = %v, want 1 entry (cancelled dropped)", ev.TaskSnapshot)
+	}
+	if (*ev.TaskSnapshot)[0].Subject != "keep" {
+		t.Errorf("kept the wrong todo: %+v", (*ev.TaskSnapshot)[0])
+	}
+}
+
 func TestParser_Tool_ToolResult(t *testing.T) {
 	p := &Parser{}
 	ev := p.ParseLine(line(t, `{"role":"tool","content":"command output","injected":false,"name":"bash","tool_call_id":"ezv2C47us"}`))
