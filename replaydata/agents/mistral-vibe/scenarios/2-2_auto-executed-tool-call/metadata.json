@@ -104,7 +104,9 @@
         "final session state is ready",
         "the newest recording's replay summary shows model mistral-medium-3.5, total_tokens>0, and cost 0 (adapter reads no cost)"
       ],
-      "settings": {},
+      "settings": {
+        "bypass_tool_permissions": true
+      },
       "timeout_seconds": 180
     }
   }
