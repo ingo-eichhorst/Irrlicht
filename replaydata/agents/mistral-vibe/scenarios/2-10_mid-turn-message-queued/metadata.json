@@ -7,7 +7,7 @@
     "agent_cli_version": "2.19.0",
     "daemon_version": "0.5.5+e943e26.dirty",
     "confidence": 0.8,
-    "notes": "agent_supports: yes; daemon_capability: full; driver_capability: gap:wait_turn"
+    "notes": "agent_supports: yes; daemon_capability: full; driver_capability: gap:wait_turn [record reshape: turn 1 → long ~500-word generation so follow-up lands mid-turn]"
   },
   "details": {
     "assessment": {
@@ -63,20 +63,21 @@
       "setup": [
         "Create a fresh empty cwd under <staging>/cwd/ so the session's working_directory is unique",
         "Vibe mints its own session_<ts>_<hash> id on launch; the daemon session_id is that directory name (single-birth)",
-        "The first prompt must keep vibe working several seconds so the follow-up can be typed mid-turn; a slow count-to-10 with pauses suffices"
+        "The first prompt must keep vibe working several seconds so the follow-up can be typed mid-turn; a slow count-to-10 with pauses suffices",
+        "RESHAPE (record): turn 1 changed from a count-to-10 (LLMs do not honor the per-line pause, so the turn finished in <4s and the follow-up landed post-turn) to a ~500-word generation that reliably keeps the turn WORKING for many seconds, so the mid-turn follow-up (typed at +3s) lands while agent_running() and is held in vibe message_queue. Pure text, no tool — observation shape unchanged."
       ],
       "script": [
         {
           "type": "send",
-          "text": "Count from 1 to 10, one number per line, pausing about a second between each line. On the very last line, reply with exactly the word: done"
+          "text": "Write a detailed 500-word description, in full paragraphs, of a slow walk through a forest on an autumn morning. Take your time and be thorough."
         },
         {
           "type": "sleep",
-          "seconds": 4
+          "seconds": 3
         },
         {
           "type": "send",
-          "text": "after you finish counting, also tell me what 6 times 7 is"
+          "text": "also, once you have finished the description, tell me what 6 times 7 is"
         },
         {
           "type": "wait_turn"
