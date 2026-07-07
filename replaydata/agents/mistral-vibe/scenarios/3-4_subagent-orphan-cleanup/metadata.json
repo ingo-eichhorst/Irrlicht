@@ -1,0 +1,123 @@
+{
+  "scenario_id": "subagent-orphan-cleanup",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "bug",
+    "driver_capability": "gap:sigkill",
+    "agent_cli_version": "2.19.0",
+    "daemon_version": "0.5.5+12d0e9a.dirty",
+    "confidence": 0.8,
+    "notes": "agent=yes daemon=bug driver=gap:sigkill — foreground orphan IS producible on a synchronous subagent (SIGKILL parent mid-child); the child is observed but surfaces UNLINKED (dropped parent_session_id), so record known_failing on parent_linked."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "subagent-orphan-cleanup",
+      "agent": "mistral-vibe",
+      "agent_supports": "yes",
+      "daemon_capability": "bug",
+      "driver_capability": "gap:sigkill",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: bug (the orphaned child IS observed as a session, but surfaces UNLINKED — its parent_session_id is on disk in a sidecar the adapter already opens, yet never projected onto ParentSessionID)\ndriver_capability: gap:sigkill (the interactive driver advertises `sigkill` but routes it to `not_implemented`; DRIVE_ELICITS='send slash sleep' omits it)\n→ route: **driver-gap** — `record` ports the `sigkill` step from the claudecode driver, then records `known_failing` against the daemon link bug. Same route + daemon-bug shape as the vibe 3-1 foreground-subagent sibling and the gemini-cli 3-4 sibling.\n\n## The scenario's user-observable signal (3.4)\n\nsubagent-orphan-cleanup is the issue-#321 restart-sweep invariant: a parent launches a FOREGROUND subagent via the Task tool; once the child transcript materializes and is `parent_linked`, the recipe SIGKILLs the parent's process group, orphaning the in-flight child; the daemon's pid_manager sweep then emits `process_exited` for BOTH parent and child with NO spurious `state_transition` to `working` for the orphaned child during cleanup, and final state `ready`. The acceptance_criteria require ≥1 child session LINKED to a parent and ≥1 subagent transcript — the link is the load-bearing observable the daemon cannot satisfy today.\n\n## agent_supports = yes (the synchronous Task model does NOT block the FOREGROUND orphan variant)\n\nThe tempting reflex is \"vibe subagents are synchronous+in-process, so a child can never outlive its parent → no orphan → agent=no.\" That is the correct reasoning for 3-2_background-subagent (agent=no: no fire-and-forget dispatch) but the WRONG reasoning for 3.4. The gemini-cli 3-4 sibling settles it: gemini's subagents are ALSO synchronous/awaited (`await executor.run(...)`, the basis of gemini's 3-2 agent=no), yet its 3-4 is agent=yes — because \"the orphan is produced by SIGKILLing the parent WHILE the synchronous child is still in flight, not by a fire-and-forget dispatch.\" The same holds for vibe:\n\n- `core/tools/builtins/task.py` `Task.run()` builds a child `AgentLoop(is_subagent=True)`, sets `subagent_loop.parent_session_id = ctx.session_id`, and drives it with `async with aclosing(subagent_loop.act(task_text)) as events: async for event in events: ...`. While the parent's Task tool-call blocks on that child loop, the child is WRITING its own `messages.jsonl` under the watched root — there is a real window in which parent (working, blocked in Task) and child (working, in flight) both exist as distinct on-disk sessions. A SIGKILL of the vibe process group during that window strands the child mid-run: exactly the orphan precondition. The child's own \"wait 30s\" keeps it in flight so the kill lands before it drains.\n- vibe 2.19.0 ships the Task tool by default; the default subagent `explore` is `agent_type=SUBAGENT` on the Task allowlist=ALWAYS, so `task(agent=explore)` auto-executes with no permission prompt (established in the 3-1 sibling). So the agent genuinely performs the precondition — a parent + a distinct in-flight child transcript — which is all 3.4 needs from the agent.\n\nNote on \"in-process / shared PID\": vibe runs the subagent IN-PROCESS (same OS process as the parent), so parent and child share ONE PID. This is NOT a disqualifier — claudecode's Task subagent is in-process too, and claudecode 3.4 is agent=yes/daemon=full. The \"orphan\" here is a child SESSION record whose owning PID has died, not a child OS process that outlives the parent. When the shared vibe PID is SIGKILLed, both session records need reaping; the daemon handles that generically (below).\n\n## daemon_capability = bug (child observed + swept, but the parent link is dropped)\n\nUnlike gemini (whose nested child is NOT observed at all — top-level `chats/*.jsonl` watch misses the nested subdir), the vibe child IS discovered and minted as a session; the ONLY daemon defect is the dropped link. Three facts (all carried over from the vibe 3-1 assessment, unchanged here):\n\n1. **Child is observed (`transcript_new` fires).** `task.py` sets the child `SessionLoggingConfig(save_dir=ctx.session_dir/'agents', session_prefix=args.agent)`, so the child lands at `~/.vibe/logs/session/<parent-id>/agents/<explore_...>/messages.jsonl` — inside `Source = FilesUnderRoot{~/.vibe/logs/session}`. `sessionIDFromPath` (adapter.go) accepts an arbitrarily-nested `messages.jsonl` and mints a session keyed on the child dir, exactly as codex's deep `sessions/YYYY/MM/DD/` layout proves the recursive tailer handles. So `child_session_birth` PASSES.\n2. **The parent link is on disk but DROPPED.** `SessionLogger` writes `parent_session_id = ctx.session_id` into the child's `meta.json`. But `parser.go` sets no `ParentSessionID`, `sidecar.go` reads the child meta.json yet decodes only working_directory/active_model/context_tokens (ignoring parent_session_id), and `deriveParentSession` (helpers.go) has no rule for the vibe `.../agents/<child>/messages.jsonl` layout. So the child surfaces as an UNLINKED standalone session: `parent_linked` never fires, `SubagentCount(parent)=0`. That fails the scenario's \"≥1 child linked to a parent\" observable → `known_failing`. This is `bug` (a fix: sidecar decodes parent_session_id → parser sets ev.ParentSessionID, OR a vibe branch in deriveParentSession), NOT `incapable`: the linking datum is present in a sidecar the adapter already opens on every event.\n3. **The orphan reap itself WORKS (no new bug).** PID discovery is by cwd+cmdline (`pid.go` DiscoverPIDByCWDAndCmdLine): the child's meta.json working_directory = the parent's cwd, so BOTH sessions resolve to the SAME vibe PID. When that PID is SIGKILLed, the pid_manager sweep finds the PID gone and emits `process_exited` for both session rows; the orphaned (unlinked) child is a plain session on a dead PID, swept without any spurious `working` transition (the #321 invariant is adapter-agnostic). So `parent_killed` and `child_cleanup` PASS; only `parent_linked` is known_failing.\n\n## driver_capability = gap:sigkill\n\nThe recipe (send the Task prompt, sleep to let the child materialize, SIGKILL the process group, sleep for the sweep) needs send/sleep/**sigkill** — the same primitive set as the claudecode 3-4 recipe (no wait_turn: it relies on timed sleeps, not a turn-done poll). The freshly-scaffolded `replaydata/agents/mistral-vibe/driver-interactive.sh` declares `DRIVE_ELICITS='send slash sleep'` and routes `sigkill)` to `not_implemented` (TODO: kill -9 the active slot's PID). send + sleep are elicited; `sigkill` is the one missing step → `driver=gap:sigkill`. `record` ports the `sigkill` seam from the claudecode reference driver before it drives.\n\n## What would unblock (the bug fix)\n\nSurface the parent link the child already writes: either (a) `sidecar.go` decodes `parent_session_id` and `parser.go` sets `ev.ParentSessionID` from it, or (b) add a vibe branch to `deriveParentSession` keyed on the `.../agents/<child>/messages.jsonl` path. Once child→parent binds, this cell flips from known_failing to a clean record (agent=yes; driver gap already ported by record). This is the SAME fix that unblocks the vibe 3-1 foreground-subagent cell — one adapter change closes both.",
+      "caveats": [
+        "No captured evidence of a real vibe subagent run: none of the live ~/.vibe/logs/session sessions used the Task tool, so no `agents/` subtree exists on disk. The child layout (`<parent-session-dir>/agents/<prefix>_<ts>_<shortid>/{messages.jsonl,meta.json}` with parent_session_id populated) is inferred from task.py + session_logger.py source (via the 3-1 sibling), not observed — confidence held at 0.8. A single live spawn+SIGKILL settles the on-disk shape, confirms the tailer mints the nested child, and confirms both sessions reap on the shared PID's death without a spurious working transition.",
+        "daemon=bug is scoped to the DROPPED LINK only (parent_linked). Unlike gemini-cli 3-4 (child not observed at all → child_session_birth also fails), the vibe child IS expected to be observed (transcript_new) because FilesUnderRoot recurses; only parent_linked is known_failing. This is PROVISIONAL on the recursive tailer actually minting the nested child and on both sessions resolving to the one vibe PID via cwd+cmdline discovery — if the child's cwd-based PID discovery races or resolves elsewhere, the child_cleanup reap timing could differ (same fix owner regardless). record settles which.",
+        "cost is not asserted: mistral-vibe is absent from core/pkg/capacity and sidecar.go never reads stats.session_cost, so the daemon emits no cost. observations assert model + tokens + agent only, cost_nonzero=false — matching the vibe 2-1/2-3/3-1 siblings.",
+        "Contrast with 3-2_background-subagent (agent=no): there the synchronous model IS the blocker (no fire-and-forget → the parent can never end_turn before the child drains). Here the synchronous model is NOT a blocker because the orphan is produced by a hard SIGKILL mid-child, not by the parent finishing early — exactly the gemini-cli 3-4 distinction."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "~/.local/share/uv/tools/mistral-vibe/lib/python3.13/site-packages/vibe/core/tools/builtins/task.py",
+          "note": "Task.run() builds child AgentLoop(is_subagent=True), sets parent_session_id=ctx.session_id, awaits subagent_loop.act(); SessionLoggingConfig(save_dir=ctx.session_dir/'agents', session_prefix=args.agent) — synchronous in-flight child under the watched root"
+        },
+        {
+          "kind": "file",
+          "ref": "~/.local/share/uv/tools/mistral-vibe/lib/python3.13/site-packages/vibe/core/session/session_logger.py",
+          "note": "persists messages.jsonl + meta.json in save_dir/<prefix>_<ts>_<shortid>; writes parent_session_id into the child meta.json"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/vibe/adapter.go",
+          "note": "Source = FilesUnderRoot{~/.vibe/logs/session}; sessionIDFromPath mints a session from any-depth messages.jsonl (recursive tailer observes the nested child)"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/vibe/parser.go",
+          "note": "sets no ParentSessionID — the child surfaces UNLINKED (daemon=bug)"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/vibe/sidecar.go",
+          "note": "reads the child meta.json but decodes only working_directory/active_model/context_tokens — ignores parent_session_id (the datum for the fix)"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/vibe/pid.go",
+          "note": "DiscoverPID by cwd+cmdline (DiscoverPIDByCWDAndCmdLine); child shares the parent's cwd → both sessions resolve to the one vibe PID, so the SIGKILL sweep reaps both"
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/helpers.go",
+          "note": "deriveParentSession recognizes only claudecode subagents/, gemini registered-parent, and pi parentSession header — no vibe .../agents/<child>/ rule"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/gemini-cli/scenarios/3-4_subagent-orphan-cleanup/metadata.json",
+          "note": "precedent: synchronous/awaited subagent is agent=yes for the FOREGROUND orphan variant (SIGKILL mid-child), daemon=bug (unlinked child), driver=gap:sigkill"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/mistral-vibe/scenarios/3-1_foreground-subagent/metadata.json",
+          "note": "sibling: same agent=yes/daemon=bug link-drop and the same one-adapter fix; 3.4 adds the sigkill orphan step"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/mistral-vibe/driver-interactive.sh",
+          "note": "DRIVE_ELICITS='send slash sleep'; sigkill) routed to not_implemented → driver=gap:sigkill"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "vibe CLI 2.19.0 on PATH and authenticated; the Task tool is exposed by default and agent=explore auto-executes (allowlist ALWAYS)",
+        "irrlichd is recording (dev daemon with --record, isolated IRRLICHT_HOME)",
+        "DRIVER GAP: driver-interactive.sh routes sigkill to not_implemented (DRIVE_ELICITS='send slash sleep'); record ports the sigkill seam (kill -9 the active slot's process group, not just the parent PID) before driving",
+        "the sigkill step must kill the ENTIRE vibe process group so the in-flight child is orphaned rather than reaped by its own clean exit; vibe runs the subagent in-process so parent+child share one PID/process group",
+        "KNOWN FAILING: daemon=bug — the vibe adapter drops the child↔parent link (parent_session_id in the child meta.json is never surfaced as ParentSessionID), so parent_linked / the child-with-ParentSessionID will not be observed until the adapter fix lands"
+      ],
+      "setup": [
+        "Driver generates a fresh cwd under <staging>/cwd/",
+        "A README.md with a single H1 heading is seeded into the cwd so the explore subagent has a deterministic file to read while the parent is alive — the subagent must still be in flight when SIGKILL lands"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Use the Task tool to launch a subagent (agent: explore) that reads the README.md in the current directory three times in a row and then waits 30 seconds before reporting its first heading. Do not reply to me until the subagent is done."
+        },
+        {
+          "type": "sleep",
+          "seconds": 12
+        },
+        {
+          "type": "sigkill"
+        },
+        {
+          "type": "sleep",
+          "seconds": 20
+        }
+      ],
+      "verify": [
+        "the parent session enters ready, then ready→working on the user Task prompt",
+        "a child session materializes under <parent>/agents/<explore_...>/messages.jsonl and is minted as a session (transcript_new)",
+        "(known-failing until adapter fix) events.jsonl contains ≥1 parent_linked binding the child to the parent session_id",
+        "events.jsonl contains exactly one process_exited for the parent session and one for the (orphaned) child session after the SIGKILL",
+        "no state_transition to working (or waiting) fires for the child after the parent's process_exited (issue #321 regression invariant)",
+        "final parent state is ready; after readyTTL both rows are removed via transcript_removed"
+      ],
+      "settings": {},
+      "timeout_seconds": 180
+    }
+  }
+}
