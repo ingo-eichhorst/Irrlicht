@@ -95,18 +95,18 @@
       "script": [
         {
           "type": "send",
-          "text": "Use your Task tool to launch a subagent (agent: explore) that writes a very long, detailed essay of at least 1500 words about the complete history of computing from the abacus to modern AI. Take your time and be thorough. Do not reply to me until the subagent is completely finished."
+          "text": "Use your Task tool to launch a subagent (agent: explore) whose ONLY job is to run this exact bash command and wait for it to finish: sleep 45 — then report the word ready. Do not reply to me until the subagent is completely finished."
         },
         {
           "type": "sleep",
-          "seconds": 22
+          "seconds": 25
         },
         {
           "type": "sigkill"
         },
         {
           "type": "sleep",
-          "seconds": 20
+          "seconds": 15
         }
       ],
       "verify": [
