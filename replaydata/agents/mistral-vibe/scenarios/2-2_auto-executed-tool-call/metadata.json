@@ -1,0 +1,111 @@
+{
+  "scenario_id": "auto-executed-tool-call",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "gap:wait_turn",
+    "agent_cli_version": "2.19.0",
+    "daemon_version": "0.5.5+fed146f.dirty",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: gap:wait_turn"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "auto-executed-tool-call",
+      "agent": "mistral-vibe",
+      "assessed_at": "2026-07-07T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "gap:wait_turn",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: gap:wait_turn\n\n## Reasoning\n\nMistral Vibe auto-executes tools when `bypass_tool_permissions` is set — this is a real config key (confirmed in a live `~/.vibe/logs/session/.../meta.json` sidecar). The model emits an `assistant` message carrying OpenAI-shape `tool_calls[]` (each with a nested `function.name`, NOT a flat `name`), the runtime runs the tool without a prompt, and a `role:tool` line records the result linked by `tool_call_id`. A real transcript on this machine shows exactly this arc — 158 assistant-with-`tool_calls` messages (e.g. `function.name: \"bash\"`) each followed by a `role:tool` result — so the tool call AND its result are fully in messages.jsonl, not a hidden channel.\n\nThe scenario's assertions map cleanly onto the vibe parser (parser.go):\n\n**Bullet 1 — `ready → working` with a tool_use mid-turn.** The first `user` line maps to `user_message` (opens the turn, ready→working); the `assistant` line carrying `tool_calls[]` maps to `assistant_message` which keeps the session `working`. `parseToolCalls` extracts `function.name` into `ev.ToolUses`, so the Bash tool_use is observed inside the working span.\n\n**Bullet 2 — state never enters `waiting`.** The vibe adapter declares NO Control and the parser has no permission-gate / AskUser path — a `tool` line is just a `tool_result` (continued activity that never touches state). Under `bypass_tool_permissions` there is no permission prompt at all, so `waiting` is structurally unreachable for this flow.\n\n**Terminal `working → ready`.** When the model stops calling tools and emits a text-only `assistant` message (no `tool_calls`), the parser emits `turn_done` and the session settles to `ready`.\n\n## Daemon sensor capture\n\nSource is `FilesUnderRoot` over `~/.vibe/logs/session/<id>/messages.jsonl` (agent.go); the sibling `meta.json` sidecar supplies cwd, model NAME (`config.active_model` = `mistral-medium-3.5`), and `context_tokens` (sidecar.go). The entire ready→working→ready arc plus the tool_use is derivable from the tailed transcript, so `daemon=full` for the state topology this scenario asserts. Model `mistral-medium-3.5` passes `NormalizeModelName` unchanged (no matching alias/pattern in tailer/parser.go:532).\n\n## Driver pillar — gap:wait_turn\n\nThe interactive driver is freshly scaffolded: `DRIVE_ELICITS=\"send slash sleep\"` (driver-interactive.sh) — `wait_turn` is present only as a stubbed arm, so recipe-lint reports a SEMANTIC gap for the recipe's `wait_turn` step. `record` must port SEAM 2 (the turn-completion poll) from a reference driver before it can drive this cell. This is tooling work, not an observability limit — the recipe + spec stand.",
+      "caveats": [
+        "PROVISIONAL on emission: whether vibe writes a text-only terminal assistant message (turn_done) after the tool cycle — vs keeping tool_calls open — is a property of what the agent emits, not confirmable from the parser read. A live record promotes provisional→settled.",
+        "Observation field selection is deliberate: vibe sets ONLY Tokens.Total (from sidecar context_tokens) on turn_done, which feeds summary.total_tokens (verify's total_tokens_nonzero via tailer_metrics.go:129). It never populates cum input/output, so tokens_nonzero (cum_input+output, observations.go:37/160) would be 0 — intentionally NOT asserted. context_window / context_utilization are also NOT asserted: mistral-medium-3.5 is not in the capacity table so the window/util bar stays 0 (matches 'daemon does not do context-window').",
+        "total_tokens_nonzero is provisional on live emission timing: applySidecar sets Tokens on turn_done only when the sidecar's context_tokens > 0 at the moment the turn_done line is tailed; every real session shows a large context_tokens, so it should hold, but record confirms it against the golden summary.",
+        "cost_nonzero=false: the adapter reads no cost field from the sidecar (sidecar.go decodes only working_directory / active_model / context_tokens), so no per-turn cost reaches the summary.",
+        "driver=gap:wait_turn: record must port the wait_turn seam (SEAM 2) into driver-interactive.sh before driving; DRIVE_ELICITS currently lists only send/slash/sleep.",
+        "The recipe REQUIRES bypass_tool_permissions (vibe's auto-execute / --yolo path) so the bash call auto-runs. Without it vibe shows a UI-only permission dialog that is NOT written to the transcript, so the daemon still would not see waiting (the arc stays working), but the driver's wait_turn would have to grant the dialog for the tool to run."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/vibe/parser.go",
+          "note": "Role map: user→user_message (ready→working); assistant+tool_calls→assistant_message/working with parseToolCalls extracting function.name into ev.ToolUses; text-only assistant→turn_done (working→ready); tool→tool_result linked by tool_call_id. No permission-gate/AskUser path, so waiting is unreachable."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/vibe/agent.go",
+          "note": "FilesUnderRoot over ~/.vibe/logs/session (SessionIDFromPath → the session dir); CommandPattern process match binds the python vibe process; declares NO Control (read-only)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/vibe/sidecar.go",
+          "note": "meta.json sidecar decodes ONLY environment.working_directory, config.active_model (mistral-medium-3.5), stats.context_tokens — no cost, timestamps, or control fields."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer_metrics.go",
+          "note": "applyTokenSnapshot (line 128-129): Tokens.Total>0 → metrics.TotalTokens (summary.total_tokens); cum input/output only set from Tokens.Input/Output, which vibe never populates — grounds total_tokens_nonzero:true and tokens_nonzero:false."
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/internal/validate/observations.go",
+          "note": "totalTokens() = CumInputTokens+CumOutputTokens gates tokens_nonzero (line 37/160); TotalTokens gates total_tokens_nonzero (line 165) — confirms the field split used in observations."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/mistral-vibe/driver-interactive.sh",
+          "note": "DRIVE_ELICITS=\"send slash sleep\" (line 113) — wait_turn is a stubbed arm only, so the recipe's wait_turn is a semantic gap → driver=gap:wait_turn until record ports SEAM 2."
+        },
+        {
+          "kind": "file",
+          "ref": ".specs/agent-scenarios.md",
+          "note": "Feature: Auto-executed tool call — the two Expected bullets (ready→working→ready; state never enters waiting) the daemon pillar is judged against."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/merlin/.vibe/logs/session/session_20260706_101952_48e134e3/messages.jsonl",
+          "note": "Live transcript (vibe v2.19.0): 158 assistant messages with OpenAI-shape tool_calls[] (function.name e.g. 'bash') each followed by a role:tool result linked by tool_call_id — proves the auto-executed tool_call→tool arc is fully in messages.jsonl; meta.json config.bypass_tool_permissions confirms the auto-execute path and config.active_model=mistral-medium-3.5."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "vibe CLI on PATH (~/.local/bin/vibe, v2.19.0) and authenticated (Mistral API key)",
+        "irrlichd is recording (run-cell.sh isolated mode, or --attach against a --record daemon)",
+        "vibe launched with bypass_tool_permissions enabled (the auto-execute / --yolo path) so the single bash call runs without a permission dialog",
+        "driver seam ported by record: SEAM 2 wait_turn poll (DRIVE_ELICITS currently lacks wait_turn — gap:wait_turn)"
+      ],
+      "setup": [
+        "Create a fresh empty cwd under <staging>/cwd/ so the session's working_directory is unique for PID binding",
+        "Vibe mints its own session_<ts>_<hash> id on launch; the daemon session_id is that directory name (single-birth)"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Run bash 'echo hello' using the bash tool, then reply 'done'."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the session_<ts>_<hash> session entering ready (single-birth; a transient proc-<PID> presession may precede it)",
+        "events.jsonl shows exactly one ready→working transition and one working→ready transition for the session",
+        "events.jsonl contains at least one tool_use event for the bash tool inside the working span",
+        "events.jsonl contains NO state_transition to waiting for the session during the entire run (bypass_tool_permissions → no gate)",
+        "final session state is ready",
+        "the newest recording's replay summary shows model mistral-medium-3.5, total_tokens>0, and cost 0 (adapter reads no cost)"
+      ],
+      "settings": {},
+      "timeout_seconds": 180
+    }
+  }
+}
