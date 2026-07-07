@@ -104,26 +104,12 @@ func (p *Parser) parseAssistantMessage(content []interface{}, ev *tailer.ParsedE
 		}
 		switch block["kind"] {
 		case "toolUse":
-			if d, ok := block["data"].(map[string]interface{}); ok {
-				id, _ := d["toolUseId"].(string)
-				name, _ := d["name"].(string)
-				if name != "" {
-					toolUses = append(toolUses, tailer.ToolUse{ID: id, Name: name})
-				}
-				if name == "todo_list" {
-					input, _ := d["input"].(map[string]interface{})
-					p.appendTodoListDeltas(input, ev)
-				}
+			if tu, ok := p.parseAssistantToolUseBlock(block, ev); ok {
+				toolUses = append(toolUses, tu)
 			}
 		case "text":
-			if text, ok := block["data"].(string); ok && text != "" {
+			if text, ok := parseAssistantTextBlock(block, ev); ok {
 				lastText = text
-				if est := tailer.ScanTaskEstimate(text, ev.Timestamp); est != nil {
-					ev.TaskEstimate = est
-				}
-				if s := tailer.ScanTaskSummary(text, ev.Timestamp); s != nil {
-					ev.TaskSummary = s
-				}
 			}
 		}
 	}
@@ -138,6 +124,46 @@ func (p *Parser) parseAssistantMessage(content []interface{}, ev *tailer.ParsedE
 		p.applySidecarMetrics(ev)
 	}
 	ev.AssistantText = tailer.TruncateAssistantText(lastText)
+}
+
+// parseAssistantToolUseBlock extracts a "toolUse" content block into a
+// ToolUse entry. ok is false when the block carries no data or no name (the
+// caller then adds nothing to its toolUses slice). A todo_list tool's
+// create/complete deltas are appended onto ev as a side effect regardless of
+// the ok result — mirrors parseAssistantMessage's original inline body
+// exactly (go:S3776 extraction, no behavior change).
+func (p *Parser) parseAssistantToolUseBlock(block map[string]interface{}, ev *tailer.ParsedEvent) (tailer.ToolUse, bool) {
+	d, ok := block["data"].(map[string]interface{})
+	if !ok {
+		return tailer.ToolUse{}, false
+	}
+	id, _ := d["toolUseId"].(string)
+	name, _ := d["name"].(string)
+	if name == "todo_list" {
+		input, _ := d["input"].(map[string]interface{})
+		p.appendTodoListDeltas(input, ev)
+	}
+	if name == "" {
+		return tailer.ToolUse{}, false
+	}
+	return tailer.ToolUse{ID: id, Name: name}, true
+}
+
+// parseAssistantTextBlock extracts a "text" content block's string and scans
+// it for task-estimate/task-summary markers, setting them on ev as a side
+// effect. ok is false for an absent or empty text field.
+func parseAssistantTextBlock(block map[string]interface{}, ev *tailer.ParsedEvent) (string, bool) {
+	text, ok := block["data"].(string)
+	if !ok || text == "" {
+		return "", false
+	}
+	if est := tailer.ScanTaskEstimate(text, ev.Timestamp); est != nil {
+		ev.TaskEstimate = est
+	}
+	if s := tailer.ScanTaskSummary(text, ev.Timestamp); s != nil {
+		ev.TaskSummary = s
+	}
+	return text, true
 }
 
 // parseKiroToolResults handles the "ToolResults" kind: collects tool-result

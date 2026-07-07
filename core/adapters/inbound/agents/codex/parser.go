@@ -157,13 +157,7 @@ func applyCodexEventType(eventType string, raw map[string]interface{}, ev *taile
 		}
 
 	case "response_item":
-		if payload, ok := raw["payload"].(map[string]interface{}); ok {
-			if !parseCodexResponseItem(payload, ev) {
-				ev.Skip = true
-			}
-		} else {
-			ev.Skip = true
-		}
+		applyCodexResponseItem(raw, ev)
 
 	case "function_call":
 		if !parseCodexFunctionCall(raw, ev) {
@@ -204,6 +198,16 @@ func applyCodexEventType(eventType string, raw map[string]interface{}, ev *taile
 		ev.Skip = true
 
 	default:
+		ev.Skip = true
+	}
+}
+
+// applyCodexResponseItem handles the "response_item" case: unlike
+// function_call/message, its payload is nested one level down, so the lookup
+// is split out of applyCodexEventType's switch (go:S3776).
+func applyCodexResponseItem(raw map[string]interface{}, ev *tailer.ParsedEvent) {
+	payload, ok := raw["payload"].(map[string]interface{})
+	if !ok || !parseCodexResponseItem(payload, ev) {
 		ev.Skip = true
 	}
 }

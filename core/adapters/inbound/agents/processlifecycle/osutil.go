@@ -182,16 +182,28 @@ func applyAncestryFallbacks(l *session.Launcher, pid int, ancestry func() (term 
 	// Without this, clicking the session in the UI raises kitty but can't
 	// target the right tab — exactly the symptom reported for pi sessions
 	// in issue #326.
-	if l.TermProgram == "kitty" && l.KittyPID == 0 {
-		if term, kpid := ancestry(); term == "kitty" && kpid > 0 {
-			l.KittyPID = kpid
-			if l.KittyListenOn == "" {
-				l.KittyListenOn = kittyListenOnFor(kpid)
-			}
-			if l.KittyListenOn != "" && l.KittyWindowID == "" {
-				l.KittyWindowID = kittyWindowIDForPID(l.KittyListenOn, pid)
-			}
-		}
+	applyKittyAncestryBackfill(l, pid, ancestry)
+}
+
+// applyKittyAncestryBackfill fills in KittyPID/KittyListenOn/KittyWindowID
+// for a session whose env yielded no kitty signals despite ancestry saying
+// kitty is the host (Apple-signed agents like `pi`, hardened-runtime
+// binaries) — split out of applyAncestryFallbacks so its nested guards don't
+// compound that function's cognitive complexity (go:S3776).
+func applyKittyAncestryBackfill(l *session.Launcher, pid int, ancestry func() (term string, hostPID int)) {
+	if l.TermProgram != "kitty" || l.KittyPID != 0 {
+		return
+	}
+	term, kpid := ancestry()
+	if term != "kitty" || kpid <= 0 {
+		return
+	}
+	l.KittyPID = kpid
+	if l.KittyListenOn == "" {
+		l.KittyListenOn = kittyListenOnFor(kpid)
+	}
+	if l.KittyListenOn != "" && l.KittyWindowID == "" {
+		l.KittyWindowID = kittyWindowIDForPID(l.KittyListenOn, pid)
 	}
 }
 
