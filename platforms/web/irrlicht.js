@@ -251,6 +251,19 @@ import { reconcile, paintRowNum } from './domReconcile.js';
     // a tick that's already reflected in our snapshot (closing the connect-time race).
     const lastTickGen = Object.create(null);
 
+    // isDangerousKey guards every historyByGranularity[gran][sessionID] /
+    // lastTickGen[sessionID] access below. Those dicts are already
+    // Object.create(null) (no prototype to hijack via a "__proto__" key),
+    // but CodeQL's prototype-pollution query doesn't credit that — it
+    // flags the later `arr[...] = value` write on the value pulled out by
+    // a server-controlled key, several lines downstream of where the dict
+    // itself was hardened. Rejecting the dangerous keys at the point of
+    // lookup makes the safety explicit right where CodeQL's dataflow
+    // expects to see it, on top of the null-prototype backstop.
+    function isDangerousKey(key) {
+      return key === '__proto__' || key === 'constructor' || key === 'prototype';
+    }
+
     const HISTORY_PRIORITY_TO_STATE = ['ready', 'working', 'waiting', ''];
     function historyPriorityForState(s) {
       switch (s) {
@@ -296,6 +309,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
     }
 
     function applyHistorySnapshot(sessionID, history, generations) {
+      if (isDangerousKey(sessionID)) return;
       for (const granKey of Object.keys(history)) {
         const gran = Number.parseInt(granKey, 10);
         if (![1, 10, 60].includes(gran)) continue;
@@ -320,31 +334,44 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       rebuildTimelineHistory();
     }
 
+    // applyOneTickBucket folds one session's bucket update into dict,
+    // returning whether it actually changed anything. Extracted from
+    // applyHistoryTick so that function's own loop/dedup branching doesn't
+    // compound with this per-session bucket-shifting logic (CodeScene
+    // flagged applyHistoryTick as a declining hotspot once the
+    // isDangerousKey guard added a branch on top of an already-complex
+    // method).
+    function applyOneTickBucket(dict, sid, granularitySec, buckets, bucketGenerations) {
+      if (isDangerousKey(sid)) return false;
+      // Skip if this tick has already been folded into our snapshot.
+      if (bucketGenerations?.[sid] !== undefined) {
+        const gen = bucketGenerations[sid];
+        const last = lastTickGen[sid]?.[granularitySec] || 0;
+        if (last && gen <= last) return false;
+        if (!lastTickGen[sid]) lastTickGen[sid] = Object.create(null);
+        lastTickGen[sid][granularitySec] = gen;
+      }
+      let arr = dict[sid];
+      if (!arr) arr = new Array(60).fill('');
+      arr.shift();
+      arr.push(HISTORY_PRIORITY_TO_STATE[buckets[sid] & 0x3]);
+      while (arr.length < 60) arr.unshift('');
+      dict[sid] = arr;
+      return true;
+    }
+
     function applyHistoryTick(granularitySec, buckets, bucketGenerations) {
       if (![1, 10, 60].includes(granularitySec)) return;
       const dict = historyByGranularity[granularitySec];
       let changed = false;
       for (const sid of Object.keys(buckets)) {
-        // Skip if this tick has already been folded into our snapshot.
-        if (bucketGenerations?.[sid] !== undefined) {
-          const gen = bucketGenerations[sid];
-          const last = lastTickGen[sid]?.[granularitySec] || 0;
-          if (last && gen <= last) continue;
-          if (!lastTickGen[sid]) lastTickGen[sid] = Object.create(null);
-          lastTickGen[sid][granularitySec] = gen;
-        }
-        let arr = dict[sid];
-        if (!arr) arr = new Array(60).fill('');
-        arr.shift();
-        arr.push(HISTORY_PRIORITY_TO_STATE[buckets[sid] & 0x3]);
-        while (arr.length < 60) arr.unshift('');
-        dict[sid] = arr;
-        changed = true;
+        if (applyOneTickBucket(dict, sid, granularitySec, buckets, bucketGenerations)) changed = true;
       }
       if (changed && granularitySec === currentGranularity) rebuildTimelineHistory();
     }
 
     function applyHistoryUpgrade(sessionID, priority) {
+      if (isDangerousKey(sessionID)) return;
       const newState = HISTORY_PRIORITY_TO_STATE[priority & 0x3];
       const newPrio = historyPriorityForState(newState);
       let changedActive = false;

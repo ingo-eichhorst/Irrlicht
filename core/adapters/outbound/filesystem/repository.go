@@ -41,7 +41,16 @@ func (r *SessionRepository) InstancesDir() string {
 
 // Load reads a session state from disk. Returns (nil, err) if the file does not exist.
 func (r *SessionRepository) Load(sessionID string) (*session.SessionState, error) {
-	data, err := os.ReadFile(r.statePath(sessionID))
+	path := r.statePath(sessionID)
+	// statePath already routes sessionID through sanitizeSessionID, so this is
+	// a no-op for any legitimate caller — but CodeQL's go/path-injection query
+	// doesn't credit a sanitizer applied inside a called function one hop back
+	// (see sanitizeSessionID's doc comment); checking the exact value reaching
+	// os.ReadFile, right here, is what it recognizes.
+	if strings.Contains(path, "..") {
+		return nil, fmt.Errorf("invalid session id %q", sessionID)
+	}
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
