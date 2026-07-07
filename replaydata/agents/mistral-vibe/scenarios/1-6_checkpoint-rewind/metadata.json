@@ -142,12 +142,12 @@
       "settings": {},
       "timeout_seconds": 180,
       "verify": [
-        "events.jsonl contains a presession_created for proc-<PID> within 1000 ms",
-        "events.jsonl contains a session for the session_<ts>_<hash> dir within 60s of the first send",
-        "two clean working→ready arcs on the original session (turns 'one', 'two')",
-        "after /rewind, a NEW session_<...> dir + session row appears in ready (the fork), and the original session row is NOT removed (no transcript_removed)",
-        "post-rewind turn ('three') drives a clean ready→working→ready arc on the NEW session",
-        "final live state is ready; observations: model=mistral-medium-3.5, tokens_nonzero, no per-turn cost"
+        "events.jsonl contains a presession_created for proc-<PID> within 1000 ms + pid_discovered",
+        "SESSION-1 (session_<ts>_<hash>) appears in ready and runs two clean working→ready arcs (turns one, two)",
+        "after /rewind + Enter (single-option RewindApp), a NEW session_<...> dir (SESSION-2) + session row appears (the fork), materializing once the post-rewind turn completes",
+        "RECORD-CORRECTED: the original SESSION-1 row IS removed (transcript_removed) as the same PID reconciles onto SESSION-2 — the on-disk messages.jsonl persists, only the daemon session row is dropped (refutes the assessment’s no-removal claim)",
+        "post-rewind turn (three) drives a clean ready→working→ready arc on SESSION-2; a benign ~2s post-turn activity blip may follow",
+        "final live state is ready; observations: agent-only (model/tokens sidecar-only, unverifiable offline)"
       ]
     }
   }
