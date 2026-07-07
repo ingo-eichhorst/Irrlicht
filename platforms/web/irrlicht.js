@@ -263,7 +263,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       if (raw.length !== 15) return null;
       const out = new Array(60);
       for (let i = 0; i < 15; i++) {
-        const byte = raw.charCodeAt(i);
+        const byte = raw.codePointAt(i);
         out[i * 4 + 0] = HISTORY_PRIORITY_TO_STATE[(byte >> 6) & 0x3];
         out[i * 4 + 1] = HISTORY_PRIORITY_TO_STATE[(byte >> 4) & 0x3];
         out[i * 4 + 2] = HISTORY_PRIORITY_TO_STATE[(byte >> 2) & 0x3];

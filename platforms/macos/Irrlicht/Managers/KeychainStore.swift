@@ -34,10 +34,11 @@ enum KeychainStore {
         // swift:S6288): irrlichd reads this token unattended to auto-reconnect
         // to the relay, including right after login before the user has
         // touched the app. AfterFirstUnlock is the standard non-interactive
-        // tier — item is unavailable before the device's first unlock (and
-        // never leaves this device, see kSecAttrSynchronizable default of
-        // false), but doesn't block a headless read afterward.
-        attrs[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        // tier — item is unavailable before the device's first unlock, but
+        // doesn't block a headless read afterward. ThisDeviceOnly formalizes
+        // that this never leaves the device (matches kSecAttrSynchronizable's
+        // default of false, now explicit rather than incidental).
+        attrs[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         return SecItemAdd(attrs as CFDictionary, nil) == errSecSuccess
     }
 
