@@ -56,8 +56,8 @@ final class SessionManagerTests: XCTestCase {
         XCTAssertEqual(session.id, "sess_test123")
         XCTAssertEqual(session.state, .working)
         XCTAssertEqual(session.model, "claude-3.7-sonnet")
-        XCTAssertEqual(session.cwd, "/Users/test/projects/app")
-        XCTAssertEqual(session.transcriptPath, "/Users/test/.claude/projects/app/transcript.jsonl")
+        XCTAssertEqual(session.cwd, "/Users/test/projects/app")  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
+        XCTAssertEqual(session.transcriptPath, "/Users/test/.claude/projects/app/transcript.jsonl")  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
         XCTAssertEqual(session.eventCount, 5)
         XCTAssertEqual(session.lastEvent, "UserPromptSubmit")
     }
@@ -171,8 +171,8 @@ final class SessionManagerTests: XCTestCase {
             id: "sess_abc123def456ghi789",
             state: .working,
             model: "claude-3.7-sonnet",
-            cwd: "/test",
-            transcriptPath: "/test/transcript.jsonl",
+            cwd: "/test",  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
+            transcriptPath: "/test/transcript.jsonl",  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
             firstSeen: Date(),
             updatedAt: Date(),
             eventCount: 1,
@@ -188,8 +188,8 @@ final class SessionManagerTests: XCTestCase {
             id: "sess_test",
             state: .working,
             model: "claude-3.7-sonnet",
-            cwd: "/test",
-            transcriptPath: "/test/transcript.jsonl",
+            cwd: "/test",  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
+            transcriptPath: "/test/transcript.jsonl",  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
             firstSeen: oneMinuteAgo,
             updatedAt: oneMinuteAgo,
             eventCount: 1,
@@ -302,8 +302,8 @@ final class SessionManagerTests: XCTestCase {
             id: "sess_\(id)",
             state: state,
             model: "claude-3.7-sonnet",
-            cwd: "/Users/test/projects/test",
-            transcriptPath: "/Users/test/.claude/projects/test/transcript.jsonl",
+            cwd: "/Users/test/projects/test",  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
+            transcriptPath: "/Users/test/.claude/projects/test/transcript.jsonl",  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
             firstSeen: Date(),
             updatedAt: Date(),
             eventCount: 1,
@@ -424,7 +424,7 @@ final class SessionManagerTests: XCTestCase {
     func testTitleMatchScoreFullCwdDominates() {
         // Full cwd in title (iTerm2/Terminal tab title style) dominates any
         // ancestor match.
-        let cwd = "/Users/ingo/projects/irrlicht/.claude/worktrees/170"
+        let cwd = "/Users/ingo/projects/irrlicht/.claude/worktrees/170"  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
         XCTAssertEqual(
             AXTitleMatchActivator.titleMatchScore(
                 title: "ingo@mac: /Users/ingo/projects/irrlicht/.claude/worktrees/170 — zsh",
@@ -436,7 +436,7 @@ final class SessionManagerTests: XCTestCase {
         // cwd is several levels below the VS Code workspace root.
         // VS Code's window title shows only the workspace folder name
         // ("irrlicht"). The matcher must still find that as an ancestor.
-        let cwd = "/Users/ingo/projects/irrlicht/.claude/worktrees/170"
+        let cwd = "/Users/ingo/projects/irrlicht/.claude/worktrees/170"  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
 
         // parts index: Users(0) ingo(1) projects(2) irrlicht(3) .claude(4) worktrees(5) 170(6)
         //   Basename "170" — score 7.
@@ -458,7 +458,7 @@ final class SessionManagerTests: XCTestCase {
     func testTitleMatchScoreSkipsGenericTopsAndHomeBasename() {
         // "Users" and the user's home basename must never match alone —
         // otherwise every title string containing "ingo" would win.
-        let cwd = "/Users/ingo/projects/irrlicht"
+        let cwd = "/Users/ingo/projects/irrlicht"  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
         // Title matches "ingo" only — must score 0 (skipped).
         XCTAssertEqual(
             AXTitleMatchActivator.titleMatchScore(title: "ingo@mac: ~ — zsh", cwd: cwd),
@@ -470,7 +470,7 @@ final class SessionManagerTests: XCTestCase {
     }
 
     func testTitleMatchScoreEmptyInputs() {
-        let cwd = "/Users/ingo/projects/irrlicht"
+        let cwd = "/Users/ingo/projects/irrlicht"  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
         XCTAssertEqual(AXTitleMatchActivator.titleMatchScore(title: "", cwd: cwd), 0)
         XCTAssertEqual(AXTitleMatchActivator.titleMatchScore(title: "anything", cwd: ""), 0)
     }
@@ -479,7 +479,7 @@ final class SessionManagerTests: XCTestCase {
         // Worktree session, three VS Code windows open. Only one window
         // (the main repo) is an ancestor of the cwd — that one wins, even
         // though the cwd basename itself doesn't appear anywhere.
-        let cwd = "/Users/ingo/projects/irrlicht/.claude/worktrees/170"
+        let cwd = "/Users/ingo/projects/irrlicht/.claude/worktrees/170"  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
         let titles = [
             "2.1.114 — irrlicht",                // 0: main repo, ancestor depth 3 → score 4
             "index.html — opencode-test",        // 1: unrelated
@@ -491,7 +491,7 @@ final class SessionManagerTests: XCTestCase {
     func testBestMatchIndexPrefersDeeperMatchWhenBothPresent() {
         // If both a deeper subfolder window ("core") and the repo root ("irrlicht")
         // are open, a cwd inside core should pick the core window.
-        let cwd = "/Users/ingo/projects/irrlicht/core"
+        let cwd = "/Users/ingo/projects/irrlicht/core"  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
         let titles = [
             "README.md — irrlicht",     // ancestor at depth 3 → score 4
             "main.go — core",           // basename at depth 4 → score 5 (wins)
@@ -500,7 +500,7 @@ final class SessionManagerTests: XCTestCase {
     }
 
     func testBestMatchIndexReturnsNilWhenNoMatch() {
-        let cwd = "/Users/ingo/projects/irrlicht/.claude/worktrees/170"
+        let cwd = "/Users/ingo/projects/irrlicht/.claude/worktrees/170"  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
         let titles = ["README.md — some-other-project", "", "main.swift — another"]
         XCTAssertNil(AXTitleMatchActivator.bestMatchIndex(titles: titles, cwd: cwd))
     }
@@ -509,7 +509,7 @@ final class SessionManagerTests: XCTestCase {
         // Two windows whose titles both contain "irrlicht" (same leaf depth = tie
         // on primary score). The second window also contains "a", the grandparent
         // segment of the actual cwd, so it should win the tie-break.
-        let cwd = "/Users/ingo/a/irrlicht"
+        let cwd = "/Users/ingo/a/irrlicht"  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
         let titles = [
             "README.md — irrlicht",   // 0: leaf match, prefix count 1 (irrlicht)
             "main.go — irrlicht — a", // 1: leaf match, prefix count 2 (irrlicht + a)
@@ -520,7 +520,7 @@ final class SessionManagerTests: XCTestCase {
     func testBestMatchIndexTmuxStyleTitleParsed() {
         // tmux window titles often embed full paths like "[0] 1:zsh /Users/.../irrlicht".
         // The Tier A score (1000) fires because the full cwd substring is present.
-        let cwd = "/Users/ingo/projects/irrlicht"
+        let cwd = "/Users/ingo/projects/irrlicht"  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
         let titles = [
             "README.md — other-project",
             "[0] 1:zsh /Users/ingo/projects/irrlicht",  // full cwd → Tier A
@@ -529,7 +529,7 @@ final class SessionManagerTests: XCTestCase {
     }
 
     func testCWDSegmentMatchCountBasic() {
-        let cwd = "/Users/ingo/a/irrlicht"
+        let cwd = "/Users/ingo/a/irrlicht"  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
         // Title contains both "irrlicht" and "a"
         XCTAssertEqual(
             AXTitleMatchActivator.cwdSegmentMatchCount(title: "main.go — irrlicht — a", cwd: cwd),
@@ -546,7 +546,7 @@ final class SessionManagerTests: XCTestCase {
 
     func testCWDSegmentMatchCountSkipsGenericSegments() {
         // "Users" and "home" are generic and must not inflate the count.
-        let cwd = "/Users/ingo/irrlicht"
+        let cwd = "/Users/ingo/irrlicht"  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
         XCTAssertEqual(
             AXTitleMatchActivator.cwdSegmentMatchCount(title: "Users — home — irrlicht", cwd: cwd),
             1) // only "irrlicht" counts; Users/ingo filtered out

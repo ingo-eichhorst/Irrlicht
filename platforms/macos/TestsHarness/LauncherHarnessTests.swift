@@ -108,7 +108,7 @@ final class LauncherHarnessTests: XCTestCase {
         // Must not crash or throw — just silently return.
         AXTitleMatchActivator.raiseMatchingWindow(
             bundleID: "com.nonexistent.app.harness",
-            cwd: "/Users/test/myproject"
+            cwd: "/Users/test/myproject"  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
         )
     }
 
@@ -128,7 +128,7 @@ final class LauncherHarnessTests: XCTestCase {
 
     func testProcessRunnerTimesOut() throws {
         try XCTSkipUnless(Self.harnessEnabled, "requires TEST_HARNESS=1")
-        let result = ProcessRunner.run("/bin/sleep", args: ["10"], timeout: 0.2)
+        let result = ProcessRunner.run("/bin/sleep", args: ["10"], timeout: 0.2)  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
         XCTAssertEqual(result.status, -1, "Timed-out process should return status -1")
         XCTAssertEqual(result.stderr, "timeout")
     }
@@ -137,7 +137,7 @@ final class LauncherHarnessTests: XCTestCase {
         try XCTSkipUnless(Self.harnessEnabled, "requires TEST_HARNESS=1")
         // Session with no KITTY_LISTEN_ON — should fall back to app-level
         // activation without crashing, and return false when kitty isn't installed.
-        let session = try makeSession(termProgram: "kitty", cwd: "/tmp/kitty-harness-test")
+        let session = try makeSession(termProgram: "kitty", cwd: "/tmp/kitty-harness-test")  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
         let activated = KittyActivator().activate(session)
         // We can only assert no crash; activated may be true or false depending
         // on whether kitty is installed on the developer's machine.
@@ -153,13 +153,13 @@ final class LauncherHarnessTests: XCTestCase {
     func testKittyLauncherDecodesKittyPID() throws {
         let session = try makeSession(
             termProgram: "kitty",
-            cwd: "/tmp/kitty-decode-test",
-            kittyListenOn: "unix:/tmp/kitty-12345",
+            cwd: "/tmp/kitty-decode-test",  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
+            kittyListenOn: "unix:/tmp/kitty-12345",  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
             kittyWindowID: "2",
             kittyPID: 12345
         )
         XCTAssertEqual(session.launcher?.kittyPID, 12345)
-        XCTAssertEqual(session.launcher?.kittyListenOn, "unix:/tmp/kitty-12345")
+        XCTAssertEqual(session.launcher?.kittyListenOn, "unix:/tmp/kitty-12345")  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
         XCTAssertEqual(session.launcher?.kittyWindowID, "2")
     }
 }

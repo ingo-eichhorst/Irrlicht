@@ -283,7 +283,7 @@ final class SessionManagerApiGroupsTests: XCTestCase {
         let id = UUID().uuidString
         let child = makeSession(id: "\(id)-child")
         let working = SessionState(
-            id: id, state: .working, model: "test-model", cwd: "/tmp",
+            id: id, state: .working, model: "test-model", cwd: "/tmp",  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
             firstSeen: Date(timeIntervalSince1970: 0),
             updatedAt: Date(timeIntervalSince1970: 0),
             role: "test-role", children: [child]
@@ -500,7 +500,7 @@ final class SessionManagerApiGroupsTests: XCTestCase {
             id: id,
             state: .working,
             model: "test-model",
-            cwd: "/tmp",
+            cwd: "/tmp",  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
             projectName: projectName,
             firstSeen: Date(timeIntervalSince1970: 0),
             updatedAt: Date(timeIntervalSince1970: 0),

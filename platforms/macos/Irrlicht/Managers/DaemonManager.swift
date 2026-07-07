@@ -150,7 +150,7 @@ final class DaemonManager: ObservableObject {
             return
         }
         let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")  // NOSONAR (swift:S1075) — local filesystem/binary path, not a network endpoint
         task.arguments = ["-x", "irrlichd"]
         task.standardOutput = FileHandle.nullDevice
         task.standardError = FileHandle.nullDevice

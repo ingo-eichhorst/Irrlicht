@@ -34,7 +34,7 @@ struct TmuxActivator: HostActivator {
             // Select the pane first so it's active when the host terminal
             // window comes to the foreground.
             let result = ProcessRunner.run(
-                "/usr/bin/env",
+                "/usr/bin/env",  // NOSONAR (swift:S1075) — local filesystem/binary path, not a network endpoint
                 args: ["tmux", "-S", socket, "select-pane", "-t", pane],
                 timeout: 2.0
             )

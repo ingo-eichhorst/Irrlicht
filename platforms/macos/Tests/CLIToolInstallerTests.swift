@@ -4,24 +4,24 @@ import XCTest
 final class CLIToolInstallerTests: XCTestCase {
     func testChooseTargetPicksFirstWritableCandidate() {
         let target = CLIToolInstaller.chooseTarget(
-            candidates: ["/nope/a", "/yes/b", "/yes/c"],
-            isWritableDir: { $0.hasPrefix("/yes") }
+            candidates: ["/nope/a", "/yes/b", "/yes/c"],  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
+            isWritableDir: { $0.hasPrefix("/yes") }  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
         )
-        XCTAssertEqual(target, "/yes/b")
+        XCTAssertEqual(target, "/yes/b")  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
     }
 
     func testChooseTargetFallsBackToSecondCandidate() {
         // The /usr/local/bin → /opt/homebrew/bin ladder: first not writable.
         let target = CLIToolInstaller.chooseTarget(
-            candidates: ["/usr/local/bin", "/opt/homebrew/bin"],
-            isWritableDir: { $0 == "/opt/homebrew/bin" }
+            candidates: ["/usr/local/bin", "/opt/homebrew/bin"],  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
+            isWritableDir: { $0 == "/opt/homebrew/bin" }  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
         )
-        XCTAssertEqual(target, "/opt/homebrew/bin")
+        XCTAssertEqual(target, "/opt/homebrew/bin")  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
     }
 
     func testChooseTargetReturnsNilWhenNothingWritable() {
         XCTAssertNil(CLIToolInstaller.chooseTarget(
-            candidates: ["/a", "/b"],
+            candidates: ["/a", "/b"],  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
             isWritableDir: { _ in false }
         ))
     }
@@ -33,7 +33,7 @@ final class CLIToolInstallerTests: XCTestCase {
         // no embedded binary the failure is "not embedded".
         let dir = try makeTempDir()
         defer { try? FileManager.default.removeItem(atPath: dir) }
-        FileManager.default.createFile(atPath: dir + "/irrlicht-ls", contents: Data("real".utf8))
+        FileManager.default.createFile(atPath: dir + "/irrlicht-ls", contents: Data("real".utf8))  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
 
         let result = CLIToolInstaller.install(candidates: [dir])
         guard case .failed(let message) = result else {
@@ -44,7 +44,7 @@ final class CLIToolInstallerTests: XCTestCase {
         XCTAssertTrue(message.contains("not embedded"), "unexpected failure: \(message)")
         // The squatting file is untouched either way.
         XCTAssertEqual(
-            try String(contentsOfFile: dir + "/irrlicht-ls", encoding: .utf8), "real"
+            try String(contentsOfFile: dir + "/irrlicht-ls", encoding: .utf8), "real"  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
         )
     }
 
@@ -61,9 +61,9 @@ final class CLIToolInstallerTests: XCTestCase {
         // check and createSymbolicLink failed with "file exists".
         let dir = try makeTempDir()
         defer { try? FileManager.default.removeItem(atPath: dir) }
-        let link = dir + "/irrlicht-ls"
+        let link = dir + "/irrlicht-ls"  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
         try FileManager.default.createSymbolicLink(
-            atPath: link, withDestinationPath: dir + "/gone-bundle/irrlicht-ls"
+            atPath: link, withDestinationPath: dir + "/gone-bundle/irrlicht-ls"  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
         )
 
         XCTAssertNil(CLIToolInstaller.clearLinkSite(link), "dangling symlink must be cleared, not reported")
@@ -73,9 +73,9 @@ final class CLIToolInstallerTests: XCTestCase {
     func testClearLinkSiteRemovesValidSymlink() throws {
         let dir = try makeTempDir()
         defer { try? FileManager.default.removeItem(atPath: dir) }
-        let target = dir + "/target"
+        let target = dir + "/target"  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
         FileManager.default.createFile(atPath: target, contents: Data("bin".utf8))
-        let link = dir + "/irrlicht-ls"
+        let link = dir + "/irrlicht-ls"  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
         try FileManager.default.createSymbolicLink(atPath: link, withDestinationPath: target)
 
         XCTAssertNil(CLIToolInstaller.clearLinkSite(link))
@@ -87,7 +87,7 @@ final class CLIToolInstallerTests: XCTestCase {
     func testClearLinkSiteRefusesRegularFile() throws {
         let dir = try makeTempDir()
         defer { try? FileManager.default.removeItem(atPath: dir) }
-        let link = dir + "/irrlicht-ls"
+        let link = dir + "/irrlicht-ls"  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
         FileManager.default.createFile(atPath: link, contents: Data("real".utf8))
 
         let message = CLIToolInstaller.clearLinkSite(link)

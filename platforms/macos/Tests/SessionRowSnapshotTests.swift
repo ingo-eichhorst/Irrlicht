@@ -176,7 +176,7 @@ final class SessionRowSnapshotTests: XCTestCase {
             id: "sess_row_test",
             state: state,
             model: "claude-opus-4-7",
-            cwd: "/Users/test/projects/app",
+            cwd: "/Users/test/projects/app",  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
             transcriptPath: nil,
             gitBranch: "main",
             projectName: "app",

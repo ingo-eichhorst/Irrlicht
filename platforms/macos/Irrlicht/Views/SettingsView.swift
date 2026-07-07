@@ -8,7 +8,7 @@ struct SettingsView: View {
     /// (SonarQube swift:S1075 flags the literal; this is intentionally fixed
     /// — it's an example value, not something worth threading through as a
     /// parameter for its three call sites here).
-    private static let defaultRelayURLPlaceholder = "ws://localhost:7839"
+    private static let defaultRelayURLPlaceholder = "ws://localhost:7839"  // NOSONAR (swift:S1075) — see doc comment above
 
     @Binding var isPresented: Bool
     /// Swaps the panel body to the permission wizard in review mode (issue #570).

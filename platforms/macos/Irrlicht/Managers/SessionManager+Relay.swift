@@ -239,7 +239,7 @@ extension SessionManager {
         else if s.hasPrefix("https://") { s = "wss://" + s.dropFirst("https://".count) }
         if !s.hasPrefix("ws://") && !s.hasPrefix("wss://") { s = "ws://" + s }
         while s.hasSuffix("/") { s.removeLast() }
-        if !s.hasSuffix("/api/v1/sessions/stream") { s += "/api/v1/sessions/stream" }
+        if !s.hasSuffix("/api/v1/sessions/stream") { s += "/api/v1/sessions/stream" }  // NOSONAR (swift:S1075) — fixed route on the daemon's own loopback API, not an external URI
         return URL(string: s)
     }
 

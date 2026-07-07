@@ -7,7 +7,7 @@ import Foundation
 /// tells it the desired `{enabled, url, token}`, which works whether the app
 /// spawned the daemon or adopted an already-running one.
 enum PublishClient {
-    static let path = "/api/v1/relay/publish"
+    static let path = "/api/v1/relay/publish"  // NOSONAR (swift:S1075) — fixed route on the daemon's own loopback API, not an external URI
 
     /// Wire shape of the PUT body. The relay token travels in this loopback
     /// body rather than a spawn-time env var (issue #722); the daemon binds

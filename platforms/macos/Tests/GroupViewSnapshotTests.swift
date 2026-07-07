@@ -40,7 +40,7 @@ final class GroupViewSnapshotTests: XCTestCase {
             id: id,
             state: .working,
             model: "claude-opus-4-7",
-            cwd: "/Users/test/projects/app",
+            cwd: "/Users/test/projects/app",  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
             transcriptPath: nil,
             gitBranch: "main",
             projectName: "app",
@@ -119,7 +119,7 @@ final class GroupViewSnapshotTests: XCTestCase {
             id: "proc-0",
             state: .ready,
             model: "gemini-3-pro",
-            cwd: "/Users/test/projects/app",
+            cwd: "/Users/test/projects/app",  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
             transcriptPath: nil,
             gitBranch: "main",
             projectName: "app",
