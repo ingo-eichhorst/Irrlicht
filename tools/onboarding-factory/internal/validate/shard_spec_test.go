@@ -136,18 +136,28 @@ func TestValidatePhases_AgainstEvents(t *testing.T) {
 	}
 }
 
-// TestValidatePhases_NoEvents returns (nil,nil) when the recording is absent —
-// the same "nothing to validate yet" shape ValidateExpectedAgainst relies on.
-func TestValidatePhases_NoEvents(t *testing.T) {
-	meta, phases, _, err := ParseShardSpec(nil, rawLines(`{"phase":"p","expected_state":"ready"}`))
-	if err != nil {
-		t.Fatal(err)
+// TestValidatePhases_NoEventsToValidate covers every "nothing to validate
+// yet" eventsPath: a genuinely-missing recording, and a literal ".." that
+// must be rejected before it ever falls through to os.Open — both yield the
+// same (nil, nil) shape ValidateExpectedAgainst relies on.
+func TestValidatePhases_NoEventsToValidate(t *testing.T) {
+	cases := map[string]string{
+		"absent recording": filepath.Join(t.TempDir(), "missing.jsonl"),
+		"path traversal":   "../../etc/events.jsonl",
 	}
-	rep, err := ValidatePhases(meta, phases, filepath.Join(t.TempDir(), "missing.jsonl"))
-	if err != nil {
-		t.Fatalf("absent events must not error, got %v", err)
-	}
-	if rep != nil {
-		t.Fatalf("absent events must yield a nil report, got %+v", rep)
+	for name, eventsPath := range cases {
+		t.Run(name, func(t *testing.T) {
+			meta, phases, _, err := ParseShardSpec(nil, rawLines(`{"phase":"p","expected_state":"ready"}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			rep, err := ValidatePhases(meta, phases, eventsPath)
+			if err != nil {
+				t.Fatalf("must not error, got %v", err)
+			}
+			if rep != nil {
+				t.Fatalf("must yield a nil report, got %+v", rep)
+			}
+		})
 	}
 }

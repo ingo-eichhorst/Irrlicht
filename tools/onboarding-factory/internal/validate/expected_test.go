@@ -323,6 +323,92 @@ func writeRec(t *testing.T, dir, file, content string) {
 	mustWrite(t, filepath.Join(dir, "recordings", "rec", file), content)
 }
 
+// TestHasParentTraversal covers the shared path-traversal guard used at
+// every os.Open/os.Stat/os.ReadDir sink in this file.
+func TestHasParentTraversal(t *testing.T) {
+	cases := map[string]bool{
+		"..":               true,
+		"../../etc/passwd": true,
+		"sub/../evil":      true,
+		"a/b/../../c":      true,
+		"":                 false,
+		"scenario-id":      false,
+		"claudecode/scenarios/2-17_user-blocking-question": false,
+		"expected.jsonl": false,
+	}
+	for p, want := range cases {
+		if got := hasParentTraversal(p); got != want {
+			t.Errorf("hasParentTraversal(%q) = %v; want %v", p, got, want)
+		}
+	}
+}
+
+// TestNewestRecordingDir_rejectsPathTraversal proves a scenarioDir containing
+// a literal ".." can't be used to discover a recordings/ dir planted one
+// level up from a legitimate-looking base directory.
+func TestNewestRecordingDir_rejectsPathTraversal(t *testing.T) {
+	base := t.TempDir()
+	outsideDir := filepath.Join(filepath.Dir(base), "irrlicht-traversal-scenario")
+	if err := os.MkdirAll(filepath.Join(outsideDir, "recordings", "2026-01-01_run"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(outsideDir)
+
+	// Deliberately NOT filepath.Join (which would Clean away the ".."), so
+	// the literal traversal segment survives into the string under test.
+	traversal := base + string(filepath.Separator) + ".." + string(filepath.Separator) + filepath.Base(outsideDir)
+	if _, err := os.Stat(filepath.Join(traversal, "recordings")); err != nil {
+		t.Fatalf("setup: traversal path should resolve to the real dir: %v", err)
+	}
+
+	if dir, ok := NewestRecordingDir(traversal); ok {
+		t.Errorf("NewestRecordingDir(%q) = (%q, true); want (\"\", false) — traversal should be rejected", traversal, dir)
+	}
+}
+
+// TestValidateExpected_rejectsPathTraversal mirrors the above for the
+// top-level cell validator.
+func TestValidateExpected_rejectsPathTraversal(t *testing.T) {
+	report, err := ValidateExpected("../../etc")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if report != nil {
+		t.Fatalf("expected nil report for a traversal scenarioDir, got %+v", report)
+	}
+}
+
+// TestValidateExpectedAgainst_rejectsPathTraversal proves neither
+// expectedPath nor eventsPath can carry a ".." segment.
+func TestValidateExpectedAgainst_rejectsPathTraversal(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "expected.jsonl"),
+		`{"schema_version":1,"scenario_id":"test","source":"unit test"}`+"\n")
+	writeRec(t, dir, "events.jsonl", `{"ts":"2026-01-01T00:00:00Z","kind":"transcript_new","session_id":"x"}`+"\n")
+	goodExpected := filepath.Join(dir, "expected.jsonl")
+	goodEvents := filepath.Join(dir, "recordings", "rec", "events.jsonl")
+
+	cases := []struct {
+		name     string
+		expected string
+		events   string
+	}{
+		{"traversal in expectedPath", "../../etc/expected.jsonl", goodEvents},
+		{"traversal in eventsPath", goodExpected, "../../etc/events.jsonl"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			report, err := ValidateExpectedAgainst(c.expected, c.events)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if report != nil {
+				t.Fatalf("expected nil report for a traversal path, got %+v", report)
+			}
+		})
+	}
+}
+
 // TestRecordingComplete pins the structural completeness rules for one recording
 // directory: events + manifest + exactly one transcript, and a replay golden iff
 // the transcript is jsonl (markdown adapters like aider have none).

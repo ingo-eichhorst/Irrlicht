@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 
 	"irrlicht/core/domain/lifecycle"
 )
@@ -95,6 +96,71 @@ func TestLoadEventsOrSynthesize_degradedUsesClassifier(t *testing.T) {
 	}
 	if !sawWaiting {
 		t.Error("expected a waiting transition — the synthesized arc must carry classifier semantics, not a naive ready↔working arc")
+	}
+}
+
+// TestHasParentTraversal covers the shared path-traversal guard used at
+// every os.Open/os.Stat sink in this file and in events.go.
+func TestHasParentTraversal(t *testing.T) {
+	cases := map[string]bool{
+		"..":               true,
+		"../../etc/passwd": true,
+		"sub/../evil":      true,
+		"a/b/../../c":      true,
+		"":                 false,
+		"scenario-id":      false,
+		"claudecode/scenarios/2-17_user-blocking-question": false,
+		"2026-05-01_run": false,
+	}
+	for p, want := range cases {
+		if got := hasParentTraversal(p); got != want {
+			t.Errorf("hasParentTraversal(%q) = %v; want %v", p, got, want)
+		}
+	}
+}
+
+// TestLoadEventsOrSynthesize_rejectsPathTraversal proves a scenarioDir
+// containing a literal ".." can't be used to read an events.jsonl planted
+// one level up from a legitimate-looking base directory.
+func TestLoadEventsOrSynthesize_rejectsPathTraversal(t *testing.T) {
+	base := t.TempDir()
+	outsideDir := filepath.Join(filepath.Dir(base), "irrlicht-traversal-scenario")
+	if err := os.MkdirAll(outsideDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(outsideDir)
+	content := `{"seq":1,"ts":"2026-05-01T13:11:31Z","kind":"transcript_new","session_id":"s"}` + "\n"
+	if err := os.WriteFile(filepath.Join(outsideDir, "events.jsonl"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	traversal := base + string(filepath.Separator) + ".." + string(filepath.Separator) + filepath.Base(outsideDir)
+	if _, err := os.Stat(filepath.Join(traversal, "events.jsonl")); err != nil {
+		t.Fatalf("setup: traversal path should resolve to the real file: %v", err)
+	}
+
+	events, degraded, err := LoadEventsOrSynthesize(traversal, "claudecode")
+	if err != nil {
+		t.Fatalf("LoadEventsOrSynthesize(%q): unexpected error %v", traversal, err)
+	}
+	if events != nil || degraded {
+		t.Errorf("LoadEventsOrSynthesize(%q) = (%v, %v); want (nil, false) — traversal should be rejected", traversal, events, degraded)
+	}
+}
+
+// TestLoadTurnMarkers_rejectsPathTraversal mirrors the above for the
+// turn-marker loader.
+func TestLoadTurnMarkers_rejectsPathTraversal(t *testing.T) {
+	if got := LoadTurnMarkers("../../etc", time.Now()); got != nil {
+		t.Errorf("LoadTurnMarkers(traversal) = %v; want nil", got)
+	}
+}
+
+// TestSynthesizeEventsFromTranscript_rejectsPathTraversal mirrors the above
+// for the transcript synthesizer's entry point.
+func TestSynthesizeEventsFromTranscript_rejectsPathTraversal(t *testing.T) {
+	if got := SynthesizeEventsFromTranscript("../../etc", "claudecode"); got != nil {
+		t.Errorf("SynthesizeEventsFromTranscript(traversal) = %v; want nil", got)
 	}
 }
 
