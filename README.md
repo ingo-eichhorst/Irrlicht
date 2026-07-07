@@ -140,7 +140,7 @@ Irrlicht is agent-verifiable by design — every session lives as atomic JSON at
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/chart?repos=ingo-eichhorst/Irrlicht&type=date&legend=top-left)](https://www.star-history.com/?repos=ingo-eichhorst%2FIrrlicht&type=date&legend=top-left)
+[![Star History Chart](assets/star-history.svg)](https://www.star-history.com/?repos=ingo-eichhorst%2FIrrlicht&type=date&legend=top-left)
 
 ## License
 

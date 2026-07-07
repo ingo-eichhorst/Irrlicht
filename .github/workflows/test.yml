@@ -7,8 +7,9 @@ name: Tests
 # including the onboarding-factory matrix/shard/validate suites — were verified
 # locally only and could not block a PR.
 #
-# Both Go modules are exercised. They share a go.work, so the runner resolves
-# cross-module packages without per-module `go mod download`.
+# core, onboarding-factory, and starhistory are exercised. They share a
+# go.work, so the runner resolves cross-module packages without per-module
+# `go mod download`.
 
 on:
   pull_request:
@@ -63,6 +64,12 @@ jobs:
       # writer's read-back check, so a hand-edit that bypassed `of` fails here.
       - name: Validate replaydata (of validate)
         run: go run ./tools/onboarding-factory/cmd/of validate
+
+      # tools/starhistory renders the README's star-history chart to a static
+      # SVG (see .github/workflows/star-history.yml) — gates the cumulative
+      # series + SVG rendering logic and the Link-header pagination parser.
+      - name: Test starhistory module
+        run: go test ./tools/starhistory/... -count=1
 
       # The recording-rig shell scripts aren't exercised by `go test` /
       # replay-fixtures (those replay static transcripts without driving), so
