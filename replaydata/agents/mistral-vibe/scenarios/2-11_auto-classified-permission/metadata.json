@@ -1,0 +1,121 @@
+{
+  "scenario_id": "auto-classified-permission",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "gap:wait_turn",
+    "agent_cli_version": "2.19.0",
+    "daemon_version": "0.5.5+91ca4fe.dirty",
+    "confidence": 0.85,
+    "notes": "safe auto-classified read is a normal tool arc; no permission event in transcript, daemon sees ready→working→ready with no waiting"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "auto-classified-permission",
+      "agent": "mistral-vibe",
+      "assessed_at": "2026-07-07T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "gap:wait_turn",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: gap:wait_turn\n\n## Reasoning\n\nMistral Vibe ships a real per-tool auto-classifier. Each tool declares a `ToolPermission` (ALWAYS / ASK / NEVER; base default ASK — core/tools/base.py:122), and `agent_loop._should_execute_tool` resolves a per-invocation `PermissionContext` (agent_loop.py:1496): a call resolving to `ToolPermission.ALWAYS` executes WITHOUT a prompt, a call resolving to `ASK` shows a UI approval dialog. Read-only inspection tools are auto-classified safe — `read_file.permission = ToolPermission.ALWAYS` (read_file.py:71) and `grep.permission = ToolPermission.ALWAYS` (grep.py:37), with a `sensitive_patterns` list that promotes specific paths back to ASK. This is exactly the March-2026 Auto-Mode shape the scenario locks down: the in-product classifier approves a benign call on the safe branch while still gating the risky branch (owned by tool-gate-permission-prompt). So agent_supports is an unambiguous yes.\n\nThis is distinct from scenario 2.2 (auto-executed-tool-call), which relies on the GLOBAL `bypass_tool_permissions` (--yolo / --auto-approve) override that short-circuits the classifier entirely (agent_loop.py:1500). This cell exercises the classifier's SAFE branch in NORMAL permission mode: a `read_file` on a benign project file resolves to ALWAYS and runs with no dialog.\n\n## The KEY daemon question — is a distinct classification signal needed?\n\nNo. When the classifier auto-approves a safe call, Vibe writes NOTHING distinctive to the transcript — messages.jsonl carries only the ordinary arc: `assistant` with OpenAI-shape `tool_calls[]` (nested `function.name`, e.g. `read_file`) → `role:tool` result linked by `tool_call_id` → text-only terminal `assistant`. The classifier verdict (auto-approve vs prompt) lives entirely in the runtime and the UI; the only aggregate trace is `stats.tool_calls_agreed` in meta.json, which is a running total, not a per-event signal. A live transcript on this machine (session_20260706_101952_48e134e3) shows this exact arc for 158 tool calls, all agreed, zero rejected.\n\nThe scenario's SAFE-path acceptance asserts only the state arc — `ready → working → ready`, state never entering `waiting` — not the classifier decision. That arc IS the normal tool arc, which the daemon already captures in full, so daemon=full. This mirrors claudecode's auto-classified-permission cell, which records ONLY the safe (auto-approved) branch and derives the same verdict: irrlicht does not inspect the classifier; it observes the downstream state, which is all the spec asserts. The risky branch (working→waiting) is a separate cell.\n\n## Mapping onto the vibe parser (parser.go)\n\n**ready→working with a tool_use mid-turn.** The first `user` line → `user_message` (opens the turn). The `assistant` line carrying `tool_calls[]` → `assistant_message`; `parseToolCalls` lifts `function.name` into `ev.ToolUses`, so the read_file tool_use is observed inside the working span and the session stays working.\n\n**state never enters waiting.** The vibe adapter declares NO Control and the parser has NO permission-gate / AskUser path — a `role:tool` line is just a `tool_result` (continued activity that never touches state). There is no parser-side write to any PermissionPending flag, so `waiting` is structurally unreachable for this flow regardless of the classifier's internal decision.\n\n**terminal working→ready.** When the model stops calling tools and emits a text-only `assistant` message (no `tool_calls`), the parser emits `turn_done` and the session settles to ready.\n\n## Daemon sensor capture\n\nSource is `FilesUnderRoot` over `~/.vibe/logs/session/<id>/messages.jsonl` (agent.go, single-birth: session id = the session_<ts>_<hash> directory via SessionIDFromPath). The sibling `meta.json` sidecar supplies cwd, model NAME (`config.active_model` = `mistral-medium-3.5`), and `context_tokens` (sidecar.go). The whole ready→working→ready arc plus the tool_use is derivable from the tailed transcript → daemon=full for the topology this scenario asserts. `mistral-medium-3.5` passes `NormalizeModelName` unchanged.\n\n## Driver pillar — gap:wait_turn\n\nThe interactive driver is freshly scaffolded: `DRIVE_ELICITS=\"send slash sleep\"` (driver-interactive.sh:113) — `wait_turn` exists only as a `not_implemented` stub arm (line 168), so recipe-lint reports a SEMANTIC gap for the recipe's `wait_turn` step. `record` must port SEAM 2 (the turn-completion poll) from a reference driver before it can drive this cell. Tooling work, not an observability limit — the recipe + spec stand as-is.",
+      "caveats": [
+        "The classifier decision itself (auto-approved vs prompted) is NOT observable in messages.jsonl — only the aggregate meta.json stats.tool_calls_agreed counter reflects it, and that is a running total, not a per-event signal. This is a CAVEAT, not a downgrade: the scenario's safe-path acceptance asserts only the state arc (ready→working→ready, never waiting), which the normal tool arc satisfies in full. Same boundary as claudecode's cell.",
+        "The recipe deliberately uses NORMAL permission mode with a read_file call (auto-classified ALWAYS, read_file.py:71) rather than the global bypass_tool_permissions used by scenario 2.2 — that is the distinction between the two cells (per-tool classifier safe-branch vs global --yolo override). If the driver launches vibe with --auto-approve/bypass, this collapses into the 2.2 mechanism; keep the driver in normal mode so the classifier's ALWAYS resolution is what suppresses the prompt.",
+        "The safe call must target a benign file the classifier does NOT promote to ASK via sensitive_patterns (read_file/grep carry a sensitive_patterns list). Reading a plain project file (e.g. a README the driver stages) stays ALWAYS; a path matching a sensitive pattern would flip to ASK and show a UI dialog — which is still NOT written to the transcript (the arc stays working, no waiting), but defeats the intent of exercising the auto-approved branch.",
+        "PROVISIONAL on emission: whether vibe writes a text-only terminal assistant message (turn_done) after the read cycle — vs keeping tool_calls open — is a property of what the agent emits, not confirmable from the parser read alone. A live record promotes provisional→settled.",
+        "Observation field selection matches the adapter: vibe sets ONLY Tokens.Total (from sidecar context_tokens) on turn_done → summary.total_tokens (total_tokens_nonzero). It never populates cum input/output, so tokens_nonzero is deliberately NOT asserted. cost_nonzero=false: the sidecar decode reads no cost field (sidecar.go). context_window/utilization not asserted: mistral-medium-3.5 is absent from the capacity table so the window/util bar stays 0.",
+        "driver=gap:wait_turn: record must port the wait_turn seam (SEAM 2) into driver-interactive.sh before driving; DRIVE_ELICITS currently lists only send/slash/sleep."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/vibe/parser.go",
+          "note": "Role map: user→user_message (ready→working); assistant+tool_calls→assistant_message/working with parseToolCalls extracting function.name into ev.ToolUses; text-only assistant→turn_done (working→ready); tool→tool_result linked by tool_call_id. No permission-gate/AskUser path and no PermissionPending write, so waiting is unreachable — an auto-classified safe call is just the normal tool arc."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/vibe/agent.go",
+          "note": "FilesUnderRoot over ~/.vibe/logs/session (single-birth; session id = the session dir via SessionIDFromPath); CommandPattern binds the python vibe process; declares NO Control (read-only)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/vibe/sidecar.go",
+          "note": "meta.json sidecar decodes ONLY environment.working_directory, config.active_model (mistral-medium-3.5), stats.context_tokens — no cost, timestamps, or control fields; grounds cost_nonzero=false and the model observation."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/merlin/.local/share/uv/tools/mistral-vibe/lib/python3.13/site-packages/vibe/core/tools/permissions.py",
+          "note": "vibe v2.19.0 permission model: ToolPermission per tool + PermissionStore of approved rules; a call resolves a PermissionContext and executes without a prompt when the permission is ALWAYS — the auto-classifier this scenario locks down."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/merlin/.local/share/uv/tools/mistral-vibe/lib/python3.13/site-packages/vibe/core/tools/builtins/read_file.py",
+          "note": "read_file.py:71 `permission: ToolPermission = ToolPermission.ALWAYS` (grep.py:37 identical) — read-only inspection tools are auto-classified safe and execute with no prompt (base default is ASK, core/tools/base.py:122). A benign read is the canonical auto-approved safe call for this cell."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/merlin/.local/share/uv/tools/mistral-vibe/lib/python3.13/site-packages/vibe/core/agent_loop.py",
+          "note": "_should_execute_tool (line 1496): resolves per-invocation PermissionContext; ALWAYS→EXECUTE without prompt, ASK→UI dialog. bypass_tool_permissions (line 1500) short-circuits the classifier entirely — the GLOBAL override used by scenario 2.2, distinct from this cell's per-tool safe-branch. tool_calls_agreed is bumped (line 1429) but only into stats, not the transcript."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer_metrics.go",
+          "note": "applyTokenSnapshot: Tokens.Total>0 → metrics.TotalTokens (summary.total_tokens); cum input/output only from Tokens.Input/Output, which vibe never populates — grounds total_tokens_nonzero:true and tokens_nonzero not asserted."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/mistral-vibe/driver-interactive.sh",
+          "note": "DRIVE_ELICITS=\"send slash sleep\" (line 113); wait_turn is a not_implemented stub arm (line 168) — the recipe's wait_turn is a semantic gap → driver=gap:wait_turn until record ports SEAM 2."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/merlin/.vibe/logs/session/session_20260706_101952_48e134e3/meta.json",
+          "note": "Live meta.json (vibe v2.19.0): stats.tool_calls_agreed=158, tool_calls_rejected=0, tool_calls_hook_denied=0 — the classifier verdict surfaces ONLY as aggregate stats, never a per-event transcript signal; config.active_model=mistral-medium-3.5."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/2-11_auto-classified-permission/metadata.json",
+          "note": "Reference cell: claudecode captures ONLY the safe (auto-approved) branch and derives daemon=full because irrlicht observes the downstream state arc, not the classifier decision — the same boundary applied here."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "vibe CLI on PATH (~/.local/bin/vibe, v2.19.0) and authenticated (Mistral API key)",
+        "irrlichd is recording (run-cell.sh isolated mode, or --attach against a --record daemon)",
+        "vibe launched in NORMAL permission mode (NOT --auto-approve/bypass_tool_permissions) so the per-tool auto-classifier's ALWAYS resolution is what suppresses the prompt",
+        "driver seam ported by record: SEAM 2 wait_turn poll (DRIVE_ELICITS currently lacks wait_turn — gap:wait_turn)"
+      ],
+      "setup": [
+        "Create a fresh cwd under <staging>/cwd/ containing a benign project file (e.g. a small README.md) so the read_file target is present and unique for PID binding",
+        "Vibe mints its own session_<ts>_<hash> id on launch; the daemon session_id is that directory name (single-birth)"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Read the file README.md using the read_file tool, then reply 'done'."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the session_<ts>_<hash> session entering ready (single-birth; a transient proc-<PID> presession may precede it)",
+        "events.jsonl shows exactly one ready→working transition and one working→ready transition for the session",
+        "events.jsonl contains at least one tool_use event for the read_file tool inside the working span",
+        "events.jsonl contains NO state_transition to waiting for the session during the entire run (auto-classified ALWAYS → no prompt, no PermissionPending path in the adapter)",
+        "final session state is ready",
+        "the newest recording's replay summary shows model mistral-medium-3.5, total_tokens>0, and cost 0 (adapter reads no cost)"
+      ],
+      "settings": {},
+      "timeout_seconds": 180
+    }
+  }
+}
