@@ -5,9 +5,9 @@
     "daemon_capability": "bug",
     "driver_capability": "ready",
     "agent_cli_version": "2.19.0",
-    "daemon_version": "0.5.5+6a16e49.dirty",
-    "confidence": 0.78,
-    "notes": "agent=yes (vibe renders a TUI-only tool-permission dialog); daemon=bug (read-back path exists but is gated on the control consent vibe never declares + DetectUI lacks vibe's markers — both feasible fixes); driver=ready (send+sleep). Known-failing, consistent with the backchannel-control feasible-Control-declaration verdict."
+    "daemon_version": "0.5.5+5e22e47.dirty",
+    "confidence": 0.8,
+    "notes": "RE-ASSESS after Control fix (5e22e47c). agent=yes (vibe renders a TUI-only tool-permission dialog); daemon=bug — the read-back CONSENT gate is now open (vibe declares Control+ControlPermission), but DetectUI's trustDialogMarkers remain Claude-Code-only, so vibe's dialog is never recognized and the waiting edge cannot fire. One feasible blocker left (add vibe markers), a documented follow-up. driver=ready (send+sleep). Known-failing."
   },
   "details": {
     "assessment": {
@@ -17,12 +17,13 @@
       "agent_supports": "yes",
       "daemon_capability": "bug",
       "driver_capability": "ready",
-      "confidence": 0.78,
+      "confidence": 0.8,
       "known_failing": true,
-      "body": "## Verdict\n\n- **agent_supports: yes** — Mistral Vibe 2.19.0 renders an interactive tool-permission dialog rendered only in its TUI. When a tool resolves to `ToolPermission.ASK` (no `--yolo`/`--auto-approve`, no stored rule) the `approval_app` Textual widget shows `Permission for the <tool> tool` with the options `Allow once` / `Allow for remainder of this session` / `Always allow` / `Deny` (Esc reject). The held prompt is an in-memory `asyncio.Future` resolved by a widget event and, as the sibling cell `2-19 tool-gate-permission-prompt` established (agent=yes, daemon=incapable via the transcript path), nothing is written to the watched `messages.jsonl` while it is open. That is exactly the transcript-invisible waiting state `backchannel-observe` (read-back, issue #732) exists to surface.\n\n- **daemon_capability: bug** — The read-back subsystem is present and agent-agnostic: `reader.CaptureScreen` (tmux capture-pane / kitty get-text keyed off `session.Launcher`), `backchannel.DetectUI`, `TerminalObserver` polling, and `SessionDetector.handleTerminalUISignal` fusing the edge to `waiting` on the single writer. It fails to surface the signal for vibe today for two FEASIBLE-fix reasons, so this is a product bug, not architectural incapacity:\n  1. `TerminalObserver.observe` gates on `o.consent.Granted(adapter, ControlPermissionKey)` (`core/application/services/terminal_observer.go:111`) — the same control consent the write path uses. Vibe's `agent.go` declares **no Control and no control permission** (zero-value `Control` → `SupportsInput=false`; only the `transcripts` observe permission is declared), so that gate can never open and the poller returns before ever capturing the screen.\n  2. `DetectUI`'s `trustDialogMarkers` (`core/domain/backchannel/uidetect.go`) are Claude-Code-specific (`\"Do you want to proceed?\"`, `\"Do you trust the files in this folder?\"`, `\"Do you want to allow this tool\"`) and do not include vibe's `\"Permission for the … tool\"` / `\"Allow for remainder of this session\"` phrasing — the code comment explicitly invites per-adapter extension \"as onboarding cells are recorded.\"\n\n  The fix is ordinary product work — declare `Control{SupportsInput:true, Interrupt:InterruptCtrlC}` + `agent.ControlPermission` on the vibe adapter (exactly as aider and kiro-cli already do, both assessed yes/full/ready 0.9 for backchannel-control) and add vibe's dialog markers to `DetectUI`. This inherits the backchannel-control sibling verdict (daemon=bug — feasible Control declaration); the read-back path is a strict downstream consumer of the same control-consent chain.\n\n- **driver_capability: ready** — The recipe only needs `send` (a tool-inducing prompt to open the ASK dialog) + `sleep` (let the read-back poll window elapse), both in the vibe scaffold's `DRIVE_ELICITS=\"send slash sleep\"`. No `keys`/`wait_turn` required (the turn deliberately never completes while the dialog is held, and dismissal is not needed to demonstrate the missing waiting edge).\n\n## Scenario signal\n\n`backchannel-observe` asserts: a tmux/kitty-backed session, backchannel toggle on and \"control\" granted, is shown **waiting** while a TUI-only trust/permission dialog is on screen (even with no agent hook running), and leaves waiting when it is dismissed. For vibe the load-bearing observable — the `working → waiting` edge derived from read-back — cannot fire because control is never granted (no Control declared) and vibe's dialog is not in the marker set. Hence known_failing: the spec asserts the CORRECT waiting arc; the recording is expected to show the session stay working (the write-gap classification from 2-19), never waiting.\n\n## Why not incapable\n\nSibling 2-19 is daemon=incapable because the TRANSCRIPT observer fundamentally cannot see the in-memory `asyncio.Future` (nothing in `messages.jsonl`). backchannel-observe uses a DIFFERENT observer — terminal read-back of the rendered screen — which is architecturally able to see the dialog regardless of the transcript. The only blockers are a missing Control declaration and missing markers, both feasible → bug, not incapable.",
+      "body": "## Verdict (re-assessment after the Control fix)\n\n- **agent_supports: yes** — Mistral Vibe 2.19.0 renders an interactive tool-permission dialog only in its TUI. When a tool resolves to `ToolPermission.ASK` (no `--yolo`/`--auto-approve`, no stored rule) the `approval_app` Textual widget shows `Permission for the <tool> tool` with options `Allow once` / `Allow for remainder of this session` / `Always allow` / `Deny` (Esc reject). The held prompt is an in-memory `asyncio.Future` resolved by a widget event and, as sibling `2-19 tool-gate-permission-prompt` established, nothing is written to the watched `messages.jsonl` while it is open. That is exactly the transcript-invisible waiting state `backchannel-observe` (read-back, issue #732) exists to surface.\n\n- **daemon_capability: bug** — Unchanged verdict, but the load-bearing reason has NARROWED from two feasible blockers to one, because half the fix has landed:\n  1. **RESOLVED.** `TerminalObserver.observe` gates on `o.consent.Granted(adapter, ControlPermissionKey)` (`core/application/services/terminal_observer.go:111`). The prior assessment failed here because vibe declared no Control/control permission, so the gate could never open. Commit **5e22e47c** (`feat(vibe): declare Control so the daemon can drive vibe sessions`) now declares `Control{SupportsInput:true, Interrupt:InterruptCtrlC, Presets:{compact:/compact}}` + `agent.ControlPermission()` on `vibe/agent.go`. Once control is granted the read-back gate opens and `reader.CaptureScreen` (tmux capture-pane / kitty get-text keyed off `session.Launcher`) captures the rendered screen for vibe exactly as for claudecode.\n  2. **STILL BROKEN — the single remaining blocker.** After the gate opens the captured screen is passed to `backchannel.DetectUI` (`core/domain/backchannel/uidetect.go`), whose `trustDialogMarkers` are Claude-Code-specific (`\"Do you want to proceed?\"`, `\"Do you trust the files in this folder?\"`, `\"Do you want to allow this tool\"`). None matches vibe's `\"Permission for the … tool\"` / `\"Allow for remainder of this session\"` phrasing, so `DetectUI` returns `UIKindNone`; `ui == o.lastUI[sessionID]` (both None), the poller returns with no edge, and no `working → waiting` transition is ever emitted. The code comment explicitly invites per-adapter extension \"as onboarding cells are recorded.\" The Control-fix commit itself flags this as the not-done follow-up: \"6.2's read-back also wants vibe-specific DetectUI terminal-state markers (uidetect.go is Claude-Code-only today) — a larger separate change.\"\n\n  This is ordinary product work (add vibe's dialog markers to `DetectUI`), not architectural incapacity → `bug`, not `incapable`.\n\n- **driver_capability: ready** — The recipe only needs `send` (a tool-inducing prompt to open the ASK dialog) + `sleep` (let the read-back poll window elapse), both in the vibe scaffold's `DRIVE_ELICITS=\"send slash sleep\"`.\n\n## Scenario signal — why Control alone does NOT satisfy it\n\n`backchannel-observe` asserts the TERMINAL-DERIVED signal: a tmux/kitty-backed session, backchannel on and \"control\" granted, shown **waiting** while a TUI-only trust/permission dialog is on screen (even with no agent hook), leaving waiting when dismissed. Its load-bearing observable is the `working → waiting` edge derived from READING THE RENDERED SCREEN BACK — not from the transcript. The Control fix enables INJECTING input and observing the injected turn's effect in `messages.jsonl` (that satisfies the sibling `6.1 backchannel-control`), but it does NOT produce the read-back waiting edge this scenario requires. Because `DetectUI` cannot recognize vibe's dialog, that edge cannot fire → known_failing: the spec asserts the CORRECT waiting arc; the recording is expected to show the session stay working (write-gap, per 2-19) while the dialog is held, never waiting.\n\n## Consistency with the backchannel-control sibling\n\nThe Control declaration fully unblocks `6.1 backchannel-control` for vibe (inject + observe the injected turn — daemon would be full). `6.2 backchannel-observe` needs that SAME Control (now present) PLUS the vibe DetectUI markers (still absent). So Control-half done, DetectUI-half not: control → full-capable, observe → still bug. Consistent.\n\n## Why not incapable\n\nSibling 2-19 is daemon=incapable because the TRANSCRIPT observer fundamentally cannot see the in-memory `asyncio.Future`. backchannel-observe uses a DIFFERENT observer — terminal read-back of the rendered screen — which IS architecturally able to see the dialog, and the consent gate now opens for vibe. The only blocker is a missing marker set, a feasible fix → bug, not incapable.",
       "caveats": [
-        "PROVISIONAL on emission: the agent-side dialog (agent=yes) is confirmed from vibe source (approval_app.py) and the 2-19 sibling, but the read-back failure mode is derived from reading the gate/marker code — record settles whether the recording shows working (write-gap) or some other non-waiting state.",
-        "Recording requires a tmux or kitty backend (read-back is multiplexer/kitty-only); a plain iTerm2/Terminal.app session surfaces no terminal-derived signal even after the fix.",
+        "PROVISIONAL on emission: the agent-side dialog (agent=yes) is confirmed from vibe source (approval_app.py) and the 2-19 sibling; the read-back failure mode is derived from reading the gate (now open) + marker code (still Claude-Code-only). record settles whether the recording shows working (write-gap) or some other non-waiting state.",
+        "Half the prior fix has landed: the ControlPermission consent gate at terminal_observer.go:111 now opens for vibe (commit 5e22e47c). The SOLE remaining blocker is DetectUI's missing vibe markers — a documented follow-up (a larger separate change per the commit message).",
+        "Recording requires a tmux or kitty backend (read-back is multiplexer/kitty-only); a plain iTerm2/Terminal.app session surfaces no terminal-derived signal even after the marker fix.",
         "Two marker candidates for the DetectUI fix (from vibe/cli/textual_ui/widgets/approval_app.py): the title prefix 'Permission for the' and the option label 'Allow for remainder of this session' — narrow enough to avoid false positives.",
         "cost is not observable for vibe (parser never reads stats.session_cost; mistral-vibe absent from core/pkg/capacity) — cost_nonzero=false while the model name still displays."
       ],
@@ -30,22 +31,22 @@
         {
           "kind": "file",
           "ref": "core/adapters/inbound/agents/vibe/agent.go",
-          "note": "vibe declares NO Control (zero-value Control → SupportsInput=false); only the 'transcripts' observe permission — no control permission for the read-back gate to check"
+          "note": "AFTER commit 5e22e47c vibe DECLARES Control{SupportsInput:true, Interrupt:InterruptCtrlC, Presets:{compact:/compact}} + agent.ControlPermission() — the read-back consent gate can now open (resolves blocker #1)"
         },
         {
           "kind": "file",
           "ref": "core/application/services/terminal_observer.go:111",
-          "note": "observe() returns early unless consent.Granted(adapter, ControlPermissionKey) — read-back is gated on control consent vibe cannot grant"
+          "note": "observe() returns early unless consent.Granted(adapter, ControlPermissionKey); with vibe now declaring ControlPermission this gate opens once control is granted, then CaptureScreen -> DetectUI runs"
         },
         {
           "kind": "file",
           "ref": "core/domain/backchannel/uidetect.go",
-          "note": "DetectUI trustDialogMarkers are Claude-Code-specific; comment invites per-adapter extension — vibe's 'Permission for the … tool' phrasing not covered"
+          "note": "STILL the blocker: DetectUI trustDialogMarkers are Claude-Code-only ('Do you want to proceed?' etc.); vibe's 'Permission for the … tool' / 'Allow for remainder of this session' phrasing is not covered, so DetectUI returns UIKindNone and no waiting edge fires"
         },
         {
-          "kind": "file",
-          "ref": "core/adapters/inbound/agents/kiro-cli/agent.go",
-          "note": "reference: Control{SupportsInput:true, Interrupt:InterruptCtrlC} + ControlPermission → the feasible fix vibe is missing (assessed yes/full/ready 0.9 for backchannel-control)"
+          "kind": "commit",
+          "ref": "5e22e47c",
+          "note": "feat(vibe): declare Control … — fixes backchannel-control's daemon=bug; commit message explicitly notes the not-done follow-up: '6.2's read-back also wants vibe-specific DetectUI terminal-state markers (uidetect.go is Claude-Code-only today) — a larger separate change'"
         },
         {
           "kind": "file",
@@ -55,12 +56,12 @@
         {
           "kind": "file",
           "ref": "/Users/merlin/.local/share/uv/tools/mistral-vibe/lib/python3.13/site-packages/vibe/cli/textual_ui/widgets/approval_app.py",
-          "note": "vibe 2.19.0 approval widget: title 'Permission for the <tool> tool'; options Allow once / Allow for remainder of this session / Always allow / Deny; Esc reject"
+          "note": "vibe 2.19.0 approval widget: title 'Permission for the <tool> tool'; options Allow once / Allow for remainder of this session / Always allow / Deny; Esc reject — the marker candidates DetectUI must learn"
         },
         {
           "kind": "file",
           "ref": "core/adapters/outbound/control/reader.go",
-          "note": "agent-agnostic tmux capture-pane / kitty get-text read-back keyed off session.Launcher — works for vibe once the gate opens"
+          "note": "agent-agnostic tmux capture-pane / kitty get-text read-back keyed off session.Launcher — works for vibe now that the consent gate opens"
         }
       ]
     },
@@ -72,8 +73,8 @@
         "mistral-vibe (vibe) v2.19.0 on PATH and authenticated (Mistral API auth persisted on this machine)",
         "the vibe session is hosted in a tmux pane or kitty window (read-back is multiplexer/kitty-only); the Launcher must name a readable backend",
         "vibe launched WITHOUT --yolo/--auto-approve and with no stored approved-rule for the shell tool, so the bash tool resolves to ToolPermission.ASK and opens the approval dialog",
-        "irrlichd is recording with the backchannel master-toggle ON",
-        "KNOWN-FAILING: vibe declares no control permission, so 'control' cannot be granted — the read-back gate stays shut and the waiting edge will NOT appear until the adapter declares Control and DetectUI learns vibe's markers"
+        "irrlichd is recording with the backchannel master-toggle ON and 'control' granted for mistral-vibe (vibe now declares ControlPermission, so the read-back consent gate CAN be granted)",
+        "KNOWN-FAILING: even with control granted, DetectUI's markers are still Claude-Code-only (uidetect.go) — vibe's 'Permission for the … tool' dialog is not recognized, so the waiting edge will NOT appear until DetectUI learns vibe's markers (documented follow-up to commit 5e22e47c)"
       ],
       "setup": [
         "Create an empty cwd under <staging>/cwd/ (the driver launches vibe there); the session_<...> transcript dir is minted under ~/.vibe/logs/session/"
@@ -91,7 +92,7 @@
       "verify": [
         "the vibe TUI shows the 'Permission for the <tool> tool' approval dialog (Allow once / Allow for remainder of this session / Always allow / Deny) while the send'd prompt's bash tool is held",
         "CORRECT (asserted) behavior: events.jsonl records a state_transition to waiting while the dialog is on screen, derived from terminal read-back, independent of any agent hook",
-        "KNOWN FAILURE: because vibe declares no control permission the read-back gate never opens, so no waiting transition occurs — the session stays working (write-gap) for the dialog's duration",
+        "KNOWN FAILURE: the read-back consent gate now opens (vibe declares ControlPermission), CaptureScreen runs, but DetectUI returns UIKindNone for vibe's dialog (Claude-Code-only markers) — no waiting transition occurs; the session stays working (write-gap) for the dialog's duration",
         "observation vector: model=mistral-medium-3.5, tokens_nonzero=true, cost_nonzero=false, agent=mistral-vibe"
       ]
     }
