@@ -50,7 +50,7 @@ export function relayWsUrl(raw) {
   // operator adds themselves (see examples/relay/Dockerfile) — a caller who
   // wants TLS types `https://`/`wss://` and the mapping above already
   // honors that.
-  if (!/^wss?:\/\//i.test(u)) u = 'ws://' + u;
+  if (!/^wss?:\/\//i.test(u)) u = 'ws://' + u; // NOSONAR (javascript:S5332) — see comment above
   while (u.endsWith('/')) u = u.slice(0, -1);
   if (!/\/api\/v1\/sessions\/stream$/.test(u)) u += '/api/v1/sessions/stream';
   return u;
