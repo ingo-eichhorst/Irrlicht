@@ -1,0 +1,62 @@
+{
+  "scenario_id": "subscription-detection",
+  "metadata": {
+    "agent_supports": "no",
+    "daemon_capability": "n/a",
+    "driver_capability": "ready",
+    "agent_cli_version": "2.19.0",
+    "daemon_version": "0.5.5+e943e261",
+    "confidence": 0.88,
+    "notes": "agent_supports: no (Vibe is PAYG per-token; no rate-limit/plan signal in session artifacts)\ndaemon_capability: n/a; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "subscription-detection",
+      "agent": "mistral-vibe",
+      "assessed_at": "2026-07-07T00:00:00Z",
+      "agent_supports": "no",
+      "daemon_capability": "n/a",
+      "driver_capability": "ready",
+      "confidence": 0.88,
+      "body": "## Verdict\n\nagent_supports: no\ndaemon_capability: n/a\ndriver_capability: ready\n\n## Reasoning\n\nSubscription-detection asks whether the agent surfaces a billing-model signal the daemon can read from its session artifacts — a `RateLimitSnapshot` with at least one `Window` (subscription/quota) or, for Codex, a non-empty `PlanType`/`Credits`. The two supporting adapters get it because the agent WRITES the data where the daemon tails: Claude Code's statusLine hook POSTs a `rate_limits` block (`statuslineToSnapshot` in core/adapters/inbound/agents/claudecode/statusline.go), and Codex carries `plan_type`/`credits` in its `rate_limits` map (`extractCodexRateLimits` in core/adapters/inbound/agents/codex/parser.go).\n\nMistral Vibe surfaces no such signal into anything the daemon reads. The vibe adapter is a `FilesUnderRoot` Source that tails `~/.vibe/logs/session/<id>/messages.jsonl` and reads only the sibling `meta.json` sidecar. The parser (core/adapters/inbound/agents/vibe/parser.go) emits only role-based lifecycle events (user_message / assistant_message / turn_done / tool_result) and enriches them from `meta.json` with just `working_directory`, `active_model`, and `stats.context_tokens` (sidecar.go). There is zero rate-limit / plan-type / quota / credits extraction, and no auth-mode detection anywhere in the adapter.\n\nVibe's billing model is pay-as-you-go per token, not a flat subscription with rate-limit windows. `meta.json.stats` carries `input_price_per_million` (1.5), `output_price_per_million` (7.5), and a running `session_cost` (e.g. 16.74) — a per-token PAYG ledger, the fingerprint of an API-key path, not a subscription plan surfacing a used-percent/resets-at window. Vibe authenticates with `MISTRAL_API_KEY` (core/llm defaults `DEFAULT_MISTRAL_API_ENV_KEY = \"MISTRAL_API_KEY\"`; agent_loop.py resolves `provider.api_key_env_var or \"MISTRAL_API_KEY\"`).\n\n## The plan_offer nuance (why still `no`)\n\nVibe's source does contain a plan concept: `vibe/cli/plan_offer/` has a `WhoAmIGateway` returning a `WhoAmIPlanType` (API / CHAT / MISTRAL_CODE) with `plan_name` (ChatPlanName FREE/INDIVIDUAL/EDU/TEAM; MistralCodePlanName FREE/ENTERPRISE). But this is a one-time startup UPSELL decision (\"switch to a pro plan\") reached via a `whoami` HTTP call — it is never written to `messages.jsonl` or `meta.json`, so it never reaches the Source the daemon tails, and it is not a per-session rate-limit/quota window in the shape the scenario asserts. The user-observable signal subscription-detection requires (a non-nil `RateLimitSnapshot` with `Windows[]`) is absent from every Vibe session artifact.\n\n## Two-axis derivation\n\nBecause `agent_supports: no`, `daemon_capability` is `n/a` per the matrix convention: there is no signal in the transcript or sidecar and no parser code path that could ever observe one, so there is no observation question to answer. Even if Vibe surfaced a plan tier, the adapter emits no auth-mode/rate-limit signal, so the daemon would be `incapable` regardless — but `agent_supports: no` short-circuits that to `n/a`.\n\n`driver_capability` is `ready` (frozen): the cell is authored as an assessment only, so no interactive driver step is exercised and none can be missing. The route is `frozen` because the agent lacks the feature.\n\n## What irrlicht does NOT see (and why that's OK)\n\nEverything subscription/rate-limit related. Vibe's PAYG-per-token model has no subscription rate-limit window to report, and the plan tier it knows internally is never emitted into a session artifact — so the absence of observation is correct, not a gap. This is the sibling of the aider/opencode frozen cells for this scenario.",
+      "caveats": [
+        "agent_supports=no, so this cell is authored as an assessment only — no recording, no lifecycle spec phases, no transcript.jsonl.",
+        "Vibe DOES carry an internal plan concept (vibe/cli/plan_offer WhoAmIPlanType API/CHAT/MISTRAL_CODE with plan_name tiers), but it is a startup upsell fetched via a whoami HTTP call and is never written to messages.jsonl or meta.json — so it never reaches the Source the daemon tails, and it is not a per-session rate-limit window.",
+        "A future Vibe release that wrote a rate-limit/quota window (used-percent/resets-at) or a plan_type into meta.json or messages.jsonl would flip agent_supports to yes and re-open the daemon question."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/vibe/parser.go",
+          "note": "Parser emits only role-based lifecycle events; enriches from meta.json with cwd/active_model/context_tokens only — no rate-limit/plan/quota/credits/auth-mode extraction."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/vibe/sidecar.go",
+          "note": "Sidecar decode reads only environment.working_directory, config.active_model, stats.context_tokens — no plan/rate-limit fields, even though meta.json.stats carries per-token PAYG pricing."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.vibe/logs/session/<id>/meta.json (stats)",
+          "note": "stats has input_price_per_million=1.5, output_price_per_million=7.5, session_cost — a per-token PAYG ledger (API-key path), not a subscription rate-limit window."
+        },
+        {
+          "kind": "file",
+          "ref": "vibe/core/config/_defaults.py + vibe/core/agent_loop.py:649",
+          "note": "Vibe authenticates via MISTRAL_API_KEY (DEFAULT_MISTRAL_API_ENV_KEY); agent_loop resolves provider.api_key_env_var or \"MISTRAL_API_KEY\" — an API key, not a subscription session."
+        },
+        {
+          "kind": "file",
+          "ref": "vibe/cli/plan_offer/ports/whoami_gateway.py",
+          "note": "The plan concept Vibe does have (WhoAmIPlanType API/CHAT/MISTRAL_CODE, plan_name tiers) is a startup whoami upsell, never written to any session artifact the daemon tails."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/codex/parser.go",
+          "note": "Contrast: Codex extracts plan_type/credits from rate_limits — the signal subscription-detection asserts, absent from every Vibe session artifact."
+        }
+      ]
+    }
+  }
+}
