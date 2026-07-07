@@ -1,0 +1,92 @@
+{
+  "scenario_id": "model-identification",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "gap:wait_turn",
+    "agent_cli_version": "2.19.0",
+    "daemon_version": "0.5.5+f064b23.dirty",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes; daemon_capability: full (model NAME); driver_capability: gap:wait_turn"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "model-identification",
+      "agent": "mistral-vibe",
+      "assessed_at": "2026-07-07T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "gap:wait_turn",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full (for model IDENTIFICATION — the model name)\ndriver_capability: gap:wait_turn\n\n## Reasoning\n\nModel identification for mistral-vibe is the model NAME, distinct from the context-WINDOW capacity bar (scenario 1.8 / model-context-display, which needs the capacity map). This cell asserts only that `SessionMetrics.ModelName` reflects the launched model and is not 'unknown'.\n\n**agent = yes.** Vibe persists the active model in the per-session `meta.json` sidecar under `config.active_model`. Confirmed from the LIVE surface (6/6 live sessions carry `\"active_model\": \"mistral-medium-3.5\"`). `config.models[]` lists name/alias pairs — `active_model` is the ALIAS; the underlying `name` for the default is `mistral-vibe-cli-latest` (also available: `devstral-small`, `local`). A single no-op turn is enough to elicit the model — the sidecar is written from launch and rewritten after every turn.\n\n**daemon = full (model name).** The vibe parser enriches EVERY emitted event with the model via `applySidecar`: it reads `config.active_model` from the sibling meta.json (`sidecar.go` decodes `Config.ActiveModel`) and sets `ev.ModelName = tailer.NormalizeModelName(st.model)` on every event (`parser.go` L108-111). `NormalizeModelName` only rewrites known Claude aliases/patterns and otherwise returns the string unchanged (parser.go L555-573 default `return normalized`), so `mistral-medium-3.5` passes through intact. So the daemon KNOWS and displays the model id from the first event onward — the canonical model-identification assertion (`ModelName != 'unknown'`) is met.\n\n**driver = gap:wait_turn.** The model-identification recipe is the basic-turn arc: `send` a trivial prompt, `wait_turn`, `sleep`. The freshly-scaffolded interactive driver ports only `DRIVE_ELICITS=\"send slash sleep\"`; `wait_turn` is stubbed (`driver-interactive.sh` L168-169 `not_implemented wait_turn`). The recipe needs `wait_turn`, so the driver is gap:wait_turn. This is tooling work (port SEAM 2), NOT an observability limit — the cell is a real cell with a real recipe; `record` ports the turn-done poll before driving.\n\n## What irrlicht does NOT see (out of scope here)\n\n- **Context-window capacity** — model-context-display (1.8/5.7), not this cell. The sidecar's `stats.context_tokens` gives context USAGE (emitted as `Tokens.Total` on turn_done), but the WINDOW capacity for mistral models is not in `core/pkg/capacity`, so the utilization bar's denominator is unresolved. The model NAME is unaffected.\n- **Cost** — the parser never reads `stats.session_cost`; mistral-vibe is absent from `core/pkg/capacity`. Cost is not observable (cost_nonzero=false in the spec) — but the model name still displays.\n- Timestamps, Control (backchannel unverified — read-only adapter), subagent-linking.",
+      "caveats": [
+        "This cell asserts the model NAME only. ContextWindow capacity resolution for mistral models is a separate concern (scenario model-context-display / capacity map) and is NOT asserted here.",
+        "PROVISIONAL on emission timing: whether a transient proc-<PID> presession row precedes the session_<...> transcript-directory birth is not confirmable from source; modeled single-birth (like claudecode/kiro-cli) — record settles it.",
+        "config.active_model is the ALIAS (mistral-medium-3.5); the underlying config.models[].name is mistral-vibe-cli-latest. The daemon surfaces the alias, which is the user-facing model id."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/vibe/parser.go L98-115",
+          "note": "applySidecar sets ev.ModelName = tailer.NormalizeModelName(st.model) on EVERY event, keeping the model lit between turns."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/vibe/sidecar.go L55-78",
+          "note": "readSidecar decodes Config.ActiveModel from meta.json config.active_model."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/parser.go L532-574",
+          "note": "NormalizeModelName leaves non-Claude ids (mistral-medium-3.5) intact — default return normalized, no mistral rewrite."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.vibe/logs/session/*/meta.json config.active_model",
+          "note": "LIVE surface: 6/6 live sessions carry active_model=mistral-medium-3.5; config.models[] pairs alias mistral-medium-3.5 with name mistral-vibe-cli-latest (also devstral-small, local)."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/mistral-vibe/driver-interactive.sh L113,L168-169",
+          "note": "DRIVE_ELICITS=\"send slash sleep\"; wait_turn arm is not_implemented (stubbed) — recipe needs wait_turn → driver=gap:wait_turn."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "vibe CLI on PATH (v2.19.0) and authenticated against Mistral",
+        "irrlichd is recording (isolated mode or --attach against a --record daemon)",
+        "the mistral-vibe interactive driver has SEAM 2 (wait_turn) ported before recording (currently stubbed)"
+      ],
+      "setup": [
+        "Driver launches vibe in a fresh cwd under <staging>/cwd/ so a fresh session_<...> transcript directory is minted",
+        "The active model (config.active_model) is the account default mistral-medium-3.5; no model flag needed to identify the model",
+        "ModelName is checked AFTER turn_end (the sidecar is written from launch, so ModelName is lit from the first event)"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        }
+      ],
+      "verify": [
+        "events.jsonl shows one ready→working→ready cycle on the session_<...> id",
+        "SessionMetrics.ModelName after turn_end equals mistral-medium-3.5 (from meta.json config.active_model via applySidecar), NOT 'unknown'",
+        "turn_done carries Tokens.Total>0 (sidecar stats.context_tokens)",
+        "transcript messages.jsonl contains 1 user line and >= 1 assistant line",
+        "final session state is ready"
+      ],
+      "settings": {},
+      "timeout_seconds": 120
+    }
+  }
+}
