@@ -19,44 +19,44 @@
       "daemon_capability": "full",
       "driver_capability": "gap:wait_turn",
       "confidence": 0.78,
-      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: gap:wait_turn\n\n## Scenario signal\n\nsession-reset asserts: after a no-op turn the user issues the reset command, the old session row disappears, and a NEW session_id appears in ready. State topology ready → working → ready → ready → working → ready, final ready, ≤0 tool calls. The load-bearing question for the daemon is whether vibe's reset continues in the SAME session dir (like kiro's /clear → invisible to the daemon → incapable) or starts a NEW ~/.vibe/logs/session/<id>/ dir (like claudecode → observable). The answer is NEW dir.\n\n## agent = yes\n\nVibe (live CLI v2.19.0, source under .../uv/tools/mistral-vibe/) has an in-REPL `/clear` slash command: `vibe/cli/commands.py:64-68` registers `clear` (alias `/clear`, \"Clear conversation history\", handler `_clear_history`). `vibe/cli/textual_ui/app.py:2685-2690` `_clear_history` calls `agent_loop.clear_history()`, which (`vibe/core/agent_loop.py:1919-1942`) persists the current messages then calls `_reset_session(keep_parent=False)`. `_reset_session` (agent_loop.py:1848-1857) mints a FRESH id via `generate_session_id(...)` and calls `session_logger.reset_session(new_id)`. `SessionLogger.reset_session` (core/session/session_logger.py:393-402) recomputes `self.session_dir = self.save_folder`, and `save_folder` (session_logger.py:61-72) builds `session_<UTC-timestamp>_<short-id>` — a brand-new directory. So `/clear` rotates to a NEW ~/.vibe/logs/session/ dir with a new session_id, NOT an in-place clear. keep_parent=False means no parent link is set (a clean new session, not a fork).\n\n## daemon = full\n\nThe adapter keys the daemon session_id off the `session_<...>` directory name (`sessionIDFromPath`, adapter.go:56-65). A new dir therefore surfaces as a genuinely new session_id — `new_session:true`. The three spec bullets map to observable events:\n1. New session appears in ready with a NEW session_id → the FilesUnderRoot watcher detects the new dir's messages.jsonl and mints a fresh session (transcript_new), same mechanism as claudecode's /clear UUID rotation.\n2. Old session disappears → both vibe sessions share ONE vibe process (same PID, same cwd); `DiscoverPID` (pid.go) binds the new session to that same PID, and `PIDManager.cleanupStalePIDHolders` (core/application/services/pid_manager.go:566-576) emits `KindTranscriptRemoved` for the prior same-PID session — the generic, matcher-agnostic #169 cleanup path claudecode's session-reset relies on. The old dir persists on disk; the daemon drops its row.\n3. Subsequent turn drives the NEW session ready→working→ready normally — standard turn arc on the new dir.\nNone of the daemon's known vibe gaps (no per-turn cost; no context-WINDOW resolution since mistral models are absent from core/pkg/capacity; per-event timestamps backfilled to scan time; no Control/backchannel; no subagent linking) touch any session-reset bullet — they are caveats, not spec-required observables here.\n\n## driver = gap:wait_turn\n\nThe reset itself is NOT a driver gap: `/clear` is an in-REPL slash command, so it is a `slash` step, and `slash` IS in the driver's elicited set (driver-interactive.sh:113 `DRIVE_ELICITS=\"send slash sleep\"`). The false reset_session/keys gap is ruled out. The genuine gap is `wait_turn`: the lifecycle recipe (send → wait_turn → /clear → send → wait_turn) needs turn-completion detection, but SEAM 2 `wait_turn()` (driver-interactive.sh:168-170) dispatches to `not_implemented` (exit 3) and is absent from DRIVE_ELICITS — so recipe-lint raises a semantic_gap before recording. This matches every sibling vibe lifecycle cell (session-start, long-idle, model-context-display all assessed driver=gap:wait_turn). Two further scaffold seams block recording of ANY vibe cell and are ported alongside by record: SEAM 1 — the launch (line 155) execs `\"mistral-vibe\"`, not on PATH (only `vibe` is); SEAM 3 — `launch_repl` (line 158) never resolves/stores the transcript path into `SES_TRANSCRIPT[$ACTIVE]`, so `emit_session_contract` (line 210) records nothing to verify, and after /clear the driver must re-resolve SES_TRANSCRIPT[$ACTIVE] to the NEW dir. This is tooling work, not an observability limit — the cell keeps its recipe + spec.",
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: gap:wait_turn\n\n## Scenario signal\n\nsession-reset asserts: after a no-op turn the user issues the reset command, the old session row disappears, and a NEW session_id appears in ready. State topology ready \u2192 working \u2192 ready \u2192 ready \u2192 working \u2192 ready, final ready, \u22640 tool calls. The load-bearing question for the daemon is whether vibe's reset continues in the SAME session dir (like kiro's /clear \u2192 invisible to the daemon \u2192 incapable) or starts a NEW ~/.vibe/logs/session/<id>/ dir (like claudecode \u2192 observable). The answer is NEW dir.\n\n## agent = yes\n\nVibe (live CLI v2.19.0, source under .../uv/tools/mistral-vibe/) has an in-REPL `/clear` slash command: `vibe/cli/commands.py:64-68` registers `clear` (alias `/clear`, \"Clear conversation history\", handler `_clear_history`). `vibe/cli/textual_ui/app.py:2685-2690` `_clear_history` calls `agent_loop.clear_history()`, which (`vibe/core/agent_loop.py:1919-1942`) persists the current messages then calls `_reset_session(keep_parent=False)`. `_reset_session` (agent_loop.py:1848-1857) mints a FRESH id via `generate_session_id(...)` and calls `session_logger.reset_session(new_id)`. `SessionLogger.reset_session` (core/session/session_logger.py:393-402) recomputes `self.session_dir = self.save_folder`, and `save_folder` (session_logger.py:61-72) builds `session_<UTC-timestamp>_<short-id>` \u2014 a brand-new directory. So `/clear` rotates to a NEW ~/.vibe/logs/session/ dir with a new session_id, NOT an in-place clear. keep_parent=False means no parent link is set (a clean new session, not a fork).\n\n## daemon = full\n\nThe adapter keys the daemon session_id off the `session_<...>` directory name (`sessionIDFromPath`, adapter.go:56-65). A new dir therefore surfaces as a genuinely new session_id \u2014 `new_session:true`. The three spec bullets map to observable events:\n1. New session appears in ready with a NEW session_id \u2192 the FilesUnderRoot watcher detects the new dir's messages.jsonl and mints a fresh session (transcript_new), same mechanism as claudecode's /clear UUID rotation.\n2. Old session disappears \u2192 both vibe sessions share ONE vibe process (same PID, same cwd); `DiscoverPID` (pid.go) binds the new session to that same PID, and `PIDManager.cleanupStalePIDHolders` (core/application/services/pid_manager.go:566-576) emits `KindTranscriptRemoved` for the prior same-PID session \u2014 the generic, matcher-agnostic #169 cleanup path claudecode's session-reset relies on. The old dir persists on disk; the daemon drops its row.\n3. Subsequent turn drives the NEW session ready\u2192working\u2192ready normally \u2014 standard turn arc on the new dir.\nNone of the daemon's known vibe gaps (no per-turn cost; no context-WINDOW resolution since mistral models are absent from core/pkg/capacity; per-event timestamps backfilled to scan time; no Control/backchannel; no subagent linking) touch any session-reset bullet \u2014 they are caveats, not spec-required observables here.\n\n## driver = gap:wait_turn\n\nThe reset itself is NOT a driver gap: `/clear` is an in-REPL slash command, so it is a `slash` step, and `slash` IS in the driver's elicited set (driver-interactive.sh:113 `DRIVE_ELICITS=\"send slash sleep\"`). The false reset_session/keys gap is ruled out. The genuine gap is `wait_turn`: the lifecycle recipe (send \u2192 wait_turn \u2192 /clear \u2192 send \u2192 wait_turn) needs turn-completion detection, but SEAM 2 `wait_turn()` (driver-interactive.sh:168-170) dispatches to `not_implemented` (exit 3) and is absent from DRIVE_ELICITS \u2014 so recipe-lint raises a semantic_gap before recording. This matches every sibling vibe lifecycle cell (session-start, long-idle, model-context-display all assessed driver=gap:wait_turn). Two further scaffold seams block recording of ANY vibe cell and are ported alongside by record: SEAM 1 \u2014 the launch (line 155) execs `\"mistral-vibe\"`, not on PATH (only `vibe` is); SEAM 3 \u2014 `launch_repl` (line 158) never resolves/stores the transcript path into `SES_TRANSCRIPT[$ACTIVE]`, so `emit_session_contract` (line 210) records nothing to verify, and after /clear the driver must re-resolve SES_TRANSCRIPT[$ACTIVE] to the NEW dir. This is tooling work, not an observability limit \u2014 the cell keeps its recipe + spec.",
       "caveats": [
-        "Provisional on live drive: daemon=full is derived from reading the adapter + shared PIDManager cleanup, not a vibe recording. The transcript_removed timing and the new-session appearance ORDERING are emission properties record must settle. In particular, clear_history persists the OLD session's messages.jsonl first, then _reset_session mints the new dir whose messages.jsonl may not materialize until the SECOND turn saves — so the new session may not surface (and the old may not be cleaned) until prompt 2 completes. The spec's max_delay bounds are generous to accommodate this; record tightens them from the recording.",
-        "keep_parent=False on /clear means the new session carries NO parent_session_id — correct for a reset (a clean new session, not a fork). vibe's /resume-based fork path (fork(), agent_loop.py:1861) DOES set a parent, but that is a different scenario.",
+        "Provisional on live drive: daemon=full is derived from reading the adapter + shared PIDManager cleanup, not a vibe recording. The transcript_removed timing and the new-session appearance ORDERING are emission properties record must settle. In particular, clear_history persists the OLD session's messages.jsonl first, then _reset_session mints the new dir whose messages.jsonl may not materialize until the SECOND turn saves \u2014 so the new session may not surface (and the old may not be cleaned) until prompt 2 completes. The spec's max_delay bounds are generous to accommodate this; record tightens them from the recording.",
+        "keep_parent=False on /clear means the new session carries NO parent_session_id \u2014 correct for a reset (a clean new session, not a fork). vibe's /resume-based fork path (fork(), agent_loop.py:1861) DOES set a parent, but that is a different scenario.",
         "The daemon does not emit per-turn cost for vibe (the sidecar retains only last-turn tokens, not backfillable), so the spec asserts tokens_nonzero + model but NOT cost.",
         "model mistral-medium-3.5 displays but its context WINDOW is unresolved (mistral models absent from core/pkg/capacity); irrelevant to session-reset (no context bar asserted).",
-        "messages.jsonl carries no per-event timestamp; backfill uses scan time — irrelevant to the state-topology assertions here."
+        "messages.jsonl carries no per-event timestamp; backfill uses scan time \u2014 irrelevant to the state-topology assertions here."
       ],
       "sources": [
         {
           "kind": "file",
           "ref": "vibe/cli/commands.py",
-          "note": "Lines 64-68: `clear` command (alias /clear) → handler _clear_history. Confirms /clear is an in-REPL slash command (→ a `slash` driver step, not reset_session)."
+          "note": "Lines 64-68: `clear` command (alias /clear) \u2192 handler _clear_history. Confirms /clear is an in-REPL slash command (\u2192 a `slash` driver step, not reset_session)."
         },
         {
           "kind": "file",
           "ref": "vibe/core/agent_loop.py",
-          "note": "clear_history (1919-1942) → _reset_session(keep_parent=False); _reset_session (1848-1857) mints a fresh generate_session_id and calls session_logger.reset_session — a NEW session, no parent link."
+          "note": "clear_history (1919-1942) \u2192 _reset_session(keep_parent=False); _reset_session (1848-1857) mints a fresh generate_session_id and calls session_logger.reset_session \u2014 a NEW session, no parent link."
         },
         {
           "kind": "file",
           "ref": "vibe/core/session/session_logger.py",
-          "note": "reset_session (393-402) recomputes session_dir = save_folder; save_folder (61-72) builds session_<UTC-timestamp>_<short-id> — a BRAND-NEW dir. So /clear rotates to a new ~/.vibe/logs/session/<id>/ dir (new-dir, like claudecode; NOT in-place like kiro)."
+          "note": "reset_session (393-402) recomputes session_dir = save_folder; save_folder (61-72) builds session_<UTC-timestamp>_<short-id> \u2014 a BRAND-NEW dir. So /clear rotates to a new ~/.vibe/logs/session/<id>/ dir (new-dir, like claudecode; NOT in-place like kiro)."
         },
         {
           "kind": "file",
           "ref": "core/adapters/inbound/agents/vibe/adapter.go",
-          "note": "sessionIDFromPath (56-65) derives the daemon session_id from the session_<...> dir name — a new dir is a new session_id (new_session:true)."
+          "note": "sessionIDFromPath (56-65) derives the daemon session_id from the session_<...> dir name \u2014 a new dir is a new session_id (new_session:true)."
         },
         {
           "kind": "file",
           "ref": "core/application/services/pid_manager.go",
-          "note": "cleanupStalePIDHolders (566-576) emits KindTranscriptRemoved for prior same-PID sessions when the new session binds the same vibe PID — the generic #169 'old session disappears' mechanism, matcher-kind agnostic."
+          "note": "cleanupStalePIDHolders (566-576) emits KindTranscriptRemoved for prior same-PID sessions when the new session binds the same vibe PID \u2014 the generic #169 'old session disappears' mechanism, matcher-kind agnostic."
         },
         {
           "kind": "file",
           "ref": "replaydata/agents/mistral-vibe/driver-interactive.sh",
-          "note": "Line 113 DRIVE_ELICITS=\"send slash sleep\" (slash IS elicited → /clear ok, not a reset gap). Line 168-170 wait_turn()->not_implemented (the real gap). Line 155 launch execs \"mistral-vibe\" not on PATH; line 158 SEAM 3 transcript-path capture unported."
+          "note": "Line 113 DRIVE_ELICITS=\"send slash sleep\" (slash IS elicited \u2192 /clear ok, not a reset gap). Line 168-170 wait_turn()->not_implemented (the real gap). Line 155 launch execs \"mistral-vibe\" not on PATH; line 158 SEAM 3 transcript-path capture unported."
         }
       ]
     },
@@ -70,7 +70,7 @@
       "setup": [
         "Create a fresh empty cwd under <staging>/cwd/ so the session's working_directory is unique",
         "Vibe mints its own session_<ts>_<hash> id on launch; the daemon session_id is that directory name",
-        "/clear mints a SECOND session_<ts2>_<hash2> dir under the same cwd/PID — the driver re-points subsequent turns at it (SEAM 3)"
+        "/clear mints a SECOND session_<ts2>_<hash2> dir under the same cwd/PID \u2014 the driver re-points subsequent turns at it (SEAM 3)"
       ],
       "script": [
         {
@@ -82,7 +82,7 @@
         },
         {
           "type": "sleep",
-          "seconds": 2
+          "seconds": 10
         },
         {
           "type": "slash",
@@ -102,7 +102,7 @@
       ],
       "verify": [
         "events.jsonl shows the FIRST session_<ts>_<hash> entering ready, then a working/ready cycle for turn 1",
-        "after /clear, events.jsonl emits transcript_removed for the FIRST session (same-PID cleanup) — the 'old session disappears' assertion",
+        "after /clear, events.jsonl emits transcript_removed for the FIRST session (same-PID cleanup) \u2014 the 'old session disappears' assertion",
         "events.jsonl contains a DIFFERENT session_<ts2>_<hash2> appearing in ready after /clear (new session_id, fresh row, new_session:true)",
         "the second turn's working/ready cycle is on the NEW session dir, not the old one",
         "final session state is ready",
