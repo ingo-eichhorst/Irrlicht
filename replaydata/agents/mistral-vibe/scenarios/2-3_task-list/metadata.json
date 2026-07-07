@@ -1,0 +1,86 @@
+{
+  "scenario_id": "task-list",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "bug",
+    "driver_capability": "gap:wait_turn",
+    "agent_cli_version": "2.19.0",
+    "daemon_version": "0.5.5+fed146f",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes\ndaemon_capability: bug; driver_capability: gap:wait_turn"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "task-list",
+      "agent": "mistral-vibe",
+      "assessed_at": "2026-07-07T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "bug",
+      "driver_capability": "gap:wait_turn",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: bug; driver_capability: gap:wait_turn\n\n## Reasoning\n\n**agent = yes.** Mistral Vibe ships a first-class single-session todo tool. `vibe/core/tools/builtins/todo.py` defines a `todo` tool with `action: 'read' | 'write'` (write = full-list replace) over `TodoItem{id, content, status, priority}`, where `TodoStatus` is `pending | in_progress | completed | cancelled` and `permission: ToolPermission.ALWAYS` (auto-executes, no gate). It is present in the live `tools_available` list (30 tools incl. `todo`) in `~/.vibe/logs/session/<id>/meta.json`, and it is actually exercised in real transcripts: `~/.vibe/logs/session/session_20260630_110359_b72e425b/messages.jsonl` contains multiple `assistant` messages whose `tool_calls[].function.name == \"todo\"` carry `arguments` JSON with the full `todos[]` array (id/content/status/priority), each followed by a `role:\"tool\"` result echoing the updated list. This is single-session (no child spawned) — distinct from Vibe's separate `task` tool, which launches subagents. So the agent performs the scenario.\n\n**daemon = bug.** The trace is on disk but the Vibe adapter drops it. `core/adapters/inbound/agents/vibe/parser.go` emits only `user_message` / `assistant_message` / `turn_done` / `tool_result`; a `todo` invocation is surfaced as a generic `ToolUse{Name:\"todo\"}` on an `assistant_message`, and its `arguments` (the `todos[]` list) are never decoded. The parser sets no `ev.TaskDeltas` and no `ev.TaskSnapshot` — the two ports (`core/pkg/tailer/parser.go`) that the tailer folds into `SessionMetrics.Tasks` (`core/pkg/tailer/tailer_metrics.go`). Consequently the session API `tasks` field stays empty for Vibe even though the transcript carries the complete list with matching subjects and statuses. This is the same class of bug already recorded `known_failing` for codex (`update_plan`) and gemini-cli, and the fix pattern already exists: OpenCode's `todowrite` — a full-list-replace todo tool with the identical shape — is decoded into `TaskDeltas` + `TaskSnapshot` in `core/adapters/inbound/agents/opencode/parser.go` (`appendTodowriteDeltas`). Vibe's parser needs the equivalent translation of a `todo` `action:'write'` call's `todos[]` into a `TaskSnapshot` (and the `tool_result` echo for reconciliation). A trace exists and is mis-handled → `bug`, not `incapable`.\n\n**driver = gap:wait_turn.** The freshly-scaffolded interactive driver (`replaydata/agents/mistral-vibe/driver-interactive.sh`) declares `DRIVE_ELICITS=\"send slash sleep\"`; its `wait_turn` arm is stubbed (not_implemented) and therefore deliberately absent from `DRIVE_ELICITS`. The recipe drives a long multi-tool turn (create three todos, then walk each `pending → in_progress → completed`) and must block until the turn settles before the settle-sleep and teardown — the `wait_turn` primitive. A fixed `sleep` cannot bound a variable-length agent turn. The semantic recipe-lint flags a recipe needing the stubbed-but-unlisted `wait_turn` as a semantic gap, so this is a driver tooling gap, not an observability limit: `record` ports the `wait_turn` seam from a reference driver, then drives and records known_failing.\n\n## Lifecycle observability (what DOES work)\n\nVibe is a single-birth `FilesUnderRoot` adapter (session id derived from the stable `session_<ts>_<hex>` directory), so the standard arc is observable: a `user` line opens the turn (ready → working), `todo` auto-executes with no permission gate so the session never dips to waiting, and the terminal no-tool `assistant` message drives `turn_done` (working → ready). `SubagentCount` stays 0 (the `task`/subagent tool is not used). Model name and context-token count flow from the `meta.json` sidecar (`active_model: mistral-medium-3.5`, `stats.context_tokens`). Cost is NOT available — the Vibe transcript and sidecar carry no per-turn usage/cost — so the observation vector asserts tokens + model + agent only, never cost.",
+      "caveats": [
+        "The tasks-content observable (three items in the session API `tasks` field with matching subjects + status) is not expressible in the phase DSL — as with claudecode/codex it is verified structurally (replay golden summary.tasks). The phases assert only the lifecycle arc, which PASSES; known_failing flags the tasks-content miss for record to file the issue.",
+        "Cost is unavailable for Vibe (no usage in transcript or sidecar), so the spec asserts tokens_nonzero but NOT cost_nonzero. This is a documented Vibe-wide daemon limitation orthogonal to this scenario, not a weakening of the task-list assertion.",
+        "model is pinned to mistral-medium-3.5 from the live sidecar (meta.json active_model), which NormalizeModelName leaves unchanged; if the record-time vibe config uses a different active model, record corrects it via observability_correction.",
+        "daemon=bug is grounded in the parser reading + the on-disk todo trace; whether a fix surfaces tasks correctly is confirmed by record once the wait_turn seam is ported."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/merlin/.local/share/uv/tools/mistral-vibe/lib/python3.13/site-packages/vibe/core/tools/builtins/todo.py",
+          "note": "Vibe todo tool: action read|write (full-list replace), TodoStatus pending|in_progress|completed|cancelled, permission ALWAYS (auto-exec)."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.vibe/logs/session/session_20260630_110359_b72e425b/messages.jsonl",
+          "note": "Real transcript: assistant tool_calls[].function.name=='todo' with full todos[] arguments, followed by role:tool results echoing the list — proves the agent uses it and the trace is on disk."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/vibe/parser.go",
+          "note": "Vibe parser emits only user_message/assistant_message/turn_done/tool_result; a todo call becomes a generic ToolUse{Name:\"todo\"} — no TaskDeltas/TaskSnapshot decoded, so SessionMetrics.Tasks stays empty. This is the daemon=bug."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/opencode/parser.go",
+          "note": "appendTodowriteDeltas — the reference fix: OpenCode's identically-shaped full-list-replace todowrite is decoded into TaskDeltas + TaskSnapshot. Vibe needs the equivalent for its todo tool."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/parser.go",
+          "note": "TaskDelta / TaskSnapshot ports and SessionMetrics.Tasks — the daemon surface this scenario asserts, which the vibe parser never feeds."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/mistral-vibe/driver-interactive.sh",
+          "note": "DRIVE_ELICITS=\"send slash sleep\"; wait_turn arm stubbed → recipe needs wait_turn → driver=gap:wait_turn."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "vibe CLI on PATH and authenticated (Mistral API key), min version 2.19.0",
+        "irrlichd is recording (run-cell.sh isolated mode, or --attach against a daemon started with --record)",
+        "driver's wait_turn seam ported from a reference driver before recording (driver=gap:wait_turn)"
+      ],
+      "timeout_seconds": 180,
+      "settings": {},
+      "script": [
+        {
+          "type": "send",
+          "text": "Use your todo tool to create exactly three todo items, in this order: 'read README', 'summarize README', 'reply done'. Then work them one at a time: for each item, call the todo tool with action 'write' to set that item to in_progress (keep the other items' status unchanged), then call todo again with action 'write' to set it to completed, before moving to the next item. Do NOT use the task tool or spawn any subagent — keep everything in this one session. When all three items are completed, reply with exactly the word: done"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 10
+        }
+      ]
+    }
+  }
+}
