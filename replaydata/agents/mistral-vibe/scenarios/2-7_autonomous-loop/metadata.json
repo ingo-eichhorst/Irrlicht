@@ -68,15 +68,15 @@
       "script": [
         {
           "type": "slash",
-          "text": "/loop 12s Append one line reading 'iteration done' to /tmp/vibe_loop_marker.txt using a bash command, then report the file's current line count."
+          "text": "/loop 30s Append one line reading 'iteration done' to /tmp/vibe_loop_marker.txt using a bash command, then report the file's current line count."
         },
         {
           "type": "sleep",
-          "seconds": 30
+          "seconds": 50
         },
         {
           "type": "sleep",
-          "seconds": 20
+          "seconds": 35
         },
         {
           "type": "slash",
