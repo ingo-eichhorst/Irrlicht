@@ -334,27 +334,38 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       rebuildTimelineHistory();
     }
 
+    // applyOneTickBucket folds one session's bucket update into dict,
+    // returning whether it actually changed anything. Extracted from
+    // applyHistoryTick so that function's own loop/dedup branching doesn't
+    // compound with this per-session bucket-shifting logic (CodeScene
+    // flagged applyHistoryTick as a declining hotspot once the
+    // isDangerousKey guard added a branch on top of an already-complex
+    // method).
+    function applyOneTickBucket(dict, sid, granularitySec, buckets, bucketGenerations) {
+      if (isDangerousKey(sid)) return false;
+      // Skip if this tick has already been folded into our snapshot.
+      if (bucketGenerations?.[sid] !== undefined) {
+        const gen = bucketGenerations[sid];
+        const last = lastTickGen[sid]?.[granularitySec] || 0;
+        if (last && gen <= last) return false;
+        if (!lastTickGen[sid]) lastTickGen[sid] = Object.create(null);
+        lastTickGen[sid][granularitySec] = gen;
+      }
+      let arr = dict[sid];
+      if (!arr) arr = new Array(60).fill('');
+      arr.shift();
+      arr.push(HISTORY_PRIORITY_TO_STATE[buckets[sid] & 0x3]);
+      while (arr.length < 60) arr.unshift('');
+      dict[sid] = arr;
+      return true;
+    }
+
     function applyHistoryTick(granularitySec, buckets, bucketGenerations) {
       if (![1, 10, 60].includes(granularitySec)) return;
       const dict = historyByGranularity[granularitySec];
       let changed = false;
       for (const sid of Object.keys(buckets)) {
-        if (isDangerousKey(sid)) continue;
-        // Skip if this tick has already been folded into our snapshot.
-        if (bucketGenerations?.[sid] !== undefined) {
-          const gen = bucketGenerations[sid];
-          const last = lastTickGen[sid]?.[granularitySec] || 0;
-          if (last && gen <= last) continue;
-          if (!lastTickGen[sid]) lastTickGen[sid] = Object.create(null);
-          lastTickGen[sid][granularitySec] = gen;
-        }
-        let arr = dict[sid];
-        if (!arr) arr = new Array(60).fill('');
-        arr.shift();
-        arr.push(HISTORY_PRIORITY_TO_STATE[buckets[sid] & 0x3]);
-        while (arr.length < 60) arr.unshift('');
-        dict[sid] = arr;
-        changed = true;
+        if (applyOneTickBucket(dict, sid, granularitySec, buckets, bucketGenerations)) changed = true;
       }
       if (changed && granularitySec === currentGranularity) rebuildTimelineHistory();
     }
