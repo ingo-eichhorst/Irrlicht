@@ -31,10 +31,26 @@ func (st RecordingStore) scenarioDir(agent, subtree, id string) string {
 	return filepath.Join(st.agentsDir(), agent, subtree, id)
 }
 
+// underRoot reports whether path, once cleaned, resolves to somewhere inside
+// st.agentsDir() — the backstop readFile/exists/listArchiveDirs funnel every
+// lookup through: whatever hand-built path a caller passes (however its
+// pieces were assembled upstream), it can never resolve to a file outside
+// the replaydata/agents tree this store exists to serve.
+func (st RecordingStore) underRoot(path string) bool {
+	rel, err := filepath.Rel(st.agentsDir(), filepath.Clean(path))
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
 // readFile reads a path joined onto RepoRoot's replaydata tree, or any
 // absolute path passed through filepath.Join. Returns the bytes and ok=false
-// when the file is absent or unreadable.
+// when the file is absent, unreadable, or escapes the tree this store serves.
 func (st RecordingStore) readFile(path string) ([]byte, bool) {
+	if !st.underRoot(path) {
+		return nil, false
+	}
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return nil, false
@@ -42,8 +58,12 @@ func (st RecordingStore) readFile(path string) ([]byte, bool) {
 	return b, true
 }
 
-// exists reports whether path is present on disk.
+// exists reports whether path is present on disk and within the tree this
+// store serves.
 func (st RecordingStore) exists(path string) bool {
+	if !st.underRoot(path) {
+		return false
+	}
 	_, err := os.Stat(path)
 	return err == nil
 }
@@ -108,7 +128,11 @@ func (st RecordingStore) listScenarios() []ScenarioListEntry {
 // listArchiveDirs returns the archive subdirectory names under
 // <scenarioDir>/recordings/, or nil when the dir is absent.
 func (st RecordingStore) listArchiveDirs(scenarioDir string) []string {
-	entries, err := os.ReadDir(filepath.Join(scenarioDir, "recordings"))
+	recordingsDir := filepath.Join(scenarioDir, "recordings")
+	if !st.underRoot(recordingsDir) {
+		return nil
+	}
+	entries, err := os.ReadDir(recordingsDir)
 	if err != nil {
 		return nil
 	}

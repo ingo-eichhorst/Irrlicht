@@ -21,6 +21,13 @@ import (
 // with a one-line warning to stderr — the file's tail may legitimately
 // contain a partial write from a crash-killed daemon.
 func LoadEvents(path string) ([]lifecycle.Event, error) {
+	// Defense-in-depth guard against path traversal — see hasParentTraversal
+	// (transcript_events.go) for why this package-local check exists
+	// alongside the HTTP-layer validation upstream. Degrades the same way
+	// a genuinely-missing file would: a wrapped os.ErrNotExist.
+	if hasParentTraversal(path) {
+		return nil, fmt.Errorf("open %s: %w", path, os.ErrNotExist)
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", path, err)

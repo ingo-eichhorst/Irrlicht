@@ -25,8 +25,12 @@ import { reconcile, paintRowNum } from './domReconcile.js';
     // (e.g. "claude-code"). Populated once on initial load; the daemon's
     // registry is essentially static (changes require a daemon restart).
     // Exported (live binding) so quotaChips.js can resolve provider/adapter
-    // icon branding without owning session state itself.
-    export const agentRegistry = {};
+    // icon branding without owning session state itself. Object.create(null)
+    // rather than {}: it's keyed by e.name straight out of the /api/v1/agents
+    // response body (see the fetch below), so a "__proto__"-named agent entry
+    // can't repoint this object's prototype — same idiom as lastTickGen/
+    // historyByGranularity below, which key off session-derived strings too.
+    export const agentRegistry = Object.create(null);
     let sessionIndex = new Map();
 
     // --- Theme ---

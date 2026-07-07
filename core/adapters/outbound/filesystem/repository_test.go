@@ -46,6 +46,35 @@ func TestRepository_Load_NotFound(t *testing.T) {
 	}
 }
 
+// TestRepository_Load_RejectsPathTraversal covers Load/Delete being
+// reachable from the daemon's loopback control API (POST
+// /api/v1/sessions/{id}/input, .../interrupt) with sessionID taken straight
+// from the URL path segment and only an empty-string check applied before
+// it reaches the repository. A "../"-shaped id must not escape instancesDir.
+func TestRepository_Load_RejectsPathTraversal(t *testing.T) {
+	dir := t.TempDir()
+	repo := filesystem.NewWithDir(filepath.Join(dir, "instances"))
+
+	secret := filepath.Join(dir, "secret.json")
+	if err := os.WriteFile(secret, []byte(`{"session_id":"secret"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, evil := range []string{"../secret", "..", "."} {
+		if _, err := repo.Load(evil); err == nil {
+			t.Errorf("Load(%q) = nil error; want the traversal rejected", evil)
+		}
+		// Delete returns nil for a missing file by design (see its doc
+		// comment) — the security property to check here is that it never
+		// removes the escaped-to file, not that it returns an error.
+		_ = repo.Delete(evil)
+	}
+
+	if data, err := os.ReadFile(secret); err != nil || string(data) != `{"session_id":"secret"}` {
+		t.Errorf("secret file was modified or removed: data=%q err=%v", data, err)
+	}
+}
+
 func TestRepository_Delete(t *testing.T) {
 	repo := filesystem.NewWithDir(t.TempDir())
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -64,6 +65,30 @@ func normalizeRelayURL(raw string) string {
 		s += streamPath
 	}
 	return s
+}
+
+// validateDialURL rejects a relay URL that isn't a well-formed ws/wss target
+// before it reaches DialContext — defense in depth against a malformed or
+// attacker-influenced IRRLICHT_RELAY_URL / publish-config value (CWE-918).
+// normalizeRelayURL already coerces the scheme and appends the fixed stream
+// path, so this only catches a value malformed enough (unparsable, a
+// non-ws(s) scheme normalizeRelayURL's switch didn't rewrite, no host, or
+// embedded userinfo) that dialing it would be unsafe or meaningless.
+func validateDialURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("invalid relay url: %w", err)
+	}
+	if u.Scheme != "ws" && u.Scheme != "wss" {
+		return fmt.Errorf("invalid relay url: scheme must be ws or wss, got %q", u.Scheme)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("invalid relay url: missing host")
+	}
+	if u.User != nil {
+		return fmt.Errorf("invalid relay url: must not embed credentials")
+	}
+	return nil
 }
 
 // SnapshotFunc returns the daemon's current sessions and adapter registry,
@@ -245,6 +270,9 @@ func (f *Forwarder) runOnce(ctx context.Context) error {
 // nothing to negotiate), only on whether the relay accepted us. On error the
 // dialed connection, if any, is closed before returning.
 func (f *Forwarder) handshake(ctx context.Context) (*websocket.Conn, error) {
+	if err := validateDialURL(f.url); err != nil {
+		return nil, err
+	}
 	conn, _, err := f.dialer.DialContext(ctx, f.url, nil)
 	if err != nil {
 		return nil, err

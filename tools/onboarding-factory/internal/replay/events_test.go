@@ -63,6 +63,31 @@ func TestLoadEvents_emptyFile(t *testing.T) {
 	}
 }
 
+// TestLoadEvents_rejectsPathTraversal proves LoadEvents refuses a path
+// containing a literal ".." component even when it resolves to a real,
+// readable file outside the intended directory — i.e. the guard runs
+// before os.Open, not just when the target happens to be missing.
+func TestLoadEvents_rejectsPathTraversal(t *testing.T) {
+	base := t.TempDir()
+	outside := filepath.Join(filepath.Dir(base), "irrlicht-traversal-events.jsonl")
+	content := `{"seq":1,"ts":"2026-05-01T13:11:31Z","kind":"transcript_new","session_id":"s"}` + "\n"
+	if err := os.WriteFile(outside, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(outside)
+
+	// Deliberately NOT filepath.Join (which would Clean away the ".."), so
+	// the literal traversal segment survives into the string LoadEvents sees.
+	traversal := base + string(filepath.Separator) + ".." + string(filepath.Separator) + filepath.Base(outside)
+	if _, err := os.Stat(traversal); err != nil {
+		t.Fatalf("setup: traversal path should resolve to the real file: %v", err)
+	}
+
+	if events, err := LoadEvents(traversal); err == nil {
+		t.Errorf("LoadEvents(%q) = %d events, nil error; want rejection", traversal, len(events))
+	}
+}
+
 func TestLoadEvents_realSeedScenario(t *testing.T) {
 	// Smoke test against the real committed seed corpus to confirm the
 	// loader handles the actual on-disk shape produced by irrlichd.

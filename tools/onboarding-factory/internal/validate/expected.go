@@ -172,11 +172,33 @@ type recordedEvent struct {
 	NewState  string    `json:"new_state,omitempty"`
 }
 
+// hasParentTraversal reports whether p contains a literal ".." — the same
+// check viewer.NewSafeArchiveName uses to reject path traversal on a single
+// path segment, generalized here to the already-assembled scenario/
+// recording/events paths this package's exported functions receive.
+// Defense-in-depth: every real caller builds these paths via filepath.Join
+// from an HTTP-validated agent/subtree/id or archive name (see the
+// viewer's slugRE and SafeArchiveName) or from shard.AgentCellDir's own
+// sanitized components, so a legitimate value here never contains ".." —
+// but CodeQL's go/path-injection query doesn't connect that validation
+// across the several function hops between the HTTP handler and this
+// package, so each sink below gets its own local guard instead (same
+// rationale as shard.sanitizePathComponent for single-segment values). A
+// rejected value makes the caller fall through to the same "nothing to
+// validate" result it already returns for an absent file, never a panic
+// or a new error shape.
+func hasParentTraversal(p string) bool {
+	return strings.Contains(p, "..")
+}
+
 // NewestRecordingDir returns the path to the newest recording under
 // scenarioDir/recordings/ — the lexicographically-greatest entry name, which
 // (recording names are timestamp-prefixed) is the most recent. ok is false
 // when there is no recordings/ dir or it holds no subdirectories.
 func NewestRecordingDir(scenarioDir string) (string, bool) {
+	if hasParentTraversal(scenarioDir) {
+		return "", false
+	}
 	entries, err := os.ReadDir(filepath.Join(scenarioDir, "recordings"))
 	if err != nil {
 		return "", false
@@ -238,6 +260,9 @@ func RecordingComplete(recDir string) []string {
 // Every recording lives under recordings/<name>/; the spec (expected.jsonl)
 // stays at the cell root and is validated against the newest recording.
 func ValidateExpected(scenarioDir string) (*ExpectedReport, error) {
+	if hasParentTraversal(scenarioDir) {
+		return nil, nil
+	}
 	expectedPath := filepath.Join(scenarioDir, "expected.jsonl")
 	recDir, ok := NewestRecordingDir(scenarioDir)
 	if !ok {
@@ -273,6 +298,9 @@ func ValidateExpected(scenarioDir string) (*ExpectedReport, error) {
 // FAILS the current spec means either the spec moved or the daemon
 // went backward (the maintainer disambiguates).
 func ValidateExpectedAgainst(expectedPath, eventsPath string) (*ExpectedReport, error) {
+	if hasParentTraversal(expectedPath) || hasParentTraversal(eventsPath) {
+		return nil, nil
+	}
 	if _, err := os.Stat(expectedPath); err != nil {
 		return nil, nil // not configured for this scenario
 	}
@@ -298,6 +326,9 @@ func ValidateExpectedAgainst(expectedPath, eventsPath string) (*ExpectedReport, 
 // hasn't been captured yet (the half-recorded guard lives in ValidateExpected,
 // the cell path).
 func ValidatePhases(meta ExpectedMeta, phases []ExpectedPhase, eventsPath string) (*ExpectedReport, error) {
+	if hasParentTraversal(eventsPath) {
+		return nil, nil
+	}
 	if _, err := os.Stat(eventsPath); err != nil {
 		return nil, nil
 	}
@@ -379,6 +410,9 @@ func ParseShardSpec(metaLine json.RawMessage, phaseLines []json.RawMessage) (Exp
 func loadExpected(path string) (ExpectedMeta, []ExpectedPhase, error) {
 	var meta ExpectedMeta
 	var phases []ExpectedPhase
+	if hasParentTraversal(path) {
+		return meta, nil, fmt.Errorf("open %s: %w", path, os.ErrNotExist)
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return meta, nil, err
@@ -421,6 +455,9 @@ func loadExpected(path string) (ExpectedMeta, []ExpectedPhase, error) {
 }
 
 func loadEvents(path string) ([]recordedEvent, error) {
+	if hasParentTraversal(path) {
+		return nil, fmt.Errorf("open %s: %w", path, os.ErrNotExist)
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err

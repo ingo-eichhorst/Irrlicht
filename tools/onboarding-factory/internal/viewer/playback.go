@@ -274,6 +274,15 @@ func (m *PlaybackManager) Current() *Playback {
 // Every recording lives under <scenarioDir>/recordings/<recording>/. recording:
 // "" → the newest recording; non-empty → that specific recording.
 func (m *PlaybackManager) StartViewerInternal(agent, subtree, scenario string, speed float64, recording string) (*Playback, error) {
+	// filepath.Base reduces each value to a single path segment before its
+	// regex check — a no-op for anything already regex-valid, but
+	// filepath.Base is the sanitizer CodeQL's go/path-injection query
+	// recognizes for the os.Stat below (a regex match alone doesn't visibly
+	// clear the taint; see shard.sanitizePathComponent for the same idiom).
+	// It also closes a real gap for recording: archiveNameRE's charset
+	// includes "." and permits the literal value "..", which slugRE (no "."
+	// at all) already excludes for agent/scenario.
+	agent, scenario = filepath.Base(agent), filepath.Base(scenario)
 	if !slugRE.MatchString(agent) || !slugRE.MatchString(scenario) {
 		return nil, fmt.Errorf("invalid agent or scenario id")
 	}
@@ -283,7 +292,8 @@ func (m *PlaybackManager) StartViewerInternal(agent, subtree, scenario string, s
 	scenarioDir := filepath.Join(m.repoRoot, "replaydata", "agents", agent, subtree, scenario)
 	var eventsDir string
 	if recording != "" {
-		if !archiveNameRE.MatchString(recording) {
+		recording = filepath.Base(recording)
+		if recording == "." || recording == ".." || !archiveNameRE.MatchString(recording) {
 			return nil, fmt.Errorf("invalid recording name")
 		}
 		eventsDir = filepath.Join(scenarioDir, "recordings", recording)

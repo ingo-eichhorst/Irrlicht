@@ -35,6 +35,9 @@ import (
 //
 // Returns nil if no transcript is present at any expected name.
 func SynthesizeEventsFromTranscript(scenarioDir, adapter string) []lifecycle.Event {
+	if hasParentTraversal(scenarioDir) {
+		return nil
+	}
 	// Try common transcript filenames in order.
 	candidates := []string{"transcript.jsonl", "transcript.md"}
 	for _, name := range candidates {
@@ -115,6 +118,9 @@ func resolveParser(adapter string) (string, tailer.TranscriptParser) {
 // firstSessionID scans a JSONL transcript for the first session id it can
 // find across the adapter-specific field names. Returns "" if none.
 func firstSessionID(path string) string {
+	if hasParentTraversal(path) {
+		return ""
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return ""
@@ -248,6 +254,9 @@ func extractLineSession(raw map[string]any) string {
 // per-line JSON metadata, so we use the file's mtime range as a coarse
 // approximation and emit one working→ready cycle.
 func synthesizeFromMarkdown(path string) []lifecycle.Event {
+	if hasParentTraversal(path) {
+		return nil
+	}
 	st, err := os.Stat(path)
 	if err != nil {
 		return nil
@@ -264,6 +273,24 @@ func synthesizeFromMarkdown(path string) []lifecycle.Event {
 		{Seq: 4, Timestamp: end.Add(-2 * time.Second), Kind: lifecycle.KindStateTransition, SessionID: sessionID, PrevState: "working", NewState: "ready", Reason: "synthetic assistant turn"},
 		{Seq: 5, Timestamp: end, Kind: lifecycle.KindTranscriptRemoved, SessionID: sessionID},
 	}
+}
+
+// hasParentTraversal reports whether p contains a literal ".." — the same
+// check viewer.NewSafeArchiveName uses to reject path traversal on a single
+// path segment, generalized here to the already-assembled directory/file
+// paths (scenarioDir, and the transcript/turn/events paths built from it)
+// this package's exported functions receive. Defense-in-depth: every real
+// caller builds these paths via filepath.Join from an HTTP-validated
+// agent/subtree/id or archive name (see the viewer's slugRE and
+// SafeArchiveName), so a legitimate value here never contains ".." — but
+// CodeQL's go/path-injection query doesn't connect that validation across
+// the several function hops between the HTTP handler and this package, so
+// each sink below gets its own local guard instead (same rationale as
+// shard.sanitizePathComponent for single-segment values). A rejected value
+// makes the caller fall through to the same "nothing found" result it
+// already returns for an absent file, never a panic or a new error shape.
+func hasParentTraversal(p string) bool {
+	return strings.Contains(p, "..")
 }
 
 // clampMonotonic returns ts if ts > floor, else floor+1ms. Used inside
@@ -296,6 +323,9 @@ type TurnMarker struct {
 // Returns nil for transcripts without per-line timestamps (aider's
 // transcript.md) and for transcripts with no user/assistant lines.
 func LoadTurnMarkers(scenarioDir string, anchor time.Time) []TurnMarker {
+	if hasParentTraversal(scenarioDir) {
+		return nil
+	}
 	for _, name := range []string{"transcript.jsonl"} {
 		path := filepath.Join(scenarioDir, name)
 		if _, err := os.Stat(path); err != nil {
@@ -309,6 +339,9 @@ func LoadTurnMarkers(scenarioDir string, anchor time.Time) []TurnMarker {
 const turnTextMax = 240
 
 func loadTurnsFromJSONL(path string, anchor time.Time) []TurnMarker {
+	if hasParentTraversal(path) {
+		return nil
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return nil
@@ -374,6 +407,9 @@ func truncateForTooltip(s string, max int) string {
 // scenarioDir is the directory containing events.jsonl / transcript.jsonl
 // / transcript.md. Returns (nil, false, nil) if none exists.
 func LoadEventsOrSynthesize(scenarioDir, adapter string) (events []lifecycle.Event, degraded bool, err error) {
+	if hasParentTraversal(scenarioDir) {
+		return nil, false, nil
+	}
 	eventsPath := filepath.Join(scenarioDir, "events.jsonl")
 	if _, statErr := os.Stat(eventsPath); statErr == nil {
 		ev, loadErr := LoadEvents(eventsPath)

@@ -151,3 +151,20 @@ func TestValidatePhases_NoEvents(t *testing.T) {
 		t.Fatalf("absent events must yield a nil report, got %+v", rep)
 	}
 }
+
+// TestValidatePhases_RejectsPathTraversal proves a literal ".." in
+// eventsPath is rejected with the same "nothing to validate yet" shape as
+// a genuinely-missing recording — not by falling through to os.Open.
+func TestValidatePhases_RejectsPathTraversal(t *testing.T) {
+	meta, phases, _, err := ParseShardSpec(nil, rawLines(`{"phase":"p","expected_state":"ready"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep, err := ValidatePhases(meta, phases, "../../etc/events.jsonl")
+	if err != nil {
+		t.Fatalf("traversal path must not error, got %v", err)
+	}
+	if rep != nil {
+		t.Fatalf("traversal path must yield a nil report, got %+v", rep)
+	}
+}

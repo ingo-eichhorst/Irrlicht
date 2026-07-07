@@ -36,7 +36,14 @@ func (s *Server) handleScenarioDetail(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "usage: /api/scenarios/{agent}/{subtree}/{id}", http.StatusBadRequest)
 		return
 	}
-	agent, subtree, id := parts[0], parts[1], parts[2]
+	// filepath.Base reduces agent/id to a single path segment before the
+	// ^[a-z0-9][a-z0-9_-]*$ slug check below — a no-op for any value that
+	// already passes the regex (which forbids "/" and "." outright), but
+	// filepath.Base is the sanitizer CodeQL's go/path-injection query
+	// recognizes for the file reads several hops downstream (recDir,
+	// scenarioDir, ...), where a regex match alone doesn't visibly clear
+	// the taint (see shard.sanitizePathComponent for the same idiom).
+	agent, subtree, id := filepath.Base(parts[0]), parts[1], filepath.Base(parts[2])
 	if subtree != "scenarios" && subtree != "regressions" {
 		http.Error(w, "subtree must be 'scenarios' or 'regressions'", http.StatusBadRequest)
 		return
@@ -72,6 +79,13 @@ func (s *Server) handleScenarioDetail(w http.ResponseWriter, r *http.Request) {
 	// cell root. recDir is "" when no recording is captured yet.
 	recDir, hasRec := validate.NewestRecordingDir(scenarioDir)
 	if hasRec {
+		// Rebuild recDir from its own filepath.Base() rather than trusting the
+		// string NewestRecordingDir returned directly — a no-op round trip
+		// (recDir is already exactly scenarioDir/recordings/<name>) that gives
+		// every os.Open/os.ReadFile below a value CodeQL's path-injection query
+		// recognizes as derived from a sanitizer, several hops closer to each
+		// sink than the agent/id validation up in the URL parsing above.
+		recDir = filepath.Join(scenarioDir, "recordings", filepath.Base(recDir))
 		d.LatestRecording = filepath.Base(recDir)
 		if b, ok := store.readFile(filepath.Join(recDir, "recording-meta.json")); ok {
 			d.Meta = b
@@ -112,12 +126,16 @@ func loadAssessment(scenarioDir string) *AssessmentReport {
 	id := filepath.Base(scenarioDir)
 	subtree := filepath.Base(filepath.Dir(scenarioDir))
 	agent := filepath.Base(filepath.Dir(filepath.Dir(scenarioDir)))
+	repoRoot := repoRootFromScenarioDir(scenarioDir)
+	// Rebuild scenarioDir from the filepath.Base()-derived components above
+	// instead of trusting the caller-supplied string directly for the disk
+	// read below — a no-op round trip for any legitimate scenarioDir.
+	scenarioDir = filepath.Join(repoRoot, "replaydata", "agents", agent, subtree, id)
 
 	if subtree != "scenarios" {
 		return loadAssessmentFromDisk(scenarioDir) // regression/ — on disk
 	}
 
-	repoRoot := repoRootFromScenarioDir(scenarioDir)
 	cell, ok := shardCellForFolder(repoRoot, agent, id)
 	if !ok || len(cell.Details.Assessment) == 0 {
 		return nil
