@@ -25,7 +25,8 @@
         "keep_parent=False on /clear means the new session carries NO parent_session_id \u2014 correct for a reset (a clean new session, not a fork). vibe's /resume-based fork path (fork(), agent_loop.py:1861) DOES set a parent, but that is a different scenario.",
         "The daemon does not emit per-turn cost for vibe (the sidecar retains only last-turn tokens, not backfillable), so the spec asserts tokens_nonzero + model but NOT cost.",
         "model mistral-medium-3.5 displays but its context WINDOW is unresolved (mistral models absent from core/pkg/capacity); irrelevant to session-reset (no context bar asserted).",
-        "messages.jsonl carries no per-event timestamp; backfill uses scan time \u2014 irrelevant to the state-topology assertions here."
+        "messages.jsonl carries no per-event timestamp; backfill uses scan time \u2014 irrelevant to the state-topology assertions here.",
+        "LIVE-DRIVE FINDING (record, 2 deterministic runs): the daemon surfaces ONLY the post-/clear session as a real session_<id>. The INITIAL session dir stays a presession (proc-<pid>) and is transcript_removed WITHOUT promoting to its real session_<id> \u2014 its ready->working->ready \"ok\" turn arc is never captured. A single-session vibe recording (basic-turn, session-start) DOES promote presession->real, so the /clear rotation is what strands the initial presession. Recording commits as VALIDATION DRIFT (5/9 phases: v2_session_birth onward unmet because v1 matched the second dir); spec expected.jsonl left intact for maintainer review. Increasing the pre-/clear sleep to 10s did NOT change it (structural, not timing)."
       ],
       "sources": [
         {
