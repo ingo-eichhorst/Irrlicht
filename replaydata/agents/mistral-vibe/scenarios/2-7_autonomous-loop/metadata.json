@@ -25,7 +25,8 @@
         "Strict-spec mismatch (same relaxation as claudecode): state does NOT stay continuously working across iterations \u2014 each fire is a discrete turn from idle, with a mandatory >=30s idle interval between fires, so the daemon observes ready\u2194working flicker per iteration. The spec models the per-iteration arc, not a single working span.",
         "Loops fire only when the agent is idle AND the input bar is focused (can_fire gate). A live drive must leave the REPL input focused between fires \u2014 the scaffolded send-key driver satisfies this.",
         "Cost is not asserted \u2014 the adapter never reads stats.session_cost; per-turn cost is not emitted for vibe.",
-        "PROVISIONAL on emission (doc+source read, no recording): the exact fire timing and whether a proc-<PID> presession precedes the session_<...> birth are settled only by record."
+        "PROVISIONAL on emission (doc+source read, no recording): the exact fire timing and whether a proc-<PID> presession precedes the session_<...> birth are settled only by record.",
+        "LIVE-DRIVE FINDING (record): vibe /loop enforces a HARD 30s minimum interval (\"Interval must be at least 30s\") and is interval-first, so the first fire \u2014 and thus the session dir first message / session_birth \u2014 cannot land before ~40s after presession_birth. The spec sets session_birth max_delay_ms=30000, which vibe structurally cannot meet, so session_birth FAILs and every downstream phase (relative_to session_birth) cascades to unknown-anchor: 1/8. The recording DOES capture the scenario essence \u2014 two clean autonomous working->ready loop fires on ONE session (marker file has 2 lines, 8 transcript lines) then /loop cancel all. VALIDATION DRIFT: the session_birth window needs widening for loop scenarios (maintainer call); expected.jsonl left intact."
       ],
       "sources": [
         {
