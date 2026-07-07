@@ -15,9 +15,9 @@ import (
 // or oscillating rule spamming a session, independent of per-rule cooldowns.
 const maxActionsPerSessionPerMinute = 6
 
-// ruleSource supplies the current rule set (satisfied by the filesystem
+// ruleLister supplies the current rule set (satisfied by the filesystem
 // rules store).
-type ruleSource interface {
+type ruleLister interface {
 	Rules() []backchannel.Rule
 }
 
@@ -26,7 +26,7 @@ type ruleSource interface {
 // on every call).
 type inputForwarder interface {
 	SendInput(sessionID string, data []byte) error
-	SendCommand(sessionID string, command string) error
+	SendCommand(sessionID, command string) error
 	Interrupt(sessionID string) error
 }
 
@@ -41,7 +41,7 @@ type inputForwarder interface {
 // per-session per-minute cap backstops oscillation. Actions run off the
 // consume loop so a slow backend can't make the engine miss other messages.
 type BackchannelEngine struct {
-	rules   ruleSource
+	rules   ruleLister
 	input   inputForwarder
 	presets map[string]map[string]string // adapter → (preset id → command text)
 	push    outbound.PushBroadcaster
@@ -60,7 +60,7 @@ type BackchannelEngine struct {
 // NewBackchannelEngine constructs an engine. enabled reports the backchannel
 // master-toggle (firing is suppressed when off, but edge bookkeeping continues
 // so re-enabling never causes a spurious fire).
-func NewBackchannelEngine(rules ruleSource, input inputForwarder, presets map[string]map[string]string, push outbound.PushBroadcaster, enabled func() bool, logger outbound.Logger) *BackchannelEngine {
+func NewBackchannelEngine(rules ruleLister, input inputForwarder, presets map[string]map[string]string, push outbound.PushBroadcaster, enabled func() bool, logger outbound.Logger) *BackchannelEngine {
 	return &BackchannelEngine{
 		rules:      rules,
 		input:      input,

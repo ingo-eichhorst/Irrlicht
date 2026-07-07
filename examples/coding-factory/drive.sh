@@ -20,6 +20,7 @@ turns() {
   find "$SESSIONS_DIR" -name 'rollout-*.jsonl' -exec cat {} + 2>/dev/null \
     | jq -r 'select(.type=="event_msg" and .payload.type=="task_complete") | "x"' 2>/dev/null \
     | wc -l | tr -d ' '
+  return 0
 }
 
 # Start (or restart) codex in tmux and wait until it is ready for input.
@@ -54,6 +55,7 @@ boot_codex() {
     sleep 1
   done
   echo "[drive] codex booted — starting task loop" >&2
+  return 0
 }
 
 boot_codex
@@ -79,7 +81,7 @@ while true; do
   tmux send-keys -t "$SESSION" Enter 2>/dev/null || true
   echo "[drive] sent task; waiting for turn to complete" >&2
   for _ in $(seq 1 180); do
-    [ "$(turns)" -gt "$before" ] && break
+    [[ "$(turns)" -gt "$before" ]] && break
     # If codex died mid-task, stop waiting and let the outer loop restart it
     tmux has-session -t "$SESSION" 2>/dev/null || break
     sleep 1

@@ -16,6 +16,9 @@ import (
 	"irrlicht/core/domain/agent"
 )
 
+// transcriptExt is the file extension for agent transcript files.
+const transcriptExt = ".jsonl"
+
 // Watcher watches a directory tree for .jsonl transcript file events.
 // It implements inbound.Watcher.
 type Watcher struct {
@@ -236,7 +239,7 @@ func (w *Watcher) handleEvent(watcher *fsnotify.Watcher, ev fsnotify.Event) {
 	}
 
 	// Only process .jsonl files (transcript files).
-	if !strings.HasSuffix(name, ".jsonl") {
+	if !strings.HasSuffix(name, transcriptExt) {
 		return
 	}
 
@@ -409,7 +412,7 @@ func (w *Watcher) emitExistingFiles(dir string) {
 	}
 	projectDir := filepath.Base(dir)
 	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), transcriptExt) {
 			continue
 		}
 		fullPath := filepath.Join(dir, e.Name())
@@ -437,10 +440,10 @@ func (w *Watcher) emitExistingFiles(dir string) {
 // Returns "" if the filename doesn't match the expected pattern.
 func extractSessionID(path string) string {
 	base := filepath.Base(path)
-	if !strings.HasSuffix(base, ".jsonl") {
+	if !strings.HasSuffix(base, transcriptExt) {
 		return ""
 	}
-	return strings.TrimSuffix(base, ".jsonl")
+	return strings.TrimSuffix(base, transcriptExt)
 }
 
 // fileSizeAndMtime returns the size and modification time of a file.

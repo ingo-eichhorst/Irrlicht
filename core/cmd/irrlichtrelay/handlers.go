@@ -8,6 +8,13 @@ import (
 	"irrlicht/core/domain/session"
 )
 
+// headerContentType and contentTypeJSON name the response header/value pair
+// set by every JSON-encoding handler in this file.
+const (
+	headerContentType = "Content-Type"
+	contentTypeJSON   = "application/json"
+)
+
 // workspaceCtxKey carries the validated workspace from requireToken to the read
 // handlers. Its own type avoids collisions with any other context value.
 type workspaceCtxKey struct{}
@@ -34,7 +41,7 @@ func handleSessions(h *hub) http.HandlerFunc {
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		groups := session.BuildDashboard(h.buildSessions(workspaceOf(r)), nil)
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set(headerContentType, contentTypeJSON)
 		_ = json.NewEncoder(w).Encode(sessionsResponse{Groups: groups})
 	}
 }
@@ -43,7 +50,7 @@ func handleSessions(h *hub) http.HandlerFunc {
 // daemons' adapter registries, matching the daemon's agentEntry shape.
 func handleAgents(h *hub) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set(headerContentType, contentTypeJSON)
 		_ = json.NewEncoder(w).Encode(h.buildAgents(workspaceOf(r)))
 	}
 }
@@ -55,7 +62,7 @@ func handleVersion(version string) http.HandlerFunc {
 	}
 	body, _ := json.Marshal(versionResp{Version: version})
 	return func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set(headerContentType, contentTypeJSON)
 		_, _ = w.Write(body)
 	}
 }

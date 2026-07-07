@@ -38,6 +38,10 @@ import (
 	"time"
 )
 
+// contentTypeHeader is the HTTP header name set on every response this mock
+// writes.
+const contentTypeHeader = "Content-Type"
+
 func main() {
 	addr := flag.String("addr", "127.0.0.1:18790", "bind address")
 	flag.Parse()
@@ -53,7 +57,7 @@ func main() {
 		// score so the turn routes to flash. Not counted.
 		if strings.Contains(path, ":generateContent") {
 			log.Printf("router %s", path)
-			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set(contentTypeHeader, "application/json")
 			_, _ = io.WriteString(w, routerLowScore)
 			return
 		}
@@ -67,7 +71,7 @@ func main() {
 				return
 			}
 			// Second+ main turn → 429 RESOURCE_EXHAUSTED (Gemini wire shape).
-			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set(contentTypeHeader, "application/json")
 			w.Header().Set("Retry-After", "1")
 			w.WriteHeader(http.StatusTooManyRequests)
 			_, _ = io.WriteString(w, resourceExhausted)
@@ -98,7 +102,7 @@ const resourceExhausted = `{"error":{"code":429,"message":"You exceeded your cur
 // streamGenerateContent parser: one text chunk, then a final chunk carrying
 // finishReason STOP + usageMetadata.
 func streamHappyPath(w http.ResponseWriter) {
-	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set(contentTypeHeader, "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.WriteHeader(http.StatusOK)

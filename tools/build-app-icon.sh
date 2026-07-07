@@ -79,6 +79,10 @@ render() {
       fi
       mv "${produced[0]}" "$out"
       ;;
+    *)
+      echo "error: unknown renderer: $renderer" >&2
+      exit 1
+      ;;
   esac
 }
 

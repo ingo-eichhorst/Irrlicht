@@ -297,6 +297,12 @@ func (m *mockMetrics) PurgeDeadBackgroundProcs(path string, _ []string) {
 	m.mu.Unlock()
 }
 
+// godre:S4144 — same body as PurgeDeadBackgroundProcs above: in production
+// (adapters/outbound/metrics.Adapter) these are genuinely distinct methods
+// (output-path-keyed vs PID-keyed background-process purging, see
+// ports/outbound.MetricsCollector); this test double only needs to record
+// that either was called, so recording both into the same log is the
+// correct simple fake, not accidental duplication.
 func (m *mockMetrics) PurgeDeadBackgroundPIDs(path string, _ []string) {
 	m.mu.Lock()
 	m.purged = append(m.purged, path)

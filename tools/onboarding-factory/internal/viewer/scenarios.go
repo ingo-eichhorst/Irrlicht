@@ -18,6 +18,10 @@ import (
 	"irrlicht/tools/onboarding-factory/internal/validate"
 )
 
+// eventsFileName is the lifecycle-events sidecar filename recorded alongside
+// a recording's transcript.jsonl.
+const eventsFileName = "events.jsonl"
+
 // handleScenariosList serves /api/scenarios — every recording cell under
 // replaydata/agents/, sorted by (agent, subtree, id).
 func (s *Server) handleScenariosList(w http.ResponseWriter, r *http.Request) {
@@ -75,10 +79,10 @@ func (s *Server) handleScenarioDetail(w http.ResponseWriter, r *http.Request) {
 		// No events.jsonl sidecar → the viewer synthesizes the timeline from the
 		// transcript via the shared classifier engine. Flag it so the UI badges a
 		// reconstructed arc rather than passing it off as recorded.
-		d.Degraded = !store.exists(filepath.Join(recDir, "events.jsonl"))
-		d.Transitions = readTransitionsRaw(filepath.Join(recDir, "events.jsonl"))
+		d.Degraded = !store.exists(filepath.Join(recDir, eventsFileName))
+		d.Transitions = readTransitionsRaw(filepath.Join(recDir, eventsFileName))
 		if d.Meta == nil {
-			if synth := synthesizeMetaFromEvents(filepath.Join(recDir, "events.jsonl")); synth != nil {
+			if synth := synthesizeMetaFromEvents(filepath.Join(recDir, eventsFileName)); synth != nil {
 				d.Meta = synth
 			}
 		}
@@ -166,7 +170,7 @@ func shardCellForFolder(repoRoot, agent, folder string) (shard.ShardAgent, bool)
 // events.jsonl to describe. The recipe-hash is keyed by the CELL folder
 // (filepath.Base of recDir's grandparent), not the recording name.
 func buildLatestManifest(recDir, agent string, d *ScenarioDetail, repoRoot string) *RecordingArchive {
-	if _, err := os.Stat(filepath.Join(recDir, "events.jsonl")); err != nil {
+	if _, err := os.Stat(filepath.Join(recDir, eventsFileName)); err != nil {
 		return nil
 	}
 	m := &RecordingArchive{Name: filepath.Base(recDir), DaemonVersion: "dev"}

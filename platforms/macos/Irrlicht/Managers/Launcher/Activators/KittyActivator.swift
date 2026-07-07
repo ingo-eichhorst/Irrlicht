@@ -39,6 +39,9 @@ struct KittyActivator: HostActivator {
             // activation — may pick the wrong instance when multiple kitties
             // run, but it's the best we can do.
             Self.logger.info("kitty: KITTY_PID unavailable for session \(session.id, privacy: .public); using bundle activation")
+            // `activated` already carries the synchronous result; the async
+            // `then` completion (fires once a cold-launched app finishes
+            // opening) isn't needed here.
             activated = AppActivator.activate(bundleID: bundleID) { _ in }
         }
 

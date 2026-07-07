@@ -36,7 +36,7 @@ MOCK_PID=$!
 
 cleanup() {
   trap - EXIT INT TERM
-  if [ -n "${MOCK_PID:-}" ]; then
+  if [[ -n "${MOCK_PID:-}" ]]; then
     kill "$MOCK_PID" 2>/dev/null || true
     wait "$MOCK_PID" 2>/dev/null || true
   fi
@@ -74,19 +74,20 @@ echo "[recorder] accepted custom-API-key dialog"
 sleep 3
 
 send_line() {
-  tmux send-keys -t "$TMUX_SESSION" -l -- "$1"
+  local line="$1"
+  tmux send-keys -t "$TMUX_SESSION" -l -- "$line"
   sleep 0.3
   tmux send-keys -t "$TMUX_SESSION" Enter
 }
 
 send_line "Reply with exactly the word: ok"
-echo "[recorder] sent prompt (expect mid-stream error → synthesized abort)"
+echo "[recorder] sent prompt (expect mid-stream error → synthesized abort)" >&2
 
 TRANSCRIPT=""
 for _ in $(seq 1 30); do
   for slug_dir in "$HOME"/.claude/projects/*/; do
     candidate="$slug_dir$UUID.jsonl"
-    if [ -f "$candidate" ] && [ -s "$candidate" ]; then
+    if [[ -f "$candidate" ]] && [[ -s "$candidate" ]]; then
       TRANSCRIPT="$candidate"
       break 2
     fi
@@ -100,13 +101,11 @@ echo "[recorder] transcript=$TRANSCRIPT"
 # varies by claude version — we just need the working→ready transition
 # to be triggerable from the JSONL stream. Time out at 30s.
 WAITED=0
-while [ "$WAITED" -lt 30 ]; do
-  if [ -f "$TRANSCRIPT" ]; then
-    # Any assistant line with a stop_reason field (any value), or any
-    # system event whose subtype implies turn termination.
-    if jq -e 'select(.type=="assistant" and .message.stop_reason!=null) | .' "$TRANSCRIPT" >/dev/null 2>&1; then
-      break
-    fi
+while [[ "$WAITED" -lt 30 ]]; do
+  # Any assistant line with a stop_reason field (any value), or any
+  # system event whose subtype implies turn termination.
+  if [[ -f "$TRANSCRIPT" ]] && jq -e 'select(.type=="assistant" and .message.stop_reason!=null) | .' "$TRANSCRIPT" >/dev/null 2>&1; then
+    break
   fi
   sleep 1; WAITED=$((WAITED+1))
 done
@@ -121,7 +120,7 @@ tmux kill-session -t "$TMUX_SESSION" 2>/dev/null
 
 RECORDING_DIR="${IRRLICHT_RECORDINGS_DIR:-$HOME/.local/share/irrlicht/recordings}"
 LATEST_RECORDING=$(ls -t "$RECORDING_DIR"/*.jsonl 2>/dev/null | head -1)
-if [ -z "$LATEST_RECORDING" ]; then
+if [[ -z "$LATEST_RECORDING" ]]; then
   echo "no recording file found under $RECORDING_DIR" >&2; exit 1
 fi
 echo "[recorder] using recording: $LATEST_RECORDING"

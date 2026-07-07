@@ -67,7 +67,7 @@ describe('background-agent badge (#744)', () => {
     await import('./irrlicht.js')
     await new Promise((r) => setTimeout(r, 0))
 
-    expect(document.querySelectorAll('#session-list .session-row').length).toBe(3)
+    expect(document.querySelectorAll('#session-list .session-row')).toHaveLength(3)
 
     // Detached bg agent: badge shown, amber-emphasized, descriptive tooltip.
     const detached = bgBadge('bg-detached')

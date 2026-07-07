@@ -114,8 +114,8 @@ export function computeStateBand(events, totalMs) {
       }
     }
     if (e.kind === "state_transition" && e.new_state) {
-      (transitionsBySid[e.session_id] = transitionsBySid[e.session_id] || [])
-        .push({offset: e.offset_ms, state: e.new_state});
+      transitionsBySid[e.session_id] = transitionsBySid[e.session_id] || [];
+      transitionsBySid[e.session_id].push({offset: e.offset_ms, state: e.new_state});
     }
   }
   for (const sid of Object.keys(transitionsBySid)) {
@@ -214,7 +214,7 @@ export function computeEventDots(events, totalMs) {
 // pairs stack without overlap. Returns [] when there's no duration or no
 // turns. Pure.
 export function computeTurns(turns, totalMs) {
-  if (!totalMs || !turns || !turns.length) return [];
+  if (!totalMs || !turns?.length) return [];
   return turns.map(t => {
     const leftPct = Math.max(0, Math.min(100, (t.offset_ms / totalMs) * 100));
     const isUser = t.role === "user";
@@ -245,13 +245,13 @@ export function computeExpectedLane(rep, totalMs) {
   // first event) and exposes it as rep.recording_start. Use that to
   // convert each phase's absolute matched_ts into an offset_ms compatible
   // with the EventMarker positions on the scrubber.
-  const startMs = rep.recording_start ? Date.parse(rep.recording_start) : NaN;
+  const startMs = rep.recording_start ? Date.parse(rep.recording_start) : Number.NaN;
   const defs = Array.isArray(rep.definitions) ? rep.definitions : [];
   const markers = [];
   for (let i = 0; i < rep.phases.length; i++) {
     const ph = rep.phases[i];
     const def = defs[i] || {};
-    const matchedMs = ph.matched_ts ? Date.parse(ph.matched_ts) : NaN;
+    const matchedMs = ph.matched_ts ? Date.parse(ph.matched_ts) : Number.NaN;
     const offsetMs = Number.isFinite(matchedMs) && Number.isFinite(startMs)
       ? matchedMs - startMs
       : null;

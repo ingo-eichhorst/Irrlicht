@@ -115,6 +115,11 @@ func readAuthCache(path string, parse func([]byte) (authCacheEntry, bool)) (auth
 const (
 	ProviderAnthropic = "anthropic"
 	ProviderOpenAI    = "openai"
+
+	// authFileName is the credential file name shared by Codex, Pi, and
+	// OpenCode's on-disk auth stores (each under a different parent
+	// directory).
+	authFileName = "auth.json"
 )
 
 // AccountKey identifies a subscription bucket: the provider name plus
@@ -284,7 +289,7 @@ func ProviderForSession(s *session.SessionState, userHome string) string {
 // failure — the caller treats absence as "no donor available", which
 // is the safe default.
 func readCodexAccountID(home string) string {
-	entry, ok := readAuthCache(filepath.Join(home, ".codex", "auth.json"), parseCodexAuth)
+	entry, ok := readAuthCache(filepath.Join(home, ".codex", authFileName), parseCodexAuth)
 	if !ok {
 		return ""
 	}
@@ -315,7 +320,7 @@ func parseCodexAuth(data []byte) (authCacheEntry, bool) {
 // prefer OpenAI over Anthropic when both are configured; either choice
 // is defensible for a single-provider Pi user.
 func readPiInheritKey(home string) (AccountKey, bool) {
-	entry, ok := readAuthCache(filepath.Join(home, ".pi", "agent", "auth.json"), parsePiAuth)
+	entry, ok := readAuthCache(filepath.Join(home, ".pi", "agent", authFileName), parsePiAuth)
 	if !ok {
 		return AccountKey{}, false
 	}
@@ -345,7 +350,7 @@ func parsePiAuth(data []byte) (authCacheEntry, bool) {
 // (no account anchor). OpenAI account_id is recovered from the JWT
 // access_token's payload via openCodeJWTAccountID.
 func readOpenCodeInheritKey(home string) (AccountKey, bool) {
-	entry, ok := readAuthCache(filepath.Join(home, ".local", "share", "opencode", "auth.json"), parseOpenCodeAuth)
+	entry, ok := readAuthCache(filepath.Join(home, ".local", "share", "opencode", authFileName), parseOpenCodeAuth)
 	if !ok {
 		return AccountKey{}, false
 	}

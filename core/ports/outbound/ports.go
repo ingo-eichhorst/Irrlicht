@@ -412,7 +412,7 @@ type AgentController interface {
 	// submit sequence is owned by the backend: tmux/kitty get a trailing CR
 	// appended; AppleScript hosts auto-submit the bare command. Used for
 	// preset actions whose command text is agent-declared (issue #754).
-	SendCommand(sessionID string, command string) error
+	SendCommand(sessionID, command string) error
 	// Interrupt delivers an interrupt (e.g. Ctrl-C) to the session.
 	Interrupt(sessionID string) error
 	// Controllable reports whether the session has a usable backend target

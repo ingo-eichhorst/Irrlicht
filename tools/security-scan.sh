@@ -56,9 +56,9 @@ GO_MODULES=(core tools/onboarding-factory tools/wsload tools/seed-demo-sessions 
 WEB_TREES=(platforms/web tools/onboarding-factory/internal/viewer/web)
 
 FAILED=0
-fail() { echo "FAIL: $1" >&2; FAILED=1; }
-warn() { echo "WARN: $1" >&2; }
-ok()   { echo "OK: $1"; }
+fail() { local msg="$1"; echo "FAIL: $msg" >&2; FAILED=1; return 0; }
+warn() { local msg="$1"; echo "WARN: $msg" >&2; return 0; }
+ok()   { local msg="$1"; echo "OK: $msg"; return 0; }
 
 # ---- GitHub-native alerts (full mode only) --------------------------------
 

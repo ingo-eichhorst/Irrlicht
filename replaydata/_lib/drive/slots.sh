@@ -44,6 +44,7 @@ load_slot() {
   UUID="${SES_UUID[$ACTIVE]}"
   EXPECTED_TURNS="${SES_EXPECTED[$ACTIVE]}"
   MARKER="${SES_MARKER[$ACTIVE]}"
+  return 0
 }
 
 # alloc_slot allocates a fresh slot (tmux session name $1, cwd $2), mints a
@@ -67,4 +68,5 @@ alloc_slot() {
   UUID=""
   EXPECTED_TURNS=0
   MARKER="$marker"
+  return 0
 }

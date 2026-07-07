@@ -87,7 +87,7 @@ function chipModeFor(snap, providerKey) {
   // Auto: a credits balance without a plan tier means the API-key /
   // usage path; everything else (plan_type set or no credits) renders
   // bars. Same rule as Swift's resolveChipMode.
-  if (snap && snap.credits && !snap.plan_type) return 'usage';
+  if (snap?.credits && !snap.plan_type) return 'usage';
   return 'subscription';
 }
 
@@ -105,7 +105,7 @@ function imminentWindow(snap) {
 // Returns where the user *should be* in the window if pacing evenly,
 // anchored to now (not sampled_at) — matches macOS quotaPacePercent.
 function paceFor(w, nowMs) {
-  if (!w || !w.window_minutes || w.window_minutes <= 0) return null;
+  if (!w?.window_minutes || w.window_minutes <= 0) return null;
   if (!w.resets_at || w.resets_at <= 0) return null;
   const windowMs = w.window_minutes * 60 * 1000;
   const startMs = w.resets_at * 1000 - windowMs;
@@ -168,7 +168,7 @@ function formatClockTime(unixSec) {
 function bucketChips(sessions, nowMs) {
   const buckets = new Map();
   for (const s of sessions) {
-    const snap = s && s.metrics && s.metrics.rate_limit;
+    const snap = s?.metrics?.rate_limit;
     if (!snap) continue;
     // Match Swift's mergeIntoBuckets stale rule exactly: any window
     // whose resets_at is in the past (or zero — Date(0) is 1970, well
@@ -182,7 +182,7 @@ function bucketChips(sessions, nowMs) {
     // (icon only, no bars) while hiding the app title. Skip them entirely.
     if (mode === 'subscription' && !Array.isArray(snap.windows)) continue;
     const imm = imminentWindow(snap);
-    const cost = (s.metrics && s.metrics.estimated_cost_usd) || 0;
+    const cost = s.metrics?.estimated_cost_usd || 0;
     const existing = buckets.get(key);
     if (!existing) {
       buckets.set(key, {
@@ -244,7 +244,7 @@ function quotaTooltip(chip, nowMs) {
       if (w.resets_at) line += ' · resets in ' + formatTimeUntil(w.resets_at);
       lines.push(line);
     }
-    const eta = chip.session && chip.session.metrics && chip.session.metrics.rate_limit_forecast_eta;
+    const eta = chip.session?.metrics?.rate_limit_forecast_eta;
     if (eta) lines.push('Projected cap: ' + formatClockTime(eta));
     else if ((chip.snapshot.windows || []).some(w => (w.used_percent || 0) > 0))
       lines.push("Forecast: won't hit cap this window");
@@ -331,7 +331,7 @@ function buildQuotaChipDOM(chip, compact, nowMs) {
   const icon = document.createElement('span');
   icon.className = 'quota-chip-icon';
   const svg = providerIconHTML(chip.key)
-            || adapterIconHTML(chip.session && chip.session.adapter);
+            || adapterIconHTML(chip.session?.adapter);
   if (svg) icon.innerHTML = svg;
   root.appendChild(icon);
 
@@ -437,7 +437,7 @@ export function refreshProviderSettings() {
 
     const name = document.createElement('span');
     name.className = 'provider-name';
-    const iconSvg = providerIconHTML(c.key) || adapterIconHTML(c.session && c.session.adapter);
+    const iconSvg = providerIconHTML(c.key) || adapterIconHTML(c.session?.adapter);
     if (iconSvg) {
       const iconSpan = document.createElement('span');
       iconSpan.innerHTML = iconSvg;

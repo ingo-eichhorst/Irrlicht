@@ -17,6 +17,11 @@ import (
 	"strings"
 )
 
+// metadataFileName is the on-disk filename for one (scenario, adapter)
+// cell's metadata, e.g.
+// replaydata/agents/<adapter>/scenarios/<folder>/metadata.json.
+const metadataFileName = "metadata.json"
+
 // Shard is one scenario's unified object: the agent-AGNOSTIC spec for one
 // matrix row. It lives in the catalog replaydata/agents/scenarios.json. A
 // scenario is just identity (id, name) + three markdown-ish fields: a one-line
@@ -104,7 +109,7 @@ func AgentCellDir(repoRoot, adapter, folder string) string {
 // Use this when you already know the folder (e.g. the viewer detail endpoint,
 // keyed by the on-disk folder).
 func LoadAgentCell(repoRoot, adapter, folder string) (*ShardAgent, bool) {
-	b, err := os.ReadFile(filepath.Join(AgentCellDir(repoRoot, adapter, folder), "metadata.json"))
+	b, err := os.ReadFile(filepath.Join(AgentCellDir(repoRoot, adapter, folder), metadataFileName))
 	if err != nil {
 		return nil, false
 	}
@@ -131,7 +136,7 @@ func LoadAdapterCells(repoRoot, adapter string) map[string]*ShardAgent {
 		if !e.IsDir() {
 			continue
 		}
-		b, err := os.ReadFile(filepath.Join(scenDir, e.Name(), "metadata.json"))
+		b, err := os.ReadFile(filepath.Join(scenDir, e.Name(), metadataFileName))
 		if err != nil {
 			continue
 		}
@@ -242,7 +247,7 @@ func AgentFolderForScenario(repoRoot, adapter, name string) string {
 			if !e.IsDir() {
 				continue
 			}
-			b, err := os.ReadFile(filepath.Join(scenDir, e.Name(), "metadata.json"))
+			b, err := os.ReadFile(filepath.Join(scenDir, e.Name(), metadataFileName))
 			if err != nil {
 				continue
 			}

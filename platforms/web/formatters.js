@@ -128,8 +128,8 @@ export function fmtEtaText(remaining, highSecs) {
 // without fresh progress — never a bare countdown (#616). Mirrored in
 // SessionListView.swift's taskEtaPresentation.
 export function taskEtaPresentation(metrics, state, nowSec) {
-  const est = metrics && metrics.task_estimate;
-  const eta = metrics && metrics.task_completion_eta;
+  const est = metrics?.task_estimate;
+  const eta = metrics?.task_completion_eta;
   if (state !== 'working' || !est) return null;
   const sourceLabel = est.source === 'tasks' ? 'from task list'
     : est.source === 'subagents' ? 'from subagents' : 'agent-reported';
@@ -139,8 +139,8 @@ export function taskEtaPresentation(metrics, state, nowSec) {
   // Widen the range generously (2×) to signal a population prior, not a
   // measured rate; with no projection (e.g. a subagent aggregate) fall back
   // to the progress-only "estimating…" chip.
-  if (!(est.completed_rounds > 0)) {
-    if (!(est.total_rounds > 0)) return null;
+  if (est.completed_rounds <= 0) {
+    if (est.total_rounds <= 0) return null;
     const age = est.updated_at > 0 ? Math.max(0, Math.floor(nowSec - est.updated_at)) : 0;
     const zeroStale = est.updated_at > 0 && age > 180;
     let zeroTitle = 'Task ETA — ' + sourceLabel + ' 0/' + est.total_rounds + ' rounds';
@@ -209,7 +209,7 @@ export function formatTokens(n) {
 
 export function esc(s) {
   if (s == null) return '';
-  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  return String(s).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
 }
 
 export function activeSubagentCount(a) {

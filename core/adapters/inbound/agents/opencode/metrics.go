@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	_ "modernc.org/sqlite"
+	_ "modernc.org/sqlite" // registers the "sqlite" driver for database/sql
 
 	"irrlicht/core/domain/session"
 	"irrlicht/core/pkg/capacity"

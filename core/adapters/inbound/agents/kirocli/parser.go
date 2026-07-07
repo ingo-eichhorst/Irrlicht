@@ -138,6 +138,13 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 	case "Clear":
 		// /clear continues in the SAME session file (no new UUID); the
 		// marker itself carries no state transition.
+		//
+		// godre:S1871 — same body as default below, kept as its own case
+		// deliberately: this documents "Clear" as a recognized, understood
+		// marker kind (as opposed to default's true catch-all for kinds this
+		// parser doesn't know about), so default can later change — e.g. to
+		// log or count unrecognized kinds — without silently changing
+		// behavior for this one.
 		ev.Skip = true
 		return ev
 

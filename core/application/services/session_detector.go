@@ -41,6 +41,18 @@ const activityDebounceWindow = 2 * time.Second
 // transcript on this interval catches the missed events.
 const staleWorkingRefreshInterval = 5 * time.Second
 
+// Logger component tags shared by SessionDetector's collaborators, split
+// across this file, session_detector_activity.go, session_detector_lifecycle.go,
+// session_detector_subagent.go, and pid_manager.go.
+const (
+	// logComponentSessionDetector tags every log line the detector's steady
+	// -state event handling emits.
+	logComponentSessionDetector = "session-detector"
+	// logComponentSessionDetectorSeed tags log lines emitted during the
+	// initial-scan seeding pass, distinct from steady-state handling.
+	logComponentSessionDetectorSeed = "session-detector-seed"
+)
+
 // compactHoldTimeout bounds the PreCompact force-working hold (#657). Normally
 // the hold clears when the manual compact_boundary lands, but an interrupted or
 // failed /compact may never write one — without a ceiling the session would be

@@ -216,8 +216,8 @@ init_session() {
   if cwd_already_trusted; then
     echo "[driver] trust: cwd already trusted by an earlier session — skipping prompt" >&2
   else
-    local WAITED=0 import_done=0 trust_done=0
-    while [[ $WAITED -lt 30 ]]; do
+    local waited=0 import_done=0 trust_done=0
+    while [[ $waited -lt 30 ]]; do
       if [[ -f "$slot_stdout" ]]; then
         # The TUI lays the dialog title out with per-word cursor-move
         # escapes (e.g. "external\e[18GCLAUDE.md\e[28Gimports"), so a
@@ -247,20 +247,20 @@ init_session() {
         grep -aq 'auto mode on' "$slot_stdout" 2>/dev/null && break
       fi
       sleep 0.5
-      WAITED=$((WAITED + 1))
+      waited=$((waited + 1))
     done
   fi
 
   # Wait for "auto mode on" — appears in the TUI footer once claude is
   # ready to accept prompts.
-  local WAITED=0
-  while [[ $WAITED -lt 60 ]]; do
+  local waited=0
+  while [[ $waited -lt 60 ]]; do
     if [[ -f "$slot_stdout" ]] && \
        grep -aq 'auto mode on' "$slot_stdout" 2>/dev/null; then
       break
     fi
     sleep 0.5
-    WAITED=$((WAITED + 1))
+    waited=$((waited + 1))
   done
   sleep 1  # extra grace for the input prompt to settle
 }

@@ -123,6 +123,9 @@ RUN_CWD="$(cd "$RUN_CWD" && pwd -P)"   # canonicalize (resolve symlinks) for the
 
 DEADLINE=$(( $(date +%s) + TIMEOUT_S ))
 EXIT_REASON="ok"
+# Shared exit-reason literal for a bad launch/dispatch error (S1192: defined
+# once here, referenced at every site below instead of repeating the string).
+NONZERO_2='nonzero(2)'
 
 # Active-session view — the step functions read/write these. They are a cache of
 # the active slot's state, kept in sync via save_active / load_slot. TRANSCRIPT
@@ -175,7 +178,8 @@ DRIVE_SLASH_REQUIRES_STEP_TYPE=false
 remaining_seconds() { local now; now=$(date +%s); (( now >= DEADLINE )) && echo 0 || echo $((DEADLINE - now)); }
 
 not_implemented() { # <step-type>
-  echo "[driver] STUB: step type '$1' not yet ported for kiro-cli — see scripts/templates/drive-interactive.sh.tmpl and drive-codex-interactive.sh" >&2
+  local step_type="$1"
+  echo "[driver] STUB: step type '$step_type' not yet ported for kiro-cli — see scripts/templates/drive-interactive.sh.tmpl and drive-codex-interactive.sh" >&2
   EXIT_REASON="nonzero(3)"
   return 3
 }
@@ -210,7 +214,7 @@ boot_session() {
   local sess="$SESSION" cwd="${SES_CWD[$ACTIVE]}"
   local slot_stdout="$DRIVER_LOG.stdout.$ACTIVE"
   : > "$slot_stdout"
-  command -v tmux >/dev/null 2>&1 || { echo "[driver] tmux required" >&2; EXIT_REASON="nonzero(2)"; exit 1; }
+  command -v tmux >/dev/null 2>&1 || { echo "[driver] tmux required" >&2; EXIT_REASON="$NONZERO_2"; exit 1; }
   mkdir -p "$cwd"
   tmux kill-session -t "$sess" 2>/dev/null || true
   # The marker's mtime is the discovery floor; with 1s mtime granularity, sleep
@@ -226,7 +230,7 @@ boot_session() {
   tmux new-session -d -s "$sess" -x 200 -y 50 -c "$cwd" \
     "$launch" \
     >>"$DRIVER_LOG.stdout" 2>>"$DRIVER_LOG.stderr" \
-    || { echo "[driver] failed to launch kiro-cli under tmux" >&2; EXIT_REASON="nonzero(2)"; exit 1; }
+    || { echo "[driver] failed to launch kiro-cli under tmux" >&2; EXIT_REASON="$NONZERO_2"; exit 1; }
   tmux pipe-pane -t "$sess" -o "cat >> '$slot_stdout'"
   echo "[driver] tmux started: $sess (slot=$ACTIVE, cwd=$cwd)" >&2
   # Wait for the idle input line ("ask a question or describe a task") so the
@@ -327,7 +331,8 @@ wait_turn() {
 # and be dropped). Each send bumps EXPECTED_TURNS so wait_turn knows how many
 # text-only AssistantMessages to expect.
 send_text() { # <text>
-  tmux send-keys -t "$SESSION" -l -- "$1"
+  local text="$1"
+  tmux send-keys -t "$SESSION" -l -- "$text"
   sleep 0.3
   tmux send-keys -t "$SESSION" Enter
   EXPECTED_TURNS=$((EXPECTED_TURNS + 1))
@@ -346,7 +351,8 @@ send_text() { # <text>
 # so the next prompt reaches the REPL. ESC on a non-overlay slash (/session-id)
 # is a harmless no-op (verified live: the prompt stays usable).
 send_slash() { # <text>
-  tmux send-keys -t "$SESSION" -l -- "$1"
+  local text="$1"
+  tmux send-keys -t "$SESSION" -l -- "$text"
   sleep 0.3
   tmux send-keys -t "$SESSION" Enter
   sleep 1.5
@@ -364,9 +370,10 @@ send_slash() { # <text>
 # a turn the escape can never produce — same reasoning as send_slash). Mirrors
 # step_keys in drive-claudecode-interactive.sh.
 send_keys() { # <key-token-list>
+  local keys="$1"
   # shellcheck disable=SC2086 — intentional word-splitting of the key list
-  tmux send-keys -t "$SESSION" $1
-  echo "[driver] keys[s$ACTIVE]: $1 (no turn expected)" >&2
+  tmux send-keys -t "$SESSION" $keys
+  echo "[driver] keys[s$ACTIVE]: $keys (no turn expected)" >&2
   sleep 0.3
 }
 
@@ -566,7 +573,7 @@ while IFS= read -r step; do
       echo "[driver] switch -> session slot $tgt (uuid=$UUID)" >&2
     else
       echo "[driver] switch: invalid session slot '$tgt' (have $N_SLOTS)" >&2
-      EXIT_REASON="nonzero(2)"
+      EXIT_REASON="$NONZERO_2"
       STEP_OK=false
       continue
     fi
@@ -586,7 +593,7 @@ while IFS= read -r step; do
     exit_clean)      step_exit_clean ;;
     start_session)   step_start_session "$(jq -r '.cwd // empty' <<<"$step")" ;;
     session)         : ;;  # pure focus switch — handled by the inline target block above
-    *)               echo "[driver] unknown step type: $type" >&2; EXIT_REASON="nonzero(2)"; STEP_OK=false ;;
+    *)               echo "[driver] unknown step type: $type" >&2; EXIT_REASON="$NONZERO_2"; STEP_OK=false ;;
   esac
   (( $(remaining_seconds) <= 0 )) && { EXIT_REASON="timeout"; STEP_OK=false; }
 done < <(jq -c '.[]' <<<"$SCRIPT_JSON")

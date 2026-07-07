@@ -9,7 +9,7 @@ import (
 // PermissionGate wires one declared permission's consent-gated call site
 // into AssertPermissionGated. SetState drives the permission to the given
 // state through whatever mechanism the call site actually checks — a
-// mutable fake ConsentGate for a live per-request check (an HTTP handler,
+// mutable fake ConsentGranter for a live per-request check (an HTTP handler,
 // input forwarding), or the permission's real Apply/Remove closures for an
 // install-type permission (a hook file, a config block). Exercise performs
 // the action the permission is supposed to gate. Observe reports whether

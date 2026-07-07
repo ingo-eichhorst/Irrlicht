@@ -63,11 +63,11 @@ describe('agent-less group in the sessions payload', () => {
     // payload: the rig agent (nested sub-group, #559) and the normal
     // project group's agent.
     const rows = document.querySelectorAll('#session-list .session-row')
-    expect(rows.length).toBe(2)
+    expect(rows).toHaveLength(2)
     expect(rows[0].dataset.sessionId).toBe('proc-rig')
     expect(rows[1].dataset.sessionId).toBe('proc-app')
     // Headers: gastown group + its rig sub-group + the project group.
-    expect(document.querySelectorAll('#session-list .group-hdr').length).toBe(3)
+    expect(document.querySelectorAll('#session-list .group-hdr')).toHaveLength(3)
     expect(document.getElementById('empty-state').style.display).toBe('none')
   })
 })

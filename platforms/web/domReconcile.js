@@ -27,13 +27,15 @@ export function reconcile(parent, items, keyFn, createFn, updateFn) {
       // Move to correct position if needed
       const expected = prevNode ? prevNode.nextSibling : parent.firstChild;
       if (el !== expected) {
-        parent.insertBefore(el, expected);
+        if (expected) expected.before(el);
+        else parent.appendChild(el);
       }
     } else {
       el = createFn(item);
       el.dataset.key = key;
       const ref = prevNode ? prevNode.nextSibling : parent.firstChild;
-      parent.insertBefore(el, ref);
+      if (ref) ref.before(el);
+      else parent.appendChild(el);
     }
     prevNode = el;
   }

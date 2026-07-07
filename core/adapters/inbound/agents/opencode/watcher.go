@@ -20,6 +20,11 @@ import (
 
 const defaultMinScanGap = 500 * time.Millisecond
 
+// sessionQueryParam is the query-string key appended to the WAL path so
+// MetricsProvider (opencode/metrics.go ComputeMetrics) can recover the
+// session ID via parseTranscriptPath.
+const sessionQueryParam = "?session="
+
 // Watcher monitors the OpenCode SQLite database for new and updated sessions.
 // It implements inbound.Watcher.
 //
@@ -336,7 +341,7 @@ func (w *Watcher) scanSessions() {
 			// parseTranscriptPath. The WAL suffix routes isStaleTranscript()
 			// at the WAL (updated on every write), not the checkpoint-only
 			// main DB.
-			walPath := w.dbPath + "-wal" + "?session=" + s.id
+			walPath := w.dbPath + "-wal" + sessionQueryParam + s.id
 			w.broadcast(agent.Event{
 				Type:            agent.EventNewSession,
 				SessionID:       s.id,
@@ -410,7 +415,7 @@ func (w *Watcher) emitRemovedForArchivedSessions(db *sql.DB) {
 		if !known {
 			continue
 		}
-		walPath := w.dbPath + "-wal" + "?session=" + id
+		walPath := w.dbPath + "-wal" + sessionQueryParam + id
 		w.broadcast(agent.Event{
 			Type:           agent.EventRemoved,
 			SessionID:      id,
@@ -545,7 +550,7 @@ func (w *Watcher) scanParts(db *sql.DB, sessionID, directory string, cur *sessio
 			Type:           agent.EventActivity,
 			SessionID:      sessionID,
 			ProjectDir:     filepath.Base(directory),
-			TranscriptPath: w.dbPath + "-wal" + "?session=" + sessionID,
+			TranscriptPath: w.dbPath + "-wal" + sessionQueryParam + sessionID,
 			CWD:            directory,
 			Terminal:       hasTerminal,
 		})

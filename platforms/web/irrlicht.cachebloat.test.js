@@ -90,7 +90,7 @@ describe('cache-creation regression badge (#813)', () => {
     await import('./irrlicht.js')
     await new Promise((r) => setTimeout(r, 0))
 
-    expect(document.querySelectorAll('#session-list .session-row').length).toBe(3)
+    expect(document.querySelectorAll('#session-list .session-row')).toHaveLength(3)
 
     // Attributed: visible text is the daemon's version-attribution string,
     // not just an icon; hover explanation is the daemon-composed string,

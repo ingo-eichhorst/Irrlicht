@@ -20,6 +20,18 @@ import (
 	"irrlicht/core/ports/outbound"
 )
 
+// errInternalErrorMsg is the generic 500 response body used across handlers
+// in this file where the underlying error is already logged and its details
+// aren't safe or useful to expose to the client.
+const errInternalErrorMsg = "internal error"
+
+// headerContentType and contentTypeJSON name the response header/value pair
+// set by every JSON-encoding handler in this file.
+const (
+	headerContentType = "Content-Type"
+	contentTypeJSON   = "application/json"
+)
+
 // costTimeframeSeconds maps the four supported time-frame keys to their
 // trailing-window duration in seconds. These are rolling windows (not
 // calendar-aligned) and are embedded under each project group's "costs"
@@ -78,7 +90,7 @@ func handleGetSessions(repo outbound.SessionRepository, orchMonitor *services.Or
 	return func(w http.ResponseWriter, r *http.Request) {
 		sessions, err := repo.ListAll()
 		if err != nil {
-			http.Error(w, "internal error", http.StatusInternalServerError)
+			http.Error(w, errInternalErrorMsg, http.StatusInternalServerError)
 			return
 		}
 		// Cross-account rate-limit inheritance (issue #309): wrapper
@@ -96,7 +108,7 @@ func handleGetSessions(repo outbound.SessionRepository, orchMonitor *services.Or
 			attachGroupCosts(groups, byProject)
 			resp.ProviderCosts = providerCostsByProvider(byProvider)
 		}
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set(headerContentType, contentTypeJSON)
 		json.NewEncoder(w).Encode(resp)
 	}
 }
@@ -436,7 +448,7 @@ func handleGetHistory(tracker outbound.CostTracker, sessions historySessionListe
 		// Yield is a per-project aggregate over completed sessions, not a cost
 		// time series — handle it before the cost-tracker path (#373).
 		if chart == "yield" {
-			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set(headerContentType, contentTypeJSON)
 			json.NewEncoder(w).Encode(buildYieldResponse(rangeKey, group, start, end, sessions))
 			return
 		}
@@ -455,7 +467,7 @@ func handleGetHistory(tracker outbound.CostTracker, sessions historySessionListe
 					ScopeValue:    scopeValue,
 				})
 				if err != nil {
-					http.Error(w, "internal error", http.StatusInternalServerError)
+					http.Error(w, errInternalErrorMsg, http.StatusInternalServerError)
 					return
 				}
 				cr = c
@@ -465,7 +477,7 @@ func handleGetHistory(tracker outbound.CostTracker, sessions historySessionListe
 				cr = &outbound.ConcurrencyResult{Start: start, End: end, BucketSeconds: bucketSeconds, BucketStarts: []int64{}, ByKey: map[string][]float64{}, PeakByKey: map[string]float64{}}
 			}
 			resp := buildAgentsResponse(rangeKey, scopeEcho, cr)
-			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set(headerContentType, contentTypeJSON)
 			json.NewEncoder(w).Encode(resp)
 			return
 		}
@@ -504,7 +516,7 @@ func handleGetHistory(tracker outbound.CostTracker, sessions historySessionListe
 				TokenTypes:    tokenTypes,
 			})
 			if err != nil {
-				http.Error(w, "internal error", http.StatusInternalServerError)
+				http.Error(w, errInternalErrorMsg, http.StatusInternalServerError)
 				return
 			}
 			series = s
@@ -516,7 +528,7 @@ func handleGetHistory(tracker outbound.CostTracker, sessions historySessionListe
 		}
 
 		resp := buildHistoryResponse(rangeKey, chart, group, scopeEcho, series, q)
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set(headerContentType, contentTypeJSON)
 		json.NewEncoder(w).Encode(resp)
 	}
 }
@@ -579,7 +591,7 @@ func parseTokenTypeFilter(s string) ([]string, bool) {
 // writeHistoryNotImplemented emits a 501 with a phase hint for chart types and
 // groups scaffolded in the UI but not yet wired (Phase 2/3).
 func writeHistoryNotImplemented(w http.ResponseWriter, what string, phase int) {
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set(headerContentType, contentTypeJSON)
 	w.WriteHeader(http.StatusNotImplemented)
 	json.NewEncoder(w).Encode(map[string]any{
 		"error": what + " is not implemented in Phase 1",
@@ -949,7 +961,7 @@ func handleGetVersion(version string) http.HandlerFunc {
 	}
 	body, _ := json.Marshal(versionResp{Version: version})
 	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set(headerContentType, contentTypeJSON)
 		w.Write(body)
 	}
 }
@@ -985,7 +997,7 @@ func handleGetAgents(allAgents []agent.Agent) http.HandlerFunc {
 		})
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set(headerContentType, contentTypeJSON)
 		json.NewEncoder(w).Encode(entries)
 	}
 }
@@ -1004,7 +1016,7 @@ type publishStatusResp struct {
 
 // writePublishStatus encodes the controller's current publish state as JSON.
 func writePublishStatus(w http.ResponseWriter, controller *relay.PublishController) {
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set(headerContentType, contentTypeJSON)
 	enabled, s := controller.Status()
 	if !enabled {
 		json.NewEncoder(w).Encode(publishStatusResp{Enabled: false})
@@ -1075,7 +1087,7 @@ func handleGetState(repo outbound.SessionRepository) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		sessions, err := repo.ListAll()
 		if err != nil {
-			http.Error(w, "internal error", http.StatusInternalServerError)
+			http.Error(w, errInternalErrorMsg, http.StatusInternalServerError)
 			return
 		}
 
@@ -1119,7 +1131,7 @@ func handleGetState(repo outbound.SessionRepository) http.HandlerFunc {
 			LastUpdated:  time.Now().UTC().Format(time.RFC3339),
 		}
 
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set(headerContentType, contentTypeJSON)
 		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")
 		enc.Encode(resp)
@@ -1138,7 +1150,7 @@ func handleDiagnosticsBundle(svc *services.DiagnosticsService) http.HandlerFunc 
 			http.Error(w, "failed to build diagnostics bundle", http.StatusInternalServerError)
 			return
 		}
-		w.Header().Set("Content-Type", "application/gzip")
+		w.Header().Set(headerContentType, "application/gzip")
 		w.Header().Set("Content-Disposition",
 			fmt.Sprintf(`attachment; filename="irrlicht-diag-%s.tar.gz"`, fileSafe(Version)))
 		w.Header().Set("Content-Length", strconv.Itoa(buf.Len()))

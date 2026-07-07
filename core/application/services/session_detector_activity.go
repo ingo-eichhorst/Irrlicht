@@ -48,7 +48,7 @@ func (d *SessionDetector) handleTranscriptEvent(id agent.Identity, ev agent.Even
 
 // onNewSession handles a new transcript file appearing.
 func (d *SessionDetector) onNewSession(id agent.Identity, ev agent.Event) {
-	d.log.LogInfo("session-detector", ev.SessionID,
+	d.log.LogInfo(logComponentSessionDetector, ev.SessionID,
 		fmt.Sprintf("new session detected in %s (adapter=%s)", ev.ProjectDir, id.Name))
 
 	// Track project directory for parent derivation.
@@ -71,12 +71,12 @@ func (d *SessionDetector) onNewSession(id agent.Identity, ev agent.Event) {
 		if deleted && time.Since(time.Unix(deletedAt, 0)) >= d.deletedCooldown && !isStaleTranscript(ev.TranscriptPath) {
 			delete(d.deletedSessions, ev.SessionID)
 			deleted = false
-			d.log.LogInfo("session-detector", ev.SessionID,
+			d.log.LogInfo(logComponentSessionDetector, ev.SessionID,
 				"previously deleted session has fresh activity (--continue), allowing re-creation")
 		}
 		d.mu.Unlock()
 		if deleted {
-			d.log.LogInfo("session-detector", ev.SessionID,
+			d.log.LogInfo(logComponentSessionDetector, ev.SessionID,
 				"skipping recently deleted session")
 			return
 		}
@@ -88,7 +88,7 @@ func (d *SessionDetector) onNewSession(id agent.Identity, ev agent.Event) {
 		if isStaleTranscript(ev.TranscriptPath) {
 			liveCWD, live := d.isLiveStaleSession(id.Name, ev)
 			if !live {
-				d.log.LogInfo("session-detector", ev.SessionID,
+				d.log.LogInfo(logComponentSessionDetector, ev.SessionID,
 					"skipping orphan transcript")
 				return
 			}
@@ -98,7 +98,7 @@ func (d *SessionDetector) onNewSession(id agent.Identity, ev agent.Event) {
 			if ev.CWD == "" {
 				ev.CWD = liveCWD
 			}
-			d.log.LogInfo("session-detector", ev.SessionID,
+			d.log.LogInfo(logComponentSessionDetector, ev.SessionID,
 				"stale transcript but live process owns its cwd — creating session")
 		}
 
@@ -109,7 +109,7 @@ func (d *SessionDetector) onNewSession(id agent.Identity, ev agent.Event) {
 		// (issue #321). The cwd directory missing on disk is an unambiguous
 		// orphan signal — no live process can be running in a gone cwd.
 		if cwdMissing(ev.CWD) {
-			d.log.LogInfo("session-detector", ev.SessionID,
+			d.log.LogInfo(logComponentSessionDetector, ev.SessionID,
 				"skipping session with missing cwd")
 			return
 		}
@@ -143,7 +143,7 @@ func (d *SessionDetector) onNewSession(id agent.Identity, ev agent.Event) {
 				d.mu.Lock()
 				d.hostGateRejected[ev.SessionID] = struct{}{}
 				d.mu.Unlock()
-				d.log.LogInfo("session-detector", ev.SessionID,
+				d.log.LogInfo(logComponentSessionDetector, ev.SessionID,
 					"skipping session bound to a non-interactive host")
 				return
 			}
@@ -196,7 +196,7 @@ func (d *SessionDetector) onNewSession(id agent.Identity, ev agent.Event) {
 		}
 
 		if err := d.repo.Save(state); err != nil {
-			d.log.LogError("session-detector", ev.SessionID,
+			d.log.LogError(logComponentSessionDetector, ev.SessionID,
 				fmt.Sprintf("failed to save new session: %v", err))
 			return
 		}
@@ -251,7 +251,7 @@ func (d *SessionDetector) onNewSession(id agent.Identity, ev agent.Event) {
 			if changed {
 				existing.UpdatedAt = now
 				if err := d.repo.Save(existing); err != nil {
-					d.log.LogError("session-detector", ev.SessionID,
+					d.log.LogError(logComponentSessionDetector, ev.SessionID,
 						fmt.Sprintf("failed to update existing session: %v", err))
 				}
 			}
@@ -396,7 +396,7 @@ func (d *SessionDetector) processActivity(id agent.Identity, ev agent.Event) {
 		if deleted && time.Since(time.Unix(deletedAt, 0)) >= d.deletedCooldown && !isStaleTranscript(ev.TranscriptPath) {
 			delete(d.deletedSessions, ev.SessionID)
 			deleted = false
-			d.log.LogInfo("session-detector", ev.SessionID,
+			d.log.LogInfo(logComponentSessionDetector, ev.SessionID,
 				"previously deleted session has fresh activity (--continue), allowing re-creation")
 		}
 		d.mu.Unlock()
@@ -443,7 +443,7 @@ func (d *SessionDetector) processActivityLocked(id agent.Identity, state *sessio
 	// existing-session writes (issue #606).
 	if state.Adapter == "" && id.Name != "" {
 		state.Adapter = id.Name
-		d.log.LogInfo("session-detector", ev.SessionID,
+		d.log.LogInfo(logComponentSessionDetector, ev.SessionID,
 			fmt.Sprintf("backfilled empty adapter=%s on activity", id.Name))
 	}
 
@@ -454,7 +454,7 @@ func (d *SessionDetector) processActivityLocked(id agent.Identity, state *sessio
 	if pid, ok := d.pidMgr.ConsumePendingPID(ev.SessionID); ok {
 		if state.PID != pid {
 			state.PID = pid
-			d.log.LogInfo("session-detector", ev.SessionID,
+			d.log.LogInfo(logComponentSessionDetector, ev.SessionID,
 				fmt.Sprintf("applied deferred pid %d", pid))
 		}
 		// Capture launcher identity + background-agent marker idempotently —
@@ -623,7 +623,7 @@ func (d *SessionDetector) processActivityLocked(id agent.Identity, state *sessio
 			case newState == session.StateReady:
 				d.finishOrphanedChildren(state.SessionID)
 				if d.hasActiveChildren(state.SessionID) {
-					d.log.LogInfo("session-detector", ev.SessionID,
+					d.log.LogInfo(logComponentSessionDetector, ev.SessionID,
 						"holding parent working — active children still running")
 					newState = session.StateWorking
 					reason = ""
@@ -650,7 +650,7 @@ func (d *SessionDetector) processActivityLocked(id agent.Identity, state *sessio
 		// would reclassify from waiting, let rule 3 fire, and transition the
 		// parent to ready despite children still running — undoing the hold.
 		if !parentHeldWorking && ShouldSynthesizeCollapsedWaiting(state.State, newState, state.Metrics) {
-			d.log.LogInfo("session-detector", ev.SessionID, SyntheticWaitingReason)
+			d.log.LogInfo(logComponentSessionDetector, ev.SessionID, SyntheticWaitingReason)
 			d.record(lifecycle.Event{
 				Kind:      lifecycle.KindStateTransition,
 				SessionID: ev.SessionID,
@@ -665,7 +665,7 @@ func (d *SessionDetector) processActivityLocked(id agent.Identity, state *sessio
 
 		if newState != state.State {
 			if reason != "" {
-				d.log.LogInfo("session-detector", ev.SessionID, reason)
+				d.log.LogInfo(logComponentSessionDetector, ev.SessionID, reason)
 			}
 			d.record(lifecycle.Event{Kind: lifecycle.KindStateTransition, SessionID: ev.SessionID, PrevState: state.State, NewState: newState, Reason: reason, Inputs: classifierInputs(state.Metrics)})
 			state.State = newState
@@ -708,7 +708,7 @@ func (d *SessionDetector) processActivityLocked(id agent.Identity, state *sessio
 	}
 
 	if err := d.repo.Save(state); err != nil {
-		d.log.LogError("session-detector", ev.SessionID,
+		d.log.LogError(logComponentSessionDetector, ev.SessionID,
 			fmt.Sprintf("failed to save activity update: %v", err))
 		return
 	}
@@ -729,7 +729,7 @@ func (d *SessionDetector) processActivityLocked(id agent.Identity, state *sessio
 		d.refreshSubagentSummary(state)
 		if !state.Subagents.Equal(prevSummary) {
 			if err := d.repo.Save(state); err != nil {
-				d.log.LogError("session-detector", ev.SessionID,
+				d.log.LogError(logComponentSessionDetector, ev.SessionID,
 					fmt.Sprintf("failed to persist cleared subagent summary: %v", err))
 			}
 			d.broadcast(outbound.PushTypeUpdated, state)

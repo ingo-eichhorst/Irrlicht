@@ -3,6 +3,12 @@ package agent
 // Source is a sealed sum describing where session data lives and how
 // the runtime discovers it. Each adapter picks exactly one variant; the
 // daemon constructs the appropriate watcher from the variant.
+//
+// Deliberately not renamed for godre:S8196 ("-er" suffix convention for
+// single-method interfaces): isSource is a sealing marker method, not a
+// behavior contract, and Source is the exported domain noun referenced
+// throughout adapters/ and application/ — renaming it would be an
+// architectural change to the domain vocabulary, not a mechanical lint fix.
 type Source interface {
 	isSource()
 }

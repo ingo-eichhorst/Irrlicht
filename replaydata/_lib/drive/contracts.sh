@@ -30,6 +30,7 @@ emit_session_contract() {
     echo "$(daemon_sid "${SES_TRANSCRIPT[$i]}")" >> "$STAGING/session.uuids"
     echo "${SES_TRANSCRIPT[$i]}" >> "$STAGING/transcript.paths"
   done
+  return 0
 }
 
 # drive_exit maps EXIT_REASON to the process exit code and exits.
@@ -40,4 +41,5 @@ drive_exit() {
     nonzero\(*\))  exit "${EXIT_REASON//[!0-9]/}" ;;
     *)             exit 1 ;;
   esac
+  return 0
 }

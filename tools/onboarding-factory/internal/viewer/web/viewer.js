@@ -80,7 +80,7 @@ let recipesByCoverageId = new Map(); // coverage_id → recipe entry
 // sidebar label, the detail-page title, and the recipe panel.
 function folderToCoverageId(folder, agent) {
   for (const r of recipesByCoverageId.values()) {
-    const folderForAgent = r.folder_by_agent && r.folder_by_agent[agent];
+    const folderForAgent = r.folder_by_agent?.[agent];
     if ((r.name === folder || folderForAgent === folder) && r.coverage_id) {
       return r.coverage_id;
     }
@@ -117,7 +117,7 @@ function folderToCoverageId(folder, agent) {
       if (h.startsWith("#/scenario/") || h.startsWith("#/recording/")) return;
       if (!catalog) return;
       const main = document.getElementById("main");
-      if (agentsPerPage((main && main.clientWidth) || 1200) !== lastPerPage) loadOverview();
+      if (agentsPerPage(main?.clientWidth || 1200) !== lastPerPage) loadOverview();
     }, 150);
   });
 
@@ -161,7 +161,8 @@ function folderToCoverageId(folder, agent) {
   const bySubtree = {scenarios: {}, regressions: {}};
   for (const s of scenarios) {
     if (!bySubtree[s.subtree]) bySubtree[s.subtree] = {};
-    (bySubtree[s.subtree][s.agent] ||= []).push(s);
+    bySubtree[s.subtree][s.agent] ||= [];
+    bySubtree[s.subtree][s.agent].push(s);
   }
   const activePath = sidebarActivePath();
   for (const subtree of ["scenarios", "regressions"]) {
@@ -203,7 +204,7 @@ function folderToCoverageId(folder, agent) {
         // canonical <dashed-code>_<name> (the 2 real variants:
         // user-esc-interrupt→2-20_interrupted-turn, user-blocking-question→
         // 2-17_agent-question-pending); the detail breadcrumb shows it regardless.
-        const canonicalFolder = code ? `${code.replace(/\./g, "-")}_${cid}` : cid;
+        const canonicalFolder = code ? `${code.replaceAll(/\./g, "-")}_${cid}` : cid;
         const labelId = s.id === canonicalFolder ? cid : `${cid} (${s.id})`;
         el.textContent = code ? `${code} ${labelId}` : labelId;
         el.addEventListener("click", () => navigate(`#/recording/${s.agent}/${s.subtree}/${s.id}`));
@@ -223,7 +224,7 @@ function folderToCoverageId(folder, agent) {
 // for numeric sort. Missing/blank codes sort to the end.
 function parseCatalogCode(code) {
   if (!code) return [Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER];
-  const [s, i] = code.split(".").map(n => parseInt(n, 10));
+  const [s, i] = code.split(".").map(n => Number.parseInt(n, 10));
   return [Number.isFinite(s) ? s : Number.MAX_SAFE_INTEGER, Number.isFinite(i) ? i : Number.MAX_SAFE_INTEGER];
 }
 
@@ -263,7 +264,7 @@ function makeSidebarGroup(className, storageKey, label, count, forceOpen) {
 // auto-expand the path leading to the selection. {null, null}
 // otherwise.
 function sidebarActivePath() {
-  const m = (location.hash || "").match(/^#\/recording\/([^/]+)\/([^/]+)\/([^/]+)/);
+  const m = /^#\/recording\/([^/]+)\/([^/]+)\/([^/]+)/.exec(location.hash || "");
   if (!m) return {subtree: null, agent: null};
   return {agent: decodeURIComponent(m[1]), subtree: decodeURIComponent(m[2])};
 }
@@ -299,16 +300,17 @@ function navigate(hash) {
 function route() {
   const hash = location.hash || "#/";
   // Peel off the optional ?focus=<key> suffix before path matching.
-  const focusMatch = hash.match(/\?focus=([a-z]+)$/);
+  const focusMatch = /\?focus=([a-z]+)$/.exec(hash);
   const focus = focusMatch ? focusMatch[1] : "";
   const pathPart = focus ? hash.slice(0, hash.lastIndexOf("?")) : hash;
 
-  let m;
-  if ((m = pathPart.match(/^#\/scenario\/([^/]+)\/?$/))) {
+  let m = /^#\/scenario\/([^/]+)\/?$/.exec(pathPart);
+  if (m) {
     loadCoverageDetail(decodeURIComponent(m[1]));
     return;
   }
-  if ((m = pathPart.match(/^#\/recording\/([^/]+)\/([^/]+)\/([^/]+)(?:\/([^/]+))?\/?$/))) {
+  m = /^#\/recording\/([^/]+)\/([^/]+)\/([^/]+)(?:\/([^/]+))?\/?$/.exec(pathPart);
+  if (m) {
     const agent = decodeURIComponent(m[1]);
     const subtree = decodeURIComponent(m[2]);
     const id = decodeURIComponent(m[3]);
@@ -436,7 +438,7 @@ function renderCoverageMatrix(detail) {
   // panel header walks through the rest. The clamped page is written back so
   // it survives re-renders.
   const main = document.getElementById("main");
-  const perPage = agentsPerPage((main && main.clientWidth) || 1200);
+  const perPage = agentsPerPage(main?.clientWidth || 1200);
   lastPerPage = perPage;
   const pg = paginateAgents(agents, agentPage, perPage);
   agentPage = pg.page;
@@ -480,7 +482,7 @@ function renderCoverageMatrix(detail) {
     nameCell.appendChild(nameLink);
     row.appendChild(nameCell);
     for (const agent of pg.visible) {
-      const cov = sc.coverage && sc.coverage[agent];
+      const cov = sc.coverage?.[agent];
       const cell = document.createElement("td");
       cell.style.textAlign = "center";
       cell.style.padding = "4px";
@@ -498,7 +500,7 @@ function renderCoverageMatrix(detail) {
       // folder_by_agent is per-agent (variant-folder aware); fall back to the
       // recipe name then the coverage_id.
       const recipe = recipesByCoverageId.get(sc.id);
-      const folder = (recipe && recipe.folder_by_agent && recipe.folder_by_agent[agent]) || (recipe && recipe.name) || sc.id;
+      const folder = recipe?.folder_by_agent?.[agent] || recipe?.name || sc.id;
       const rec = recIndex.get(`${agent}/${folder}`);
       const strip = renderPipelineStrip(agent, sc.id, cov, rec);
       cell.appendChild(strip);
@@ -516,7 +518,7 @@ function renderCoverageMatrix(detail) {
   for (const sc of catalog.scenarios) {
     for (const agent of agents) {
       total++;
-      const cov = sc.coverage && sc.coverage[agent];
+      const cov = sc.coverage?.[agent];
       if (!cov) continue;
       withEntry++;
       const sup = cov.agent_supports;
@@ -525,9 +527,9 @@ function renderCoverageMatrix(detail) {
       const pipe = cov.pipeline || {};
       const meas = cov.measurement || {};
       if (sup === "no") { stages.blocked++; continue; }
-      const recipeOK = pipe.recipe && pipe.recipe.authored;
-      const specOK = pipe.spec && pipe.spec.authored;
-      const recCount = ((pipe.recordings && pipe.recordings.latest) ? 1 : 0) + ((pipe.recordings && pipe.recordings.archive_count) || 0);
+      const recipeOK = pipe.recipe?.authored;
+      const specOK = pipe.spec?.authored;
+      const recCount = (pipe.recordings?.latest ? 1 : 0) + (pipe.recordings?.archive_count || 0);
       if (!recipeOK) { stages.awaitingRecipe++; continue; }
       if (!specOK) { stages.awaitingSpec++; continue; }
       if (recCount === 0) { stages.awaitingRecording++; continue; }
@@ -536,10 +538,14 @@ function renderCoverageMatrix(detail) {
       const capable = (daemon === "full" && driver === "ready");
       const verdictBlocks = (daemon === "incapable" || daemon === "bug" ||
         String(driver).startsWith("gap:"));
-      if (meas.status === "fail") stages.divergent++;
-      else if (meas.status === "known_failing" && capable) stages.divergent++;
-      else if (meas.status === "pass" && verdictBlocks) stages.divergent++;
-      else if (meas.status === "known_failing_now_passing") stages.divergent++;
+      if (
+        meas.status === "fail" ||
+        (meas.status === "known_failing" && capable) ||
+        (meas.status === "pass" && verdictBlocks) ||
+        meas.status === "known_failing_now_passing"
+      ) {
+        stages.divergent++;
+      }
     }
   }
   const sum = document.createElement("div");
@@ -767,11 +773,11 @@ function buildAgentPlanPanel(sc, agent, recipe) {
   panel.className = "panel";
   panel.style.marginBottom = "12px";
 
-  const cov = sc.coverage && sc.coverage[agent];
-  const sup = cov && cov.agent_supports || "unknown";
-  const daemon = cov && cov.daemon_capability || "unknown";
-  const driver = cov && cov.driver_capability || "ready";
-  const display = cov && cov.display_state || "unknown";
+  const cov = sc.coverage?.[agent];
+  const sup = cov?.agent_supports || "unknown";
+  const daemon = cov?.daemon_capability || "unknown";
+  const driver = cov?.driver_capability || "ready";
+  const display = cov?.display_state || "unknown";
   const {label, bg, fg} = coverageBadge(display);
 
   const headerHTML = `
@@ -784,14 +790,14 @@ function buildAgentPlanPanel(sc, agent, recipe) {
     </div>
   `;
   let html = headerHTML;
-  if (cov && cov.notes) {
+  if (cov?.notes) {
     html += `<div style="font-size: 12px; color: #444; padding: 6px 8px; background: #fafaf2; border-left: 3px solid #d8d6cc; margin-bottom: 8px;">${escapeHtml(cov.notes)}</div>`;
   }
 
   // Recipe section per agent. Two shapes in scenarios.json:
   //   - by_adapter.<agent>.prompt → headless driver (drive-<adapter>.sh)
   //   - by_adapter.<agent>.script → interactive tmux driver (drive-<adapter>-interactive.sh)
-  if (recipe && recipe.by_adapter && recipe.by_adapter[agent]) {
+  if (recipe?.by_adapter?.[agent]) {
     const a = recipe.by_adapter[agent];
     // Idle-only badge when the recipe is observation-only (no prompts sent).
     const idleTag = recipe.idle_only
@@ -845,7 +851,7 @@ function buildAgentPlanPanel(sc, agent, recipe) {
   // Existing recording link if one is committed. Resolve the on-disk folder
   // per-agent (variant-folder aware) so cells whose folder != coverage_id still
   // link their recording; fall back to the recipe name.
-  const recFolder = recipe && ((recipe.folder_by_agent && recipe.folder_by_agent[agent]) || recipe.name);
+  const recFolder = recipe?.folder_by_agent?.[agent] || recipe?.name;
   const rec = scenariosList.find(r => r.subtree === "scenarios" && r.agent === agent && recFolder && r.id === recFolder);
   if (rec) {
     html += `<div style="margin-top: 8px;">`;
@@ -1128,8 +1134,10 @@ function renderPipelineStrip(agent, scenarioID, cov, rec) {
     const recipe = pipe.recipe || {};
     const spec = pipe.spec || {};
     const rcs = pipe.recordings || {};
-    lines.push(`Recipe: ${recipe.authored ? `authored (${recipe.step_count} steps)` : "not authored yet"}`);
-    lines.push(`Spec:   ${spec.authored ? `authored (${spec.phase_count} phases)` : "not authored yet"}`);
+    const recipeStatus = recipe.authored ? `authored (${recipe.step_count} steps)` : "not authored yet";
+    const specStatus = spec.authored ? `authored (${spec.phase_count} phases)` : "not authored yet";
+    lines.push(`Recipe: ${recipeStatus}`);
+    lines.push(`Spec:   ${specStatus}`);
     const totalRecs = (rcs.latest ? 1 : 0) + (rcs.archive_count || 0);
     if (totalRecs > 0) {
       const parts = [];
@@ -1145,11 +1153,11 @@ function renderPipelineStrip(agent, scenarioID, cov, rec) {
   } else {
     lines.push(`(pipeline frozen — agent_supports=no)`);
   }
-  if (wrap.style.border && wrap.style.border.includes("#c0392b")) {
+  if (wrap.style.border?.includes("#c0392b")) {
     lines.push(`⚠ regression: daemon=full/driver=ready but recording fails`);
-  } else if (wrap.style.border && wrap.style.border.includes("#1c3f7a")) {
+  } else if (wrap.style.border?.includes("#1c3f7a")) {
     lines.push(`↑ flag drop: marked daemon=bug / known_failing but now passes`);
-  } else if (wrap.style.border && wrap.style.border.includes("#d68a2a")) {
+  } else if (wrap.style.border?.includes("#d68a2a")) {
     lines.push(`⚠ verdict may be stale: marked blocked/unobservable but recording passes`);
   }
   lines.push(`↻ click a segment to jump to its section`);
@@ -1252,7 +1260,7 @@ function renderScenariosMatrix(detail) {
     for (const adapter of adapters) {
       const cell = document.createElement("td");
       cell.style.textAlign = "center";
-      const declares = sc.by_adapter && sc.by_adapter[adapter];
+      const declares = sc.by_adapter?.[adapter];
       if (!declares) {
         cell.textContent = "—";
         cell.style.color = "#ccc";
@@ -1361,7 +1369,7 @@ async function loadScenario(s, initialArchive, focus) {
   let recipeEntry = null;
   const recipeRow = recipesByCoverageId.get(coverageId);
   if (recipeRow) {
-    recipeEntry = recipeRow.by_adapter && recipeRow.by_adapter[s.agent];
+    recipeEntry = recipeRow.by_adapter?.[s.agent];
   }
   // Look up the per-cell coverage entry for the Assessment-fallback
   // panel. Used when no assessment.json exists on disk — the panel
@@ -1373,7 +1381,7 @@ async function loadScenario(s, initialArchive, focus) {
   if (catalog && Array.isArray(catalog.scenarios)) {
     for (const sc of catalog.scenarios) {
       if (sc.id === coverageId) {
-        coverageEntry = sc.coverage && sc.coverage[s.agent];
+        coverageEntry = sc.coverage?.[s.agent];
         coverageFeature = sc.feature || "";
         break;
       }
@@ -1409,7 +1417,7 @@ async function loadScenario(s, initialArchive, focus) {
 function degradedBanner() {
   const b = document.createElement("div");
   b.className = "degraded-banner";
-  b.setAttribute("data-testid", "degraded-banner");
+  b.dataset.testid = "degraded-banner";
   b.style.cssText =
     "margin:8px 0;padding:8px 12px;border-left:3px solid #c90;" +
     "background:#332b00;color:#e8c84d;border-radius:4px;font-size:13px;";
@@ -1503,7 +1511,7 @@ function renderAssessment(a) {
   const p = panel("Assessment", "supports");
   // Also tag with the observes alias so [data-anchor="observes"]
   // resolves to the same panel.
-  p.setAttribute("data-anchor-alias", "observes");
+  p.dataset.anchorAlias = "observes";
   // Dated subtitle.
   const sub = document.createElement("div");
   sub.style.cssText = "font-size: 11px; color: #666; margin-bottom: 8px;";
@@ -1598,7 +1606,7 @@ function renderAssessmentFallback(coverageEntry) {
   // anchor "supports" + alias "observes" — matches renderAssessment so
   // both pipeline-strip segments resolve here.
   const p = panel("Assessment", "supports");
-  p.setAttribute("data-anchor-alias", "observes");
+  p.dataset.anchorAlias = "observes";
   const subtitle = document.createElement("div");
   subtitle.style.cssText = "font-size: 11px; color: #666; margin-bottom: 8px;";
   subtitle.textContent = "from matrix verdict — no point-in-time assessment.json on disk yet";
@@ -1696,7 +1704,7 @@ function renderExpected(data, mode) {
         spec only — pick a recording to validate
       </span>
       <span style="font-size: 11px; color: #888;">
-        source: <code>${escapeHtml(rep.meta && rep.meta.source || "")}</code>
+        source: <code>${escapeHtml(rep.meta?.source || "")}</code>
       </span>
     `;
   } else {
@@ -1707,7 +1715,7 @@ function renderExpected(data, mode) {
         ${escapeHtml(rep.summary || "")}
       </span>
       <span style="font-size: 11px; color: #888;">
-        source: <code>${escapeHtml(rep.meta && rep.meta.source || "")}</code>
+        source: <code>${escapeHtml(rep.meta?.source || "")}</code>
       </span>
     `;
   }
@@ -1971,8 +1979,8 @@ function renderRecordingHistory(s, latestData, archives, initialArchive, recipeE
     };
     // Drift annotation: archive's frozen pass rate (manifest) vs
     // fresh eval (current spec re-run on archived events).
-    const frozenRate = (arch && arch.expected_pass_rate) || "";
-    const freshRate = (archDetail.expected && archDetail.expected.summary) || "";
+    const frozenRate = arch?.expected_pass_rate || "";
+    const freshRate = archDetail.expected?.summary || "";
     if (frozenRate && freshRate) {
       const driftNote = document.createElement("div");
       driftNote.style.cssText = "margin-top: 8px; padding: 6px 9px; font-size: 11px; border-radius: 3px;";
@@ -2334,7 +2342,7 @@ function renderPlayback(s, detailData, archiveName) {
   scrubWrap.addEventListener("mouseover", (e) => {
     const el = e.target.closest("[data-tip]");
     if (!el) return;
-    tip.textContent = el.getAttribute("data-tip") || "";
+    tip.textContent = el.dataset.tip || "";
     tip.style.display = "block";
     const wrapRect = scrubWrap.getBoundingClientRect();
     const elRect = el.getBoundingClientRect();
@@ -2356,7 +2364,7 @@ function renderPlayback(s, detailData, archiveName) {
     if (!el) return;
     // Only hide when leaving to a non-marker; mouseover on a sibling
     // tooltip-bearing element will re-show immediately anyway.
-    const next = e.relatedTarget && e.relatedTarget.closest && e.relatedTarget.closest("[data-tip]");
+    const next = e.relatedTarget?.closest?.("[data-tip]");
     if (next) return;
     tip.style.display = "none";
   });
@@ -2414,7 +2422,7 @@ function renderPlayback(s, detailData, archiveName) {
     paintStateBand(stateBand, events, totalMs);
     paintEventDots(eventLane, events, totalMs);
     paintTurns(turnLane, turns, totalMs);
-    paintExpectedLane(expectedLane, detailData && detailData.expected, totalMs);
+    paintExpectedLane(expectedLane, detailData?.expected, totalMs);
   }
 
   // Dashboard iframe (hidden until playback starts).
@@ -2615,26 +2623,32 @@ export function renderMarkdown(md) {
   let para = [];     // accumulated plain lines → one <p>
   const flushPara = () => { if (para.length) { out.push(`<p>${inline(para.join(" "))}</p>`); para = []; } };
   const flushList = () => {
-    if (list) { out.push(`<${list.tag}>${list.items.map(i => `<li>${inline(i)}</li>`).join("")}</${list.tag}>`); list = null; }
+    if (list) {
+      const itemsHtml = list.items.map(i => `<li>${inline(i)}</li>`).join("");
+      out.push(`<${list.tag}>${itemsHtml}</${list.tag}>`);
+      list = null;
+    }
   };
   for (const raw of esc.split("\n")) {
-    const line = raw.replace(/\s+$/, "");
-    let m;
+    const line = raw.trimEnd();
     if (line === "") { flushPara(); flushList(); continue; }
-    if ((m = line.match(/^(#{2,4})\s+(.*)$/))) {
+    let m = /^(#{2,4})\s+(.*)$/.exec(line);
+    if (m) {
       flushPara(); flushList();
       out.push(`<h${m[1].length + 2}>${inline(m[2])}</h${m[1].length + 2}>`); // ## → h4, ### → h5, #### → h6
       continue;
     }
-    if ((m = line.match(/^\s*-\s+(.*)$/))) {
+    m = /^\s*-\s+(.*)$/.exec(line);
+    if (m) {
       flushPara();
-      if (!list || list.tag !== "ul") { flushList(); list = {tag: "ul", items: []}; }
+      if (list?.tag !== "ul") { flushList(); list = {tag: "ul", items: []}; }
       list.items.push(m[1]);
       continue;
     }
-    if ((m = line.match(/^\s*\d+\.\s+(.*)$/))) {
+    m = /^\s*\d+\.\s+(.*)$/.exec(line);
+    if (m) {
       flushPara();
-      if (!list || list.tag !== "ol") { flushList(); list = {tag: "ol", items: []}; }
+      if (list?.tag !== "ol") { flushList(); list = {tag: "ol", items: []}; }
       list.items.push(m[1]);
       continue;
     }

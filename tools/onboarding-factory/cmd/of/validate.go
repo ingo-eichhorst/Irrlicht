@@ -31,6 +31,15 @@ type finding struct {
 	Msg  string `json:"msg"`
 }
 
+const (
+	// catalogRelPath is the repo-relative catalog path used in finding
+	// messages (the actual read goes through shard.File).
+	catalogRelPath = "replaydata/agents/scenarios.json"
+	// metadataJSONSuffix is appended to a cell's relative path to name its
+	// metadata.json file in finding messages.
+	metadataJSONSuffix = "/metadata.json"
+)
+
 // runValidate checks the whole replaydata tree for schema + referential
 // integrity: the catalog parses and every scenario is the minimal 5-field
 // shape with a well-formed unique id/name; every agent cell parses, links to a
@@ -87,7 +96,7 @@ func validateCatalog(repoRoot string, add func(path, msg string)) map[string]boo
 	path := shard.File(repoRoot)
 	b, err := os.ReadFile(path)
 	if err != nil {
-		add("replaydata/agents/scenarios.json", fmt.Sprintf("cannot read catalog: %v", err))
+		add(catalogRelPath, fmt.Sprintf("cannot read catalog: %v", err))
 		return names
 	}
 	var doc struct {
@@ -95,17 +104,17 @@ func validateCatalog(repoRoot string, add func(path, msg string)) map[string]boo
 		Scenarios []json.RawMessage `json:"scenarios"`
 	}
 	if err := json.Unmarshal(b, &doc); err != nil {
-		add("replaydata/agents/scenarios.json", fmt.Sprintf("catalog is not valid JSON: %v", err))
+		add(catalogRelPath, fmt.Sprintf("catalog is not valid JSON: %v", err))
 		return names
 	}
 	if len(doc.Scenarios) == 0 {
-		add("replaydata/agents/scenarios.json", "catalog has no scenarios")
+		add(catalogRelPath, "catalog has no scenarios")
 	}
 	seenID := map[string]bool{}
 	for _, raw := range doc.Scenarios {
 		var fields map[string]json.RawMessage
 		if json.Unmarshal(raw, &fields) != nil {
-			add("replaydata/agents/scenarios.json", "a scenario entry is not a JSON object")
+			add(catalogRelPath, "a scenario entry is not a JSON object")
 			continue
 		}
 		var s struct{ ID, Name string }
@@ -170,18 +179,18 @@ func validateCells(repoRoot string, names map[string]bool, add func(path, msg st
 			}
 			var cell shard.ShardAgent
 			if err := json.Unmarshal(mb, &cell); err != nil {
-				add(rel+"/metadata.json", fmt.Sprintf("not valid JSON: %v", err))
+				add(rel+metadataJSONSuffix, fmt.Sprintf("not valid JSON: %v", err))
 				continue
 			}
 			if cell.ScenarioID == "" {
-				add(rel+"/metadata.json", "missing scenario_id (the cell→catalog foreign key)")
+				add(rel+metadataJSONSuffix, "missing scenario_id (the cell→catalog foreign key)")
 			} else if !names[cell.ScenarioID] {
-				add(rel+"/metadata.json", fmt.Sprintf("scenario_id %q not in the catalog", cell.ScenarioID))
+				add(rel+metadataJSONSuffix, fmt.Sprintf("scenario_id %q not in the catalog", cell.ScenarioID))
 			}
 			// A recipe the driver will run must carry the fields the driver reads
 			// positionally — a missing timeout_seconds once crashed a driver.
 			if msg := recipeTimeoutFinding(cell.Details.Recipe); msg != "" {
-				add(rel+"/metadata.json", msg)
+				add(rel+metadataJSONSuffix, msg)
 			}
 			// A cell is "recorded" iff NewestRecordingDir resolves one — the SAME
 			// definition matrix.cellRecorded uses, so the two never disagree.

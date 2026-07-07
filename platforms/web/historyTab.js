@@ -105,7 +105,7 @@ export function historyQuery(state = historyState) {
     if (dim === state.group) continue;
     if (dim === 'token_type' && state.chart !== 'tokens') continue;
     const vals = filters[dim];
-    if (vals && vals.length) p.set(dim, vals.join(','));
+    if (vals?.length) p.set(dim, vals.join(','));
   }
   return p.toString();
 }
@@ -170,7 +170,7 @@ function paintHistoryChart() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
 
-  const buckets = (data && data.bucket_starts) || [];
+  const buckets = data?.bucket_starts || [];
   const B = buckets.length;
   const hasData = !!(data && data.total > 0 && B > 0);
   wrap.classList.toggle('empty', !hasData);
@@ -363,7 +363,7 @@ function renderHistoryPanel() {
       return;
     }
     const split = data.token_split;
-    if (!split || !(data.total > 0)) {
+    if (!split || data.total <= 0) {
       appendHistoryEmpty(listEl, 'no token usage in this range');
       return;
     }
@@ -531,7 +531,7 @@ function paintYieldChart() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
 
-  const projects = (data && data.projects) || [];
+  const projects = data?.projects || [];
   // Only projects with attributable (productive+reverted) spend get a bar;
   // unknown-only projects contribute nothing to the ratio.
   const rows = projects.filter(p => (p.total_cost || 0) > 0);
@@ -633,7 +633,7 @@ function historyDownload(filename, mime, text) {
 }
 function historyCsvCell(s) {
   s = String(s);
-  return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  return /[",\n]/.test(s) ? '"' + s.replaceAll('"', '""') + '"' : s;
 }
 function exportHistoryCSV() {
   const d = historyState.data;
@@ -678,7 +678,7 @@ export function initHistoryTab() {
     for (const x of histRangeSeg.querySelectorAll('button')) x.classList.toggle('active', x === b);
     const r = b.dataset.range;
     const custom = document.getElementById('history-custom');
-    if (r === 'custom') { if (custom) custom.hidden = false; return; } // wait for Apply
+    if (r === 'custom') { if (custom) { custom.hidden = false; } return; } // wait for Apply
     if (custom) custom.hidden = true;
     historyState.range = r;
     historyState.start = null;
@@ -693,7 +693,7 @@ export function initHistoryTab() {
     if (!sv || !ev) return;
     const start = Math.floor(new Date(sv + 'T00:00:00').getTime() / 1000);
     const end = Math.floor(new Date(ev + 'T00:00:00').getTime() / 1000) + 86400; // include the end day
-    if (!(end > start)) return;
+    if (end <= start) return;
     historyState.range = 'custom';
     historyState.start = start;
     historyState.end = end;

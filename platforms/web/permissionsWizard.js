@@ -21,7 +21,7 @@ let permissionsWizardAgents = null;
 // wizard: detected, with at least one pending permission, in ask mode.
 // Pure; exported for tests.
 export function pendingWizardAgents(snap) {
-  if (!snap || snap.mode !== 'ask' || !Array.isArray(snap.agents)) return [];
+  if (snap?.mode !== 'ask' || !Array.isArray(snap?.agents)) return [];
   return snap.agents.filter(a =>
     a.detected && (a.permissions || []).some(p => p.state === 'pending'));
 }
@@ -234,7 +234,7 @@ export function initPermissionsWizard() {
     if (e.target.id === 'permissions-backdrop') closePermissionsWizard();
   });
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && backdrop && backdrop.classList.contains('open')) {
+    if (e.key === 'Escape' && backdrop?.classList.contains('open')) {
       closePermissionsWizard();
     }
   });

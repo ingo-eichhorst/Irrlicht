@@ -4,6 +4,12 @@ import UniformTypeIdentifiers
 import UserNotifications
 
 struct SettingsView: View {
+    /// Placeholder/default relay address shown until the user sets their own
+    /// (SonarQube swift:S1075 flags the literal; this is intentionally fixed
+    /// — it's an example value, not something worth threading through as a
+    /// parameter for its three call sites here).
+    private static let defaultRelayURLPlaceholder = "ws://localhost:7839"
+
     @Binding var isPresented: Bool
     /// Swaps the panel body to the permission wizard in review mode (issue #570).
     /// A binding (not a closure) so SettingsView's inputs stay diff-stable — the
@@ -412,7 +418,7 @@ struct SettingsView: View {
                                 // them whenever either subscribe or publish is on.
                                 if useRelayServer || publishToRelay {
                                     HStack(spacing: 6) {
-                                        TextField("ws://localhost:7839", text: $relayURLDraft)
+                                        TextField(Self.defaultRelayURLPlaceholder, text: $relayURLDraft)
                                             .textFieldStyle(.roundedBorder)
                                             .font(.system(.caption, design: .monospaced))
                                             .autocorrectionDisabled(true)
@@ -472,13 +478,13 @@ struct SettingsView: View {
                             }
                             .onChange(of: useRelayServer) { on in
                                 if on && relayURLDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                                    relayURLDraft = "ws://localhost:7839"
+                                    relayURLDraft = Self.defaultRelayURLPlaceholder
                                 }
                                 commitRelayURL()
                             }
                             .onChange(of: publishToRelay) { on in
                                 if on && relayURLDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                                    relayURLDraft = "ws://localhost:7839"
+                                    relayURLDraft = Self.defaultRelayURLPlaceholder
                                 }
                                 commitRelayURL()
                                 daemonManager.publishSettingsDidChange()
@@ -668,7 +674,7 @@ private struct CLIToolSection: View {
 
 private struct WindowAccessor: NSViewRepresentable {
     let onWindow: (NSWindow) -> Void
-    func makeNSView(context: Context) -> NSView {
+    func makeNSView(context _: Context) -> NSView {
         let v = NSView()
         // Defer one runloop so NSView.window is populated (nil during makeNSView).
         DispatchQueue.main.async { [weak v] in
@@ -676,7 +682,9 @@ private struct WindowAccessor: NSViewRepresentable {
         }
         return v
     }
-    func updateNSView(_ nsView: NSView, context: Context) {}
+    // NSViewRepresentable requires this method; there's nothing to update —
+    // onWindow already fired from makeNSView once the view had a window.
+    func updateNSView(_: NSView, context _: Context) {}
 }
 
 /// The "Alert at [value] [% / tokens]" control under the context-pressure

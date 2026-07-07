@@ -80,6 +80,12 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 
 	switch partType {
 	case "step-start":
+		// godre:S1871 — same body as default below, kept as its own case
+		// deliberately: "step-start" is step-finish's documented counterpart
+		// (both are real, named opencode part types, unlike default's true
+		// catch-all for part types this parser doesn't model), so it stays
+		// named here for symmetry with step-finish even though there is
+		// nothing to extract from it today.
 		ev.Skip = true
 		return ev
 

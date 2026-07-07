@@ -26,6 +26,9 @@ type sessionLister interface {
 // defaultFetchTimeout bounds each gt CLI subprocess call in production.
 const defaultFetchTimeout = 5 * time.Second
 
+// jsonFlag requests machine-readable output from gt CLI subcommands.
+const jsonFlag = "--json"
+
 // poller queries the gt CLI for rig, polecat, dog, and boot state and maps
 // the results to the standardised orchestrator.State model.
 type poller struct {
@@ -398,7 +401,7 @@ func (p *poller) fetchRigs(ctx context.Context) []rigState {
 	ctx, cancel := context.WithTimeout(ctx, p.fetchTimeout)
 	defer cancel()
 
-	out, err := p.gtCommand(ctx, "rig", "list", "--json").Output()
+	out, err := p.gtCommand(ctx, "rig", "list", jsonFlag).Output()
 	if err != nil {
 		// Fallback to collector's cached rigs from rigs.json.
 		p.recordFetch(ctx, "rig list", "cached rigs.json")
@@ -416,7 +419,7 @@ func (p *poller) fetchPolecats(ctx context.Context) []polecatState {
 	ctx, cancel := context.WithTimeout(ctx, p.fetchTimeout)
 	defer cancel()
 
-	out, err := p.gtCommand(ctx, "polecat", "list", "--all", "--json").Output()
+	out, err := p.gtCommand(ctx, "polecat", "list", "--all", jsonFlag).Output()
 	if err != nil {
 		p.recordFetch(ctx, "polecat list", "empty")
 		return nil
@@ -433,7 +436,7 @@ func (p *poller) fetchDogs(ctx context.Context) []dogState {
 	ctx, cancel := context.WithTimeout(ctx, p.fetchTimeout)
 	defer cancel()
 
-	out, err := p.gtCommand(ctx, "dog", "list", "--json").Output()
+	out, err := p.gtCommand(ctx, "dog", "list", jsonFlag).Output()
 	if err != nil {
 		p.recordFetch(ctx, "dog list", "empty")
 		return nil
@@ -450,7 +453,7 @@ func (p *poller) fetchBootStatus(ctx context.Context) *bootStatus {
 	ctx, cancel := context.WithTimeout(ctx, p.fetchTimeout)
 	defer cancel()
 
-	out, err := p.gtCommand(ctx, "boot", "status", "--json").Output()
+	out, err := p.gtCommand(ctx, "boot", "status", jsonFlag).Output()
 	if err != nil {
 		p.recordFetch(ctx, "boot status", "empty")
 		return nil

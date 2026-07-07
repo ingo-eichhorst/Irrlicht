@@ -28,7 +28,19 @@ RUN apt-get update \
 RUN useradd --create-home --uid 10001 runner
 ENV HOME=/home/runner
 WORKDIR /src
-COPY --chown=runner:runner . .
+# WORKDIR creates /src as root; hand it to runner so replay-fixtures.sh can
+# mkdir its own .build/ output dir there later.
+RUN chown runner:runner /src
+
+# Explicit, scoped copies rather than `COPY . .` (docker:S6470) — this is
+# everything the compile gate + replay-fixtures.sh actually touch (core/ and
+# tools/ resolve each other via the workspace file; replaydata/ holds the
+# fixtures being replayed) and, just as importantly, everything it can NEVER
+# pick up: repo-root files like a local .env never enter the build context.
+COPY --chown=runner:runner go.work go.work.sum ./
+COPY --chown=runner:runner core/ ./core/
+COPY --chown=runner:runner tools/ ./tools/
+COPY --chown=runner:runner replaydata/ ./replaydata/
 USER runner
 
 # Compile gate: nothing below matters if the tree doesn't build on Linux.
@@ -41,8 +53,9 @@ RUN cd core && go build ./...
 # pidfd/poll concurrency bugs, so the local harness must exercise the detector
 # too, or a race could pass here and fail CI.
 CMD set -eux; \
-    cd /src/core; \
+    cd /src/tools/onboarding-factory; \
     go test ./cmd/replay/... -race -count=1; \
+    cd /src/core; \
     go test ./adapters/inbound/agents/processlifecycle/... -race -count=1; \
     cd /src; \
     tools/replay-fixtures.sh

@@ -32,6 +32,10 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 [[ -n "$REPO_ROOT" ]] || { echo "not in a git repo" >&2; exit 1; }
 
+# Recording/transcript files this script scans for are always *.jsonl; named
+# once so the glob literal isn't repeated across find invocations (S1192).
+JSONL_GLOB='*.jsonl'
+
 # shellcheck source=lib/shard-lib.sh
 source "$SCRIPT_DIR/lib/shard-lib.sh"   # per-scenario shard reader (#511)
 
@@ -366,14 +370,14 @@ fi
 # rotates by start-time so a recording in progress always has the
 # newest mtime; multiple may match if the daemon rotated mid-run.
 if [[ "$ATTACH" == "1" ]]; then
-  RECORDING="$(find "$ATTACHED_RECORDINGS_DIR" -maxdepth 1 -name '*.jsonl' -type f -newer "$ATTACH_MARKER" 2>/dev/null | sort | tail -n1)"
+  RECORDING="$(find "$ATTACHED_RECORDINGS_DIR" -maxdepth 1 -name "$JSONL_GLOB" -type f -newer "$ATTACH_MARKER" 2>/dev/null | sort | tail -n1)"
   if [[ -z "$RECORDING" ]]; then
     # Fall back to the most-recent file regardless of mtime, in case
     # the daemon's writes haven't bumped the mtime past our marker.
-    RECORDING="$(find "$ATTACHED_RECORDINGS_DIR" -maxdepth 1 -name '*.jsonl' -type f 2>/dev/null | xargs ls -1t 2>/dev/null | head -n1)"
+    RECORDING="$(find "$ATTACHED_RECORDINGS_DIR" -maxdepth 1 -name "$JSONL_GLOB" -type f 2>/dev/null | xargs ls -1t 2>/dev/null | head -n1)"
   fi
 else
-  RECORDING="$(find "$STAGING/recordings" -maxdepth 1 -name '*.jsonl' -type f 2>/dev/null | head -n1)"
+  RECORDING="$(find "$STAGING/recordings" -maxdepth 1 -name "$JSONL_GLOB" -type f 2>/dev/null | head -n1)"
 fi
 
 # --- Daemon-recorded session-id mapping ---------------------------------
@@ -467,7 +471,7 @@ if [[ -n "$REQUIRES_SUBAGENTS" ]]; then
     *)
       SUBAGENT_DIR="$(dirname "$TRANSCRIPT")/$ACTUAL_UUID/subagents"
       count_subagent_files() {
-        find "$SUBAGENT_DIR" -maxdepth 1 -name '*.jsonl' -type f 2>/dev/null | wc -l | tr -d ' '
+        find "$SUBAGENT_DIR" -maxdepth 1 -name "$JSONL_GLOB" -type f 2>/dev/null | wc -l | tr -d ' '
       }
       SUBAGENT_FILES="$(count_subagent_files)"
       # If the daemon saw parent_linked events but the child transcripts

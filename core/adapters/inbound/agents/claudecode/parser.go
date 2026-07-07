@@ -12,6 +12,10 @@ import (
 // messages (thinking blocks, partial text) that should not trigger IsAgentDone().
 const eventTypeAssistantStreaming = "assistant_streaming"
 
+// xmlFieldTaskID is the <task-id> XML field name background-task markers
+// carry in prompt/tool-result text.
+const xmlFieldTaskID = "task-id"
+
 // backgroundSpawnRe matches the text Claude Code writes in a `Bash`
 // tool_result when the command was launched with `run_in_background: true`:
 //
@@ -146,7 +150,7 @@ func handleAttachmentEvent(raw map[string]interface{}, ev *tailer.ParsedEvent) {
 	// ends a tracked Bash background process by its <task-id>. See issue #445.
 	if kind == "queued_command" || cmdMode == "task-notification" {
 		if prompt, _ := att["prompt"].(string); prompt != "" {
-			if id := extractXMLField(prompt, "task-id"); id != "" && backgroundStatusTerminated(prompt) {
+			if id := extractXMLField(prompt, xmlFieldTaskID); id != "" && backgroundStatusTerminated(prompt) {
 				ev.TerminatedBackgroundTaskIDs = append(ev.TerminatedBackgroundTaskIDs, id)
 			}
 		}
@@ -267,7 +271,7 @@ func handleTaskNotification(raw map[string]interface{}, ev *tailer.ParsedEvent) 
 	if msg, ok := raw["message"].(map[string]interface{}); ok {
 		if content, ok := msg["content"].(string); ok {
 			ev.SubagentCompletions = append(ev.SubagentCompletions, tailer.SubagentCompletion{
-				AgentID:   extractXMLField(content, "task-id"),
+				AgentID:   extractXMLField(content, xmlFieldTaskID),
 				ToolUseID: extractXMLField(content, "tool-use-id"),
 				Status:    extractXMLField(content, "status"),
 			})
@@ -276,7 +280,7 @@ func handleTaskNotification(raw map[string]interface{}, ev *tailer.ParsedEvent) 
 			// completion path orchestrated/SDK claude uses instead of a
 			// BashOutput poll. Dropping a non-matching id (a subagent's) is a
 			// harmless no-op in the tailer. See issue #445.
-			if id := extractXMLField(content, "task-id"); id != "" && backgroundStatusTerminated(content) {
+			if id := extractXMLField(content, xmlFieldTaskID); id != "" && backgroundStatusTerminated(content) {
 				ev.TerminatedBackgroundTaskIDs = append(ev.TerminatedBackgroundTaskIDs, id)
 			}
 		}

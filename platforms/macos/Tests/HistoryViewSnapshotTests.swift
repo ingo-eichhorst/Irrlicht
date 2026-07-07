@@ -3,6 +3,9 @@ import SwiftUI
 import SnapshotTesting
 @testable import Irrlicht
 
+// `onExportCSV: {}, onExportJSON: {}` below are intentional no-ops — these are
+// pure visual-rendering snapshots, not interaction tests, so export wiring is
+// irrelevant (SonarQube swift:S1186 flags each occurrence individually).
 @MainActor
 final class HistoryViewSnapshotTests: XCTestCase {
     private var originalTimeZone: TimeZone!

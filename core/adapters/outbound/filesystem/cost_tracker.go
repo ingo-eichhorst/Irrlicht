@@ -20,6 +20,10 @@ import (
 const (
 	costDirName = "cost"
 
+	// costFileExt is the on-disk extension for one project's per-line JSONL
+	// cost log (project+costFileExt under costDirName).
+	costFileExt = ".jsonl"
+
 	// costWriteInterval throttles how often a new row may be appended for a
 	// given session. Keeps files small when cumulative totals tick forward
 	// every couple of seconds during active work.
@@ -334,14 +338,14 @@ func (t *CostTracker) CostsInWindows(windowSeconds map[string]int64) (byProject,
 	}
 	cutoffs := cutoffsFor(windowSeconds)
 	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), costFileExt) {
 			continue
 		}
 		agg, err := t.scanWindows(filepath.Join(t.dir, e.Name()), cutoffs)
 		if err != nil {
 			return nil, nil, err
 		}
-		fallback := strings.TrimSuffix(e.Name(), ".jsonl")
+		fallback := strings.TrimSuffix(e.Name(), costFileExt)
 		for _, s := range agg {
 			projectKey := s.project
 			if projectKey == "" {
@@ -692,10 +696,10 @@ func (t *CostTracker) CostSeries(q outbound.SeriesQuery) (*outbound.CostSeriesRe
 		return nil, err
 	}
 	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), costFileExt) {
 			continue
 		}
-		fallback := strings.TrimSuffix(e.Name(), ".jsonl")
+		fallback := strings.TrimSuffix(e.Name(), costFileExt)
 		if err := t.scanSeries(filepath.Join(t.dir, e.Name()), q, filter, bucketSeconds, n, fallback, out); err != nil {
 			return nil, err
 		}
@@ -748,6 +752,15 @@ func (t *CostTracker) scanSeries(path string, q outbound.SeriesQuery, f seriesFi
 		case r.TS < q.Start:
 			// Pre-range row: advance the baseline so the first in-range delta
 			// measures spend since the last snapshot.
+			//
+			// godre:S1871 — this body is identical to the !s.hasPrev branch
+			// below (advance, then return), but the two guard on unrelated
+			// conditions (time-window position vs. a missing baseline) and
+			// are kept as separate cases deliberately: merging them would
+			// require reordering relative to the r.TS >= q.End case between
+			// them, which changes behavior in the degenerate q.Start >
+			// q.End case (both guards could then be true for the same row,
+			// and case order decides the outcome).
 			s.advance(cur, curIn, curOut, curRead, curCreate)
 			return
 		case r.TS >= q.End:
@@ -831,10 +844,10 @@ func (t *CostTracker) BackfillCO2() error {
 		return err
 	}
 	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), costFileExt) {
 			continue
 		}
-		project := strings.TrimSuffix(e.Name(), ".jsonl")
+		project := strings.TrimSuffix(e.Name(), costFileExt)
 		if err := t.backfillCO2File(filepath.Join(t.dir, e.Name()), project); err != nil {
 			return err
 		}
@@ -952,10 +965,10 @@ func (t *CostTracker) Prune(olderThanDays int) error {
 	// file (e.g. whose baseline row was older than olderThanDays).
 	survivors := make(map[string]struct{})
 	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), costFileExt) {
 			continue
 		}
-		project := strings.TrimSuffix(e.Name(), ".jsonl")
+		project := strings.TrimSuffix(e.Name(), costFileExt)
 		if err := t.pruneFile(filepath.Join(t.dir, e.Name()), project, cutoff, survivors); err != nil {
 			return err
 		}
@@ -1049,7 +1062,7 @@ func (t *CostTracker) pruneFile(path, project string, cutoff int64, survivors ma
 }
 
 func (t *CostTracker) filePath(project string) string {
-	return filepath.Join(t.dir, project+".jsonl")
+	return filepath.Join(t.dir, project+costFileExt)
 }
 
 // unsafeFileCharRe matches characters not allowed in a project filename.

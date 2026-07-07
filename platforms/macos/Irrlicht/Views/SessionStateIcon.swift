@@ -64,10 +64,11 @@ private struct WorkingIcon: View {
     private static let dimOpacity: Double = 0.55
 
     var body: some View {
+        let dimmedOpacity: Double = dim ? Self.dimOpacity : 1
         Circle()
             .fill(IrrColors.working)
             .frame(width: size, height: size)
-            .opacity(reduceMotion ? 1 : (dim ? Self.dimOpacity : 1))
+            .opacity(reduceMotion ? 1 : dimmedOpacity)
             .onAppear {
                 guard !reduceMotion else { return }
                 withAnimation(

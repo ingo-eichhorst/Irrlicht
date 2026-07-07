@@ -37,6 +37,7 @@ if [[ -f "$MANIFEST" ]]; then
     transcript_or_recording_missing) emit "transcript_missing" "Daemon didn't see the agent's session" "$err_code" ;;
     wall_clock_timeout)              emit "timeout"            "Scenario timed out"                    "$err_code" ;;
     no_subagents_spawned)            emit "transcript_missing" "Scenario requires subagents but none spawned" "$err_code" ;;
+    *) ;;
   esac
 fi
 

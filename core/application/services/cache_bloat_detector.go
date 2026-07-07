@@ -31,10 +31,10 @@ type sessionLister interface {
 	ListAll() ([]*session.SessionState, error)
 }
 
-// cacheBloatEventSink emits the structured cache_bloat_detected lifecycle
+// cacheBloatRecorder emits the structured cache_bloat_detected lifecycle
 // event. Satisfied by outbound.EventRecorder; narrowed so the detector can be
 // unit-tested without the full recorder.
-type cacheBloatEventSink interface {
+type cacheBloatRecorder interface {
 	Record(ev lifecycle.Event)
 }
 
@@ -56,7 +56,7 @@ type CacheBloatConfig struct {
 // on the detector's single event-loop goroutine, so its maps need no locking.
 type CacheBloatDetector struct {
 	lister   sessionLister
-	recorder cacheBloatEventSink
+	recorder cacheBloatRecorder
 	cfg      CacheBloatConfig
 	now      func() int64 // injectable clock for tests
 
@@ -71,7 +71,7 @@ type CacheBloatDetector struct {
 
 // NewCacheBloatDetector builds a detector. recorder may be nil (the glyph still
 // fires; only the structured event is suppressed).
-func NewCacheBloatDetector(lister sessionLister, recorder cacheBloatEventSink, cfg CacheBloatConfig) *CacheBloatDetector {
+func NewCacheBloatDetector(lister sessionLister, recorder cacheBloatRecorder, cfg CacheBloatConfig) *CacheBloatDetector {
 	return &CacheBloatDetector{
 		lister:   lister,
 		recorder: recorder,
@@ -315,7 +315,7 @@ func perTurnCacheCreation(s *session.SessionState) float64 {
 // LoggerCacheBloatSink writes cache_bloat_detected findings to the structured
 // events.log via the Logger port — the always-on sink the ir:agent-releases
 // workflow consumes. The event's fields are encoded as a JSON message under
-// the cache_bloat_detected event type. Satisfies cacheBloatEventSink.
+// the cache_bloat_detected event type. Satisfies cacheBloatRecorder.
 type LoggerCacheBloatSink struct{ log outbound.Logger }
 
 // NewLoggerCacheBloatSink wraps a Logger as the detector's emission sink.

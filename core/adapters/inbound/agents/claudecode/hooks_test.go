@@ -356,12 +356,12 @@ func TestHookHandler_MalformedJSON(t *testing.T) {
 	}
 }
 
-// fakeGate is a ConsentGate with a fixed answer.
+// fakeGate is a ConsentGranter with a fixed answer.
 type fakeGate bool
 
 func (g fakeGate) Granted(_, _ string) bool { return bool(g) }
 
-// mutableGate is a ConsentGate whose answer can change between calls —
+// mutableGate is a ConsentGranter whose answer can change between calls —
 // needed to drive a single handler instance through all three consent
 // states for contracttesting.AssertPermissionGated.
 type mutableGate struct {
@@ -596,7 +596,7 @@ func TestHookHandler_PreToolUse_UserInputToolStillDispatchesWithMarkerScan(t *te
 }
 
 // TestHookHandler_PermissionGateContract wires the hooks permission's live
-// per-request ConsentGate check into the shared issue #797 contract: while
+// per-request ConsentGranter check into the shared issue #797 contract: while
 // PermissionKeyHooks is pending or denied, an inbound hook payload must
 // dispatch to nothing; granted, it must dispatch; revoked, dispatch must
 // stop again. TestHookHandler_ConsentGateDropsWhenNotGranted /

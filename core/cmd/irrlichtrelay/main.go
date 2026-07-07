@@ -56,6 +56,11 @@ func envInt(name string, def int) int {
 // mtime so `token revoke` (a separate process) propagates without a restart.
 const tokenReloadInterval = 2 * time.Second
 
+// tokensFileFlag is the --auth flag value (bare or "tokens-file:PATH"-prefixed)
+// that selects the hashed bearer-token store, and the sentinel compared
+// against a stripped prefix to detect the bare (no-path) form.
+const tokensFileFlag = "tokens-file"
+
 func main() {
 	args := os.Args[1:]
 	if len(args) > 0 && (args[0] == "--version" || args[0] == "-v") {
@@ -133,12 +138,12 @@ func runServe(args []string) {
 	switch {
 	case *auth == "off":
 		// no auth
-	case *auth == "tokens-file" || strings.HasPrefix(*auth, "tokens-file:"):
+	case *auth == tokensFileFlag || strings.HasPrefix(*auth, "tokens-file:"):
 		// TrimPrefix leaves a bare "tokens-file" (no colon) untouched and turns
 		// "tokens-file:PATH" into PATH; both the bare form and an empty PATH mean
 		// "use the default path".
 		path := strings.TrimPrefix(*auth, "tokens-file:")
-		if path == "" || path == "tokens-file" {
+		if path == "" || path == tokensFileFlag {
 			path = filepath.Join(ddir, tokensFilename)
 		}
 		s, err := newAuthStore(path)
@@ -237,7 +242,7 @@ func runToken(args []string) {
 	}
 	sub, rest := args[0], args[1:]
 	fs := flag.NewFlagSet("irrlichtrelay token "+sub, flag.ExitOnError)
-	tokensFile := fs.String("tokens-file", "", "path to the tokens file (default: <data-dir>/tokens.json)")
+	tokensFile := fs.String(tokensFileFlag, "", "path to the tokens file (default: <data-dir>/tokens.json)")
 	dataDirFlag := fs.String("data-dir", "", "state directory for the tokens file (default: $IRRLICHT_HOME or ~/.local/share/irrlicht)")
 	label := fs.String("label", "", "human label for the issued token (issue only)")
 	workspace := fs.String("workspace", "", "tenant workspace the issued token is scoped to (issue only; empty = default single-tenant workspace)")

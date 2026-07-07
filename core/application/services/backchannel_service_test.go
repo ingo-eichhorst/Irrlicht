@@ -55,7 +55,7 @@ type fakeForwarder struct {
 }
 
 func (f *fakeForwarder) SendInput(_ string, data []byte) error { f.sentInput = data; return nil }
-func (f *fakeForwarder) SendCommand(_ string, cmd string) error {
+func (f *fakeForwarder) SendCommand(_, cmd string) error {
 	f.sentCommand, f.commandSet = cmd, true
 	return nil
 }

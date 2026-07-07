@@ -66,7 +66,7 @@ echo "$RESULT" | jq .
 COMPOSITE_REGRESSED=$(echo "$RESULT" | jq -r '.composite_regressed')
 CATEGORY_REGRESSION_COUNT=$(echo "$RESULT" | jq '.category_regressions | length')
 
-if [ "$COMPOSITE_REGRESSED" = "true" ] || [ "$CATEGORY_REGRESSION_COUNT" -gt 0 ]; then
+if [[ "$COMPOSITE_REGRESSED" = "true" ]] || [[ "$CATEGORY_REGRESSION_COUNT" -gt 0 ]]; then
   echo "ars-gate: FAILED — architecture health regressed vs origin/main" >&2
   echo "$RESULT" | jq '.category_regressions' >&2
   exit 1

@@ -541,10 +541,9 @@ func (m *StateMachine) CursorOffsetMs() int64 {
 
 // TotalDurationMs reports the recording's wall-clock duration.
 func (m *StateMachine) TotalDurationMs() int64 {
-	if len(m.events) < 2 {
-		return 0
-	}
-	return m.events[len(m.events)-1].Timestamp.Sub(m.events[0].Timestamp).Milliseconds()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.totalDurationMsLocked()
 }
 
 // EventMarker is one point on the scrubber's event-tick lane. The viewer

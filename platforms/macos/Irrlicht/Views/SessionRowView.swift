@@ -93,9 +93,10 @@ struct SessionRowView: View {
     private func costOrCO2Label(_ metrics: SessionMetrics, placeholder: String, isReverted: Bool = false) -> some View {
         let showingCO2 = costDisplayModeRaw == "co2"
         let text = showingCO2 ? (metrics.formattedCO2 ?? placeholder) : (metrics.formattedCost ?? placeholder)
-        let tooltip = showingCO2
-            ? metrics.co2TierTooltip
-            : (isReverted ? "Estimated cost — session work was reverted — click to show CO2 estimate" : "Click to show CO2 estimate")
+        let costTooltip = isReverted
+            ? "Estimated cost — session work was reverted — click to show CO2 estimate"
+            : "Click to show CO2 estimate"
+        let tooltip = showingCO2 ? metrics.co2TierTooltip : costTooltip
         Button(action: { costDisplayModeRaw = showingCO2 ? "cost" : "co2" }) {
             Text(text)
                 .font(.system(size: 9, weight: .medium, design: .monospaced))
@@ -531,8 +532,12 @@ struct SessionRowView: View {
         guard session.state == .working,
               let metrics = session.metrics,
               let est = metrics.taskEstimate else { return nil }
-        let sourceLabel = est.source == "tasks" ? "from task list"
-            : est.source == "subagents" ? "from subagents" : "agent-reported"
+        let sourceLabel: String
+        switch est.source {
+        case "tasks": sourceLabel = "from task list"
+        case "subagents": sourceLabel = "from subagents"
+        default: sourceLabel = "agent-reported"
+        }
         guard est.completedRounds > 0 else {
             // No MEASURED rate yet, but the daemon projects from a corpus prior
             // (#753) so a real number shows at the first marker instead of
@@ -639,7 +644,7 @@ private struct FlowLayout: Layout {
     var hSpacing: CGFloat = 4
     var vSpacing: CGFloat = 3
 
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache _: inout ()) -> CGSize {
         let maxWidth = proposal.width ?? .infinity
         var x: CGFloat = 0
         var y: CGFloat = 0
@@ -657,7 +662,7 @@ private struct FlowLayout: Layout {
         return CGSize(width: maxWidth, height: y + rowHeight)
     }
 
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache _: inout ()) {
         // First pass: group subviews into rows so we know each row's
         // height before placing items. Second pass: place items with
         // their vertical center aligned to the row center, so tiny

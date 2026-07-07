@@ -34,6 +34,10 @@ const (
 // auto-compaction fires mid-turn while the session is already working (#657).
 const compactTriggerManual = "manual"
 
+// logComponentHookReceiver is the Logger component tag for every log line
+// emitted by the hook HTTP handler below.
+const logComponentHookReceiver = "hook-receiver"
+
 // Tool names that suspend the agent waiting for user input. PreToolUse hooks
 // must match one of these — anything else is rejected by the handler, even
 // if the matcher in settings.json was edited to be broader. Defense-in-depth
@@ -71,7 +75,7 @@ type HookTarget interface {
 
 // MarkerTarget is the narrow interface for hook-carried task-estimate
 // markers (#604) — the same method shape as the MetricsCollector port, so
-// the metrics adapter satisfies it directly (mirrors RateLimitTarget in
+// the metrics adapter satisfies it directly (mirrors RateLimitIngester in
 // statusline.go). Nil disables the scan (tests).
 type MarkerTarget interface {
 	IngestTaskEstimate(transcriptPath string, est *session.TaskEstimate)
@@ -144,11 +148,11 @@ func scanValueForMarkers(v interface{}, observedAt time.Time) (*tailer.TaskEstim
 	return est, sum, q
 }
 
-// ConsentGate reports whether the user has granted a permission (issue
+// ConsentGranter reports whether the user has granted a permission (issue
 // #570). Satisfied by *services.PermissionService. Hooks installed by a
 // pre-consent daemon version keep firing until answered, so the receivers
 // drop payloads while their permission is pending or denied.
-type ConsentGate interface {
+type ConsentGranter interface {
 	Granted(agentName, key string) bool
 }
 
@@ -180,7 +184,7 @@ func sessionIDFromTranscriptPath(p string) string {
 // gate is the consent check for the "hooks" permission; while not granted
 // the payload is dropped with 200 (so the curl hook stays quiet). A nil
 // gate means no gating — used by tests.
-func NewHookHandler(target HookTarget, markers MarkerTarget, gate ConsentGate, log outbound.Logger) http.HandlerFunc {
+func NewHookHandler(target HookTarget, markers MarkerTarget, gate ConsentGranter, log outbound.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -205,7 +209,7 @@ func NewHookHandler(target HookTarget, markers MarkerTarget, gate ConsentGate, l
 		}
 
 		dispatch := func() {
-			log.LogInfo("hook-receiver", sessionID,
+			log.LogInfo(logComponentHookReceiver, sessionID,
 				fmt.Sprintf("received %s (tool=%s)", payload.HookEventName, payload.ToolName))
 			target.HandlePermissionHook(sessionID, payload.TranscriptPath, payload.HookEventName)
 		}
@@ -223,11 +227,11 @@ func NewHookHandler(target HookTarget, markers MarkerTarget, gate ConsentGate, l
 			// defense-in-depth so an auto-compaction (already working, fires
 			// mid-turn) never gets a spurious working blip.
 			if payload.Trigger == compactTriggerManual {
-				log.LogInfo("hook-receiver", sessionID,
+				log.LogInfo(logComponentHookReceiver, sessionID,
 					fmt.Sprintf("received %s (trigger=%s)", payload.HookEventName, payload.Trigger))
 				target.HandleCompactHook(sessionID, payload.TranscriptPath, payload.Trigger)
 			} else {
-				log.LogInfo("hook-receiver", sessionID,
+				log.LogInfo(logComponentHookReceiver, sessionID,
 					fmt.Sprintf("ignored %s (trigger=%q, not manual)", payload.HookEventName, payload.Trigger))
 			}
 		case HookPreToolUse:
@@ -242,7 +246,7 @@ func NewHookHandler(target HookTarget, markers MarkerTarget, gate ConsentGate, l
 				// deterministic compactor covers the no-marker case regardless.
 				est, sum, _ := scanToolInput(payload.ToolInput, time.Now())
 				if est != nil {
-					log.LogInfo("hook-receiver", sessionID,
+					log.LogInfo(logComponentHookReceiver, sessionID,
 						fmt.Sprintf("task-estimate marker via %s tool input: %d/%d", payload.ToolName, est.CompletedRounds, est.TotalRounds))
 					markers.IngestTaskEstimate(payload.TranscriptPath, &session.TaskEstimate{
 						TotalRounds:     est.TotalRounds,
@@ -254,7 +258,7 @@ func NewHookHandler(target HookTarget, markers MarkerTarget, gate ConsentGate, l
 				}
 				// Task-summary marker (#738) — same carrier, same drop-bypass.
 				if sum != nil {
-					log.LogInfo("hook-receiver", sessionID,
+					log.LogInfo(logComponentHookReceiver, sessionID,
 						fmt.Sprintf("task-summary marker via %s tool input", payload.ToolName))
 					markers.IngestTaskSummary(payload.TranscriptPath, sum.Text, sum.ObservedAt)
 				}
@@ -264,12 +268,12 @@ func NewHookHandler(target HookTarget, markers MarkerTarget, gate ConsentGate, l
 			if payload.ToolName == toolAskUserQuestion || payload.ToolName == toolExitPlanMode {
 				dispatch()
 			} else {
-				log.LogInfo("hook-receiver", sessionID,
+				log.LogInfo(logComponentHookReceiver, sessionID,
 					fmt.Sprintf("ignored PreToolUse for unexpected tool %q", payload.ToolName))
 			}
 		default:
 			// Unrecognized hook event — accept but ignore.
-			log.LogInfo("hook-receiver", sessionID,
+			log.LogInfo(logComponentHookReceiver, sessionID,
 				fmt.Sprintf("ignored unrecognized hook event %q", payload.HookEventName))
 		}
 

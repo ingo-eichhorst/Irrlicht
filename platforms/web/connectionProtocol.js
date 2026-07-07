@@ -31,9 +31,9 @@ export function seqGap(last, seq) {
 // then reconnecting, else disconnected. Pure; exported for tests.
 export function aggregateConnState(states) {
   if (!states || states.length === 0) return 'disconnected';
-  if (states.some(s => s === 'connected')) return 'connected';
-  if (states.some(s => s === 'connecting')) return 'connecting';
-  if (states.some(s => s === 'reconnecting')) return 'reconnecting';
+  if (states.includes('connected')) return 'connected';
+  if (states.includes('connecting')) return 'connecting';
+  if (states.includes('reconnecting')) return 'reconnecting';
   return 'disconnected';
 }
 
@@ -51,7 +51,7 @@ export function relayWsUrl(raw) {
   // wants TLS types `https://`/`wss://` and the mapping above already
   // honors that.
   if (!/^wss?:\/\//i.test(u)) u = 'ws://' + u;
-  u = u.replace(/\/+$/, '');
+  while (u.endsWith('/')) u = u.slice(0, -1);
   if (!/\/api\/v1\/sessions\/stream$/.test(u)) u += '/api/v1/sessions/stream';
   return u;
 }

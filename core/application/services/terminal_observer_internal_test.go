@@ -67,7 +67,7 @@ func (r *uiReader) CaptureScreen(id string) ([]byte, error) {
 	return []byte(r.screen[id]), nil
 }
 
-// uiConsent is a consentGate that grants a fixed set of adapters.
+// uiConsent is a consentGranter that grants a fixed set of adapters.
 type uiConsent struct{ granted map[string]bool }
 
 func (c uiConsent) Granted(adapter, _ string) bool { return c.granted[adapter] }
