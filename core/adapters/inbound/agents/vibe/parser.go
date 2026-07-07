@@ -48,6 +48,18 @@ func (p *Parser) ParseLine(raw map[string]any) *tailer.ParsedEvent {
 
 	switch role {
 	case "user":
+		// Vibe writes the result of a `!`-shell escape as an injected:true user
+		// message ("Manual `!` command result from the user. Use this as context
+		// only. …"). It is context for the NEXT real turn, not a user turn of its
+		// own: treating it as activity flips the session to working with no
+		// turn_done to ever close it, so the session sticks in working after the
+		// shell command returns. Skip it — the real prompt that follows
+		// (injected:false) drives the turn. Injected user messages are ALWAYS the
+		// shell-escape wrapper (verified across live 2.19.0 transcripts).
+		if injected, _ := raw["injected"].(bool); injected {
+			ev.Skip = true
+			return ev
+		}
 		ev.EventType = "user_message"
 		ev.ClearToolNames = true
 		if c, _ := raw["content"].(string); c != "" {

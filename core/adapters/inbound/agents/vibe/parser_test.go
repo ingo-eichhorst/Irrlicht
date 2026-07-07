@@ -39,12 +39,26 @@ func TestParser_User_UserMessage(t *testing.T) {
 }
 
 // An injected user message (Vibe's `!`-shell escape result fed back as
-// context) is still user activity and maps to user_message.
-func TestParser_InjectedUser_UserMessage(t *testing.T) {
+// context) is NOT a user turn — it must be skipped so it can't flip the
+// session to working with no turn_done to close it (the session-sticks-working
+// bug). See the parser's user branch.
+func TestParser_InjectedUser_Skipped(t *testing.T) {
 	p := &Parser{}
-	ev := p.ParseLine(line(t, `{"role":"user","content":"Manual `+"`!`"+` command result from the user.","injected":true,"message_id":"abc"}`))
+	ev := p.ParseLine(line(t, `{"role":"user","content":"Manual `+"`!`"+` command result from the user. Use this as context only.","injected":true,"message_id":"abc"}`))
+	if ev == nil || !ev.Skip {
+		t.Fatalf("injected `!` user context should be skipped, got %+v", ev)
+	}
+	if ev.EventType != "" {
+		t.Errorf("skipped event should carry no EventType, got %q", ev.EventType)
+	}
+}
+
+// A normal (injected:false) user message is still a real turn.
+func TestParser_NonInjectedUser_UserMessage(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(line(t, `{"role":"user","content":"fix the bug","injected":false,"message_id":"abc"}`))
 	if ev == nil || ev.Skip || ev.EventType != "user_message" {
-		t.Fatalf("injected user: EventType = %q, want user_message", eventTypeOf(ev))
+		t.Fatalf("non-injected user: EventType = %q, want user_message", eventTypeOf(ev))
 	}
 }
 
