@@ -78,32 +78,32 @@ final class GroupViewSnapshotTests: XCTestCase {
         return groups
     }
 
-    func testFirstOfThree_UpChevronDisabled() {
+    func testFirstOfThreeUpChevronDisabled() {
         let groups = seedThreeGroups()
         let view = host(GroupView(group: groups[0]))
         assertSnapshot(of: view, as: .image)
     }
 
-    func testMiddleOfThree_BothChevronsEnabled() {
+    func testMiddleOfThreeBothChevronsEnabled() {
         let groups = seedThreeGroups()
         let view = host(GroupView(group: groups[1]))
         assertSnapshot(of: view, as: .image)
     }
 
-    func testLastOfThree_DownChevronDisabled() {
+    func testLastOfThreeDownChevronDisabled() {
         let groups = seedThreeGroups()
         let view = host(GroupView(group: groups[2]))
         assertSnapshot(of: view, as: .image)
     }
 
-    func testSingleGroup_NoChevrons() {
+    func testSingleGroupNoChevrons() {
         let solo = makeGroup(name: "solo")
         sessionManager.apiGroups = [solo]
         let view = host(GroupView(group: solo))
         assertSnapshot(of: view, as: .image)
     }
 
-    func testSubGroup_NoChevrons() {
+    func testSubGroupNoChevrons() {
         _ = seedThreeGroups()
         let view = host(GroupView(group: makeGroup(name: "nested"), depth: 1))
         assertSnapshot(of: view, as: .image)

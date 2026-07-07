@@ -38,7 +38,7 @@ final class SessionManagerApiGroupsTests: XCTestCase {
 
     // MARK: - collectSessionIds
 
-    func testCollectSessionIds_includesTopLevelAgents() {
+    func testCollectSessionIdsIncludesTopLevelAgents() {
         let group = AgentGroup(
             name: "articles",
             agents: [makeSession(id: "a1"), makeSession(id: "a2")]
@@ -46,7 +46,7 @@ final class SessionManagerApiGroupsTests: XCTestCase {
         XCTAssertEqual(Set(sut.collectSessionIds(from: group)), ["a1", "a2"])
     }
 
-    func testCollectSessionIds_includesChildren() {
+    func testCollectSessionIdsIncludesChildren() {
         // Regression: children were structurally unreachable — the set built
         // from `collectSessionIds` never contained child ids, so the guard in
         // `patchApiGroups` dropped every WS update for subagents.
@@ -61,7 +61,7 @@ final class SessionManagerApiGroupsTests: XCTestCase {
         )
     }
 
-    func testCollectSessionIds_descendsIntoNestedGroups() {
+    func testCollectSessionIdsDescendsIntoNestedGroups() {
         let nested = AgentGroup(name: "sub", agents: [makeSession(id: "n1")])
         let top = AgentGroup(
             name: "top",
@@ -73,7 +73,7 @@ final class SessionManagerApiGroupsTests: XCTestCase {
 
     // MARK: - patchGroup
 
-    func testPatchGroup_patchesTopLevelAgentMetrics() {
+    func testPatchGroupPatchesTopLevelAgentMetrics() {
         let before = makeSession(id: "s1", cost: 1.00)
         let sibling = makeSession(id: "s2", cost: 3.00)
         let group = AgentGroup(name: "proj", agents: [before, sibling])
@@ -86,7 +86,7 @@ final class SessionManagerApiGroupsTests: XCTestCase {
         XCTAssertEqual(patched.agents?.first(where: { $0.id == "s2" })?.metrics?.estimatedCostUSD, 3.00)
     }
 
-    func testPatchGroup_patchesChildInsideAgent() {
+    func testPatchGroupPatchesChildInsideAgent() {
         // Regression: `patchGroup` used to only patch `group.agents` and
         // `group.groups`; child sessions buried in `agent.children` were
         // unreachable and their rows never ticked until the 30 s hydration.
@@ -103,7 +103,7 @@ final class SessionManagerApiGroupsTests: XCTestCase {
         XCTAssertEqual(patchedParent?.children?.first?.metrics?.estimatedCostUSD, 0.50)
     }
 
-    func testPatchGroup_preservesChildrenWhenPatchingParent() {
+    func testPatchGroupPreservesChildrenWhenPatchingParent() {
         // Regression: WS payloads don't carry `children`, so naively
         // substituting the matched agent with the incoming session would
         // drop every subagent row. `withChildren` on the patched copy
@@ -123,7 +123,7 @@ final class SessionManagerApiGroupsTests: XCTestCase {
         XCTAssertEqual(patchedParent?.children?.map(\.id), ["childA", "childB"])
     }
 
-    func testPatchGroup_returnsUnchangedWhenNoMatch() {
+    func testPatchGroupReturnsUnchangedWhenNoMatch() {
         let group = AgentGroup(name: "proj", agents: [makeSession(id: "only")])
         let unrelated = makeSession(id: "unrelated", cost: 999)
         let patched = sut.patchGroup(group, with: unrelated)
@@ -133,7 +133,7 @@ final class SessionManagerApiGroupsTests: XCTestCase {
 
     // MARK: - patchApiGroups (end-to-end through SessionManager state)
 
-    func testPatchApiGroups_updatesAgentMetricsWhenIdKnown() {
+    func testPatchApiGroupsUpdatesAgentMetricsWhenIdKnown() {
         let original = makeSession(id: "live", cost: 1.00)
         sut.seedLocalApiGroups([AgentGroup(name: "proj", agents: [original])])
 
@@ -147,7 +147,7 @@ final class SessionManagerApiGroupsTests: XCTestCase {
         )
     }
 
-    func testPatchApiGroups_leavesApiGroupsUnchangedOnMiss() {
+    func testPatchApiGroupsLeavesApiGroupsUnchangedOnMiss() {
         // When the guard drops, we rely on the debounced rehydration (tested
         // indirectly by the fact that we don't crash / mutate). The important
         // invariant here is that an unknown session id never corrupts
@@ -164,7 +164,7 @@ final class SessionManagerApiGroupsTests: XCTestCase {
 
     // MARK: - removeFromApiGroups (regression for #244)
 
-    func testRemoveFromApiGroups_dropsTopLevelAgentAndEmptyGroup() {
+    func testRemoveFromApiGroupsDropsTopLevelAgentAndEmptyGroup() {
         let lone = makeSession(id: "live")
         sut.seedLocalApiGroups([AgentGroup(name: "irrlicht", agents: [lone])])
 
@@ -175,7 +175,7 @@ final class SessionManagerApiGroupsTests: XCTestCase {
         XCTAssertFalse(sut.groupedSessionIds.contains("live"))
     }
 
-    func testRemoveFromApiGroups_dropsChild_keepsParent() {
+    func testRemoveFromApiGroupsDropsChildKeepsParent() {
         let child = makeSession(id: "child")
         let parent = makeSession(id: "parent", cost: 2.00, children: [child])
         sut.seedLocalApiGroups([AgentGroup(name: "irrlicht", agents: [parent])])
@@ -192,7 +192,7 @@ final class SessionManagerApiGroupsTests: XCTestCase {
         XCTAssertTrue(sut.groupedSessionIds.contains("parent"))
     }
 
-    func testRemoveFromApiGroups_preservesGasTownGroupWhenEmpty() {
+    func testRemoveFromApiGroupsPreservesGasTownGroupWhenEmpty() {
         // Gas-town's top-level row renders even with no rigs (menu-bar badge
         // tracks daemon presence, not session count), so it must not prune.
         let rigSession = makeSession(id: "rig-1")
@@ -214,7 +214,7 @@ final class SessionManagerApiGroupsTests: XCTestCase {
                        "empty rig group must be pruned")
     }
 
-    func testRemoveFromApiGroups_recursesIntoNestedNonGasTownGroup() {
+    func testRemoveFromApiGroupsRecursesIntoNestedNonGasTownGroup() {
         // Pins generic `group.groups` recursion — gas-town test exercises the
         // same path but trips the isGasTown carve-out.
         let nestedSession = makeSession(id: "deep")
@@ -235,7 +235,7 @@ final class SessionManagerApiGroupsTests: XCTestCase {
         XCTAssertEqual(sut.groupedSessionIds, ["sibling"])
     }
 
-    func testRemoveFromApiGroups_dropsParent_clearsOrphanedChildIds() {
+    func testRemoveFromApiGroupsDropsParentClearsOrphanedChildIds() {
         // Children embedded in a removed parent vanish from the tree, so
         // their ids must also leave groupedSessionIds — otherwise a late WS
         // update slips past the patchApiGroups guard with no row to land in.
@@ -251,7 +251,7 @@ final class SessionManagerApiGroupsTests: XCTestCase {
         XCTAssertFalse(sut.groupedSessionIds.contains("parent"))
     }
 
-    func testRemoveFromApiGroups_isNoOpForUnknownId() {
+    func testRemoveFromApiGroupsIsNoOpForUnknownId() {
         let original = makeSession(id: "alive", cost: 1.00)
         sut.seedLocalApiGroups([AgentGroup(name: "irrlicht", agents: [original])])
 
@@ -264,7 +264,7 @@ final class SessionManagerApiGroupsTests: XCTestCase {
 
     // MARK: - deleteSession (regression for #287)
 
-    func testDeleteSession_clearsBothMenuBarAndListViewSurfaces() {
+    func testDeleteSessionClearsBothMenuBarAndListViewSurfaces() {
         let id = UUID().uuidString
         let session = makeSession(id: id, cost: 1.00)
         sut.sessions = [session]
@@ -279,7 +279,7 @@ final class SessionManagerApiGroupsTests: XCTestCase {
 
     // MARK: - resetSessionState (regression for #287)
 
-    func testResetSessionState_flipsBothSurfacesAndPreservesFields() throws {
+    func testResetSessionStateFlipsBothSurfacesAndPreservesFields() throws {
         let id = UUID().uuidString
         let child = makeSession(id: "\(id)-child")
         let working = SessionState(
@@ -317,7 +317,7 @@ final class SessionManagerApiGroupsTests: XCTestCase {
 
     // MARK: - SessionState.withChildren
 
-    func testWithChildren_preservesIdentityAndMetrics() {
+    func testWithChildrenPreservesIdentityAndMetrics() {
         let child = makeSession(id: "child")
         let original = makeSession(id: "parent", cost: 4.20, children: nil)
         let replaced = original.withChildren([child])
@@ -327,7 +327,7 @@ final class SessionManagerApiGroupsTests: XCTestCase {
         XCTAssertEqual(replaced.children?.map(\.id), ["child"])
     }
 
-    func testWithChildren_allowsClearingChildren() {
+    func testWithChildrenAllowsClearingChildren() {
         let original = makeSession(
             id: "parent",
             cost: 1.00,
@@ -342,7 +342,7 @@ final class SessionManagerApiGroupsTests: XCTestCase {
 
     /// Two daemons emitting the same session_id must render as two distinct
     /// rows, keyed by the compound (daemon_id, session_id) — not merged.
-    func testRelay_sameSessionId_differentDaemons_yieldsTwoRows() {
+    func testRelaySameSessionIdDifferentDaemonsYieldsTwoRows() {
         sut.handleRelayMessage(relayPush(source: "daemonA", sessionId: "proc-1234", project: "alpha"))
         sut.handleRelayMessage(relayPush(source: "daemonB", sessionId: "proc-1234", project: "beta"))
 
@@ -357,7 +357,7 @@ final class SessionManagerApiGroupsTests: XCTestCase {
 
     /// The same daemon re-emitting a session_id updates in place (one row),
     /// so a daemon reached over both paths never doubles.
-    func testRelay_sameDaemonSameId_updatesInPlace() {
+    func testRelaySameDaemonSameIdUpdatesInPlace() {
         sut.handleRelayMessage(relayPush(source: "daemonA", sessionId: "proc-1234", project: "alpha"))
         sut.handleRelayMessage(relayPush(source: "daemonA", sessionId: "proc-1234", project: "alpha", state: "waiting"))
 
@@ -367,7 +367,7 @@ final class SessionManagerApiGroupsTests: XCTestCase {
 
     /// A relay session whose id is also present locally collapses to the local
     /// row (local wins) — the v0 "same daemon over both paths shows once" guard.
-    func testRelay_idAlsoPresentLocally_collapsesToLocal() {
+    func testRelayIdAlsoPresentLocallyCollapsesToLocal() {
         sut.sessionMap["proc-1234"] = makeSession(id: "proc-1234")     // local, no daemonID
         sut.handleRelayMessage(relayPush(source: "daemonA", sessionId: "proc-1234", project: "alpha"))
 
@@ -380,7 +380,7 @@ final class SessionManagerApiGroupsTests: XCTestCase {
     /// A project present locally that echoes back via the relay (under a drifted
     /// session_id, so it escapes the id-only filter) renders exactly once — the
     /// local copy wins; the relay group of the same name is suppressed.
-    func testRelayEcho_sameProjectName_driftedId_collapsesToLocal() {
+    func testRelayEchoSameProjectNameDriftedIdCollapsesToLocal() {
         sut.seedLocalApiGroups([AgentGroup(name: "irrlicht", agents: [makeSession(id: "local-1")])])
         // Relay echoes the same project under a ghost daemon + drifted id.
         sut.handleRelayMessage(relayPush(source: "ghostDaemon", sessionId: "drifted-9", project: "irrlicht"))
@@ -398,7 +398,7 @@ final class SessionManagerApiGroupsTests: XCTestCase {
     /// only deduped relay sessions by id, so the drifted-id echo survived and
     /// the menu bar (which reads `sessions`) double-counted the project while
     /// the list view (which reads `apiGroups`) already showed the correct total.
-    func testRelayEcho_sameProjectName_driftedId_collapsesToLocal_inFlatSessions() {
+    func testRelayEchoSameProjectNameDriftedIdCollapsesToLocalInFlatSessions() {
         sut.sessionMap["local-1"] = makeSession(id: "local-1", projectName: "irrlicht")
         sut.seedLocalApiGroups([AgentGroup(name: "irrlicht", agents: [makeSession(id: "local-1", projectName: "irrlicht")])])
         sut.handleRelayMessage(relayPush(source: "ghostDaemon", sessionId: "drifted-9", project: "irrlicht"))
@@ -410,7 +410,7 @@ final class SessionManagerApiGroupsTests: XCTestCase {
 
     /// A relay-only project with no local equivalent still appears — the
     /// name-collapse only suppresses collisions, not genuine remote projects.
-    func testRelayOnly_differentProject_stillAppears() {
+    func testRelayOnlyDifferentProjectStillAppears() {
         sut.seedLocalApiGroups([AgentGroup(name: "irrlicht", agents: [makeSession(id: "local-1")])])
         sut.handleRelayMessage(relayPush(source: "daemonB", sessionId: "remote-1", project: "otherproj"))
 
@@ -425,7 +425,7 @@ final class SessionManagerApiGroupsTests: XCTestCase {
     /// A relay session carries a daemonID, and the relay's snapshot label map
     /// resolves it to a hostname — the data the per-row origin glyph + tooltip
     /// render from. A local session has no daemonID (no glyph).
-    func testOriginGlyph_remoteSessionResolvesHostnameTooltip() {
+    func testOriginGlyphRemoteSessionResolvesHostnameTooltip() {
         sut.handleRelayMessage(relaySnapshot(daemonID: "daemonA", label: "ingo-mini.local"))
         sut.handleRelayMessage(relayPush(source: "daemonA", sessionId: "proc-1234", project: "alpha"))
 
@@ -441,7 +441,7 @@ final class SessionManagerApiGroupsTests: XCTestCase {
 
     /// A relay daemon going offline fades its rows (keeps them, marks offline)
     /// instead of deleting them; reconnect restores them solid.
-    func testOffline_disconnectFadesRows_reconnectRestores() {
+    func testOfflineDisconnectFadesRowsReconnectRestores() {
         sut.handleRelayMessage(relaySnapshot(daemonID: "daemonA", label: "ingo-mini.local"))
         sut.handleRelayMessage(relayPush(source: "daemonA", sessionId: "proc-1234", project: "alpha"))
         let row = { self.sut.sessions.first { $0.id == "proc-1234" } }

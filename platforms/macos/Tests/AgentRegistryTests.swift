@@ -14,19 +14,19 @@ final class AgentRegistryTests: XCTestCase {
 
     // MARK: - adapterName
 
-    func testAdapterName_emptyRegistry_returnsRawAdapterKey() throws {
+    func testAdapterNameEmptyRegistryReturnsRawAdapterKey() throws {
         let session = try makeSession(adapter: "fake-agent")
         XCTAssertEqual(session.adapterName, "fake-agent",
                        "missing registry entry should fall through to the raw adapter key")
     }
 
-    func testAdapterName_emptyAdapter_returnsUnknownPlaceholder() throws {
+    func testAdapterNameEmptyAdapterReturnsUnknownPlaceholder() throws {
         let session = try makeSession(adapter: nil)
         XCTAssertEqual(session.adapterName, "Unknown",
                        "no adapter field should resolve to a stable 'Unknown' label")
     }
 
-    func testAdapterName_populatedRegistry_returnsDisplayName() throws {
+    func testAdapterNamePopulatedRegistryReturnsDisplayName() throws {
         AgentRegistry.byName["claude-code"] = AgentBranding(
             name: "claude-code",
             displayName: "Claude Code",
@@ -39,13 +39,13 @@ final class AgentRegistryTests: XCTestCase {
 
     // MARK: - adapterIcon
 
-    func testAdapterIcon_emptyRegistry_returnsGenericIcon() throws {
+    func testAdapterIconEmptyRegistryReturnsGenericIcon() throws {
         let session = try makeSession(adapter: "fake-agent")
         XCTAssertNotNil(session.adapterIcon,
                         "registry miss should still render the neutral generic icon, not nil")
     }
 
-    func testAdapterIcon_populatedRegistry_returnsBrandedIcon() throws {
+    func testAdapterIconPopulatedRegistryReturnsBrandedIcon() throws {
         AgentRegistry.byName["claude-code"] = AgentBranding(
             name: "claude-code",
             displayName: "Claude Code",

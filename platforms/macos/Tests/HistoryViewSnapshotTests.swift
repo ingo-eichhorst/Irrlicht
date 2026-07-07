@@ -119,7 +119,7 @@ final class HistoryViewSnapshotTests: XCTestCase {
         )
     }
 
-    func testHistory_Populated() {
+    func testHistoryPopulated() {
         let view = HistoryContentView(
             data: populated(),
             range: .month,
@@ -129,7 +129,7 @@ final class HistoryViewSnapshotTests: XCTestCase {
         assertSnapshot(of: host(view, height: 460), as: .image)
     }
 
-    func testHistory_Tokens() {
+    func testHistoryTokens() {
         let view = HistoryContentView(
             data: populatedTokens(),
             range: .month,
@@ -142,7 +142,7 @@ final class HistoryViewSnapshotTests: XCTestCase {
         assertSnapshot(of: host(view, height: 460), as: .image)
     }
 
-    func testHistory_Drilldown() {
+    func testHistoryDrilldown() {
         let view = HistoryContentView(
             data: populated(),
             range: .month,
@@ -155,7 +155,7 @@ final class HistoryViewSnapshotTests: XCTestCase {
         assertSnapshot(of: host(view, height: 500), as: .image)
     }
 
-    func testHistory_EmptyState() {
+    func testHistoryEmptyState() {
         let view = HistoryContentView(
             data: empty(),
             range: .day,
@@ -186,7 +186,7 @@ final class HistoryViewSnapshotTests: XCTestCase {
         )
     }
 
-    func testYield_Populated() {
+    func testYieldPopulated() {
         let view = HistoryYieldContentView(data: yieldFixture(), range: .month)
         assertSnapshot(of: host(view, height: 360), as: .image)
     }
@@ -252,7 +252,7 @@ final class HistoryViewSnapshotTests: XCTestCase {
 
     /// Single provider, both windows side-by-side — the common case (one Claude
     /// subscription): exercises the 5h cap trajectory + 7d on-pace footer.
-    func testQuotaForecast_SingleProvider() {
+    func testQuotaForecastSingleProvider() {
         let view = HistoryQuotaForecastView(providers: [anthropicProvider()])
         assertSnapshot(of: host(view, height: 320), as: .image)
     }
@@ -260,7 +260,7 @@ final class HistoryViewSnapshotTests: XCTestCase {
     /// Two active providers stacked — Anthropic (5h hits cap, 7d on pace) +
     /// OpenAI (5h on pace). Exercises the per-provider grid, both brand icons,
     /// and both footer states.
-    func testQuotaForecast_MultiProvider() {
+    func testQuotaForecastMultiProvider() {
         let view = HistoryQuotaForecastView(providers: [anthropicProvider(), openaiProvider()])
         assertSnapshot(of: host(view, height: 460), as: .image)
     }

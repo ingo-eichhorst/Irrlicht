@@ -9,7 +9,7 @@ final class HistoryPhase2Tests: XCTestCase {
         Dictionary(uniqueKeysWithValues: items.compactMap { i in i.value.map { (i.name, $0) } })
     }
 
-    func testQueryItems_carriesChartGroupScope() {
+    func testQueryItemsCarriesChartGroupScope() {
         let p = params(HistoryRange.day.queryItems(
             chart: .tokens, group: .branch,
             scope: HistoryScope(field: .project, value: "irrlicht"),
@@ -22,7 +22,7 @@ final class HistoryPhase2Tests: XCTestCase {
         XCTAssertEqual(p["forecast"], "true")
     }
 
-    func testQueryItems_customRangeSendsStartEndNotRange() {
+    func testQueryItemsCustomRangeSendsStartEndNotRange() {
         let p = params(HistoryRange.custom.queryItems(
             chart: .cost, group: .project, scope: nil,
             filters: [:],
@@ -33,7 +33,7 @@ final class HistoryPhase2Tests: XCTestCase {
         XCTAssertNil(p["scope"])
     }
 
-    func testDrillNext_axisChain() {
+    func testDrillNextAxisChain() {
         XCTAssertEqual(HistoryGroup.project.drillNext, .branch)
         XCTAssertEqual(HistoryGroup.branch.drillNext, .session)
         XCTAssertEqual(HistoryGroup.provider.drillNext, .model)
@@ -41,7 +41,7 @@ final class HistoryPhase2Tests: XCTestCase {
         XCTAssertNil(HistoryGroup.session.drillNext) // leaf
     }
 
-    func testChart_pinnedGroupAndIsCost() {
+    func testChartPinnedGroupAndIsCost() {
         XCTAssertEqual(HistoryChart.models.pinnedGroup, .model)
         XCTAssertEqual(HistoryChart.providers.pinnedGroup, .provider)
         XCTAssertNil(HistoryChart.cost.pinnedGroup)
@@ -54,14 +54,14 @@ final class HistoryPhase2Tests: XCTestCase {
     }
 
     // issue #829: the co2 chart is neither the USD nor the tokens metric.
-    func testChart_isCO2() {
+    func testChartIsCO2() {
         XCTAssertTrue(HistoryChart.co2.isCO2)
         XCTAssertFalse(HistoryChart.cost.isCO2)
         XCTAssertFalse(HistoryChart.tokens.isCO2)
         XCTAssertEqual(HistoryChart.co2.label, "CO2")
     }
 
-    func testFormat_tokensAndValue() {
+    func testFormatTokensAndValue() {
         XCTAssertEqual(HistoryFormat.tokens(2_000_000), "2.0M")
         XCTAssertEqual(HistoryFormat.tokens(1500), "1.5k")
         XCTAssertEqual(HistoryFormat.tokens(970), "970")
@@ -70,18 +70,18 @@ final class HistoryPhase2Tests: XCTestCase {
     }
 
     // issue #829: unit-adaptive CO2e formatting, matching the web histCO2.
-    func testFormat_co2AndValue() {
+    func testFormatCo2AndValue() {
         XCTAssertEqual(HistoryFormat.co2(0.03), "30mg")
         XCTAssertEqual(HistoryFormat.co2(158.7), "158.7g")
         XCTAssertEqual(HistoryFormat.co2(2850), "2.85kg")
         XCTAssertEqual(HistoryFormat.value(158.7, chart: .co2), "158.7g")
     }
 
-    func testScope_queryForm() {
+    func testScopeQueryForm() {
         XCTAssertEqual(HistoryScope(field: .branch, value: "main").query, "branch:main")
     }
 
-    func testQueryItems_emitsNonGroupedFiltersAndDropsGroupedDimension() {
+    func testQueryItemsEmitsNonGroupedFiltersAndDropsGroupedDimension() {
         let p = params(HistoryRange.day.queryItems(
             chart: .tokens, group: .project, scope: nil,
             filters: [.provider: ["anthropic"], .tokenType: ["input", "output"], .project: ["x"]],
@@ -91,7 +91,7 @@ final class HistoryPhase2Tests: XCTestCase {
         XCTAssertNil(p["project"]) // project is the active group
     }
 
-    func testQueryItems_tokenTypeFilterOmittedUnlessTokensMetric() {
+    func testQueryItemsTokenTypeFilterOmittedUnlessTokensMetric() {
         let p = params(HistoryRange.day.queryItems(
             chart: .cost, group: .project, scope: nil,
             filters: [.tokenType: ["input"], .provider: ["anthropic"]],
@@ -100,7 +100,7 @@ final class HistoryPhase2Tests: XCTestCase {
         XCTAssertEqual(p["provider"], "anthropic")
     }
 
-    func testQueryItems_emptyFiltersEmitNothing() {
+    func testQueryItemsEmptyFiltersEmitNothing() {
         let p = params(HistoryRange.day.queryItems(
             chart: .tokens, group: .project, scope: nil,
             filters: [.provider: [], .tokenType: []],
@@ -109,7 +109,7 @@ final class HistoryPhase2Tests: XCTestCase {
         XCTAssertNil(p["token_type"])
     }
 
-    func testTokenTypeGroup_isLeafWithLabel() {
+    func testTokenTypeGroupIsLeafWithLabel() {
         XCTAssertNil(HistoryGroup.tokenType.drillNext) // bands aren't drillable
         XCTAssertEqual(HistoryGroup.tokenType.rawValue, "token_type")
         XCTAssertEqual(HistoryGroup.tokenType.shortLabel, "Type")
@@ -117,7 +117,7 @@ final class HistoryPhase2Tests: XCTestCase {
         XCTAssertEqual(HistoryTokenType.cacheCreation.label, "Cache create")
     }
 
-    func testResponse_decodesTokenSplitAndScope() throws {
+    func testResponseDecodesTokenSplitAndScope() throws {
         let json = Data("""
         {"range":"day","chart":"tokens","group":"branch","start":0,"end":10,"bucket_seconds":1,"bucket_starts":[0],"total":170,"series":[],"top_contributors":[],"token_split":{"input":100,"output":20,"cache":50},"scope":"project:irrlicht"}
         """.utf8)
@@ -127,7 +127,7 @@ final class HistoryPhase2Tests: XCTestCase {
         XCTAssertEqual(r.scope, "project:irrlicht")
     }
 
-    func testResponse_preV2PayloadDecodesWithNils() throws {
+    func testResponsePreV2PayloadDecodesWithNils() throws {
         // A cost×project response with no token_split / scope keys still decodes.
         let json = Data("""
         {"range":"day","chart":"cost","group":"project","start":0,"end":10,"bucket_seconds":1,"bucket_starts":[0],"total":1.5,"series":[],"top_contributors":[]}

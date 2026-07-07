@@ -247,7 +247,7 @@ final class SessionRowSnapshotTests: XCTestCase {
     /// everything after them) must start at the same x in every row. The
     /// ready SF Symbol used to measure 14×14 against the others' framed
     /// 12×12, shifting ready rows 2 pt right of their neighbours.
-    func testStateIconAlignment_AcrossStates() {
+    func testStateIconAlignmentAcrossStates() {
         let rows = VStack(spacing: 0) {
             SessionRowView(session: makeSession(state: .working, metrics: makeMetrics()), agentNumber: 1)
             SessionRowView(session: makeSession(state: .waiting, metrics: makeMetrics()), agentNumber: 2)
@@ -257,7 +257,7 @@ final class SessionRowSnapshotTests: XCTestCase {
         assertSnapshot(of: view, as: .image)
     }
 
-    func testWaitingState_ShowsQuestionBlock() {
+    func testWaitingStateShowsQuestionBlock() {
         let session = makeSession(
             state: .waiting,
             metrics: makeMetrics(lastText: "Should I run the migration?")
@@ -266,7 +266,7 @@ final class SessionRowSnapshotTests: XCTestCase {
         assertSnapshot(of: view, as: .image)
     }
 
-    func testUserIntent_ShowsPurpleBlock() {
+    func testUserIntentShowsPurpleBlock() {
         // Beta "User-Intent Display" on: the task summary renders as a purple
         // block above the orange pending-question block.
         UserDefaults.standard.set(true, forKey: "userIntentDisplay")
@@ -281,7 +281,7 @@ final class SessionRowSnapshotTests: XCTestCase {
         assertSnapshot(of: view, as: .image)
     }
 
-    func testCollapsed_HidesSummaryBlocks() {
+    func testCollapsedHidesSummaryBlocks() {
         // Global collapse on: a waiting session with BOTH an intent summary and
         // a pending question shows neither block — collapse applies to every
         // row, including new entries (issue #763). User-intent display is on to
@@ -299,7 +299,7 @@ final class SessionRowSnapshotTests: XCTestCase {
         assertSnapshot(of: view, as: .image)
     }
 
-    func testContextBar_ShowsTokenLabel() {
+    func testContextBarShowsTokenLabel() {
         let session = makeSession(state: .working, metrics: makeMetrics())
         let view = host(session)
         assertSnapshot(of: view, as: .image)
@@ -320,15 +320,15 @@ final class SessionRowSnapshotTests: XCTestCase {
         assertSnapshot(of: view, as: .image, testName: testName)
     }
 
-    func testHistoryBar1Min_PreservesModelLabel() {
+    func testHistoryBar1MinPreservesModelLabel() {
         snapshotHistoryMode("1 Min")
     }
 
-    func testHistoryBar10Min_PreservesModelLabel() {
+    func testHistoryBar10MinPreservesModelLabel() {
         snapshotHistoryMode("10 Min")
     }
 
-    func testHistoryBar60Min_PreservesModelLabel() {
+    func testHistoryBar60MinPreservesModelLabel() {
         snapshotHistoryMode("60 Min")
     }
 
@@ -339,7 +339,7 @@ final class SessionRowSnapshotTests: XCTestCase {
     /// (The metrics-present-but-empty shape is covered by the antigravity-ghost
     /// fixture, whose metrics object carries zero tokens / zero utilization, so a
     /// separate zero-token unit case would render an identical row.)
-    func testGhostRow_PID0_NilMetrics() {
+    func testGhostRowPID0NilMetrics() {
         let session = makeSession(state: .ready, metrics: nil, pid: 0, adapter: "antigravity")
         assertSnapshot(of: host(session), as: .image)
     }
@@ -355,7 +355,7 @@ final class SessionRowSnapshotTests: XCTestCase {
         assertSnapshot(of: host(row), as: .image)
     }
 
-    func testBackgroundMoon_Detached() {
+    func testBackgroundMoonDetached() {
         let session = makeSession(
             state: .working,
             metrics: makeMetrics(),
@@ -364,7 +364,7 @@ final class SessionRowSnapshotTests: XCTestCase {
         assertSnapshot(of: host(session), as: .image)
     }
 
-    func testBackgroundMoon_NonDetached() {
+    func testBackgroundMoonNonDetached() {
         let session = makeSession(
             state: .working,
             metrics: makeMetrics(),
@@ -373,7 +373,7 @@ final class SessionRowSnapshotTests: XCTestCase {
         assertSnapshot(of: host(session), as: .image)
     }
 
-    func testCacheBloatBadge_Attributed() {
+    func testCacheBloatBadgeAttributed() {
         let session = makeSession(
             state: .working,
             metrics: makeMetrics(
@@ -387,7 +387,7 @@ final class SessionRowSnapshotTests: XCTestCase {
 
     // #813: no version attribution → the badge falls back to a compact label
     // instead of the old bare arrow glyph.
-    func testCacheBloatBadge_Fallback() {
+    func testCacheBloatBadgeFallback() {
         let session = makeSession(
             state: .working,
             metrics: makeMetrics(
@@ -420,13 +420,13 @@ final class SessionRowSnapshotTests: XCTestCase {
         assertSnapshot(of: host(session), as: .image)
     }
 
-    func testRelayCloud_Online() {
+    func testRelayCloudOnline() {
         sessionManager.relayDaemons = ["mac-studio": "Mac Studio"]
         let session = makeSession(state: .working, metrics: makeMetrics(), daemonID: "mac-studio")
         assertSnapshot(of: host(session), as: .image)
     }
 
-    func testRelayCloud_OfflineFade() {
+    func testRelayCloudOfflineFade() {
         sessionManager.offlineDaemons = ["mac-studio": "Mac Studio"]
         let session = makeSession(state: .ready, metrics: makeMetrics(), daemonID: "mac-studio")
         assertSnapshot(of: host(session), as: .image)
@@ -435,7 +435,7 @@ final class SessionRowSnapshotTests: XCTestCase {
     /// Progress chip without a projection (taskCompletionEta nil): renders the
     /// time-invariant "rounds/total · percent" form. The far-past marker makes
     /// it the stale (dimmed) branch, so the snapshot never depends on the clock.
-    func testTaskProgressChip_Stale() {
+    func testTaskProgressChipStale() {
         let session = makeSession(
             state: .working,
             metrics: makeMetrics(
@@ -454,14 +454,14 @@ final class SessionRowSnapshotTests: XCTestCase {
 
     /// Drives a render straight from a captured `{type, session}` websocket
     /// envelope — the antigravity PID=0 ghost that Phase 1's trace explains.
-    func testFixture_AntigravityGhost() throws {
+    func testFixtureAntigravityGhost() throws {
         let session = try loadSession("antigravity-ghost.json")
         assertSnapshot(of: host(session), as: .image)
     }
 
     /// Drives a render from a bare daemon `SessionState` object (no envelope) —
     /// a substantive working Claude Code session with high context fill.
-    func testFixture_WorkingClaude() throws {
+    func testFixtureWorkingClaude() throws {
         let session = try loadSession("working-claude.json")
         assertSnapshot(of: host(session, height: 72), as: .image)
     }
