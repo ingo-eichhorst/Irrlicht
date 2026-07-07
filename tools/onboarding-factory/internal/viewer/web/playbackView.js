@@ -15,7 +15,7 @@ export function paintStateBand(el, events, totalMs) {
   for (const seg of computeStateBand(events, totalMs)) {
     const region = document.createElement("div");
     region.style.cssText = `position: absolute; top: 0; bottom: 0; left: ${seg.leftPct}%; width: ${seg.widthPct}%; background: ${seg.color};`;
-    region.setAttribute("data-tip", seg.tip);
+    region.dataset.tip = seg.tip;
     el.appendChild(region);
   }
 }
@@ -29,7 +29,7 @@ export function paintEventDots(el, events, totalMs) {
       `width: ${d.size}px; height: ${d.size}px; background: ${d.color}; opacity: ${d.opacity}; ` +
       `border-radius: 50%; transform: translateX(-${d.size / 2}px); ` +
       `border: 1.5px solid white; box-shadow: 0 0 0 1px rgba(0,0,0,0.1); cursor: help;`;
-    dot.setAttribute("data-tip", d.tip);
+    dot.dataset.tip = d.tip;
     el.appendChild(dot);
   }
 }
@@ -42,7 +42,7 @@ export function paintTurns(el, turns, totalMs) {
     tick.style.cssText = `position: absolute; left: ${t.leftPct}%; top: ${t.top}; ` +
       `width: 5px; height: 10px; background: ${t.color}; transform: translateX(-2.5px); ` +
       `border-radius: 2px; cursor: help;`;
-    tick.setAttribute("data-tip", t.tip);
+    tick.dataset.tip = t.tip;
     el.appendChild(tick);
   }
 }
@@ -98,7 +98,7 @@ export function paintExpectedLane(el, rep, totalMs) {
         `cursor: help;`;
       marker.textContent = m.label;
     }
-    marker.setAttribute("data-tip", m.tip);
+    marker.dataset.tip = m.tip;
     el.appendChild(marker);
   }
 }

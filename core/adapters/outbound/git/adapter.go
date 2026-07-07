@@ -9,12 +9,21 @@ import (
 	"regexp"
 	"strings"
 
+	"irrlicht/core/pkg/pathutil"
 	"irrlicht/core/pkg/transcript"
 )
 
 // revertTrailer matches the "This reverts commit <sha>." trailer that
 // `git revert` writes into the body of a revert commit (#373).
 var revertTrailer = regexp.MustCompile(`(?m)^This reverts commit ([0-9a-f]{7,40})`)
+
+// gitPath is resolved once from a fixed set of trusted directories rather
+// than trusted PATH, per go:S4036.
+var gitPath = pathutil.MustResolve("git")
+
+// gitRevParseCmd is the git subcommand shared by GetBranch, GetHeadCommit,
+// and GetGitRoot to resolve refs, commits, and repo-relative paths.
+const gitRevParseCmd = "rev-parse"
 
 // Adapter implements ports/outbound.GitResolver using local git commands and
 // transcript file inspection.
@@ -29,7 +38,7 @@ func (a *Adapter) GetBranch(dir string) string {
 	if dir == "" {
 		return ""
 	}
-	cmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
+	cmd := exec.Command(gitPath, gitRevParseCmd, "--abbrev-ref", "HEAD")
 	cmd.Dir = dir
 	out, err := cmd.Output()
 	if err != nil {
@@ -51,7 +60,7 @@ func (a *Adapter) GetHeadCommit(dir string) string {
 	if dir == "" {
 		return ""
 	}
-	cmd := exec.Command("git", "rev-parse", "HEAD")
+	cmd := exec.Command(gitPath, gitRevParseCmd, "HEAD")
 	cmd.Dir = dir
 	out, err := cmd.Output()
 	if err != nil {
@@ -70,7 +79,7 @@ func (a *Adapter) RevertedCommits(dir string) []string {
 	if dir == "" {
 		return nil
 	}
-	cmd := exec.Command("git", "log", "--all", "--grep", "^This reverts commit ", "--pretty=format:%b")
+	cmd := exec.Command(gitPath, "log", "--all", "--grep", "^This reverts commit ", "--pretty=format:%b")
 	cmd.Dir = dir
 	out, err := cmd.Output()
 	if err != nil {
@@ -100,7 +109,7 @@ func (a *Adapter) GetGitRoot(dir string) string {
 	if dir == "" {
 		return ""
 	}
-	cmd := exec.Command("git", "rev-parse", "--path-format=absolute", "--git-common-dir")
+	cmd := exec.Command(gitPath, gitRevParseCmd, "--path-format=absolute", "--git-common-dir")
 	cmd.Dir = dir
 	out, err := cmd.Output()
 	if err != nil {

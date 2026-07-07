@@ -35,9 +35,9 @@ var ErrUnknownPermission = errors.New("unknown agent or permission")
 // scanner's tracked-PID map) and are rebuilt rather than restarted.
 type WatcherFactory func() []inbound.Watcher
 
-// watcherRegistrar is the slice of *SessionDetector the service needs:
+// watcherRegisterer is the slice of *SessionDetector the service needs:
 // registering a watcher's event stream with the running detector.
-type watcherRegistrar interface {
+type watcherRegisterer interface {
 	AddWatcher(ctx context.Context, w inbound.Watcher)
 }
 
@@ -88,7 +88,7 @@ type PermissionService struct {
 	push      outbound.PushBroadcaster
 	log       outbound.Logger
 	mode      string
-	registrar watcherRegistrar
+	registrar watcherRegisterer
 	factories map[string]WatcherFactory
 	hasLive   HasLiveProcessFunc
 
@@ -114,7 +114,12 @@ type PermissionService struct {
 	set      permission.Set
 	detected map[string]bool
 	watching map[string]context.CancelFunc // agent name → cancel for its running watchers
-	parent   context.Context               // daemon-lifetime ctx, set by Start
+	// parent is intentionally stored rather than threaded through as a method
+	// parameter (godre:S8242): it is the daemon-lifetime ctx set once by
+	// Start, and every watcher startWatching starts later — triggered by an
+	// Answer() call arriving on its own short-lived HTTP request — must be
+	// bounded by the daemon's lifetime, not by that unrelated request's.
+	parent context.Context
 }
 
 // pendingEffect is one consent effect collected under mu and executed
@@ -140,7 +145,7 @@ func NewPermissionService(
 	push outbound.PushBroadcaster,
 	log outbound.Logger,
 	mode string,
-	registrar watcherRegistrar,
+	registrar watcherRegisterer,
 	factories map[string]WatcherFactory,
 	hasLive HasLiveProcessFunc,
 ) *PermissionService {

@@ -105,7 +105,7 @@ func TestForecastCap_ToleratesOffByOneWindowMinutes(t *testing.T) {
 		{SampledAt: base.Unix(), Windows: []RateLimitWindow{{UsedPercent: 20, WindowMinutes: 299, ResetsAt: base.Add(2 * time.Hour).Unix()}}},
 		{SampledAt: base.Add(10 * time.Minute).Unix(), Windows: []RateLimitWindow{{UsedPercent: 30, WindowMinutes: 300, ResetsAt: base.Add(2 * time.Hour).Unix()}}},
 	}
-	if eta := ForecastCap(history, base.Add(10*time.Minute)); eta == nil {
+	if ForecastCap(history, base.Add(10*time.Minute)) == nil {
 		t.Fatal("expected forecast despite 299/300 window-minute mismatch")
 	}
 }

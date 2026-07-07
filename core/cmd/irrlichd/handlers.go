@@ -20,6 +20,18 @@ import (
 	"irrlicht/core/ports/outbound"
 )
 
+// errInternalErrorMsg is the generic 500 response body used across handlers
+// in this file where the underlying error is already logged and its details
+// aren't safe or useful to expose to the client.
+const errInternalErrorMsg = "internal error"
+
+// headerContentType and contentTypeJSON name the response header/value pair
+// set by every JSON-encoding handler in this file.
+const (
+	headerContentType = "Content-Type"
+	contentTypeJSON   = "application/json"
+)
+
 // costTimeframeSeconds maps the four supported time-frame keys to their
 // trailing-window duration in seconds. These are rolling windows (not
 // calendar-aligned) and are embedded under each project group's "costs"
@@ -78,7 +90,7 @@ func handleGetSessions(repo outbound.SessionRepository, orchMonitor *services.Or
 	return func(w http.ResponseWriter, r *http.Request) {
 		sessions, err := repo.ListAll()
 		if err != nil {
-			http.Error(w, "internal error", http.StatusInternalServerError)
+			http.Error(w, errInternalErrorMsg, http.StatusInternalServerError)
 			return
 		}
 		// Cross-account rate-limit inheritance (issue #309): wrapper
@@ -96,7 +108,7 @@ func handleGetSessions(repo outbound.SessionRepository, orchMonitor *services.Or
 			attachGroupCosts(groups, byProject)
 			resp.ProviderCosts = providerCostsByProvider(byProvider)
 		}
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set(headerContentType, contentTypeJSON)
 		json.NewEncoder(w).Encode(resp)
 	}
 }
@@ -161,31 +173,48 @@ func attachGroupCosts(groups []*session.AgentGroup, byTf map[string]map[string]f
 		if g == nil {
 			continue
 		}
-		costs := make(map[string]float64, len(costTimeframeSeconds))
+		var costs map[string]float64
 		if g.Type == "gastown" {
-			projects := collectProjectNames(g)
-			for tf := range costTimeframeSeconds {
-				var sum float64
-				for p := range projects {
-					if v, ok := byTf[tf][p]; ok {
-						sum += v
-					}
-				}
-				if sum > 0 {
-					costs[tf] = sum
-				}
-			}
+			costs = gastownGroupCosts(g, byTf)
 		} else {
-			for tf := range costTimeframeSeconds {
-				if v, ok := byTf[tf][g.Name]; ok {
-					costs[tf] = v
-				}
-			}
+			costs = regularGroupCosts(g, byTf)
 		}
 		if len(costs) > 0 {
 			g.Costs = costs
 		}
 	}
+}
+
+// gastownGroupCosts sums the distinct project costs across every session
+// beneath an orchestrator group (rigs span projects), counting a shared
+// project once — the per-timeframe half of attachGroupCosts' gastown branch.
+func gastownGroupCosts(g *session.AgentGroup, byTf map[string]map[string]float64) map[string]float64 {
+	costs := make(map[string]float64, len(costTimeframeSeconds))
+	projects := collectProjectNames(g)
+	for tf := range costTimeframeSeconds {
+		var sum float64
+		for p := range projects {
+			if v, ok := byTf[tf][p]; ok {
+				sum += v
+			}
+		}
+		if sum > 0 {
+			costs[tf] = sum
+		}
+	}
+	return costs
+}
+
+// regularGroupCosts returns a plain project group's own trailing-window
+// costs, keyed by the group's name.
+func regularGroupCosts(g *session.AgentGroup, byTf map[string]map[string]float64) map[string]float64 {
+	costs := make(map[string]float64, len(costTimeframeSeconds))
+	for tf := range costTimeframeSeconds {
+		if v, ok := byTf[tf][g.Name]; ok {
+			costs[tf] = v
+		}
+	}
+	return costs
 }
 
 // collectProjectNames returns the distinct, non-empty ProjectNames of every
@@ -436,7 +465,7 @@ func handleGetHistory(tracker outbound.CostTracker, sessions historySessionListe
 		// Yield is a per-project aggregate over completed sessions, not a cost
 		// time series — handle it before the cost-tracker path (#373).
 		if chart == "yield" {
-			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set(headerContentType, contentTypeJSON)
 			json.NewEncoder(w).Encode(buildYieldResponse(rangeKey, group, start, end, sessions))
 			return
 		}
@@ -455,7 +484,7 @@ func handleGetHistory(tracker outbound.CostTracker, sessions historySessionListe
 					ScopeValue:    scopeValue,
 				})
 				if err != nil {
-					http.Error(w, "internal error", http.StatusInternalServerError)
+					http.Error(w, errInternalErrorMsg, http.StatusInternalServerError)
 					return
 				}
 				cr = c
@@ -465,7 +494,7 @@ func handleGetHistory(tracker outbound.CostTracker, sessions historySessionListe
 				cr = &outbound.ConcurrencyResult{Start: start, End: end, BucketSeconds: bucketSeconds, BucketStarts: []int64{}, ByKey: map[string][]float64{}, PeakByKey: map[string]float64{}}
 			}
 			resp := buildAgentsResponse(rangeKey, scopeEcho, cr)
-			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set(headerContentType, contentTypeJSON)
 			json.NewEncoder(w).Encode(resp)
 			return
 		}
@@ -504,7 +533,7 @@ func handleGetHistory(tracker outbound.CostTracker, sessions historySessionListe
 				TokenTypes:    tokenTypes,
 			})
 			if err != nil {
-				http.Error(w, "internal error", http.StatusInternalServerError)
+				http.Error(w, errInternalErrorMsg, http.StatusInternalServerError)
 				return
 			}
 			series = s
@@ -516,7 +545,7 @@ func handleGetHistory(tracker outbound.CostTracker, sessions historySessionListe
 		}
 
 		resp := buildHistoryResponse(rangeKey, chart, group, scopeEcho, series, q)
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set(headerContentType, contentTypeJSON)
 		json.NewEncoder(w).Encode(resp)
 	}
 }
@@ -579,7 +608,7 @@ func parseTokenTypeFilter(s string) ([]string, bool) {
 // writeHistoryNotImplemented emits a 501 with a phase hint for chart types and
 // groups scaffolded in the UI but not yet wired (Phase 2/3).
 func writeHistoryNotImplemented(w http.ResponseWriter, what string, phase int) {
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set(headerContentType, contentTypeJSON)
 	w.WriteHeader(http.StatusNotImplemented)
 	json.NewEncoder(w).Encode(map[string]any{
 		"error": what + " is not implemented in Phase 1",
@@ -810,41 +839,7 @@ func buildYieldResponse(rangeKey, group string, start, end int64, lister history
 		return resp
 	}
 
-	type agg struct {
-		productive, reverted, unknown float64
-		revertedCount                 int
-	}
-	byProject := make(map[string]*agg)
-	for _, st := range sessions {
-		if st == nil || st.YieldState == "" {
-			continue // not a completed, ready-captured session
-		}
-		if st.UpdatedAt < start || st.UpdatedAt >= end {
-			continue
-		}
-		cost := 0.0
-		if st.Metrics != nil {
-			cost = st.Metrics.EstimatedCostUSD
-		}
-		project := st.ProjectName
-		if project == "" {
-			project = "unknown"
-		}
-		a := byProject[project]
-		if a == nil {
-			a = &agg{}
-			byProject[project] = a
-		}
-		switch st.YieldState {
-		case session.YieldReverted:
-			a.reverted += cost
-			a.revertedCount++
-		case session.YieldProductive:
-			a.productive += cost
-		default: // YieldUnknown
-			a.unknown += cost
-		}
-	}
+	byProject := aggregateYieldBySession(sessions, start, end)
 
 	// Project order: total (productive+reverted) desc, then name.
 	names := make([]string, 0, len(byProject))
@@ -862,20 +857,7 @@ func buildYieldResponse(rangeKey, group string, start, end int64, lister history
 
 	for _, p := range names {
 		a := byProject[p]
-		total := a.productive + a.reverted
-		y := 0.0
-		if total > 0 {
-			y = a.productive / total
-		}
-		resp.Projects = append(resp.Projects, historyYieldProject{
-			Project:        p,
-			ProductiveCost: a.productive,
-			RevertedCost:   a.reverted,
-			UnknownCost:    a.unknown,
-			TotalCost:      total,
-			Yield:          y,
-			RevertedCount:  a.revertedCount,
-		})
+		resp.Projects = append(resp.Projects, yieldProjectRow(p, a))
 		resp.ProductiveCost += a.productive
 		resp.RevertedCost += a.reverted
 		resp.UnknownCost += a.unknown
@@ -885,6 +867,74 @@ func buildYieldResponse(rangeKey, group string, start, end int64, lister history
 		resp.Yield = resp.ProductiveCost / resp.TotalCost
 	}
 	return resp
+}
+
+// yieldAgg accumulates one project's productive/reverted/unknown spend while
+// aggregateYieldBySession walks completed sessions.
+type yieldAgg struct {
+	productive, reverted, unknown float64
+	revertedCount                 int
+}
+
+// aggregateYieldBySession folds completed (ready) sessions within [start,end)
+// into per-project productive/reverted/unknown spend, the core windowing and
+// bucketing step of buildYieldResponse. Sessions are windowed by UpdatedAt —
+// their completion time — so a revert detected later never moves a session
+// into a newer window. Only sessions that have gone ready (non-empty
+// YieldState) are counted; spend from sessions still in flight is excluded.
+func aggregateYieldBySession(sessions []*session.SessionState, start, end int64) map[string]*yieldAgg {
+	byProject := make(map[string]*yieldAgg)
+	for _, st := range sessions {
+		if st == nil || st.YieldState == "" {
+			continue // not a completed, ready-captured session
+		}
+		if st.UpdatedAt < start || st.UpdatedAt >= end {
+			continue
+		}
+		cost := 0.0
+		if st.Metrics != nil {
+			cost = st.Metrics.EstimatedCostUSD
+		}
+		project := st.ProjectName
+		if project == "" {
+			project = "unknown"
+		}
+		a := byProject[project]
+		if a == nil {
+			a = &yieldAgg{}
+			byProject[project] = a
+		}
+		switch st.YieldState {
+		case session.YieldReverted:
+			a.reverted += cost
+			a.revertedCount++
+		case session.YieldProductive:
+			a.productive += cost
+		default: // YieldUnknown
+			a.unknown += cost
+		}
+	}
+	return byProject
+}
+
+// yieldProjectRow builds one project's row of the chart=yield response —
+// unknown (non-git) spend is reported separately and kept out of the ratio's
+// denominator.
+func yieldProjectRow(project string, a *yieldAgg) historyYieldProject {
+	total := a.productive + a.reverted
+	y := 0.0
+	if total > 0 {
+		y = a.productive / total
+	}
+	return historyYieldProject{
+		Project:        project,
+		ProductiveCost: a.productive,
+		RevertedCost:   a.reverted,
+		UnknownCost:    a.unknown,
+		TotalCost:      total,
+		Yield:          y,
+		RevertedCount:  a.revertedCount,
+	}
 }
 
 // historyForecastEnabled defaults to on; ?forecast=false|0 disables it.
@@ -949,7 +999,7 @@ func handleGetVersion(version string) http.HandlerFunc {
 	}
 	body, _ := json.Marshal(versionResp{Version: version})
 	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set(headerContentType, contentTypeJSON)
 		w.Write(body)
 	}
 }
@@ -985,7 +1035,7 @@ func handleGetAgents(allAgents []agent.Agent) http.HandlerFunc {
 		})
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set(headerContentType, contentTypeJSON)
 		json.NewEncoder(w).Encode(entries)
 	}
 }
@@ -1004,7 +1054,7 @@ type publishStatusResp struct {
 
 // writePublishStatus encodes the controller's current publish state as JSON.
 func writePublishStatus(w http.ResponseWriter, controller *relay.PublishController) {
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set(headerContentType, contentTypeJSON)
 	enabled, s := controller.Status()
 	if !enabled {
 		json.NewEncoder(w).Encode(publishStatusResp{Enabled: false})
@@ -1075,7 +1125,7 @@ func handleGetState(repo outbound.SessionRepository) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		sessions, err := repo.ListAll()
 		if err != nil {
-			http.Error(w, "internal error", http.StatusInternalServerError)
+			http.Error(w, errInternalErrorMsg, http.StatusInternalServerError)
 			return
 		}
 
@@ -1119,7 +1169,7 @@ func handleGetState(repo outbound.SessionRepository) http.HandlerFunc {
 			LastUpdated:  time.Now().UTC().Format(time.RFC3339),
 		}
 
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set(headerContentType, contentTypeJSON)
 		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")
 		enc.Encode(resp)
@@ -1138,7 +1188,7 @@ func handleDiagnosticsBundle(svc *services.DiagnosticsService) http.HandlerFunc 
 			http.Error(w, "failed to build diagnostics bundle", http.StatusInternalServerError)
 			return
 		}
-		w.Header().Set("Content-Type", "application/gzip")
+		w.Header().Set(headerContentType, "application/gzip")
 		w.Header().Set("Content-Disposition",
 			fmt.Sprintf(`attachment; filename="irrlicht-diag-%s.tar.gz"`, fileSafe(Version)))
 		w.Header().Set("Content-Length", strconv.Itoa(buf.Len()))

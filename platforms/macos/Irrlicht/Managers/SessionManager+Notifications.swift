@@ -238,7 +238,7 @@ final class NotificationClickForwarder: NSObject, UNUserNotificationCenterDelega
     }
 
     nonisolated func userNotificationCenter(
-        _ center: UNUserNotificationCenter,
+        _: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
@@ -257,8 +257,8 @@ final class NotificationClickForwarder: NSObject, UNUserNotificationCenterDelega
     // macOS for quiet, and forcing `.sound` here is what lets the sound leak
     // through even when the OS is suppressing the banner.
     nonisolated func userNotificationCenter(
-        _ center: UNUserNotificationCenter,
-        willPresent notification: UNNotification,
+        _: UNUserNotificationCenter,
+        willPresent _: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
         completionHandler(Self.presentationOptions(focusActive: focusMonitor.isFocusActive))

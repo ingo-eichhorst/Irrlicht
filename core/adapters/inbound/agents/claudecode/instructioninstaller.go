@@ -28,6 +28,10 @@ const (
 	taskEtaEndSentinel   = "<!-- END IRRLICHT MANAGED BLOCK (task-eta) -->"
 )
 
+// descriptionFieldLiteral is the backtick-quoted "`description`" carrier name
+// referenced by the managed instruction blocks below.
+const descriptionFieldLiteral = "`description`"
+
 // managedTaskEtaBlock is the full block (sentinels inclusive) written
 // verbatim. The lightest "emit periodically" phrasing won the 2026-05-31
 // emission experiment; the marker example stays minimal per the v1 contract.
@@ -78,9 +82,9 @@ and update it as you make progress:
 
 ` + "`total_rounds`" + ` is your estimate of the task's phases; ` + "`completed_rounds`" + `
 is how many you've finished. Emit the first marker by appending it to the
-` + "`description`" + ` of your first Bash call (never to the command itself).
+` + descriptionFieldLiteral + ` of your first Bash call (never to the command itself).
 After each phase you complete, emit the updated marker the same way:
-appended to the ` + "`description`" + ` of the next Bash call you make, or in your
+appended to the ` + descriptionFieldLiteral + ` of the next Bash call you make, or in your
 response text when no Bash call is coming.
 ` + taskEtaEndSentinel
 
@@ -111,7 +115,7 @@ summary of the overall task as a hidden marker, early in the task:
 <!-- {"marker":"irrlicht-summary","summary":"<one sentence: what this task is about>"} -->
 ` + "```" + `
 
-Emit it once near the start by appending it to the ` + "`description`" + ` of an
+Emit it once near the start by appending it to the ` + descriptionFieldLiteral + ` of an
 early Bash call (never to the command itself). Re-emit only if the task
 fundamentally changes. Keep it a short one-liner — under ~70 characters, plain
 prose, no secrets.

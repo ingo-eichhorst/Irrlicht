@@ -41,6 +41,18 @@ const activityDebounceWindow = 2 * time.Second
 // transcript on this interval catches the missed events.
 const staleWorkingRefreshInterval = 5 * time.Second
 
+// Logger component tags shared by SessionDetector's collaborators, split
+// across this file, session_detector_activity.go, session_detector_lifecycle.go,
+// session_detector_subagent.go, and pid_manager.go.
+const (
+	// logComponentSessionDetector tags every log line the detector's steady
+	// -state event handling emits.
+	logComponentSessionDetector = "session-detector"
+	// logComponentSessionDetectorSeed tags log lines emitted during the
+	// initial-scan seeding pass, distinct from steady-state handling.
+	logComponentSessionDetectorSeed = "session-detector-seed"
+)
+
 // compactHoldTimeout bounds the PreCompact force-working hold (#657). Normally
 // the hold clears when the manual compact_boundary lands, but an interrupted or
 // failed /compact may never write one — without a ceiling the session would be
@@ -505,7 +517,7 @@ func (d *SessionDetector) Run(ctx context.Context) error {
 	// Periodic liveness sweep: detect dead PIDs that kqueue missed.
 	go d.pidMgr.SweepDeadPIDs(ctx)
 
-	d.log.LogInfo("session-detector", "", "started — listening for transcript events")
+	d.log.LogInfo(logComponentSessionDetector, "", "started — listening for transcript events")
 
 	// Periodic refresh catches missed fswatcher events. When the subscriber
 	// channel overflows during concurrent bursts (multiple sessions + subagent
@@ -622,7 +634,7 @@ func (d *SessionDetector) handleTerminalUISignal(sig terminalUISignal) {
 			state.WaitingStartTime = nil
 		}
 		if err := d.repo.Save(state); err != nil {
-			d.log.LogError("session-detector", sig.sessionID,
+			d.log.LogError(logComponentSessionDetector, sig.sessionID,
 				fmt.Sprintf("failed to save terminal-UI update: %v", err))
 			return
 		}

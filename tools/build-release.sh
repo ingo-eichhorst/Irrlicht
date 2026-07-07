@@ -100,13 +100,13 @@ swift build -c release --arch arm64 --arch x86_64 2>&1 | tail -5
 cd "$ROOT_DIR"
 
 SWIFT_BIN="platforms/macos/.build/apple/Products/Release/Irrlicht"
-if [ ! -f "$SWIFT_BIN" ]; then
+if [[ ! -f "$SWIFT_BIN" ]]; then
     # Fallback path for single-arch or different swift build layouts
     SWIFT_BIN=$(find platforms/macos/.build -name Irrlicht -type f -perm +111 | grep -i release | head -1)
 fi
 
-if [ -z "$SWIFT_BIN" ] || [ ! -f "$SWIFT_BIN" ]; then
-    echo "ERROR: Could not find built Irrlicht binary"
+if [[ -z "$SWIFT_BIN" ]] || [[ ! -f "$SWIFT_BIN" ]]; then
+    echo "ERROR: Could not find built Irrlicht binary" >&2
     exit 1
 fi
 echo "  Built: $SWIFT_BIN"
@@ -142,11 +142,11 @@ echo "  Embedded daemon, irrlicht-focus, and irrlicht-ls in app bundle"
 # binary (the SwiftPM-built executable only has @loader_path, which points
 # at Contents/MacOS/ inside the bundle).
 SPARKLE_SRC="platforms/macos/.build/apple/Products/Release/Sparkle.framework"
-if [ ! -d "$SPARKLE_SRC" ]; then
+if [[ ! -d "$SPARKLE_SRC" ]]; then
     SPARKLE_SRC=$(find platforms/macos/.build -name "Sparkle.framework" -type d -not -path "*artifacts*" | grep -i release | head -1)
 fi
-if [ -z "$SPARKLE_SRC" ] || [ ! -d "$SPARKLE_SRC" ]; then
-    echo "ERROR: Could not find Sparkle.framework in SwiftPM build output"
+if [[ -z "$SPARKLE_SRC" ]] || [[ ! -d "$SPARKLE_SRC" ]]; then
+    echo "ERROR: Could not find Sparkle.framework in SwiftPM build output" >&2
     exit 1
 fi
 mkdir -p "$APP_CONTENTS/Frameworks"
@@ -209,14 +209,14 @@ echo "  Created $APP_BUNDLE"
 # Embed provisioning profile — required for restricted entitlements (focus-status)
 # under Developer ID distribution. Set PROVISIONING_PROFILE to the path of the
 # .provisionprofile downloaded from developer.apple.com.
-if [ -n "${PROVISIONING_PROFILE:-}" ]; then
-    if [ ! -f "$PROVISIONING_PROFILE" ]; then
-        echo "ERROR: PROVISIONING_PROFILE set but file not found: $PROVISIONING_PROFILE"
+if [[ -n "${PROVISIONING_PROFILE:-}" ]]; then
+    if [[ ! -f "$PROVISIONING_PROFILE" ]]; then
+        echo "ERROR: PROVISIONING_PROFILE set but file not found: $PROVISIONING_PROFILE" >&2
         exit 1
     fi
     cp "$PROVISIONING_PROFILE" "$APP_CONTENTS/embedded.provisionprofile"
     echo "  Embedded provisioning profile: $PROVISIONING_PROFILE"
-elif [ -n "${DEVELOPER_ID:-}" ]; then
+elif [[ -n "${DEVELOPER_ID:-}" ]]; then
     echo "WARNING: DEVELOPER_ID is set but PROVISIONING_PROFILE is not."
     echo "         The focus-status entitlement requires a Developer ID provisioning"
     echo "         profile to be honoured at runtime. Download one from developer.apple.com"
@@ -236,20 +236,20 @@ SPARKLE_VERSION_DIR="$SPARKLE_FW/Versions/Current"
 sign_sparkle() {
     local sign_args=("$@")
     for xpc in "$SPARKLE_VERSION_DIR"/XPCServices/*.xpc; do
-        [ -d "$xpc" ] || continue
+        [[ -d "$xpc" ]] || continue
         codesign --force "${sign_args[@]}" "$xpc"
     done
-    if [ -d "$SPARKLE_VERSION_DIR/Updater.app" ]; then
+    if [[ -d "$SPARKLE_VERSION_DIR/Updater.app" ]]; then
         codesign --force "${sign_args[@]}" "$SPARKLE_VERSION_DIR/Updater.app"
     fi
-    if [ -f "$SPARKLE_VERSION_DIR/Autoupdate" ]; then
+    if [[ -f "$SPARKLE_VERSION_DIR/Autoupdate" ]]; then
         codesign --force "${sign_args[@]}" "$SPARKLE_VERSION_DIR/Autoupdate"
     fi
     codesign --force "${sign_args[@]}" "$SPARKLE_VERSION_DIR/Sparkle"
     codesign --force "${sign_args[@]}" "$SPARKLE_FW"
 }
 
-if [ -n "${DEVELOPER_ID:-}" ]; then
+if [[ -n "${DEVELOPER_ID:-}" ]]; then
     echo "Signing app bundle with Developer ID..."
     SIGN_IDENTITY="Developer ID Application: ${DEVELOPER_ID}"
     sign_sparkle --sign "$SIGN_IDENTITY" --options runtime --timestamp
@@ -269,7 +269,7 @@ if [ -n "${DEVELOPER_ID:-}" ]; then
     GTA_TRUE=$(echo "$ENTS_XML" | xmllint --xpath \
       "boolean(/plist/dict/key[text()='com.apple.security.get-task-allow']/following-sibling::*[1][self::true])" \
       - 2>/dev/null)
-    [ "$GTA_TRUE" = "true" ] && { echo "ERROR: get-task-allow=true in signed bundle — notarization would reject"; exit 1; } || true
+    [[ "$GTA_TRUE" = "true" ]] && { echo "ERROR: get-task-allow=true in signed bundle — notarization would reject" >&2; exit 1; } || true
     echo "  Signed $APP_BUNDLE (Developer ID); get-task-allow not true"
 else
     echo "Signing app bundle (ad-hoc — set DEVELOPER_ID to use Developer ID cert)..."
@@ -307,7 +307,7 @@ echo "  Created $BUILD_DIR/$DMG_NAME"
 # shipped unsigned DMGs; harmless for Gatekeeper, but the release-skill
 # verification flags it). Must happen BEFORE notarization so the ticket
 # covers the signed bytes — signing after stapling would invalidate it.
-if [ -n "${DEVELOPER_ID:-}" ]; then
+if [[ -n "${DEVELOPER_ID:-}" ]]; then
     echo "  Signing DMG with Developer ID..."
     codesign --force --sign "Developer ID Application: ${DEVELOPER_ID}" \
         --timestamp "$BUILD_DIR/$DMG_NAME"
@@ -316,7 +316,7 @@ if [ -n "${DEVELOPER_ID:-}" ]; then
 fi
 
 # ── 4b. Notarize and staple DMG ────────────────────────────────────────
-if [ -n "${NOTARYTOOL_KEYCHAIN_PROFILE:-}" ]; then
+if [[ -n "${NOTARYTOOL_KEYCHAIN_PROFILE:-}" ]]; then
     echo ""
     echo "Notarizing DMG..."
     xcrun notarytool submit "$BUILD_DIR/$DMG_NAME" \
@@ -326,8 +326,8 @@ if [ -n "${NOTARYTOOL_KEYCHAIN_PROFILE:-}" ]; then
     xcrun stapler staple "$BUILD_DIR/$DMG_NAME"
     xcrun stapler validate "$BUILD_DIR/$DMG_NAME"
     echo "  Notarized and stapled $DMG_NAME"
-elif [ -n "${DEVELOPER_ID:-}" ]; then
-    echo "ERROR: DEVELOPER_ID is set but NOTARYTOOL_KEYCHAIN_PROFILE is not."
+elif [[ -n "${DEVELOPER_ID:-}" ]]; then
+    echo "ERROR: DEVELOPER_ID is set but NOTARYTOOL_KEYCHAIN_PROFILE is not." >&2
     echo "       A Developer ID-signed DMG must be notarized — without it Gatekeeper blocks launch."
     echo "       Create a profile first: xcrun notarytool store-credentials <profile>"
     exit 1

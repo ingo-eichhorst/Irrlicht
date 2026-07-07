@@ -54,24 +54,30 @@ while [[ $# -gt 0 ]]; do
 done
 [[ "$ONLY" == "linux" ]] && RUN_LINUX=1
 
-want() { [[ -z "$ONLY" || "$ONLY" == "$1" ]]; }
+want() {
+  local group="$1"
+  [[ -z "$ONLY" || "$ONLY" == "$group" ]]
+  return $?
+}
 
 NAMES=()
 RESULTS=()
 overall=0
+SEPARATOR="=============================================================="
 
 run_gate() {
   local name="$1"; shift
   echo
-  echo "=============================================================="
+  echo "$SEPARATOR"
   echo "  $name"
-  echo "=============================================================="
+  echo "$SEPARATOR"
   if "$@"; then
     NAMES+=("$name"); RESULTS+=("PASS")
   else
     NAMES+=("$name"); RESULTS+=("FAIL")
     overall=1
   fi
+  return 0
 }
 
 # ---- go group (mirrors test.yml) ----------------------------------------
@@ -94,7 +100,11 @@ if want go; then
 fi
 
 # ---- web group (mirrors web-test.yml) -----------------------------------
-web_tree() { ( cd "$1" && npm ci && npm test ); }
+web_tree() {
+  local dir="$1"
+  ( cd "$dir" && npm ci && npm test )
+  return $?
+}
 
 if want web; then
   run_gate "web: platforms/web"             web_tree platforms/web
@@ -129,9 +139,9 @@ if [[ "$RUN_LINUX" == 1 ]]; then
 fi
 
 echo
-echo "=============================================================="
+echo "$SEPARATOR"
 echo "  summary"
-echo "=============================================================="
+echo "$SEPARATOR"
 for i in "${!NAMES[@]}"; do
   printf "  %-58s %s\n" "${NAMES[$i]}" "${RESULTS[$i]}"
 done

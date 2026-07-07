@@ -24,7 +24,7 @@ func (d *SessionDetector) onRemoved(ev agent.Event) {
 		return
 	}
 
-	d.log.LogInfo("session-detector", ev.SessionID, "session removed")
+	d.log.LogInfo(logComponentSessionDetector, ev.SessionID, "session removed")
 
 	// Cancel any pending debounce timer for this session.
 	d.debounceMu.Lock()
@@ -69,7 +69,7 @@ func (d *SessionDetector) onRemoved(ev agent.Event) {
 // surviving file so subsequent activity events and metric refreshes follow it.
 func (d *SessionDetector) onRelocated(ev agent.Event, newPath string) {
 	newProjectDir := filepath.Base(filepath.Dir(newPath))
-	d.log.LogInfo("session-detector", ev.SessionID,
+	d.log.LogInfo(logComponentSessionDetector, ev.SessionID,
 		fmt.Sprintf("transcript relocated to %s — session still alive, not marking ready", newProjectDir))
 
 	// Keep the project-dir tracking current for parent derivation.
@@ -97,7 +97,7 @@ func (d *SessionDetector) onRelocated(ev agent.Event, newPath string) {
 		state.TranscriptPath = newPath
 		state.UpdatedAt = time.Now().Unix()
 		if err := d.repo.Save(state); err != nil {
-			d.log.LogError("session-detector", ev.SessionID,
+			d.log.LogError(logComponentSessionDetector, ev.SessionID,
 				fmt.Sprintf("failed to save relocated transcript path: %v", err))
 			return
 		}
@@ -164,7 +164,7 @@ func (d *SessionDetector) onRemovedLocked(state *session.SessionState, ev agent.
 	d.record(lifecycle.Event{Kind: lifecycle.KindStateTransition, SessionID: ev.SessionID, PrevState: prevState, NewState: session.StateReady, Reason: "transcript removed"})
 
 	if err := d.repo.Save(state); err != nil {
-		d.log.LogError("session-detector", ev.SessionID,
+		d.log.LogError(logComponentSessionDetector, ev.SessionID,
 			fmt.Sprintf("failed to save removal state: %v", err))
 		return
 	}
@@ -322,7 +322,7 @@ func (d *SessionDetector) seedFromDisk() {
 		// new activity.
 		if newState != state.State && newState != session.StateWorking {
 			if reason != "" {
-				d.log.LogInfo("session-detector-seed", state.SessionID,
+				d.log.LogInfo(logComponentSessionDetectorSeed, state.SessionID,
 					fmt.Sprintf("re-evaluated %s on startup", reason))
 			}
 			state.State = newState
@@ -349,10 +349,10 @@ func (d *SessionDetector) seedFromDisk() {
 	for _, state := range d.enricher.BackfillMetadata(allowed) {
 		state.UpdatedAt = time.Now().Unix()
 		if err := d.repo.Save(state); err != nil {
-			d.log.LogError("session-detector-seed", state.SessionID,
+			d.log.LogError(logComponentSessionDetectorSeed, state.SessionID,
 				fmt.Sprintf("failed to backfill metadata: %v", err))
 		} else {
-			d.log.LogInfo("session-detector-seed", state.SessionID,
+			d.log.LogInfo(logComponentSessionDetectorSeed, state.SessionID,
 				fmt.Sprintf("backfilled project=%s cwd=%s", state.ProjectName, state.CWD))
 			d.broadcast(outbound.PushTypeUpdated, state)
 		}

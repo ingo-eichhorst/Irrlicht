@@ -22,6 +22,12 @@ enum AppleScriptRunner {
     /// Callers typically check `result == "1"` vs `"0"` — scripts should
     /// return those literals to signal match/no-match so permission
     /// failures don't silently look like successes.
+    // SonarQube swift:S1523 flags NSAppleScript execution unconditionally.
+    // This one is safe: every caller builds `source` from a fixed,
+    // hardcoded template (see TerminalAppActivator/ITermActivator/
+    // SessionInputActivator) and only interpolates values that went through
+    // `escape()` above into a quoted-string-literal position — never into a
+    // position that could inject AppleScript syntax.
     static func run(_ source: String, tag: String) -> String? {
         var err: NSDictionary?
         guard let script = NSAppleScript(source: source) else {

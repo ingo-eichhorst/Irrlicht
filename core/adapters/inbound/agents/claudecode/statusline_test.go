@@ -14,7 +14,7 @@ import (
 	"irrlicht/core/internal/contracttesting"
 )
 
-type fakeRateLimitTarget struct {
+type fakeRateLimitIngester struct {
 	calls []rateLimitCall
 }
 
@@ -23,11 +23,11 @@ type rateLimitCall struct {
 	snap *session.RateLimitSnapshot
 }
 
-func (f *fakeRateLimitTarget) IngestRateLimit(path string, snap *session.RateLimitSnapshot) {
+func (f *fakeRateLimitIngester) IngestRateLimit(path string, snap *session.RateLimitSnapshot) {
 	f.calls = append(f.calls, rateLimitCall{path: path, snap: snap})
 }
 
-func (f *fakeRateLimitTarget) reset() {
+func (f *fakeRateLimitIngester) reset() {
 	f.calls = nil
 }
 
@@ -39,7 +39,7 @@ func (silentLogger) LogProcessingTime(string, string, int64, int, string) {}
 func (silentLogger) Close() error                                         { return nil }
 
 func TestStatuslineHandler_IngestsRateLimits(t *testing.T) {
-	target := &fakeRateLimitTarget{}
+	target := &fakeRateLimitIngester{}
 	h := NewStatuslineHandler(target, nil, silentLogger{})
 
 	body := `{
@@ -76,7 +76,7 @@ func TestStatuslineHandler_IngestsRateLimits(t *testing.T) {
 }
 
 func TestStatuslineHandler_NoRateLimitsBlockIsOk(t *testing.T) {
-	target := &fakeRateLimitTarget{}
+	target := &fakeRateLimitIngester{}
 	h := NewStatuslineHandler(target, nil, silentLogger{})
 
 	body := `{"session_id":"abc","transcript_path":"/tmp/abc.jsonl"}`
@@ -93,7 +93,7 @@ func TestStatuslineHandler_NoRateLimitsBlockIsOk(t *testing.T) {
 }
 
 func TestStatuslineHandler_RejectsMissingTranscriptPath(t *testing.T) {
-	h := NewStatuslineHandler(&fakeRateLimitTarget{}, nil, silentLogger{})
+	h := NewStatuslineHandler(&fakeRateLimitIngester{}, nil, silentLogger{})
 	body := `{"session_id":"abc"}`
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/x", bytes.NewBufferString(body))
 	rr := httptest.NewRecorder()
@@ -104,7 +104,7 @@ func TestStatuslineHandler_RejectsMissingTranscriptPath(t *testing.T) {
 }
 
 func TestStatuslineHandler_RejectsNonPost(t *testing.T) {
-	h := NewStatuslineHandler(&fakeRateLimitTarget{}, nil, silentLogger{})
+	h := NewStatuslineHandler(&fakeRateLimitIngester{}, nil, silentLogger{})
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/x", nil)
 	rr := httptest.NewRecorder()
 	h(rr, req)
@@ -119,7 +119,7 @@ func TestStatuslineHandler_SampledAtUsesClock(t *testing.T) {
 	statuslineNow = func() time.Time { return pinned }
 	t.Cleanup(func() { statuslineNow = prev })
 
-	target := &fakeRateLimitTarget{}
+	target := &fakeRateLimitIngester{}
 	h := NewStatuslineHandler(target, nil, silentLogger{})
 	body := `{"transcript_path":"/tmp/x.jsonl","rate_limits":{"five_hour":{"used_percentage":1,"resets_at":2}}}`
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/x", bytes.NewBufferString(body))
@@ -266,7 +266,7 @@ func TestChainStatuslineCommand_MigratesOldWrapsToV3(t *testing.T) {
 }
 
 func TestStatuslineHandler_ConsentGateDropsWhenNotGranted(t *testing.T) {
-	target := &fakeRateLimitTarget{}
+	target := &fakeRateLimitIngester{}
 	h := NewStatuslineHandler(target, fakeGate(false), silentLogger{})
 
 	body := `{
@@ -294,7 +294,7 @@ func TestStatuslineHandler_ConsentGateDropsWhenNotGranted(t *testing.T) {
 // pending or denied, ingested once granted, and dropped again once
 // revoked.
 func TestStatuslineHandler_PermissionGateContract(t *testing.T) {
-	target := &fakeRateLimitTarget{}
+	target := &fakeRateLimitIngester{}
 	gate := &mutableGate{}
 	h := NewStatuslineHandler(target, gate, silentLogger{})
 	body := `{

@@ -64,8 +64,8 @@ class MockWebSocket {
     this.readyState = 0; // CONNECTING
     global.lastMockWebSocket = this;
   }
-  addEventListener() {}
-  send() {}
+  addEventListener() { /* unused: tests dispatch via onopen/onmessage/onerror/onclose property assignment instead */ }
+  send() { /* unused: no test currently asserts on outgoing frames */ }
   close() {
     this.readyState = 3; // CLOSED
     if (this.onclose) this.onclose({ code: 1000, reason: '' });

@@ -43,6 +43,10 @@ import (
 
 const modelID = "mock-quota-model"
 
+// contentTypeHeader is the HTTP header name set on every response this mock
+// writes.
+const contentTypeHeader = "Content-Type"
+
 func main() {
 	addr := flag.String("addr", "127.0.0.1:18766", "bind address")
 	errorStatus := flag.Int("error-status", http.StatusForbidden, "HTTP status to return on requests after the first (default 403, non-retryable; set 429 to reproduce AI-SDK retry-forever behaviour)")
@@ -54,7 +58,7 @@ func main() {
 
 	// Provider discovery: opencode/the AI SDK may GET the model list.
 	mux.HandleFunc("/v1/models", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set(contentTypeHeader, "application/json")
 		fmt.Fprintf(w, `{"object":"list","data":[{"id":%q,"object":"model","created":0,"owned_by":"mock"}]}`, modelID)
 	})
 
@@ -72,7 +76,7 @@ func main() {
 		}
 		// OpenAI's documented insufficient_quota body, returned with a status
 		// the AI-SDK will NOT retry (403 default; see file header for why).
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set(contentTypeHeader, "application/json")
 		w.WriteHeader(*errorStatus)
 		_, _ = fmt.Fprintln(w, `{"error":{"message":"You exceeded your current quota, please check your plan and billing details.","type":"insufficient_quota","param":null,"code":"insufficient_quota"}}`)
 	})
@@ -97,7 +101,7 @@ func main() {
 // content delta ("ok") then a finish_reason: stop chunk, then [DONE]. This is
 // the SSE shape the @ai-sdk/openai-compatible provider opencode uses expects.
 func streamHappyPath(w http.ResponseWriter) {
-	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set(contentTypeHeader, "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.WriteHeader(http.StatusOK)

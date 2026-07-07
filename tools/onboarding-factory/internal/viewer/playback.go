@@ -31,6 +31,11 @@ import (
 // `+` and `.` are both legal characters in archive names.
 var archiveNameRE = regexp.MustCompile(`^[A-Za-z0-9._:+-]+$`)
 
+// playbackModeViewerInternal is the only supported Playback.Mode value
+// today — kept as a string field (rather than dropped) for a possible
+// future isolated-daemon mode.
+const playbackModeViewerInternal = "viewer-internal"
+
 // Playback represents one active replay session. Only one Playback may
 // be active per Manager at a time — starting a new one stops the
 // previous, mirroring how a real daemon serves one set of sessions.
@@ -39,7 +44,7 @@ type Playback struct {
 	Agent    string
 	Subtree  string // "scenarios" | "regressions"
 	Scenario string
-	Mode     string // "viewer-internal" — kept as a field for future modes
+	Mode     string // playbackModeViewerInternal — kept as a field for future modes
 	Speed    float64
 
 	StartedAt time.Time
@@ -335,7 +340,7 @@ func (m *PlaybackManager) StartViewerInternal(agent, subtree, scenario string, s
 		Agent:        agent,
 		Subtree:      subtree,
 		Scenario:     scenario,
-		Mode:         "viewer-internal",
+		Mode:         playbackModeViewerInternal,
 		Speed:        speed,
 		StartedAt:    time.Now().UTC(),
 		broadcaster:  m.broadcaster,
@@ -534,14 +539,14 @@ func (m *PlaybackManager) handleStart(w http.ResponseWriter, r *http.Request) {
 		req.Speed = 1.0
 	}
 	if req.Mode == "" {
-		req.Mode = "viewer-internal"
+		req.Mode = playbackModeViewerInternal
 	}
 
 	// Mode is currently a single-value field reserved for future
 	// extension (e.g. a real isolated-daemon mode someday). Anything
-	// other than empty / "viewer-internal" is rejected so a caller
-	// doesn't silently get a different behavior than they expected.
-	if req.Mode != "" && req.Mode != "viewer-internal" {
+	// other than empty / playbackModeViewerInternal is rejected so a
+	// caller doesn't silently get a different behavior than they expected.
+	if req.Mode != "" && req.Mode != playbackModeViewerInternal {
 		http.Error(w, "unsupported mode: "+req.Mode, http.StatusBadRequest)
 		return
 	}

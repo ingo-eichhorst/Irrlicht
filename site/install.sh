@@ -93,6 +93,8 @@ uninstall_previous() {
                     kill "$pid" 2>/dev/null || true
                     removed_something=1
                     ;;
+                *)
+                    ;;
             esac
         done
     elif pgrep -x irrlichd >/dev/null 2>&1; then
@@ -113,13 +115,11 @@ uninstall_previous() {
 
     # Linux: stop/disable the systemd user unit if a daemon-only install
     # registered one.
-    if [ "${PLATFORM:-}" = "linux" ] && command -v systemctl >/dev/null 2>&1; then
-        if [ -f "$HOME/.config/systemd/user/irrlichd.service" ]; then
-            systemctl --user disable --now irrlichd.service 2>/dev/null || true
-            rm -f "$HOME/.config/systemd/user/irrlichd.service"
-            systemctl --user daemon-reload 2>/dev/null || true
-            removed_something=1
-        fi
+    if [ "${PLATFORM:-}" = "linux" ] && command -v systemctl >/dev/null 2>&1 && [ -f "$HOME/.config/systemd/user/irrlichd.service" ]; then
+        systemctl --user disable --now irrlichd.service 2>/dev/null || true
+        rm -f "$HOME/.config/systemd/user/irrlichd.service"
+        systemctl --user daemon-reload 2>/dev/null || true
+        removed_something=1
     fi
 
     # Remove app bundle

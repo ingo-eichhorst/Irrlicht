@@ -130,12 +130,11 @@ RUN_CWD_SQL="${RUN_CWD//\'/\'\'}"
 # global config. The $schema is injected if the blob omits it so opencode
 # validates it as a real config. An empty/absent blob writes NOTHING, so
 # every other opencode cell keeps using the global-config-only path.
-if [[ -n "${SETTINGS_PATH:-}" && -f "$SETTINGS_PATH" ]]; then
-  if [[ "$(jq -r 'if (type=="object" and (.|length)>0) then "yes" else "no" end' "$SETTINGS_PATH" 2>/dev/null)" == "yes" ]]; then
-    jq '. + (if has("$schema") then {} else {"$schema":"https://opencode.ai/config.json"} end)' \
-      "$SETTINGS_PATH" > "$RUN_CWD/opencode.json"
-    echo "[driver] seeded project config $RUN_CWD/opencode.json from recipe settings" >&2
-  fi
+if [[ -n "${SETTINGS_PATH:-}" && -f "$SETTINGS_PATH" ]] \
+   && [[ "$(jq -r 'if (type=="object" and (.|length)>0) then "yes" else "no" end' "$SETTINGS_PATH" 2>/dev/null)" == "yes" ]]; then
+  jq '. + (if has("$schema") then {} else {"$schema":"https://opencode.ai/config.json"} end)' \
+    "$SETTINGS_PATH" > "$RUN_CWD/opencode.json"
+  echo "[driver] seeded project config $RUN_CWD/opencode.json from recipe settings" >&2
 fi
 
 OPENCODE_DB="$HOME/.local/share/opencode/opencode.db"
@@ -146,6 +145,11 @@ fi
 
 DEADLINE=$(( $(date +%s) + TIMEOUT_S ))
 EXIT_REASON="ok"
+# Shared exit-reason/sqlite literals (S1192: defined once here, referenced at
+# every site below instead of repeating the string).
+NONZERO_2='nonzero(2)'
+TIMEOUT_REASON='timeout'
+SQLITE_TIMEOUT_CMD='.timeout 5000'
 
 # Per-slot session ids (1-based; index 0 unused). Each slot is an
 # independent `opencode run` chain in RUN_CWD. The initial session is slot 1;
@@ -187,11 +191,11 @@ run_live() {
   set +e   # this path manages failures via EXIT_REASON, not set -e aborts
   command -v tmux >/dev/null 2>&1 || {
     echo "[driver] live mode requires tmux (not found)" >&2
-    echo "nonzero(2)" > "$STAGING/driver.exit-reason"
+    echo "$NONZERO_2" > "$STAGING/driver.exit-reason"
     exit 1
   }
 
-  local SESSION="ocdrv-$$-$(date +%s)"
+  local session="ocdrv-$$-$(date +%s)"
   # Per-turn baseline: the terminal-step-finish high-water mark captured at the
   # moment a send fires. oc_wait_turn waits for the terminal count to strictly
   # exceed it — exactly one NEW `stop` per turn. (A raw all-step count compared
@@ -199,18 +203,18 @@ run_live() {
   # reason="tool-calls" for every mid-turn tool iteration, so a single
   # multi-step turn would push the total past the turn counter and make the
   # NEXT wait_turn return immediately on an unprocessed prompt.)
-  local TURN_BASELINE=0
+  local turn_baseline=0 # NOSONAR shelldre:S1481 — false positive, read/written throughout run_live() below (e.g. lines 343, 348, 361-369, 374, 438)
   # Set once oc_sigkill has killed the live opencode process: there is no longer
   # a turn to await, so oc_wait_turn returns immediately instead of polling a
   # now-static counter to the deadline. oc_restart clears it (fresh process).
-  local LIVE_DEAD=0
+  local live_dead=0 # NOSONAR shelldre:S1481 — false positive, read/written throughout run_live() below (e.g. lines 355, 550, 567)
 
-  echo "[driver] live mode: launching opencode TUI (tmux=$SESSION, cwd=$RUN_CWD)" >&2
-  tmux kill-session -t "$SESSION" 2>/dev/null || true
-  tmux new-session -d -s "$SESSION" -x 200 -y 50 -c "$RUN_CWD" "opencode" \
+  echo "[driver] live mode: launching opencode TUI (tmux=$session, cwd=$RUN_CWD)" >&2
+  tmux kill-session -t "$session" 2>/dev/null || true
+  tmux new-session -d -s "$session" -x 200 -y 50 -c "$RUN_CWD" "opencode" \
     >>"$DRIVER_LOG.stdout" 2>>"$DRIVER_LOG.stderr"
   # Always tear the TUI down, even on an error/timeout exit below.
-  trap 'tmux kill-session -t "$SESSION" 2>/dev/null || true' EXIT
+  trap 'tmux kill-session -t "$session" 2>/dev/null || true' EXIT
 
   # TERMINAL step-finish parts across OUR cwd's top-level sessions = completed
   # turns. opencode emits a step-finish per STEP, so only the terminal one —
@@ -233,7 +237,7 @@ run_live() {
   # polling to the deadline. Counting across all of the cwd's sessions (not just
   # the active one) keeps the high-water mark monotonic across a /new reset.
   oc_turn_total() {
-    sqlite3 -cmd ".timeout 5000" "$OPENCODE_DB" \
+    sqlite3 -cmd "$SQLITE_TIMEOUT_CMD" "$OPENCODE_DB" \
       "SELECT count(*) FROM part p JOIN session s ON p.session_id = s.id
        WHERE s.directory = '$RUN_CWD_SQL' AND (s.parent_id IS NULL OR s.parent_id = '')
          AND json_extract(p.data,'\$.type') = 'step-finish'
@@ -249,7 +253,7 @@ run_live() {
   # and the turn completes on `stop`; counting the broad set there false-settled
   # the interrupt (#492). Counting interrupted-only makes a no-op ESC fail loudly.
   oc_interrupted_total() {
-    sqlite3 -cmd ".timeout 5000" "$OPENCODE_DB" \
+    sqlite3 -cmd "$SQLITE_TIMEOUT_CMD" "$OPENCODE_DB" \
       "SELECT count(*) FROM part p JOIN session s ON p.session_id = s.id
        WHERE s.directory = '$RUN_CWD_SQL' AND (s.parent_id IS NULL OR s.parent_id = '')
          AND json_extract(p.data,'\$.type') = 'step-finish'
@@ -260,7 +264,7 @@ run_live() {
   # for the input affordance to render before the first send, then a margin.
   local waited=0 ready=0
   while (( $(remaining_seconds) > 0 )) && (( waited < 40 )); do
-    if tmux capture-pane -t "$SESSION" -p 2>/dev/null | grep -q "Ask anything"; then
+    if tmux capture-pane -t "$session" -p 2>/dev/null | grep -q "Ask anything"; then
       ready=1; break
     fi
     sleep 1; waited=$((waited + 1))
@@ -283,7 +287,7 @@ run_live() {
   # 24-char prefix never wraps; the prompt may carry a leading glyph so we match
   # the prefix substring, not a line anchor.
   oc_composer_holds() {
-    tmux capture-pane -t "$SESSION" -p 2>/dev/null | tail -12 \
+    tmux capture-pane -t "$session" -p 2>/dev/null | tail -12 \
       | grep -qF "${1:0:24}"
   }
 
@@ -296,13 +300,13 @@ run_live() {
   # has not cleared by then, re-press Enter ONCE and proceed regardless.
   oc_flush() {
     local prefix="$1" waited=0 cap=30
-    tmux send-keys -t "$SESSION" Enter
+    tmux send-keys -t "$session" Enter
     while (( $(remaining_seconds) > 0 )) && (( waited < cap )); do
       sleep 1; waited=$((waited + 1))
       oc_composer_holds "$prefix" || return 0
       if (( waited == cap / 2 )); then
         echo "[driver] live: composer still holds input after ${waited}s, re-pressing Enter" >&2
-        tmux send-keys -t "$SESSION" Enter
+        tmux send-keys -t "$session" Enter
       fi
     done
     echo "[driver] live: composer did not confirm flush within ${cap}s; proceeding" >&2
@@ -312,7 +316,7 @@ run_live() {
   oc_send() {
     local text="$1" tries=0
     while (( tries < 3 )); do
-      tmux send-keys -t "$SESSION" -l -- "$text"
+      tmux send-keys -t "$session" -l -- "$text"
       sleep 0.5
       # Confirm the keystrokes landed (boot splash can still eat them). Scan the
       # FULL pane, not just the composer slice: on the first send the composer
@@ -320,7 +324,7 @@ run_live() {
       # mid-pane, not in the bottom box), so a bottom-only match would miss it
       # and retype. The input box is 200 cols wide so a 24-char prefix never
       # wraps.
-      if tmux capture-pane -t "$SESSION" -p 2>/dev/null | grep -qF "${text:0:24}"; then
+      if tmux capture-pane -t "$session" -p 2>/dev/null | grep -qF "${text:0:24}"; then
         break
       fi
       tries=$((tries + 1))
@@ -336,39 +340,39 @@ run_live() {
     # turn that completes before oc_flush confirms the composer cleared does not
     # get folded INTO its own baseline — which would make its wait_turn need an
     # extra terminal step-finish that never comes and time out.
-    TURN_BASELINE=$(oc_turn_total)
+    turn_baseline=$(oc_turn_total)
     # Press Enter and wait for the composer to FLUSH (text submitted + cleared)
     # before returning — a lingering composer would let the next input merge
     # into this one. (See oc_flush.)
     oc_flush "$text"
-    echo "[driver] live send (terminal baseline=$TURN_BASELINE): ${text:0:60}" >&2
+    echo "[driver] live send (terminal baseline=$turn_baseline): ${text:0:60}" >&2
   }
 
   oc_wait_turn() {
     local now
     # The live opencode process was SIGKILLed (oc_sigkill) and not restarted —
     # no further turn can land, so don't burn the budget polling a dead store.
-    if (( LIVE_DEAD == 1 )); then
+    if (( live_dead == 1 )); then
       echo "[driver] live wait_turn: process killed, nothing to await" >&2
       return 0
     fi
     while (( $(remaining_seconds) > 0 )); do
       now=$(oc_turn_total)
-      if (( now > TURN_BASELINE )); then
-        echo "[driver] live wait_turn: terminal step-finish total=$now (> baseline $TURN_BASELINE)" >&2
+      if (( now > turn_baseline )); then
+        echo "[driver] live wait_turn: terminal step-finish total=$now (> baseline $turn_baseline)" >&2
         # Advance the baseline to the turn we just observed so the NEXT
         # wait_turn waits for the FOLLOWING turn instead of returning instantly
         # on this same count. This is what lets a queued mid_turn_send turn be
         # awaited (send sets baseline=B; wait #1 → B+1, baseline:=B+1; the queued
         # turn → B+2 > B+1, wait #2 returns correctly) and stops two consecutive
         # wait_turns from both settling on one turn.
-        TURN_BASELINE=$now
+        turn_baseline=$now
         return 0
       fi
       sleep 2
     done
-    echo "[driver] live wait_turn: timeout (total=$(oc_turn_total), needed > baseline $TURN_BASELINE)" >&2
-    EXIT_REASON="timeout"
+    echo "[driver] live wait_turn: timeout (total=$(oc_turn_total), needed > baseline $turn_baseline)" >&2
+    EXIT_REASON="$TIMEOUT_REASON"
     return 1
   }
 
@@ -379,7 +383,7 @@ run_live() {
   # daemon stays `working` with no flicker (the queued-mid-turn-message cell).
   # Reuse the composer landing/flush check from oc_send (the composer accepts
   # input during a turn), but DELIBERATELY skip the turn-detection bookkeeping:
-  # no TURN_BASELINE snapshot/bump here, because this send does not start its own
+  # no turn_baseline snapshot/bump here, because this send does not start its own
   # observable turn boundary at submit time. A SUBSEQUENT wait_turn waits for the
   # queued message to run as the next turn (its terminal step-finish bumps the
   # count past whatever baseline the preceding oc_send set). The flush confirms
@@ -387,16 +391,16 @@ run_live() {
   oc_mid_turn_send() {
     local text="$1" tries=0
     while (( tries < 3 )); do
-      tmux send-keys -t "$SESSION" -l -- "$text"
+      tmux send-keys -t "$session" -l -- "$text"
       sleep 0.5
-      if tmux capture-pane -t "$SESSION" -p 2>/dev/null | grep -qF "${text:0:24}"; then
+      if tmux capture-pane -t "$session" -p 2>/dev/null | grep -qF "${text:0:24}"; then
         break
       fi
       tries=$((tries + 1))
       echo "[driver] live: mid-turn send did not register (try $tries), retrying" >&2
       sleep 1
     done
-    # NO TURN_BASELINE snapshot/bump — the queued message does not open its own
+    # NO turn_baseline snapshot/bump — the queued message does not open its own
     # turn at submit time; the next wait_turn rides the preceding send's baseline.
     oc_flush "$text"
     echo "[driver] live mid_turn_send (queued, no baseline bump): ${text:0:60}" >&2
@@ -418,20 +422,20 @@ run_live() {
   #   - a non-interrupted terminal part appears first (stop/length/error) → the
   #     ESC was a no-op; FAIL LOUDLY (return 1) so the run is not promoted
   #   - neither within the budget        → timeout (return 1)
-  # On settle, ADVANCE the shared TURN_BASELINE to the current terminal total so
+  # On settle, ADVANCE the shared turn_baseline to the current terminal total so
   # a following oc_wait_turn waits for the NEXT turn rather than re-detecting
   # this interrupted one (the interrupted step-finish already bumped the count).
   oc_interrupt() {
     local ibase tbase inow tnow
     ibase=$(oc_interrupted_total)
     tbase=$(oc_turn_total)
-    tmux send-keys -t "$SESSION" Escape
+    tmux send-keys -t "$session" Escape
     echo "[driver] live interrupt: sent Escape (interrupted baseline=$ibase, terminal baseline=$tbase)" >&2
     while (( $(remaining_seconds) > 0 )); do
       inow=$(oc_interrupted_total)
       if (( inow > ibase )); then
         echo "[driver] live interrupt: settled on a real step-finish reason=interrupted (interrupted total=$inow > baseline $ibase)" >&2
-        TURN_BASELINE=$(oc_turn_total)
+        turn_baseline=$(oc_turn_total)
         return 0
       fi
       tnow=$(oc_turn_total)
@@ -443,7 +447,7 @@ run_live() {
       sleep 2
     done
     echo "[driver] live interrupt: timeout (interrupted total=$(oc_interrupted_total), needed > baseline $ibase; no interrupted part landed within the budget)" >&2
-    EXIT_REASON="timeout"
+    EXIT_REASON="$TIMEOUT_REASON"
     return 1
   }
 
@@ -459,11 +463,11 @@ run_live() {
     # cwd). Recipe key lists are plain key names (Up/Down/Enter/Escape/…) + text.
     if [[ "$keys" == *';'* || "$keys" == *'*'* || "$keys" == *'?'* || "$keys" == *'['* ]]; then
       echo "[driver] ERROR: invalid keys value '$keys' (contains ';' or a glob metacharacter)" >&2
-      EXIT_REASON="nonzero(2)"
+      EXIT_REASON="$NONZERO_2"
       return 1
     fi
     # shellcheck disable=SC2086 — intentional word-splitting of the key list
-    tmux send-keys -t "$SESSION" $keys
+    tmux send-keys -t "$session" $keys
     echo "[driver] live keys: $keys" >&2
     sleep 0.5
   }
@@ -474,7 +478,7 @@ run_live() {
   # snapshots the (monotonic, reset-surviving) terminal count for its own turn.
   oc_reset() {
     echo "[driver] live reset_session: delivering /new" >&2
-    tmux send-keys -t "$SESSION" -l -- "/new"
+    tmux send-keys -t "$session" -l -- "/new"
     sleep 0.5
     # /new is a local command (no model turn), but it is still a slash command:
     # confirm the composer FLUSHED (oc_flush presses Enter, then waits for the
@@ -500,7 +504,7 @@ run_live() {
     # Common case: `tmux new-session ... "opencode"` execs the single-word
     # command directly, so the PANE process IS opencode — exactly the PID the
     # daemon's DiscoverPIDByCWD tracks. Use it without guessing or scanning.
-    pane_pid=$(tmux list-panes -t "$SESSION" -F '#{pane_pid}' 2>/dev/null | head -1)
+    pane_pid=$(tmux list-panes -t "$session" -F '#{pane_pid}' 2>/dev/null | head -1)
     if [[ -n "$pane_pid" ]]; then
       comm=$(ps -o comm= -p "$pane_pid" 2>/dev/null | tr -d ' ')
       if [[ "$comm" == *opencode* ]]; then
@@ -543,7 +547,7 @@ run_live() {
     fi
     # The live process is gone: a subsequent wait_turn must not poll for a turn
     # that can never land (oc_restart clears this when it relaunches).
-    LIVE_DEAD=1
+    live_dead=1
     sleep 1
   }
 
@@ -560,17 +564,17 @@ run_live() {
   # them as zombies; the contract enumerates top-level rows only.
   oc_restart() {
     oc_sigkill
-    LIVE_DEAD=0   # a fresh process is about to come up — re-enable wait_turn
-    tmux kill-session -t "$SESSION" 2>/dev/null || true
+    live_dead=0   # a fresh process is about to come up — re-enable wait_turn
+    tmux kill-session -t "$session" 2>/dev/null || true
     sleep 1
-    echo "[driver] live restart: relaunching opencode TUI (tmux=$SESSION, cwd=$RUN_CWD)" >&2
-    tmux new-session -d -s "$SESSION" -x 200 -y 50 -c "$RUN_CWD" "opencode" \
+    echo "[driver] live restart: relaunching opencode TUI (tmux=$session, cwd=$RUN_CWD)" >&2
+    tmux new-session -d -s "$session" -x 200 -y 50 -c "$RUN_CWD" "opencode" \
       >>"$DRIVER_LOG.stdout" 2>>"$DRIVER_LOG.stderr"
     # Re-wait the input affordance before any subsequent send (same readiness
     # gate as the initial launch; opencode swallows keystrokes during boot).
     local waited=0
     while (( $(remaining_seconds) > 0 )) && (( waited < 40 )); do
-      if tmux capture-pane -t "$SESSION" -p 2>/dev/null | grep -q "Ask anything"; then
+      if tmux capture-pane -t "$session" -p 2>/dev/null | grep -q "Ask anything"; then
         break
       fi
       sleep 1; waited=$((waited + 1))
@@ -579,12 +583,12 @@ run_live() {
   }
 
   if [[ "$EXIT_REASON" == "ok" ]]; then
-    local STEP_COUNT i STEP TYPE
-    STEP_COUNT=$(jq 'length' <<<"$SCRIPT_JSON")
-    for (( i = 0; i < STEP_COUNT; i++ )); do
-      STEP=$(jq -c ".[$i]" <<<"$SCRIPT_JSON")
-      TYPE=$(jq -r '.type' <<<"$STEP")
-      case "$TYPE" in
+    local step_count i step type
+    step_count=$(jq 'length' <<<"$SCRIPT_JSON")
+    for (( i = 0; i < step_count; i++ )); do
+      step=$(jq -c ".[$i]" <<<"$SCRIPT_JSON")
+      type=$(jq -r '.type' <<<"$step")
+      case "$type" in
         live)
           # No-op marker: its mere presence in script[] forces this recipe onto
           # the long-lived run_live path (see router below), so a PLAIN
@@ -595,13 +599,13 @@ run_live() {
           echo "[driver] live marker: long-lived run_live path" >&2
           ;;
         send)
-          oc_send "$(jq -r '.text' <<<"$STEP")"
+          oc_send "$(jq -r '.text' <<<"$step")"
           ;;
         mid_turn_send)
           # Queue a SECOND message into the composer WHILE the current turn is
           # still running — opencode buffers it and runs it as the NEXT turn.
           # No baseline bump; a SUBSEQUENT wait_turn detects the queued turn.
-          oc_mid_turn_send "$(jq -r '.text' <<<"$STEP")"
+          oc_mid_turn_send "$(jq -r '.text' <<<"$step")"
           ;;
         wait_turn)
           oc_wait_turn || break
@@ -616,7 +620,7 @@ run_live() {
           oc_interrupt || break
           ;;
         keys)
-          oc_keys "$(jq -r '.keys' <<<"$STEP")" || break
+          oc_keys "$(jq -r '.keys' <<<"$step")" || break
           ;;
         sigkill)
           # kill -9 the live opencode process mid-turn — orphans the parent and
@@ -630,8 +634,8 @@ run_live() {
           oc_restart
           ;;
         slash)
-          local s; s=$(jq -r '.text // .command // empty' <<<"$STEP")
-          tmux send-keys -t "$SESSION" -l -- "$s"; sleep 0.5
+          local s; s=$(jq -r '.text // .command // empty' <<<"$step")
+          tmux send-keys -t "$session" -l -- "$s"; sleep 0.5
           # A slash must go into an EMPTY composer and confirm it submitted
           # before the next step runs — otherwise it merges with a lingering
           # prompt and is swallowed as literal text instead of executing. A
@@ -641,16 +645,16 @@ run_live() {
           echo "[driver] live slash: $s" >&2
           ;;
         sleep)
-          local secs; secs=$(jq -r '.seconds // empty' <<<"$STEP")
+          local secs; secs=$(jq -r '.seconds // empty' <<<"$step")
           if ! [[ "$secs" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
-            echo "[driver] ERROR: sleep step missing/non-numeric: $STEP" >&2
-            EXIT_REASON="nonzero(2)"; break
+            echo "[driver] ERROR: sleep step missing/non-numeric: $step" >&2
+            EXIT_REASON="$NONZERO_2"; break
           fi
           echo "[driver] live sleep ${secs}s" >&2; sleep "$secs"
           ;;
         *)
-          echo "[driver] ERROR: unknown step type '$TYPE'" >&2
-          EXIT_REASON="nonzero(2)"; break
+          echo "[driver] ERROR: unknown step type '$type'" >&2
+          EXIT_REASON="$NONZERO_2"; break
           ;;
       esac
     done
@@ -658,15 +662,15 @@ run_live() {
 
   # Settle so the daemon's recorder observes the final state, then drop the TUI.
   sleep 1
-  tmux kill-session -t "$SESSION" 2>/dev/null || true
+  tmux kill-session -t "$session" 2>/dev/null || true
   trap - EXIT
 
   # Enumerate OUR cwd's top-level sessions chronologically, skipping any empty
   # stub (a session row with no message). [old, new] after one reset.
-  local SIDS=()
+  local sids=()
   while IFS= read -r sid; do
-    [[ -n "$sid" ]] && SIDS+=("$sid")
-  done < <(sqlite3 -cmd ".timeout 5000" "$OPENCODE_DB" \
+    [[ -n "$sid" ]] && sids+=("$sid")
+  done < <(sqlite3 -cmd "$SQLITE_TIMEOUT_CMD" "$OPENCODE_DB" \
     "SELECT s.id FROM session s
      WHERE s.directory = '$RUN_CWD' AND (s.parent_id IS NULL OR s.parent_id = '')
        AND EXISTS (SELECT 1 FROM message m WHERE m.session_id = s.id)
@@ -675,7 +679,7 @@ run_live() {
   : > "$STAGING/session.uuids"
   : > "$STAGING/transcript.paths"
   local n=0 first_uuid="" first_path="" sid tpath
-  for sid in ${SIDS[@]+"${SIDS[@]}"}; do
+  for sid in ${sids[@]+"${sids[@]}"}; do
     n=$((n + 1))
     tpath="$STAGING/opencode-transcript.$n.jsonl"
     : > "$tpath"
@@ -715,7 +719,7 @@ SQL
   {
     echo "=== live opencode driver ==="
     echo "exit reason : $EXIT_REASON"
-    echo "sessions    : ${SIDS[*]:-<none>}"
+    echo "sessions    : ${sids[*]:-<none>}"
     echo "primary     : ${first_uuid:-<none>}"
   } > "$DRIVER_LOG"
 
@@ -748,7 +752,7 @@ run_send() {
   local remaining
   remaining=$(remaining_seconds)
   if (( remaining <= 0 )); then
-    EXIT_REASON="timeout"
+    EXIT_REASON="$TIMEOUT_REASON"
     return 1
   fi
 
@@ -763,7 +767,7 @@ run_send() {
 
   case "$rc" in
     0)   ;;
-    124) EXIT_REASON="timeout"; return 1 ;;
+    124) EXIT_REASON="$TIMEOUT_REASON"; return 1 ;;
     137) EXIT_REASON="killed";  return 1 ;;
     *)   EXIT_REASON="nonzero($rc)"; return 1 ;;
   esac
@@ -791,7 +795,7 @@ run_send() {
   # re-looked-up and the two chains never alias. The captured id is mirrored
   # into SES_IDS[$ACTIVE] so the end-of-run epilogue exports every slot.
   if [[ -z "$SESSION_ID" ]]; then
-    SESSION_ID=$(sqlite3 -cmd ".timeout 5000" "$OPENCODE_DB" \
+    SESSION_ID=$(sqlite3 -cmd "$SQLITE_TIMEOUT_CMD" "$OPENCODE_DB" \
       "SELECT id FROM session WHERE directory = '$RUN_CWD_SQL' AND (parent_id IS NULL OR parent_id = '') ORDER BY time_created DESC LIMIT 1;")
     if [[ -z "$SESSION_ID" ]]; then
       echo "[driver] WARN: no session row found for cwd=$RUN_CWD" >&2
@@ -843,7 +847,7 @@ LIVE_ROUTE=$(jq -r 'any(.[]?; .type == "reset_session" or .type == "slash" or .t
 if [[ "$LIVE_ROUTE" == "true" ]] \
    && [[ "$(jq -r 'any(.[]?; .type == "start_session" or (.session != null))' <<<"$SCRIPT_JSON")" == "true" ]]; then
   echo "[driver] ERROR: recipe mixes a live-TUI step (reset_session/slash/interrupt/keys/restart/sigkill/mid_turn_send/live) with a headless-only multi-slot step (start_session/{\"session\":N}); these cannot run together. Split into separate cells." >&2
-  echo "nonzero(2)" > "$STAGING/driver.exit-reason"
+  echo "$NONZERO_2" > "$STAGING/driver.exit-reason"
   exit 1
 fi
 if [[ "$LIVE_ROUTE" == "true" ]]; then
@@ -870,7 +874,7 @@ for (( i = 0; i < STEP_COUNT; i++ )); do
       echo "[driver] switch -> session slot $ACTIVE (id=${SESSION_ID:-<new>})" >&2
     else
       echo "[driver] ERROR: invalid session slot '$TGT' (have $N_SLOTS)" >&2
-      EXIT_REASON="nonzero(2)"
+      EXIT_REASON="$NONZERO_2"
       break
     fi
   fi
@@ -895,7 +899,7 @@ for (( i = 0; i < STEP_COUNT; i++ )); do
       # whole script under `set -e` with no exit-reason file written.
       if ! [[ "$SECONDS_" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
         echo "[driver] ERROR: sleep step missing or non-numeric 'seconds': $STEP" >&2
-        EXIT_REASON="nonzero(2)"
+        EXIT_REASON="$NONZERO_2"
         break
       fi
       echo "[driver] sleep ${SECONDS_}s" >&2
@@ -911,7 +915,7 @@ for (( i = 0; i < STEP_COUNT; i++ )); do
       ;;
     *)
       echo "[driver] ERROR: unknown step type '$TYPE'" >&2
-      EXIT_REASON="nonzero(2)"
+      EXIT_REASON="$NONZERO_2"
       break
       ;;
   esac

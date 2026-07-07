@@ -57,8 +57,8 @@ func TestSessionDetector_CompactHook_HoldsWorkingThenReleases(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- det.Run(ctx) }()
 	defer func() { cancel(); <-done }()
+	go func() { done <- det.Run(ctx) }()
 
 	time.Sleep(20 * time.Millisecond) // let seedFromDisk finish
 
@@ -134,8 +134,8 @@ func TestSessionDetector_CompactHook_AutoIgnored(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- det.Run(ctx) }()
 	defer func() { cancel(); <-done }()
+	go func() { done <- det.Run(ctx) }()
 
 	time.Sleep(20 * time.Millisecond)
 

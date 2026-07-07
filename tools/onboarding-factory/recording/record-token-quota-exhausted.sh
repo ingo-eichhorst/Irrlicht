@@ -46,7 +46,7 @@ MOCK_PID=$!
 # mid-teardown and leak the tmux session or mock process.
 cleanup() {
   trap - EXIT INT TERM
-  if [ -n "${MOCK_PID:-}" ]; then
+  if [[ -n "${MOCK_PID:-}" ]]; then
     kill "$MOCK_PID" 2>/dev/null || true
     wait "$MOCK_PID" 2>/dev/null || true
   fi
@@ -90,7 +90,8 @@ echo "[recorder] accepted custom-API-key dialog"
 sleep 3
 
 send_line() {
-  tmux send-keys -t "$TMUX_SESSION" -l -- "$1"
+  local line="$1"
+  tmux send-keys -t "$TMUX_SESSION" -l -- "$line"
   sleep 0.3
   tmux send-keys -t "$TMUX_SESSION" Enter
 }
@@ -102,7 +103,7 @@ TRANSCRIPT=""
 for _ in $(seq 1 30); do
   for slug_dir in "$HOME"/.claude/projects/*/; do
     candidate="$slug_dir$UUID.jsonl"
-    if [ -f "$candidate" ] && [ -s "$candidate" ]; then
+    if [[ -f "$candidate" ]] && [[ -s "$candidate" ]]; then
       TRANSCRIPT="$candidate"
       break 2
     fi
@@ -112,13 +113,13 @@ done
 echo "[recorder] transcript=$TRANSCRIPT"
 
 turn_count() {
-  if [ -f "$TRANSCRIPT" ]; then
+  if [[ -f "$TRANSCRIPT" ]]; then
     jq -r 'select(.type=="assistant" and .message.stop_reason=="end_turn") | "x"' \
       "$TRANSCRIPT" 2>/dev/null | wc -l | tr -d ' '
   else echo 0; fi
 }
 WAITED=0
-while [ "$WAITED" -lt 30 ] && [ "$(turn_count)" -lt 1 ]; do
+while [[ "$WAITED" -lt 30 ]] && [[ "$(turn_count)" -lt 1 ]]; do
   sleep 1; WAITED=$((WAITED+1))
 done
 echo "[recorder] first turn_done observed (turns=$(turn_count))"
@@ -142,7 +143,7 @@ tmux kill-session -t "$TMUX_SESSION" 2>/dev/null
 
 RECORDING_DIR="${IRRLICHT_RECORDINGS_DIR:-$HOME/.local/share/irrlicht/recordings}"
 LATEST_RECORDING=$(ls -t "$RECORDING_DIR"/*.jsonl 2>/dev/null | head -1)
-if [ -z "$LATEST_RECORDING" ]; then
+if [[ -z "$LATEST_RECORDING" ]]; then
   echo "no recording file found under $RECORDING_DIR" >&2; exit 1
 fi
 echo "[recorder] using recording: $LATEST_RECORDING"

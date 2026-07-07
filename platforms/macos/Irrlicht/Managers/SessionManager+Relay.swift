@@ -169,10 +169,8 @@ extension SessionManager {
         // `relayURLSession` once failures pile up rather than waiting on an
         // app relaunch (#846). A 4401 (rejected token, handled below) isn't a
         // wedged connection, so it doesn't count toward the streak.
-        if !confirmed && task.closeCode.rawValue != 4401 {
-            if recordFailedRelayConnectAttempt() {
-                print("🔌 Relay unreachable after repeated attempts — recreating URLSession")
-            }
+        if !confirmed && task.closeCode.rawValue != 4401 && recordFailedRelayConnectAttempt() {
+            print("🔌 Relay unreachable after repeated attempts — recreating URLSession")
         }
 
         // The link is down, so we no longer know the remote state: drop the

@@ -66,4 +66,5 @@ reconcile_slot_csv() {
     sp="${slot_paths[$slot]:-}"
     daemon_sid_for_transcript "$sp" "$ad" "$s"
   done
+  return 0
 }

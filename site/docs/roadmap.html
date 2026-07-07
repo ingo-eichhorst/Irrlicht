@@ -179,7 +179,7 @@
     white-space: nowrap;
     text-transform: uppercase;
   }
-  .pill-in-flight { background: rgba(139,92,246,0.14); color: #b794f6; border: 1px solid rgba(139,92,246,0.3); }
+  .pill-in-flight { background: rgba(49,32,86,0.14); color: #b794f6; border: 1px solid rgba(139,92,246,0.3); }
   .pill-next      { background: rgba(255,149,0,0.12); color: var(--waiting); border: 1px solid rgba(255,149,0,0.25); }
   .pill-later     { background: rgba(200,205,216,0.06); color: var(--text-dim); }
   .pill-horizon   { background: rgba(200,205,216,0.04); color: var(--text-dim); opacity: 0.75; }
@@ -355,7 +355,7 @@
 <div class="docs-layout">
 
   <!-- Sidebar -->
-  <nav class="sidebar">
+  <nav class="sidebar" aria-label="Documentation sections">
     <a href="../index.html" class="sidebar-logo">
       <span class="dot"></span>
       <span>Irrlicht</span>
@@ -1044,7 +1044,7 @@
       <p>If an item here looks stale relative to its linked issue, the issue wins &mdash; file a bug.</p>
 
       <!-- Bottom nav -->
-      <nav class="docs-nav-bottom">
+      <nav class="docs-nav-bottom" aria-label="Previous and next page">
         <a href="adapters.html">
           <span class="label">Previous</span>
           Adapters

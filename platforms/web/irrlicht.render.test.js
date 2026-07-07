@@ -70,12 +70,12 @@ describe('session row rendering (#564)', () => {
     await new Promise((r) => setTimeout(r, 0))
 
     const rows = document.querySelectorAll('#session-list .session-row')
-    expect(rows.length).toBe(2)
+    expect(rows).toHaveLength(2)
     expect(rows[0].dataset.sessionId).toBe('proc-1')
     expect(rows[1].dataset.sessionId).toBe('proc-2')
     // Single group → no header rendered; the rows must show regardless of the
     // stale collapse entry.
-    expect(document.querySelectorAll('#session-list .group-hdr').length).toBe(0)
+    expect(document.querySelectorAll('#session-list .group-hdr')).toHaveLength(0)
     expect(document.getElementById('empty-state').style.display).toBe('none')
   })
 
@@ -91,9 +91,9 @@ describe('session row rendering (#564)', () => {
 
     // Headers are back, so the collapsed 'irrlicht' group legitimately hides
     // its rows again — collapse semantics unchanged when a header exists.
-    expect(document.querySelectorAll('#session-list .group-hdr').length).toBe(2)
+    expect(document.querySelectorAll('#session-list .group-hdr')).toHaveLength(2)
     const rows = document.querySelectorAll('#session-list .session-row')
-    expect(rows.length).toBe(1)
+    expect(rows).toHaveLength(1)
     expect(rows[0].dataset.sessionId).toBe('proc-3')
   })
 })

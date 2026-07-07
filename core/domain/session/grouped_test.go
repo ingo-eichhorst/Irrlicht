@@ -341,7 +341,7 @@ func TestBuildDashboard_DoesNotMutateInput(t *testing.T) {
 
 	groups := BuildDashboard(sessions, nil)
 
-	if got := groups[0].Agents[0].Subagents; got == nil {
+	if groups[0].Agents[0].Subagents == nil {
 		t.Fatal("group tree should carry the unified subagents summary")
 	}
 	if parent.Subagents != nil {

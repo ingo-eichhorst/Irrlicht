@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -239,6 +240,21 @@ func TestLoadAgentCell(t *testing.T) {
 	// Wrong agent → ok=false.
 	if _, ok := LoadAgentCell(dir, "codex", "basic-turn"); ok {
 		t.Fatal("LoadAgentCell for wrong agent should return ok=false")
+	}
+}
+
+// TestAgentCellDirRejectsTraversal guards the CodeQL path-injection fix:
+// filepath.Base alone doesn't strip a bare ".." segment (it IS its own last
+// element), so AgentCellDir must special-case it — otherwise a ".."
+// adapter/folder escapes the agents/<adapter>/ sandbox by one level.
+func TestAgentCellDirRejectsTraversal(t *testing.T) {
+	got := AgentCellDir("/repo", "..", "x")
+	if strings.Contains(got, "..") {
+		t.Fatalf("AgentCellDir(%q, %q, %q) = %q; must not contain \"..\"", "/repo", "..", "x", got)
+	}
+	got = AgentCellDir("/repo", "aider", "..")
+	if strings.Contains(got, "..") {
+		t.Fatalf("AgentCellDir with folder=%q = %q; must not contain \"..\"", "..", got)
 	}
 }
 

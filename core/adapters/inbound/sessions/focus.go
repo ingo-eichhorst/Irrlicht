@@ -9,9 +9,9 @@ import (
 	"irrlicht/core/ports/outbound"
 )
 
-// focusTarget is the interface the focus handler calls into. Satisfied by
+// focusRequester is the interface the focus handler calls into. Satisfied by
 // *services.FocusService without importing the services package.
-type focusTarget interface {
+type focusRequester interface {
 	RequestFocus(sessionID string) error
 }
 
@@ -24,7 +24,7 @@ type focusTarget interface {
 //   - 400: malformed request (no session ID)
 //   - 404: session not found or has no launcher information
 //   - 405: method not allowed
-func NewFocusHandler(target focusTarget, log outbound.Logger) http.HandlerFunc {
+func NewFocusHandler(target focusRequester, log outbound.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

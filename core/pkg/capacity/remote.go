@@ -118,48 +118,60 @@ func parseLiteLLMData(data []byte) (*capacityConfig, error) {
 			continue
 		}
 
-		var entry liteLLMEntry
-		if err := json.Unmarshal(rawEntry, &entry); err != nil {
+		mc, ok := parseLiteLLMEntry(key, rawEntry)
+		if !ok {
 			continue
-		}
-
-		if entry.MaxInputTokens <= 0 {
-			continue
-		}
-
-		// Skip non-chat models.
-		if entry.Mode != "" && entry.Mode != "chat" {
-			continue
-		}
-
-		mc := ModelCapacity{
-			ContextWindow: entry.MaxInputTokens,
-			MaxOutput:     entry.MaxOutputTokens,
-			DisplayName:   key,
-			Family:        deriveFamilyFromLiteLLM(key, entry.LiteLLMProvider),
-		}
-
-		// Convert per-token pricing to per-million-token pricing.
-		if entry.InputCostPerToken > 0 || entry.OutputCostPerToken > 0 {
-			p := &ModelPricing{
-				InputPerMTok:         entry.InputCostPerToken * 1_000_000,
-				OutputPerMTok:        entry.OutputCostPerToken * 1_000_000,
-				CacheReadPerMTok:     entry.CacheReadInputTokenCost * 1_000_000,
-				CacheCreationPerMTok: entry.CacheCreationInputTokenCost * 1_000_000,
-			}
-			// When LiteLLM publishes the 1h rate, populate both sub-rates.
-			// CacheCreationPerMTok stays equal to the 5m rate as the legacy fallback.
-			if entry.CacheCreation1hInputTokenCost > 0 {
-				p.CacheCreation5mPerMTok = entry.CacheCreationInputTokenCost * 1_000_000
-				p.CacheCreation1hPerMTok = entry.CacheCreation1hInputTokenCost * 1_000_000
-			}
-			mc.Pricing = p
 		}
 
 		config.Models[key] = mc
 	}
 
 	return config, nil
+}
+
+// parseLiteLLMEntry converts a single LiteLLM JSON entry into a ModelCapacity.
+// Returns ok=false for entries that should be skipped: unparsable JSON,
+// a missing/non-positive context window, or a non-chat mode.
+func parseLiteLLMEntry(key string, rawEntry json.RawMessage) (mc ModelCapacity, ok bool) {
+	var entry liteLLMEntry
+	if err := json.Unmarshal(rawEntry, &entry); err != nil {
+		return ModelCapacity{}, false
+	}
+
+	if entry.MaxInputTokens <= 0 {
+		return ModelCapacity{}, false
+	}
+
+	// Skip non-chat models.
+	if entry.Mode != "" && entry.Mode != "chat" {
+		return ModelCapacity{}, false
+	}
+
+	mc = ModelCapacity{
+		ContextWindow: entry.MaxInputTokens,
+		MaxOutput:     entry.MaxOutputTokens,
+		DisplayName:   key,
+		Family:        deriveFamilyFromLiteLLM(key, entry.LiteLLMProvider),
+	}
+
+	// Convert per-token pricing to per-million-token pricing.
+	if entry.InputCostPerToken > 0 || entry.OutputCostPerToken > 0 {
+		p := &ModelPricing{
+			InputPerMTok:         entry.InputCostPerToken * 1_000_000,
+			OutputPerMTok:        entry.OutputCostPerToken * 1_000_000,
+			CacheReadPerMTok:     entry.CacheReadInputTokenCost * 1_000_000,
+			CacheCreationPerMTok: entry.CacheCreationInputTokenCost * 1_000_000,
+		}
+		// When LiteLLM publishes the 1h rate, populate both sub-rates.
+		// CacheCreationPerMTok stays equal to the 5m rate as the legacy fallback.
+		if entry.CacheCreation1hInputTokenCost > 0 {
+			p.CacheCreation5mPerMTok = entry.CacheCreationInputTokenCost * 1_000_000
+			p.CacheCreation1hPerMTok = entry.CacheCreation1hInputTokenCost * 1_000_000
+		}
+		mc.Pricing = p
+	}
+
+	return mc, true
 }
 
 // deriveFamilyFromLiteLLM infers a model family string.

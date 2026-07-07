@@ -56,15 +56,22 @@ func TestJSONLRecorder_RoundTrip(t *testing.T) {
 		t.Fatalf("got %d events, want %d", len(got), len(events))
 	}
 	for i, ev := range got {
-		if ev.Seq != events[i].Seq {
-			t.Errorf("event %d: seq=%d, want %d", i, ev.Seq, events[i].Seq)
-		}
-		if ev.Kind != events[i].Kind {
-			t.Errorf("event %d: kind=%s, want %s", i, ev.Kind, events[i].Kind)
-		}
-		if ev.SessionID != events[i].SessionID {
-			t.Errorf("event %d: sessionID=%s, want %s", i, ev.SessionID, events[i].SessionID)
-		}
+		verifyRoundTrippedEvent(t, i, ev, events[i])
+	}
+}
+
+// verifyRoundTrippedEvent asserts that a round-tripped event's fields match
+// the event that was originally recorded.
+func verifyRoundTrippedEvent(t *testing.T, i int, got, want lifecycle.Event) {
+	t.Helper()
+	if got.Seq != want.Seq {
+		t.Errorf("event %d: seq=%d, want %d", i, got.Seq, want.Seq)
+	}
+	if got.Kind != want.Kind {
+		t.Errorf("event %d: kind=%s, want %s", i, got.Kind, want.Kind)
+	}
+	if got.SessionID != want.SessionID {
+		t.Errorf("event %d: sessionID=%s, want %s", i, got.SessionID, want.SessionID)
 	}
 }
 

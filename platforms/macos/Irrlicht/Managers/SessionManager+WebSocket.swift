@@ -104,18 +104,16 @@ extension SessionManager {
 
         guard connectionState != .disconnected && !Task.isCancelled else { return }
 
-        if connectionState != .connected {
-            // Neither the ping nor hydration nor the socket ever confirmed
-            // anything, even though `resume()` said the attempt started
-            // fine. A stuck OS-level connection cache pinned to this
-            // URLSession instance can cause exactly that — failing forever
-            // against a healthy daemon that restarted on the same port —
-            // until something discards it (previously only an app relaunch;
-            // #843). Recycle it ourselves once failures pile up rather than
-            // waiting on that.
-            if recordFailedLocalConnectAttempt() {
-                print("🔌 Local daemon unreachable after repeated attempts — recreating URLSession")
-            }
+        // Neither the ping nor hydration nor the socket ever confirmed
+        // anything, even though `resume()` said the attempt started
+        // fine. A stuck OS-level connection cache pinned to this
+        // URLSession instance can cause exactly that — failing forever
+        // against a healthy daemon that restarted on the same port —
+        // until something discards it (previously only an app relaunch;
+        // #843). Recycle it ourselves once failures pile up rather than
+        // waiting on that.
+        if connectionState != .connected && recordFailedLocalConnectAttempt() {
+            print("🔌 Local daemon unreachable after repeated attempts — recreating URLSession")
         }
 
         let jitter = Double.random(in: 0...(reconnectDelay * 0.2))

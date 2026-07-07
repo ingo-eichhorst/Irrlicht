@@ -557,20 +557,11 @@ func (t *TranscriptTailer) scanNewLines(reader *bufio.Reader, startPos int64) tr
 
 	for {
 		raw, consumed, lineErr := readLineCapped(reader, maxTranscriptLineSize)
-		if errors.Is(lineErr, io.EOF) || errors.Is(lineErr, errPartialAtEOF) {
-			// EOF (clean) or partial trailing line — stop without advancing
-			// past the partial bytes; they'll be re-read next tick once more
-			// data is appended.
-			break
-		}
-		if errors.Is(lineErr, errLineTooLong) {
-			log.Printf("irrlicht/tailer: skipping oversized line at offset %d (%d bytes) in %s", res.endOffset, consumed, t.path)
-			res.endOffset += consumed
+		switch t.classifyLineReadError(lineErr, consumed, &res) {
+		case lineReadStop:
+			return res
+		case lineReadSkip:
 			continue
-		}
-		if lineErr != nil {
-			res.err = lineErr
-			break
 		}
 
 		res.endOffset += consumed
@@ -580,25 +571,70 @@ func (t *TranscriptTailer) scanNewLines(reader *bufio.Reader, startPos int64) tr
 		}
 
 		t.lastLineSeenAt = time.Now()
-
-		parsed := t.parseTranscriptLine(line, isRawLine, rawLineParser)
-		if parsed == nil || parsed.Skip {
-			if parsed != nil {
-				res.linesParsed++
-				if t.applySkippedEvent(parsed) {
-					res.substantive = true
-				}
-			}
-			continue
-		}
-		res.linesParsed++
-		res.substantive = true
-		if parsed.IsManualCompactBoundary {
-			res.sawManualCompact = true
-		}
-		t.processParsedEvent(parsed, &res.sawUserBlockingClosed)
+		t.scanParsedLine(line, isRawLine, rawLineParser, &res)
 	}
-	return res
+}
+
+// lineReadAction tells scanNewLines' loop what to do after readLineCapped
+// returns, as classified by classifyLineReadError.
+type lineReadAction int
+
+const (
+	// lineReadContinueProcessing means a full line was read (lineErr == nil);
+	// the caller proceeds to trim and process it.
+	lineReadContinueProcessing lineReadAction = iota
+	// lineReadSkip means the line was handled in full (an oversized line was
+	// discarded) and the loop should move on to the next one.
+	lineReadSkip
+	// lineReadStop means the scan is done: clean EOF, a partial trailing
+	// line, or a real read error.
+	lineReadStop
+)
+
+// classifyLineReadError interprets the error from readLineCapped and applies
+// its side effects (advancing endOffset past a skipped oversized line,
+// recording a real read error onto res), returning what the caller should do
+// next.
+func (t *TranscriptTailer) classifyLineReadError(lineErr error, consumed int64, res *transcriptScanResult) lineReadAction {
+	switch {
+	case errors.Is(lineErr, io.EOF) || errors.Is(lineErr, errPartialAtEOF):
+		// EOF (clean) or partial trailing line — stop without advancing past
+		// the partial bytes; they'll be re-read next tick once more data is
+		// appended.
+		return lineReadStop
+	case errors.Is(lineErr, errLineTooLong):
+		log.Printf("irrlicht/tailer: skipping oversized line at offset %d (%d bytes) in %s", res.endOffset, consumed, t.path)
+		res.endOffset += consumed
+		return lineReadSkip
+	case lineErr != nil:
+		res.err = lineErr
+		return lineReadStop
+	default:
+		return lineReadContinueProcessing
+	}
+}
+
+// scanParsedLine parses a single non-empty, already-offset-accounted
+// transcript line and routes it to either applySkippedEvent (Skip=true or
+// unparseable) or processParsedEvent (a real event), folding the outcome
+// into res.
+func (t *TranscriptTailer) scanParsedLine(line string, isRawLine bool, rawLineParser RawLineParser, res *transcriptScanResult) {
+	parsed := t.parseTranscriptLine(line, isRawLine, rawLineParser)
+	if parsed == nil || parsed.Skip {
+		if parsed != nil {
+			res.linesParsed++
+			if t.applySkippedEvent(parsed) {
+				res.substantive = true
+			}
+		}
+		return
+	}
+	res.linesParsed++
+	res.substantive = true
+	if parsed.IsManualCompactBoundary {
+		res.sawManualCompact = true
+	}
+	t.processParsedEvent(parsed, &res.sawUserBlockingClosed)
 }
 
 // parseTranscriptLine converts a single trimmed transcript line into a

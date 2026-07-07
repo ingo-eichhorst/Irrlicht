@@ -56,7 +56,7 @@ func TestEnsureTaskEtaBlock_Idempotent(t *testing.T) {
 	if modified {
 		t.Error("second install should be a no-op")
 	}
-	if got := readFileString(t, memoryPathFor(home)); got != first {
+	if readFileString(t, memoryPathFor(home)) != first {
 		t.Error("second install changed bytes")
 	}
 }
@@ -448,7 +448,7 @@ func TestApplyInstructionBlocks_InstallsAllAndCoexist(t *testing.T) {
 	if err := applyInstructionBlocks(); err != nil {
 		t.Fatal(err)
 	}
-	if got := readFileString(t, memoryPathFor(home)); got != content {
+	if readFileString(t, memoryPathFor(home)) != content {
 		t.Error("re-applying instruction blocks changed bytes")
 	}
 }
@@ -490,7 +490,7 @@ func findPermission(t *testing.T, a agent.Agent, key string) agent.Permission {
 // TestInstructionsPermission_GateContract drives the real Apply/Remove
 // closures behind the declared "instructions" permission through the
 // shared issue #797 contract. Unlike hooks/statusline (a live per-request
-// ConsentGate), this permission has no in-code check of its own — its
+// ConsentGranter), this permission has no in-code check of its own — its
 // consent gate is entirely PermissionService's generic effect dispatch, so
 // this test proves that dispatch is wired to the real closures Agent()
 // exports, not a stand-in.

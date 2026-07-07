@@ -338,6 +338,11 @@ func setupProcessWatcher(demoMode bool, detector **services.SessionDetector, log
 		logger.LogError("startup", "", fmt.Sprintf("ProcessWatcher init failed (non-fatal): %v", err))
 		return nil, nil
 	}
+	// godre:S8188 flags procCancel as not deferred here — intentional:
+	// procCancel is bundled into the returned cleanup closure for the CALLER
+	// to defer at daemon-shutdown scope (see the doc comment above), not
+	// within this setup function. A bare `defer procCancel()` here would
+	// cancel the watcher the instant setupProcessWatcher returns.
 	procCtx, procCancel := context.WithCancel(context.Background())
 	go func() {
 		if err := pw.Run(procCtx); err != nil && err != context.Canceled {

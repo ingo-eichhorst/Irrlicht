@@ -13,32 +13,35 @@ import (
 // close appearing after open. Bypasses tailer.ExtractAssistantText's
 // 200-rune tail truncation, which would drop the leading tag.
 func assistantContentContainsBlock(raw map[string]interface{}, open, close string) bool {
-	scan := func(arr []interface{}) bool {
-		for _, item := range arr {
-			block, ok := item.(map[string]interface{})
-			if !ok {
-				continue
-			}
-			bt, _ := block["type"].(string)
-			if bt != "text" && bt != "output_text" {
-				continue
-			}
-			text, _ := block["text"].(string)
-			openIdx := strings.Index(text, open)
-			if openIdx < 0 {
-				continue
-			}
-			if strings.Contains(text[openIdx+len(open):], close) {
-				return true
-			}
-		}
-		return false
-	}
-	if arr, ok := raw["content"].([]interface{}); ok && scan(arr) {
+	if arr, ok := raw["content"].([]interface{}); ok && codexBlockHasOpenClose(arr, open, close) {
 		return true
 	}
 	if msg, ok := raw["message"].(map[string]interface{}); ok {
-		if arr, ok := msg["content"].([]interface{}); ok && scan(arr) {
+		if arr, ok := msg["content"].([]interface{}); ok && codexBlockHasOpenClose(arr, open, close) {
+			return true
+		}
+	}
+	return false
+}
+
+// codexBlockHasOpenClose reports whether any `text` / `output_text` content
+// block in arr contains open followed later (within the same block) by close.
+func codexBlockHasOpenClose(arr []interface{}, open, close string) bool {
+	for _, item := range arr {
+		block, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		bt, _ := block["type"].(string)
+		if bt != "text" && bt != "output_text" {
+			continue
+		}
+		text, _ := block["text"].(string)
+		openIdx := strings.Index(text, open)
+		if openIdx < 0 {
+			continue
+		}
+		if strings.Contains(text[openIdx+len(open):], close) {
 			return true
 		}
 	}
@@ -92,58 +95,73 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 	var cumBreakdown *tailer.UsageBreakdown
 	ev.ModelName, ev.ContextWindow, ev.Tokens, cumBreakdown = extractCodexMetadata(raw)
 
-	// Rate-limit extraction from token_count events. Lives on
-	// event_msg.payload.rate_limits and is emitted on every API turn (clean
-	// cadence — no zero-delta noise like Claude Code's statusline). Other
-	// event types either don't carry the block or carry stale duplicates.
-	if eventType == "event_msg" {
-		if payload, ok := raw["payload"].(map[string]interface{}); ok {
-			if pt, _ := payload["type"].(string); pt == "token_count" {
-				ev.RateLimit = extractCodexRateLimits(payload, ev.Timestamp)
-			}
-		}
-	}
-
-	// Emit a Contribution when cumulative usage advances (monotonic delta).
-	if cumBreakdown != nil {
-		delta := tailer.UsageBreakdown{
-			Input:     max(0, cumBreakdown.Input-p.cursor.Input),
-			Output:    max(0, cumBreakdown.Output-p.cursor.Output),
-			CacheRead: max(0, cumBreakdown.CacheRead-p.cursor.CacheRead),
-		}
-		if delta.Input > 0 || delta.Output > 0 || delta.CacheRead > 0 {
-			ev.Contribution = &tailer.PerTurnContribution{
-				Model: ev.ModelName,
-				Usage: delta,
-			}
-			p.cursor = *cumBreakdown
-		}
-		ev.CumulativeTokens = ev.Tokens
-	}
+	applyCodexRateLimit(eventType, raw, ev)
+	p.applyCumulativeContribution(cumBreakdown, ev)
 
 	// Map event types to normalized forms.
+	applyCodexEventType(eventType, raw, ev)
+
+	return ev
+}
+
+// applyCodexRateLimit sets ev.RateLimit from a token_count event_msg's
+// payload.rate_limits. Lives on event_msg.payload.rate_limits and is emitted
+// on every API turn (clean cadence — no zero-delta noise like Claude Code's
+// statusline). Other event types either don't carry the block or carry stale
+// duplicates, so this is a no-op for them.
+func applyCodexRateLimit(eventType string, raw map[string]interface{}, ev *tailer.ParsedEvent) {
+	if eventType != "event_msg" {
+		return
+	}
+	payload, ok := raw["payload"].(map[string]interface{})
+	if !ok {
+		return
+	}
+	if pt, _ := payload["type"].(string); pt == "token_count" {
+		ev.RateLimit = extractCodexRateLimits(payload, ev.Timestamp)
+	}
+}
+
+// applyCumulativeContribution emits a PerTurnContribution when cumulative
+// usage advances (monotonic delta relative to p.cursor), and advances the
+// cursor to the new cumulative total. No-op when cumBreakdown is nil (event
+// carried no total_token_usage) or the delta is zero.
+func (p *Parser) applyCumulativeContribution(cumBreakdown *tailer.UsageBreakdown, ev *tailer.ParsedEvent) {
+	if cumBreakdown == nil {
+		return
+	}
+	delta := tailer.UsageBreakdown{
+		Input:     max(0, cumBreakdown.Input-p.cursor.Input),
+		Output:    max(0, cumBreakdown.Output-p.cursor.Output),
+		CacheRead: max(0, cumBreakdown.CacheRead-p.cursor.CacheRead),
+	}
+	if delta.Input > 0 || delta.Output > 0 || delta.CacheRead > 0 {
+		ev.Contribution = &tailer.PerTurnContribution{
+			Model: ev.ModelName,
+			Usage: delta,
+		}
+		p.cursor = *cumBreakdown
+	}
+	ev.CumulativeTokens = ev.Tokens
+}
+
+// applyCodexEventType dispatches on the event's top-level "type" and mutates
+// ev accordingly, setting ev.Skip for anything that carries no observable
+// signal. Split out of ParseLine so each case's own nested lookups don't
+// compound that function's cognitive complexity.
+func applyCodexEventType(eventType string, raw map[string]interface{}, ev *tailer.ParsedEvent) {
 	switch eventType {
 	case "message":
 		if !parseCodexMessage(raw, ev) {
 			ev.Skip = true
-			return ev
 		}
 
 	case "response_item":
-		if payload, ok := raw["payload"].(map[string]interface{}); ok {
-			if !parseCodexResponseItem(payload, ev) {
-				ev.Skip = true
-				return ev
-			}
-		} else {
-			ev.Skip = true
-			return ev
-		}
+		applyCodexResponseItem(raw, ev)
 
 	case "function_call":
 		if !parseCodexFunctionCall(raw, ev) {
 			ev.Skip = true
-			return ev
 		}
 
 	case "function_call_output":
@@ -164,33 +182,57 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 		// flickers working→ready→working every time the agent writes an
 		// intermediate assistant message before calling a tool (typical at
 		// the start of a turn).
-		if payload, ok := raw["payload"].(map[string]interface{}); ok {
-			if pt, _ := payload["type"].(string); pt == "task_complete" || pt == "turn_aborted" {
-				ev.EventType = "turn_done"
-				return ev
-			}
+		if codexEventMsgIsTurnDone(raw) {
+			ev.EventType = "turn_done"
+		} else {
+			ev.Skip = true
 		}
-		ev.Skip = true
-		return ev
 
 	case "session_meta", "turn_context":
 		// session_meta.payload.cli_version carries the Codex CLI version (e.g.
 		// "0.137.0"). Capture it before skipping — the tailer applies metadata
 		// from Skip=true events too.
-		if payload, ok := raw["payload"].(map[string]interface{}); ok {
-			if v, ok := payload["cli_version"].(string); ok {
-				ev.AgentVersion = v
-			}
+		if v, ok := codexAgentVersion(raw); ok {
+			ev.AgentVersion = v
 		}
 		ev.Skip = true
-		return ev
 
 	default:
 		ev.Skip = true
-		return ev
 	}
+}
 
-	return ev
+// applyCodexResponseItem handles the "response_item" case: unlike
+// function_call/message, its payload is nested one level down, so the lookup
+// is split out of applyCodexEventType's switch (go:S3776).
+func applyCodexResponseItem(raw map[string]interface{}, ev *tailer.ParsedEvent) {
+	payload, ok := raw["payload"].(map[string]interface{})
+	if !ok || !parseCodexResponseItem(payload, ev) {
+		ev.Skip = true
+	}
+}
+
+// codexEventMsgIsTurnDone reports whether an event_msg payload signals a turn
+// boundary (task_complete or turn_aborted) — see applyCodexEventType's
+// "event_msg" case for the full rationale.
+func codexEventMsgIsTurnDone(raw map[string]interface{}) bool {
+	payload, ok := raw["payload"].(map[string]interface{})
+	if !ok {
+		return false
+	}
+	pt, _ := payload["type"].(string)
+	return pt == "task_complete" || pt == "turn_aborted"
+}
+
+// codexAgentVersion extracts payload.cli_version from a session_meta /
+// turn_context event, if present.
+func codexAgentVersion(raw map[string]interface{}) (string, bool) {
+	payload, ok := raw["payload"].(map[string]interface{})
+	if !ok {
+		return "", false
+	}
+	v, ok := payload["cli_version"].(string)
+	return v, ok
 }
 
 // scanCodexTaskEstimate scans the FULL assistant text blocks for the

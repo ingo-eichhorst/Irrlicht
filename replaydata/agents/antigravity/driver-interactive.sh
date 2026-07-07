@@ -117,6 +117,9 @@ mkdir -p "$RUN_CWD"
 RUN_CWD="$(cd "$RUN_CWD" && pwd -P)"   # canonicalize (resolve symlinks) for the daemon's cwd match
 DEADLINE=$(( $(date +%s) + TIMEOUT_S ))
 EXIT_REASON="ok"
+# Shared exit-reason literal for a bad launch/dispatch error (S1192: defined
+# once here, referenced at every site below instead of repeating the string).
+NONZERO_2='nonzero(2)'
 
 # View vars owned by the driver (the slot lib reads/writes these). SESSION is the
 # active tmux session; TRANSCRIPT/UUID are the resolved transcript path + conv-id;
@@ -137,7 +140,8 @@ ANTIGRAVITY_TRANSCRIPT_REL=".system_generated/logs/transcript.jsonl"
 remaining_seconds() { local now; now=$(date +%s); (( now >= DEADLINE )) && echo 0 || echo $((DEADLINE - now)); }
 
 not_implemented() { # <step-type>
-  echo "[driver] STUB: step type '$1' not yet ported for antigravity — see scripts/templates/drive-interactive.sh.tmpl and drive-claudecode-interactive.sh" >&2
+  local step_type="$1"
+  echo "[driver] STUB: step type '$step_type' not yet ported for antigravity — see scripts/templates/drive-interactive.sh.tmpl and drive-claudecode-interactive.sh" >&2
   EXIT_REASON="nonzero(3)"
   return 3
 }
@@ -164,7 +168,7 @@ launch_repl() {
   # itself (trust prompt + input-ready wait) is identical across launch/restart/
   # resume, so they all share this body.
   local extra_args=("$@")
-  command -v tmux >/dev/null 2>&1 || { echo "[driver] tmux required" >&2; EXIT_REASON="nonzero(2)"; exit 1; }
+  command -v tmux >/dev/null 2>&1 || { echo "[driver] tmux required" >&2; EXIT_REASON="$NONZERO_2"; exit 1; }
   tmux kill-session -t "$SESSION" 2>/dev/null || true
   # `|| { … exit … }` keeps a launch failure from aborting under set -e WITHOUT
   # an accurate exit-reason — the cleanup trap then records nonzero(2).
@@ -173,7 +177,7 @@ launch_repl() {
   tmux new-session -d -s "$SESSION" -x 200 -y 50 -c "${SES_CWD[$ACTIVE]}" "agy" \
     ${extra_args[@]+"${extra_args[@]}"} \
     >>"$DRIVER_LOG.stdout.$ACTIVE" 2>>"$DRIVER_LOG.stderr" \
-    || { echo "[driver] failed to launch agy under tmux" >&2; EXIT_REASON="nonzero(2)"; exit 1; }
+    || { echo "[driver] failed to launch agy under tmux" >&2; EXIT_REASON="$NONZERO_2"; exit 1; }
   # agy mints the conversation dir + transcript only AFTER the first prompt lands,
   # so there's nothing to resolve at boot — resolve_transcript runs on the first
   # wait_turn (SEAM 3, marker-gated by alloc_slot's MARKER).
@@ -320,12 +324,13 @@ wait_turn() {
 # distinctive substring of the text is the cheap, reliable echo probe; re-type
 # once if it's missing.
 send_text() { # <text>
+  local text="$1"
   local probe; probe="${1:0:20}"
-  tmux send-keys -t "$SESSION" -l -- "$1"
+  tmux send-keys -t "$SESSION" -l -- "$text"
   sleep 0.5   # let agy's input render
   if ! tmux capture-pane -t "$SESSION" -p -S -10 2>/dev/null | grep -qF -- "$probe"; then
     echo "[driver] send_text: input not echoed, re-typing once" >&2
-    tmux send-keys -t "$SESSION" -l -- "$1"
+    tmux send-keys -t "$SESSION" -l -- "$text"
     sleep 0.5
   fi
   tmux send-keys -t "$SESSION" Enter
@@ -485,7 +490,7 @@ while IFS= read -r step; do
       echo "[driver] switch -> session slot $tgt (conv-id=$UUID)" >&2
     else
       echo "[driver] switch: invalid session slot '$tgt' (have $N_SLOTS)" >&2
-      EXIT_REASON="nonzero(2)"; break
+      EXIT_REASON="$NONZERO_2"; break
     fi
   fi
   case "$type" in
@@ -501,7 +506,7 @@ while IFS= read -r step; do
     exit_clean)      step_exit_clean ;;
     start_session)   step_start_session "$(jq -r '.cwd // empty' <<<"$step")" ;;
     session)         : ;;   # pure focus switch — already handled by the inline target block
-    *)               echo "[driver] unknown step type: $type" >&2; EXIT_REASON="nonzero(2)"; break ;;
+    *)               echo "[driver] unknown step type: $type" >&2; EXIT_REASON="$NONZERO_2"; break ;;
   esac
   (( $(remaining_seconds) <= 0 )) && { EXIT_REASON="timeout"; break; }
 done < <(jq -c '.[]' <<<"$SCRIPT_JSON")

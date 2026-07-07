@@ -115,7 +115,7 @@ func TestReadSidecarModelState_Cache(t *testing.T) {
 	if first == nil || cache.state == nil {
 		t.Fatal("expected first read to fill the cache")
 	}
-	if second := readSidecarModelState(transcriptPath, &cache); second != first {
+	if readSidecarModelState(transcriptPath, &cache) != first {
 		t.Error("unchanged sidecar: expected the cached pointer back")
 	}
 

@@ -131,6 +131,10 @@ func detectAdapter(path string) (string, error) {
 	return "", fmt.Errorf("cannot infer adapter from path %q — pass --adapter claude-code|codex|pi|aider|opencode|kiro-cli|gemini-cli|antigravity", abs)
 }
 
+// eventsSidecarExt is the lifecycle-events sidecar's file extension, paired
+// with a transcript's .jsonl (e.g. session.jsonl / session.events.jsonl).
+const eventsSidecarExt = ".events.jsonl"
+
 // cliOptions bundles the parsed CLI flags and positional argument so the
 // main helpers can pass a single value around instead of a long arg list.
 type cliOptions struct {
@@ -203,11 +207,11 @@ func parseFlags() cliOptions {
 // directly; otherwise a sibling sidecar is auto-detected next to the
 // transcript.
 func resolveInputPaths(src string) (transcriptPath, sidecarPath string, useSidecar bool) {
-	if strings.HasSuffix(src, ".events.jsonl") {
-		return strings.TrimSuffix(src, ".events.jsonl") + ".jsonl", src, true
+	if strings.HasSuffix(src, eventsSidecarExt) {
+		return strings.TrimSuffix(src, eventsSidecarExt) + ".jsonl", src, true
 	}
 	transcriptPath = src
-	if candidate := strings.TrimSuffix(src, ".jsonl") + ".events.jsonl"; candidate != src {
+	if candidate := strings.TrimSuffix(src, ".jsonl") + eventsSidecarExt; candidate != src {
 		if _, err := os.Stat(candidate); err == nil {
 			return transcriptPath, candidate, true
 		}

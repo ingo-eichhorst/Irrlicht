@@ -83,11 +83,11 @@ func (d *SessionDetector) finishOrphanedChildren(parentID string) {
 			Reason:    "subagent orphaned (parent turn done, no open tools)",
 		})
 		if err := d.repo.Save(s); err != nil {
-			d.log.LogError("session-detector", s.SessionID,
+			d.log.LogError(logComponentSessionDetector, s.SessionID,
 				fmt.Sprintf("failed to finish orphaned child: %v", err))
 			continue
 		}
-		d.log.LogInfo("session-detector", s.SessionID,
+		d.log.LogInfo(logComponentSessionDetector, s.SessionID,
 			fmt.Sprintf("finished orphaned subagent (%s → ready) — parent %s turn done", prev, parentID))
 		d.broadcast(outbound.PushTypeUpdated, s)
 	}
@@ -135,11 +135,11 @@ func (d *SessionDetector) applySubagentCompletions(parentID string, completions 
 				Reason:    "subagent completed (parent task-notification)",
 			})
 			if err := d.repo.Save(s); err != nil {
-				d.log.LogError("session-detector", s.SessionID,
+				d.log.LogError(logComponentSessionDetector, s.SessionID,
 					fmt.Sprintf("failed to apply subagent completion: %v", err))
 				continue
 			}
-			d.log.LogInfo("session-detector", s.SessionID,
+			d.log.LogInfo(logComponentSessionDetector, s.SessionID,
 				fmt.Sprintf("subagent completed via parent task-notification (%s → ready, parent %s)", prev, parentID))
 			d.broadcast(outbound.PushTypeUpdated, s)
 			break
@@ -198,11 +198,11 @@ func (d *SessionDetector) holdParentWorkingForNewChild(parentID string) {
 		parent.UpdatedAt = time.Now().Unix()
 		d.refreshSubagentSummary(parent)
 		if err := d.repo.Save(parent); err != nil {
-			d.log.LogError("session-detector", parentID,
+			d.log.LogError(logComponentSessionDetector, parentID,
 				fmt.Sprintf("failed to hold parent working for new child: %v", err))
 			return
 		}
-		d.log.LogInfo("session-detector", parentID,
+		d.log.LogInfo(logComponentSessionDetector, parentID,
 			"holding parent working — new child discovered while ready")
 		d.broadcast(outbound.PushTypeUpdated, parent)
 	})
@@ -237,7 +237,7 @@ func (d *SessionDetector) reevaluateParent(parentID string) {
 	d.refreshSubagentSummary(parent)
 	if !parent.Subagents.Equal(prevSummary) {
 		if err := d.repo.Save(parent); err != nil {
-			d.log.LogError("session-detector", parentID,
+			d.log.LogError(logComponentSessionDetector, parentID,
 				fmt.Sprintf("failed to persist refreshed subagent summary: %v", err))
 		}
 		d.broadcast(outbound.PushTypeUpdated, parent)
@@ -267,7 +267,7 @@ func (d *SessionDetector) reevaluateParent(parentID string) {
 
 	now := time.Now().Unix()
 	if reason != "" {
-		d.log.LogInfo("session-detector", parentID,
+		d.log.LogInfo(logComponentSessionDetector, parentID,
 			fmt.Sprintf("children done, parent re-evaluated: %s", reason))
 	}
 	d.record(lifecycle.Event{Kind: lifecycle.KindStateTransition, SessionID: parentID, PrevState: parent.State, NewState: newState, Reason: reason})
@@ -278,7 +278,7 @@ func (d *SessionDetector) reevaluateParent(parentID string) {
 	}
 
 	if err := d.repo.Save(parent); err != nil {
-		d.log.LogError("session-detector", parentID,
+		d.log.LogError(logComponentSessionDetector, parentID,
 			fmt.Sprintf("failed to save parent re-evaluation: %v", err))
 		return
 	}
@@ -293,7 +293,7 @@ func (d *SessionDetector) reevaluateParent(parentID string) {
 		d.refreshSubagentSummary(parent)
 		if !parent.Subagents.Equal(prev) {
 			if err := d.repo.Save(parent); err != nil {
-				d.log.LogError("session-detector", parentID,
+				d.log.LogError(logComponentSessionDetector, parentID,
 					fmt.Sprintf("failed to persist cleared subagent summary: %v", err))
 			}
 			d.broadcast(outbound.PushTypeUpdated, parent)

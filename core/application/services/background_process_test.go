@@ -358,6 +358,12 @@ func TestSessionDetector_BackgroundMixed_IndependentLivenessAndPurge(t *testing.
 		det.SetBackgroundProbeForTest(func([]string) bool { return outAlive })
 		det.SetBackgroundPIDProbeForTest(func([]string) bool { return pidAlive })
 
+		// godre:S8188 wants cancel deferred here, but this helper is invoked
+		// from inside each t.Run subtest below and returns before the
+		// subtest's assertions run — a bare `defer` at this scope would
+		// cancel det.Run mid-subtest. t.Cleanup(subtest t) is the correct
+		// mechanism: it defers cancel+drain to the END of whichever subtest
+		// called runMixed, not to this helper's own return.
 		ctx, cancel := context.WithCancel(context.Background())
 		done := make(chan error, 1)
 		go func() { done <- det.Run(ctx) }()

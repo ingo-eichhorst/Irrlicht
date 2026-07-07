@@ -30,9 +30,13 @@ emit_session_contract() {
     echo "$(daemon_sid "${SES_TRANSCRIPT[$i]}")" >> "$STAGING/session.uuids"
     echo "${SES_TRANSCRIPT[$i]}" >> "$STAGING/transcript.paths"
   done
+  return 0
 }
 
-# drive_exit maps EXIT_REASON to the process exit code and exits.
+# drive_exit maps EXIT_REASON to the process exit code and exits. Every case
+# (including the catch-all) calls exit, so this function never returns
+# normally — no trailing `return` (it would be unreachable dead code;
+# shellcheck SC2317 flags exactly that).
 drive_exit() {
   case "$EXIT_REASON" in
     ok)            exit 0 ;;

@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	_ "modernc.org/sqlite"
+	_ "modernc.org/sqlite" // registers the "sqlite" driver for database/sql
 )
 
 func TestParseTranscriptPath_RawDBPath(t *testing.T) {

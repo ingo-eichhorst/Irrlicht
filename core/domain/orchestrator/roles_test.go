@@ -2,18 +2,22 @@ package orchestrator
 
 import "testing"
 
+// roleTestCase is one DeriveGasTownRole table-test case: an input cwd and
+// the RoleInfo fields (or nil-ness) it should produce.
+type roleTestCase struct {
+	name     string
+	cwd      string
+	wantRole string
+	wantRig  string
+	wantName string
+	wantIcon string
+	wantNil  bool
+}
+
 func TestDeriveGasTownRole(t *testing.T) {
 	const gtRoot = "/Users/test/gt"
 
-	tests := []struct {
-		name     string
-		cwd      string
-		wantRole string
-		wantRig  string
-		wantName string
-		wantIcon string
-		wantNil  bool
-	}{
+	tests := []roleTestCase{
 		{name: "mayor", cwd: gtRoot + "/mayor", wantRole: "mayor", wantIcon: "\U0001F3A9"},
 		{name: "mayor nested", cwd: gtRoot + "/mayor/subdir", wantRole: "mayor", wantIcon: "\U0001F3A9"},
 		{name: "deacon", cwd: gtRoot + "/deacon", wantRole: "deacon", wantIcon: "\U0001F4CB"},
@@ -54,29 +58,35 @@ func TestDeriveGasTownRole(t *testing.T) {
 				root = ""
 			}
 			ri := DeriveGasTownRole(tt.cwd, root, icons)
-
-			if tt.wantNil {
-				if ri != nil {
-					t.Errorf("got %+v, want nil", ri)
-				}
-				return
-			}
-
-			if ri == nil {
-				t.Fatal("got nil, want RoleInfo")
-			}
-			if ri.Role != tt.wantRole {
-				t.Errorf("Role = %q, want %q", ri.Role, tt.wantRole)
-			}
-			if ri.Rig != tt.wantRig {
-				t.Errorf("Rig = %q, want %q", ri.Rig, tt.wantRig)
-			}
-			if ri.Name != tt.wantName {
-				t.Errorf("Name = %q, want %q", ri.Name, tt.wantName)
-			}
-			if ri.Icon != tt.wantIcon {
-				t.Errorf("Icon = %q, want %q", ri.Icon, tt.wantIcon)
-			}
+			checkRoleInfo(t, tt, ri)
 		})
+	}
+}
+
+// checkRoleInfo asserts that ri matches tt's expectations, covering both the
+// wantNil case and the populated-RoleInfo field-by-field comparison.
+func checkRoleInfo(t *testing.T, tt roleTestCase, ri *RoleInfo) {
+	t.Helper()
+	if tt.wantNil {
+		if ri != nil {
+			t.Errorf("got %+v, want nil", ri)
+		}
+		return
+	}
+
+	if ri == nil {
+		t.Fatal("got nil, want RoleInfo")
+	}
+	if ri.Role != tt.wantRole {
+		t.Errorf("Role = %q, want %q", ri.Role, tt.wantRole)
+	}
+	if ri.Rig != tt.wantRig {
+		t.Errorf("Rig = %q, want %q", ri.Rig, tt.wantRig)
+	}
+	if ri.Name != tt.wantName {
+		t.Errorf("Name = %q, want %q", ri.Name, tt.wantName)
+	}
+	if ri.Icon != tt.wantIcon {
+		t.Errorf("Icon = %q, want %q", ri.Icon, tt.wantIcon)
 	}
 }

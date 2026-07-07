@@ -803,7 +803,7 @@ struct SessionListView: View {
     /// headline doesn't collapse to an icon-only sliver next to a
     /// bars chip.
     @ViewBuilder
-    private func quotaUsageBody(_ d: QuotaWidgetData, compact: Bool) -> some View {
+    private func quotaUsageBody(_ d: QuotaWidgetData, compact _: Bool) -> some View {
         let spend = sessionManager.providerCosts[d.id]?[usageCostTimeframe.rawValue] ?? 0
         Button(action: cycleUsageTimeframe) {
             VStack(alignment: .leading, spacing: 1) {

@@ -546,7 +546,7 @@ func (pm *PIDManager) HandlePIDAssigned(pid int, sessionID string) {
 	// Register with ProcessWatcher for exit monitoring.
 	if pm.pw != nil {
 		if err := pm.pw.Watch(pid, sessionID); err != nil {
-			pm.log.LogError("session-detector", sessionID,
+			pm.log.LogError(logComponentSessionDetector, sessionID,
 				fmt.Sprintf("failed to watch pid %d: %v", pid, err))
 		}
 	}
@@ -565,7 +565,7 @@ func (pm *PIDManager) HandlePIDAssigned(pid int, sessionID string) {
 // and the session looks "leaked" in the recording (issue #169).
 func (pm *PIDManager) cleanupStalePIDHolders(stale []*session.SessionState, sessionID string, pid int) {
 	for _, old := range stale {
-		pm.log.LogInfo("session-detector", old.SessionID,
+		pm.log.LogInfo(logComponentSessionDetector, old.SessionID,
 			fmt.Sprintf("replaced by new session %s (same pid %d) — deleting", sessionID, pid))
 
 		pm.record(lifecycle.Event{
@@ -691,7 +691,7 @@ func (pm *PIDManager) TryDiscoverPID(sessionID, cwd, transcriptPath, adapter str
 	if strings.HasPrefix(sessionID, "proc-") {
 		var pid int
 		if _, err := fmt.Sscanf(sessionID, "proc-%d", &pid); err == nil && pid > 0 {
-			pm.log.LogInfo("session-detector", sessionID,
+			pm.log.LogInfo(logComponentSessionDetector, sessionID,
 				fmt.Sprintf("encoded pid %d for %s pre-session", pid, adapter))
 			pm.HandlePIDAssigned(pid, sessionID)
 			return true
@@ -708,7 +708,7 @@ func (pm *PIDManager) TryDiscoverPID(sessionID, cwd, transcriptPath, adapter str
 	}
 
 	if pid, err := discoverFn(cwd, transcriptPath, pm.claimAwareDisambiguate(sessionID)); err == nil && pid > 0 {
-		pm.log.LogInfo("session-detector", sessionID,
+		pm.log.LogInfo(logComponentSessionDetector, sessionID,
 			fmt.Sprintf("discovered pid %d for %s session", pid, adapter))
 		pm.HandlePIDAssigned(pid, sessionID)
 		return true
@@ -894,12 +894,12 @@ func (pm *PIDManager) reapDeadOrInfraPID(snap livenessSnapshot) bool {
 	if snap.pid <= 0 {
 		return false
 	}
-	if err := syscall.Kill(snap.pid, 0); err == syscall.ESRCH {
+	if syscall.Kill(snap.pid, 0) == syscall.ESRCH {
 		pm.HandleProcessExit(snap.pid, snap.state.SessionID, "pid exited (ESRCH)")
 		return true
 	}
 	if pm.isBoundToInfra(snap) {
-		pm.log.LogInfo("session-detector", snap.state.SessionID,
+		pm.log.LogInfo(logComponentSessionDetector, snap.state.SessionID,
 			fmt.Sprintf("pid %d is %s background infra, not the session — reaping ghost",
 				snap.pid, snap.adapter))
 		pm.HandleProcessExit(snap.pid, snap.state.SessionID,
@@ -947,7 +947,7 @@ func (pm *PIDManager) sweepStaleSnapshot(snap livenessSnapshot) {
 		return
 	}
 	if snap.sessionState == session.StateReady || snap.pid == 0 {
-		pm.log.LogInfo("session-detector", snap.state.SessionID,
+		pm.log.LogInfo(logComponentSessionDetector, snap.state.SessionID,
 			fmt.Sprintf("%s session (pid=%d) idle for >%v, deleting",
 				snap.sessionState, snap.pid, pm.readyTTL))
 		pm.deleteWithChildren(snap.state,
@@ -1004,7 +1004,7 @@ func (pm *PIDManager) reapUnboundReadyGhost(snap livenessSnapshot) bool {
 	if !isStaleTranscript(snap.transcriptPath) {
 		return false
 	}
-	pm.log.LogInfo("session-detector", snap.state.SessionID,
+	pm.log.LogInfo(logComponentSessionDetector, snap.state.SessionID,
 		"ready session with no PID and stale transcript for >30s, deleting")
 	pm.deleteWithChildren(snap.state,
 		"ghost reaped: PID=0, ready, stale transcript >30s — pre-session never bound a process")
@@ -1083,7 +1083,7 @@ func (pm *PIDManager) seedAlivePIDs(states []*session.SessionState) map[int]*ses
 			// inside the parent process and never get their own PID.
 			// cwdMissing also catches zombies re-touched by `claude --resume`
 			// after the worktree was deleted (#321).
-			pm.log.LogInfo("session-detector-seed", state.SessionID, "deleting orphan session")
+			pm.log.LogInfo(logComponentSessionDetectorSeed, state.SessionID, "deleting orphan session")
 			pm.deleteWithChildren(state, "orphan session at seed — PID discovery never succeeded")
 		}
 	}
@@ -1094,15 +1094,15 @@ func (pm *PIDManager) seedAlivePIDs(states []*session.SessionState) map[int]*ses
 // process is dead, otherwise watches it and backfills launcher metadata.
 // Returns true when the state remains alive after processing.
 func (pm *PIDManager) handleAlivePIDState(state *session.SessionState) bool {
-	if err := syscall.Kill(state.PID, 0); err == syscall.ESRCH {
-		pm.log.LogInfo("session-detector-seed", state.SessionID,
+	if syscall.Kill(state.PID, 0) == syscall.ESRCH {
+		pm.log.LogInfo(logComponentSessionDetectorSeed, state.SessionID,
 			fmt.Sprintf("pid %d dead, deleting session", state.PID))
 		pm.deleteWithChildren(state, fmt.Sprintf("pid %d dead at seed (ESRCH)", state.PID))
 		return false
 	}
 	if pm.pw != nil {
 		if err := pm.pw.Watch(state.PID, state.SessionID); err != nil {
-			pm.log.LogError("session-detector-seed", state.SessionID,
+			pm.log.LogError(logComponentSessionDetectorSeed, state.SessionID,
 				fmt.Sprintf("failed to watch existing pid %d: %v", state.PID, err))
 		}
 	}
@@ -1186,7 +1186,7 @@ func (pm *PIDManager) dedupeByPID(states []*session.SessionState, newestByPID ma
 			if s, _ := pm.repo.Load(state.SessionID); s == nil {
 				continue
 			}
-			pm.removeSessionUntracked("session-detector-seed", state,
+			pm.removeSessionUntracked(logComponentSessionDetectorSeed, state,
 				fmt.Sprintf("duplicate pid %d (keeping %s) — deleting", pid, newest.SessionID))
 		}
 	}
@@ -1255,7 +1255,7 @@ func (pm *PIDManager) sweepSupersededPreSessions(states []*session.SessionState)
 			continue
 		}
 		if candidate, _ := findSupersedingSession(proc, states); candidate != nil {
-			pm.removeSessionUntracked("session-detector-seed", proc,
+			pm.removeSessionUntracked(logComponentSessionDetectorSeed, proc,
 				fmt.Sprintf("pre-session superseded by %s — deleting", candidate.SessionID))
 		}
 	}
@@ -1313,7 +1313,7 @@ func (pm *PIDManager) sweepSupersededPreSessionsPeriodic() {
 		if s, _ := pm.repo.Load(v.state.SessionID); s == nil {
 			continue
 		}
-		pm.removeSessionUntracked("session-detector", v.state,
+		pm.removeSessionUntracked(logComponentSessionDetector, v.state,
 			fmt.Sprintf("pre-session superseded by %s (PID-bound to a sibling) — deleting", v.candidate))
 	}
 }

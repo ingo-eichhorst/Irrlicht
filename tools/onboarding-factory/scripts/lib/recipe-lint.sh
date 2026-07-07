@@ -49,7 +49,9 @@ driver_step_types_from_file() {
 #     Empty for a headless `prompt` cell (no script) — which can never hit a
 #     driver-step gap. Reads the shard recipe via shard-lib.
 recipe_step_types() {
-  shard_recipe "$1" "$2" | jq -r '.script // [] | .[].type' 2>/dev/null | sort -u
+  local scenario="$1" agent="$2"
+  shard_recipe "$scenario" "$agent" | jq -r '.script // [] | .[].type' 2>/dev/null | sort -u
+  return 0
 }
 
 # recipe_lint_gaps <driver-file> <scenario> <agent>
@@ -118,10 +120,12 @@ driver_slash_requires_step_type() {
 #   → the text of every `send` step whose text is a bare slash command. On an
 #     adapter with slash_requires_step_type, these never reach the REPL.
 recipe_send_slash_texts() {
-  shard_recipe "$1" "$2" | jq -r '
+  local scenario="$1" agent="$2"
+  shard_recipe "$scenario" "$agent" | jq -r '
     .script // []
     | .[] | select(.type == "send" and ((.text // "") | startswith("/"))) | .text
   ' 2>/dev/null
+  return 0
 }
 
 # recipe_semantic_gaps <driver-file> <scenario> <agent>
@@ -197,6 +201,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
         case "$p" in
           not-elicited:*)  echo "  - step type '${p#not-elicited:}' is dispatched but produces no effect on $agent" ;;
           slash-in-send:*) echo "  - send-text '${p#slash-in-send:}' is a slash command; use a dedicated 'slash'/'reset_session' step ($agent requires it — headless send stores it as literal text)" ;;
+          *) echo "  - $p" ;;
         esac
       done <<< "$sem"
     } >&2

@@ -25,7 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var menuBarController: MenuBarController?
 
-    func applicationDidFinishLaunching(_ notification: Notification) {
+    func applicationDidFinishLaunching(_: Notification) {
         // LSUIElement apps have no visible menu bar, but NSApp still routes key
         // equivalents through NSApp.mainMenu. Without an Edit menu, Cmd+V/X/C/Z/A
         // don't reach text fields. Set one up invisibly so standard text-editing
@@ -64,7 +64,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         LoginItemManager.reconcileOnLaunch()
     }
 
-    func applicationWillTerminate(_ notification: Notification) {
+    func applicationWillTerminate(_: Notification) {
         daemonManager.stop()
     }
 }

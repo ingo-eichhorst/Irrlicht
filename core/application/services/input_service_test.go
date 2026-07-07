@@ -23,7 +23,7 @@ func (f *fakeController) SendInput(_ string, data []byte) error {
 	f.sentData = data
 	return f.sendErr
 }
-func (f *fakeController) SendCommand(_ string, command string) error {
+func (f *fakeController) SendCommand(_, command string) error {
 	f.sentCommand = command
 	return f.sendErr
 }
@@ -34,7 +34,7 @@ type fakeConsent struct{ granted bool }
 
 func (f fakeConsent) Granted(_, _ string) bool { return f.granted }
 
-// mutableConsent is a consentGate whose answer can change between calls —
+// mutableConsent is a consentGranter whose answer can change between calls —
 // needed to drive a single InputService instance through all three
 // consent states for contracttesting.AssertPermissionGated.
 type mutableConsent struct{ granted bool }
@@ -132,7 +132,7 @@ func TestControllable_ReflectsGate(t *testing.T) {
 }
 
 // TestSendInput_PermissionGateContract wires the backchannel's live
-// per-call ConsentGate check (input_service.go's resolve, the exact
+// per-call ConsentGranter check (input_service.go's resolve, the exact
 // "backchannel write path" issue #797 was filed to guard) into the shared
 // three-state contract: forwarding must be a no-op while the "control"
 // permission is pending or denied, must delegate to the controller once

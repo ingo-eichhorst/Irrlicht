@@ -17,6 +17,11 @@ import (
 	"strings"
 )
 
+// metadataFileName is the on-disk filename for one (scenario, adapter)
+// cell's metadata, e.g.
+// replaydata/agents/<adapter>/scenarios/<folder>/metadata.json.
+const metadataFileName = "metadata.json"
+
 // Shard is one scenario's unified object: the agent-AGNOSTIC spec for one
 // matrix row. It lives in the catalog replaydata/agents/scenarios.json. A
 // scenario is just identity (id, name) + three markdown-ish fields: a one-line
@@ -91,12 +96,34 @@ type Meta struct {
 	TranscriptExtensions map[string]string `json:"transcript_extensions"`
 }
 
+// sanitizePathComponent returns name reduced to a single, safe path segment:
+// "" if name is empty, ".", "..", or contains a path separator after taking
+// its final element — filepath.Base alone isn't enough here since
+// filepath.Base("..") returns ".." unchanged (".." IS its own last element),
+// which would otherwise let AgentCellDir's callers escape the agents/<adapter>/
+// sandbox by one level. A caller that gets "" back will simply fail to find
+// anything on disk, which is the safe outcome for a rejected input.
+func sanitizePathComponent(name string) string {
+	name = filepath.Base(name)
+	if name == "." || name == ".." {
+		return ""
+	}
+	return name
+}
+
 // AgentCellDir returns the directory that holds one (adapter, scenario) cell:
 // replaydata/agents/<adapter>/scenarios/<folder>. Folder is the on-disk
 // recording folder — the dashed-id-prefixed scenario name for standard cells
 // (e.g. 5-4_architect-editor-pair), or a prefixed variant name otherwise.
+//
+// adapter and folder are reduced to a single safe path segment before
+// joining — a defense-in-depth backstop (this package has no HTTP layer of
+// its own to enforce it) against a caller passing a path-separator- or
+// "../"-containing value through to the filesystem. The viewer's HTTP
+// handler already restricts these to a `^[a-z0-9][a-z0-9_-]*$` slug before
+// they ever reach here, so this is a no-op for every legitimate caller.
 func AgentCellDir(repoRoot, adapter, folder string) string {
-	return filepath.Join(repoRoot, "replaydata", "agents", adapter, "scenarios", folder)
+	return filepath.Join(repoRoot, "replaydata", "agents", sanitizePathComponent(adapter), "scenarios", sanitizePathComponent(folder))
 }
 
 // LoadAgentCell reads replaydata/agents/<adapter>/scenarios/<folder>/metadata.json
@@ -104,7 +131,7 @@ func AgentCellDir(repoRoot, adapter, folder string) string {
 // Use this when you already know the folder (e.g. the viewer detail endpoint,
 // keyed by the on-disk folder).
 func LoadAgentCell(repoRoot, adapter, folder string) (*ShardAgent, bool) {
-	b, err := os.ReadFile(filepath.Join(AgentCellDir(repoRoot, adapter, folder), "metadata.json"))
+	b, err := os.ReadFile(filepath.Join(AgentCellDir(repoRoot, adapter, folder), metadataFileName))
 	if err != nil {
 		return nil, false
 	}
@@ -122,7 +149,7 @@ func LoadAgentCell(repoRoot, adapter, folder string) (*ShardAgent, bool) {
 // Empty map on any error; never returns an error.
 func LoadAdapterCells(repoRoot, adapter string) map[string]*ShardAgent {
 	out := map[string]*ShardAgent{}
-	scenDir := filepath.Join(repoRoot, "replaydata", "agents", adapter, "scenarios")
+	scenDir := filepath.Join(repoRoot, "replaydata", "agents", sanitizePathComponent(adapter), "scenarios")
 	entries, err := os.ReadDir(scenDir)
 	if err != nil {
 		return out
@@ -131,7 +158,7 @@ func LoadAdapterCells(repoRoot, adapter string) map[string]*ShardAgent {
 		if !e.IsDir() {
 			continue
 		}
-		b, err := os.ReadFile(filepath.Join(scenDir, e.Name(), "metadata.json"))
+		b, err := os.ReadFile(filepath.Join(scenDir, e.Name(), metadataFileName))
 		if err != nil {
 			continue
 		}
@@ -236,13 +263,13 @@ func FolderForScenario(repoRoot, name string) string {
 // of cell write/spec and of verify all go through it so a cell's metadata.json,
 // expected.jsonl, and recordings never split across two folders.
 func AgentFolderForScenario(repoRoot, adapter, name string) string {
-	scenDir := filepath.Join(repoRoot, "replaydata", "agents", adapter, "scenarios")
+	scenDir := filepath.Join(repoRoot, "replaydata", "agents", sanitizePathComponent(adapter), "scenarios")
 	if entries, err := os.ReadDir(scenDir); err == nil {
 		for _, e := range entries {
 			if !e.IsDir() {
 				continue
 			}
-			b, err := os.ReadFile(filepath.Join(scenDir, e.Name(), "metadata.json"))
+			b, err := os.ReadFile(filepath.Join(scenDir, e.Name(), metadataFileName))
 			if err != nil {
 				continue
 			}

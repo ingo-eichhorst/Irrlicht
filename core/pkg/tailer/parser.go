@@ -411,6 +411,13 @@ type ParserStateProvider interface {
 // which transcript file they are parsing — e.g. to read a metadata sidecar
 // living next to it (Kiro CLI's <uuid>.json, issue #599). The tailer injects
 // the path once at construction; ParseLine itself stays path-free.
+//
+// Deliberately not renamed for godre:S8196 ("-er" suffix convention): this is
+// an optional capability-marker interface (type-asserted with `x, ok :=
+// p.(TranscriptPathAware)`), a well-established alternate Go idiom for that
+// pattern, and it is implemented across three separate adapter packages
+// (kirocli, antigravity) plus pkg/tailer itself — renaming would touch a wide,
+// cross-package surface for a naming style that already reads clearly.
 type TranscriptPathAware interface {
 	SetTranscriptPath(path string)
 }
@@ -527,6 +534,14 @@ func isUserEventType(eventType string) bool {
 	return false
 }
 
+// Normalized Claude model names referenced more than once by
+// NormalizeModelName below (as both an alias target and a switch case).
+const (
+	modelClaudeOpus41   = "claude-opus-4-1"
+	modelClaudeSonnet46 = "claude-sonnet-4-6"
+	modelClaudeHaiku45  = "claude-haiku-4-5"
+)
+
 // NormalizeModelName normalizes model names by removing date suffixes, extended
 // context markers, and handling aliases. Exported for use by adapter parsers.
 func NormalizeModelName(rawModel string) string {
@@ -539,9 +554,9 @@ func NormalizeModelName(rawModel string) string {
 
 	// Handle common aliases first
 	aliases := map[string]string{
-		"opusplan": "claude-opus-4-1",
-		"sonnet":   "claude-sonnet-4-6",
-		"haiku":    "claude-haiku-4-5",
+		"opusplan": modelClaudeOpus41,
+		"sonnet":   modelClaudeSonnet46,
+		"haiku":    modelClaudeHaiku45,
 	}
 	if normalized, exists := aliases[rawModel]; exists {
 		return normalized
@@ -555,14 +570,14 @@ func NormalizeModelName(rawModel string) string {
 	switch {
 	case strings.Contains(normalized, "claude-opus-4-6"):
 		return "claude-opus-4-6"
-	case strings.Contains(normalized, "claude-sonnet-4-6"):
-		return "claude-sonnet-4-6"
+	case strings.Contains(normalized, modelClaudeSonnet46):
+		return modelClaudeSonnet46
 	case strings.Contains(normalized, "claude-sonnet-4-5"):
 		return "claude-sonnet-4-5"
-	case strings.Contains(normalized, "claude-haiku-4-5"):
-		return "claude-haiku-4-5"
-	case strings.Contains(normalized, "claude-opus-4-1"):
-		return "claude-opus-4-1"
+	case strings.Contains(normalized, modelClaudeHaiku45):
+		return modelClaudeHaiku45
+	case strings.Contains(normalized, modelClaudeOpus41):
+		return modelClaudeOpus41
 	case strings.Contains(normalized, "claude-sonnet-4"):
 		return "claude-4-sonnet"
 	case strings.Contains(normalized, "claude-3.5-sonnet"):
@@ -579,31 +594,35 @@ func NormalizeModelName(rawModel string) string {
 func ExtractAssistantText(raw map[string]interface{}) string {
 	var parts []string
 
-	collectText := func(arr []interface{}) {
-		for _, item := range arr {
-			if block, ok := item.(map[string]interface{}); ok {
-				bt := block["type"]
-				if bt == "text" || bt == "output_text" {
-					if text, ok := block["text"].(string); ok && text != "" {
-						parts = append(parts, text)
-					}
-				}
-			}
-		}
-	}
-
 	// Claude Code: message.content[]
 	if msg, ok := raw["message"].(map[string]interface{}); ok {
 		if arr, ok := msg["content"].([]interface{}); ok {
-			collectText(arr)
+			collectAssistantTextBlocks(arr, &parts)
 		}
 	}
 	// Codex: top-level content[]
 	if arr, ok := raw["content"].([]interface{}); ok {
-		collectText(arr)
+		collectAssistantTextBlocks(arr, &parts)
 	}
 
 	return TruncateAssistantText(strings.Join(parts, " "))
+}
+
+// collectAssistantTextBlocks appends the text of each "text"/"output_text"
+// content block in arr to *parts, in order. Shared by both content sources
+// ExtractAssistantText scans (Claude Code's message.content[] and Codex's
+// top-level content[]).
+func collectAssistantTextBlocks(arr []interface{}, parts *[]string) {
+	for _, item := range arr {
+		if block, ok := item.(map[string]interface{}); ok {
+			bt := block["type"]
+			if bt == "text" || bt == "output_text" {
+				if text, ok := block["text"].(string); ok && text != "" {
+					*parts = append(*parts, text)
+				}
+			}
+		}
+	}
 }
 
 // ExtractUserText extracts the prose of a genuine user prompt from a parsed
@@ -615,39 +634,43 @@ func ExtractAssistantText(raw map[string]interface{}) string {
 // Untruncated — the caller (tailer) cleans and caps.
 func ExtractUserText(raw map[string]interface{}) string {
 	var parts []string
-	collectText := func(arr []interface{}) {
-		for _, item := range arr {
-			if block, ok := item.(map[string]interface{}); ok {
-				switch block["type"] {
-				case "text", "input_text":
-					if text, ok := block["text"].(string); ok && text != "" {
-						parts = append(parts, text)
-					}
+	// Claude Code: message.content (string or []block).
+	if msg, ok := raw["message"].(map[string]interface{}); ok {
+		appendContentText(msg["content"], &parts)
+	}
+	// Codex / others: top-level content (string or []block).
+	appendContentText(raw["content"], &parts)
+	return strings.TrimSpace(strings.Join(parts, " "))
+}
+
+// appendContentText appends content's text to *parts: a plain non-empty
+// string is appended directly; a []interface{} is scanned block-by-block via
+// collectUserTextBlocks. Any other shape (nil, object, number) is ignored.
+// Shared by the two content sources ExtractUserText scans.
+func appendContentText(content interface{}, parts *[]string) {
+	switch c := content.(type) {
+	case string:
+		if c != "" {
+			*parts = append(*parts, c)
+		}
+	case []interface{}:
+		collectUserTextBlocks(c, parts)
+	}
+}
+
+// collectUserTextBlocks appends the text of each "text"/"input_text" content
+// block in arr to *parts, in order.
+func collectUserTextBlocks(arr []interface{}, parts *[]string) {
+	for _, item := range arr {
+		if block, ok := item.(map[string]interface{}); ok {
+			switch block["type"] {
+			case "text", "input_text":
+				if text, ok := block["text"].(string); ok && text != "" {
+					*parts = append(*parts, text)
 				}
 			}
 		}
 	}
-	// Claude Code: message.content (string or []block).
-	if msg, ok := raw["message"].(map[string]interface{}); ok {
-		switch c := msg["content"].(type) {
-		case string:
-			if c != "" {
-				parts = append(parts, c)
-			}
-		case []interface{}:
-			collectText(c)
-		}
-	}
-	// Codex / others: top-level content (string or []block).
-	switch c := raw["content"].(type) {
-	case string:
-		if c != "" {
-			parts = append(parts, c)
-		}
-	case []interface{}:
-		collectText(c)
-	}
-	return strings.TrimSpace(strings.Join(parts, " "))
 }
 
 // MaxAssistantTextRunes caps the assistant text kept for waiting-state display.

@@ -27,6 +27,52 @@ type Score struct {
 	MeanJitter      float64 // mean |Δ predicted end-time| between consecutive turns
 }
 
+// episodeAccum holds one episode's raw samples contributed to the aggregate
+// score, before they are folded into ScoreEstimator's running totals.
+type episodeAccum struct {
+	abs, rel, signed           []float64
+	secsToFirst, firstAbs      []float64
+	jitter                     []float64
+	firstFound, scoredAnything bool
+}
+
+// scoreEpisode runs the estimator over every turn of one episode and collects
+// its accuracy, latency, and stability samples. Split out of ScoreEstimator
+// so the per-turn bookkeeping (first-estimate tracking, jitter, forward-only
+// accuracy) doesn't nest inside the per-episode loop.
+func scoreEpisode(est Estimator, ep Episode) episodeAccum {
+	var acc episodeAccum
+	var prevEnd *int64
+	for i := range ep.Turns {
+		pred := est.Predict(ep, i)
+		if pred == nil {
+			continue
+		}
+		predEnd := pred.Unix()
+		if !acc.firstFound {
+			acc.firstFound = true
+			acc.secsToFirst = append(acc.secsToFirst, float64(ep.Turns[i].VirtualUnix-ep.FirstUnix()))
+			acc.firstAbs = append(acc.firstAbs, math.Abs(float64(predEnd-ep.ActualEndUnix)))
+		}
+		if prevEnd != nil {
+			acc.jitter = append(acc.jitter, math.Abs(float64(predEnd-*prevEnd)))
+		}
+		pe := predEnd
+		prevEnd = &pe
+
+		actualRemaining := ep.ActualEndUnix - ep.Turns[i].VirtualUnix
+		if actualRemaining <= 0 {
+			continue // at/after the end — not a forward prediction
+		}
+		err := float64(predEnd - ep.ActualEndUnix) // predicted-remaining − actual-remaining
+		acc.abs = append(acc.abs, math.Abs(err))
+		acc.signed = append(acc.signed, err)
+		acc.rel = append(acc.rel, math.Abs(err)/float64(actualRemaining))
+		acc.scoredAnything = true
+	}
+	return acc
+}
+
 // ScoreEstimator runs one estimator over the episodes and aggregates the
 // metrics. reachedOnly restricts accuracy to episodes that hit completed==total
 // (where the last marker IS the completion, the clean accuracy subset).
@@ -46,40 +92,17 @@ func ScoreEstimator(est Estimator, eps []Episode, reachedOnly bool) Score {
 		}
 		totalEpisodes++
 
-		var prevEnd *int64
-		firstFound := false
-		scoredHere := false
-		for i := range ep.Turns {
-			pred := est.Predict(ep, i)
-			if pred == nil {
-				continue
-			}
-			predEnd := pred.Unix()
-			if !firstFound {
-				firstFound = true
-				secsToFirst = append(secsToFirst, float64(ep.Turns[i].VirtualUnix-ep.FirstUnix()))
-				firstAbs = append(firstAbs, math.Abs(float64(predEnd-ep.ActualEndUnix)))
-			}
-			if prevEnd != nil {
-				jitter = append(jitter, math.Abs(float64(predEnd-*prevEnd)))
-			}
-			pe := predEnd
-			prevEnd = &pe
-
-			actualRemaining := ep.ActualEndUnix - ep.Turns[i].VirtualUnix
-			if actualRemaining <= 0 {
-				continue // at/after the end — not a forward prediction
-			}
-			err := float64(predEnd - ep.ActualEndUnix) // predicted-remaining − actual-remaining
-			abs = append(abs, math.Abs(err))
-			signed = append(signed, err)
-			rel = append(rel, math.Abs(err)/float64(actualRemaining))
-			scoredHere = true
-		}
-		if firstFound {
+		acc := scoreEpisode(est, ep)
+		abs = append(abs, acc.abs...)
+		rel = append(rel, acc.rel...)
+		signed = append(signed, acc.signed...)
+		secsToFirst = append(secsToFirst, acc.secsToFirst...)
+		firstAbs = append(firstAbs, acc.firstAbs...)
+		jitter = append(jitter, acc.jitter...)
+		if acc.firstFound {
 			episodesWithEstimate++
 		}
-		if scoredHere {
+		if acc.scoredAnything {
 			sc.Episodes++
 		}
 	}

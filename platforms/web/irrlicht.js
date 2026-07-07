@@ -1,20 +1,16 @@
 import { isGroupCollapsed, toggleGroupCollapsed } from './collapsedGroups.js';
 import { isSummaryCollapsed, toggleSummaryCollapsed, anySummaryCollapsed, collapseAllSummaries, expandAllSummaries } from './collapsedSummaries.js';
+import { initHistoryTab } from './historyTab.js';
+import { initPermissionsWizard, refreshPermissions } from './permissionsWizard.js';
 import {
-  initHistoryTab, historyQuery, histTokens, histCount, histCO2, CHART_LABELS, DRILL_NEXT, historyRunningSum,
-} from './historyTab.js';
-import {
-  initPermissionsWizard, refreshPermissions, pendingWizardAgents, stillPendingForAgents, buildPermissionAnswers,
-} from './permissionsWizard.js';
-import {
-  showQuotaForecast, setShowQuotaForecast, renderHeaderTitle, refreshProviderSettings, formatUsageCost,
+  showQuotaForecast, setShowQuotaForecast, renderHeaderTitle, refreshProviderSettings,
 } from './quotaChips.js';
 import {
   compoundSessionId, displaySessionId, sessionOrigin, sourceIdOf, localBareIds, isShadowedRemote, daemonSessionIds,
 } from './sessionIdentity.js';
 import { relayFrameKind, seqGap, aggregateConnState, relayWsUrl } from './connectionProtocol.js';
 import {
-  stateIcon, shortModel, formatCost, costCellDisplay, fmtDuration, formatElapsed, fmtEtaDuration, fmtEtaText,
+  stateIcon, shortModel, formatCost, costCellDisplay, fmtDuration, formatElapsed,
   taskEtaPresentation, shortID, pressureClass, pressureColor, formatTokens, esc, activeSubagentCount,
   cacheBloatBadgeText,
 } from './formatters.js';
@@ -30,7 +26,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
     // registry is essentially static (changes require a daemon restart).
     // Exported (live binding) so quotaChips.js can resolve provider/adapter
     // icon branding without owning session state itself.
-    export let agentRegistry = {};
+    export const agentRegistry = {};
     let sessionIndex = new Map();
 
     // --- Theme ---
@@ -45,12 +41,12 @@ import { reconcile, paintRowNum } from './domReconcile.js';
     function resolvedTheme() {
       const t = storedTheme();
       if (t) return t;
-      return (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) ? 'light' : 'dark';
+      return window.matchMedia?.('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
     }
     function applyStoredTheme() {
       const t = storedTheme();
-      if (t) document.documentElement.setAttribute('data-theme', t);
-      else document.documentElement.removeAttribute('data-theme');
+      if (t) document.documentElement.dataset.theme = t;
+      else delete document.documentElement.dataset.theme;
       updateThemeToggleGlyph();
     }
     function updateThemeToggleGlyph() {
@@ -91,7 +87,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       { key: '60min',   label: '60 Min',  isHistory: true,  granularity: 60 },
     ];
     let currentDisplayMode = localStorage.getItem('irrlicht_displayMode') || 'context';
-    if (!DISPLAY_MODES.find(m => m.key === currentDisplayMode)) currentDisplayMode = 'context';
+    if (!DISPLAY_MODES.some(m => m.key === currentDisplayMode)) currentDisplayMode = 'context';
     function currentMode() {
       return DISPLAY_MODES.find(m => m.key === currentDisplayMode) || DISPLAY_MODES[0];
     }
@@ -142,11 +138,11 @@ import { reconcile, paintRowNum } from './domReconcile.js';
     function loadSettings() {
       try {
         const raw = localStorage.getItem(SETTINGS_KEY);
-        if (!raw) return Object.assign({}, SETTINGS_DEFAULTS);
+        if (!raw) return { ...SETTINGS_DEFAULTS };
         const parsed = JSON.parse(raw);
-        return Object.assign({}, SETTINGS_DEFAULTS, (parsed && typeof parsed === 'object') ? parsed : {});
+        return { ...SETTINGS_DEFAULTS, ...((parsed && typeof parsed === 'object') ? parsed : {}) };
       } catch (e) {
-        return Object.assign({}, SETTINGS_DEFAULTS);
+        return { ...SETTINGS_DEFAULTS };
       }
     }
     let settings = loadSettings();
@@ -174,17 +170,17 @@ import { reconcile, paintRowNum } from './domReconcile.js';
     }
     function rowLabel(s) {
       // Best-effort "project · branch" label that matches what the row shows.
-      const proj = s && s.project_name ? s.project_name : '';
-      const branch = s && s.git_branch ? s.git_branch : '';
+      const proj = s?.project_name || '';
+      const branch = s?.git_branch || '';
       if (proj && branch) return proj + ' · ' + branch;
-      return proj || branch || (s && s.session_id ? displaySessionId(s.session_id).slice(0, 8) : 'session');
+      return proj || branch || (s?.session_id ? displaySessionId(s.session_id).slice(0, 8) : 'session');
     }
     function maybeNotifyOnUpdate(prev, next) {
       if (!next) return;
       const prevState    = prev ? prev.state : '';
-      const prevPressure = (prev && prev.metrics) ? prev.metrics.pressure_level : '';
+      const prevPressure = prev?.metrics?.pressure_level || '';
       const nextState    = next.state || '';
-      const nextPressure = (next.metrics && next.metrics.pressure_level) || '';
+      const nextPressure = next.metrics?.pressure_level || '';
       const sid          = next.session_id;
       const label        = rowLabel(next);
 
@@ -217,13 +213,13 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       { key: 'year',  suffix: '/yr' },
     ];
     let currentTimeframe = localStorage.getItem('irrlicht_costTimeframe') || 'day';
-    if (!COST_TIMEFRAMES.find(t => t.key === currentTimeframe)) currentTimeframe = 'day';
+    if (!COST_TIMEFRAMES.some(t => t.key === currentTimeframe)) currentTimeframe = 'day';
 
     // Usage chips share one timeframe, cycled by clicking any of them and
     // persisted independently of the project-cost timeframe above — mirrors
     // macOS's separate usageCostTimeframe (#386).
     export let currentUsageTimeframe = localStorage.getItem('irrlicht_usageCostTimeframe') || 'day';
-    if (!COST_TIMEFRAMES.find(t => t.key === currentUsageTimeframe)) currentUsageTimeframe = 'day';
+    if (!COST_TIMEFRAMES.some(t => t.key === currentUsageTimeframe)) currentUsageTimeframe = 'day';
 
     // costDisplayMode selects what the per-session row's cost slot shows —
     // 'cost' ($) or 'co2' (estimated CO2e), issue #829. Click-to-cycle rather
@@ -297,7 +293,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
 
     function applyHistorySnapshot(sessionID, history, generations) {
       for (const granKey of Object.keys(history)) {
-        const gran = parseInt(granKey, 10);
+        const gran = Number.parseInt(granKey, 10);
         if (![1, 10, 60].includes(gran)) continue;
         const buckets = decodeHistoryBuckets(history[granKey]);
         if (!buckets) continue;
@@ -308,7 +304,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       if (generations) {
         const perGran = lastTickGen[sessionID] || Object.create(null);
         for (const granKey of Object.keys(generations)) {
-          const gran = parseInt(granKey, 10);
+          const gran = Number.parseInt(granKey, 10);
           if (gran === 1 || gran === 10 || gran === 60) perGran[gran] = generations[granKey];
         }
         lastTickGen[sessionID] = perGran;
@@ -326,9 +322,9 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       let changed = false;
       for (const sid of Object.keys(buckets)) {
         // Skip if this tick has already been folded into our snapshot.
-        if (bucketGenerations && bucketGenerations[sid] !== undefined) {
+        if (bucketGenerations?.[sid] !== undefined) {
           const gen = bucketGenerations[sid];
-          const last = (lastTickGen[sid] && lastTickGen[sid][granularitySec]) || 0;
+          const last = lastTickGen[sid]?.[granularitySec] || 0;
           if (last && gen <= last) continue;
           if (!lastTickGen[sid]) lastTickGen[sid] = Object.create(null);
           lastTickGen[sid][granularitySec] = gen;
@@ -380,7 +376,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
             sessionIndex.set(a.session_id, {group: g, agent: a, parent: null});
             indexChildren(g, a);
           }
-          if (g.groups && g.groups.length) walk(g.groups, true);
+          if (g.groups?.length) walk(g.groups, true);
         }
       })(dashboardGroups, false);
     }
@@ -393,14 +389,14 @@ import { reconcile, paintRowNum } from './domReconcile.js';
     }
 
     function applySessionUpdate(s) {
-      var entry = sessionIndex.get(s.session_id);
+      const entry = sessionIndex.get(s.session_id);
       if (entry) {
-        var a = entry.agent;
+        const a = entry.agent;
         // Capture previous state + pressure before merging so we can fire
         // notifications on the transition (web parity for the menu-bar app's
         // ready/waiting/pressure alerts).
-        var prevSnap = { state: a.state, metrics: a.metrics ? { pressure_level: a.metrics.pressure_level } : null };
-        var role = a.role, wn = a.worker_name, wid = a.worker_id, ch = a.children;
+        const prevSnap = { state: a.state, metrics: a.metrics ? { pressure_level: a.metrics.pressure_level } : null };
+        const role = a.role, wn = a.worker_name, wid = a.worker_id, ch = a.children;
         Object.assign(a, s);
         if (role && !a.role) a.role = role;
         if (wn && !a.worker_name) a.worker_name = wn;
@@ -416,12 +412,12 @@ import { reconcile, paintRowNum } from './domReconcile.js';
         // structural, not project-derived, so a project_name mismatch must
         // not tear them out of their rig.
         if (!entry.parent && !entry.group._nested) {
-          var desired = a.project_name || 'unknown';
+          const desired = a.project_name || 'unknown';
           if (entry.group.name !== desired) {
-            var oldGroup = entry.group;
-            var ai = oldGroup.agents.findIndex(x => x.session_id === s.session_id);
+            const oldGroup = entry.group;
+            const ai = oldGroup.agents.findIndex(x => x.session_id === s.session_id);
             if (ai >= 0) oldGroup.agents.splice(ai, 1);
-            var target = dashboardGroups.find(g => g.name === desired);
+            let target = dashboardGroups.find(g => g.name === desired);
             if (!target) {
               target = {name: desired, agents: []};
               dashboardGroups.push(target);
@@ -434,7 +430,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
             // doesn't follow a reference to a group we just spliced out.
             indexChildren(target, a);
             if (oldGroup.agents.length === 0) {
-              var gi = dashboardGroups.indexOf(oldGroup);
+              const gi = dashboardGroups.indexOf(oldGroup);
               if (gi >= 0) dashboardGroups.splice(gi, 1);
             }
           }
@@ -445,14 +441,14 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       // First sight of this session — treat any non-trivial state as a
       // transition for notification purposes.
       maybeNotifyOnUpdate(null, s);
-      var groupName = s.project_name || 'unknown';
-      var group = dashboardGroups.find(g => g.name === groupName);
+      const groupName = s.project_name || 'unknown';
+      let group = dashboardGroups.find(g => g.name === groupName);
       if (!group) {
         group = {name: groupName, agents: []};
         dashboardGroups.push(group);
       }
       if (s.parent_session_id) {
-        var parentEntry = sessionIndex.get(s.parent_session_id);
+        const parentEntry = sessionIndex.get(s.parent_session_id);
         if (parentEntry) {
           if (!parentEntry.agent.children) parentEntry.agent.children = [];
           parentEntry.agent.children.push(s);
@@ -465,7 +461,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
     }
 
     function applySessionDelete(sessionId) {
-      var entry = sessionIndex.get(sessionId);
+      const entry = sessionIndex.get(sessionId);
       delete lastTickGen[sessionId];
       delete historyByGranularity[1][sessionId];
       delete historyByGranularity[10][sessionId];
@@ -476,14 +472,14 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       if (!entry) return;
       sessionIndex.delete(sessionId);
       if (entry.parent) {
-        var ci = entry.parent.children.findIndex(c => c.session_id === sessionId);
+        const ci = entry.parent.children.findIndex(c => c.session_id === sessionId);
         if (ci >= 0) entry.parent.children.splice(ci, 1);
       } else {
-        var ai = entry.group.agents.findIndex(a => a.session_id === sessionId);
+        const ai = entry.group.agents.findIndex(a => a.session_id === sessionId);
         if (ai >= 0) entry.group.agents.splice(ai, 1);
       }
       if (entry.group.agents.length === 0) {
-        var gi = dashboardGroups.indexOf(entry.group);
+        const gi = dashboardGroups.indexOf(entry.group);
         if (gi >= 0) dashboardGroups.splice(gi, 1);
       }
     }
@@ -572,7 +568,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
     // quotaChips.js.
     export function usageSpendForChip(chip) {
       const byTf = dashboardProviderCosts[chip.key];
-      const v = byTf && byTf[currentUsageTimeframe];
+      const v = byTf?.[currentUsageTimeframe];
       return typeof v === 'number' ? v : 0;
     }
 
@@ -1000,7 +996,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
         // Show headers when there's more than one top-level group, or when any
         // group nests sub-groups (Gas Town rigs) that need their own headers.
         const showHeaders = dashboardGroups.length > 1 ||
-          dashboardGroups.some(g => g.groups && g.groups.length);
+          dashboardGroups.some(g => g.groups?.length);
         let agentNum = 0;
 
         // Local-wins (#538): a relay session whose bare id is also delivered by
@@ -1034,7 +1030,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
             // the parent; the version-attribution string can be a full
             // sentence, too wide for this fixed-width icon row (mirrors
             // macOS's cacheBloatBlock).
-            if (a.metrics && a.metrics.cache_bloat) {
+            if (a.metrics?.cache_bloat) {
               items.push({type: 'cachebloat', key: 'cb:' + a.session_id, agent: a});
             }
             // Task summary + waiting question — collapsible block beneath the
@@ -1046,7 +1042,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
             // Task progress dots — separate row beneath the parent so they
             // don't push the meta columns off the session row. Matches the
             // overlay's TaskListView placement (SessionListView.swift:629-632).
-            const tasks = (a.metrics && a.metrics.tasks) || [];
+            const tasks = a.metrics?.tasks || [];
             const tasksOpen = tasks.length > 0 && !tasks.every(t => t.status === 'completed');
             if (tasksOpen) {
               items.push({type: 'tasks', key: 'tk:' + a.session_id, agent: a, isChild: false});
@@ -1100,7 +1096,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
         for (const g of groups) {
           for (const a of (g.agents || [])) topLevel.push(a);
           collectAll(g.agents || []);
-          if (g.groups && g.groups.length) walk(g.groups);
+          if (g.groups?.length) walk(g.groups);
         }
       })(dashboardGroups);
       updateSummary(all, topLevel);
@@ -1195,7 +1191,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       return TASK_STATUSES.has(s) ? s : 'pending';
     }
     function updateTaskListRow(el, agent) {
-      const tasks = (agent.metrics && agent.metrics.tasks) || [];
+      const tasks = agent.metrics?.tasks || [];
       if (tasks.length === 0) { el.style.display = 'none'; return; }
       el.style.display = '';
       const done = tasks.filter(t => t.status === 'completed').length;
@@ -1230,10 +1226,10 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       return el;
     }
     function updateSummaryRow(el, agent) {
-      const summary = (agent.metrics && agent.metrics.task_summary) || '';
+      const summary = agent.metrics?.task_summary || '';
       // Prefer the terse one-line headline (issue #759); fall back to the full
       // last-assistant text for older daemons. The full text is kept for hover.
-      const questionFull = (agent.state === 'waiting' && agent.metrics && agent.metrics.last_assistant_text) || '';
+      const questionFull = (agent.state === 'waiting' && agent.metrics?.last_assistant_text) || '';
       const question = (agent.state === 'waiting' && agent.metrics && (agent.metrics.question_headline || agent.metrics.last_assistant_text)) || '';
       if (!summary && !question) { el.style.display = 'none'; return; }
       el.style.display = '';
@@ -1297,7 +1293,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       const now = Date.now() / 1000;
       for (const el of document.querySelectorAll('.row-elapsed')) {
         if (el.dataset.active === '1') {
-          const fs = parseFloat(el.dataset.firstSeen);
+          const fs = Number.parseFloat(el.dataset.firstSeen);
           if (fs) el.textContent = fmtDuration(Math.max(0, Math.floor(now - fs)));
         }
       }
@@ -1306,14 +1302,14 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       // and visibility/suppression decisions stay with updateSessionRow —
       // the tick only refreshes the countdown and staleness.
       for (const el of document.querySelectorAll('.row-eta')) {
-        const eta = parseFloat(el.dataset.eta);
+        const eta = Number.parseFloat(el.dataset.eta);
         if (!eta) continue;
         const info = taskEtaPresentation({
           task_completion_eta: eta,
           task_estimate: {
-            total_rounds: parseInt(el.dataset.total, 10) || 0,
-            completed_rounds: parseInt(el.dataset.completed, 10) || 0,
-            updated_at: parseFloat(el.dataset.updatedAt) || 0,
+            total_rounds: Number.parseInt(el.dataset.total, 10) || 0,
+            completed_rounds: Number.parseInt(el.dataset.completed, 10) || 0,
+            updated_at: Number.parseFloat(el.dataset.updatedAt) || 0,
           },
         }, 'working', now);
         if (info) {
@@ -1326,7 +1322,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       // we don't waste DOM reads when the chip is hidden.
       if (settings.debugMode) {
         for (const el of document.querySelectorAll('.row-created')) {
-          const fs = parseFloat(el.dataset.firstSeen);
+          const fs = Number.parseFloat(el.dataset.firstSeen);
           if (fs) el.textContent = 'created ' + fmtDuration(Math.max(0, Math.floor(now - fs))) + ' ago';
         }
       }
@@ -1364,7 +1360,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       const ctx = canvas.getContext('2d');
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, w, h);
-      if (!rec || !rec.states.length) return;
+      if (!rec?.states.length) return;
       // Right-anchor: newest bucket lands at the right edge, oldest fills
       // backwards leftward. Empty leading buckets (no data yet) are
       // represented by an unpainted left section. Mirrors macOS
@@ -1400,7 +1396,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
     ]).then(([entries, resp]) => {
       if (Array.isArray(entries)) {
         for (const e of entries) {
-          if (e && e.name) agentRegistry[e.name] = e;
+          if (e?.name) agentRegistry[e.name] = e;
         }
       }
       if (resp) {
@@ -1474,8 +1470,8 @@ import { reconcile, paintRowNum } from './domReconcile.js';
             const key = parentKey ? parentKey + '/' + g.name : (g.name || '');
             byPath.set(key, g);
             for (const a of (g.agents || [])) {
-              if (a && a.session_id) freshAgents.set(a.session_id, a);
-              if (a && a.children) (function ix(arr){ for (const c of arr||[]){ if (c.session_id) freshAgents.set(c.session_id, c); if (c.children) ix(c.children);} })(a.children);
+              if (a?.session_id) freshAgents.set(a.session_id, a);
+              if (a?.children) (function ix(arr){ for (const c of arr||[]){ if (c.session_id) { freshAgents.set(c.session_id, c); } if (c.children) { ix(c.children); } } })(a.children);
             }
             if (g.groups) walkFresh(g.groups, key);
           }
@@ -1485,14 +1481,14 @@ import { reconcile, paintRowNum } from './domReconcile.js';
           for (const g of groups) {
             const key = parentKey ? parentKey + '/' + g.name : (g.name || '');
             const f = byPath.get(key);
-            if (f && f.costs && JSON.stringify(g.costs) !== JSON.stringify(f.costs)) {
+            if (f?.costs && JSON.stringify(g.costs) !== JSON.stringify(f.costs)) {
               g.costs = f.costs;
               changed = true;
             }
             (function mergeRateLimit(arr) {
               for (const a of arr || []) {
                 const fa = freshAgents.get(a.session_id);
-                if (fa && fa.metrics) {
+                if (fa?.metrics) {
                   if (!a.metrics) a.metrics = {};
                   const newRL = fa.metrics.rate_limit || null;
                   const newETA = fa.metrics.rate_limit_forecast_eta || null;
@@ -1528,7 +1524,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
     // setInterval) so each tick re-reads the cadence and never overlaps a fetch.
     function scheduleRehydratePoll() {
       const hasOrchestrator = dashboardGroups.some(g =>
-        g && (g.type === 'gastown' || (g.groups && g.groups.length)));
+        g && (g.type === 'gastown' || g.groups?.length));
       setTimeout(() => {
         rehydratePoll().finally(scheduleRehydratePoll);
       }, hasOrchestrator ? 2500 : 30000);
@@ -1575,8 +1571,8 @@ import { reconcile, paintRowNum } from './domReconcile.js';
     function daemonLabelFor(daemonId) {
       if (!daemonId) return '';
       for (const src of sources.values()) {
-        const d = src.daemons && src.daemons.get(daemonId);
-        if (d && d.label) return d.label;
+        const d = src.daemons?.get(daemonId);
+        if (d?.label) return d.label;
       }
       return daemonId;
     }
@@ -1616,7 +1612,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       }
       for (const d of desired) {
         if (!sources.has(d.id)) {
-          const src = Object.assign({ state: 'connecting', ws: null, reconnectDelay: 1000, closing: false, daemons: new Map(), seqCursors: new Map() }, d);
+          const src = { state: 'connecting', ws: null, reconnectDelay: 1000, closing: false, daemons: new Map(), seqCursors: new Map(), ...d };
           sources.set(d.id, src);
           connectSource(src);
         }
@@ -1652,7 +1648,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
         src.seqCursors.clear();
         // 4401 = auth failed/revoked: retrying with the same token just loops, so
         // stop reconnecting (until settings change) instead of a tight loop.
-        if (ev && ev.code === 4401) { src.state = 'unauthorized'; updateWsStatus(); return; }
+        if (ev?.code === 4401) { src.state = 'unauthorized'; updateWsStatus(); return; }
         src.state = 'disconnected';
         updateWsStatus();
         scheduleReconnect(src);
@@ -1703,7 +1699,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
         case 'snapshot':
           src.daemons.clear();
           for (const d of (msg.daemons || [])) {
-            if (d && d.daemon_id) src.daemons.set(d.daemon_id, { label: d.daemon_label || d.daemon_id, status: d.status || 'connected' });
+            if (d?.daemon_id) src.daemons.set(d.daemon_id, { label: d.daemon_label || d.daemon_id, status: d.status || 'connected' });
           }
           updateWsStatus();
           return;
@@ -1788,7 +1784,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
         return;
       }
       if (!msg.session) return;
-      var s = msg.session;
+      const s = msg.session;
       if (msg.type === 'session_deleted') {
         applySessionDelete(s.session_id);
       } else {
@@ -1997,7 +1993,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
     // --- Daemon version (Irrlicht v$VERSION in the header) ---
     fetch('/api/v1/version').then(r => r.ok ? r.json() : null).catch(() => null).then(v => {
       const el = document.getElementById('app-version');
-      if (el && v && v.version) el.textContent = 'v' + v.version;
+      if (el && v?.version) el.textContent = 'v' + v.version;
     });
 
     // Permission wizard (issue #570) — its state, wizard rendering, and POST
@@ -2013,13 +2009,16 @@ import { reconcile, paintRowNum } from './domReconcile.js';
 
 export {
   resolvedTheme, rowLabel, maybeNotifyOnUpdate,
-  formatCost, costCellDisplay, formatUsageCost, pressureClass, historyPriorityForState,
+  formatCost, costCellDisplay, pressureClass, historyPriorityForState,
   taskEtaPresentation,
   lastNotifiedPressure,
   relayFrameKind, aggregateConnState, relayWsUrl, seqGap,
   compoundSessionId, displaySessionId,
   sessionOrigin, sourceIdOf, localBareIds, isShadowedRemote,
   daemonSessionIds, structureSignature,
-  pendingWizardAgents, buildPermissionAnswers, stillPendingForAgents,
-  historyQuery, histTokens, histCount, histCO2, CHART_LABELS, DRILL_NEXT, historyRunningSum,
 };
+export { formatUsageCost } from './quotaChips.js';
+export { pendingWizardAgents, buildPermissionAnswers, stillPendingForAgents } from './permissionsWizard.js';
+export {
+  historyQuery, histTokens, histCount, histCO2, CHART_LABELS, DRILL_NEXT, historyRunningSum,
+} from './historyTab.js';

@@ -15,6 +15,14 @@ import (
 	"irrlicht/tools/onboarding-factory/internal/validate"
 )
 
+const (
+	// repoRootFlagName is the shared --repo-root flag name used across the
+	// of subcommands.
+	repoRootFlagName = "repo-root"
+	// repoRootFlagUsage is the shared --repo-root flag usage string.
+	repoRootFlagUsage = "repository root"
+)
+
 // flagPassed reports whether name was explicitly set on the command line (so an
 // update can tell "--description ”" (clear it) from "not passed" (leave it)).
 func flagPassed(fs *flag.FlagSet, name string) bool {
@@ -129,7 +137,7 @@ func runScenarioShow(args []string, stdout, stderr io.Writer) int {
 	var (
 		name     = fs.String("name", "", "scenario name (kebab slug)")
 		asJSON   = fs.Bool("json", false, "emit JSON")
-		repoRoot = fs.String("repo-root", ".", "repository root")
+		repoRoot = fs.String(repoRootFlagName, ".", repoRootFlagUsage)
 	)
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
@@ -171,7 +179,7 @@ func runScenario(args []string, stdout, stderr io.Writer) int {
 		desc     = fs.String("description", "", "one-line description")
 		procF    = fs.String("process-file", "", "markdown file for the process block")
 		accF     = fs.String("acceptance-file", "", "markdown file for the acceptance_criteria block")
-		repoRoot = fs.String("repo-root", ".", "repository root")
+		repoRoot = fs.String(repoRootFlagName, ".", repoRootFlagUsage)
 	)
 	if err := fs.Parse(args[1:]); err != nil {
 		return exitUsage
@@ -289,7 +297,7 @@ func runAgent(args []string, stdout, stderr io.Writer) int {
 		name     = fs.String("name", "", "display name")
 		provider = fs.String("provider", "", "provider (e.g. anthropic, openai)")
 		minVer   = fs.String("min-version", "0.0.0", "minimum supported agent version (column registration)")
-		repoRoot = fs.String("repo-root", ".", "repository root")
+		repoRoot = fs.String(repoRootFlagName, ".", repoRootFlagUsage)
 	)
 	fs.Var(&prereqs, "prereq", "a recording prerequisite (repeatable)")
 	if err := fs.Parse(args[1:]); err != nil {
@@ -379,7 +387,7 @@ func runCellWrite(args []string, stdout, stderr io.Writer) int {
 		scenario = fs.String("scenario", "", "scenario name (the FK)")
 		file     = fs.String("file", "", "metadata.json content to write")
 		folder   = fs.String("folder", "", "override on-disk folder (default: <dashed-id>_<name>)")
-		repoRoot = fs.String("repo-root", ".", "repository root")
+		repoRoot = fs.String(repoRootFlagName, ".", repoRootFlagUsage)
 	)
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
@@ -466,7 +474,7 @@ func runCellSpec(args []string, stdout, stderr io.Writer) int {
 		scenario = fs.String("scenario", "", "scenario name (the FK)")
 		file     = fs.String("file", "", "expected.jsonl content to write")
 		folder   = fs.String("folder", "", "override on-disk folder (default: <dashed-id>_<name>)")
-		repoRoot = fs.String("repo-root", ".", "repository root")
+		repoRoot = fs.String(repoRootFlagName, ".", repoRootFlagUsage)
 	)
 	if err := fs.Parse(args); err != nil {
 		return exitUsage

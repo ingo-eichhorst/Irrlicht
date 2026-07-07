@@ -227,28 +227,15 @@ func newReplayer(src string, opts Options, events []rawEvent) (*replayer, func()
 func (r *replayer) runBatches(batches [][]rawEvent) error {
 	for bi, batch := range batches {
 		nextEventTime := batch[len(batch)-1].Time
-		for _, ev := range batch {
-			if _, err := r.tmp.Write(ev.Bytes); err != nil {
-				return err
-			}
-			r.consumed++
+		if err := r.writeBatch(batch); err != nil {
+			return err
 		}
 		metrics, err := r.tailer.TailAndProcess()
 		if err != nil {
 			return fmt.Errorf("batch %d: %w", bi, err)
 		}
 		r.lastMetrics = metrics
-		if r.emitTimeline {
-			// TailerToDomain allocates a fresh struct per call, so the snapshot
-			// never aliases the tailer's mutable cumulative state; the estimate
-			// pointers are copied for the same reason.
-			r.result.MetricsTimeline = append(r.result.MetricsTimeline, MetricsSnapshot{
-				VirtualTime:      nextEventTime,
-				Metrics:          TailerToDomain(metrics),
-				TaskEstimate:     copyTailerTaskEstimate(metrics.TaskEstimate),
-				TaskEstimateBase: copyTailerTaskEstimate(metrics.TaskEstimateBase),
-			})
-		}
+		r.recordMetricsSnapshot(nextEventTime, metrics)
 		cause := CauseEvent
 		if len(batch) > 1 {
 			cause = CauseDebounceCoalesce
@@ -256,25 +243,55 @@ func (r *replayer) runBatches(batches [][]rawEvent) error {
 		r.classifyBatch(batch[len(batch)-1].Index, nextEventTime, cause, TailerToDomain(metrics))
 	}
 
-	// Force the parser's idle-flush hook after the final batch, mirroring the
-	// daemon's periodic poll eventually crossing the parser's idle threshold.
-	// No-op for parsers that don't implement idleFlusher (claudecode/codex/pi).
-	if len(batches) > 0 {
-		if metrics, flushed := r.tailer.FlushIdle(); flushed {
-			r.lastMetrics = metrics
-			last := batches[len(batches)-1]
-			if r.emitTimeline {
-				r.result.MetricsTimeline = append(r.result.MetricsTimeline, MetricsSnapshot{
-					VirtualTime:      last[len(last)-1].Time,
-					Metrics:          TailerToDomain(metrics),
-					TaskEstimate:     copyTailerTaskEstimate(metrics.TaskEstimate),
-					TaskEstimateBase: copyTailerTaskEstimate(metrics.TaskEstimateBase),
-				})
-			}
-			r.classifyBatch(last[len(last)-1].Index, last[len(last)-1].Time, CauseIdleFlush, TailerToDomain(metrics))
+	r.flushIdleTail(batches)
+	return nil
+}
+
+// writeBatch appends one debounced batch's raw transcript bytes to the
+// scratch file, tracking how many source events have been consumed.
+func (r *replayer) writeBatch(batch []rawEvent) error {
+	for _, ev := range batch {
+		if _, err := r.tmp.Write(ev.Bytes); err != nil {
+			return err
 		}
+		r.consumed++
 	}
 	return nil
+}
+
+// recordMetricsSnapshot appends a cumulative metrics snapshot to the result's
+// timeline when Options.EmitMetricsTimeline is set; otherwise it's a no-op.
+// TailerToDomain allocates a fresh struct per call, so the snapshot never
+// aliases the tailer's mutable cumulative state; the estimate pointers are
+// copied for the same reason.
+func (r *replayer) recordMetricsSnapshot(virtTime time.Time, metrics *tailer.SessionMetrics) {
+	if !r.emitTimeline {
+		return
+	}
+	r.result.MetricsTimeline = append(r.result.MetricsTimeline, MetricsSnapshot{
+		VirtualTime:      virtTime,
+		Metrics:          TailerToDomain(metrics),
+		TaskEstimate:     copyTailerTaskEstimate(metrics.TaskEstimate),
+		TaskEstimateBase: copyTailerTaskEstimate(metrics.TaskEstimateBase),
+	})
+}
+
+// flushIdleTail forces the parser's idle-flush hook after the final batch,
+// mirroring the daemon's periodic poll eventually crossing the parser's idle
+// threshold. No-op for parsers that don't implement idleFlusher
+// (claudecode/codex/pi), and when there were no batches to begin with.
+func (r *replayer) flushIdleTail(batches [][]rawEvent) {
+	if len(batches) == 0 {
+		return
+	}
+	metrics, flushed := r.tailer.FlushIdle()
+	if !flushed {
+		return
+	}
+	r.lastMetrics = metrics
+	last := batches[len(batches)-1]
+	r.recordMetricsSnapshot(last[len(last)-1].Time, metrics)
+	r.classifyBatch(last[len(last)-1].Index, last[len(last)-1].Time, CauseIdleFlush, TailerToDomain(metrics))
 }
 
 // classifyBatch applies the state classifier to one batch's domain metrics,
@@ -328,65 +345,81 @@ func loadEvents(path string) ([]rawEvent, error) {
 		line := append([]byte(nil), scanner.Bytes()...)
 		line = append(line, '\n')
 
-		// Explicit timestamp only — do NOT use tailer.ParseTimestamp here
-		// because it falls back to time.Now() when the field is missing,
-		// which would pollute the sorted virtual timeline with wall-clock
-		// values for metadata lines.
-		var raw map[string]any
-		ts := time.Time{}
-		if err := json.Unmarshal(scanner.Bytes(), &raw); err == nil {
-			if v, ok := raw["timestamp"].(string); ok {
-				if parsed, err := time.Parse(time.RFC3339, v); err == nil {
-					ts = parsed
-				} else if parsed, err := time.Parse("2006-01-02T15:04:05.000Z", v); err == nil {
-					ts = parsed
-				}
-			} else if v, ok := raw["_ts"].(float64); ok && v > 0 {
-				// OpenCode transcripts carry _ts as Unix milliseconds.
-				ts = time.UnixMilli(int64(v)).UTC()
-			} else if v, ok := raw["created_at"].(string); ok {
-				// Antigravity steps carry an RFC3339 created_at.
-				if parsed, err := time.Parse(time.RFC3339, v); err == nil {
-					ts = parsed
-				}
-			}
-		}
-
-		out = append(out, rawEvent{Index: idx, Bytes: line, Time: ts})
+		out = append(out, rawEvent{Index: idx, Bytes: line, Time: parseEventTimestamp(scanner.Bytes())})
 		idx++
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, err
 	}
 
-	// Resolve null-timestamp lines (summary / metadata) so they process
-	// in-file-order alongside the surrounding real events.
-	var lastTS time.Time
-	for i := range out {
-		if out[i].Time.IsZero() {
-			out[i].Time = lastTS
-		} else {
-			lastTS = out[i].Time
-		}
-	}
-	var firstTS time.Time
-	for _, e := range out {
-		if !e.Time.IsZero() {
-			firstTS = e.Time
-			break
-		}
-	}
-	for i := range out {
-		if out[i].Time.IsZero() {
-			out[i].Time = firstTS
-		}
-	}
+	fillMissingTimestamps(out)
 
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Time.Before(out[j].Time) })
 	for i := range out {
 		out[i].Index = i
 	}
 	return out, nil
+}
+
+// parseEventTimestamp extracts one transcript line's explicit timestamp from
+// its known field shapes. Returns the zero time when the line is unparsable
+// JSON or carries none of the known fields — do NOT fall back to
+// tailer.ParseTimestamp/time.Now() here, since that would pollute the sorted
+// virtual timeline with wall-clock values for metadata lines.
+func parseEventTimestamp(lineBytes []byte) time.Time {
+	var raw map[string]any
+	if err := json.Unmarshal(lineBytes, &raw); err != nil {
+		return time.Time{}
+	}
+
+	if v, ok := raw["timestamp"].(string); ok {
+		if parsed, err := time.Parse(time.RFC3339, v); err == nil {
+			return parsed
+		}
+		if parsed, err := time.Parse("2006-01-02T15:04:05.000Z", v); err == nil {
+			return parsed
+		}
+		return time.Time{}
+	}
+	if v, ok := raw["_ts"].(float64); ok && v > 0 {
+		// OpenCode transcripts carry _ts as Unix milliseconds.
+		return time.UnixMilli(int64(v)).UTC()
+	}
+	if v, ok := raw["created_at"].(string); ok {
+		// Antigravity steps carry an RFC3339 created_at.
+		if parsed, err := time.Parse(time.RFC3339, v); err == nil {
+			return parsed
+		}
+	}
+	return time.Time{}
+}
+
+// fillMissingTimestamps resolves null-timestamp lines (summary / metadata) in
+// place so they process in-file-order alongside the surrounding real events:
+// each takes the most recent preceding real timestamp, and any run of
+// zero-timestamp lines at the very start takes the first real timestamp in
+// the slice.
+func fillMissingTimestamps(events []rawEvent) {
+	var lastTS time.Time
+	for i := range events {
+		if events[i].Time.IsZero() {
+			events[i].Time = lastTS
+		} else {
+			lastTS = events[i].Time
+		}
+	}
+	var firstTS time.Time
+	for _, e := range events {
+		if !e.Time.IsZero() {
+			firstTS = e.Time
+			break
+		}
+	}
+	for i := range events {
+		if events[i].Time.IsZero() {
+			events[i].Time = firstTS
+		}
+	}
 }
 
 func batchByDebounce(events []rawEvent, window time.Duration) [][]rawEvent {

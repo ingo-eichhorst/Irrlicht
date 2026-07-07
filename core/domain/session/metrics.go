@@ -504,6 +504,17 @@ func newMergedMetrics(newM *SessionMetrics) *SessionMetrics {
 // when merged's copy of newM reads as "not observed this pass" (zero,
 // empty, or "unknown") rather than a real freshly computed value.
 func carryForwardScalarFields(merged, oldM *SessionMetrics) {
+	carryForwardContextFields(merged, oldM)
+	carryForwardCoreMeasurements(merged, oldM)
+	carryForwardCostFields(merged, oldM)
+	carryForwardIdentityFields(merged, oldM)
+}
+
+// carryForwardContextFields preserves ContextWindow and the
+// ContextWindowUnknown verdict that depends on it. Order matters:
+// ContextWindowUnknown's carry-forward is conditioned on ContextWindow still
+// reading as unset after its own carry-forward runs.
+func carryForwardContextFields(merged, oldM *SessionMetrics) {
 	if merged.ContextWindow == 0 && oldM.ContextWindow > 0 {
 		merged.ContextWindow = oldM.ContextWindow
 	}
@@ -515,6 +526,11 @@ func carryForwardScalarFields(merged, oldM *SessionMetrics) {
 	if !merged.ContextWindowUnknown && oldM.ContextWindowUnknown && merged.ContextWindow == 0 {
 		merged.ContextWindowUnknown = oldM.ContextWindowUnknown
 	}
+}
+
+// carryForwardCoreMeasurements preserves the elapsed-time/token/model/
+// pressure fields computed on (almost) every pass.
+func carryForwardCoreMeasurements(merged, oldM *SessionMetrics) {
 	if merged.ElapsedSeconds == 0 && oldM.ElapsedSeconds > 0 {
 		merged.ElapsedSeconds = oldM.ElapsedSeconds
 	}
@@ -530,6 +546,10 @@ func carryForwardScalarFields(merged, oldM *SessionMetrics) {
 	if (merged.PressureLevel == "" || merged.PressureLevel == "unknown") && oldM.PressureLevel != "" && oldM.PressureLevel != "unknown" {
 		merged.PressureLevel = oldM.PressureLevel
 	}
+}
+
+// carryForwardCostFields preserves the cost/CO2 estimates.
+func carryForwardCostFields(merged, oldM *SessionMetrics) {
 	if merged.EstimatedCostUSD == 0 && oldM.EstimatedCostUSD > 0 {
 		merged.EstimatedCostUSD = oldM.EstimatedCostUSD
 	}
@@ -537,6 +557,12 @@ func carryForwardScalarFields(merged, oldM *SessionMetrics) {
 		merged.EstimatedCO2Grams = oldM.EstimatedCO2Grams
 		merged.CO2Tier = oldM.CO2Tier
 	}
+}
+
+// carryForwardIdentityFields preserves session-identity fields that are
+// typically only observed once (e.g. in the transcript header) and must
+// survive the many markerless passes that follow.
+func carryForwardIdentityFields(merged, oldM *SessionMetrics) {
 	if merged.PermissionMode == "" && oldM.PermissionMode != "" {
 		merged.PermissionMode = oldM.PermissionMode
 	}

@@ -33,7 +33,7 @@ final class LauncherHarnessTests: XCTestCase {
         kittyPID: Int? = nil,
         tmuxPane: String? = nil,
         tmuxSocket: String? = nil
-    ) -> SessionState {
+    ) throws -> SessionState {
         // Build the JSON we'd receive from the daemon so we rely on the actual
         // Codable path rather than synthesising via initializer.
         var launcherFields: [String: Any] = [
@@ -57,8 +57,8 @@ final class LauncherHarnessTests: XCTestCase {
             "updated_at": Int(Date().timeIntervalSince1970),
             "launcher": launcherFields,
         ]
-        let data = try! JSONSerialization.data(withJSONObject: sessionDict)
-        return try! JSONDecoder().decode(SessionState.self, from: data)
+        let data = try JSONSerialization.data(withJSONObject: sessionDict)
+        return try JSONDecoder().decode(SessionState.self, from: data)
     }
 
     /// Opens `bundleID` to a temp directory and waits up to `timeout` for the
@@ -95,7 +95,7 @@ final class LauncherHarnessTests: XCTestCase {
             throw XCTSkip("Ghostty not installed")
         }
         Thread.sleep(forTimeInterval: 1.0) // let the window appear
-        let session = makeSession(termProgram: "ghostty", cwd: cwd)
+        let session = try makeSession(termProgram: "ghostty", cwd: cwd)
         SessionLauncher.jump(session)
         Thread.sleep(forTimeInterval: 0.5)
         let frontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
@@ -137,7 +137,7 @@ final class LauncherHarnessTests: XCTestCase {
         try XCTSkipUnless(Self.harnessEnabled, "requires TEST_HARNESS=1")
         // Session with no KITTY_LISTEN_ON — should fall back to app-level
         // activation without crashing, and return false when kitty isn't installed.
-        let session = makeSession(termProgram: "kitty", cwd: "/tmp/kitty-harness-test")
+        let session = try makeSession(termProgram: "kitty", cwd: "/tmp/kitty-harness-test")
         let activated = KittyActivator().activate(session)
         // We can only assert no crash; activated may be true or false depending
         // on whether kitty is installed on the developer's machine.
@@ -151,7 +151,7 @@ final class LauncherHarnessTests: XCTestCase {
     /// decode, every click silently degrades to the bundle fallback (which is
     /// what issue #326 was actually exhibiting before the fix).
     func testKittyLauncherDecodesKittyPID() throws {
-        let session = makeSession(
+        let session = try makeSession(
             termProgram: "kitty",
             cwd: "/tmp/kitty-decode-test",
             kittyListenOn: "unix:/tmp/kitty-12345",

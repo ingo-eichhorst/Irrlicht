@@ -20,6 +20,11 @@ import (
 // forwarder's context and starts a fresh one — the forwarder is already
 // ctx-cancelable, so this reuses its existing shutdown path.
 type PublishController struct {
+	// parentCtx is intentionally stored rather than threaded through as a
+	// method parameter (godre:S8242): it is the daemon-lifetime context
+	// captured once at construction, and every forwarder Apply starts must be
+	// bounded by that lifetime — never by the short-lived HTTP request
+	// context of whichever PUT call happens to trigger the (re)configure.
 	parentCtx      context.Context
 	identity       Identity
 	push           outbound.PushBroadcaster

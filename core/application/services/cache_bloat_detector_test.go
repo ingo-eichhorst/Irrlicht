@@ -23,7 +23,7 @@ func testCfg() CacheBloatConfig {
 	return CacheBloatConfig{BaselineDays: 14, Threshold: 1.4, VersionDeltaTokens: 10000, MinTurns: 3}
 }
 
-func newDetector(lister sessionLister, rec cacheBloatEventSink, cfg CacheBloatConfig) *CacheBloatDetector {
+func newDetector(lister sessionLister, rec cacheBloatRecorder, cfg CacheBloatConfig) *CacheBloatDetector {
 	d := NewCacheBloatDetector(lister, rec, cfg)
 	d.now = func() int64 { return testNow }
 	return d

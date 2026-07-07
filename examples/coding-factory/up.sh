@@ -9,12 +9,12 @@ cd "$(dirname "$0")"
 
 compose() { docker compose -f docker-compose.yml "$@"; }
 
-[ -f .env ] || cp .env.example .env
+[[ -f .env ]] || cp .env.example .env
 
 # OPENAI_API_KEY may come from the environment or .env; make sure it's in .env so
 # compose (which reads .env) sees it.
 if ! grep -q '^OPENAI_API_KEY=.\+' .env; then
-  if [ -n "${OPENAI_API_KEY:-}" ]; then
+  if [[ -n "${OPENAI_API_KEY:-}" ]]; then
     grep -v '^OPENAI_API_KEY=' .env > .env.tmp || true
     { cat .env.tmp; echo "OPENAI_API_KEY=$OPENAI_API_KEY"; } > .env
     rm -f .env.tmp
@@ -33,7 +33,7 @@ issue="$(compose exec -T relay sh -c \
   'IRRLICHT_HOME=/var/lib/irrlichtrelay irrlichtrelay token issue --label coding-factory')"
 # The plaintext token is the indented second line of the issue output.
 token="$(printf '%s\n' "$issue" | awk 'NR==2 {print $1}')"
-if [ -z "$token" ]; then
+if [[ -z "$token" ]]; then
   echo "error: could not parse the issued token from:" >&2
   printf '%s\n' "$issue" >&2
   exit 1

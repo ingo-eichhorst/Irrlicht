@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"time"
 
-	_ "modernc.org/sqlite"
+	_ "modernc.org/sqlite" // registers the "sqlite" driver for database/sql
 )
 
 // Antigravity keeps token usage and the canonical model id in a per-conversation

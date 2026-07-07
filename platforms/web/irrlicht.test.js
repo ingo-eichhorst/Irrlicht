@@ -430,6 +430,22 @@ describe('taskEtaPresentation', () => {
     ...((over && over.metrics) || {}),
   })
 
+  test('missing completed_rounds falls back to the zero-rounds "estimating…" chip, not a broken undefined/N label', () => {
+    // Regression: `completed_rounds <= 0` is false for undefined (unlike the
+    // intended `!(completed_rounds > 0)`), which would otherwise fall through
+    // to the rounds-only/projected paths and render "undefined/10 rounds".
+    const info = taskEtaPresentation(metricsFor({ est: { completed_rounds: undefined, updated_at: undefined }, metrics: { task_completion_eta: undefined } }), 'working', now)
+    expect(info).not.toBeNull()
+    expect(info.text).toBe('estimating…')
+  })
+
+  test('missing total_rounds (alongside zero completed_rounds) returns null instead of a broken 0/undefined label', () => {
+    // Same regression class as the completed_rounds case above, in
+    // zeroRoundsEtaPresentation's own total_rounds guard.
+    const info = taskEtaPresentation(metricsFor({ est: { completed_rounds: 0, total_rounds: undefined } }), 'working', now)
+    expect(info).toBeNull()
+  })
+
   test('point estimate at the marker once half the rounds are done', () => {
     const info = taskEtaPresentation(metricsFor({ est: { updated_at: now } }), 'working', now)
     expect(info).not.toBeNull()

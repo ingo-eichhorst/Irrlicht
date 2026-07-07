@@ -75,7 +75,7 @@ const submitCR = "\r"
 // tmux/kitty get a trailing CR appended; the AppleScript path broadcasts the
 // bare command, since the macOS app's write-text/do-script auto-submits (and
 // strips any trailing newline) — appending a CR there would double-submit.
-func (c *Controller) SendCommand(sessionID string, command string) error {
+func (c *Controller) SendCommand(sessionID, command string) error {
 	state, err := c.loadState(sessionID)
 	if err != nil {
 		return err

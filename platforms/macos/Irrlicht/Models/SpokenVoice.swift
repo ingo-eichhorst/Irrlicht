@@ -14,6 +14,10 @@ import Foundation
 /// highest-quality match for the canonical name, so installing the
 /// premium variant later upgrades speech with no app change.
 enum SpokenVoice: String, CaseIterable {
+    // `default` (needing backticks) is the idiomatic Apple-platform name for
+    // "the standard instance of this type" — kept as-is rather than renamed
+    // per SonarQube swift:S2961; it's also the persisted raw value in
+    // SoundChoice's "speak:default" grammar.
     case `default`
     case female
     case male

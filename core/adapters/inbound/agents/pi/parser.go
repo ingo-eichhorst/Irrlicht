@@ -140,6 +140,12 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 
 	case "bashExecution":
 		// User-side shell escape (! command) — skip.
+		//
+		// go:S1871 — same body as default below, kept as its own case
+		// deliberately: this documents "bashExecution" as a recognized,
+		// understood role (as opposed to default's true catch-all for roles
+		// this parser doesn't know about), so default can later change
+		// without silently changing behavior for this one.
 		ev.Skip = true
 		return ev
 
