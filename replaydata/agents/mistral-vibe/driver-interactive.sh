@@ -113,7 +113,7 @@ SES_MARKER=(); SES_CWD=(); SES_ALIVE=()
 # Tool-executing recipes: set the recipe's settings.bypass_tool_permissions=true
 # and launch_repl adds `vibe --auto-approve` so tool calls run unattended (not a
 # step type — a launch-mode toggle, so it stays out of DRIVE_ELICITS).
-DRIVE_ELICITS="send slash sleep wait_turn exit_clean restart sigkill resume"
+DRIVE_ELICITS="send slash sleep wait_turn exit_clean restart sigkill resume keys"
 DRIVE_SLASH_REQUIRES_STEP_TYPE=false
 RUN_CWD="${IRRLICHT_ONBOARD_CWD:-$STAGING/cwd}"
 mkdir -p "$RUN_CWD"
@@ -385,6 +385,16 @@ send_text() { # <text>
 # active slot's cached transcript, and reset the turn baseline (the new dir starts
 # empty — the following send's answer is turn 1 in it).
 ROTATING_SLASHES="/clear /compact /new"
+# /rewind is a FORK slash: it opens the Textual RewindApp picker; selecting a
+# checkpoint (driven by later `keys` steps) makes vibe's rewind_manager truncate
+# the conversation and FORK to a NEW session_<ts>_<hash> dir (core/rewind manager
+# → session_logger.reset_session), in the SAME process + cwd. The re-arm is
+# identical to a rotating slash (snapshot dirs, clear the cached transcript,
+# reset the turn baseline) — the only difference is the new dir materializes
+# after the keys-driven selection + the next turn, not immediately, and the
+# ORIGINAL session dir persists (rewind is a fork, not an in-place reset). The
+# set-diff in resolve_transcript then binds the forked dir on the next wait_turn.
+FORK_SLASHES="/rewind"
 slash_cmd() { # <text>
   local text="$1"
   # A rotating slash can't be the launch positional (vibe needs a real prompt to
@@ -392,7 +402,7 @@ slash_cmd() { # <text>
   if [[ "$FIRST_SEND_PENDING" == "1" ]]; then
     send_text "$text"; return
   fi
-  if [[ " $ROTATING_SLASHES " == *" $text "* ]]; then
+  if [[ " $ROTATING_SLASHES $FORK_SLASHES " == *" $text "* ]]; then
     PRE_LAUNCH_DIRS="$(find "$HOME/.vibe/logs/session" -maxdepth 1 -type d -name 'session_*' 2>/dev/null | sort)"
     type_enter "$text"
     TRANSCRIPT=""; UUID=""
@@ -500,7 +510,15 @@ while IFS= read -r step; do
     wait_turn)       wait_turn || break ;;
     sleep)           sleep "$(jq -r '.seconds // 1' <<<"$step")" ;;
     interrupt)       not_implemented interrupt || break ;;       # TODO(mistral-vibe): Escape/Ctrl-C the in-flight turn
-    keys)            not_implemented keys || break ;;            # TODO(mistral-vibe): tmux send-keys raw sequence
+    keys)            # Raw tmux key sequence (NOT literal text) for driving picker
+                     # UIs — arrow keys / Enter for the /rewind RewindApp and the
+                     # /model ModelPickerApp, C-c to clear a pre-filled input, etc.
+                     # e.g. {"type":"keys","keys":"Down Enter"}.
+                     ks="$(jq -r '.keys' <<<"$step")"
+                     # shellcheck disable=SC2086 — intentional word-split of the key list
+                     tmux send-keys -t "$SESSION" $ks
+                     echo "[driver] keys[s$ACTIVE]: $ks" >&2
+                     sleep 0.5 ;;
     reset_session)   not_implemented reset_session || break ;;   # TODO(mistral-vibe): in-REPL /clear|/new → new id, SAME slot; re-resolve SES_TRANSCRIPT[$ACTIVE] (SEAM 3)
     restart)         step_restart ;;
     resume)          step_resume ;;
