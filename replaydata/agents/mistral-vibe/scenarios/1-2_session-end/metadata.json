@@ -3,11 +3,11 @@
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
-    "driver_capability": "gap:sigkill",
+    "driver_capability": "ready",
     "agent_cli_version": "2.19.0",
     "daemon_version": "0.5.5+e943e26.dirty",
     "confidence": 0.8,
-    "notes": "agent_supports: yes; daemon_capability: full; driver_capability: gap:sigkill (also exit_clean/restart/wait_turn unported)"
+    "notes": "agent_supports: yes; daemon_capability: full; driver_capability: ready (exit_clean/restart/sigkill ported; re-spec to 2-variant kiro shape — mid-turn sigkill dropped, not recordable for vibe)"
   },
   "details": {
     "assessment": {
@@ -17,14 +17,15 @@
       "assessed_at": "2026-07-07T00:00:00Z",
       "agent_supports": "yes",
       "daemon_capability": "full",
-      "driver_capability": "gap:sigkill",
+      "driver_capability": "ready",
       "confidence": 0.8,
       "body": "## Verdict\n\nagent_supports: yes — vibe exits cleanly and can be killed like any process.\ndaemon_capability: full — the process-exit lifecycle is wired for vibe.\ndriver_capability: gap:sigkill — the scaffolded driver has not ported sigkill (nor exit_clean / restart / wait_turn); the recipe needs all four.\n\n## Reasoning\n\nSession end has three variants (clean exit, SIGKILL mid-idle, SIGKILL mid-turn). All three are teardown paths on a normal OS process, and the defining question is whether irrlicht observes the disappearance and settles the session — not whether the agent has a special feature.\n\n**agent = yes.** Vibe is a Textual TUI. Ctrl+D quits (confirming twice within ~1s, or once when `ask_confirmation_on_exit=false`), and there is an explicit `/exit` slash command (aliases `/exit`,`exit`,`quit`,`:q`,`:quit`). SIGKILL is OS-level and agent-agnostic. So all three teardown variants are exercisable against a live vibe process.\n\n**daemon = full.** The vibe adapter declares `Process.Match = CommandPattern{processCmdRegex}` and `Process.PIDForSession = DiscoverPID` (agent.go), and `DiscoverPID` binds the vibe PID by cwd+cmdline (pid.go). Process-exit handling is generic and adapter-agnostic: `PIDManager.HandleProcessExit` (core/application/services/pid_manager.go:303) records `lifecycle.KindProcessExited` and deletes the session (with children) the moment the registered PID disappears — the same mechanism that gives claudecode's session-end cell daemon=full. The working→ready settle on exit and the ready→removed TTL are shared daemon behavior in session_detector_activity / the liveness sweep, not adapter code, so vibe inherits them. The session-end signal is therefore process_exited (vibe keeps transcripts under ~/.vibe/logs/session/ — it does not delete messages.jsonl on exit — so file-removal is NOT the teardown signal; process-exit is). Verified against a live session dir (session_20260706_101952_48e134e3) holding messages.jsonl + meta.json.\n\n**driver = gap:sigkill.** The templated recipe (from claudecode's 3-variant sibling) needs `wait_turn`, `exit_clean`, `restart`, and `sigkill`. The scaffolded driver-interactive.sh has every arm PRESENT but stubbed; its `DRIVE_ELICITS` lists only `send slash sleep`, so recipe-lint flags all four as semantic gaps before recording. sigkill is the load-bearing miss (2 of 3 variants); exit_clean/restart/wait_turn are also unported. `record` must port these seams (from the codex/gemini slot-model drivers) before it can drive this cell — the cell stays a real cell with a real recipe and spec.\n\n## What is provisional\n\ndaemon=full is derived from the generic process-exit path plus the claudecode precedent, not from a vibe recording — kept at confidence 0.8. The session-end signal is OS process exit (not agent transcript emission), so the usual emission caveat is weak here; a live drive still promotes it from provisional to settled.",
       "caveats": [
         "Driver: exit_clean for vibe is Ctrl+D with a confirmation prompt (press twice within ~1s, or set ask_confirmation_on_exit=false), or the `/exit` slash command — the exit_clean seam port must account for the confirm dialog. `/exit` is deliverable via the already-implemented `slash` step but still triggers the same confirm path.",
         "Variant 3 (SIGKILL mid-turn): the post-crash working→ready sweep transition may not land inside the recording's tail window — shared daemon behavior, same accommodation as the claudecode sibling (anchor v3_exit to v3_turn_start, do not require an explicit post-crash ready phase).",
         "The JSONL carries no per-event timestamps; live tailing stamps time.Now (ParseTimestamp), so ordering within a live recording is fine — not a session-end blocker.",
-        "Per-turn cost is not emitted (the sidecar retains only last-turn tokens) and mistral models are absent from core/pkg/capacity, so no cost/utilization observations are asserted; session-end is a lifecycle scenario and (like the claudecode sibling) asserts no observation vector."
+        "Per-turn cost is not emitted (the sidecar retains only last-turn tokens) and mistral models are absent from core/pkg/capacity, so no cost/utilization observations are asserted; session-end is a lifecycle scenario and (like the claudecode sibling) asserts no observation vector.",
+        "Re-spec (record backflow): the templated 3-variant recipe (clean-exit + sigkill-idle + sigkill-mid-turn) was reduced to the 2-variant kiro shape (clean-exit + sigkill-idle). Vibe batch-writes messages.jsonl only when a turn COMPLETES (save_interaction), so a SIGKILL mid-turn leaves no session_<ts>_<shortid> transcript — the session never surfaces as a persisted session row to key on, unlike claudecode which streams partial writes. The mid-turn variant is therefore not cleanly recordable for vibe and was dropped; the two idle/clean teardown variants exercise the same process_exited signal."
       ],
       "sources": [
         {
@@ -103,36 +104,17 @@
         },
         {
           "type": "sleep",
-          "seconds": 5
-        },
-        {
-          "type": "restart"
-        },
-        {
-          "type": "send",
-          "text": "Write a 200 word essay about the history of coffee."
-        },
-        {
-          "type": "sleep",
-          "seconds": 2
-        },
-        {
-          "type": "sigkill"
-        },
-        {
-          "type": "sleep",
-          "seconds": 8
+          "seconds": 6
         }
       ],
       "verify": [
-        "events.jsonl contains 3 distinct vibe session_ids (one per variant), each with its process_exited",
-        "variant 1 (clean exit): the session returns to ready right after its turn completes, immediately preceding its process_exited",
+        "events.jsonl contains 2 distinct vibe session_ids (session_<ts>_<shortid>), one per variant, each with its process_exited",
+        "variant 1 (clean /exit): the session returns to ready right after its turn completes, immediately preceding its process_exited",
         "variant 2 (SIGKILL idle): the session ends in ready when sigkill fires; no state_transition to working after process_exited",
-        "variant 3 (SIGKILL mid-turn): the session is working when sigkill fires; a working→ready sweep may or may not appear in the 8s tail — accept either shape",
-        "the state band shows three colored arcs separated by grey gaps where no session is alive between variants"
+        "the state band shows two colored arcs separated by a grey gap where no session is alive between variants"
       ],
       "settings": {},
-      "timeout_seconds": 180
+      "timeout_seconds": 150
     }
   }
 }
