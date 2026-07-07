@@ -586,6 +586,39 @@ function buildCoverageTable(pg, recIndex) {
 // recorded), plus divergence between the capability verdict and the
 // measured outcome (mirrors renderPipelineStrip's outline logic).
 // Extracted from renderCoverageMatrix.
+// classifyCoverageCell resolves one (scenario, agent) cell's pipeline stage
+// — the same decision chain computeCoverageStages' loop used to run inline,
+// pulled out so the loop's own branching isn't compounded by it (SonarQube
+// javascript:S3776). Mirrors the original exactly: a "recorded" cell is
+// still tagged divergent on top of (not instead of) being recorded.
+function classifyCoverageCell(cov) {
+  if (cov.agent_supports === "no") return {stage: "blocked"};
+  const pipe = cov.pipeline || {};
+  if (!pipe.recipe?.authored) return {stage: "awaitingRecipe"};
+  if (!pipe.spec?.authored) return {stage: "awaitingSpec"};
+  const recCount = (pipe.recordings?.latest ? 1 : 0) + (pipe.recordings?.archive_count || 0);
+  if (recCount === 0) return {stage: "awaitingRecording"};
+  return {stage: "recorded", divergent: isCoverageCellDivergent(cov)};
+}
+
+// isCoverageCellDivergent reports whether a recorded cell's capability
+// verdict (daemon/driver) disagrees with its measured outcome — mirrors
+// renderPipelineStrip's outline logic.
+function isCoverageCellDivergent(cov) {
+  const daemon = cov.daemon_capability || "unknown";
+  const driver = cov.driver_capability || "ready";
+  const meas = cov.measurement || {};
+  const capable = (daemon === "full" && driver === "ready");
+  const verdictBlocks = (daemon === "incapable" || daemon === "bug" ||
+    String(driver).startsWith("gap:"));
+  return (
+    meas.status === "fail" ||
+    (meas.status === "known_failing" && capable) ||
+    (meas.status === "pass" && verdictBlocks) ||
+    meas.status === "known_failing_now_passing"
+  );
+}
+
 function computeCoverageStages(agents) {
   const stages = {blocked: 0, awaitingRecipe: 0, awaitingSpec: 0, awaitingRecording: 0, recorded: 0, divergent: 0};
   let total = 0, withEntry = 0;
@@ -595,30 +628,9 @@ function computeCoverageStages(agents) {
       const cov = sc.coverage?.[agent];
       if (!cov) continue;
       withEntry++;
-      const sup = cov.agent_supports;
-      const daemon = cov.daemon_capability || "unknown";
-      const driver = cov.driver_capability || "ready";
-      const pipe = cov.pipeline || {};
-      const meas = cov.measurement || {};
-      if (sup === "no") { stages.blocked++; continue; }
-      const recipeOK = pipe.recipe?.authored;
-      const specOK = pipe.spec?.authored;
-      const recCount = (pipe.recordings?.latest ? 1 : 0) + (pipe.recordings?.archive_count || 0);
-      if (!recipeOK) { stages.awaitingRecipe++; continue; }
-      if (!specOK) { stages.awaitingSpec++; continue; }
-      if (recCount === 0) { stages.awaitingRecording++; continue; }
-      stages.recorded++;
-      const capable = (daemon === "full" && driver === "ready");
-      const verdictBlocks = (daemon === "incapable" || daemon === "bug" ||
-        String(driver).startsWith("gap:"));
-      if (
-        meas.status === "fail" ||
-        (meas.status === "known_failing" && capable) ||
-        (meas.status === "pass" && verdictBlocks) ||
-        meas.status === "known_failing_now_passing"
-      ) {
-        stages.divergent++;
-      }
+      const result = classifyCoverageCell(cov);
+      stages[result.stage]++;
+      if (result.divergent) stages.divergent++;
     }
   }
   return {stages, total, withEntry};
@@ -1257,8 +1269,7 @@ function renderPipelineStrip(agent, scenarioID, cov, rec) {
     const rcs = pipe.recordings || {};
     const recipeStatus = recipe.authored ? `authored (${recipe.step_count} steps)` : "not authored yet";
     const specStatus = spec.authored ? `authored (${spec.phase_count} phases)` : "not authored yet";
-    lines.push(`Recipe: ${recipeStatus}`);
-    lines.push(`Spec:   ${specStatus}`);
+    lines.push(`Recipe: ${recipeStatus}`, `Spec:   ${specStatus}`);
     const totalRecs = (rcs.latest ? 1 : 0) + (rcs.archive_count || 0);
     if (totalRecs > 0) {
       const parts = [];
@@ -2737,6 +2748,15 @@ function escapeHtml(s) {
 // subset is deliberately small (it's what the assess skill authors), so a few
 // regexes beat pulling a markdown library into a no-build SPA. Style lives in
 // the `.md-body` rules in index.html.
+//
+// The heading/list-item regexes below (jssecurity:S8786) each start with a
+// mandatory literal ("#", "-", or a digit run + ".") that a non-matching line
+// fails on immediately — the engine never backtracks into the trailing
+// `\s+`/`.*` pair because it never gets past the first character class. Each
+// is also run per-line (pre-split on "\n", no embedded newlines) against
+// markdown the assess skill itself authors, not arbitrary/attacker input.
+// Verified no exponential blowup on adversarial inputs (long runs of spaces,
+// no trailing match) before leaving these as-is.
 export function renderMarkdown(md) {
   const esc = escapeHtml(String(md || ""));
   // Inline pass — one alternation, left-to-right: a `code` span is matched

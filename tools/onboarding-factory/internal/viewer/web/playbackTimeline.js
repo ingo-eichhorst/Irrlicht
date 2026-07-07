@@ -312,8 +312,9 @@ function buildExpectedMarker(ph, def, startMs, totalMs) {
     : null;
   const pos = offsetMs !== null ? Math.max(0, Math.min(100, (offsetMs / totalMs) * 100)) : null;
   const isState = !!def.expected_state;
+  const matchedType = isState ? "state" : "lifecycle";
   return {
-    type: pos === null ? "unmatched" : (isState ? "state" : "lifecycle"),
+    type: pos === null ? "unmatched" : matchedType,
     pos,
     baseColor: expectedMarkerColor(def),
     rimColor: ph.pass ? "#22c55e" : "#dc2626",
