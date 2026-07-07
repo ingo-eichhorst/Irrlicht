@@ -76,12 +76,13 @@
         "Create an empty cwd under <staging>/cwd/ (the driver launches vibe there); the session_<...> transcript dir is minted under ~/.vibe/logs/session/",
         "WHY this exercises the oversized-line path: the prompt asks vibe for ONE very long single-line sentence (≥5000 words, no embedded newlines), so vibe appends one large role:assistant content line to messages.jsonl. The shared tailer reads it via readLineCapped (64 MB cap, issue #270) BEFORE json.Unmarshal decodes it for vibe's JSONLineParser — a ~30 KB line is far under the cap, so it is read whole and the turn resolves via the usual turn_done close. This is a sanity-check that the arc completes on a large single line, keeping tool calls at 0 (a role:tool result would also produce a large line but would add tool-call phases the scenario excludes); the genuine >64 MB cap behavior is pinned agent-agnostically by core/pkg/tailer/large_line_test.go",
         "WHY interactive, not headless: keeping vibe alive in the REPL across one send + wait_turn lets the daemon observe the full ready→working→ready settle before teardown; wait_turn blocks until the turn's terminal text-only assistant message lands so the trailing sleep never races a still-running turn",
-        "DRIVER GAP: this recipe needs wait_turn, which the scaffolded driver stubs (not_implemented; DRIVE_ELICITS=\"send slash sleep\"). record ports SEAMs 1/2/3 from a reference driver (drive-kiro-cli / drive-codex) before driving."
+        "DRIVER GAP: this recipe needs wait_turn, which the scaffolded driver stubs (not_implemented; DRIVE_ELICITS=\"send slash sleep\"). record ports SEAMs 1/2/3 from a reference driver (drive-kiro-cli / drive-codex) before driving.",
+        "RESHAPE (record): the earlier 5000-word MODEL-generated reply exceeded the wait budget (slow token streaming). Replaced with a FAST bash tool (head -c 200000 /dev/zero | tr NUL x) under bypass_tool_permissions=true so a single ~200KB tool-result line lands in messages.jsonl within the wait. Exercises the same tailer readLineCapped(64MB) path on a large single JSONL line; the arc turn_start->turn_end proves no parser stall."
       ],
       "script": [
         {
           "type": "send",
-          "text": "Write a single very long sentence on one line. Make it at least 5000 words. Do not use newlines anywhere in the sentence."
+          "text": "Use the bash tool to run exactly this command and nothing else, then reply with just the word done. Command: head -c 200000 /dev/zero | tr '\\0' x"
         },
         {
           "type": "wait_turn"
@@ -101,8 +102,10 @@
         "final session state is ready before the driver tears the REPL down",
         "observation vector: model=mistral-medium-3.5, tokens_nonzero=true, cost_nonzero=false"
       ],
-      "settings": {},
-      "timeout_seconds": 300
+      "settings": {
+        "bypass_tool_permissions": true
+      },
+      "timeout_seconds": 180
     }
   }
 }
