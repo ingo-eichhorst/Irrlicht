@@ -16,6 +16,7 @@ against a real `~/.vibe` transcript. /
 | Matrix column registered (`of agent add`) | `mistral-vibe`, provider mistral, min-version 2.19.0 | `72493dff` |
 | **Go daemon adapter** (`core/adapters/inbound/agents/vibe/`) | agent.go, parser.go, sidecar.go, pid.go, icons.go, adapter.go + tests | `e943e261` |
 | Assess sweep (46 scenarios) | all cells assessed + spec'd | 46 commits |
+| **Unlock pass** (6 daemon/parser fixes) | 7 cells moved daemon=bug → daemon=full | 6 fix commits + 8 re-assess |
 
 Adapter shape (verified against a real transcript, not the handover doc):
 
@@ -98,9 +99,45 @@ daemon-bug (feasible unlock) · **7** unobservable (frozen) · **7** n.a. (froze
 | 6.1 | backchannel-control | yes | **bug** | ready | record-known-failing |
 | 6.2 | backchannel-observe | yes | **bug** | ready | record-known-failing |
 
-## Feasible daemon-bug unlocks (an unlock pass would build these)
+## Unlock pass — COMPLETED
 
-All eight `daemon=bug` cells are fixable — each cited to source:
+The unlock pass built the feasible daemon/parser fixes below, each with unit
+tests and a live/end-to-end check, then re-assessed the affected cells. Result:
+the `daemon=bug` count dropped **8 → 1**, and one cell became recordable.
+
+| Rollup | after sweep | after unlock |
+|---|---|---|
+| pending-record | 1 | **2** |
+| blocked-driver | 23 | 29 |
+| blocked-daemon | 8 | **1** |
+| unobservable (frozen) | 7 | 7 |
+| n.a. (frozen) | 7 | 7 |
+
+Fixes shipped (commit → cells moved to daemon=full):
+
+- `5e0b4f5c` **skip injected `!`-shell lines** → 2.15 shell-escape (was sticking
+  the session in working; a regression the new adapter introduced).
+- `3d89d5e9` **subagent parent-linking** (`deriveVibeParentSessionID`, path-based)
+  → 3.1 foreground-subagent, 3.4 subagent-orphan-cleanup.
+- `0fccc242` **decode the `todo` tool** → 2.3 task-list.
+- `c37c6830` **per-turn token usage** (cumulative-delta, backfill-safe) → 5.1
+  token-accounting (tokens now surface; cost remains a documented gap).
+- `4d3c2327` **context bar from `auto_compact_threshold`** → 1.8
+  model-context-display (sourced per-session, not a guessed capacity window).
+- `5e22e47c` **declare Control** (SupportsInput + Ctrl-C + `/compact`) → 6.1
+  backchannel-control (now recordable), 6.2 backchannel-observe (control half).
+
+Remaining `daemon=bug` (1): **6.2 backchannel-observe** — the read-back needs
+vibe-specific `DetectUI` terminal-state markers (`uidetect.go` is Claude-only), a
+larger separate change. Documented follow-up. Plus two cross-cutting follow-ups
+surfaced but not shipped (out of the unlock's scope): authoritative **cost** (the
+daemon can't carry ProviderCostUSD alongside token Usage in one contribution; and
+vibe's prices are user-configurable), and a daemon **working-state idle sweep**
+(would unfreeze 2.9/2.14/2.20 error/abort/ESC cells).
+
+## Original feasible daemon-bug unlocks (all now addressed above except 6.2)
+
+All eight `daemon=bug` cells were fixable — each cited to source:
 
 - **2.15 shell-escape** — the `injected:true` "Manual `!` command result … context
   only" user line wrongly registers as activity → session sticks in `working`.
