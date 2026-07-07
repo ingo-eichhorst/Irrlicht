@@ -110,7 +110,7 @@ SES_MARKER=(); SES_CWD=(); SES_ALIVE=()
 # recipe-lint flags a recipe needing it as a semantic_gap before recording. Set
 # DRIVE_SLASH_REQUIRES_STEP_TYPE=true if mistral-vibe is headless-first (a bare
 # send "/cmd" stores literal text instead of reaching the REPL).
-DRIVE_ELICITS="send slash sleep"
+DRIVE_ELICITS="send slash sleep wait_turn"
 DRIVE_SLASH_REQUIRES_STEP_TYPE=false
 RUN_CWD="${IRRLICHT_ONBOARD_CWD:-$STAGING/cwd}"
 mkdir -p "$RUN_CWD"
@@ -118,8 +118,71 @@ RUN_CWD="$(cd "$RUN_CWD" && pwd -P)"   # canonicalize (resolve symlinks) for the
 DEADLINE=$(( $(date +%s) + TIMEOUT_S ))
 EXIT_REASON="ok"
 SESSION=""
+# Session dirs that already existed when this run launched. Vibe creates a new
+# ~/.vibe/logs/session/<session-id>/ LAZILY on the first user message, so the
+# fresh dir is resolved by set-difference against this snapshot (SEAM 3), not
+# by "newest mtime" — an older session's mtime can be bumped and win that race.
+PRE_LAUNCH_DIRS=""
+
+# daemon_sid OVERRIDE (vibe-specific): slots.sh's default maps a transcript
+# path to its filename stem, but every Vibe session writes the SAME constant
+# basename `messages.jsonl` — the daemon keys the session on the PARENT
+# directory name instead (see vibe/adapter.go sessionIDFromPath). So the
+# daemon's session_id is the <session-id> dir one level above the file, and
+# both emit_session_contract's session.uuid and the multi-session session.uuids
+# list (contracts.sh) must carry that form so curation's `.session_id` filter
+# matches the daemon's events.jsonl. Defined AFTER `source slots.sh` so it wins.
+daemon_sid() {
+  local p="$1"
+  [[ -z "$p" ]] && { echo ""; return; }
+  basename "$(dirname "$p")"
+}
 
 remaining_seconds() { local now; now=$(date +%s); (( now >= DEADLINE )) && echo 0 || echo $((DEADLINE - now)); }
+
+# resolve_transcript binds the active slot to the session dir Vibe minted for
+# this run. It is LAZY: the dir appears only after the first user message, so
+# this is called from wait_turn, not launch. Pick the session_* dir that did
+# NOT exist pre-launch and now holds a non-empty messages.jsonl; cache it on
+# the active slot (TRANSCRIPT is the messages.jsonl, UUID is the dir name).
+resolve_transcript() {
+  [[ -n "$TRANSCRIPT" ]] && return 0
+  local sroot="$HOME/.vibe/logs/session"
+  local _ d cand
+  for _ in $(seq 1 60); do
+    cand=""
+    while IFS= read -r d; do
+      [[ -z "$d" ]] && continue
+      grep -qxF "$d" <<<"$PRE_LAUNCH_DIRS" && continue
+      [[ -f "$d/messages.jsonl" && -s "$d/messages.jsonl" ]] || continue
+      cand="$d"
+    done < <(find "$sroot" -maxdepth 1 -type d -name 'session_*' 2>/dev/null | sort)
+    if [[ -n "$cand" ]]; then
+      TRANSCRIPT="$cand/messages.jsonl"
+      UUID="$(basename "$cand")"
+      SES_TRANSCRIPT[$ACTIVE]="$TRANSCRIPT"
+      SES_UUID[$ACTIVE]="$UUID"
+      echo "[driver] resolve_transcript[s$ACTIVE]: $TRANSCRIPT (sid=$UUID)" >&2
+      return 0
+    fi
+    sleep 0.5
+  done
+  return 1
+}
+
+# turn_count counts COMPLETED assistant turns in the transcript. Mirrors the
+# vibe adapter's turn_done classification: a role:"assistant" line WITH content
+# and NO tool_calls is a finished turn. An assistant line carrying tool_calls
+# (still working) and role:"tool" lines are intentionally excluded, so a
+# tool-using turn only counts once its final answer lands.
+turn_count() {
+  if [[ -f "$TRANSCRIPT" ]]; then
+    jq -r 'select(.role=="assistant" and ((.content // "") != "") and (((.tool_calls // []) | length) == 0)) | "x"' \
+      "$TRANSCRIPT" 2>/dev/null | wc -l | tr -d ' '
+  else
+    echo 0
+  fi
+}
 
 not_implemented() { # <step-type>
   echo "[driver] STUB: step type '$1' not yet ported for mistral-vibe — see scripts/templates/drive-interactive.sh.tmpl and drive-claudecode-interactive.sh" >&2
@@ -145,19 +208,42 @@ trap cleanup EXIT
 # preferred UUID if the agent accepts one. The cleanup trap above tears it down.
 launch_repl() {
   command -v tmux >/dev/null 2>&1 || { echo "[driver] tmux required" >&2; EXIT_REASON="nonzero(2)"; exit 1; }
+  # Snapshot pre-existing session dirs BEFORE launch. Vibe creates its
+  # ~/.vibe/logs/session/<session-id>/ dir lazily on the first user message, so
+  # resolve_transcript (called from wait_turn) picks the dir absent from this
+  # set — never "newest mtime", which an older bumped session could win.
+  PRE_LAUNCH_DIRS="$(find "$HOME/.vibe/logs/session" -maxdepth 1 -type d -name 'session_*' 2>/dev/null | sort)"
   # alloc_slot mints a fresh slot, points SESSION at its tmux name and ACTIVE at
   # it, and clears the slot's TRANSCRIPT/UUID. restart/start_session call it again
   # to open another session; per-slot stdout (.stdout.$ACTIVE) feeds the contract.
   alloc_slot "mistral-vibedrv-$$-$(date +%s)-$((N_SLOTS + 1))" "$RUN_CWD"
   tmux kill-session -t "$SESSION" 2>/dev/null || true
-  # `|| { … exit … }` keeps a launch failure from aborting under set -e WITHOUT
-  # an accurate exit-reason — the cleanup trap then records nonzero(2).
-  tmux new-session -d -s "$SESSION" -x 200 -y 50 -c "${SES_CWD[$ACTIVE]}" "mistral-vibe" \
-    >>"$DRIVER_LOG.stdout.$ACTIVE" 2>>"$DRIVER_LOG.stderr" \
-    || { echo "[driver] failed to launch mistral-vibe under tmux" >&2; EXIT_REASON="nonzero(2)"; exit 1; }
-  : # TODO(mistral-vibe): resolve the live session_id + transcript path and store it
-    #   on the active slot — SES_TRANSCRIPT[$ACTIVE]=<abs path> (SEAM 3). The
-    #   staging contract + multi-session lists are derived from SES_TRANSCRIPT.
+  : > "$DRIVER_LOG.stdout.$ACTIVE"
+  # The binary is `vibe` (the console-script), NOT `mistral-vibe`; the OS process
+  # is a python interpreter running .../bin/vibe. Vibe is an interactive Textual
+  # TUI, so drive it under tmux. `|| { … exit … }` keeps a launch failure from
+  # aborting under set -e WITHOUT an accurate exit-reason — the cleanup trap then
+  # records nonzero(2).
+  tmux new-session -d -s "$SESSION" -x 200 -y 50 -c "${SES_CWD[$ACTIVE]}" "vibe" \
+    2>>"$DRIVER_LOG.stderr" \
+    || { echo "[driver] failed to launch vibe under tmux" >&2; EXIT_REASON="nonzero(2)"; exit 1; }
+  tmux pipe-pane -t "$SESSION" -o "cat >> '$DRIVER_LOG.stdout.$ACTIVE'"
+  echo "[driver] tmux started: $SESSION (slot=$ACTIVE, cwd=${SES_CWD[$ACTIVE]})" >&2
+  # Wait for the TUI banner to render, then for the "Initializing…" spinner to
+  # clear so the input prompt is live before the first keystroke lands.
+  local WAITED=0
+  while [[ $WAITED -lt 60 ]]; do
+    tmux capture-pane -t "$SESSION" -p -S -40 2>/dev/null | grep -q 'Type /help' && break
+    sleep 0.5; WAITED=$((WAITED + 1))
+  done
+  WAITED=0
+  while [[ $WAITED -lt 60 ]]; do
+    tmux capture-pane -t "$SESSION" -p -S -40 2>/dev/null | grep -q 'Initializing' || break
+    sleep 0.5; WAITED=$((WAITED + 1))
+  done
+  sleep 2  # extra grace for the input prompt to settle
+  # Transcript is resolved lazily in wait_turn — Vibe's session dir does not
+  # exist until the first user message is sent.
 }
 
 # --- AGENT-SPECIFIC SEAM 2: detect a completed turn --------------------------
@@ -166,13 +252,34 @@ launch_repl() {
 # polls the SQLite store for a step-finish. Return 0 when a NEW turn completed
 # (or times out via remaining_seconds()).
 wait_turn() {
-  not_implemented wait_turn   # TODO(mistral-vibe): replace with the real turn-done poll
+  resolve_transcript || {
+    echo "[driver] wait_turn[s$ACTIVE]: vibe never created a session dir under ~/.vibe/logs/session" >&2
+    EXIT_REASON="readiness_timeout"
+    return 1
+  }
+  local now=0
+  while [[ $(date +%s) -lt $DEADLINE ]]; do
+    now=$(turn_count)
+    if [[ $now -ge $EXPECTED_TURNS ]]; then
+      echo "[driver] wait_turn[s$ACTIVE]: count=$now (expected >= $EXPECTED_TURNS)" >&2
+      return 0
+    fi
+    sleep 1
+  done
+  echo "[driver] wait_turn[s$ACTIVE]: timeout (count=$now, expected >= $EXPECTED_TURNS)" >&2
+  EXIT_REASON="timeout"
+  return 1
 }
 
 # --- AGENT-SPECIFIC SEAM 3: send text -----------------------------------------
 send_text() { # <text>
-  tmux send-keys -t "$SESSION" -l "$1"
+  tmux send-keys -t "$SESSION" -l -- "$1"
+  # Brief pause so the Textual TUI's input handler renders the typed text before
+  # Enter lands, so Enter isn't dropped mid-render.
+  sleep 0.3
   tmux send-keys -t "$SESSION" Enter
+  EXPECTED_TURNS=$((EXPECTED_TURNS + 1))
+  echo "[driver] send[s$ACTIVE]: ${1:0:60} (expecting turn $EXPECTED_TURNS)" >&2
 }
 
 # --- Step dispatch: ALL standard arms present; stubs fail loudly -------------
