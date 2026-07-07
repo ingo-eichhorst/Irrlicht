@@ -97,6 +97,7 @@ if want go; then
   run_gate "onboarding-factory tests" go test ./tools/onboarding-factory/... -count=1
   run_gate "replaydata validate"      go run ./tools/onboarding-factory/cmd/of validate
   run_gate "recording-rig smoke test" bash tools/onboarding-factory/scripts/smoke-test.sh
+  run_gate "starhistory tests"        go test ./tools/starhistory/... -count=1
 fi
 
 # ---- web group (mirrors web-test.yml) -----------------------------------
