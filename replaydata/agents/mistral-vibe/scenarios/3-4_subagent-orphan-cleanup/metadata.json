@@ -89,16 +89,17 @@
       ],
       "setup": [
         "Driver generates a fresh cwd under <staging>/cwd/",
-        "A README.md with a single H1 heading is seeded into the cwd so the explore subagent has a deterministic file to read while the parent is alive — the subagent must still be in flight when SIGKILL lands"
+        "A README.md with a single H1 heading is seeded into the cwd so the explore subagent has a deterministic file to read while the parent is alive — the subagent must still be in flight when SIGKILL lands",
+        "RESHAPE (record): empty staging cwd, so the seeded-README child task cannot run — replaced with a self-contained long-essay explore-subagent task (>=1500 words, ~30-40s) so the child is reliably alive and observed when the parent is SIGKILLed. Pre-sigkill sleep raised 12s->22s to clear vibe boot variance (dir has appeared anywhere from +4s to +21s) so the child is minted+linked before the kill. bypass_tool_permissions=true so the Task tool auto-executes."
       ],
       "script": [
         {
           "type": "send",
-          "text": "Use the Task tool to launch a subagent (agent: explore) that reads the README.md in the current directory three times in a row and then waits 30 seconds before reporting its first heading. Do not reply to me until the subagent is done."
+          "text": "Use your Task tool to launch a subagent (agent: explore) that writes a very long, detailed essay of at least 1500 words about the complete history of computing from the abacus to modern AI. Take your time and be thorough. Do not reply to me until the subagent is completely finished."
         },
         {
           "type": "sleep",
-          "seconds": 12
+          "seconds": 22
         },
         {
           "type": "sigkill"
@@ -116,7 +117,9 @@
         "no state_transition to working (or waiting) fires for the child after the parent's process_exited (issue #321 regression invariant)",
         "final parent state is ready; after readyTTL both rows are removed via transcript_removed"
       ],
-      "settings": {},
+      "settings": {
+        "bypass_tool_permissions": true
+      },
       "timeout_seconds": 180
     }
   }
