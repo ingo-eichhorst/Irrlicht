@@ -118,11 +118,8 @@ func resolveParser(adapter string) (string, tailer.TranscriptParser) {
 // firstSessionID scans a JSONL transcript for the first session id it can
 // find across the adapter-specific field names. Returns "" if none.
 func firstSessionID(path string) string {
-	if hasParentTraversal(path) {
-		return ""
-	}
-	f, err := os.Open(path)
-	if err != nil {
+	f, ok := openTaintGuarded(path)
+	if !ok {
 		return ""
 	}
 	defer f.Close()
@@ -293,6 +290,20 @@ func hasParentTraversal(p string) bool {
 	return strings.Contains(p, "..")
 }
 
+// openTaintGuarded is os.Open with the hasParentTraversal check folded in,
+// collapsing what would otherwise be two separate early-return branches
+// (traversal check, then the os.Open error check) in every caller into one.
+func openTaintGuarded(path string) (*os.File, bool) {
+	if hasParentTraversal(path) {
+		return nil, false
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, false
+	}
+	return f, true
+}
+
 // clampMonotonic returns ts if ts > floor, else floor+1ms. Used inside
 // synthesizeViaEngine to guarantee every event's timestamp strictly
 // exceeds the last one — otherwise the state machine treats negative
@@ -339,11 +350,8 @@ func LoadTurnMarkers(scenarioDir string, anchor time.Time) []TurnMarker {
 const turnTextMax = 240
 
 func loadTurnsFromJSONL(path string, anchor time.Time) []TurnMarker {
-	if hasParentTraversal(path) {
-		return nil
-	}
-	f, err := os.Open(path)
-	if err != nil {
+	f, ok := openTaintGuarded(path)
+	if !ok {
 		return nil
 	}
 	defer f.Close()

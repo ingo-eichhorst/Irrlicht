@@ -191,6 +191,17 @@ func hasParentTraversal(p string) bool {
 	return strings.Contains(p, "..")
 }
 
+// openTaintGuarded is os.Open with the hasParentTraversal check folded in
+// as a synthesized os.ErrNotExist — collapsing what would otherwise be two
+// separate early-return branches (traversal check, then the os.Open error
+// check) in every caller into one.
+func openTaintGuarded(path string) (*os.File, error) {
+	if hasParentTraversal(path) {
+		return nil, fmt.Errorf("open %s: %w", path, os.ErrNotExist)
+	}
+	return os.Open(path)
+}
+
 // NewestRecordingDir returns the path to the newest recording under
 // scenarioDir/recordings/ — the lexicographically-greatest entry name, which
 // (recording names are timestamp-prefixed) is the most recent. ok is false
@@ -410,10 +421,7 @@ func ParseShardSpec(metaLine json.RawMessage, phaseLines []json.RawMessage) (Exp
 func loadExpected(path string) (ExpectedMeta, []ExpectedPhase, error) {
 	var meta ExpectedMeta
 	var phases []ExpectedPhase
-	if hasParentTraversal(path) {
-		return meta, nil, fmt.Errorf("open %s: %w", path, os.ErrNotExist)
-	}
-	f, err := os.Open(path)
+	f, err := openTaintGuarded(path)
 	if err != nil {
 		return meta, nil, err
 	}
@@ -455,10 +463,7 @@ func loadExpected(path string) (ExpectedMeta, []ExpectedPhase, error) {
 }
 
 func loadEvents(path string) ([]recordedEvent, error) {
-	if hasParentTraversal(path) {
-		return nil, fmt.Errorf("open %s: %w", path, os.ErrNotExist)
-	}
-	f, err := os.Open(path)
+	f, err := openTaintGuarded(path)
 	if err != nil {
 		return nil, err
 	}

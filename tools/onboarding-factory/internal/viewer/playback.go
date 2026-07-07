@@ -31,6 +31,18 @@ import (
 // `+` and `.` are both legal characters in archive names.
 var archiveNameRE = regexp.MustCompile(`^[A-Za-z0-9._:+-]+$`)
 
+// isInvalidRecordingName reports whether recording — already reduced to a
+// single path segment via filepath.Base — is unusable as an archive
+// directory name: archiveNameRE's charset includes "." and has no
+// length/sequence restriction, so it matches the literal values "." and
+// ".." too, which must be rejected explicitly.
+func isInvalidRecordingName(recording string) bool {
+	if recording == "." || recording == ".." {
+		return true
+	}
+	return !archiveNameRE.MatchString(recording)
+}
+
 // playbackModeViewerInternal is the only supported Playback.Mode value
 // today — kept as a string field (rather than dropped) for a possible
 // future isolated-daemon mode.
@@ -293,7 +305,7 @@ func (m *PlaybackManager) StartViewerInternal(agent, subtree, scenario string, s
 	var eventsDir string
 	if recording != "" {
 		recording = filepath.Base(recording)
-		if recording == "." || recording == ".." || !archiveNameRE.MatchString(recording) {
+		if isInvalidRecordingName(recording) {
 			return nil, fmt.Errorf("invalid recording name")
 		}
 		eventsDir = filepath.Join(scenarioDir, "recordings", recording)

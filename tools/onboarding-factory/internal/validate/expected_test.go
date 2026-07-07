@@ -326,16 +326,19 @@ func writeRec(t *testing.T, dir, file, content string) {
 // TestHasParentTraversal covers the shared path-traversal guard used at
 // every os.Open/os.Stat/os.ReadDir sink in this file.
 func TestHasParentTraversal(t *testing.T) {
-	bad := []string{"..", "../../etc/passwd", "sub/../evil", "a/b/../../c"}
-	for _, p := range bad {
-		if !hasParentTraversal(p) {
-			t.Errorf("hasParentTraversal(%q) = false; want true", p)
-		}
+	cases := map[string]bool{
+		"..":               true,
+		"../../etc/passwd": true,
+		"sub/../evil":      true,
+		"a/b/../../c":      true,
+		"":                 false,
+		"scenario-id":      false,
+		"claudecode/scenarios/2-17_user-blocking-question": false,
+		"expected.jsonl": false,
 	}
-	good := []string{"", "scenario-id", "claudecode/scenarios/2-17_user-blocking-question", "expected.jsonl"}
-	for _, p := range good {
-		if hasParentTraversal(p) {
-			t.Errorf("hasParentTraversal(%q) = true; want false", p)
+	for p, want := range cases {
+		if got := hasParentTraversal(p); got != want {
+			t.Errorf("hasParentTraversal(%q) = %v; want %v", p, got, want)
 		}
 	}
 }
