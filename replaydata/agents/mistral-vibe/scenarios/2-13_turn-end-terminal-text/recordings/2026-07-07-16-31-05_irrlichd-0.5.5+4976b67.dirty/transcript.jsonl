@@ -1,0 +1,2 @@
+{"role": "user", "content": "Reply with exactly: hello world", "injected": false, "message_id": "a2e644c5-75a4-4ee0-961a-b31b5f413245"}
+{"role": "assistant", "content": "hello world", "injected": false, "reasoning_content": "The user wants me to reply with exactly \"hello world\". This is a simple, direct instruction. I should output exactly that string and nothing else.", "reasoning_message_id": "7a6a8249-6a86-469e-88ed-e4a1612f9f32", "message_id": "09724a51-be1d-41d5-ae59-08487038204e"}
