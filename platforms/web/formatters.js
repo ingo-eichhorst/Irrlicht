@@ -190,7 +190,12 @@ export function taskEtaPresentation(metrics, state, nowSec) {
   if (state !== 'working' || !est) return null;
   const sourceLabel = est.source === 'tasks' ? 'from task list'
     : est.source === 'subagents' ? 'from subagents' : 'agent-reported';
-  if (!(est.completed_rounds > 0)) return zeroRoundsEtaPresentation(est, eta, nowSec, sourceLabel);
+  // Explicit null/undefined check before the <= comparison (SonarQube
+  // javascript:S1940 wants <= over !(... > ...), but `undefined <= 0` is
+  // false while `!(undefined > 0)` is true — a missing completed_rounds
+  // must still take the zero-rounds fallback, not fall through to a path
+  // that renders "undefined/N rounds").
+  if (est.completed_rounds == null || est.completed_rounds <= 0) return zeroRoundsEtaPresentation(est, eta, nowSec, sourceLabel);
   if (!eta) return roundsOnlyEtaPresentation(est, nowSec, sourceLabel);
   return projectedEtaPresentation(est, eta, nowSec, sourceLabel);
 }

@@ -220,7 +220,8 @@ function historyMaxY(matrix, projects, B, fcY) {
 
 // drawHistoryGridlines draws the Y gridlines and their value labels,
 // underneath where the stacked areas will be drawn.
-function drawHistoryGridlines(ctx, w, padL, padR, muted, gridColor, maxY, yAt) {
+function drawHistoryGridlines(geo, { w, padL, padR, muted, gridColor, maxY }) {
+  const { ctx, yAt } = geo;
   ctx.font = '10px ui-monospace, monospace';
   ctx.textBaseline = 'middle';
   ctx.textAlign = 'right';
@@ -261,8 +262,9 @@ function drawHistoryStackedAreas(ctx, projects, matrix, B, xAt, yAt) {
 // incremental charts hold a flat line at the projected per-bucket rate,
 // anchored at the forecast's own first value so an empty trailing bucket
 // (the in-progress current minute) doesn't draw a spurious dip-and-spike.
-function drawHistoryForecastLine(ctx, B, H, xAt, yAt, cumulative, grandTotal, fcY, waiting) {
+function drawHistoryForecastLine(geo, { B, H, cumulative, grandTotal, fcY, waiting }) {
   if (H <= 0) return;
+  const { ctx, xAt, yAt } = geo;
   ctx.save();
   ctx.setLineDash([4, 3]);
   ctx.strokeStyle = waiting;
@@ -275,7 +277,8 @@ function drawHistoryForecastLine(ctx, B, H, xAt, yAt, cumulative, grandTotal, fc
 }
 
 // drawHistoryXAxisLabels draws up to 6 evenly-spaced time labels.
-function drawHistoryXAxisLabels(ctx, buckets, B, bucketSeconds, muted, h, padB, xAt) {
+function drawHistoryXAxisLabels(geo, { buckets, B, bucketSeconds, muted, h, padB }) {
+  const { ctx, xAt } = geo;
   ctx.fillStyle = muted;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
@@ -328,17 +331,22 @@ function paintHistoryChart() {
   const xAt = (i) => (N <= 1 ? padL : padL + plotW * (i / (N - 1)));
   const yAt = (v) => padT + plotH * (1 - v / maxY);
 
+  // Shared canvas geometry (context + coordinate mappers) every draw* helper
+  // below needs; the rest of each call is data specific to that helper
+  // (javascript:S107 — bundling this alone dropped each from 8-9 params to 2).
+  const geo = { ctx, xAt, yAt };
+
   // Y gridlines + dollar labels (drawn first, behind the areas).
-  drawHistoryGridlines(ctx, w, padL, padR, muted, gridColor, maxY, yAt);
+  drawHistoryGridlines(geo, { w, padL, padR, muted, gridColor, maxY });
 
   // Stacked areas, bottom-up.
   drawHistoryStackedAreas(ctx, projects, matrix, B, xAt, yAt);
 
   // Forecast: a dashed line into the future.
-  drawHistoryForecastLine(ctx, B, H, xAt, yAt, cumulative, grandTotal, fcY, waiting);
+  drawHistoryForecastLine(geo, { B, H, cumulative, grandTotal, fcY, waiting });
 
   // X axis time labels.
-  drawHistoryXAxisLabels(ctx, buckets, B, data.bucket_seconds, muted, h, padB, xAt);
+  drawHistoryXAxisLabels(geo, { buckets, B, bucketSeconds: data.bucket_seconds, muted, h, padB });
 }
 
 // buildHistoryStatRow builds one contributor list-item: colored dot, label,

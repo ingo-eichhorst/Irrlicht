@@ -533,9 +533,9 @@ type seriesAgg struct {
 
 // advance seeds/updates a session's running baselines to the current row's
 // values. A method (not a per-row closure) so the scan loop allocates nothing.
-func (s *seriesAgg) advance(cur, in, out, read, create float64) {
-	s.prev = cur
-	s.prevIn, s.prevOut, s.prevRead, s.prevCreate = in, out, read, create
+func (s *seriesAgg) advance(cv cumulativeSnapshot) {
+	s.prev = cv.metric
+	s.prevIn, s.prevOut, s.prevRead, s.prevCreate = cv.in, cv.out, cv.read, cv.create
 	s.hasPrev = true
 }
 
@@ -731,6 +731,10 @@ func (t *CostTracker) CostSeries(q outbound.SeriesQuery) (*outbound.CostSeriesRe
 // instead of a single group key.
 func (t *CostTracker) scanSeries(path string, q outbound.SeriesQuery, f seriesFilter, bucketSeconds int64, n int, fallback string, out *outbound.CostSeriesResult) error {
 	aggs := make(map[string]*seriesAgg)
+	// sc bundles the scan-wide constants (fixed for every row in this file)
+	// so accumulateGroupedDelta doesn't need them as five separate params
+	// (go:S107).
+	sc := &seriesScanCtx{out: out, q: q, f: f, fallback: fallback}
 	return scanCostFile(path, func(r snapshotRow) {
 		if scanSeriesRowExcluded(r, q, f, fallback) {
 			return
@@ -740,25 +744,50 @@ func (t *CostTracker) scanSeries(path string, q outbound.SeriesQuery, f seriesFi
 			s = &seriesAgg{}
 			aggs[r.Session] = s
 		}
-		cur := seriesMetricValue(r, q, f.tokens)
-		curIn := float64(r.CumIn)
-		curOut := float64(r.CumOut)
-		curRead := float64(r.CumRead)
-		curCreate := float64(r.CumCreate)
+		cv := cumulativeSnapshot{
+			metric: seriesMetricValue(r, q, f.tokens),
+			in:     float64(r.CumIn),
+			out:    float64(r.CumOut),
+			read:   float64(r.CumRead),
+			create: float64(r.CumCreate),
+		}
 
-		if s.seedOrSkip(r, q, cur, curIn, curOut, curRead, curCreate) {
+		if s.seedOrSkip(r, q, cv) {
 			return
 		}
 
 		// The guards above filter rows to [Start, End), so the index is always
 		// within [0, n-1] — no clamp needed.
 		idx := int((r.TS - q.Start) / bucketSeconds)
-		accumulateGroupedDelta(out, r, q, f, fallback, idx, n, s, cur, curIn, curOut, curRead, curCreate)
+		sc.accumulateGroupedDelta(r, idx, n, s, cv)
 		if out.TokenSplit != nil {
-			accumulateTokenSplit(out.TokenSplit, f, s, curIn, curOut, curRead, curCreate)
+			accumulateTokenSplit(out.TokenSplit, f, s, cv)
 		}
-		s.advance(cur, curIn, curOut, curRead, curCreate)
+		s.advance(cv)
 	})
+}
+
+// cumulativeSnapshot bundles one row's current cumulative metric + token
+// values — threaded through seedOrSkip/advance/accumulateGroupedDelta/
+// accumulateTokenSplit as a single value instead of five separate floats
+// (go:S107).
+type cumulativeSnapshot struct {
+	metric float64
+	in     float64
+	out    float64
+	read   float64
+	create float64
+}
+
+// seriesScanCtx bundles scanSeries' per-file constants (out, q, f, fallback)
+// so accumulateGroupedDelta can take them as one value instead of four
+// separate params (go:S107) — all four are fixed for the lifetime of one
+// scanSeries call, not per-row state.
+type seriesScanCtx struct {
+	out      *outbound.CostSeriesResult
+	q        outbound.SeriesQuery
+	f        seriesFilter
+	fallback string
 }
 
 // scanSeriesRowExcluded reports whether a row falls outside the query's scope
@@ -806,15 +835,15 @@ func seriesMetricValue(r snapshotRow, q outbound.SeriesQuery, tokens map[string]
 // relative to the window-end case between them, which changes behavior in
 // the degenerate q.Start > q.End case (both guards could then be true for
 // the same row, and case order decides the outcome).
-func (s *seriesAgg) seedOrSkip(r snapshotRow, q outbound.SeriesQuery, cur, curIn, curOut, curRead, curCreate float64) bool {
+func (s *seriesAgg) seedOrSkip(r snapshotRow, q outbound.SeriesQuery, cv cumulativeSnapshot) bool {
 	switch {
 	case r.TS < q.Start:
-		s.advance(cur, curIn, curOut, curRead, curCreate)
+		s.advance(cv)
 		return true
 	case r.TS >= q.End:
 		return true
 	case !s.hasPrev:
-		s.advance(cur, curIn, curOut, curRead, curCreate)
+		s.advance(cv)
 		return true
 	}
 	return false
@@ -824,23 +853,23 @@ func (s *seriesAgg) seedOrSkip(r snapshotRow, q outbound.SeriesQuery, cur, curIn
 // series at bucket idx: when grouping by token type, each selected token
 // kind contributes its own band (addBand); otherwise the row's positive
 // delta on the query's metric is folded into its group key's series.
-func accumulateGroupedDelta(out *outbound.CostSeriesResult, r snapshotRow, q outbound.SeriesQuery, f seriesFilter, fallback string, idx, n int, s *seriesAgg, cur, curIn, curOut, curRead, curCreate float64) {
-	if f.groupByToken {
-		addBand(out, "input", idx, n, curIn-s.prevIn, f.tokens)
-		addBand(out, "output", idx, n, curOut-s.prevOut, f.tokens)
-		addBand(out, "cache_read", idx, n, curRead-s.prevRead, f.tokens)
-		addBand(out, "cache_creation", idx, n, curCreate-s.prevCreate, f.tokens)
+func (sc *seriesScanCtx) accumulateGroupedDelta(r snapshotRow, idx, n int, s *seriesAgg, cv cumulativeSnapshot) {
+	if sc.f.groupByToken {
+		addBand(sc.out, "input", idx, n, cv.in-s.prevIn, sc.f.tokens)
+		addBand(sc.out, "output", idx, n, cv.out-s.prevOut, sc.f.tokens)
+		addBand(sc.out, "cache_read", idx, n, cv.read-s.prevRead, sc.f.tokens)
+		addBand(sc.out, "cache_creation", idx, n, cv.create-s.prevCreate, sc.f.tokens)
 		return
 	}
-	if d := cur - s.prev; d > 0 {
-		key := rowKey(r, q.Group, fallback)
-		dst := out.ByKey[key]
+	if d := cv.metric - s.prev; d > 0 {
+		key := rowKey(r, sc.q.Group, sc.fallback)
+		dst := sc.out.ByKey[key]
 		if dst == nil {
 			dst = make([]float64, n)
-			out.ByKey[key] = dst
+			sc.out.ByKey[key] = dst
 		}
 		dst[idx] += d
-		out.Totals[key] += d
+		sc.out.Totals[key] += d
 	}
 }
 
@@ -848,25 +877,25 @@ func accumulateGroupedDelta(out *outbound.CostSeriesResult, r snapshotRow, q out
 // filter's selected token kinds — used alongside the grouped series so a
 // tokens-metric query can report the input/output/cache split regardless of
 // its Group axis.
-func accumulateTokenSplit(ts *outbound.TokenSplit, f seriesFilter, s *seriesAgg, curIn, curOut, curRead, curCreate float64) {
+func accumulateTokenSplit(ts *outbound.TokenSplit, f seriesFilter, s *seriesAgg, cv cumulativeSnapshot) {
 	if f.tokens["input"] {
-		if d := curIn - s.prevIn; d > 0 {
+		if d := cv.in - s.prevIn; d > 0 {
 			ts.Input += d
 		}
 	}
 	if f.tokens["output"] {
-		if d := curOut - s.prevOut; d > 0 {
+		if d := cv.out - s.prevOut; d > 0 {
 			ts.Output += d
 		}
 	}
 	var cache float64
 	if f.tokens["cache_read"] {
-		if d := curRead - s.prevRead; d > 0 {
+		if d := cv.read - s.prevRead; d > 0 {
 			cache += d
 		}
 	}
 	if f.tokens["cache_creation"] {
-		if d := curCreate - s.prevCreate; d > 0 {
+		if d := cv.create - s.prevCreate; d > 0 {
 			cache += d
 		}
 	}
