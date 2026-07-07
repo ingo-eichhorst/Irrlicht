@@ -309,6 +309,15 @@ func (m *PlaybackManager) StartViewerInternal(agent, subtree, scenario string, s
 			return nil, fmt.Errorf("invalid recording name")
 		}
 		eventsDir = filepath.Join(scenarioDir, "recordings", recording)
+		// eventsDir is built from the already-Base()'d/validated recording
+		// above, so this is a no-op for any legitimate value — but CodeQL's
+		// go/path-injection query doesn't credit that validation across the
+		// intervening filepath.Join (see the store.underRoot doc comment for
+		// the same rationale); checking the exact value reaching os.Stat,
+		// right here, is what it recognizes.
+		if strings.Contains(eventsDir, "..") {
+			return nil, fmt.Errorf("invalid recording name")
+		}
 		if _, err := os.Stat(filepath.Join(eventsDir, "events.jsonl")); err != nil {
 			return nil, fmt.Errorf("recording %q has no events.jsonl", recording)
 		}

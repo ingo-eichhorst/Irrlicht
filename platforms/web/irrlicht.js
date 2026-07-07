@@ -251,6 +251,19 @@ import { reconcile, paintRowNum } from './domReconcile.js';
     // a tick that's already reflected in our snapshot (closing the connect-time race).
     const lastTickGen = Object.create(null);
 
+    // isDangerousKey guards every historyByGranularity[gran][sessionID] /
+    // lastTickGen[sessionID] access below. Those dicts are already
+    // Object.create(null) (no prototype to hijack via a "__proto__" key),
+    // but CodeQL's prototype-pollution query doesn't credit that — it
+    // flags the later `arr[...] = value` write on the value pulled out by
+    // a server-controlled key, several lines downstream of where the dict
+    // itself was hardened. Rejecting the dangerous keys at the point of
+    // lookup makes the safety explicit right where CodeQL's dataflow
+    // expects to see it, on top of the null-prototype backstop.
+    function isDangerousKey(key) {
+      return key === '__proto__' || key === 'constructor' || key === 'prototype';
+    }
+
     const HISTORY_PRIORITY_TO_STATE = ['ready', 'working', 'waiting', ''];
     function historyPriorityForState(s) {
       switch (s) {
@@ -296,6 +309,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
     }
 
     function applyHistorySnapshot(sessionID, history, generations) {
+      if (isDangerousKey(sessionID)) return;
       for (const granKey of Object.keys(history)) {
         const gran = Number.parseInt(granKey, 10);
         if (![1, 10, 60].includes(gran)) continue;
@@ -325,6 +339,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       const dict = historyByGranularity[granularitySec];
       let changed = false;
       for (const sid of Object.keys(buckets)) {
+        if (isDangerousKey(sid)) continue;
         // Skip if this tick has already been folded into our snapshot.
         if (bucketGenerations?.[sid] !== undefined) {
           const gen = bucketGenerations[sid];
@@ -345,6 +360,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
     }
 
     function applyHistoryUpgrade(sessionID, priority) {
+      if (isDangerousKey(sessionID)) return;
       const newState = HISTORY_PRIORITY_TO_STATE[priority & 0x3];
       const newPrio = historyPriorityForState(newState);
       let changedActive = false;
