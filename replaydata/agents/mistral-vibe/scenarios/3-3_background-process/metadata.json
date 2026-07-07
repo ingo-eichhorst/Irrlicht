@@ -1,0 +1,66 @@
+{
+  "scenario_id": "background-process",
+  "metadata": {
+    "agent_supports": "no",
+    "daemon_capability": "n/a",
+    "driver_capability": "n/a",
+    "agent_cli_version": "2.19.0",
+    "daemon_version": "0.5.5+12d0e9a.dirty",
+    "confidence": 0.9,
+    "notes": "agent_supports: no — Mistral Vibe's bash tool is synchronous (params command+timeout only); no run_in_background primitive, no background id, no poll/kill tool"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "background-process",
+      "agent": "mistral-vibe",
+      "assessed_at": "2026-07-07T00:00:00Z",
+      "agent_supports": "no",
+      "daemon_capability": "n/a",
+      "driver_capability": "n/a",
+      "confidence": 0.9,
+      "body": "## Verdict\n\nagent_supports: no\ndaemon_capability: n/a; driver_capability: n/a\n\n## What the scenario requires\n\nbackground-process (id 3.3) asserts the user-observable arc PR #450 / issue #445 added for Claude Code: the agent spawns a Bash command with `run_in_background:true`, the tool returns immediately carrying a structured `toolUseResult.backgroundTaskId`, the detached process outlives the turn's `end_turn`, the session STAYS `working` while the process is alive (`BackgroundProcessCount > 0`), and a single `working → ready` fires once the process exits after a `BashOutput` poll reports it completed. The fixed structural arc: one `ready → working`, an extended `working` dwell with no settle while the background process is alive, then exactly one `working → ready` after it exits.\n\n## Why agent_supports: no\n\nThe scenario's core primitive — a tool call that launches a process the agent leaves running in the background and polls to completion in a later step — does not exist in Mistral Vibe 2.19.0. Vibe's tool surface, read BOTH from a live session's `meta.json` `tools_available` schema AND from the bundled source, is: `skill`, `task`, `web_fetch`, `bash`, `edit`, `grep`, `ask_user_question`, `read_file`, `web_search`, `todo`, `write_file` (+ moderne MCP tools). The only shell primitive is `bash`:\n\n- **`bash` schema** (from `tools_available`): `{command: string, timeout: int|null}`. There is NO `run_in_background` parameter and no id in the return. Its description states it verbatim: \"Use `bash` to run a one-off shell command and capture its output\" and \"Each command runs independently in a fresh, stateless environment.\" It returns a `BashResult(command, stdout, stderr, returncode)` — a completed result, not a handle.\n- **`bash` implementation** (`vibe/core/tools/builtins/bash.py`): `run()` calls `asyncio.create_subprocess_shell(...)` then `await asyncio.wait_for(proc.communicate(), timeout=timeout)` — it BLOCKS until the process completes (or times out and is killed), and its `finally` block unconditionally calls `await kill_async_subprocess(proc)`. So no process a Vibe bash call starts can outlive the tool call: the tool waits for it, then kills it. A user-authored `&` inside the command string backgrounds a child within the single synchronous shell invocation, but that child is untracked, has no id to poll, and is not surfaced in the transcript as outliving the turn — and `nohup`/`bash`/`sh` are on the standalone denylist anyway.\n\nThere is NO `BashOutput` poll tool and NO `KillShell` tool in Vibe's tool set — the two tools the #445/#450 mechanism uses to poll and terminate a tracked background process. The whole scenario observability is keyed on Claude Code's `toolUseResult.backgroundTaskId` field plus `BashOutput`/`KillShell`; Vibe has no analogue. On disk, a real Vibe `bash` tool_call carries only `{\"command\": ...}` as its arguments (session_20260622_093035_3f8d3225) — an ordinary synchronous tool call with no background semantics.\n\nThe `task` tool launches a read-only subagent that runs autonomously and returns a single final message — the agent waits for that result within the turn; it is a different scenario family (subagent dispatch), not a detached background OS process that holds the parent session `working` past its own turn.\n\nBecause the agent cannot perform the behavior, the daemon and driver pillars are `n/a`: there is no behavior to observe and no recipe to drive. This is distinct from `cloud-background-agent` (where a feature might exist but irrlicht has no transport → `daemon=incapable`); here the gap is in the agent itself, so the route is frozen on `agent=no`.\n\n## Daemon side (consistent, not the deciding pillar)\n\nEven had Vibe emitted a background marker, the Vibe parser (`core/adapters/inbound/agents/vibe/parser.go`) produces no `BackgroundSpawns` / `TerminatedBackgroundTaskIDs` — it maps assistant tool_calls to plain `ToolUses` with id+name and nothing more. The daemon's `BackgroundProcessCount` path (`core/pkg/tailer/tailer.go` → `applyBackgroundProcessDeltas`) is fed ONLY by those parser fields, which today only the claudecode parser emits. So the daemon could not track a Vibe background process even in principle — but this is moot: the deciding pillar is `agent=no`.\n\n## What would flip agent_supports to yes\n\nA future Vibe release adding a true detached/background exec primitive — a `bash` `run_in_background` flag or a dedicated background-task tool that returns a task id, keeps the process alive past the turn, and exposes a poll/terminate surface (a `BashOutput`/`KillShell` analogue) the agent and a tailer can observe. None of that exists in 2.19.0.",
+      "caveats": [
+        "agent_supports: no is anchored to Mistral Vibe 2.19.0 on two independent surfaces: (1) a live session's meta.json tools_available — the bash tool schema is {command, timeout}, no run_in_background, and the tool set contains no BashOutput/KillShell; (2) the bundled source vibe/core/tools/builtins/bash.py — BashArgs is {command, timeout} and run() blocks on proc.communicate() then kills the subprocess in finally.",
+        "A user-supplied `&` inside a bash command backgrounds a child within the single synchronous invocation, but it is untracked, has no id to poll, is not surfaced in the transcript as outliving the turn, and nohup/bash/sh standalone are denylisted — it does not satisfy the scenario's tracked-background-process arc.",
+        "daemon/driver are n/a (not incapable): the agent lacks the primitive, so there is no signal to observe and no recipe to drive. The vibe parser additionally emits no BackgroundSpawns, so the daemon's BackgroundProcessCount path would be unfed regardless — but agent=no is the deciding pillar."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "~/.vibe/logs/session/session_20260706_101952_48e134e3/meta.json (tools_available)",
+          "note": "Live Vibe 2.19.0 tool set: skill, task, web_fetch, bash, edit, grep, ask_user_question, read_file, web_search, todo, write_file (+ moderne). The bash tool schema is {command, timeout:int|null} — no run_in_background; description: 'run a one-off shell command and capture its output', 'Each command runs independently in a fresh, stateless environment'. No BashOutput / KillShell tool exists."
+        },
+        {
+          "kind": "file",
+          "ref": "vibe/core/tools/builtins/bash.py (site-packages, mistral-vibe 2.19.0)",
+          "note": "BashArgs = {command, timeout}. run() does asyncio.create_subprocess_shell then await asyncio.wait_for(proc.communicate(), timeout) — blocks until the process finishes — and its finally block calls kill_async_subprocess(proc). No backgroundTaskId, no detached/background mode; a started process cannot outlive the tool call. nohup/bash/sh are on denylist_standalone."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.vibe/logs/session/session_20260622_093035_3f8d3225/messages.jsonl",
+          "note": "On-disk proof: a real Vibe bash tool_call carries only arguments {\"command\": \"ls -la .vscode/ ...\"} — an ordinary synchronous tool call, no run_in_background / background id marker."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/vibe/parser.go",
+          "note": "The vibe parser maps assistant tool_calls to plain ToolUses (id+name) and produces no BackgroundSpawns / TerminatedBackgroundTaskIDs. The daemon's BackgroundProcessCount path (core/pkg/tailer/tailer.go applyBackgroundProcessDeltas) is fed only by those parser fields, which only claudecode emits."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/3-3_background-process/metadata.json",
+          "note": "Canonical anchor (claudecode yes/full/ready): the scenario's observability is built entirely on Claude Code's run_in_background + toolUseResult.backgroundTaskId + BashOutput/KillShell, none of which Vibe has."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "preconditions": [],
+      "setup": [],
+      "script": [],
+      "verify": [],
+      "settings": {},
+      "timeout_seconds": 0
+    }
+  }
+}
