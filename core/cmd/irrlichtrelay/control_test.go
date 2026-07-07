@@ -69,6 +69,13 @@ func TestRelayRoutesControlToDaemon(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	// Wait for the client's initial snapshot before dialing the daemon: dial()
+	// returning only means the TCP/HTTP handshake finished, not that the
+	// server has processed the hello and registered the client yet. Without
+	// this sync point the daemon's hello can race ahead and register+broadcast
+	// daemon_status before the client is in h.clients, so fanout drops the
+	// frame and the readUntil below times out (flaked in #913's CI run).
+	readUntil(t, client, relay.MsgSnapshot)
 
 	daemon := dial(t, wsURL)
 	if err := daemon.WriteJSON(relay.Hello{
