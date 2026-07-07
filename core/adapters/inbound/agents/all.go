@@ -9,6 +9,7 @@ import (
 	"irrlicht/core/adapters/inbound/agents/kirocli"
 	"irrlicht/core/adapters/inbound/agents/opencode"
 	"irrlicht/core/adapters/inbound/agents/pi"
+	"irrlicht/core/adapters/inbound/agents/vibe"
 	"irrlicht/core/domain/agent"
 )
 
@@ -27,5 +28,6 @@ func All() []agent.Agent {
 		kirocli.Agent(),
 		geminicli.Agent(),
 		antigravity.Agent(),
+		vibe.Agent(),
 	}
 }

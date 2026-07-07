@@ -101,8 +101,8 @@ MIN_VERSION="$(jq -r --arg a "$ADAPTER" '.meta.min_versions[$a] // empty' "$CATA
 # claude --version → "X.Y.Z (...)"; codex --version → "codex-cli X.Y.Z";
 # pi --version → "X.Y.Z"; aider --version → "aider X.Y.Z";
 # kiro-cli --version → "kiro-cli X.Y.Z"; gemini --version → "X.Y.Z";
-# agy --version → "X.Y.Z"; vibe --version → "X.Y.Z" (VER_FIELD=1 assumed —
-# unverified, the vibe CLI was not on this machine; adjust if it prefixes a token).
+# agy --version → "X.Y.Z"; vibe --version → "vibe X.Y.Z" (verified against
+# vibe 2.19.0 on this machine — the version is the 2nd field).
 case "$ADAPTER" in
   claudecode)  CLI_BIN="claude";   VER_FIELD=1 ;;
   codex)       CLI_BIN="codex";    VER_FIELD=2 ;;
@@ -112,7 +112,7 @@ case "$ADAPTER" in
   kiro-cli)    CLI_BIN="kiro-cli"; VER_FIELD=2 ;;
   gemini-cli)  CLI_BIN="gemini";   VER_FIELD=1 ;;
   antigravity) CLI_BIN="agy";      VER_FIELD=1 ;;
-  mistral-vibe) CLI_BIN="vibe";    VER_FIELD=1 ;;
+  mistral-vibe) CLI_BIN="vibe";    VER_FIELD=2 ;;
 esac
 
 command -v "$CLI_BIN" >/dev/null 2>&1 || fail "$CLI_BIN CLI not on PATH"
