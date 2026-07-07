@@ -49,14 +49,6 @@ RUN cd core && go build ./...
 
 # Run the cross-platform gate. Kept as the image's default command (not a
 # RUN) so `docker run` re-executes it against the built layers and a fresh
-# process table for the conformance test.
-# -race matches the linux.yml CI job — the conformance test exists to catch
-# pidfd/poll concurrency bugs, so the local harness must exercise the detector
-# too, or a race could pass here and fail CI.
-CMD set -eux; \
-    cd /src/tools/onboarding-factory; \
-    go test ./cmd/replay/... -race -count=1; \
-    cd /src/core; \
-    go test ./adapters/inbound/agents/processlifecycle/... -race -count=1; \
-    cd /src; \
-    tools/replay-fixtures.sh
+# process table for the conformance test. Extracted into a script + exec
+# form (docker:S7019) rather than an inline shell-form CMD.
+CMD ["tools/linux-replay-entrypoint.sh"]

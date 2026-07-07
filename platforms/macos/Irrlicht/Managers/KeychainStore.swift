@@ -38,7 +38,7 @@ enum KeychainStore {
         // doesn't block a headless read afterward. ThisDeviceOnly formalizes
         // that this never leaves the device (matches kSecAttrSynchronizable's
         // default of false, now explicit rather than incidental).
-        attrs[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        attrs[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly // NOSONAR (swift:S6288) — see comment above
         return SecItemAdd(attrs as CFDictionary, nil) == errSecSuccess
     }
 
