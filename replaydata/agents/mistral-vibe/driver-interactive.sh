@@ -113,7 +113,7 @@ SES_MARKER=(); SES_CWD=(); SES_ALIVE=()
 # Tool-executing recipes: set the recipe's settings.bypass_tool_permissions=true
 # and launch_repl adds `vibe --auto-approve` so tool calls run unattended (not a
 # step type — a launch-mode toggle, so it stays out of DRIVE_ELICITS).
-DRIVE_ELICITS="send slash sleep wait_turn"
+DRIVE_ELICITS="send slash sleep wait_turn exit_clean restart sigkill"
 DRIVE_SLASH_REQUIRES_STEP_TYPE=false
 RUN_CWD="${IRRLICHT_ONBOARD_CWD:-$STAGING/cwd}"
 mkdir -p "$RUN_CWD"
@@ -227,19 +227,27 @@ trap cleanup EXIT
 FIRST_PROMPT="$(jq -r '.[0] | select(.type=="send" and ((.text // "") | startswith("!") | not)) | .text // empty' <<<"$SCRIPT_JSON" 2>/dev/null || true)"
 FIRST_SEND_PENDING=0
 
-launch_repl() {
+# boot_vibe_active <positional-prompt> <resume-id>
+# Launch vibe in the ALREADY-ALLOCATED active slot's tmux session + cwd. Shared
+# by the initial launch (launch_repl), restart (fresh session), and resume
+# (relaunch the same session id). Both args may be empty:
+#   <positional-prompt> — delivered as vibe's launch PROMPT arg so vibe boots +
+#                         submits it without any TUI keystroke timing; empty ⇒
+#                         bare launch and we wait for REPL readiness so a later
+#                         send types into a live input box.
+#   <resume-id>         — adds `--resume <id>` so vibe reopens the SAME
+#                         session_<ts>_<shortid> dir and appends (one session,
+#                         two process lifetimes). Empty ⇒ fresh session.
+# Snapshots PRE_LAUNCH_DIRS so resolve_transcript's set-diff picks the dir vibe
+# mints for THIS launch (lazy — created on the first user message), never an
+# older bumped session.
+boot_vibe_active() {
+  local prompt="$1" resume_id="$2"
   command -v tmux >/dev/null 2>&1 || { echo "[driver] tmux required" >&2; EXIT_REASON="nonzero(2)"; exit 1; }
-  # Snapshot pre-existing session dirs BEFORE launch. Vibe creates its
-  # ~/.vibe/logs/session/<session-id>/ dir lazily on the first user message, so
-  # resolve_transcript (called from wait_turn) picks the dir absent from this
-  # set — never "newest mtime", which an older bumped session could win.
   PRE_LAUNCH_DIRS="$(find "$HOME/.vibe/logs/session" -maxdepth 1 -type d -name 'session_*' 2>/dev/null | sort)"
-  # alloc_slot mints a fresh slot, points SESSION at its tmux name and ACTIVE at
-  # it, and clears the slot's TRANSCRIPT/UUID. restart/start_session call it again
-  # to open another session; per-slot stdout (.stdout.$ACTIVE) feeds the contract.
-  alloc_slot "mistral-vibedrv-$$-$(date +%s)-$((N_SLOTS + 1))" "$RUN_CWD"
   tmux kill-session -t "$SESSION" 2>/dev/null || true
   : > "$DRIVER_LOG.stdout.$ACTIVE"
+  mkdir -p "${SES_CWD[$ACTIVE]}"
   # The binary is `vibe` (the console-script), NOT `mistral-vibe`; the OS process
   # is a python interpreter running .../bin/vibe. Vibe is an interactive Textual
   # TUI, so drive it under tmux. `|| { … exit … }` keeps a launch failure from
@@ -262,10 +270,13 @@ launch_repl() {
     vibe_args+=(--auto-approve)
     echo "[driver] bypass_tool_permissions: launching vibe with --auto-approve" >&2
   fi
-  if [[ -n "$FIRST_PROMPT" ]]; then
-    vibe_args+=("$FIRST_PROMPT")
-    FIRST_SEND_PENDING=1
-    echo "[driver] launching with first prompt as positional arg: ${FIRST_PROMPT:0:60}" >&2
+  if [[ -n "$resume_id" ]]; then
+    vibe_args+=(--resume "$resume_id")
+    echo "[driver] resume: launching vibe --resume $resume_id" >&2
+  fi
+  if [[ -n "$prompt" ]]; then
+    vibe_args+=("$prompt")
+    echo "[driver] launching with prompt as positional arg: ${prompt:0:60}" >&2
   fi
   tmux new-session -d -s "$SESSION" -x 200 -y 50 -c "${SES_CWD[$ACTIVE]}" -- \
     vibe "${vibe_args[@]}" 2>>"$DRIVER_LOG.stderr" \
@@ -276,7 +287,7 @@ launch_repl() {
   # TUI, so wait for the banner to render and the "Initializing…" spinner to
   # clear before the first keystroke lands. Skipped on the positional path —
   # vibe processes the launch prompt itself, so no keystroke timing to gate.
-  if [[ -z "$FIRST_PROMPT" ]]; then
+  if [[ -z "$prompt" ]]; then
     local WAITED=0
     while [[ $WAITED -lt 120 ]]; do
       tmux capture-pane -t "$SESSION" -p -S -40 2>/dev/null | grep -q 'Type /help' && break
@@ -291,6 +302,15 @@ launch_repl() {
   fi
   # Transcript is resolved lazily in wait_turn — Vibe's session dir does not
   # exist until the first user message is processed.
+}
+
+launch_repl() {
+  # alloc_slot mints slot 1, points SESSION at its tmux name and ACTIVE at it,
+  # and clears the slot's TRANSCRIPT/UUID. restart calls alloc_slot again for a
+  # fresh session; per-slot stdout (.stdout.$ACTIVE) feeds the contract.
+  alloc_slot "mistral-vibedrv-$$-$(date +%s)-$((N_SLOTS + 1))" "$RUN_CWD"
+  [[ -n "$FIRST_PROMPT" ]] && FIRST_SEND_PENDING=1
+  boot_vibe_active "$FIRST_PROMPT" ""
 }
 
 # --- AGENT-SPECIFIC SEAM 2: detect a completed turn --------------------------
@@ -387,6 +407,60 @@ slash_cmd() { # <text>
   echo "[driver] slash[s$ACTIVE]: $text (no turn expected)" >&2
 }
 
+# --- SEAM: teardown primitives (exit_clean / restart / sigkill) --------------
+# step_exit_clean — graceful shutdown. Vibe's `/exit` slash (handler _exit_app)
+# quits directly with NO confirmation dialog (unlike Ctrl+D, which needs a
+# second press within ~1s). Type it, then wait for the tmux session's process to
+# die so the daemon observes process_exited before the next step runs.
+step_exit_clean() {
+  resolve_transcript || true
+  type_enter "/exit"
+  local w=0
+  while [[ $w -lt 30 ]] && tmux has-session -t "$SESSION" 2>/dev/null; do
+    sleep 0.5; w=$((w + 1))
+  done
+  SES_ALIVE[$ACTIVE]=0
+  echo "[driver] exit_clean[s$ACTIVE]: sent /exit; process exited (sid=$(daemon_sid "$TRANSCRIPT"))" >&2
+}
+
+# step_restart — end the active session and start a FRESH vibe (new session dir,
+# new session_id, fresh cwd). Separates session-end variants so each lands as
+# its own session row with a grey gap between. By the time restart runs the
+# active process is usually already gone (an exit_clean or sigkill preceded it);
+# retire the slot regardless but keep it in the list so the epilogue flushes its
+# session id. A fresh cwd keeps each variant's session cleanly separated.
+step_restart() {
+  resolve_transcript || true
+  save_active
+  SES_ALIVE[$ACTIVE]=0
+  tmux kill-session -t "$SESSION" 2>/dev/null || true
+  sleep 1
+  local idx=$(( N_SLOTS + 1 ))
+  alloc_slot "mistral-vibedrv-$$-$(date +%s)-${idx}" "${RUN_CWD}-${idx}"
+  echo "[driver] restart: new session slot #${ACTIVE} (cwd=${SES_CWD[$ACTIVE]})" >&2
+  boot_vibe_active "" ""
+}
+
+# step_sigkill — kill -9 the active slot's vibe process: abrupt teardown with no
+# session flush (the SIGKILL counterpart to exit_clean's graceful /exit). The
+# daemon binds the vibe PID by cwd+cmdline (vibe/pid.go DiscoverPIDByCWDAndCmdLine
+# against `(^|/)vibe( |$)|mistral-vibe/bin/python`); tmux launches `vibe` as the
+# pane's own process (`-- vibe …`, no shell wrapper), so the pane pid IS the
+# daemon's tracked PID. kill it directly so process_exited fires.
+step_sigkill() {
+  resolve_transcript || true
+  local pid
+  pid=$(tmux list-panes -t "$SESSION" -F '#{pane_pid}' 2>/dev/null | head -1)
+  if [[ -n "$pid" ]]; then
+    kill -9 "$pid" 2>/dev/null || true
+    echo "[driver] sigkill[s$ACTIVE]: killed PID $pid (sid=$(daemon_sid "$TRANSCRIPT"))" >&2
+  else
+    echo "[driver] sigkill[s$ACTIVE]: no vibe PID found (session=$SESSION)" >&2
+  fi
+  SES_ALIVE[$ACTIVE]=0
+  sleep 1
+}
+
 # --- Step dispatch: ALL standard arms present; stubs fail loudly -------------
 launch_repl
 EXPECTED_TURNS=0
@@ -400,10 +474,10 @@ while IFS= read -r step; do
     interrupt)       not_implemented interrupt || break ;;       # TODO(mistral-vibe): Escape/Ctrl-C the in-flight turn
     keys)            not_implemented keys || break ;;            # TODO(mistral-vibe): tmux send-keys raw sequence
     reset_session)   not_implemented reset_session || break ;;   # TODO(mistral-vibe): in-REPL /clear|/new → new id, SAME slot; re-resolve SES_TRANSCRIPT[$ACTIVE] (SEAM 3)
-    restart)         not_implemented restart || break ;;         # TODO(mistral-vibe): save_active; alloc_slot <name> <new-cwd>; launch — new slot carries the new id
+    restart)         step_restart ;;
     resume)          not_implemented resume || break ;;          # TODO(mistral-vibe): relaunch same id+cwd (1 session, 2 PIDs) — reuse the active slot
-    sigkill)         not_implemented sigkill || break ;;         # TODO(mistral-vibe): kill -9 the active slot's PID
-    exit_clean)      not_implemented exit_clean || break ;;      # TODO(mistral-vibe): Ctrl-D graceful shutdown
+    sigkill)         step_sigkill ;;
+    exit_clean)      step_exit_clean ;;
     start_session)   not_implemented start_session || break ;;   # TODO(mistral-vibe): save_active; alloc_slot; launch a CONCURRENT session, keep the first alive
     session)         not_implemented session || break ;;         # TODO(mistral-vibe): save_active; load_slot N — switch the active slot
     *)               echo "[driver] unknown step type: $type" >&2; EXIT_REASON="nonzero(2)"; break ;;
