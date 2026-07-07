@@ -206,6 +206,17 @@ trap cleanup EXIT
 # Port from the reference driver. Start the agent in a detached tmux session in
 # $RUN_CWD, capturing stdout/stderr to "$DRIVER_LOG.stdout|.stderr". Pass the
 # preferred UUID if the agent accepts one. The cleanup trap above tears it down.
+# If the FIRST recipe step is a send/slash, its text is delivered as vibe's
+# positional PROMPT arg at launch instead of typed into the TUI. Vibe's Textual
+# welcome-banner animation + model-list init can outlast any capture-pane
+# readiness heuristic, and a keystroke typed before the input box is live is
+# silently dropped (no session dir is ever created). Launching `vibe "<prompt>"`
+# sidesteps TUI-input timing entirely: vibe boots, submits the prompt, and stays
+# interactive. Empty when the first step isn't a send (then we fall back to the
+# tmux-send path with a readiness wait).
+FIRST_PROMPT="$(jq -r '.[0] | select(.type=="send" or .type=="slash") | .text // empty' <<<"$SCRIPT_JSON" 2>/dev/null || true)"
+FIRST_SEND_PENDING=0
+
 launch_repl() {
   command -v tmux >/dev/null 2>&1 || { echo "[driver] tmux required" >&2; EXIT_REASON="nonzero(2)"; exit 1; }
   # Snapshot pre-existing session dirs BEFORE launch. Vibe creates its
@@ -224,26 +235,36 @@ launch_repl() {
   # TUI, so drive it under tmux. `|| { … exit … }` keeps a launch failure from
   # aborting under set -e WITHOUT an accurate exit-reason — the cleanup trap then
   # records nonzero(2).
-  tmux new-session -d -s "$SESSION" -x 200 -y 50 -c "${SES_CWD[$ACTIVE]}" "vibe" \
-    2>>"$DRIVER_LOG.stderr" \
+  local -a vibe_args=()
+  if [[ -n "$FIRST_PROMPT" ]]; then
+    vibe_args=("$FIRST_PROMPT")
+    FIRST_SEND_PENDING=1
+    echo "[driver] launching with first prompt as positional arg: ${FIRST_PROMPT:0:60}" >&2
+  fi
+  tmux new-session -d -s "$SESSION" -x 200 -y 50 -c "${SES_CWD[$ACTIVE]}" -- \
+    vibe "${vibe_args[@]}" 2>>"$DRIVER_LOG.stderr" \
     || { echo "[driver] failed to launch vibe under tmux" >&2; EXIT_REASON="nonzero(2)"; exit 1; }
   tmux pipe-pane -t "$SESSION" -o "cat >> '$DRIVER_LOG.stdout.$ACTIVE'"
   echo "[driver] tmux started: $SESSION (slot=$ACTIVE, cwd=${SES_CWD[$ACTIVE]})" >&2
-  # Wait for the TUI banner to render, then for the "Initializing…" spinner to
-  # clear so the input prompt is live before the first keystroke lands.
-  local WAITED=0
-  while [[ $WAITED -lt 60 ]]; do
-    tmux capture-pane -t "$SESSION" -p -S -40 2>/dev/null | grep -q 'Type /help' && break
-    sleep 0.5; WAITED=$((WAITED + 1))
-  done
-  WAITED=0
-  while [[ $WAITED -lt 60 ]]; do
-    tmux capture-pane -t "$SESSION" -p -S -40 2>/dev/null | grep -q 'Initializing' || break
-    sleep 0.5; WAITED=$((WAITED + 1))
-  done
-  sleep 2  # extra grace for the input prompt to settle
+  # Bare-launch fallback (no positional prompt): a later send types into the
+  # TUI, so wait for the banner to render and the "Initializing…" spinner to
+  # clear before the first keystroke lands. Skipped on the positional path —
+  # vibe processes the launch prompt itself, so no keystroke timing to gate.
+  if [[ -z "$FIRST_PROMPT" ]]; then
+    local WAITED=0
+    while [[ $WAITED -lt 120 ]]; do
+      tmux capture-pane -t "$SESSION" -p -S -40 2>/dev/null | grep -q 'Type /help' && break
+      sleep 0.5; WAITED=$((WAITED + 1))
+    done
+    WAITED=0
+    while [[ $WAITED -lt 120 ]]; do
+      tmux capture-pane -t "$SESSION" -p -S -40 2>/dev/null | grep -q 'Initializing' || break
+      sleep 0.5; WAITED=$((WAITED + 1))
+    done
+    sleep 2  # extra grace for the input prompt to settle
+  fi
   # Transcript is resolved lazily in wait_turn — Vibe's session dir does not
-  # exist until the first user message is sent.
+  # exist until the first user message is processed.
 }
 
 # --- AGENT-SPECIFIC SEAM 2: detect a completed turn --------------------------
@@ -273,6 +294,15 @@ wait_turn() {
 
 # --- AGENT-SPECIFIC SEAM 3: send text -----------------------------------------
 send_text() { # <text>
+  # The first send/slash of a run is already delivered as the launch positional
+  # prompt (see launch_repl) — just account for the turn, don't re-type it into
+  # the TUI. Every later send types into the now-live REPL.
+  if [[ "$FIRST_SEND_PENDING" == "1" ]]; then
+    FIRST_SEND_PENDING=0
+    EXPECTED_TURNS=$((EXPECTED_TURNS + 1))
+    echo "[driver] send[s$ACTIVE]: (delivered at launch) ${1:0:60} (expecting turn $EXPECTED_TURNS)" >&2
+    return 0
+  fi
   tmux send-keys -t "$SESSION" -l -- "$1"
   # Brief pause so the Textual TUI's input handler renders the typed text before
   # Enter lands, so Enter isn't dropped mid-render.
