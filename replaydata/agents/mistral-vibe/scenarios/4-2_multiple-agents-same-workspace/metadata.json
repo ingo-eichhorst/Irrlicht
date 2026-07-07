@@ -1,0 +1,86 @@
+{
+  "scenario_id": "multiple-agents-same-workspace",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "gap:wait_turn",
+    "agent_cli_version": "2.19.0",
+    "daemon_version": "0.5.5+fed146f",
+    "confidence": 0.82,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: gap:wait_turn"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "multiple-agents-same-workspace",
+      "agent": "mistral-vibe",
+      "assessed_at": "2026-07-07T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "gap:wait_turn",
+      "confidence": 0.82,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: gap:wait_turn\n\n## Reasoning\n\nLike its claudecode/codex siblings, this cell is really an irrlicht-dispatcher test filed under the mistral-vibe column. The scenario co-launches a `vibe` process and a DIFFERENT agent (here claudecode) in the SAME cwd and asserts irrlicht reports two rows under their correct adapter labels with no cross-contamination. There is no vibe-specific limitation: vibe is a normal foreground coding agent that contributes exactly one normal session, and its transport is fully disjoint from the partner's.\n\nirrlicht isolates adapters at three layers, all exercised here:\n1. **Process matching** — each adapter declares its own matcher. vibe uses a `CommandPattern` on `(^|/)vibe( |$)|mistral-vibe/bin/python` (agent.go / adapter.go), disjoint from claudecode's `ExactName{Name: \"claude\"}`. The scanner runs each matcher independently and tags each PID with its originating adapter name.\n2. **Transcript roots** — adapters declare disjoint `FilesUnderRoot.Dir` paths: vibe watches `~/.vibe/logs/session/` (sessionsDir() in adapter.go), claudecode watches `~/.claude/projects/`. They never collide, so a JSONL line under one root can never reach the other adapter's parser.\n3. **Per-session metrics** — `Parsers` / `PIDDiscoverers` / `SubagentCounters` in maps.go are keyed by adapter Identity.Name; metrics, subagent counts, and parent linkage all key off the (adapter, session_id) tuple. No global per-cwd aggregation exists in the domain, so nothing can leak between vibe and claudecode.\n\nSpec bullets map cleanly: correct adapter label (recorded at presession/scan time from the matcher-tagged result), independent state transitions (two tailers, different goroutines, different files, per-session classifier), and no cross-contamination (per-adapter counters, disjoint roots). daemon=full.\n\n## Driver: gap:wait_turn\n\nThe recipe drives ONLY the vibe half (send -> wait_turn -> sleep); the second-agent (claudecode) launch is the rig's job — run-cell-multi.sh reads `partner_adapter` off this recipe and launches BOTH interactive drivers concurrently against one shared cwd under a single --record daemon. So there is NO second-agent-launch driver gap. However, the vibe interactive driver is freshly SCAFFOLDED: DRIVE_ELICITS=\"send slash sleep\", and `wait_turn` is a `not_implemented` stub (SEAM 2, driver-interactive.sh L168-170). The recipe needs `wait_turn`, so the semantic recipe-lint flags a gap -> driver=gap:wait_turn, consistent with every other mistral-vibe cell (e.g. 2-1_basic-turn). record ports SEAMs 1/2/3 (REPL launch, turn-done poll, transcript resolution) before it can drive.\n\n## What irrlicht does NOT see (and why that's OK)\n\nirrlicht has no first-class 'workspace' row; the session list is flat and the dashboard groups by cwd visually. That is correct for this scenario, which asserts only per-session correctness, not aggregate workspace state.\n\n## Recording plan\n\nRecorded by run-cell-multi.sh in isolated coexist mode (its own --record daemon on an alternate port + IRRLICHT_HOME, so production keeps running). It launches the mistral-vibe and claudecode interactive drivers concurrently against ONE shared cwd (IRRLICHT_ONBOARD_CWD). The daemon observes vibe via its `~/.vibe/logs/session` fswatcher and claudecode via `~/.claude/projects` — both keyed off the real $HOME — labeling each adapter independently. This cell stores the vibe transcript for the replay golden; its events.jsonl + expected.jsonl span the whole workspace (both adapters) and are adapter-agnostic (agentA = first to working, agentB = the other).",
+      "caveats": [
+        "The recipe runs two different agent CLIs concurrently, so run-cell-multi.sh needs both `vibe` and `claude` installed + authenticated. ONE recording satisfies both matrix rows: the mistral-vibe and claudecode cells share the workspace events.jsonl + expected.jsonl, differing only in which transcript each stores for its replay golden.",
+        "Whether vibe emits a transient proc-<PID> presession row born ready before the real session_<...> birth is not confirmable from source (single-birth adapter; sessionIDFromPath). The shared spec anchors every phase on a WORKING transition specifically to skip any born-ready placeholders, so it holds either way — record settles the emission detail.",
+        "cost is not observable for mistral-vibe (parser never reads stats.session_cost; the model is absent from core/pkg/capacity), but this workspace-level spec is adapter-agnostic and pins no per-adapter observation vector."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/vibe/adapter.go",
+          "note": "vibe watches ~/.vibe/logs/session (sessionsDir) and matches its process via CommandPattern `(^|/)vibe( |$)|mistral-vibe/bin/python` — disjoint from claudecode's ~/.claude/projects root and ExactName{claude} matcher, so no collision."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/maps.go",
+          "note": "Parsers / PIDDiscoverers / ProcessNames / SubagentCounters are all keyed by adapter Identity.Name — no shared global parser or counter that could leak state between vibe and the partner adapter."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/mistral-vibe/driver-interactive.sh",
+          "note": "Scaffolded driver: DRIVE_ELICITS=\"send slash sleep\"; wait_turn() is a not_implemented stub (SEAM 2, L168-170). The recipe needs wait_turn -> semantic gap -> driver=gap:wait_turn; record ports SEAMs 1/2/3 before driving."
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/scripts/run-cell-multi.sh",
+          "note": "Reads partner_adapter off the primary recipe (L103-106) and launches both adapters' interactive drivers concurrently against one shared cwd under a single --record daemon — the second-agent launch is the rig's job, not a driver primitive."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "partner_adapter": "claudecode",
+      "preconditions": [
+        "vibe AND claude CLIs on PATH and authenticated",
+        "irrlichd is recording — run-cell-multi.sh isolated coexist mode (spawns its own --record daemon on an alternate port with its own IRRLICHT_HOME, so production keeps running)",
+        "no other mistral-vibe/claudecode session is live in the run cwd"
+      ],
+      "setup": [
+        "run-cell-multi.sh creates ONE shared cwd and launches the mistral-vibe and claudecode interactive drivers concurrently, both pointed at it via IRRLICHT_ONBOARD_CWD",
+        "the isolated daemon observes vibe via its ~/.vibe/logs/session fswatcher and claudecode via ~/.claude/projects — both keyed off the real $HOME — so it labels each adapter independently",
+        "this cell stores the mistral-vibe transcript for the replay golden; its events.jsonl and expected.jsonl span the whole workspace (both adapters)"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: alpha"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 15
+        }
+      ],
+      "verify": [
+        "events.jsonl contains TWO distinct session_ids from two different adapters, both keyed to the same cwd slug",
+        "each session has its own independent working->ready arc; no transition on one is attributed to the other",
+        "no cross-contamination: the daemon never merges or flaps the two adapters' rows"
+      ],
+      "settings": {},
+      "timeout_seconds": 240
+    }
+  }
+}
