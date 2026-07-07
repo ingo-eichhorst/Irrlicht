@@ -128,6 +128,27 @@ var waitingCuePatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\bis (?:that|this) (?:right|correct|ok|okay|fine|good|what you wanted)\b`),
 }
 
+// waitingCueExclusions veto an otherwise-matched cue when the sentence names
+// an explicitly non-human wait target. "its"/"their"/"it" as the object of
+// wait/waiting unambiguously refer to something already named elsewhere in
+// the text (an agent, a job, a process) — never to the user being addressed
+// directly, unlike "for you"/"for your". Scoped narrowly to "wait(ing)
+// for/on <pronoun>" so it can't accidentally veto an unrelated cue earlier
+// in the same sentence. See #897: "I'll wait for its completion
+// notification" must not register as waiting on the user.
+var waitingCueExclusions = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)\bwait(?:ing)?\s+(?:for|on)\s+(?:its|their|it)\b`),
+}
+
+func isSelfReferentialWait(s string) bool {
+	for _, re := range waitingCueExclusions {
+		if re.MatchString(s) {
+			return true
+		}
+	}
+	return false
+}
+
 // ExtractWaitingCue returns the trailing sentence that carries an imperative
 // or implicit waiting cue, or "" when none is present. Unlike
 // ExtractQuestionSnippet it does not require a literal '?'; it matches the
@@ -146,6 +167,9 @@ func ExtractWaitingCue(text string) string {
 		s := tail[i]
 		stripped := strings.TrimLeft(strings.TrimRight(s, trailingMarkdownNoise), markdownWrapper)
 		if stripped == "" {
+			continue
+		}
+		if isSelfReferentialWait(stripped) {
 			continue
 		}
 		for _, re := range waitingCuePatterns {

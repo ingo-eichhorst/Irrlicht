@@ -164,6 +164,17 @@ func (d *SessionDetector) hasActiveChildren(parentID string) bool {
 	return false
 }
 
+// holdIfChildrenActive fast-forwards any orphaned children of sessionID
+// (see finishOrphanedChildren) and reports whether a genuinely active one
+// remains. Shared by processActivity's ready and turn-done-waiting branches,
+// which both hold the parent working identically when it does (#897) — a
+// single call site keeps that hold logic from drifting out of sync between
+// the two.
+func (d *SessionDetector) holdIfChildrenActive(sessionID string) bool {
+	d.finishOrphanedChildren(sessionID)
+	return d.hasActiveChildren(sessionID)
+}
+
 // holdParentWorkingForNewChild forces a parent session that is sitting at
 // ready back to working the moment a new child of it is discovered.
 //

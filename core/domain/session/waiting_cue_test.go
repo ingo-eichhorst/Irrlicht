@@ -114,6 +114,8 @@ func TestExtractWaitingCue(t *testing.T) {
 		{"19 drop the API key", "Drop the API key in .env and I'll re-run.", true},
 		{"20 once you've reviewed", "Once you've reviewed, ship it.", true},
 		{"21 I'll wait", "I'll wait for your green light before pushing.", true},
+		{"21b I'll wait until you're free", "I'll wait until you're free to look at this.", true},
+		{"21c I'll wait on your input", "I'll wait on your input before proceeding.", true},
 		{"23 lmk", "Lmk if you'd rather I split the PR.", true},
 		{"24 tell me", "Tell me which approach you prefer.", true},
 		{"25 please review", "Please review the diff.", true},
@@ -134,6 +136,14 @@ func TestExtractWaitingCue(t *testing.T) {
 		{"neg test failures substring", "Use a fixture, e.g. small.json. The tests pass.", false},
 		{"neg empty", "", false},
 		{"neg statement", "I am done.", false},
+		// #897: "I'll wait" on a background subagent's own completion is not
+		// a wait on the user — vetoed by waitingCueExclusions ("its"/"their"/
+		// "it" as the wait object), not by narrowing the inclusion pattern
+		// (that regressed recall for genuine human-directed waits lacking a
+		// literal "for you"/"for your", per code review on this fix).
+		{"neg wait for background agent (its)", "The Go agent is doing significant interface-renaming work — I'll wait for its completion notification before touching any Go/JS files myself.", false},
+		{"neg wait for background agents (their)", "The Go and JS agents are still running — I'll wait for their completion before merging.", false},
+		{"neg wait for it", "The background job is almost done — I'll wait for it to finish before continuing.", false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
