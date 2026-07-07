@@ -223,7 +223,7 @@ final class SessionManagerTests: XCTestCase {
         )
     }
 
-    func testFormattedCost_DropsCentsAt100AndAbove() {
+    func testFormattedCostDropsCentsAt100AndAbove() {
         // Below $100: keep two decimals. The prior bug hid cents at $10+.
         XCTAssertEqual(makeMetrics(cost: 9.99).formattedCost, "$9.99")
         XCTAssertEqual(makeMetrics(cost: 12.5).formattedCost, "$12.50")
@@ -235,7 +235,7 @@ final class SessionManagerTests: XCTestCase {
         XCTAssertEqual(makeMetrics(cost: 106.99).formattedCost, "$107")
     }
 
-    func testFormattedCost_SmallAndZero() {
+    func testFormattedCostSmallAndZero() {
         XCTAssertNil(makeMetrics(cost: nil).formattedCost)
         XCTAssertNil(makeMetrics(cost: 0).formattedCost)
         XCTAssertEqual(makeMetrics(cost: 0.005).formattedCost, "<$0.01")

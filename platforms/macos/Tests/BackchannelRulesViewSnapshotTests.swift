@@ -69,14 +69,14 @@ final class BackchannelRulesViewSnapshotTests: XCTestCase {
         return model
     }
 
-    func testBackchannelRule_ContextPressure() {
+    func testBackchannelRuleContextPressure() {
         let view = BackchannelRulesView(model: model(event: BackchannelRule.eventContextPressure, threshold: 85))
         assertSnapshot(of: host(view, height: 220), as: .image)
     }
 
     /// The tokens variant — wider threshold field + "tokens" suffix must still
     /// fit the 304pt card without clipping.
-    func testBackchannelRule_ContextTokens() {
+    func testBackchannelRuleContextTokens() {
         let view = BackchannelRulesView(model: model(event: BackchannelRule.eventContextTokens, threshold: 150_000))
         assertSnapshot(of: host(view, height: 220), as: .image)
     }
