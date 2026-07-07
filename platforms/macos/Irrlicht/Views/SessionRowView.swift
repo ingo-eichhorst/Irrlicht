@@ -662,7 +662,7 @@ private struct FlowLayout: Layout {
         return CGSize(width: maxWidth, height: y + rowHeight)
     }
 
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache _: inout ()) {
+    func placeSubviews(in bounds: CGRect, proposal _: ProposedViewSize, subviews: Subviews, cache _: inout ()) {
         // First pass: group subviews into rows so we know each row's
         // height before placing items. Second pass: place items with
         // their vertical center aligned to the row center, so tiny

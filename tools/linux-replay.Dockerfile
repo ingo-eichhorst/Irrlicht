@@ -24,13 +24,14 @@ RUN apt-get update \
 
 # Run the build/test as a non-root user rather than the image's root default
 # (docker:S6471) — this container only ever runs our own test suite, but
-# least privilege costs nothing here.
-RUN useradd --create-home --uid 10001 runner
+# least privilege costs nothing here. Pre-create + chown /src here (one RUN,
+# docker:S7031) so replay-fixtures.sh can mkdir its own .build/ output dir
+# there later; WORKDIR below just cds into it without touching ownership.
+RUN useradd --create-home --uid 10001 runner \
+    && mkdir -p /src \
+    && chown runner:runner /src
 ENV HOME=/home/runner
 WORKDIR /src
-# WORKDIR creates /src as root; hand it to runner so replay-fixtures.sh can
-# mkdir its own .build/ output dir there later.
-RUN chown runner:runner /src
 
 # Explicit, scoped copies rather than `COPY . .` (docker:S6470) — this is
 # everything the compile gate + replay-fixtures.sh actually touch (core/ and

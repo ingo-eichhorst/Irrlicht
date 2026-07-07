@@ -15,6 +15,11 @@ import {
 
 const SPEED_PRESETS = [1, 2, 5, 10, 25, 100];
 
+// RECORDING_SLUG_RE mirrors the backend's /api/scenarios/{agent}/{subtree}/{id}
+// validation (slugRE in internal/viewer/scenarios.go) — agent and id must be
+// lowercase-alnum-dash-underscore slugs, never containing "/", "?", or "#".
+const RECORDING_SLUG_RE = /^[a-z0-9][a-z0-9_-]*$/;
+
 // inferDriverLabel returns "Interactive (tmux REPL)" when the adapter
 // entry has a non-empty script array, "Headless one-shot" otherwise.
 // Pure function — exported for unit tests.
@@ -199,7 +204,7 @@ function buildRecordingButton(s, codeById) {
   // canonical <dashed-code>_<name> (the 2 real variants:
   // user-esc-interrupt→2-20_interrupted-turn, user-blocking-question→
   // 2-17_agent-question-pending); the detail breadcrumb shows it regardless.
-  const canonicalFolder = code ? `${code.replaceAll(/\./g, "-")}_${cid}` : cid;
+  const canonicalFolder = code ? `${code.replaceAll(".", "-")}_${cid}` : cid;
   const labelId = s.id === canonicalFolder ? cid : `${cid} (${s.id})`;
   el.textContent = code ? `${code} ${labelId}` : labelId;
   el.addEventListener("click", () => navigate(`#/recording/${s.agent}/${s.subtree}/${s.id}`));
@@ -1443,9 +1448,15 @@ async function loadScenario(s, initialArchive, focus) {
   detail.innerHTML = `<p>Loading…</p>`;
 
   // s.agent/s.subtree/s.id come from the URL hash (sidebarActivePath /
-  // route()) — encode each segment before it lands in a fetch path so a
-  // hash crafted with `/`, `?`, or `#` can't retarget the request
-  // (SonarQube jssecurity:S7044 / S8476).
+  // route()). Validate each segment against the same slug/subtree
+  // contract the backend's /api/scenarios handler enforces, then encode —
+  // belt-and-suspenders so a hash crafted with `/`, `?`, or `#` can't
+  // retarget the request (SonarQube jssecurity:S7044 / S8476).
+  if (!RECORDING_SLUG_RE.test(s.agent) || !RECORDING_SLUG_RE.test(s.id) ||
+      (s.subtree !== "scenarios" && s.subtree !== "regressions")) {
+    detail.innerHTML = `<p>Invalid recording path.</p>`;
+    return;
+  }
   const recordingPath = `${encodeURIComponent(s.agent)}/${encodeURIComponent(s.subtree)}/${encodeURIComponent(s.id)}`;
   const [data, archives, recipes, catalog] = await Promise.all([
     fetch(`/api/scenarios/${recordingPath}`).then(r => r.json()),
@@ -2567,7 +2578,7 @@ function renderPlayback(s, detailData, archiveName) {
       // Never pop a blocking modal — a scenario with no events.jsonl/usable
       // transcript (e.g. an un-recorded cell opened via a deep link) just has
       // nothing to play. Log non-blocking for debugging and bail quietly.
-      console.warn(`replay start failed: ${res.status} ${JSON.stringify(res.error)}`);
+      console.warn("replay start failed:", res.status, res.error);
       return;
     }
     const body = res.body;

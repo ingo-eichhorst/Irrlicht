@@ -191,49 +191,57 @@ func sessionIDFromTranscriptPath(p string) string {
 // gate means no gating — used by tests.
 func NewHookHandler(target HookTarget, markers MarkerTarget, gate ConsentGranter, log outbound.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
-		if gate != nil && !gate.Granted(AdapterName, PermissionKeyHooks) {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-
-		var payload hookPayload
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			http.Error(w, "bad request: invalid JSON", http.StatusBadRequest)
-			return
-		}
-
-		sessionID := sessionIDFromTranscriptPath(payload.TranscriptPath)
-		if sessionID == "" {
-			http.Error(w, "bad request: missing transcript_path", http.StatusBadRequest)
-			return
-		}
-
-		dispatch := func() {
-			log.LogInfo(logComponentHookReceiver, sessionID,
-				fmt.Sprintf("received %s (tool=%s)", payload.HookEventName, payload.ToolName))
-			target.HandlePermissionHook(sessionID, payload.TranscriptPath, payload.HookEventName)
-		}
-
-		switch payload.HookEventName {
-		case HookPermissionRequest, HookPostToolUse, HookPostToolUseFailure:
-			dispatch()
-		case HookPreCompact:
-			handlePreCompactHook(target, log, sessionID, payload)
-		case HookPreToolUse:
-			handlePreToolUseHook(markers, log, sessionID, payload, dispatch)
-		default:
-			// Unrecognized hook event — accept but ignore.
-			log.LogInfo(logComponentHookReceiver, sessionID,
-				fmt.Sprintf("ignored unrecognized hook event %q", payload.HookEventName))
-		}
-
-		w.WriteHeader(http.StatusOK)
+		serveHookRequest(target, markers, gate, log, w, r)
 	}
+}
+
+// serveHookRequest is NewHookHandler's request logic, pulled out of the
+// returned closure so its branching isn't counted at the closure's extra
+// nesting depth (go:S3776 — this dropped the reported complexity from 31 to
+// within the 15-point budget without changing any behavior).
+func serveHookRequest(target HookTarget, markers MarkerTarget, gate ConsentGranter, log outbound.Logger, w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if gate != nil && !gate.Granted(AdapterName, PermissionKeyHooks) {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	var payload hookPayload
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		http.Error(w, "bad request: invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	sessionID := sessionIDFromTranscriptPath(payload.TranscriptPath)
+	if sessionID == "" {
+		http.Error(w, "bad request: missing transcript_path", http.StatusBadRequest)
+		return
+	}
+
+	dispatch := func() {
+		log.LogInfo(logComponentHookReceiver, sessionID,
+			fmt.Sprintf("received %s (tool=%s)", payload.HookEventName, payload.ToolName))
+		target.HandlePermissionHook(sessionID, payload.TranscriptPath, payload.HookEventName)
+	}
+
+	switch payload.HookEventName {
+	case HookPermissionRequest, HookPostToolUse, HookPostToolUseFailure:
+		dispatch()
+	case HookPreCompact:
+		handlePreCompactHook(target, log, sessionID, payload)
+	case HookPreToolUse:
+		handlePreToolUseHook(markers, log, sessionID, payload, dispatch)
+	default:
+		// Unrecognized hook event — accept but ignore.
+		log.LogInfo(logComponentHookReceiver, sessionID,
+			fmt.Sprintf("ignored unrecognized hook event %q", payload.HookEventName))
+	}
+
+	w.WriteHeader(http.StatusOK)
 }
 
 // handlePreCompactHook processes a PreCompact hook event. A manual /compact

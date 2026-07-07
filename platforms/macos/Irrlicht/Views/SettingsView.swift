@@ -682,9 +682,11 @@ private struct WindowAccessor: NSViewRepresentable {
         }
         return v
     }
-    // NSViewRepresentable requires this method; there's nothing to update —
-    // onWindow already fired from makeNSView once the view had a window.
-    func updateNSView(_: NSView, context _: Context) {}
+    func updateNSView(_: NSView, context _: Context) {
+        // NSViewRepresentable requires this method; there's nothing to
+        // update — onWindow already fired from makeNSView once the view
+        // had a window.
+    }
 }
 
 /// The "Alert at [value] [% / tokens]" control under the context-pressure

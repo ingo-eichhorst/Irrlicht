@@ -517,7 +517,7 @@ func (d *SessionDetector) Run(ctx context.Context) error {
 	// Periodic liveness sweep: detect dead PIDs that kqueue missed.
 	go d.pidMgr.SweepDeadPIDs(ctx)
 
-	d.log.LogInfo("session-detector", "", "started — listening for transcript events")
+	d.log.LogInfo(logComponentSessionDetector, "", "started — listening for transcript events")
 
 	// Periodic refresh catches missed fswatcher events. When the subscriber
 	// channel overflows during concurrent bursts (multiple sessions + subagent
@@ -634,7 +634,7 @@ func (d *SessionDetector) handleTerminalUISignal(sig terminalUISignal) {
 			state.WaitingStartTime = nil
 		}
 		if err := d.repo.Save(state); err != nil {
-			d.log.LogError("session-detector", sig.sessionID,
+			d.log.LogError(logComponentSessionDetector, sig.sessionID,
 				fmt.Sprintf("failed to save terminal-UI update: %v", err))
 			return
 		}
