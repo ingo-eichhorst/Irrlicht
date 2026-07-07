@@ -135,6 +135,9 @@ func (p *Parser) applySidecar(ev *tailer.ParsedEvent) {
 		if st.contextTokens > 0 {
 			ev.Tokens = &tailer.TokenSnapshot{Total: st.contextTokens}
 		}
+		if st.contextWindow > 0 {
+			ev.ContextWindow = st.contextWindow
+		}
 		p.emitContribution(st, ev)
 	}
 }

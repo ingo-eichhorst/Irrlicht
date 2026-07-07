@@ -27,7 +27,7 @@ func TestTokenAccounting_EndToEnd(t *testing.T) {
 	}
 	// The sidecar carries the session-cumulative token counts, as vibe writes
 	// them after the final turn.
-	meta := `{"environment":{"working_directory":"/tmp/p"},"config":{"active_model":"mistral-medium-3.5"},"stats":{"context_tokens":9000,"session_prompt_tokens":8500,"session_completion_tokens":320}}`
+	meta := `{"environment":{"working_directory":"/tmp/p"},"config":{"active_model":"mistral-medium-3.5","auto_compact_threshold":200000},"stats":{"context_tokens":9000,"session_prompt_tokens":8500,"session_completion_tokens":320}}`
 	if err := os.WriteFile(filepath.Join(dir, "meta.json"), []byte(meta), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -46,5 +46,10 @@ func TestTokenAccounting_EndToEnd(t *testing.T) {
 	}
 	if m.CumOutputTokens != 320 {
 		t.Errorf("CumOutputTokens = %d, want 320", m.CumOutputTokens)
+	}
+	// The context-utilization bar resolves from the sidecar's auto-compaction
+	// threshold (mistral models aren't in the capacity window map).
+	if m.ContextWindow != 200000 {
+		t.Errorf("ContextWindow = %d, want 200000 (auto_compact_threshold)", m.ContextWindow)
 	}
 }

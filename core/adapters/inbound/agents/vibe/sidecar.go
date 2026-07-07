@@ -26,6 +26,11 @@ type sidecarState struct {
 	// whole session cumulative once; later ones see no delta).
 	sessionPromptTokens     int64
 	sessionCompletionTokens int64
+	// contextWindow is vibe's auto-compaction threshold — the token budget vibe
+	// itself targets before compacting. It is the meaningful "context full" mark
+	// for a vibe session (mistral models aren't in the capacity window map), so
+	// the parser emits it as the context-utilization window.
+	contextWindow int64
 }
 
 // sidecarCache memoizes the last decode by (mtime, size) so a backfill of a
@@ -64,7 +69,8 @@ func readSidecar(transcriptPath string, cache *sidecarCache) *sidecarState {
 			WorkingDirectory string `json:"working_directory"`
 		} `json:"environment"`
 		Config struct {
-			ActiveModel string `json:"active_model"`
+			ActiveModel          string `json:"active_model"`
+			AutoCompactThreshold int64  `json:"auto_compact_threshold"`
 		} `json:"config"`
 		Stats struct {
 			ContextTokens          int64 `json:"context_tokens"`
@@ -82,6 +88,7 @@ func readSidecar(transcriptPath string, cache *sidecarCache) *sidecarState {
 		contextTokens:           raw.Stats.ContextTokens,
 		sessionPromptTokens:     raw.Stats.SessionPromptTokens,
 		sessionCompletionTokens: raw.Stats.SessionCompletionToken,
+		contextWindow:           raw.Config.AutoCompactThreshold,
 	}
 	cache.mtime = fi.ModTime()
 	cache.size = fi.Size()
