@@ -1,0 +1,2 @@
+{"role": "user", "content": "Reply with exactly the word: warm", "injected": false, "message_id": "e4df29fe-a675-4766-a52b-d7b982b35887"}
+{"role": "assistant", "content": "warm", "injected": false, "reasoning_content": "The user wants me to reply with exactly the word \"warm\". This is a simple direct instruction. I should just return that word without any additional text, formatting, or explanation.", "reasoning_message_id": "c7700424-8054-4581-b78b-4cd22b9ca0e0", "message_id": "aa1904c6-1616-47eb-9d25-02b9e707538b"}
