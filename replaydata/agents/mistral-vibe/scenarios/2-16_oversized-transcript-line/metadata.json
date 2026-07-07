@@ -1,0 +1,108 @@
+{
+  "scenario_id": "oversized-transcript-line",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "gap:wait_turn",
+    "agent_cli_version": "2.19.0",
+    "daemon_version": "0.5.5+91ca4fe",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes\ndaemon_capability: full\ndriver_capability: gap:wait_turn"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "oversized-transcript-line",
+      "agent": "mistral-vibe",
+      "assessed_at": "2026-07-07T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "gap:wait_turn",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: gap:wait_turn\n\n## Reasoning\n\nThis scenario's primitive is tailer/parser robustness to one very large single JSONL line, NOT an agent feature — it is largely adapter-AGNOSTIC. The scenario's only observable is the state arc `ready → working → ready` with no parser stall leaving the session stuck in `working` (acceptance: tool calls ≤ 0).\n\n1. **agent_supports = yes.** Mistral Vibe appends one message object per line to `~/.vibe/logs/session/<session_...>/messages.jsonl` (append-only JSONL, `\\n`-terminated). A single message whose `content` is large — a long single-line assistant answer, or a `role:tool` result carrying a big file dump / pasted blob — flushes one large JSONL line. Whatever length a line happens to be, vibe just writes it. So there is nothing for vibe to 'support'; the arc is exercised by a bare prompt eliciting one large single-line reply. Confirmed against live transcripts (CLI v2.19.0): the sample `messages.jsonl` is ~517 KB over 336 lines, and a single large tool result can already exceed the old 64 KB `bufio.Scanner` token limit.\n\n2. **daemon_capability = full.** The oversized-line protection is SHARED tailer infrastructure, not adapter-specific, and it sits BEFORE the JSON decode. In `core/pkg/tailer/tailer.go` the read loop builds `bufio.NewReaderSize(file, 64*1024)` (line 467) and calls `readLineCapped(reader, maxTranscriptLineSize)` at line 559 for BOTH the raw and JSON paths; only afterwards does `parseTranscriptLine` (line 584) reach `json.Unmarshal` (line 619) that feeds vibe's `JSONLineParser`. So vibe's JSONL path is gated by exactly the same 64 MB cap (`maxTranscriptLineSize`, line_reader.go line 12) as every other adapter — NOT `bufio.Scanner`, whose old ~64 KB/2 MB token limit would have wedged. Lines under 64 MB are read whole and unmarshalled normally; lines over it are logged ('skipping oversized line at offset', line 567) and the offset is advanced past them so processing continues (issue #270), and `errPartialAtEOF` (line 560) re-reads a partially-written giant line once more bytes arrive. `core/pkg/tailer/large_line_test.go` pins the regression agent-agnostically (oversized line does not block the tailer; subsequent lines still parse). This verdict matches every sibling on this scenario (aider/claudecode/gemini-cli/pi/kiro-cli all daemon=full) — it is a daemon-wide property.\n\n   Vibe-specific angle: once the tailer delivers the line, `Parser.ParseLine` receives the full decoded map and `TruncateAssistantText` caps only the retained `AssistantText` — the full `content` is still parsed and the turn resolves (`role:assistant` no tool_calls → `turn_done` → ready). So a large assistant/tool line drives the same `ready → working → ready` arc; the cap is purely a display-side truncation, never a stall.\n\n3. **driver_capability = gap:wait_turn.** The recipe must block for turn completion before the settle sleep, so it needs a `wait_turn` step. The freshly-scaffolded `replaydata/agents/mistral-vibe/driver-interactive.sh` declares `DRIVE_ELICITS=\"send slash sleep\"` and its `wait_turn()` arm is a `not_implemented` stub (SEAM 2); SEAMs 1 (launch binary) and 3 (transcript-path resolution) are also unfilled. `recipe_semantic_gaps` (tools/onboarding-factory/scripts/lib/recipe-lint.sh) flags any recipe using `wait_turn` as a semantic_gap because it is not in DRIVE_ELICITS. This is TOOLING work, not an observability limit — the recipe and spec are real; `record` ports `wait_turn` (and SEAMs 1/3) from a reference driver (e.g. drive-kiro-cli / drive-codex) before it drives. Identical to every other mistral-vibe cell that needs a turn barrier (cf. 2-1_basic-turn).\n\n## Model / cost / tokens\n\nModel id `mistral-medium-3.5` confirmed from the live surface (`config.active_model` in every recent `meta.json` sidecar); `NormalizeModelName` returns it unchanged. Tokens: non-zero — `applySidecar` reads `stats.context_tokens` and emits `ev.Tokens = &TokenSnapshot{Total: context_tokens}` on `turn_done`. Cost: NOT emitted — `sidecar.go` reads only `working_directory`, `active_model`, `context_tokens` (never `stats.session_cost`), and mistral-vibe is absent from `core/pkg/capacity`, so `cost_nonzero=false` while the model NAME still displays.\n\n## Birth model (provisional)\n\nSingle-birth: the session id is the `session_<...>` transcript directory (`sessionIDFromPath`), a stable id from launch. Modeled like claudecode/kiro-cli — birth anchored to `start`, unpinned. Whether a transient `proc-<PID>` presession row precedes the transcript is emission-dependent and cannot be confirmed from source; `record` settles it.\n\nNet: a ~30 KB line (5000 words) is far under the 64 MB cap, so it is read whole, unmarshalled, and resolved via the usual `turn_done` close — `ready → working → ready` completes. Even a hand-crafted >64 MB line only triggers the log-and-skip branch, which still leaves the arc intact. The ONLY per-agent deviation from the sibling verdicts is the driver: vibe's driver is a fresh scaffold, so `wait_turn` is a gap.",
+      "caveats": [
+        "driver=gap:wait_turn: driver-interactive.sh is a fresh scaffold — wait_turn is a not_implemented stub (DRIVE_ELICITS=\"send slash sleep\") and SEAMs 1 (launch binary) and 3 (transcript-path resolution) are unfilled. record ports these from a reference driver before recording.",
+        "A live vibe CLI cannot be coerced into a truly oversized (>2 MB, let alone >64 MB) single line: the long-sentence prompt yields only a ~30 KB line, so this recording is a sanity-check that the arc completes on a large single-line turn, NOT a true cap-stress. A follow-up cell can hand-craft a synthetic >2 MB (or >64 MB) line into a live messages.jsonl for deeper coverage; the genuine cap behavior is pinned agent-agnostically by core/pkg/tailer/large_line_test.go (issue #270).",
+        "TruncateAssistantText caps only the RETAINED AssistantText for display; ParseLine still receives the full decoded map, so the truncation never affects the state arc. The size property itself is not a phase-DSL form — the absence of a parser stall is INFERRED from the clean arc completing (no stuck working, no waiting).",
+        "Birth model (single-birth, start-anchored) and the absence of a proc-<PID> presession row are PROVISIONAL — they depend on emission the source can't confirm; record promotes them from provisional to settled.",
+        "cost_nonzero=false: the sidecar carries stats.session_cost but the parser never reads it, and mistral-vibe is absent from core/pkg/capacity, so no per-turn cost or context-window is emitted (model NAME still displays)."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer.go",
+          "note": "Read loop builds bufio.NewReaderSize(file, 64KB) (line 467) and calls readLineCapped(reader, maxTranscriptLineSize) at line 559 for BOTH raw and JSON paths, BEFORE parseTranscriptLine (line 584) reaches json.Unmarshal (line 619) that feeds vibe's JSONLineParser. Oversized lines logged ('skipping oversized line at offset', line 567) and skipped past; errPartialAtEOF (line 560) re-reads a partial giant line. Anchors daemon_capability: full — vibe's JSONL path gated by the same 64 MB cap as every adapter."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/line_reader.go",
+          "note": "maxTranscriptLineSize = 64 MB (line 12); readLineCapped returns errLineTooLong for a line that exceeds the cap and ends with '\\n' (bytes discarded, offset advanced), and errPartialAtEOF for a giant line not yet '\\n'-terminated (re-read on next append). NOT bufio.Scanner — the ~64 KB token limit that would have wedged."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/large_line_test.go",
+          "note": "Regression test for #270 — oversized line does not block the tailer; subsequent lines still parse. Pins the cap behavior agent-agnostically, so it covers vibe's JSONLineParser path."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/vibe/agent.go",
+          "note": "Vibe is FilesUnderRoot{~/.vibe/logs/session, sessionIDFromPath, JSONLineParser} — it routes through the shared tailer read loop (readLineCapped) exactly like every other adapter; no per-line size handling lives in the adapter."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/vibe/parser.go",
+          "note": "ParseLine receives the full decoded map; a text-only role:assistant (no tool_calls) → turn_done → ready. TruncateAssistantText caps only the retained AssistantText, never the state arc — so a large assistant/tool line drives ready→working→ready without stalling."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/mistral-vibe/driver-interactive.sh",
+          "note": "Freshly scaffolded: DRIVE_ELICITS=\"send slash sleep\"; wait_turn() is a not_implemented stub and SEAMs 1/3 unfilled. recipe_semantic_gaps flags the recipe's wait_turn as a semantic_gap → driver=gap:wait_turn. record ports the missing step before driving."
+        },
+        {
+          "kind": "issue",
+          "ref": "ingo-eichhorst/Irrlicht#270",
+          "note": "Oversized-line wedge fixed by switching the tailer from bufio.Scanner to bufio.Reader + readLineCapped — adapter-agnostic, so it covers vibe's JSONL path."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "mistral-vibe (vibe) v2.19.0 on PATH and authenticated (Mistral API auth persisted on this machine)",
+        "irrlichd is recording — run-cell.sh in isolated mode, or --attach against a daemon started with --record",
+        "no other vibe session shares the same cwd (PID is bound by cwd)"
+      ],
+      "setup": [
+        "Create an empty cwd under <staging>/cwd/ (the driver launches vibe there); the session_<...> transcript dir is minted under ~/.vibe/logs/session/",
+        "WHY this exercises the oversized-line path: the prompt asks vibe for ONE very long single-line sentence (≥5000 words, no embedded newlines), so vibe appends one large role:assistant content line to messages.jsonl. The shared tailer reads it via readLineCapped (64 MB cap, issue #270) BEFORE json.Unmarshal decodes it for vibe's JSONLineParser — a ~30 KB line is far under the cap, so it is read whole and the turn resolves via the usual turn_done close. This is a sanity-check that the arc completes on a large single line, keeping tool calls at 0 (a role:tool result would also produce a large line but would add tool-call phases the scenario excludes); the genuine >64 MB cap behavior is pinned agent-agnostically by core/pkg/tailer/large_line_test.go",
+        "WHY interactive, not headless: keeping vibe alive in the REPL across one send + wait_turn lets the daemon observe the full ready→working→ready settle before teardown; wait_turn blocks until the turn's terminal text-only assistant message lands so the trailing sleep never races a still-running turn",
+        "DRIVER GAP: this recipe needs wait_turn, which the scaffolded driver stubs (not_implemented; DRIVE_ELICITS=\"send slash sleep\"). record ports SEAMs 1/2/3 from a reference driver (drive-kiro-cli / drive-codex) before driving."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Write a single very long sentence on one line. Make it at least 5000 words. Do not use newlines anywhere in the sentence."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        }
+      ],
+      "verify": [
+        "events.jsonl mints the session_<...> session in ready shortly after launch (single-birth; id from the transcript directory)",
+        "events.jsonl contains a pid_discovered event binding the vibe PID to the session (matched by cwd)",
+        "events.jsonl shows exactly one state_transition to working as the large-reply turn begins",
+        "events.jsonl shows exactly one state_transition to ready at turn end — completion of the arc is the parser-resilience proof: if the tailer had wedged on the oversized single line this transition would never fire (the genuine >64 MB cap behavior is pinned by core/pkg/tailer/large_line_test.go, issue #270)",
+        "irrlichd logs do NOT contain a 'skipping oversized line' warning for the session transcript (a 5000-word line is well under the 64 MB cap)",
+        "no state_transition to waiting occurs (a one-sentence reply has no trailing question mark)",
+        "final session state is ready before the driver tears the REPL down",
+        "observation vector: model=mistral-medium-3.5, tokens_nonzero=true, cost_nonzero=false"
+      ],
+      "settings": {},
+      "timeout_seconds": 300
+    }
+  }
+}
