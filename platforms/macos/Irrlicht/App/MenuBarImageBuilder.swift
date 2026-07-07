@@ -47,12 +47,27 @@ enum MenuBarImageBuilder {
         let nonGtSessions = gasTownProvider.isDaemonRunning
             ? sessionManager.sessions.filter { !gasTownProvider.ownsSession($0) }
             : sessionManager.sessions
-        let dotsImage = MenuBarStatusRenderer.buildStatusImage(
+
+        // Issue #909: which content the icon shows is a user choice (default
+        // .lights = today's behavior, unchanged for existing users). Either
+        // half can come back nil (no sessions for .usage-only, or no
+        // rate_limit data yet for .usage/.combined) without collapsing the
+        // whole icon — composeSideBySide degrades to whichever half exists.
+        let style = MenuBarStyle.current
+        let dotsImage = style == .usage ? nil : MenuBarStatusRenderer.buildStatusImage(
             sessions: nonGtSessions,
             projectGroupOrder: sessionManager.projectGroupOrder
         )
+        let quotaImage = style == .lights ? nil : QuotaMenuBarRenderer.imageForSelectedProvider(
+            sessions: nonGtSessions,
+            providerKey: MenuBarQuotaProvider.current
+        )
+        // Dots first (left), quota bars last (right) — closest to the
+        // system status icons (WiFi/battery/clock), matching issue #909's
+        // mockup ordering.
+        let baseImage = composeSideBySide(dotsImage, quotaImage)
 
-        guard gasTownProvider.isDaemonRunning else { return dotsImage }
+        guard gasTownProvider.isDaemonRunning else { return baseImage }
 
         let rigCount = sessionManager.apiGroups.first { $0.isGasTown }?.groups?.count ?? 0
         let emoji = NSAttributedString(string: "\u{26FD}", attributes: [
@@ -65,26 +80,46 @@ enum MenuBarImageBuilder {
         let badge = NSMutableAttributedString()
         badge.append(emoji)
         badge.append(countStr)
-        let badgeSize = badge.size()
 
-        let gap: CGFloat = dotsImage != nil ? 4 : 0
-        let dotsWidth = dotsImage?.size.width ?? 0
-        let dotsHeight = dotsImage?.size.height ?? 0
-        let totalWidth = badgeSize.width + gap + dotsWidth
-        let totalHeight = max(badgeSize.height, dotsHeight)
+        return composeSideBySide(attributedStringImage(badge), baseImage)
+    }
 
-        let combined = NSImage(size: NSSize(width: totalWidth, height: totalHeight))
-        combined.lockFocus()
-        let badgeY = (totalHeight - badgeSize.height) / 2
-        badge.draw(at: NSPoint(x: 0, y: badgeY))
-        if let dotsImage {
-            let dotsY = (totalHeight - dotsHeight) / 2
-            dotsImage.draw(at: NSPoint(x: badgeSize.width + gap, y: dotsY),
-                           from: .zero, operation: .sourceOver, fraction: 1)
+    /// Horizontally concatenates two optional images with a fixed gap,
+    /// vertically centering each on the taller one's height. Either side
+    /// may be nil — the other renders alone with no artificial gap. Shared
+    /// by the quota+dots composition and the Gas Town badge+base
+    /// composition, which both used to hand-roll this same NSImage math.
+    static func composeSideBySide(_ left: NSImage?, _ right: NSImage?, gap: CGFloat = 4) -> NSImage? {
+        switch (left, right) {
+        case (nil, nil):
+            return nil
+        case (let l?, nil):
+            return l
+        case (nil, let r?):
+            return r
+        case (let l?, let r?):
+            let totalWidth = l.size.width + gap + r.size.width
+            let totalHeight = max(l.size.height, r.size.height)
+            let combined = NSImage(size: NSSize(width: totalWidth, height: totalHeight))
+            combined.lockFocus()
+            l.draw(at: NSPoint(x: 0, y: (totalHeight - l.size.height) / 2),
+                   from: .zero, operation: .sourceOver, fraction: 1)
+            r.draw(at: NSPoint(x: l.size.width + gap, y: (totalHeight - r.size.height) / 2),
+                   from: .zero, operation: .sourceOver, fraction: 1)
+            combined.unlockFocus()
+            combined.isTemplate = false
+            return combined
         }
-        combined.unlockFocus()
-        combined.isTemplate = false
-        return combined
+    }
+
+    private static func attributedStringImage(_ text: NSAttributedString) -> NSImage {
+        let size = text.size()
+        let image = NSImage(size: size)
+        image.lockFocus()
+        text.draw(at: .zero)
+        image.unlockFocus()
+        image.isTemplate = false
+        return image
     }
 
 }

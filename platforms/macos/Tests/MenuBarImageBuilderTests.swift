@@ -45,4 +45,30 @@ final class MenuBarImageBuilderTests: XCTestCase {
             "Irrlicht — action required: permission pending"
         )
     }
+
+    // MARK: - composeSideBySide (issue #909: dots + quota composition)
+
+    func testComposeSideBySideReturnsNilWhenBothNil() {
+        XCTAssertNil(MenuBarImageBuilder.composeSideBySide(nil, nil))
+    }
+
+    func testComposeSideBySideReturnsLeftUnchangedWhenRightNil() {
+        let left = NSImage(size: NSSize(width: 10, height: 18))
+        let result = MenuBarImageBuilder.composeSideBySide(left, nil)
+        XCTAssertEqual(result?.size, NSSize(width: 10, height: 18))
+    }
+
+    func testComposeSideBySideReturnsRightUnchangedWhenLeftNil() {
+        let right = NSImage(size: NSSize(width: 12, height: 18))
+        let result = MenuBarImageBuilder.composeSideBySide(nil, right)
+        XCTAssertEqual(result?.size, NSSize(width: 12, height: 18))
+    }
+
+    func testComposeSideBySideSumsWidthAndTakesTallerHeightWhenBothPresent() {
+        let left = NSImage(size: NSSize(width: 10, height: 18))
+        let right = NSImage(size: NSSize(width: 20, height: 12))
+        let result = MenuBarImageBuilder.composeSideBySide(left, right, gap: 4)
+        XCTAssertEqual(result?.size.width, 34) // 10 + 4 + 20
+        XCTAssertEqual(result?.size.height, 18) // max(18, 12)
+    }
 }
