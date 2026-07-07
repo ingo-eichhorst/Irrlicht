@@ -235,9 +235,14 @@ launch_repl() {
   # TUI, so drive it under tmux. `|| { … exit … }` keeps a launch failure from
   # aborting under set -e WITHOUT an accurate exit-reason — the cleanup trap then
   # records nonzero(2).
-  local -a vibe_args=()
+  # --trust: auto-trust the workdir. The onboarding staging cwd lives UNDER the
+  # irrlicht git repo, so vibe otherwise fires a blocking "Trust folder or
+  # repository?" dialog (it detects the repo's AGENTS.md) that stalls init and
+  # prevents the session dir from ever being created. --trust makes launch
+  # deterministic regardless of where the staging cwd lands.
+  local -a vibe_args=(--trust)
   if [[ -n "$FIRST_PROMPT" ]]; then
-    vibe_args=("$FIRST_PROMPT")
+    vibe_args+=("$FIRST_PROMPT")
     FIRST_SEND_PENDING=1
     echo "[driver] launching with first prompt as positional arg: ${FIRST_PROMPT:0:60}" >&2
   fi
