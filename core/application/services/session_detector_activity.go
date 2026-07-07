@@ -612,28 +612,38 @@ func (d *SessionDetector) processActivityLocked(id agent.Identity, state *sessio
 		// question/cue (#593) — IsAgentDone gates it, so permission-prompt
 		// waiting (open tool call) is excluded. Without this, a parent whose
 		// overnight run ends by asking a question leaves its finished
-		// children stuck in working until the liveness sweep. The waiting
-		// branch only fast-forwards: no hold (the parent legitimately waits
-		// on the user) and no cleanupChildren (background children may still
-		// be running; finishOrphanedChildren's quiet-window and open-tool
-		// guards leave those alone).
+		// children stuck in working until the liveness sweep.
+		//
+		// The waiting branch also holds the parent working when a genuinely
+		// active child remains (#897) — mirroring the ready branch below.
+		// A turn-ending cue like "I'll wait for its completion notification"
+		// can read as a question/cue to the classifier while actually
+		// describing a wait on the parent's own background subagent, not
+		// the user; surfacing "waiting" in that case reads as "nothing
+		// happening" on the dashboard when a subagent is still working.
+		// finishOrphanedChildren runs first so a child that's merely stale
+		// (not genuinely active) doesn't hold the parent forever; no
+		// cleanupChildren either way (finishOrphanedChildren's quiet-window
+		// and open-tool guards already leave a truly running child alone).
 		parentHeldWorking := false
+		holdWorkingIfChildrenActive := func(logMsg string) {
+			if !d.holdIfChildrenActive(state.SessionID) {
+				return
+			}
+			d.log.LogInfo(logComponentSessionDetector, ev.SessionID, logMsg)
+			newState = session.StateWorking
+			reason = ""
+			parentHeldWorking = true
+		}
 		if state.ParentSessionID == "" {
 			switch {
 			case newState == session.StateReady:
-				d.finishOrphanedChildren(state.SessionID)
-				if d.hasActiveChildren(state.SessionID) {
-					d.log.LogInfo(logComponentSessionDetector, ev.SessionID,
-						"holding parent working — active children still running")
-					newState = session.StateWorking
-					reason = ""
-					parentHeldWorking = true
-				}
+				holdWorkingIfChildrenActive("holding parent working — active children still running")
 			case newState == session.StateWaiting && state.Metrics != nil && state.Metrics.IsAgentDone():
-				// Turn-done waiting (question/cue) — fast-forward only.
-				// Permission-prompt waiting never reaches here: its open
-				// tool call makes IsAgentDone return false.
-				d.finishOrphanedChildren(state.SessionID)
+				// Turn-done waiting (question/cue). Permission-prompt
+				// waiting never reaches here: its open tool call makes
+				// IsAgentDone return false.
+				holdWorkingIfChildrenActive("holding parent working — active children still running (turn ended in waiting cue)")
 			}
 		}
 

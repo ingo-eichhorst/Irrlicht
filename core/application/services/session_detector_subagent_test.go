@@ -1011,10 +1011,15 @@ func TestSessionDetector_PermissionWaitingDoesNotFastForwardChildren(t *testing.
 	<-done
 }
 
-// TestSessionDetector_WaitingParent_DoesNotCleanupBackgroundChildren: a
-// background child still writing its transcript (within SubagentQuietWindow)
-// survives the parent's turn-done-waiting transition untouched (#593).
-func TestSessionDetector_WaitingParent_DoesNotCleanupBackgroundChildren(t *testing.T) {
+// TestSessionDetector_WaitingParent_HeldWorking_WhenBackgroundChildActive
+// covers #897: a parent whose turn ends in a waiting cue ("Want a summary
+// when it lands?") is held working — not waiting — while a background child
+// is still genuinely active (transcript freshly written, within
+// SubagentQuietWindow). Surfacing "waiting" here would read as "nothing
+// happening" on the dashboard even though the child is still running. The
+// child itself is left untouched either way (#593) — this only changes the
+// parent's own state.
+func TestSessionDetector_WaitingParent_HeldWorking_WhenBackgroundChildActive(t *testing.T) {
 	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
 	repo := newMockRepo()
@@ -1082,8 +1087,8 @@ func TestSessionDetector_WaitingParent_DoesNotCleanupBackgroundChildren(t *testi
 	if parent == nil {
 		t.Fatal("parent session should still exist")
 	}
-	if parent.State != session.StateWaiting {
-		t.Errorf("parent state: got %q, want waiting", parent.State)
+	if parent.State != session.StateWorking {
+		t.Errorf("parent state: got %q, want working — held by the active background child (#897)", parent.State)
 	}
 
 	child, _ := repo.Load("child-bg")
