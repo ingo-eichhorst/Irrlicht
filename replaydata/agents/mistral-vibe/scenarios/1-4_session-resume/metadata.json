@@ -3,7 +3,7 @@
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
-    "driver_capability": "gap:resume",
+    "driver_capability": "ready",
     "agent_cli_version": "2.19.0",
     "daemon_version": "0.5.5+e943e261",
     "confidence": 0.75,
@@ -17,7 +17,7 @@
       "assessed_at": "2026-07-07T00:00:00Z",
       "agent_supports": "yes",
       "daemon_capability": "full",
-      "driver_capability": "gap:resume",
+      "driver_capability": "ready",
       "confidence": 0.75,
       "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: gap:resume\n\n## Reasoning\n\n**agent (yes).** `vibe --help` lists `-c | --resume [SESSION_ID]`: `--resume <id>` reopens a saved session, `-c`/`--continue` reopens the latest in the cwd, and the REPL exposes the same as `/resume` / `/continue` (cli/commands.py:119). The load-bearing fact for irrlicht is HOW resume rehydrates: `load_session` resolves the id via `SessionLoader.find_session_by_id` to the EXISTING session directory, and `_resume_previous_session` calls `session_logger.resume_existing_session(session_id, session_path)` which sets `self.session_dir = session_dir` on the ORIGINAL folder and appends to its `messages.jsonl` (cli/cli.py:190/208-218, core/session/session_logger.py:407-416). Resume therefore does NOT mint a new session directory. (`meta.json` carries a `parent_session_id`, but it is only populated by `reset_session(..., parent_session_id=...)` — the /new-session fork path that DOES allocate a fresh dir; it is `null` in all six live transcripts and is irrelevant to resume.)\n\n**daemon (full).** The adapter's Source is `FilesUnderRoot{Dir: ~/.vibe/logs/session, SessionIDFromPath: sessionIDFromPath}` and `sessionIDFromPath` keys the daemon session off the `session_<ts>_<shortid>` DIRECTORY basename, not the JSONL contents (agent.go:31-37, adapter.go:56-65). Because vibe resume reuses the same directory, the daemon sees the SAME session_id row reappear across both PID lifetimes — exactly the claudecode/antigravity/kiro-cli shape, not a new row. The parser drives the arc from the appended lines: user -> user_message (working), assistant+tool_calls -> assistant_message (working), text-only assistant -> turn_done (ready) (parser.go:49-90). PID binding is via CommandPattern + cwd (pid.go), so a clean exit yields process_exited and the resumed PID rebinds to the same dir. Sidecar (meta.json) supplies model + context_tokens on each turn_done (parser.go:98-115, sidecar.go). This verdict is PROVISIONAL — derived from parser reading, no recording — and vibe writes `messages.jsonl` lazily (only after the first interaction is saved, session_logger.save_interaction), so the process-detected proc-<PID> presession, not the transcript, satisfies the initial `ready`; a live drive settles the emission timing.\n\n**driver (gap:resume).** `replaydata/agents/mistral-vibe/driver-interactive.sh` is a fresh scaffold: the `resume` arm is `not_implemented resume` (line 191), and the recipe also needs `exit_clean` (line 193) and `wait_turn` (line 169), both still `not_implemented`, plus SEAM 3 (resolving the live session_id + transcript path, lines 158-160) is a TODO. The session-resume-defining primitive is `resume` (relaunch `vibe --resume <id>` in the same cwd), so the pillar is gap:resume; `record` ports resume + exit_clean + wait_turn + SEAM 3 from the reference driver before it can drive this cell.",
       "caveats": [
