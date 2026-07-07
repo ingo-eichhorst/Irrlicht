@@ -59,51 +59,12 @@ type claudeSessionMeta struct {
 // triggering destructive duplicate-PID cleanup.
 func DiscoverPID(cwd, transcriptPath string, disambiguate func([]int) int) (int, error) {
 	wantSessionID := sessionIDFromTranscript(transcriptPath)
-
-	// Transcript mtime anchors the mtime gate below. Zero on error keeps
-	// the gate inert so behavior falls back to strict negative filtering.
-	var wantMTime time.Time
-	if transcriptPath != "" {
-		if info, err := os.Stat(transcriptPath); err == nil {
-			wantMTime = info.ModTime()
-		}
-	}
+	wantMTime := transcriptMTime(transcriptPath)
 
 	// Layer 1: authoritative metadata lookup.
-	// Scan ~/.claude/sessions/*.json once, collecting PIDs that some metadata
-	// file owns (for negative-filtering the fallback) and looking for an
-	// exact sessionId match. Entries whose mtime is older than the caller's
-	// transcript by more than staleMetaSlack are treated as positive-only
-	// signals (their PID is NOT added to claimedByOthers) — see issue #169.
-	claimedByOthers := make(map[int]bool)
-	if wantSessionID != "" && sessionsDir != "" {
-		entries, err := os.ReadDir(sessionsDir)
-		if err == nil {
-			for _, e := range entries {
-				if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
-					continue
-				}
-				meta, ok := readSessionMeta(filepath.Join(sessionsDir, e.Name()))
-				if !ok {
-					continue
-				}
-				if !pidAlive(meta.PID) {
-					continue
-				}
-				if meta.SessionID == wantSessionID {
-					return meta.PID, nil
-				}
-				// A live Claude process owns this PID for a different sessionId.
-				// Exclude it from the cwd fallback — unless the metadata is
-				// demonstrably older than the caller's transcript, which
-				// indicates a stale post-/clear entry that would otherwise
-				// strand the new session at PID=0 (issue #169).
-				metaMTime := metaFileMTime(e)
-				if wantMTime.IsZero() || metaMTime.IsZero() || !metaMTime.Before(wantMTime.Add(-staleMetaSlack)) {
-					claimedByOthers[meta.PID] = true
-				}
-			}
-		}
+	claimedByOthers, matchedPID, found := scanSessionMetadata(wantSessionID, wantMTime)
+	if found {
+		return matchedPID, nil
 	}
 
 	// Layer 2: restricted CWD fallback.
@@ -116,26 +77,97 @@ func DiscoverPID(cwd, transcriptPath string, disambiguate func([]int) int) (int,
 	// is the exact behavior that lets a new session steal a rival's PID.
 	// The wrapped callback below enforces the stricter unambiguous rule.
 	wrapped := func(pids []int) int {
-		filtered := make([]int, 0, len(pids))
-		for _, p := range pids {
-			if claimedByOthers[p] {
-				continue
-			}
-			filtered = append(filtered, p)
-		}
-		switch len(filtered) {
-		case 0:
-			return 0
-		case 1:
-			return filtered[0]
-		default:
-			// Ambiguous: multiple live claude processes share this cwd and
-			// none are disambiguated by metadata. Returning 0 causes the
-			// caller to retry, giving Claude time to write its metadata file.
-			return 0
-		}
+		return disambiguateUnclaimed(pids, claimedByOthers)
 	}
 	return discoverByCWD(ProcessName, cwd, wrapped)
+}
+
+// transcriptMTime returns transcriptPath's modification time, anchoring the
+// staleness gate in scanSessionMetadata. Returns the zero value when
+// transcriptPath is empty or unreadable, which keeps that gate inert so
+// behavior falls back to strict negative filtering.
+func transcriptMTime(transcriptPath string) time.Time {
+	if transcriptPath == "" {
+		return time.Time{}
+	}
+	info, err := os.Stat(transcriptPath)
+	if err != nil {
+		return time.Time{}
+	}
+	return info.ModTime()
+}
+
+// scanSessionMetadata scans ~/.claude/sessions/*.json once, collecting PIDs
+// that some metadata file owns (for negative-filtering the cwd fallback) and
+// looking for an exact sessionId match, returned as (pid, true). Entries
+// whose mtime is older than the caller's transcript by more than
+// staleMetaSlack are treated as positive-only signals (their PID is NOT added
+// to claimedByOthers) — see issue #169.
+func scanSessionMetadata(wantSessionID string, wantMTime time.Time) (claimedByOthers map[int]bool, matchedPID int, found bool) {
+	claimedByOthers = make(map[int]bool)
+	if wantSessionID == "" || sessionsDir == "" {
+		return claimedByOthers, 0, false
+	}
+	entries, err := os.ReadDir(sessionsDir)
+	if err != nil {
+		return claimedByOthers, 0, false
+	}
+	for _, e := range entries {
+		meta, ok := validSessionEntry(e)
+		if !ok {
+			continue
+		}
+		if meta.SessionID == wantSessionID {
+			return claimedByOthers, meta.PID, true
+		}
+		// A live Claude process owns this PID for a different sessionId.
+		// Exclude it from the cwd fallback — unless the metadata is
+		// demonstrably older than the caller's transcript, which indicates a
+		// stale post-/clear entry that would otherwise strand the new
+		// session at PID=0 (issue #169).
+		if isClaimedByOther(e, wantMTime) {
+			claimedByOthers[meta.PID] = true
+		}
+	}
+	return claimedByOthers, 0, false
+}
+
+// validSessionEntry reads a ~/.claude/sessions/ directory entry and reports
+// whether it names a live Claude process's metadata file.
+func validSessionEntry(e os.DirEntry) (claudeSessionMeta, bool) {
+	if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+		return claudeSessionMeta{}, false
+	}
+	meta, ok := readSessionMeta(filepath.Join(sessionsDir, e.Name()))
+	if !ok || !pidAlive(meta.PID) {
+		return claudeSessionMeta{}, false
+	}
+	return meta, true
+}
+
+// isClaimedByOther reports whether a metadata entry's mtime is recent enough
+// (relative to wantMTime) that its PID should be excluded from the cwd
+// fallback. See scanSessionMetadata's doc comment for the staleness rule.
+func isClaimedByOther(e os.DirEntry, wantMTime time.Time) bool {
+	metaMTime := metaFileMTime(e)
+	return wantMTime.IsZero() || metaMTime.IsZero() || !metaMTime.Before(wantMTime.Add(-staleMetaSlack))
+}
+
+// disambiguateUnclaimed filters pids down to those not claimed by another
+// session (per claimedByOthers) and returns the sole survivor. Returns 0 when
+// zero or more than one remain — ambiguous cases cause the caller to retry
+// rather than guess, giving Claude time to write its metadata file.
+func disambiguateUnclaimed(pids []int, claimedByOthers map[int]bool) int {
+	filtered := make([]int, 0, len(pids))
+	for _, p := range pids {
+		if !claimedByOthers[p] {
+			filtered = append(filtered, p)
+		}
+	}
+	if len(filtered) == 1 {
+		return filtered[0]
+	}
+	return 0
 }
 
 // sessionIDFromTranscript extracts Claude's canonical session UUID from a

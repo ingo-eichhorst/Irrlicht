@@ -383,6 +383,149 @@ type historySessionLister interface {
 	ListAll() ([]*session.SessionState, error)
 }
 
+// historyChartKnown validates the requested ?chart= value. Charts implemented
+// in Phase 1-3 pass through; chart=state is scaffolded in the UI but not wired
+// yet (writes a 501); anything else is a client error (writes a 400). Returns
+// false once it has already written the response, in which case the caller
+// must return immediately.
+func historyChartKnown(w http.ResponseWriter, chart string) bool {
+	switch chart {
+	case "cost", "tokens", "co2", "models", "providers":
+		// implemented (Phase 2); co2 added for issue #829
+	case "yield":
+		// implemented (#373) — handled after range resolution below
+	case "agents":
+		// implemented (Phase 3) — handled after range resolution below
+	case "state":
+		// time-in-state is the issue's optional second half (#751); the
+		// reconstruction exists but no chart is wired yet.
+		writeHistoryNotImplemented(w, "chart="+chart, 3)
+		return false
+	default:
+		http.Error(w, "unknown chart: "+chart, http.StatusBadRequest)
+		return false
+	}
+	return true
+}
+
+// historyGroupKnown validates the requested ?group= axis, writing a 400 and
+// returning false for anything outside the supported set.
+func historyGroupKnown(w http.ResponseWriter, group string) bool {
+	switch group {
+	case "project", "branch", "provider", "model", "session":
+		// implemented (Phase 2)
+	case "token_type":
+		// implemented (faceted) — tokens metric only (validated below)
+	default:
+		http.Error(w, "unknown group: "+group, http.StatusBadRequest)
+		return false
+	}
+	return true
+}
+
+// historyMetricAndGroup derives the measured metric and the effective
+// stacking axis from chart and the requested group. chart picks the measured
+// metric for tokens/co2; models/providers/agents are presets that pin the
+// stacking axis to that dimension (one-click "cost by X"; agents is
+// reconstructed per project only), overriding whatever ?group= requested.
+func historyMetricAndGroup(chart, group string) (metric, effectiveGroup string) {
+	switch chart {
+	case "tokens":
+		return "tokens", group
+	case "co2":
+		return "co2", group
+	case "models":
+		return "cost", "model"
+	case "providers":
+		return "cost", "provider"
+	case "agents":
+		return "cost", "project"
+	default:
+		return "cost", group
+	}
+}
+
+// historyGroupMetricMismatch reports the one invalid chart/group combination:
+// token_type is inherently a token concept — it can't slice cost (we store no
+// per-token-type cost on disk).
+func historyGroupMetricMismatch(group, metric string) bool {
+	return group == "token_type" && metric != "tokens"
+}
+
+// historyScopeEcho renders a parsed ?scope= drilldown back into its
+// "field:value" wire form, or "" when there is no active scope.
+func historyScopeEcho(field, value string) string {
+	if field == "" {
+		return ""
+	}
+	return field + ":" + value
+}
+
+// writeHistoryJSON encodes v as a history endpoint's JSON response body.
+func writeHistoryJSON(w http.ResponseWriter, v any) {
+	w.Header().Set(headerContentType, contentTypeJSON)
+	json.NewEncoder(w).Encode(v)
+}
+
+// serveHistoryAgentsChart serves chart=agents: a concurrent-agents series
+// reconstructed from lifecycle recordings via ConcurrencyReader.AgentsSeries
+// (Phase 3, #751). A nil reader or an unresolved recordings dir yields an
+// empty-but-valid payload rather than an error.
+func serveHistoryAgentsChart(w http.ResponseWriter, concurrency outbound.ConcurrencyReader, rangeKey, scopeEcho string, query outbound.SeriesQuery) {
+	var cr *outbound.ConcurrencyResult
+	if concurrency != nil {
+		c, err := concurrency.AgentsSeries(query)
+		if err != nil {
+			http.Error(w, errInternalErrorMsg, http.StatusInternalServerError)
+			return
+		}
+		cr = c
+	}
+	if cr == nil {
+		// No reader (recordings dir unresolved): empty-but-valid payload.
+		cr = &outbound.ConcurrencyResult{Start: query.Start, End: query.End, BucketSeconds: query.BucketSeconds, BucketStarts: []int64{}, ByKey: map[string][]float64{}, PeakByKey: map[string]float64{}}
+	}
+	writeHistoryJSON(w, buildAgentsResponse(rangeKey, scopeEcho, cr))
+}
+
+// historyCrossFilters resolves the orthogonal ?project=/?provider=/?token_type=
+// cross-filters (comma-separated, multi-value). The active group dimension is
+// never filtered — drop whichever matches it — so a dimension is never both a
+// stacking axis and a filter. ok is false for an invalid ?token_type=, which
+// the caller turns into a 400.
+func historyCrossFilters(q url.Values, group string) (projects, providers, tokenTypes []string, ok bool) {
+	projects = parseCSVParam(q.Get("project"))
+	providers = parseCSVParam(q.Get("provider"))
+	tokenTypes, ok = parseTokenTypeFilter(q.Get("token_type"))
+	if !ok {
+		return nil, nil, nil, false
+	}
+	switch group {
+	case "project":
+		projects = nil
+	case "provider":
+		providers = nil
+	case "token_type":
+		tokenTypes = nil
+	}
+	return projects, providers, tokenTypes, true
+}
+
+// fetchHistoryCostSeries resolves the cost series for the cost/tokens/co2/
+// models/providers charts. A nil tracker (init failed) yields an
+// empty-but-valid payload so the dashboard renders cleanly instead of
+// erroring; ok is false only when a present tracker's query itself failed.
+func fetchHistoryCostSeries(tracker outbound.CostTracker, query outbound.SeriesQuery) (series *outbound.CostSeriesResult, ok bool) {
+	if tracker == nil {
+		return &outbound.CostSeriesResult{Start: query.Start, End: query.End, BucketSeconds: query.BucketSeconds, BucketStarts: []int64{}, ByKey: map[string][]float64{}, Totals: map[string]float64{}}, true
+	}
+	s, err := tracker.CostSeries(query)
+	if err != nil {
+		return nil, false
+	}
+	return s, true
+}
+
 // handleGetHistory serves GET /api/v1/history?range=&chart=&group=&start=&end=
 // &bucket=&forecast=&forecast_buckets=. Range is a trailing window
 // (day|week|month|year), a calendar shorthand (this-month), or an explicit
@@ -395,20 +538,7 @@ func handleGetHistory(tracker outbound.CostTracker, sessions historySessionListe
 		if chart == "" {
 			chart = "cost"
 		}
-		switch chart {
-		case "cost", "tokens", "co2", "models", "providers":
-			// implemented (Phase 2); co2 added for issue #829
-		case "yield":
-			// implemented (#373) — handled after range resolution below
-		case "agents":
-			// implemented (Phase 3) — handled after range resolution below
-		case "state":
-			// time-in-state is the issue's optional second half (#751); the
-			// reconstruction exists but no chart is wired yet.
-			writeHistoryNotImplemented(w, "chart="+chart, 3)
-			return
-		default:
-			http.Error(w, "unknown chart: "+chart, http.StatusBadRequest)
+		if !historyChartKnown(w, chart) {
 			return
 		}
 
@@ -416,45 +546,18 @@ func handleGetHistory(tracker outbound.CostTracker, sessions historySessionListe
 		if group == "" {
 			group = "project"
 		}
-		switch group {
-		case "project", "branch", "provider", "model", "session":
-			// implemented (Phase 2)
-		case "token_type":
-			// implemented (faceted) — tokens metric only (validated below)
-		default:
-			http.Error(w, "unknown group: "+group, http.StatusBadRequest)
+		if !historyGroupKnown(w, group) {
 			return
 		}
 
-		// chart picks the measured metric; models/providers are presets that
-		// pin the stacking axis to that dimension (one-click "cost by X").
-		// agents is reconstructed per project only.
-		metric := "cost"
-		switch chart {
-		case "tokens":
-			metric = "tokens"
-		case "co2":
-			metric = "co2"
-		case "models":
-			group = "model"
-		case "providers":
-			group = "provider"
-		case "agents":
-			group = "project"
-		}
-
-		// token_type is inherently a token concept — it can't slice cost (we
-		// store no per-token-type cost on disk).
-		if group == "token_type" && metric != "tokens" {
+		metric, group := historyMetricAndGroup(chart, group)
+		if historyGroupMetricMismatch(group, metric) {
 			http.Error(w, "group=token_type requires chart=tokens", http.StatusBadRequest)
 			return
 		}
 
 		scopeField, scopeValue := parseHistoryScope(q.Get("scope"))
-		scopeEcho := ""
-		if scopeField != "" {
-			scopeEcho = scopeField + ":" + scopeValue
-		}
+		scopeEcho := historyScopeEcho(scopeField, scopeValue)
 
 		rangeKey, start, end, ok := resolveHistoryRange(q)
 		if !ok {
@@ -465,88 +568,42 @@ func handleGetHistory(tracker outbound.CostTracker, sessions historySessionListe
 		// Yield is a per-project aggregate over completed sessions, not a cost
 		// time series — handle it before the cost-tracker path (#373).
 		if chart == "yield" {
-			w.Header().Set(headerContentType, contentTypeJSON)
-			json.NewEncoder(w).Encode(buildYieldResponse(rangeKey, group, start, end, sessions))
+			writeHistoryJSON(w, buildYieldResponse(rangeKey, group, start, end, sessions))
 			return
 		}
 
 		bucketSeconds := historyBucketSeconds(q, end-start)
+		seriesQuery := outbound.SeriesQuery{
+			Start:         start,
+			End:           end,
+			BucketSeconds: bucketSeconds,
+			Group:         group,
+			ScopeField:    scopeField,
+			ScopeValue:    scopeValue,
+		}
 
 		if chart == "agents" {
-			var cr *outbound.ConcurrencyResult
-			if concurrency != nil {
-				c, err := concurrency.AgentsSeries(outbound.SeriesQuery{
-					Start:         start,
-					End:           end,
-					BucketSeconds: bucketSeconds,
-					Group:         group,
-					ScopeField:    scopeField,
-					ScopeValue:    scopeValue,
-				})
-				if err != nil {
-					http.Error(w, errInternalErrorMsg, http.StatusInternalServerError)
-					return
-				}
-				cr = c
-			}
-			if cr == nil {
-				// No reader (recordings dir unresolved): empty-but-valid payload.
-				cr = &outbound.ConcurrencyResult{Start: start, End: end, BucketSeconds: bucketSeconds, BucketStarts: []int64{}, ByKey: map[string][]float64{}, PeakByKey: map[string]float64{}}
-			}
-			resp := buildAgentsResponse(rangeKey, scopeEcho, cr)
-			w.Header().Set(headerContentType, contentTypeJSON)
-			json.NewEncoder(w).Encode(resp)
+			serveHistoryAgentsChart(w, concurrency, rangeKey, scopeEcho, seriesQuery)
 			return
 		}
 
-		// Orthogonal cross-filters (comma-separated, multi-value). The active
-		// group dimension is never filtered — drop whichever matches it — so a
-		// dimension is never both a stacking axis and a filter.
-		projects := parseCSVParam(q.Get("project"))
-		providers := parseCSVParam(q.Get("provider"))
-		tokenTypes, okTT := parseTokenTypeFilter(q.Get("token_type"))
-		if !okTT {
+		projects, providers, tokenTypes, ok := historyCrossFilters(q, group)
+		if !ok {
 			http.Error(w, "invalid token_type: use input|output|cache_read|cache_creation", http.StatusBadRequest)
 			return
 		}
-		switch group {
-		case "project":
-			projects = nil
-		case "provider":
-			providers = nil
-		case "token_type":
-			tokenTypes = nil
+		seriesQuery.Metric = metric
+		seriesQuery.Projects = projects
+		seriesQuery.Providers = providers
+		seriesQuery.TokenTypes = tokenTypes
+
+		series, ok := fetchHistoryCostSeries(tracker, seriesQuery)
+		if !ok {
+			http.Error(w, errInternalErrorMsg, http.StatusInternalServerError)
+			return
 		}
 
-		var series *outbound.CostSeriesResult
-		if tracker != nil {
-			s, err := tracker.CostSeries(outbound.SeriesQuery{
-				Start:         start,
-				End:           end,
-				BucketSeconds: bucketSeconds,
-				Group:         group,
-				Metric:        metric,
-				ScopeField:    scopeField,
-				ScopeValue:    scopeValue,
-				Projects:      projects,
-				Providers:     providers,
-				TokenTypes:    tokenTypes,
-			})
-			if err != nil {
-				http.Error(w, errInternalErrorMsg, http.StatusInternalServerError)
-				return
-			}
-			series = s
-		}
-		if series == nil {
-			// No tracker (init failed): respond with an empty-but-valid payload
-			// so the dashboard renders cleanly instead of erroring.
-			series = &outbound.CostSeriesResult{Start: start, End: end, BucketSeconds: bucketSeconds, BucketStarts: []int64{}, ByKey: map[string][]float64{}, Totals: map[string]float64{}}
-		}
-
-		resp := buildHistoryResponse(rangeKey, chart, group, scopeEcho, series, q)
-		w.Header().Set(headerContentType, contentTypeJSON)
-		json.NewEncoder(w).Encode(resp)
+		writeHistoryJSON(w, buildHistoryResponse(rangeKey, chart, group, scopeEcho, series, q))
 	}
 }
 
@@ -674,6 +731,61 @@ const (
 	historyUnknownMinShare = 0.10
 )
 
+// sortKeysByValueDesc orders a group-key → value map's keys deterministically:
+// value desc, then name — the ordering every history/agents chart uses for its
+// series and top-contributors list.
+func sortKeysByValueDesc(values map[string]float64) []string {
+	keys := make([]string, 0, len(values))
+	for k := range values {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if values[keys[i]] != values[keys[j]] {
+			return values[keys[i]] > values[keys[j]]
+		}
+		return keys[i] < keys[j]
+	})
+	return keys
+}
+
+// appendSparsePoints appends one [{ts,project,value}] point per non-zero
+// bucket, in key order, to dest — the sparse series shape both the cost and
+// agents charts render (zero buckets are omitted rather than drawn as gaps).
+func appendSparsePoints(dest []historyPoint, keys []string, byKey map[string][]float64, bucketStarts []int64) []historyPoint {
+	for _, k := range keys {
+		for i, v := range byKey[k] {
+			if i >= len(bucketStarts) {
+				break
+			}
+			if v != 0 {
+				dest = append(dest, historyPoint{TS: bucketStarts[i], Project: k, Value: v})
+			}
+		}
+	}
+	return dest
+}
+
+// topHistoryContributors takes the first limit keys (already ordered by
+// sortKeysByValueDesc) and renders them as the side panel's ranked list.
+func topHistoryContributors(keys []string, values map[string]float64, limit int) []historyContributor {
+	out := []historyContributor{}
+	for i, k := range keys {
+		if i >= limit {
+			break
+		}
+		out = append(out, historyContributor{Label: k, Value: values[k]})
+	}
+	return out
+}
+
+// historyShouldForecast reports whether buildHistoryResponse should attach a
+// linear forecast. Forecast projects USD spend; it isn't meaningful for token
+// counts, and compounding a linear projection on top of an already-modeled
+// CO2e estimate would overstate precision it doesn't have.
+func historyShouldForecast(chart string, q url.Values, total float64, bucketCount int) bool {
+	return chart != "tokens" && chart != "co2" && historyForecastEnabled(q) && total > 0 && bucketCount > 0
+}
+
 // buildHistoryResponse flattens the per-key series into the response envelope:
 // a sparse [{ts,project,value}] series (zero buckets omitted), per-key top
 // contributors, and an optional linear forecast over the grand per-bucket
@@ -695,44 +807,18 @@ func buildHistoryResponse(rangeKey, chart, group, scope string, s *outbound.Cost
 		Scope:           scope,
 	}
 
-	// Deterministic key order: total desc, then name.
-	keys := make([]string, 0, len(s.Totals))
-	for k := range s.Totals {
-		keys = append(keys, k)
-	}
-	sort.Slice(keys, func(i, j int) bool {
-		if s.Totals[keys[i]] != s.Totals[keys[j]] {
-			return s.Totals[keys[i]] > s.Totals[keys[j]]
-		}
-		return keys[i] < keys[j]
-	})
-
+	keys := sortKeysByValueDesc(s.Totals)
 	for _, k := range keys {
 		resp.Total += s.Totals[k]
-		for i, v := range s.ByKey[k] {
-			if i >= len(s.BucketStarts) {
-				break
-			}
-			if v != 0 {
-				resp.Series = append(resp.Series, historyPoint{TS: s.BucketStarts[i], Project: k, Value: v})
-			}
-		}
 	}
-	for i, k := range keys {
-		if i >= 5 {
-			break
-		}
-		resp.TopContributors = append(resp.TopContributors, historyContributor{Label: k, Value: s.Totals[k]})
-	}
+	resp.Series = appendSparsePoints(resp.Series, keys, s.ByKey, s.BucketStarts)
+	resp.TopContributors = topHistoryContributors(keys, s.Totals, 5)
 
 	if s.TokenSplit != nil {
 		resp.TokenSplit = &historyTokenSplit{Input: s.TokenSplit.Input, Output: s.TokenSplit.Output, Cache: s.TokenSplit.Cache}
 	}
 
-	// Forecast projects USD spend; it isn't meaningful for token counts, and
-	// compounding a linear projection on top of an already-modeled CO2e
-	// estimate would overstate precision it doesn't have.
-	if chart != "tokens" && chart != "co2" && historyForecastEnabled(q) && resp.Total > 0 && len(s.BucketStarts) > 0 {
+	if historyShouldForecast(chart, q, resp.Total, len(s.BucketStarts)) {
 		resp.Forecast = computeLinearForecast(s.BucketStarts, s.BucketSeconds, resp.Total, historyForecastBuckets(q, len(s.BucketStarts)))
 	}
 	return resp
@@ -761,34 +847,9 @@ func buildAgentsResponse(rangeKey, scope string, c *outbound.ConcurrencyResult) 
 		Scope:           scope,
 	}
 
-	// Deterministic key order: peak desc, then name.
-	keys := make([]string, 0, len(c.PeakByKey))
-	for k := range c.PeakByKey {
-		keys = append(keys, k)
-	}
-	sort.Slice(keys, func(i, j int) bool {
-		if c.PeakByKey[keys[i]] != c.PeakByKey[keys[j]] {
-			return c.PeakByKey[keys[i]] > c.PeakByKey[keys[j]]
-		}
-		return keys[i] < keys[j]
-	})
-
-	for _, k := range keys {
-		for i, v := range c.ByKey[k] {
-			if i >= len(c.BucketStarts) {
-				break
-			}
-			if v != 0 {
-				resp.Series = append(resp.Series, historyPoint{TS: c.BucketStarts[i], Project: k, Value: v})
-			}
-		}
-	}
-	for i, k := range keys {
-		if i >= 5 {
-			break
-		}
-		resp.TopContributors = append(resp.TopContributors, historyContributor{Label: k, Value: c.PeakByKey[k]})
-	}
+	keys := sortKeysByValueDesc(c.PeakByKey)
+	resp.Series = appendSparsePoints(resp.Series, keys, c.ByKey, c.BucketStarts)
+	resp.TopContributors = topHistoryContributors(keys, c.PeakByKey, 5)
 	return resp
 }
 

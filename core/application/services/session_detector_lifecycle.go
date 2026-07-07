@@ -275,71 +275,92 @@ func (d *SessionDetector) seedFromDisk() {
 		return
 	}
 
-	// Populate projectSessions map.
-	d.mu.Lock()
-	for _, state := range states {
-		if state.TranscriptPath != "" {
-			if pdir := extractProjectDir(state.TranscriptPath); pdir != "" {
-				d.projectSessions[state.SessionID] = pdir
-			}
-		}
-	}
-	d.mu.Unlock()
+	d.seedProjectSessions(states)
+	d.seedReevaluateStates(states)
+	d.seedBackfillMetadata(states)
 
-	// Re-evaluate state for sessions with transcripts: recompute metrics
-	// and apply the current detection logic. This ensures sessions persisted
-	// with stale states are corrected on startup (e.g. ready sessions whose
-	// last assistant message ends with a question should be waiting), and
-	// that stale persisted metrics from an older daemon version (e.g. pre-
-	// PR #110 codex cumulative token counts) are overwritten with a fresh
-	// recomputation under the current parser.
-	//
-	// Consent-gated per adapter (#570): RefreshMetrics re-reads the
-	// transcript file, which a pending/denied observe permission forbids —
-	// the upgrade contract is that previously monitored agents pause until
-	// the wizard is answered. Un-consented sessions stay persisted as-is.
+	// Clean up dead sessions and register alive PIDs with ProcessWatcher.
+	d.pidMgr.SeedPIDs(states)
+
+	d.pruneDeletedSessionsCache()
+}
+
+// seedProjectSessions populates the projectSessions map from persisted
+// sessions' transcript paths, so parent derivation works for sessions that
+// existed before this daemon start.
+func (d *SessionDetector) seedProjectSessions(states []*session.SessionState) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	for _, state := range states {
 		if state.TranscriptPath == "" {
 			continue
 		}
-		if !d.observeAllowed(state.Adapter) {
-			continue
-		}
-		d.enricher.RefreshMetrics(state)
-
-		// Probe background-process liveness before re-classifying so a session
-		// persisted as `working` solely because a Bash run_in_background
-		// process is still alive (its open set rehydrated from the ledger) is
-		// not wrongly demoted to ready on startup. Without this, IsAgentDone
-		// would return true (count alone doesn't gate) and the session would
-		// flip to ready and never re-probe (refreshStaleSessions is
-		// working-only). See issue #445.
-		d.applyBackgroundLiveness(state)
-
-		newState, reason := ClassifyState(state.State, state.Metrics)
-		// Only apply transitions to waiting or ready (not working promotion)
-		// because seed is re-evaluating persisted state, not responding to
-		// new activity.
-		if newState != state.State && newState != session.StateWorking {
-			if reason != "" {
-				d.log.LogInfo(logComponentSessionDetectorSeed, state.SessionID,
-					fmt.Sprintf("re-evaluated %s on startup", reason))
-			}
-			state.State = newState
-		}
-		// Always persist after RefreshMetrics — stale metrics from an
-		// older daemon version would otherwise linger on disk indefinitely
-		// for idle sessions that never get another transcript_activity
-		// event to trigger RefreshOnActivity + Save.
-		_ = d.repo.Save(state)
-		if d.historyTracker != nil {
-			d.historyTracker.OnTransition(state.SessionID, state.State, time.Now())
+		if pdir := extractProjectDir(state.TranscriptPath); pdir != "" {
+			d.projectSessions[state.SessionID] = pdir
 		}
 	}
+}
 
-	// Backfill ProjectName / CWD / GitBranch for sessions that were saved
-	// before these fields were populated. Same consent gate as above —
-	// BackfillMetadata reads transcripts (GetCWDFromTranscript).
+// seedReevaluateStates re-evaluates state for sessions with transcripts:
+// recompute metrics and apply the current detection logic. This ensures
+// sessions persisted with stale states are corrected on startup (e.g. ready
+// sessions whose last assistant message ends with a question should be
+// waiting), and that stale persisted metrics from an older daemon version
+// (e.g. pre-PR #110 codex cumulative token counts) are overwritten with a
+// fresh recomputation under the current parser.
+//
+// Consent-gated per adapter (#570): RefreshMetrics re-reads the transcript
+// file, which a pending/denied observe permission forbids — the upgrade
+// contract is that previously monitored agents pause until the wizard is
+// answered. Un-consented sessions stay persisted as-is.
+func (d *SessionDetector) seedReevaluateStates(states []*session.SessionState) {
+	for _, state := range states {
+		if state.TranscriptPath == "" || !d.observeAllowed(state.Adapter) {
+			continue
+		}
+		d.seedReevaluateOne(state)
+	}
+}
+
+// seedReevaluateOne refreshes one persisted session's metrics, applies any
+// resulting waiting/ready correction, and always re-persists — stale metrics
+// from an older daemon version would otherwise linger on disk indefinitely
+// for idle sessions that never get another transcript_activity event to
+// trigger RefreshOnActivity + Save.
+func (d *SessionDetector) seedReevaluateOne(state *session.SessionState) {
+	d.enricher.RefreshMetrics(state)
+
+	// Probe background-process liveness before re-classifying so a session
+	// persisted as `working` solely because a Bash run_in_background
+	// process is still alive (its open set rehydrated from the ledger) is
+	// not wrongly demoted to ready on startup. Without this, IsAgentDone
+	// would return true (count alone doesn't gate) and the session would
+	// flip to ready and never re-probe (refreshStaleSessions is
+	// working-only). See issue #445.
+	d.applyBackgroundLiveness(state)
+
+	// Only apply transitions to waiting or ready (not working promotion)
+	// because seed is re-evaluating persisted state, not responding to
+	// new activity.
+	newState, reason := ClassifyState(state.State, state.Metrics)
+	if newState != state.State && newState != session.StateWorking {
+		if reason != "" {
+			d.log.LogInfo(logComponentSessionDetectorSeed, state.SessionID,
+				fmt.Sprintf("re-evaluated %s on startup", reason))
+		}
+		state.State = newState
+	}
+	_ = d.repo.Save(state)
+	if d.historyTracker != nil {
+		d.historyTracker.OnTransition(state.SessionID, state.State, time.Now())
+	}
+}
+
+// seedBackfillMetadata fills ProjectName / CWD / GitBranch for sessions that
+// were saved before these fields were populated. Same consent gate as
+// seedReevaluateStates — BackfillMetadata reads transcripts
+// (GetCWDFromTranscript).
+func (d *SessionDetector) seedBackfillMetadata(states []*session.SessionState) {
 	allowed := states[:0:0]
 	for _, state := range states {
 		if d.observeAllowed(state.Adapter) {
@@ -351,25 +372,24 @@ func (d *SessionDetector) seedFromDisk() {
 		if err := d.repo.Save(state); err != nil {
 			d.log.LogError(logComponentSessionDetectorSeed, state.SessionID,
 				fmt.Sprintf("failed to backfill metadata: %v", err))
-		} else {
-			d.log.LogInfo(logComponentSessionDetectorSeed, state.SessionID,
-				fmt.Sprintf("backfilled project=%s cwd=%s", state.ProjectName, state.CWD))
-			d.broadcast(outbound.PushTypeUpdated, state)
+			continue
 		}
+		d.log.LogInfo(logComponentSessionDetectorSeed, state.SessionID,
+			fmt.Sprintf("backfilled project=%s cwd=%s", state.ProjectName, state.CWD))
+		d.broadcast(outbound.PushTypeUpdated, state)
 	}
+}
 
-	// Clean up dead sessions and register alive PIDs with ProcessWatcher.
-	d.pidMgr.SeedPIDs(states)
-
-	// Prune stale deletedSessions entries from previous daemon runs.
-	// Entries older than 1 hour serve no purpose — the cooldown window
-	// is only 10 seconds.
+// pruneDeletedSessionsCache drops deletedSessions entries older than 1 hour,
+// left over from a previous daemon run. Entries that old serve no purpose —
+// the re-creation cooldown they guard is only 10 seconds.
+func (d *SessionDetector) pruneDeletedSessionsCache() {
 	d.mu.Lock()
+	defer d.mu.Unlock()
 	pruneThreshold := time.Now().Add(-1 * time.Hour).Unix()
 	for id, ts := range d.deletedSessions {
 		if ts < pruneThreshold {
 			delete(d.deletedSessions, id)
 		}
 	}
-	d.mu.Unlock()
 }

@@ -858,64 +858,11 @@ func (t *TranscriptTailer) applyTaskDeltas(parsed *ParsedEvent) {
 	for _, d := range parsed.TaskDeltas {
 		switch d.Op {
 		case TaskOpCreate:
-			// The ID assigned here is provisional — the authoritative one
-			// arrives in the create's tool_result as an assign_id delta and
-			// replaces it. The counter only carries transcripts whose results
-			// don't include toolUseResult.task.id. See issue #615.
-			t.taskSeq++
-			provisional := strconv.Itoa(t.taskSeq)
-			t.tasks = append(t.tasks, Task{
-				ID:          provisional,
-				Subject:     d.Subject,
-				Description: d.Description,
-				ActiveForm:  d.ActiveForm,
-				Status:      TaskStatusPending,
-			})
-			if d.ToolUseID != "" {
-				t.pendingTaskCreates[d.ToolUseID] = provisional
-			}
-			t.metrics.AppliedTaskDeltas = append(t.metrics.AppliedTaskDeltas, AppliedTaskDelta{
-				Op: "create", ID: provisional, Subject: d.Subject, Status: TaskStatusPending,
-			})
+			t.applyTaskCreateDelta(d)
 		case TaskOpAssignID:
-			provisional, ok := t.pendingTaskCreates[d.ToolUseID]
-			if !ok || d.ID == "" {
-				break
-			}
-			delete(t.pendingTaskCreates, d.ToolUseID)
-			// Scan in reverse: when the provisional counter lags Claude's
-			// numbering by less than a parallel-create batch, an already
-			// assigned authoritative ID can collide with a later task's
-			// provisional one. The authoritative holder was necessarily
-			// created earlier (smaller provisional, earlier result), so the
-			// last match is always the still-provisional task.
-			for i := len(t.tasks) - 1; i >= 0; i-- {
-				if t.tasks[i].ID == provisional {
-					t.tasks[i].ID = d.ID
-					break
-				}
-			}
-			// Keep the provisional counter at least at Claude's numbering so
-			// a create whose result never lands (interrupt) still gets a
-			// non-colliding, aligned fallback ID.
-			if n, err := strconv.Atoi(d.ID); err == nil && n > t.taskSeq {
-				t.taskSeq = n
-			}
+			t.applyTaskAssignIDDelta(d)
 		case TaskOpUpdate:
-			for i := range t.tasks {
-				if t.tasks[i].ID == d.ID {
-					if d.Status != "" {
-						if d.Status == TaskStatusCompleted && t.tasks[i].Status != TaskStatusCompleted {
-							t.tasks[i].CompletedAt = eventUnix(parsed)
-						}
-						t.tasks[i].Status = d.Status
-						t.metrics.AppliedTaskDeltas = append(t.metrics.AppliedTaskDeltas, AppliedTaskDelta{
-							Op: "update", ID: t.tasks[i].ID, Subject: t.tasks[i].Subject, Status: d.Status,
-						})
-					}
-					break
-				}
-			}
+			t.applyTaskUpdateDelta(d, parsed)
 		}
 	}
 	// A create's pending entry resolves when its tool_result arrives — via
@@ -925,6 +872,79 @@ func (t *TranscriptTailer) applyTaskDeltas(parsed *ParsedEvent) {
 	// its ToolResultID arrive on the same parsed event.
 	for _, id := range parsed.ToolResultIDs {
 		delete(t.pendingTaskCreates, id)
+	}
+}
+
+// applyTaskCreateDelta handles a TaskOpCreate delta: assigns a provisional
+// ID (the authoritative one arrives in the create's tool_result as an
+// assign_id delta and replaces it — the counter only carries transcripts
+// whose results don't include toolUseResult.task.id, see issue #615),
+// appends the new task, and records the pending create + applied delta.
+func (t *TranscriptTailer) applyTaskCreateDelta(d TaskDelta) {
+	t.taskSeq++
+	provisional := strconv.Itoa(t.taskSeq)
+	t.tasks = append(t.tasks, Task{
+		ID:          provisional,
+		Subject:     d.Subject,
+		Description: d.Description,
+		ActiveForm:  d.ActiveForm,
+		Status:      TaskStatusPending,
+	})
+	if d.ToolUseID != "" {
+		t.pendingTaskCreates[d.ToolUseID] = provisional
+	}
+	t.metrics.AppliedTaskDeltas = append(t.metrics.AppliedTaskDeltas, AppliedTaskDelta{
+		Op: "create", ID: provisional, Subject: d.Subject, Status: TaskStatusPending,
+	})
+}
+
+// applyTaskAssignIDDelta handles a TaskOpAssignID delta: replaces the
+// still-provisional task's ID with Claude's authoritative one and keeps the
+// provisional counter aligned with it.
+func (t *TranscriptTailer) applyTaskAssignIDDelta(d TaskDelta) {
+	provisional, ok := t.pendingTaskCreates[d.ToolUseID]
+	if !ok || d.ID == "" {
+		return
+	}
+	delete(t.pendingTaskCreates, d.ToolUseID)
+	// Scan in reverse: when the provisional counter lags Claude's
+	// numbering by less than a parallel-create batch, an already
+	// assigned authoritative ID can collide with a later task's
+	// provisional one. The authoritative holder was necessarily
+	// created earlier (smaller provisional, earlier result), so the
+	// last match is always the still-provisional task.
+	for i := len(t.tasks) - 1; i >= 0; i-- {
+		if t.tasks[i].ID == provisional {
+			t.tasks[i].ID = d.ID
+			break
+		}
+	}
+	// Keep the provisional counter at least at Claude's numbering so
+	// a create whose result never lands (interrupt) still gets a
+	// non-colliding, aligned fallback ID.
+	if n, err := strconv.Atoi(d.ID); err == nil && n > t.taskSeq {
+		t.taskSeq = n
+	}
+}
+
+// applyTaskUpdateDelta handles a TaskOpUpdate delta: updates the matching
+// task's status (stamping CompletedAt on the first transition to completed)
+// and records the applied delta.
+func (t *TranscriptTailer) applyTaskUpdateDelta(d TaskDelta, parsed *ParsedEvent) {
+	for i := range t.tasks {
+		if t.tasks[i].ID != d.ID {
+			continue
+		}
+		if d.Status != "" {
+			if d.Status == TaskStatusCompleted && t.tasks[i].Status != TaskStatusCompleted {
+				t.tasks[i].CompletedAt = eventUnix(parsed)
+			}
+			t.tasks[i].Status = d.Status
+			t.metrics.AppliedTaskDeltas = append(t.metrics.AppliedTaskDeltas, AppliedTaskDelta{
+				Op: "update", ID: t.tasks[i].ID, Subject: t.tasks[i].Subject, Status: d.Status,
+			})
+		}
+		break
 	}
 }
 

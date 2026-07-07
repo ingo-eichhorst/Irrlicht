@@ -205,60 +205,19 @@ func runScenario(args []string, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 
-	idx := -1
-	for i := range cat.Scenarios {
-		if cat.Scenarios[i].Name == *name {
-			idx = i
-			break
-		}
-	}
-
+	idx := findScenarioIndex(cat, *name)
+	var rc int
 	switch verb {
 	case "add":
-		if idx >= 0 {
-			fmt.Fprintf(stderr, "of scenario add: %q already exists (use update)\n", *name)
-			return exitFail
-		}
-		if *id == "" {
-			fmt.Fprintln(stderr, "of scenario add: --id is required")
-			return exitUsage
-		}
-		if !idRe.MatchString(*id) {
-			fmt.Fprintf(stderr, "of scenario add: id %q is not <section>.<index>\n", *id)
-			return exitFail
-		}
-		if !nameRe.MatchString(*name) {
-			fmt.Fprintf(stderr, "of scenario add: name %q is not a kebab slug\n", *name)
-			return exitFail
-		}
-		for _, s := range cat.Scenarios {
-			if s.ID == *id {
-				fmt.Fprintf(stderr, "of scenario add: id %q already in use by %q\n", *id, s.Name)
-				return exitFail
-			}
-		}
-		cat.Scenarios = append(cat.Scenarios, shard.Shard{
-			ID: *id, Name: *name, Description: *desc,
-			Process: process, AcceptanceCriteria: acceptance,
-		})
+		rc = applyScenarioAdd(cat, idx, *id, *name, *desc, process, acceptance, stderr)
 	case "update":
-		if idx < 0 {
-			fmt.Fprintf(stderr, "of scenario update: %q not found (use add)\n", *name)
-			return exitFail
-		}
-		s := &cat.Scenarios[idx]
-		if flagPassed(fs, "description") {
-			s.Description = *desc
-		}
-		if *procF != "" {
-			s.Process = process
-		}
-		if *accF != "" {
-			s.AcceptanceCriteria = acceptance
-		}
+		rc = applyScenarioUpdate(cat, idx, fs, *desc, *procF, *accF, process, acceptance, *name, stderr)
 	default:
 		fmt.Fprintln(stderr, "of scenario: verb must be add, update, or show")
 		return exitUsage
+	}
+	if rc != exitOK {
+		return rc
 	}
 
 	cat.sortByID()
@@ -267,6 +226,71 @@ func runScenario(args []string, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 	fmt.Fprintf(stdout, "of scenario %s: %s ok\n", verb, *name)
+	return exitOK
+}
+
+// findScenarioIndex returns the index of the scenario named name in
+// cat.Scenarios, or -1 if it isn't present.
+func findScenarioIndex(cat *writeCatalog, name string) int {
+	for i := range cat.Scenarios {
+		if cat.Scenarios[i].Name == name {
+			return i
+		}
+	}
+	return -1
+}
+
+// applyScenarioAdd appends a new scenario to cat after checking it doesn't
+// already exist (idx < 0) and that its id/name are well-formed and unique.
+func applyScenarioAdd(cat *writeCatalog, idx int, id, name, desc, process, acceptance string, stderr io.Writer) int {
+	if idx >= 0 {
+		fmt.Fprintf(stderr, "of scenario add: %q already exists (use update)\n", name)
+		return exitFail
+	}
+	if id == "" {
+		fmt.Fprintln(stderr, "of scenario add: --id is required")
+		return exitUsage
+	}
+	if !idRe.MatchString(id) {
+		fmt.Fprintf(stderr, "of scenario add: id %q is not <section>.<index>\n", id)
+		return exitFail
+	}
+	if !nameRe.MatchString(name) {
+		fmt.Fprintf(stderr, "of scenario add: name %q is not a kebab slug\n", name)
+		return exitFail
+	}
+	for _, s := range cat.Scenarios {
+		if s.ID == id {
+			fmt.Fprintf(stderr, "of scenario add: id %q already in use by %q\n", id, s.Name)
+			return exitFail
+		}
+	}
+	cat.Scenarios = append(cat.Scenarios, shard.Shard{
+		ID: id, Name: name, Description: desc,
+		Process: process, AcceptanceCriteria: acceptance,
+	})
+	return exitOK
+}
+
+// applyScenarioUpdate patches the existing scenario at idx in place:
+// description only when --description was explicitly passed (so an empty
+// value can clear it), process/acceptance_criteria only when their file
+// flags were given.
+func applyScenarioUpdate(cat *writeCatalog, idx int, fs *flag.FlagSet, desc, procF, accF, process, acceptance, name string, stderr io.Writer) int {
+	if idx < 0 {
+		fmt.Fprintf(stderr, "of scenario update: %q not found (use add)\n", name)
+		return exitFail
+	}
+	s := &cat.Scenarios[idx]
+	if flagPassed(fs, "description") {
+		s.Description = desc
+	}
+	if procF != "" {
+		s.Process = process
+	}
+	if accF != "" {
+		s.AcceptanceCriteria = acceptance
+	}
 	return exitOK
 }
 
@@ -531,25 +555,17 @@ func normalizeExpectedJSONL(b []byte, scenarioID string) ([]byte, error) {
 		if obj == nil { // a bare `null` line unmarshals to a nil map with no error
 			return nil, fmt.Errorf("line %d is JSON null, not an object", i+1)
 		}
-		if metaLine == nil {
-			// Meta line: force the FK + a default schema_version, then re-emit
-			// WITHOUT HTML-escaping so it matches the file's literal style (the
-			// rest of replaydata is not >-escaped); otherwise a re-write
-			// would churn every < > & in source/notes into escapes.
-			obj["scenario_id"], _ = json.Marshal(scenarioID)
-			if _, ok := obj["schema_version"]; !ok {
-				obj["schema_version"] = json.RawMessage("1")
-			}
-			enc, err := marshalNoEscape(obj)
-			if err != nil {
-				return nil, err
-			}
-			metaLine = enc
-			out = append(out, string(enc))
+		if metaLine != nil {
+			out = append(out, ln) // phase line — verbatim
+			phaseLines = append(phaseLines, json.RawMessage(ln))
 			continue
 		}
-		out = append(out, ln) // phase line — verbatim
-		phaseLines = append(phaseLines, json.RawMessage(ln))
+		enc, err := buildMetaLine(obj, scenarioID)
+		if err != nil {
+			return nil, err
+		}
+		metaLine = enc
+		out = append(out, string(enc))
 	}
 	if metaLine == nil {
 		return nil, fmt.Errorf("expected.jsonl has no meta line (empty or whitespace-only file)")
@@ -558,6 +574,19 @@ func normalizeExpectedJSONL(b []byte, scenarioID string) ([]byte, error) {
 		return nil, err
 	}
 	return []byte(strings.Join(out, "\n") + "\n"), nil
+}
+
+// buildMetaLine forces the FK + a default schema_version onto the
+// expected.jsonl meta line (the first non-empty line) and re-emits it WITHOUT
+// HTML-escaping so it matches the file's literal style (the rest of
+// replaydata is not >-escaped); otherwise a re-write would churn every
+// < > & in source/notes into escapes.
+func buildMetaLine(obj map[string]json.RawMessage, scenarioID string) (json.RawMessage, error) {
+	obj["scenario_id"], _ = json.Marshal(scenarioID)
+	if _, ok := obj["schema_version"]; !ok {
+		obj["schema_version"] = json.RawMessage("1")
+	}
+	return marshalNoEscape(obj)
 }
 
 // marshalNoEscape encodes v as compact JSON without Go's default HTML escaping

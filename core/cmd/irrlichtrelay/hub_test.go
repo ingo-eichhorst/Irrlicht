@@ -47,6 +47,107 @@ func dial(t *testing.T, wsURL string) *websocket.Conn {
 	return c
 }
 
+// connectClient dials wsURL and sends a client hello (token may be "" when
+// auth is off), failing the test if the write errors.
+func connectClient(t *testing.T, wsURL, token string) *websocket.Conn {
+	t.Helper()
+	c := dial(t, wsURL)
+	if err := c.WriteJSON(relay.Hello{Type: relay.MsgHello, ProtocolVersion: relay.ProtocolVersion, Role: relay.RoleClient, Token: token}); err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+// connectDaemon dials wsURL and sends a daemon hello, returning the
+// connection and the parsed hello_ack for the caller to assert on.
+func connectDaemon(t *testing.T, wsURL, daemonID, label string) (*websocket.Conn, relay.HelloAck) {
+	t.Helper()
+	d := dial(t, wsURL)
+	if err := d.WriteJSON(relay.Hello{
+		Type: relay.MsgHello, ProtocolVersion: relay.ProtocolVersion,
+		Role: relay.RoleDaemon, DaemonID: daemonID, DaemonLabel: label,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var ack relay.HelloAck
+	if err := d.ReadJSON(&ack); err != nil {
+		t.Fatal(err)
+	}
+	return d, ack
+}
+
+// connectDaemonWithSession dials wsURL, sends a daemon hello (optionally
+// bearer token-authenticated), and pushes a one-session daemon_snapshot — the
+// connect-and-seed pattern used to test workspace isolation between two
+// same-daemon-id tenants.
+func connectDaemonWithSession(t *testing.T, wsURL, token, sid, proj string) *websocket.Conn {
+	t.Helper()
+	d := dial(t, wsURL)
+	if err := d.WriteJSON(relay.Hello{
+		Type: relay.MsgHello, ProtocolVersion: relay.ProtocolVersion,
+		Role: relay.RoleDaemon, DaemonID: "d1", DaemonLabel: "host", Token: token,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var ack relay.HelloAck
+	if err := d.ReadJSON(&ack); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.WriteJSON(relay.DaemonSnapshot{
+		Type:     relay.MsgDaemonSnapshot,
+		Sessions: []*session.SessionState{{SessionID: sid, State: "working", ProjectName: proj}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return d
+}
+
+// waitForDaemonDisconnect reads frames from c until daemonID's disconnect
+// status arrives, failing the test if that never happens within 2s. Every
+// frame is also passed to onFrame first (when non-nil), so callers can assert
+// on other traffic — e.g. no unexpected session_deleted — while waiting.
+func waitForDaemonDisconnect(t *testing.T, c *websocket.Conn, daemonID string, onFrame func(data []byte)) {
+	t.Helper()
+	sawDisconnect := false
+	deadline := time.Now().Add(2 * time.Second)
+	for !sawDisconnect && time.Now().Before(deadline) {
+		c.SetReadDeadline(time.Now().Add(2 * time.Second))
+		_, data, err := c.ReadMessage()
+		if err != nil {
+			t.Fatalf("reading after daemon close: %v", err)
+		}
+		if onFrame != nil {
+			onFrame(data)
+		}
+		if relay.FrameType(data) == relay.MsgDaemonStatus {
+			var ds relay.DaemonStatus
+			mustJSON(t, data, &ds)
+			if ds.DaemonID == daemonID && ds.Status == relay.StatusDisconnected {
+				sawDisconnect = true
+			}
+		}
+	}
+	if !sawDisconnect {
+		t.Fatal("never observed the daemon disconnect status")
+	}
+}
+
+// rejectSessionDeleted returns a waitForDaemonDisconnect onFrame callback
+// that fails the test if a session_deleted push for sid arrives — used to
+// prove disconnect fades rows rather than deleting them (#540).
+func rejectSessionDeleted(t *testing.T, sid string) func(data []byte) {
+	return func(data []byte) {
+		if relay.FrameType(data) != relay.MsgPush {
+			return
+		}
+		var p relay.Push
+		mustJSON(t, data, &p)
+		if p.Msg.Type == outbound.PushTypeDeleted && p.Msg.Session != nil && p.Msg.Session.SessionID == sid {
+			t.Fatal("unexpected session_deleted on disconnect — rows must fade, not delete (#540)")
+		}
+	}
+}
+
 // readUntil reads frames until one of the wanted type arrives, so a test is
 // robust to interleaved control/other frames.
 func readUntil(t *testing.T, c *websocket.Conn, typ string) []byte {
@@ -124,10 +225,7 @@ func TestRelayRoundTrip(t *testing.T) {
 	wsURL, baseURL := newTestServer(t)
 
 	// Client connects first — no daemons yet, so the snapshot is empty.
-	client := dial(t, wsURL)
-	if err := client.WriteJSON(relay.Hello{Type: relay.MsgHello, ProtocolVersion: relay.ProtocolVersion, Role: relay.RoleClient}); err != nil {
-		t.Fatal(err)
-	}
+	client := connectClient(t, wsURL, "")
 	var snap relay.Snapshot
 	mustJSON(t, readUntil(t, client, relay.MsgSnapshot), &snap)
 	if len(snap.Daemons) != 0 {
@@ -135,16 +233,9 @@ func TestRelayRoundTrip(t *testing.T) {
 	}
 
 	// Daemon connects, handshakes, and reconciles one session.
-	daemon := dial(t, wsURL)
-	if err := daemon.WriteJSON(relay.Hello{
-		Type: relay.MsgHello, ProtocolVersion: relay.ProtocolVersion,
-		Role: relay.RoleDaemon, DaemonID: "d1", DaemonLabel: "laptop",
-	}); err != nil {
-		t.Fatal(err)
-	}
-	var ack relay.HelloAck
-	if err := daemon.ReadJSON(&ack); err != nil || ack.Type != relay.MsgHelloAck || ack.AcceptedVersion != relay.ProtocolVersion {
-		t.Fatalf("hello_ack: err=%v ack=%+v", err, ack)
+	daemon, ack := connectDaemon(t, wsURL, "d1", "laptop")
+	if ack.Type != relay.MsgHelloAck || ack.AcceptedVersion != relay.ProtocolVersion {
+		t.Fatalf("hello_ack: ack=%+v", ack)
 	}
 	if err := daemon.WriteJSON(relay.DaemonSnapshot{
 		Type:     relay.MsgDaemonSnapshot,
@@ -188,25 +279,7 @@ func TestRelayRoundTrip(t *testing.T) {
 
 	// Daemon drops → the relay deletes its rows and announces disconnect.
 	daemon.Close()
-	sawDisconnect := false
-	deadline := time.Now().Add(2 * time.Second)
-	for !sawDisconnect && time.Now().Before(deadline) {
-		client.SetReadDeadline(time.Now().Add(2 * time.Second))
-		_, data, err := client.ReadMessage()
-		if err != nil {
-			t.Fatalf("reading after daemon close: %v", err)
-		}
-		if relay.FrameType(data) == relay.MsgDaemonStatus {
-			var d relay.DaemonStatus
-			mustJSON(t, data, &d)
-			if d.DaemonID == "d1" && d.Status == relay.StatusDisconnected {
-				sawDisconnect = true
-			}
-		}
-	}
-	if !sawDisconnect {
-		t.Fatal("never observed the daemon disconnect status")
-	}
+	waitForDaemonDisconnect(t, client, "d1", nil)
 }
 
 func TestRelayReplaysCacheToLateClient(t *testing.T) {
@@ -248,23 +321,10 @@ func TestRelayReplaysCacheToLateClient(t *testing.T) {
 func TestRelayDaemonDisconnectKeepsRowsClientSide(t *testing.T) {
 	wsURL, baseURL := newTestServer(t)
 
-	client := dial(t, wsURL)
-	if err := client.WriteJSON(relay.Hello{Type: relay.MsgHello, ProtocolVersion: relay.ProtocolVersion, Role: relay.RoleClient}); err != nil {
-		t.Fatal(err)
-	}
+	client := connectClient(t, wsURL, "")
 	readUntil(t, client, relay.MsgSnapshot)
 
-	daemon := dial(t, wsURL)
-	if err := daemon.WriteJSON(relay.Hello{
-		Type: relay.MsgHello, ProtocolVersion: relay.ProtocolVersion,
-		Role: relay.RoleDaemon, DaemonID: "d1", DaemonLabel: "laptop",
-	}); err != nil {
-		t.Fatal(err)
-	}
-	var ack relay.HelloAck
-	if err := daemon.ReadJSON(&ack); err != nil {
-		t.Fatal(err)
-	}
+	daemon, _ := connectDaemon(t, wsURL, "d1", "laptop")
 	if err := daemon.WriteJSON(relay.DaemonSnapshot{
 		Type:     relay.MsgDaemonSnapshot,
 		Sessions: []*session.SessionState{{SessionID: "s1", State: "working", ProjectName: "proj"}},
@@ -284,32 +344,7 @@ func TestRelayDaemonDisconnectKeepsRowsClientSide(t *testing.T) {
 	// session_deleted (#540 "fade, don't delete"): clients keep the rows and
 	// decide how to present them. The cache is still evicted.
 	daemon.Close()
-	sawDisconnect := false
-	deadline := time.Now().Add(2 * time.Second)
-	for !sawDisconnect && time.Now().Before(deadline) {
-		client.SetReadDeadline(time.Now().Add(2 * time.Second))
-		_, data, err := client.ReadMessage()
-		if err != nil {
-			t.Fatalf("reading after daemon close: %v", err)
-		}
-		switch relay.FrameType(data) {
-		case relay.MsgPush:
-			var p relay.Push
-			mustJSON(t, data, &p)
-			if p.Msg.Type == outbound.PushTypeDeleted && p.Msg.Session != nil && p.Msg.Session.SessionID == "s1" {
-				t.Fatal("unexpected session_deleted on disconnect — rows must fade, not delete (#540)")
-			}
-		case relay.MsgDaemonStatus:
-			var ds relay.DaemonStatus
-			mustJSON(t, data, &ds)
-			if ds.DaemonID == "d1" && ds.Status == relay.StatusDisconnected {
-				sawDisconnect = true
-			}
-		}
-	}
-	if !sawDisconnect {
-		t.Fatal("no daemon disconnect status")
-	}
+	waitForDaemonDisconnect(t, client, "d1", rejectSessionDeleted(t, "s1"))
 	if body := httpGet(t, baseURL+"/api/v1/sessions"); bytes.Contains(body, []byte(`"session_id":"s1"`)) {
 		t.Fatalf("s1 should be evicted from the cache after daemon disconnect, got %s", body)
 	}
@@ -431,17 +466,10 @@ func TestAuthRevokeClosesLiveDaemon(t *testing.T) {
 // even when a daemon in another workspace claims a colliding daemon_id.
 func TestWorkspaceIsolation(t *testing.T) {
 	tokensPath := filepath.Join(t.TempDir(), "tokens.json")
-	mint := func(label, ws string) string {
-		_, pt, err := issueToken(tokensPath, label, ws)
-		if err != nil {
-			t.Fatalf("issue %s: %v", label, err)
-		}
-		return pt
-	}
-	daemonA := mint("daemon-a", "ws-a")
-	clientA := mint("client-a", "ws-a")
-	daemonB := mint("daemon-b", "ws-b")
-	clientB := mint("client-b", "ws-b")
+	_, daemonA := mustIssueToken(t, tokensPath, "daemon-a", "ws-a")
+	_, clientA := mustIssueToken(t, tokensPath, "client-a", "ws-a")
+	_, daemonB := mustIssueToken(t, tokensPath, "daemon-b", "ws-b")
+	_, clientB := mustIssueToken(t, tokensPath, "client-b", "ws-b")
 
 	store, err := newAuthStore(tokensPath)
 	if err != nil {
@@ -458,46 +486,20 @@ func TestWorkspaceIsolation(t *testing.T) {
 	// Both daemons claim the SAME daemon_id "d1" but authenticate into different
 	// workspaces, so a colliding id must not let one tenant read or overwrite
 	// the other's slot.
-	connectDaemon := func(token, sid, proj string) *websocket.Conn {
-		d := dial(t, wsURL)
-		if err := d.WriteJSON(relay.Hello{
-			Type: relay.MsgHello, ProtocolVersion: relay.ProtocolVersion,
-			Role: relay.RoleDaemon, DaemonID: "d1", DaemonLabel: "host", Token: token,
-		}); err != nil {
-			t.Fatal(err)
-		}
-		var ack relay.HelloAck
-		if err := d.ReadJSON(&ack); err != nil {
-			t.Fatal(err)
-		}
-		if err := d.WriteJSON(relay.DaemonSnapshot{
-			Type:     relay.MsgDaemonSnapshot,
-			Sessions: []*session.SessionState{{SessionID: sid, State: "working", ProjectName: proj}},
-		}); err != nil {
-			t.Fatal(err)
-		}
-		return d
-	}
-	connectDaemon(daemonA, "sa", "proj-a")
-	dB := connectDaemon(daemonB, "sb", "proj-b")
+	connectDaemonWithSession(t, wsURL, daemonA, "sa", "proj-a")
+	dB := connectDaemonWithSession(t, wsURL, daemonB, "sb", "proj-b")
 	// Let both snapshots ingest before the clients connect (the replay path).
 	time.Sleep(50 * time.Millisecond)
 
 	// Client A replays only ws-a's session, never ws-b's.
-	ca := dial(t, wsURL)
-	if err := ca.WriteJSON(relay.Hello{Type: relay.MsgHello, ProtocolVersion: relay.ProtocolVersion, Role: relay.RoleClient, Token: clientA}); err != nil {
-		t.Fatal(err)
-	}
+	ca := connectClient(t, wsURL, clientA)
 	var p relay.Push
 	mustJSON(t, readUntil(t, ca, relay.MsgPush), &p)
 	if p.Msg.Session == nil || p.Msg.Session.SessionID != "sa" {
 		t.Fatalf("client A replay = %+v; want session sa", p.Msg.Session)
 	}
 
-	cb := dial(t, wsURL)
-	if err := cb.WriteJSON(relay.Hello{Type: relay.MsgHello, ProtocolVersion: relay.ProtocolVersion, Role: relay.RoleClient, Token: clientB}); err != nil {
-		t.Fatal(err)
-	}
+	cb := connectClient(t, wsURL, clientB)
 	mustJSON(t, readUntil(t, cb, relay.MsgPush), &p)
 	if p.Msg.Session == nil || p.Msg.Session.SessionID != "sb" {
 		t.Fatalf("client B replay = %+v; want session sb", p.Msg.Session)

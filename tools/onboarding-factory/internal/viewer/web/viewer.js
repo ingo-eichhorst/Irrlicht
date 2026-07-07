@@ -906,6 +906,108 @@ function renderSpecPanel(spec) {
   return panel;
 }
 
+// _agentPlanHeaderHTML builds the per-agent card heading: agent name,
+// coverage badge, and the supports/daemon/driver summary line.
+function _agentPlanHeaderHTML(agent, cov) {
+  const sup = cov?.agent_supports || "unknown";
+  const daemon = cov?.daemon_capability || "unknown";
+  const driver = cov?.driver_capability || "ready";
+  const display = cov?.display_state || "unknown";
+  const {label, bg, fg} = coverageBadge(display);
+  return `
+    <h3 style="margin-top:0; display: flex; align-items: center; gap: 8px;">
+      ${agent}
+      <span style="background: ${bg}; color: ${fg}; padding: 1px 8px; border-radius: 10px; font-size: 11px; font-weight: 600;">${label}</span>
+    </h3>
+    <div style="font-size: 11px; color: #555; margin-bottom: 6px;">
+      agent_supports: <b>${sup}</b> · daemon: <b>${daemon}</b> · driver: <b>${driver}</b>
+    </div>
+  `;
+}
+
+// _renderRecipeDriverHTML renders the driver-specific block (interactive
+// script vs headless prompt vs neither) for one agent's by_adapter entry.
+function _renderRecipeDriverHTML(agent, a, idleTag) {
+  if (Array.isArray(a.script)) {
+    let html = `<div style="font-size: 11px; color: #666; margin: 8px 0 4px;">
+        <b>Driver:</b> Interactive (tmux REPL) — <code>drive-${agent}-interactive.sh</code>${idleTag}
+      </div>`;
+    html += renderStepScript(a.script);
+    return html;
+  }
+  if (a.prompt) {
+    return `<div style="font-size: 11px; color: #666; margin: 8px 0 4px;">
+        <b>Driver:</b> Headless (<code>--print</code>) — <code>drive-${agent}.sh</code>${idleTag}
+      </div>
+      <pre style="background: #1e1e1e; color: #d4d4d4; padding: 8px; border-radius: 4px; font-size: 11px; white-space: pre-wrap; margin: 0;">${escapeHtml(a.prompt)}</pre>`;
+  }
+  return `<div style="font-size: 12px; color: #888;">Recipe entry exists but has no prompt or script.</div>`;
+}
+
+// _renderRecipeMetaHTML renders the optional timeout/settings footer line.
+function _renderRecipeMetaHTML(a) {
+  const timeout = a.timeout_seconds;
+  const settings = a.settings || {};
+  const meta = [];
+  if (typeof timeout === "number") meta.push(`timeout: ${timeout}s`);
+  if (Object.keys(settings).length) meta.push(`settings: <code>${escapeHtml(JSON.stringify(settings))}</code>`);
+  if (!meta.length) return "";
+  return `<div style="font-size: 11px; color: #888; margin-top: 6px;">${meta.join(" · ")}</div>`;
+}
+
+// _renderRecipeChecklistsHTML renders the preconditions/setup/verify
+// checklists — only present on recipes authored by the per-cell workflow.
+function _renderRecipeChecklistsHTML(a) {
+  let html = "";
+  if (Array.isArray(a.preconditions) && a.preconditions.length) {
+    html += renderChecklistBlock("Preconditions", a.preconditions, "□");
+  }
+  if (Array.isArray(a.setup) && a.setup.length) {
+    html += renderChecklistBlock("Setup (run-cell.sh handles this)", a.setup, "•");
+  }
+  if (Array.isArray(a.verify) && a.verify.length) {
+    html += renderChecklistBlock("Verify after recording", a.verify, "□");
+  }
+  return html;
+}
+
+// _renderRecipeSectionHTML composes the full recipe section per agent. Two
+// by_adapter shapes in scenarios.json:
+//   - by_adapter.<agent>.prompt → headless driver (drive-<adapter>.sh)
+//   - by_adapter.<agent>.script → interactive tmux driver (drive-<adapter>-interactive.sh)
+// Falls back to explanatory copy when the agent (or the recipe itself)
+// has no entry yet.
+function _renderRecipeSectionHTML(sc, agent, recipe) {
+  const entry = recipe?.by_adapter?.[agent];
+  if (!entry) {
+    return recipe
+      ? `<div style="font-size: 12px; color: #888; padding: 6px 0;">
+      No <code>by_adapter.${agent}</code> entry on the recipe — adapter doesn't
+      currently drive this scenario. Either the capability is missing, or the
+      recipe just hasn't been written yet.
+    </div>`
+      : `<div style="font-size: 12px; color: #888; padding: 6px 0;">
+      No recording recipe wired to this scenario (no <code>coverage_id: "${sc.id}"</code>
+      in scenarios.json yet).
+    </div>`;
+  }
+  // Idle-only badge when the recipe is observation-only (no prompts sent).
+  const idleTag = recipe.idle_only
+    ? ` <span style="background: #e0eaff; color: #1f3d8a; padding: 1px 6px; border-radius: 8px; font-size: 10px; font-weight: 600; margin-left: 6px;">idle observation</span>`
+    : "";
+  return _renderRecipeDriverHTML(agent, entry, idleTag) +
+    _renderRecipeMetaHTML(entry) +
+    _renderRecipeChecklistsHTML(entry);
+}
+
+// _findAgentRecording resolves the on-disk recording for one (scenario,
+// agent) pair. Variant-folder aware: falls back to the recipe name when
+// folder_by_agent doesn't have an override for this agent.
+function _findAgentRecording(recipe, agent) {
+  const recFolder = recipe?.folder_by_agent?.[agent] || recipe?.name;
+  return scenariosList.find(r => r.subtree === "scenarios" && r.agent === agent && recFolder && r.id === recFolder);
+}
+
 // buildAgentPlanPanel composes one card per agent showing how this
 // scenario is (or would be) recorded for that agent: coverage verdict,
 // notes, driver choice, step-script or prompt, and any existing
@@ -916,85 +1018,15 @@ function buildAgentPlanPanel(sc, agent, recipe) {
   panel.style.marginBottom = "12px";
 
   const cov = sc.coverage?.[agent];
-  const sup = cov?.agent_supports || "unknown";
-  const daemon = cov?.daemon_capability || "unknown";
-  const driver = cov?.driver_capability || "ready";
-  const display = cov?.display_state || "unknown";
-  const {label, bg, fg} = coverageBadge(display);
-
-  const headerHTML = `
-    <h3 style="margin-top:0; display: flex; align-items: center; gap: 8px;">
-      ${agent}
-      <span style="background: ${bg}; color: ${fg}; padding: 1px 8px; border-radius: 10px; font-size: 11px; font-weight: 600;">${label}</span>
-    </h3>
-    <div style="font-size: 11px; color: #555; margin-bottom: 6px;">
-      agent_supports: <b>${sup}</b> · daemon: <b>${daemon}</b> · driver: <b>${driver}</b>
-    </div>
-  `;
-  let html = headerHTML;
+  let html = _agentPlanHeaderHTML(agent, cov);
   if (cov?.notes) {
     html += `<div style="font-size: 12px; color: #444; padding: 6px 8px; background: #fafaf2; border-left: 3px solid #d8d6cc; margin-bottom: 8px;">${escapeHtml(cov.notes)}</div>`;
   }
 
-  // Recipe section per agent. Two shapes in scenarios.json:
-  //   - by_adapter.<agent>.prompt → headless driver (drive-<adapter>.sh)
-  //   - by_adapter.<agent>.script → interactive tmux driver (drive-<adapter>-interactive.sh)
-  if (recipe?.by_adapter?.[agent]) {
-    const a = recipe.by_adapter[agent];
-    // Idle-only badge when the recipe is observation-only (no prompts sent).
-    const idleTag = recipe.idle_only
-      ? ` <span style="background: #e0eaff; color: #1f3d8a; padding: 1px 6px; border-radius: 8px; font-size: 10px; font-weight: 600; margin-left: 6px;">idle observation</span>`
-      : "";
-    if (Array.isArray(a.script)) {
-      html += `<div style="font-size: 11px; color: #666; margin: 8px 0 4px;">
-        <b>Driver:</b> Interactive (tmux REPL) — <code>drive-${agent}-interactive.sh</code>${idleTag}
-      </div>`;
-      html += renderStepScript(a.script);
-    } else if (a.prompt) {
-      html += `<div style="font-size: 11px; color: #666; margin: 8px 0 4px;">
-        <b>Driver:</b> Headless (<code>--print</code>) — <code>drive-${agent}.sh</code>${idleTag}
-      </div>`;
-      html += `<pre style="background: #1e1e1e; color: #d4d4d4; padding: 8px; border-radius: 4px; font-size: 11px; white-space: pre-wrap; margin: 0;">${escapeHtml(a.prompt)}</pre>`;
-    } else {
-      html += `<div style="font-size: 12px; color: #888;">Recipe entry exists but has no prompt or script.</div>`;
-    }
-    const timeout = a.timeout_seconds;
-    const settings = a.settings || {};
-    const meta = [];
-    if (typeof timeout === "number") meta.push(`timeout: ${timeout}s`);
-    if (Object.keys(settings).length) meta.push(`settings: <code>${escapeHtml(JSON.stringify(settings))}</code>`);
-    if (meta.length) {
-      html += `<div style="font-size: 11px; color: #888; margin-top: 6px;">${meta.join(" · ")}</div>`;
-    }
-    // Preconditions / setup / verify — only present on recipes that
-    // have been authored by the per-cell workflow (see recipe/SKILL.md).
-    if (Array.isArray(a.preconditions) && a.preconditions.length) {
-      html += renderChecklistBlock("Preconditions", a.preconditions, "□");
-    }
-    if (Array.isArray(a.setup) && a.setup.length) {
-      html += renderChecklistBlock("Setup (run-cell.sh handles this)", a.setup, "•");
-    }
-    if (Array.isArray(a.verify) && a.verify.length) {
-      html += renderChecklistBlock("Verify after recording", a.verify, "□");
-    }
-  } else if (recipe) {
-    html += `<div style="font-size: 12px; color: #888; padding: 6px 0;">
-      No <code>by_adapter.${agent}</code> entry on the recipe — adapter doesn't
-      currently drive this scenario. Either the capability is missing, or the
-      recipe just hasn't been written yet.
-    </div>`;
-  } else {
-    html += `<div style="font-size: 12px; color: #888; padding: 6px 0;">
-      No recording recipe wired to this scenario (no <code>coverage_id: "${sc.id}"</code>
-      in scenarios.json yet).
-    </div>`;
-  }
+  html += _renderRecipeSectionHTML(sc, agent, recipe);
 
-  // Existing recording link if one is committed. Resolve the on-disk folder
-  // per-agent (variant-folder aware) so cells whose folder != coverage_id still
-  // link their recording; fall back to the recipe name.
-  const recFolder = recipe?.folder_by_agent?.[agent] || recipe?.name;
-  const rec = scenariosList.find(r => r.subtree === "scenarios" && r.agent === agent && recFolder && r.id === recFolder);
+  // Existing recording link if one is committed.
+  const rec = _findAgentRecording(recipe, agent);
   if (rec) {
     html += `<div style="margin-top: 8px;">`;
     html += `<button class="open-rec" data-agent="${agent}" data-id="${rec.id}" style="background: #1f56a8; color: white; border: 0; padding: 4px 10px; border-radius: 3px; cursor: pointer; font-size: 11px;">↻ Open recording: ${agent}/${rec.id}</button>`;
@@ -1162,6 +1194,130 @@ function _driverBadge(value) {
 //   scenarioID — coverage_id for the scenario detail link
 //   cov   — one entry from coverage[<agent>] (assessment + pipeline + measurement)
 //   rec   — recording lookup entry from recIndex (or undefined)
+// _appendPipelineTailSegments appends the four right-hand segments
+// (Recipe / Spec / Recordings / Validation) — or, when the cell is
+// blocked (agent_supports=no), four dim disabled placeholders so the
+// cell width stays consistent across rows.
+function _appendPipelineTailSegments(wrap, blocked, pipe, meas, jump) {
+  if (blocked) {
+    wrap.appendChild(_pipeBtn("·", "transparent", "#bbb", null, true,
+      "Pipeline frozen — agent_supports=no"));
+    wrap.appendChild(_pipeBtn("·", "transparent", "#bbb", null, true, ""));
+    wrap.appendChild(_pipeBtn("·", "transparent", "#bbb", null, true, ""));
+    wrap.appendChild(_pipeBtn("·", "transparent", "#bbb", null, true, ""));
+    return;
+  }
+  const recipe = pipe.recipe || {};
+  const spec = pipe.spec || {};
+  const rcs = pipe.recordings || {};
+  // Recipe
+  wrap.appendChild(recipe.authored
+    ? _pipeBtn("✎", "#d6f0d4", "#1f5a1d", jump("recipe"), false,
+        `Recipe authored (${recipe.step_count} steps)`)
+    : _pipeBtn("·", "transparent", "#bbb", jump("recipe"), false,
+        "Recipe — not authored yet"));
+  // Spec
+  wrap.appendChild(spec.authored
+    ? _pipeBtn("§", "#d6f0d4", "#1f5a1d", jump("spec"), false,
+        `Spec authored (${spec.phase_count} phases)`)
+    : _pipeBtn("·", "transparent", "#bbb", jump("spec"), false,
+        "Spec — not authored yet"));
+  // Recordings count (latest counts as 1; archive_count is additional)
+  const totalRecs = (rcs.latest ? 1 : 0) + (rcs.archive_count || 0);
+  wrap.appendChild(totalRecs > 0
+    ? _pipeBtn(String(totalRecs), "#d6f0d4", "#1f5a1d", jump("recordings"), false,
+        `${totalRecs} recording${totalRecs === 1 ? "" : "s"}`)
+    : _pipeBtn("·", "transparent", "#bbb", jump("recordings"), false,
+        "No recordings yet"));
+  // Validation
+  const v = _validationGlyph(meas.status);
+  wrap.appendChild(v
+    ? _pipeBtn(v.label, v.bg, v.fg, jump("validation"), false,
+        `Validation: ${meas.status}`)
+    : _pipeBtn("·", "transparent", "#bbb", jump("validation"), false,
+        "Validation — no recording yet"));
+}
+
+// _DRIFT_STYLES / _DRIFT_TOOLTIP_NOTES key the same three drift kinds to
+// the pipeline strip's outline color and its tooltip note, so the two
+// stay in lockstep by construction instead of by re-deriving the kind
+// from a rendered CSS string (as the pre-refactor code did).
+const _DRIFT_STYLES = {
+  regression: {border: "1px solid #c0392b", background: "#fff5f5"},
+  flag_drop: {border: "1px solid #1c3f7a", background: "#f0f5ff"},
+  stale_verdict: {border: "1px solid #d68a2a", background: "#fffaf0"},
+};
+const _DRIFT_TOOLTIP_NOTES = {
+  regression: "⚠ regression: daemon=full/driver=ready but recording fails",
+  flag_drop: "↑ flag drop: marked daemon=bug / known_failing but now passes",
+  stale_verdict: "⚠ verdict may be stale: marked blocked/unobservable but recording passes",
+};
+
+// _computeDriftKind classifies drift between the assessed capability
+// verdict and the measured recording outcome:
+//   regression    = expected to observe cleanly (full+ready) but the recording fails
+//   flag_drop     = marked daemon=bug or known_failing yet the recording now passes
+//                   (the bug/known_failing verdict is stale — drop it)
+//   stale_verdict = marked blocked/unobservable yet a recording passes clean
+//                   (capability verdict looks stale)
+// Returns null when there is no drift to flag.
+function _computeDriftKind(daemon, driver, meas) {
+  const capable = (daemon === "full" && driver === "ready");
+  const verdictBlocks = (daemon === "incapable" || daemon === "bug" ||
+    String(driver).startsWith("gap:"));
+  if (meas.status === "fail" || (meas.status === "known_failing" && capable)) {
+    return "regression";
+  }
+  if (meas.status === "known_failing_now_passing" ||
+      (meas.status === "pass" && daemon === "bug")) {
+    return "flag_drop";
+  }
+  if (meas.status === "pass" && verdictBlocks) {
+    return "stale_verdict";
+  }
+  return null;
+}
+
+// _buildPipelineStageLines renders the Recipe/Spec/Recordings/Validation
+// tooltip lines shown when the cell isn't blocked.
+function _buildPipelineStageLines(pipe, meas) {
+  const recipe = pipe.recipe || {};
+  const spec = pipe.spec || {};
+  const rcs = pipe.recordings || {};
+  const recipeStatus = recipe.authored ? `authored (${recipe.step_count} steps)` : "not authored yet";
+  const specStatus = spec.authored ? `authored (${spec.phase_count} phases)` : "not authored yet";
+  const lines = [`Recipe: ${recipeStatus}`, `Spec:   ${specStatus}`];
+  const totalRecs = (rcs.latest ? 1 : 0) + (rcs.archive_count || 0);
+  if (totalRecs > 0) {
+    const parts = [];
+    if (rcs.latest) parts.push("1 latest");
+    if (rcs.archive_count > 0) parts.push(`${rcs.archive_count} archived`);
+    lines.push(`Recordings: ${totalRecs} (${parts.join(" + ")})`);
+  } else {
+    lines.push(`Recordings: none yet`);
+  }
+  if (meas.status && meas.status !== "no_recording" && meas.status !== "no_expected") {
+    lines.push(`Validation: ${meas.status}${meas.summary ? " — " + meas.summary : ""}`);
+  }
+  return lines;
+}
+
+// _buildPipelineTooltip composes the full per-stage tooltip text for a
+// pipeline strip.
+function _buildPipelineTooltip(agent, scenarioID, cov, sup, daemon, driver, display, blocked, pipe, meas, driftKind) {
+  const lines = [`${agent} × ${scenarioID}`];
+  lines.push(`Assessment: supports=${sup}, daemon=${daemon}, driver=${driver} → ${_displayMeta(display).text}`);
+  if (cov.notes) lines.push(`  ${cov.notes}`);
+  if (blocked) {
+    lines.push(`(pipeline frozen — agent_supports=no)`);
+  } else {
+    lines.push(..._buildPipelineStageLines(pipe, meas));
+  }
+  if (driftKind) lines.push(_DRIFT_TOOLTIP_NOTES[driftKind]);
+  lines.push(`↻ click a segment to jump to its section`);
+  return lines.join("\n");
+}
+
 function renderPipelineStrip(agent, scenarioID, cov, rec) {
   const sup = cov.agent_supports || "unknown";
   const daemon = cov.daemon_capability || "unknown";
@@ -1207,102 +1363,17 @@ function renderPipelineStrip(agent, scenarioID, cov, rec) {
     jump("observes"), false, `daemon: ${daemon} — can the daemon observe it`));
   wrap.appendChild(_pipeBtn(driverChip.label, driverChip.bg, driverChip.fg,
     jump("observes"), false, `driver: ${driver} — can the harness drive it`));
-  if (blocked) {
-    // Four disabled placeholders so the cell width stays consistent
-    // across rows when supports=no freezes the pipeline.
-    wrap.appendChild(_pipeBtn("·", "transparent", "#bbb", null, true,
-      "Pipeline frozen — agent_supports=no"));
-    wrap.appendChild(_pipeBtn("·", "transparent", "#bbb", null, true, ""));
-    wrap.appendChild(_pipeBtn("·", "transparent", "#bbb", null, true, ""));
-    wrap.appendChild(_pipeBtn("·", "transparent", "#bbb", null, true, ""));
-  } else {
-    const recipe = pipe.recipe || {};
-    const spec = pipe.spec || {};
-    const rcs = pipe.recordings || {};
-    // Recipe
-    wrap.appendChild(recipe.authored
-      ? _pipeBtn("✎", "#d6f0d4", "#1f5a1d", jump("recipe"), false,
-          `Recipe authored (${recipe.step_count} steps)`)
-      : _pipeBtn("·", "transparent", "#bbb", jump("recipe"), false,
-          "Recipe — not authored yet"));
-    // Spec
-    wrap.appendChild(spec.authored
-      ? _pipeBtn("§", "#d6f0d4", "#1f5a1d", jump("spec"), false,
-          `Spec authored (${spec.phase_count} phases)`)
-      : _pipeBtn("·", "transparent", "#bbb", jump("spec"), false,
-          "Spec — not authored yet"));
-    // Recordings count (latest counts as 1; archive_count is additional)
-    const totalRecs = (rcs.latest ? 1 : 0) + (rcs.archive_count || 0);
-    wrap.appendChild(totalRecs > 0
-      ? _pipeBtn(String(totalRecs), "#d6f0d4", "#1f5a1d", jump("recordings"), false,
-          `${totalRecs} recording${totalRecs === 1 ? "" : "s"}`)
-      : _pipeBtn("·", "transparent", "#bbb", jump("recordings"), false,
-          "No recordings yet"));
-    // Validation
-    const v = _validationGlyph(meas.status);
-    wrap.appendChild(v
-      ? _pipeBtn(v.label, v.bg, v.fg, jump("validation"), false,
-          `Validation: ${meas.status}`)
-      : _pipeBtn("·", "transparent", "#bbb", jump("validation"), false,
-          "Validation — no recording yet"));
+  _appendPipelineTailSegments(wrap, blocked, pipe, meas, jump);
+
+  // Drift outline — see _computeDriftKind for the three cases.
+  const driftKind = _computeDriftKind(daemon, driver, meas);
+  if (driftKind) {
+    const style = _DRIFT_STYLES[driftKind];
+    wrap.style.border = style.border;
+    wrap.style.background = style.background;
   }
 
-  // Drift outlines — the verdict (capability) vs the measured recording:
-  //   red   = expected to observe cleanly (full+ready) but the recording fails
-  //   blue  = marked daemon=bug or known_failing yet the recording now passes
-  //           (the bug/known_failing verdict is stale — drop it)
-  //   amber = marked blocked/unobservable yet a recording passes clean
-  //           (capability verdict looks stale)
-  const capable = (daemon === "full" && driver === "ready");
-  const verdictBlocks = (daemon === "incapable" || daemon === "bug" ||
-    String(driver).startsWith("gap:"));
-  if (meas.status === "fail" || (meas.status === "known_failing" && capable)) {
-    wrap.style.border = "1px solid #c0392b";
-    wrap.style.background = "#fff5f5";
-  } else if (meas.status === "known_failing_now_passing" ||
-             (meas.status === "pass" && daemon === "bug")) {
-    wrap.style.border = "1px solid #1c3f7a";
-    wrap.style.background = "#f0f5ff";
-  } else if (meas.status === "pass" && verdictBlocks) {
-    wrap.style.border = "1px solid #d68a2a";
-    wrap.style.background = "#fffaf0";
-  }
-
-  // Tooltip with the per-stage detail
-  const lines = [`${agent} × ${scenarioID}`];
-  lines.push(`Assessment: supports=${sup}, daemon=${daemon}, driver=${driver} → ${_displayMeta(display).text}`);
-  if (cov.notes) lines.push(`  ${cov.notes}`);
-  if (!blocked) {
-    const recipe = pipe.recipe || {};
-    const spec = pipe.spec || {};
-    const rcs = pipe.recordings || {};
-    const recipeStatus = recipe.authored ? `authored (${recipe.step_count} steps)` : "not authored yet";
-    const specStatus = spec.authored ? `authored (${spec.phase_count} phases)` : "not authored yet";
-    lines.push(`Recipe: ${recipeStatus}`, `Spec:   ${specStatus}`);
-    const totalRecs = (rcs.latest ? 1 : 0) + (rcs.archive_count || 0);
-    if (totalRecs > 0) {
-      const parts = [];
-      if (rcs.latest) parts.push("1 latest");
-      if (rcs.archive_count > 0) parts.push(`${rcs.archive_count} archived`);
-      lines.push(`Recordings: ${totalRecs} (${parts.join(" + ")})`);
-    } else {
-      lines.push(`Recordings: none yet`);
-    }
-    if (meas.status && meas.status !== "no_recording" && meas.status !== "no_expected") {
-      lines.push(`Validation: ${meas.status}${meas.summary ? " — " + meas.summary : ""}`);
-    }
-  } else {
-    lines.push(`(pipeline frozen — agent_supports=no)`);
-  }
-  if (wrap.style.border?.includes("#c0392b")) {
-    lines.push(`⚠ regression: daemon=full/driver=ready but recording fails`);
-  } else if (wrap.style.border?.includes("#1c3f7a")) {
-    lines.push(`↑ flag drop: marked daemon=bug / known_failing but now passes`);
-  } else if (wrap.style.border?.includes("#d68a2a")) {
-    lines.push(`⚠ verdict may be stale: marked blocked/unobservable but recording passes`);
-  }
-  lines.push(`↻ click a segment to jump to its section`);
-  wrap.title = lines.join("\n");
+  wrap.title = _buildPipelineTooltip(agent, scenarioID, cov, sup, daemon, driver, display, blocked, pipe, meas, driftKind);
 
   return wrap;
 }
@@ -1352,20 +1423,85 @@ function _validationGlyph(status) {
 }
 
 
+// _collectDeclaredAdapters gathers every adapter slug that declares at
+// least one by_adapter entry across all scenarios, sorted for a stable
+// column order.
+function _collectDeclaredAdapters(scenarios) {
+  const adapterSet = new Set();
+  for (const sc of scenarios) {
+    for (const a of Object.keys(sc.by_adapter || {})) adapterSet.add(a);
+  }
+  return [...adapterSet].sort((a, b) => a.localeCompare(b));
+}
+
+// _buildScenarioRecIndex indexes committed scenario recordings by
+// "<agent>/<id>" for O(1) lookup while painting the matrix.
+function _buildScenarioRecIndex(recordings) {
+  const recIndex = new Map();
+  for (const r of recordings) {
+    if (r.subtree === "scenarios") recIndex.set(`${r.agent}/${r.id}`, r);
+  }
+  return recIndex;
+}
+
+// _buildScenarioMatrixCell paints one (scenario × adapter) cell: dim "—"
+// when the adapter doesn't declare this scenario, an open-recording ✓
+// button when it does and a recording is committed, or an amber "○"
+// when declared but not yet recorded.
+function _buildScenarioMatrixCell(sc, adapter, recIndex) {
+  const cell = document.createElement("td");
+  cell.style.textAlign = "center";
+  const declares = sc.by_adapter?.[adapter];
+  if (!declares) {
+    cell.textContent = "—";
+    cell.style.color = "#ccc";
+    cell.title = `${adapter}: not declared`;
+    return cell;
+  }
+  const rec = recIndex.get(`${adapter}/${sc.name}`);
+  if (!rec) {
+    cell.textContent = "○";
+    cell.style.color = "#c08a00";
+    cell.title = `${adapter}: declared but no recording committed`;
+    return cell;
+  }
+  const btn = document.createElement("button");
+  btn.textContent = "✓";
+  btn.title = `Open ${adapter}/${sc.name}`;
+  btn.style.cssText = "background: transparent; border: 0; color: #2a8d4f; font-size: 16px; cursor: pointer; padding: 0;";
+  btn.addEventListener("click", () => {
+    navigate(`#/recording/${rec.agent}/${rec.subtree}/${rec.id}`);
+  });
+  cell.appendChild(btn);
+  return cell;
+}
+
+// _buildScenarioMatrixRow paints one scenario's row: name, requires, then
+// one cell per adapter column.
+function _buildScenarioMatrixRow(sc, adapters, recIndex) {
+  const row = document.createElement("tr");
+  const nameCell = document.createElement("td");
+  nameCell.style.fontWeight = "600";
+  nameCell.textContent = sc.name;
+  if (sc.description) nameCell.title = sc.description;
+  row.appendChild(nameCell);
+  const reqCell = document.createElement("td");
+  reqCell.style.color = "#888";
+  reqCell.style.fontSize = "11px";
+  reqCell.textContent = (sc.requires || []).join(", ");
+  row.appendChild(reqCell);
+  for (const adapter of adapters) {
+    row.appendChild(_buildScenarioMatrixCell(sc, adapter, recIndex));
+  }
+  return row;
+}
+
 // renderScenariosMatrix paints the older 8×5 by_adapter view from
 // scenarios.json (fallback when .claude/skills/ir:onboard-agent/agent-scenarios-coverage.json
 // isn't reachable).
 function renderScenariosMatrix(detail) {
-  const adapterSet = new Set();
-  for (const sc of catalog.scenarios) {
-    for (const a of Object.keys(sc.by_adapter || {})) adapterSet.add(a);
-  }
-  const adapters = [...adapterSet].sort((a, b) => a.localeCompare(b));
-
-  const recIndex = new Map();
-  for (const r of scenariosList) {
-    if (r.subtree === "scenarios") recIndex.set(`${r.agent}/${r.id}`, r);
-  }
+  const adapters = _collectDeclaredAdapters(catalog.scenarios);
+  const recIndex = _buildScenarioRecIndex(scenariosList);
 
   const panel = document.createElement("div");
   panel.className = "panel";
@@ -1387,45 +1523,7 @@ function renderScenariosMatrix(detail) {
 
   const tbody = document.createElement("tbody");
   for (const sc of catalog.scenarios) {
-    const row = document.createElement("tr");
-    const nameCell = document.createElement("td");
-    nameCell.style.fontWeight = "600";
-    nameCell.textContent = sc.name;
-    if (sc.description) nameCell.title = sc.description;
-    row.appendChild(nameCell);
-    const reqCell = document.createElement("td");
-    reqCell.style.color = "#888";
-    reqCell.style.fontSize = "11px";
-    reqCell.textContent = (sc.requires || []).join(", ");
-    row.appendChild(reqCell);
-    for (const adapter of adapters) {
-      const cell = document.createElement("td");
-      cell.style.textAlign = "center";
-      const declares = sc.by_adapter?.[adapter];
-      if (!declares) {
-        cell.textContent = "—";
-        cell.style.color = "#ccc";
-        cell.title = `${adapter}: not declared`;
-      } else {
-        const rec = recIndex.get(`${adapter}/${sc.name}`);
-        if (rec) {
-          const btn = document.createElement("button");
-          btn.textContent = "✓";
-          btn.title = `Open ${adapter}/${sc.name}`;
-          btn.style.cssText = "background: transparent; border: 0; color: #2a8d4f; font-size: 16px; cursor: pointer; padding: 0;";
-          btn.addEventListener("click", () => {
-            navigate(`#/recording/${rec.agent}/${rec.subtree}/${rec.id}`);
-          });
-          cell.appendChild(btn);
-        } else {
-          cell.textContent = "○";
-          cell.style.color = "#c08a00";
-          cell.title = `${adapter}: declared but no recording committed`;
-        }
-      }
-      row.appendChild(cell);
-    }
-    tbody.appendChild(row);
+    tbody.appendChild(_buildScenarioMatrixRow(sc, adapters, recIndex));
   }
   table.appendChild(tbody);
   panel.appendChild(table);
@@ -1652,20 +1750,18 @@ function renderMeta(data) {
 //   - prose body (markdown rendered as preformatted text — headings
 //     read fine via the literal `##` prefix)
 //   - sources list with URL anchors where applicable
-function renderAssessment(a) {
-  // anchor "supports" — the pipeline-strip pillar segments (⚙ ◉ ▷) all land
-  // here (the panel's chips render the three pillars individually).
-  const p = panel("Assessment", "supports");
-  // Also tag with the observes alias so [data-anchor="observes"]
-  // resolves to the same panel.
-  p.dataset.anchorAlias = "observes";
-  // Dated subtitle.
+// _renderAssessmentSubtitle builds the "assessed <date>" subtitle line.
+function _renderAssessmentSubtitle(a) {
   const sub = document.createElement("div");
   sub.style.cssText = "font-size: 11px; color: #666; margin-bottom: 8px;";
   const when = a.assessed_at ? a.assessed_at.replace("T", " ").replace(/\.\d+Z?$/, "").replace(/Z$/, " UTC") : "date unknown";
   sub.textContent = `assessed ${when}`;
-  p.appendChild(sub);
-  // Verdict chips row.
+  return sub;
+}
+
+// _renderAssessmentVerdictRow builds the agent/daemon/driver verdict
+// chips row, plus an optional confidence pill when present.
+function _renderAssessmentVerdictRow(a) {
   const row = document.createElement("div");
   row.style.cssText = "display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 10px;";
   row.appendChild(_assessmentChip("Agent", a.agent_supports));
@@ -1677,69 +1773,97 @@ function renderAssessment(a) {
     conf.textContent = `confidence ${a.confidence.toFixed(2)}`;
     row.appendChild(conf);
   }
-  p.appendChild(row);
-  // Body — rendered Markdown (## / ### headings, - and 1. lists, **bold**,
-  // `code`). renderMarkdown escapes the prose first, so it cannot inject HTML.
-  if (a.body) {
-    const body = document.createElement("div");
-    body.className = "md-body";
-    body.innerHTML = renderMarkdown(a.body);
-    p.appendChild(body);
+  return row;
+}
+
+// _appendAssessmentBody appends the rendered-Markdown prose body, if any.
+// renderMarkdown escapes the prose first, so it cannot inject HTML.
+function _appendAssessmentBody(p, body) {
+  if (!body) return;
+  const el = document.createElement("div");
+  el.className = "md-body";
+  el.innerHTML = renderMarkdown(body);
+  p.appendChild(el);
+}
+
+// _appendCaveatsBlock appends the labelled caveats box — known
+// limitations / metric drifts the verdict doesn't capture but a reader
+// should know about. No-op when there are no caveats.
+function _appendCaveatsBlock(p, caveats) {
+  if (!Array.isArray(caveats) || caveats.length === 0) return;
+  const cavHead = document.createElement("div");
+  cavHead.style.cssText = "font-size: 11px; color: #666; margin-bottom: 4px;";
+  cavHead.textContent = "Caveats";
+  p.appendChild(cavHead);
+  const cavBox = document.createElement("ul");
+  cavBox.style.cssText = "margin: 0 0 10px 0; padding: 8px 10px 8px 28px; font-size: 12px; line-height: 1.5; color: #5a4500; background: #fff7e6; border: 1px solid #f5d886; border-radius: 4px;";
+  for (const c of caveats) {
+    const li = document.createElement("li");
+    li.textContent = c;
+    li.style.marginBottom = "4px";
+    cavBox.appendChild(li);
   }
-  // Caveats — known limitations / metric drifts the verdict doesn't
-  // capture but a reader should know about. Rendered as a labelled
-  // box above sources so they're visually prominent.
-  if (Array.isArray(a.caveats) && a.caveats.length > 0) {
-    const cavHead = document.createElement("div");
-    cavHead.style.cssText = "font-size: 11px; color: #666; margin-bottom: 4px;";
-    cavHead.textContent = "Caveats";
-    p.appendChild(cavHead);
-    const cavBox = document.createElement("ul");
-    cavBox.style.cssText = "margin: 0 0 10px 0; padding: 8px 10px 8px 28px; font-size: 12px; line-height: 1.5; color: #5a4500; background: #fff7e6; border: 1px solid #f5d886; border-radius: 4px;";
-    for (const c of a.caveats) {
-      const li = document.createElement("li");
-      li.textContent = c;
-      li.style.marginBottom = "4px";
-      cavBox.appendChild(li);
-    }
-    p.appendChild(cavBox);
+  p.appendChild(cavBox);
+}
+
+// _buildSourceListItem builds one <li> for the Sources list: a kind
+// label, a link (url sources) or code ref (everything else), and an
+// optional trailing note.
+function _buildSourceListItem(src) {
+  const li = document.createElement("li");
+  const kind = document.createElement("span");
+  kind.style.cssText = "color: #888; margin-right: 6px; font-family: monospace; font-size: 11px;";
+  kind.textContent = src.kind || "src";
+  li.appendChild(kind);
+  if (src.kind === "url" && src.ref) {
+    const link = document.createElement("a");
+    link.href = src.ref;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.textContent = src.ref;
+    li.appendChild(link);
+  } else if (src.ref) {
+    const code = document.createElement("code");
+    code.textContent = src.ref;
+    li.appendChild(code);
   }
-  // Sources list.
-  if (Array.isArray(a.sources) && a.sources.length > 0) {
-    const h = document.createElement("div");
-    h.style.cssText = "font-size: 11px; color: #666; margin-bottom: 4px;";
-    h.textContent = "Sources";
-    p.appendChild(h);
-    const ul = document.createElement("ul");
-    ul.style.cssText = "margin: 0; padding-left: 18px; font-size: 12px; line-height: 1.5;";
-    for (const src of a.sources) {
-      const li = document.createElement("li");
-      const kind = document.createElement("span");
-      kind.style.cssText = "color: #888; margin-right: 6px; font-family: monospace; font-size: 11px;";
-      kind.textContent = src.kind || "src";
-      li.appendChild(kind);
-      if (src.kind === "url" && src.ref) {
-        const a = document.createElement("a");
-        a.href = src.ref;
-        a.target = "_blank";
-        a.rel = "noopener noreferrer";
-        a.textContent = src.ref;
-        li.appendChild(a);
-      } else if (src.ref) {
-        const code = document.createElement("code");
-        code.textContent = src.ref;
-        li.appendChild(code);
-      }
-      if (src.note) {
-        const note = document.createElement("span");
-        note.style.cssText = "color: #555; margin-left: 6px;";
-        note.textContent = `— ${src.note}`;
-        li.appendChild(note);
-      }
-      ul.appendChild(li);
-    }
-    p.appendChild(ul);
+  if (src.note) {
+    const note = document.createElement("span");
+    note.style.cssText = "color: #555; margin-left: 6px;";
+    note.textContent = `— ${src.note}`;
+    li.appendChild(note);
   }
+  return li;
+}
+
+// _appendSourcesBlock appends the Sources list. No-op when there are no
+// sources.
+function _appendSourcesBlock(p, sources) {
+  if (!Array.isArray(sources) || sources.length === 0) return;
+  const h = document.createElement("div");
+  h.style.cssText = "font-size: 11px; color: #666; margin-bottom: 4px;";
+  h.textContent = "Sources";
+  p.appendChild(h);
+  const ul = document.createElement("ul");
+  ul.style.cssText = "margin: 0; padding-left: 18px; font-size: 12px; line-height: 1.5;";
+  for (const src of sources) {
+    ul.appendChild(_buildSourceListItem(src));
+  }
+  p.appendChild(ul);
+}
+
+function renderAssessment(a) {
+  // anchor "supports" — the pipeline-strip pillar segments (⚙ ◉ ▷) all land
+  // here (the panel's chips render the three pillars individually).
+  const p = panel("Assessment", "supports");
+  // Also tag with the observes alias so [data-anchor="observes"]
+  // resolves to the same panel.
+  p.dataset.anchorAlias = "observes";
+  p.appendChild(_renderAssessmentSubtitle(a));
+  p.appendChild(_renderAssessmentVerdictRow(a));
+  _appendAssessmentBody(p, a.body);
+  _appendCaveatsBlock(p, a.caveats);
+  _appendSourcesBlock(p, a.sources);
   return p;
 }
 
@@ -1826,23 +1950,21 @@ function _capabilityChip(prefix, value) {
 //   "spec"               — definitions only. Used when no recording is
 //                          selected so the panel reads as "here is the
 //                          spec" rather than "0/N passed against nothing".
-function renderExpected(data, mode) {
-  const specOnly = mode === "spec";
-  // anchor "spec" — pipeline-strip segment § lands here.
-  const p = panel("Spec expectations", "spec");
-  if (!data.expected || !Array.isArray(data.expected.phases) || data.expected.phases.length === 0) {
-    p.appendChild(text("No expected.jsonl for this scenario. Author one via /ir:onboard-agent spec <agent> <scenario>."));
-    return p;
-  }
-  const rep = data.expected;
-  // Anchor target for the pipeline-strip ✓ segment ("validation").
-  // The summary chip just below carries the pass/fail signal; we add
-  // a small heading so the scroll lands on a labelled anchor.
+// _buildExpectedValidationHeading builds the anchor heading for the
+// pipeline-strip ✓ segment ("validation"). The summary chip just below
+// carries the pass/fail signal; this small heading just gives the
+// scroll-into-view a labelled landing spot.
+function _buildExpectedValidationHeading() {
   const valHeading = document.createElement("h4");
   valHeading.dataset.anchor = "validation";
   valHeading.style.cssText = "font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #666; margin: 0 0 6px 0; font-weight: 600;";
   valHeading.textContent = "Validation";
-  p.appendChild(valHeading);
+  return valHeading;
+}
+
+// _buildExpectedSummary builds the pass/fail (or spec-only) summary chip
+// row shown above the phases table.
+function _buildExpectedSummary(rep, specOnly) {
   const summary = document.createElement("div");
   summary.style.cssText = "margin-bottom: 8px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap;";
   if (specOnly) {
@@ -1854,10 +1976,11 @@ function renderExpected(data, mode) {
         source: <code>${escapeHtml(rep.meta?.source || "")}</code>
       </span>
     `;
-  } else {
-    const summaryColor = rep.pass ? "#d6f0d4" : "#f8c8c8";
-    const summaryFg = rep.pass ? "#1f5a1d" : "#8a0000";
-    summary.innerHTML = `
+    return summary;
+  }
+  const summaryColor = rep.pass ? "#d6f0d4" : "#f8c8c8";
+  const summaryFg = rep.pass ? "#1f5a1d" : "#8a0000";
+  summary.innerHTML = `
       <span style="background: ${summaryColor}; color: ${summaryFg}; padding: 2px 10px; border-radius: 10px; font-size: 11px; font-weight: 600;">
         ${escapeHtml(rep.summary || "")}
       </span>
@@ -1865,11 +1988,13 @@ function renderExpected(data, mode) {
         source: <code>${escapeHtml(rep.meta?.source || "")}</code>
       </span>
     `;
-  }
-  p.appendChild(summary);
+  return summary;
+}
 
-  const tbl = document.createElement("table");
-  tbl.innerHTML = specOnly
+// _expectedTableHeaderHTML returns the <tr> header — the validate mode
+// adds "result" and "delta" columns not shown in spec-only mode.
+function _expectedTableHeaderHTML(specOnly) {
+  return specOnly
     ? `<tr>
         <th>phase</th>
         <th>target</th>
@@ -1886,40 +2011,55 @@ function renderExpected(data, mode) {
         <th>delta</th>
         <th>spec text</th>
       </tr>`;
-  // Definitions and phases are same-length, same-order arrays from
-  // the validator. Zip by index so the row shows full context.
-  const defs = Array.isArray(rep.definitions) ? rep.definitions : [];
-  for (let i = 0; i < rep.phases.length; i++) {
-    const ph = rep.phases[i];
-    const def = defs[i] || {};
-    const target = def.expected_state
-      ? `state=<span class="badge ${def.expected_state}">${def.expected_state}</span>`
-      : (def.kind ? `kind=<code>${escapeHtml(def.kind)}</code>` : "—");
-    const anchor = def.relative_to ? `<code>${escapeHtml(def.relative_to)}</code>` : "<code>start</code>";
-    let win = "";
-    if (def.max_delay_ms) win += `≤ ${def.max_delay_ms} ms`;
-    if (def.duration_at_least_ms) win += (win ? " · " : "") + `≥ ${def.duration_at_least_ms} ms`;
-    if (!win) win = "—";
-    const specText = def.text || "";
-    const tr = document.createElement("tr");
-    if (specOnly) {
-      tr.innerHTML = `
+}
+
+// _expectedTargetHTML renders one phase definition's "target" cell:
+// expected state badge, else expected event kind, else a dash.
+function _expectedTargetHTML(def) {
+  if (def.expected_state) {
+    return `state=<span class="badge ${def.expected_state}">${def.expected_state}</span>`;
+  }
+  return def.kind ? `kind=<code>${escapeHtml(def.kind)}</code>` : "—";
+}
+
+// _expectedWindowText renders one phase definition's timing-window cell
+// (max delay and/or minimum duration constraints, joined with " · ").
+function _expectedWindowText(def) {
+  let win = "";
+  if (def.max_delay_ms) win += `≤ ${def.max_delay_ms} ms`;
+  if (def.duration_at_least_ms) win += (win ? " · " : "") + `≥ ${def.duration_at_least_ms} ms`;
+  return win || "—";
+}
+
+// _buildExpectedRow builds one phase's <tr>. Definitions and phases are
+// same-length, same-order arrays from the validator, so the row can show
+// full context (target/anchor/window from the definition, pass/delta from
+// the phase result — the latter only in validate mode).
+function _buildExpectedRow(ph, def, specOnly) {
+  const target = _expectedTargetHTML(def);
+  const anchor = def.relative_to ? `<code>${escapeHtml(def.relative_to)}</code>` : "<code>start</code>";
+  const win = _expectedWindowText(def);
+  const specText = def.text || "";
+  const tr = document.createElement("tr");
+  if (specOnly) {
+    tr.innerHTML = `
         <td><code>${escapeHtml(ph.phase)}</code></td>
         <td style="font-size: 11px;">${target}</td>
         <td style="font-size: 11px;">${anchor}</td>
         <td style="font-size: 11px; color: #555;">${win}</td>
         <td title="${escapeHtml(specText)}" style="font-size: 11px; color: #555;">${escapeHtml(truncate(specText, 90))}</td>`;
-    } else {
-      const resultPill = ph.pass
-        ? `<span class="badge ready">✓ pass</span>`
-        : `<span class="badge fail">✗ fail</span>`;
-      // delta_ms may be 0 (phase matched exactly at its anchor) — treat
-      // anything numeric as renderable, only fall back to "—" when the
-      // phase never matched at all.
-      const delta = ph.matched_ts
-        ? `+${Number.isFinite(ph.delta_ms) ? ph.delta_ms : 0} ms`
-        : "—";
-      tr.innerHTML = `
+    return tr;
+  }
+  const resultPill = ph.pass
+    ? `<span class="badge ready">✓ pass</span>`
+    : `<span class="badge fail">✗ fail</span>`;
+  // delta_ms may be 0 (phase matched exactly at its anchor) — treat
+  // anything numeric as renderable, only fall back to "—" when the
+  // phase never matched at all.
+  const delta = ph.matched_ts
+    ? `+${Number.isFinite(ph.delta_ms) ? ph.delta_ms : 0} ms`
+    : "—";
+  tr.innerHTML = `
         <td><code>${escapeHtml(ph.phase)}</code></td>
         <td style="font-size: 11px;">${target}</td>
         <td style="font-size: 11px;">${anchor}</td>
@@ -1927,27 +2067,55 @@ function renderExpected(data, mode) {
         <td>${resultPill}</td>
         <td>${escapeHtml(delta)}</td>
         <td title="${escapeHtml(specText)}" style="font-size: 11px; color: #555;">${escapeHtml(truncate(specText, 90))}</td>`;
-    }
-    tbl.appendChild(tr);
+  return tr;
+}
+
+// _buildExpectedTable builds the full phases table (header + one row per
+// phase).
+function _buildExpectedTable(rep, specOnly) {
+  const tbl = document.createElement("table");
+  tbl.innerHTML = _expectedTableHeaderHTML(specOnly);
+  // Definitions and phases are same-length, same-order arrays from
+  // the validator. Zip by index so the row shows full context.
+  const defs = Array.isArray(rep.definitions) ? rep.definitions : [];
+  for (let i = 0; i < rep.phases.length; i++) {
+    tbl.appendChild(_buildExpectedRow(rep.phases[i], defs[i] || {}, specOnly));
   }
-  p.appendChild(tbl);
+  return tbl;
+}
+
+// _appendExpectedFailures appends the failure-detail block — surfaces the
+// reason strings prominently so the operator can scan failures without
+// hovering each row. No-op when nothing failed.
+function _appendExpectedFailures(p, rep) {
+  const failed = rep.phases.filter(ph => !ph.pass);
+  if (failed.length === 0) return;
+  const failBox = document.createElement("div");
+  failBox.style.cssText = "margin-top: 10px; padding: 8px 10px; background: #fff7f7; border-left: 3px solid #8a0000; font-size: 12px; color: #444;";
+  let html = "<b>Failures:</b><ul style=\"margin: 4px 0 0; padding-left: 20px;\">";
+  for (const ph of failed) {
+    html += `<li><code>${escapeHtml(ph.phase)}</code>: ${escapeHtml(ph.reason || "(no reason recorded)")}</li>`;
+  }
+  html += "</ul>";
+  failBox.innerHTML = html;
+  p.appendChild(failBox);
+}
+
+function renderExpected(data, mode) {
+  const specOnly = mode === "spec";
+  // anchor "spec" — pipeline-strip segment § lands here.
+  const p = panel("Spec expectations", "spec");
+  if (!data.expected || !Array.isArray(data.expected.phases) || data.expected.phases.length === 0) {
+    p.appendChild(text("No expected.jsonl for this scenario. Author one via /ir:onboard-agent spec <agent> <scenario>."));
+    return p;
+  }
+  const rep = data.expected;
+  p.appendChild(_buildExpectedValidationHeading());
+  p.appendChild(_buildExpectedSummary(rep, specOnly));
+  p.appendChild(_buildExpectedTable(rep, specOnly));
 
   if (specOnly) return p;
-
-  // Failure detail block — surface the reason strings prominently so
-  // the operator can scan failures without hovering each row.
-  const failed = rep.phases.filter(ph => !ph.pass);
-  if (failed.length > 0) {
-    const failBox = document.createElement("div");
-    failBox.style.cssText = "margin-top: 10px; padding: 8px 10px; background: #fff7f7; border-left: 3px solid #8a0000; font-size: 12px; color: #444;";
-    let html = "<b>Failures:</b><ul style=\"margin: 4px 0 0; padding-left: 20px;\">";
-    for (const ph of failed) {
-      html += `<li><code>${escapeHtml(ph.phase)}</code>: ${escapeHtml(ph.reason || "(no reason recorded)")}</li>`;
-    }
-    html += "</ul>";
-    failBox.innerHTML = html;
-    p.appendChild(failBox);
-  }
+  _appendExpectedFailures(p, rep);
   return p;
 }
 
@@ -2194,68 +2362,100 @@ function renderRecordingHistory(s, latestData, archives, initialArchive, recipeE
   return wrap;
 }
 
+// _buildToolCallsIntro builds the explanatory paragraph above the chips
+// and table.
+function _buildToolCallsIntro(tools) {
+  const intro = document.createElement("div");
+  intro.style.cssText = "font-size: 11px; color: #666; margin-bottom: 8px;";
+  intro.innerHTML = `<b>${tools.length}</b> tool call${tools.length === 1 ? "" : "s"} ` +
+    `extracted from <code>transcript.jsonl</code>. ` +
+    `Note: irrlicht's <code>events.jsonl</code> has no first-class <code>tool_use</code> Kind today; ` +
+    `this view is derived client-side from the transcript content. Promotion to a lifecycle Kind is future work.`;
+  return intro;
+}
+
+// _toolCallsStartMs anchors the +ms offsets to the first tool call's
+// timestamp, so the table reads in the same time base as the timeline
+// lanes. Returns null when there's nothing to anchor to.
+function _toolCallsStartMs(tools) {
+  if (tools.length > 0 && tools[0].ts) return Date.parse(tools[0].ts);
+  return null;
+}
+
+// _countToolsByName groups tool calls by name for the summary chips.
+function _countToolsByName(tools) {
+  const byName = {};
+  for (const t of tools) {
+    byName[t.name] = (byName[t.name] || 0) + 1;
+  }
+  return byName;
+}
+
+// _buildToolNameChip builds one summary chip. Special-cases the "Agent"
+// tool name (claudecode's Task tool) with a distinct color + tooltip
+// since spawning subagents is the headline case.
+function _buildToolNameChip(name, count) {
+  const chip = document.createElement("span");
+  const isAgent = name === "Agent";
+  chip.style.cssText = `padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; ` +
+    (isAgent
+      ? "background: #e0eaff; color: #1f3d8a;"
+      : "background: #eaeae0; color: #555;");
+  chip.textContent = `${name} · ${count}`;
+  if (isAgent) chip.title = "Task tool — spawns subagents. See coverage_id=foreground-subagent (3.1).";
+  return chip;
+}
+
+// _buildToolNameChips builds the summary chip row, one chip per distinct
+// tool name, sorted alphabetically.
+function _buildToolNameChips(byName) {
+  const chips = document.createElement("div");
+  chips.style.cssText = "display: flex; gap: 6px; margin-bottom: 8px; flex-wrap: wrap;";
+  for (const name of Object.keys(byName).sort((a, b) => a.localeCompare(b))) {
+    chips.appendChild(_buildToolNameChip(name, byName[name]));
+  }
+  return chips;
+}
+
+// _buildToolCallRow builds one `+ms · session · tool · id` row.
+function _buildToolCallRow(t, startMs) {
+  const offset = (startMs && t.ts) ? (Date.parse(t.ts) - startMs) : null;
+  const offsetCell = offset !== null ? `+${offset} ms` : "—";
+  const sidShort = (t.session_id || "").slice(0, 14);
+  const isAgent = t.name === "Agent";
+  const toolCell = isAgent
+    ? `<span style="background: #e0eaff; color: #1f3d8a; padding: 1px 6px; border-radius: 8px; font-weight: 600; font-size: 11px;">${escapeHtml(t.name)}</span>`
+    : `<code>${escapeHtml(t.name)}</code>`;
+  const tr = document.createElement("tr");
+  tr.innerHTML = `
+      <td>${escapeHtml(offsetCell)}</td>
+      <td><code style="font-size: 11px; color: #666;">${escapeHtml(sidShort)}</code></td>
+      <td>${toolCell}</td>
+      <td><code style="font-size: 11px; color: #888;">${escapeHtml((t.id || "").slice(0, 16))}</code></td>`;
+  return tr;
+}
+
+// _buildToolCallsTable builds the header + one row per tool call.
+function _buildToolCallsTable(tools, startMs) {
+  const tbl = document.createElement("table");
+  tbl.innerHTML = `<tr><th>+ms</th><th>session</th><th>tool</th><th>id</th></tr>`;
+  for (const t of tools) {
+    tbl.appendChild(_buildToolCallRow(t, startMs));
+  }
+  return tbl;
+}
+
 // renderToolCalls shows the tool_use blocks the server extracted
 // from transcript.jsonl. Today this is the only signal irrlicht has
 // for "agent invoked a tool" — events.jsonl has no first-class
 // tool_use Kind, so the viewer derives this client-side from the
 // transcript content. Each row is `+ms · session · ToolName · id`.
-// Special-cases the "Agent" tool name (claudecode's Task tool) with
-// a distinct icon since spawning subagents is the headline case.
 function renderToolCalls(data) {
   const p = panel("Tool calls");
-  const intro = document.createElement("div");
-  intro.style.cssText = "font-size: 11px; color: #666; margin-bottom: 8px;";
-  intro.innerHTML = `<b>${data.tools.length}</b> tool call${data.tools.length === 1 ? "" : "s"} ` +
-    `extracted from <code>transcript.jsonl</code>. ` +
-    `Note: irrlicht's <code>events.jsonl</code> has no first-class <code>tool_use</code> Kind today; ` +
-    `this view is derived client-side from the transcript content. Promotion to a lifecycle Kind is future work.`;
-  p.appendChild(intro);
-
-  // Recording start anchors the +ms offsets so the table reads in
-  // the same time base as the timeline lanes.
-  let startMs = null;
-  if (data.tools.length > 0 && data.tools[0].ts) {
-    startMs = Date.parse(data.tools[0].ts);
-  }
-  // Group by tool name for the summary chips.
-  const byName = {};
-  for (const t of data.tools) {
-    byName[t.name] = (byName[t.name] || 0) + 1;
-  }
-  const chips = document.createElement("div");
-  chips.style.cssText = "display: flex; gap: 6px; margin-bottom: 8px; flex-wrap: wrap;";
-  for (const name of Object.keys(byName).sort((a, b) => a.localeCompare(b))) {
-    const chip = document.createElement("span");
-    const isAgent = name === "Agent";
-    chip.style.cssText = `padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; ` +
-      (isAgent
-        ? "background: #e0eaff; color: #1f3d8a;"
-        : "background: #eaeae0; color: #555;");
-    chip.textContent = `${name} · ${byName[name]}`;
-    if (isAgent) chip.title = "Task tool — spawns subagents. See coverage_id=foreground-subagent (3.1).";
-    chips.appendChild(chip);
-  }
-  p.appendChild(chips);
-
-  const tbl = document.createElement("table");
-  tbl.innerHTML = `<tr><th>+ms</th><th>session</th><th>tool</th><th>id</th></tr>`;
-  for (const t of data.tools) {
-    const offset = (startMs && t.ts) ? (Date.parse(t.ts) - startMs) : null;
-    const offsetCell = offset !== null ? `+${offset} ms` : "—";
-    const sidShort = (t.session_id || "").slice(0, 14);
-    const isAgent = t.name === "Agent";
-    const toolCell = isAgent
-      ? `<span style="background: #e0eaff; color: #1f3d8a; padding: 1px 6px; border-radius: 8px; font-weight: 600; font-size: 11px;">${escapeHtml(t.name)}</span>`
-      : `<code>${escapeHtml(t.name)}</code>`;
-    const tr = document.createElement("tr");
-    tr.innerHTML = `
-      <td>${escapeHtml(offsetCell)}</td>
-      <td><code style="font-size: 11px; color: #666;">${escapeHtml(sidShort)}</code></td>
-      <td>${toolCell}</td>
-      <td><code style="font-size: 11px; color: #888;">${escapeHtml((t.id || "").slice(0, 16))}</code></td>`;
-    tbl.appendChild(tr);
-  }
-  p.appendChild(tbl);
+  p.appendChild(_buildToolCallsIntro(data.tools));
+  const startMs = _toolCallsStartMs(data.tools);
+  p.appendChild(_buildToolNameChips(_countToolsByName(data.tools)));
+  p.appendChild(_buildToolCallsTable(data.tools, startMs));
   return p;
 }
 

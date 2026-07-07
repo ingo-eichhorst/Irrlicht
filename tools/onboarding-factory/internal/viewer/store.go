@@ -110,27 +110,40 @@ func (st RecordingStore) listScenarios() []ScenarioListEntry {
 		if !agentEntry.IsDir() {
 			continue
 		}
-		agent := agentEntry.Name()
-		for _, subtree := range []string{"scenarios", "regressions"} {
-			scns, _ := os.ReadDir(filepath.Join(st.agentsDir(), agent, subtree))
-			for _, sd := range scns {
-				if !sd.IsDir() {
-					continue
-				}
-				out = append(out, ScenarioListEntry{Agent: agent, Subtree: subtree, ID: sd.Name()})
-			}
-		}
+		out = append(out, st.scenariosForAgent(agentEntry.Name())...)
 	}
 	sort.Slice(out, func(i, j int) bool {
-		if out[i].Agent != out[j].Agent {
-			return out[i].Agent < out[j].Agent
-		}
-		if out[i].Subtree != out[j].Subtree {
-			return out[i].Subtree < out[j].Subtree
-		}
-		return out[i].ID < out[j].ID
+		return scenarioListEntryLess(out[i], out[j])
 	})
 	return out
+}
+
+// scenariosForAgent lists every recording cell under
+// replaydata/agents/<agent>/{scenarios,regressions}/<id>.
+func (st RecordingStore) scenariosForAgent(agent string) []ScenarioListEntry {
+	var out []ScenarioListEntry
+	for _, subtree := range []string{"scenarios", "regressions"} {
+		scns, _ := os.ReadDir(filepath.Join(st.agentsDir(), agent, subtree))
+		for _, sd := range scns {
+			if !sd.IsDir() {
+				continue
+			}
+			out = append(out, ScenarioListEntry{Agent: agent, Subtree: subtree, ID: sd.Name()})
+		}
+	}
+	return out
+}
+
+// scenarioListEntryLess orders entries by (agent, subtree, id) for a
+// deterministic /api/scenarios listing.
+func scenarioListEntryLess(a, b ScenarioListEntry) bool {
+	if a.Agent != b.Agent {
+		return a.Agent < b.Agent
+	}
+	if a.Subtree != b.Subtree {
+		return a.Subtree < b.Subtree
+	}
+	return a.ID < b.ID
 }
 
 // listArchiveDirs returns the archive subdirectory names under

@@ -36,26 +36,34 @@ func TestFixtureReplayByteIdentity(t *testing.T) {
 	for _, fx := range fixtures {
 		t.Run(filepath.Base(fx), func(t *testing.T) {
 			t.Parallel()
-			got := runFixtureReplay(t, fx)
-			goldenPath := fx + ".replay.json.golden"
-
-			if update {
-				if err := os.WriteFile(goldenPath, got, 0o644); err != nil {
-					t.Fatalf("write golden: %v", err)
-				}
-				return
-			}
-
-			want, err := os.ReadFile(goldenPath)
-			if err != nil {
-				t.Fatalf("read golden %s: %v (run with UPDATE_REPLAY_GOLDENS=1 to create)", goldenPath, err)
-			}
-			if !bytes.Equal(got, want) {
-				t.Fatalf("replay output differs from golden %s\n"+
-					"run UPDATE_REPLAY_GOLDENS=1 go test ./tools/onboarding-factory/cmd/replay/... to refresh\n"+
-					"first diff: %s", goldenPath, firstJSONDiff(got, want))
-			}
+			checkFixtureAgainstGolden(t, fx, update)
 		})
+	}
+}
+
+// checkFixtureAgainstGolden replays fx and either writes the result as the
+// new golden (update=true, i.e. UPDATE_REPLAY_GOLDENS=1) or asserts it
+// matches the committed golden byte-for-byte.
+func checkFixtureAgainstGolden(t *testing.T, fx string, update bool) {
+	t.Helper()
+	got := runFixtureReplay(t, fx)
+	goldenPath := fx + ".replay.json.golden"
+
+	if update {
+		if err := os.WriteFile(goldenPath, got, 0o644); err != nil {
+			t.Fatalf("write golden: %v", err)
+		}
+		return
+	}
+
+	want, err := os.ReadFile(goldenPath)
+	if err != nil {
+		t.Fatalf("read golden %s: %v (run with UPDATE_REPLAY_GOLDENS=1 to create)", goldenPath, err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("replay output differs from golden %s\n"+
+			"run UPDATE_REPLAY_GOLDENS=1 go test ./tools/onboarding-factory/cmd/replay/... to refresh\n"+
+			"first diff: %s", goldenPath, firstJSONDiff(got, want))
 	}
 }
 

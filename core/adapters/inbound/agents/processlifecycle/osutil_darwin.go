@@ -288,37 +288,56 @@ func kittyWindowIDForPID(socket string, sessionPID int) string {
 	return parseKittenLsForPID(out, sessionPID)
 }
 
+// kittyLsWindow is one entry of a `kitten @ ls` response's tabs[].windows[].
+type kittyLsWindow struct {
+	ID                  int `json:"id"`
+	PID                 int `json:"pid"`
+	ForegroundProcesses []struct {
+		PID int `json:"pid"`
+	} `json:"foreground_processes"`
+}
+
+// kittyLsTab is one entry of a `kitten @ ls` response's os_windows[].tabs[].
+type kittyLsTab struct {
+	Windows []kittyLsWindow `json:"windows"`
+}
+
+// kittyLsOSWindow is one top-level entry of a `kitten @ ls` JSON response.
+type kittyLsOSWindow struct {
+	Tabs []kittyLsTab `json:"tabs"`
+}
+
 // parseKittenLsForPID parses a `kitten @ ls` JSON response and returns the
 // id (as a decimal string) of the kitty-window whose `pid` or
 // `foreground_processes[].pid` matches sessionPID, or "" if no match.
 // Exposed as a separate function so the JSON-handling can be unit-tested
 // without spawning a real kitty.
 func parseKittenLsForPID(out []byte, sessionPID int) string {
-	var osWindows []struct {
-		Tabs []struct {
-			Windows []struct {
-				ID                  int `json:"id"`
-				PID                 int `json:"pid"`
-				ForegroundProcesses []struct {
-					PID int `json:"pid"`
-				} `json:"foreground_processes"`
-			} `json:"windows"`
-		} `json:"tabs"`
-	}
+	var osWindows []kittyLsOSWindow
 	if err := json.Unmarshal(out, &osWindows); err != nil {
 		return ""
 	}
 	for _, w := range osWindows {
 		for _, t := range w.Tabs {
-			for _, kw := range t.Windows {
-				if kw.PID == sessionPID {
-					return strconv.Itoa(kw.ID)
-				}
-				for _, fg := range kw.ForegroundProcesses {
-					if fg.PID == sessionPID {
-						return strconv.Itoa(kw.ID)
-					}
-				}
+			if id := findKittyWindowIDForPID(t.Windows, sessionPID); id != "" {
+				return id
+			}
+		}
+	}
+	return ""
+}
+
+// findKittyWindowIDForPID scans one tab's windows for one whose own pid or
+// any foreground_processes[].pid matches sessionPID, returning its window id
+// (decimal string), or "" if none match.
+func findKittyWindowIDForPID(windows []kittyLsWindow, sessionPID int) string {
+	for _, kw := range windows {
+		if kw.PID == sessionPID {
+			return strconv.Itoa(kw.ID)
+		}
+		for _, fg := range kw.ForegroundProcesses {
+			if fg.PID == sessionPID {
+				return strconv.Itoa(kw.ID)
 			}
 		}
 	}

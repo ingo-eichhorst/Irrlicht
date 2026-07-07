@@ -38,15 +38,10 @@ func runCommand(cwd string) []any {
 	}}
 }
 
-// TestParseTurn walks a full turn — prompt, planning+tool, failing result,
-// terminal line — and asserts the normalized event for each step, plus the cwd
-// and model harvested along the way.
-func TestParseTurn(t *testing.T) {
-	p := &Parser{}
-
-	userContent := "<USER_REQUEST>\nls\n</USER_REQUEST>\n<USER_SETTINGS_CHANGE>\n" +
-		"The user changed setting `Model Selection` from None to Gemini 3.5 Flash (Medium). No need to comment.\n</USER_SETTINGS_CHANGE>"
-	ev := p.ParseLine(line("USER_EXPLICIT", "USER_INPUT", 0, userContent, nil))
+// assertUserInputEvent checks the normalized event for TestParseTurn's
+// initial USER_INPUT step.
+func assertUserInputEvent(t *testing.T, p *Parser, ev *tailer.ParsedEvent) {
+	t.Helper()
 	if ev.Skip || ev.EventType != "user_message" {
 		t.Fatalf("USER_INPUT: got skip=%v type=%q, want user_message", ev.Skip, ev.EventType)
 	}
@@ -56,15 +51,12 @@ func TestParseTurn(t *testing.T) {
 	if p.model == "" {
 		t.Error("model should be harvested from <USER_SETTINGS_CHANGE>")
 	}
+}
 
-	// SYSTEM lines are skipped.
-	if ev := p.ParseLine(line("SYSTEM", "CONVERSATION_HISTORY", 1, "", nil)); !ev.Skip {
-		t.Errorf("SYSTEM/CONVERSATION_HISTORY should be skipped, got type=%q", ev.EventType)
-	}
-
-	// Planning step with one tool call → assistant_message, one open tool, cwd
-	// + model attached.
-	ev = p.ParseLine(line("MODEL", "PLANNER_RESPONSE", 2, "I will list the directory.", runCommand("/repo")))
+// assertPlannerWithToolEvent checks the normalized event for TestParseTurn's
+// planning step that opens a run_command tool call.
+func assertPlannerWithToolEvent(t *testing.T, ev *tailer.ParsedEvent) {
+	t.Helper()
 	if ev.EventType != "assistant_message" {
 		t.Fatalf("planner-with-tool: got type=%q, want assistant_message", ev.EventType)
 	}
@@ -80,10 +72,12 @@ func TestParseTurn(t *testing.T) {
 	if ev.ModelName == "" {
 		t.Error("ModelName should be attached to assistant events once harvested")
 	}
+}
 
-	// Failing tool result → function_call_output, closes the open tool, flags error.
-	ev = p.ParseLine(line("MODEL", "RUN_COMMAND", 3,
-		"Created At: ...\nThe command failed with exit code: 1\nOutput:\n", nil))
+// assertFailingToolResultEvent checks the normalized event for TestParseTurn's
+// failing run_command result step.
+func assertFailingToolResultEvent(t *testing.T, p *Parser, ev *tailer.ParsedEvent) {
+	t.Helper()
 	if ev.EventType != "function_call_output" {
 		t.Fatalf("tool result: got type=%q, want function_call_output", ev.EventType)
 	}
@@ -96,15 +90,49 @@ func TestParseTurn(t *testing.T) {
 	if p.openToolID != "" {
 		t.Errorf("openToolID = %q, want cleared after the result closed it", p.openToolID)
 	}
+}
 
-	// Terminal empty planner step → turn_done.
-	ev = p.ParseLine(line("MODEL", "PLANNER_RESPONSE", 4, "", nil))
+// assertTerminalPlannerEvent checks the normalized event for TestParseTurn's
+// terminal empty planner step.
+func assertTerminalPlannerEvent(t *testing.T, ev *tailer.ParsedEvent) {
+	t.Helper()
 	if ev.EventType != "turn_done" {
 		t.Fatalf("terminal planner: got type=%q, want turn_done", ev.EventType)
 	}
 	if len(ev.ToolUses) != 0 {
 		t.Errorf("terminal planner opened tools: %+v", ev.ToolUses)
 	}
+}
+
+// TestParseTurn walks a full turn — prompt, planning+tool, failing result,
+// terminal line — and asserts the normalized event for each step, plus the cwd
+// and model harvested along the way.
+func TestParseTurn(t *testing.T) {
+	p := &Parser{}
+
+	userContent := "<USER_REQUEST>\nls\n</USER_REQUEST>\n<USER_SETTINGS_CHANGE>\n" +
+		"The user changed setting `Model Selection` from None to Gemini 3.5 Flash (Medium). No need to comment.\n</USER_SETTINGS_CHANGE>"
+	ev := p.ParseLine(line("USER_EXPLICIT", "USER_INPUT", 0, userContent, nil))
+	assertUserInputEvent(t, p, ev)
+
+	// SYSTEM lines are skipped.
+	if ev := p.ParseLine(line("SYSTEM", "CONVERSATION_HISTORY", 1, "", nil)); !ev.Skip {
+		t.Errorf("SYSTEM/CONVERSATION_HISTORY should be skipped, got type=%q", ev.EventType)
+	}
+
+	// Planning step with one tool call → assistant_message, one open tool, cwd
+	// + model attached.
+	ev = p.ParseLine(line("MODEL", "PLANNER_RESPONSE", 2, "I will list the directory.", runCommand("/repo")))
+	assertPlannerWithToolEvent(t, ev)
+
+	// Failing tool result → function_call_output, closes the open tool, flags error.
+	ev = p.ParseLine(line("MODEL", "RUN_COMMAND", 3,
+		"Created At: ...\nThe command failed with exit code: 1\nOutput:\n", nil))
+	assertFailingToolResultEvent(t, p, ev)
+
+	// Terminal empty planner step → turn_done.
+	ev = p.ParseLine(line("MODEL", "PLANNER_RESPONSE", 4, "", nil))
+	assertTerminalPlannerEvent(t, ev)
 }
 
 // TestSuccessfulResultNotError guards the error classifier: a successful command

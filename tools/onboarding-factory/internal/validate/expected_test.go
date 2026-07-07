@@ -29,37 +29,51 @@ func TestValidateExpected_committedScenarios(t *testing.T) {
 		scenarioDir := filepath.Dir(path)
 		name := filepath.Base(scenarioDir)
 		t.Run(name, func(t *testing.T) {
-			report, err := ValidateExpected(scenarioDir)
-			if err != nil {
-				t.Fatalf("ValidateExpected: %v", err)
-			}
-			if report == nil {
-				t.Skip("no events.jsonl — recording not yet captured (applicable: false)")
-			}
-			if !report.Pass {
-				var failed []string
-				for _, p := range report.Phases {
-					if !p.Pass {
-						failed = append(failed, p.Phase+": "+p.Reason)
-					}
-				}
-				if report.Meta.KnownFailing {
-					t.Logf("EXPECTED FAILURE (%s): %s\n  failed phases:\n    %s\n  (meta.known_failing=true — daemon-side gap; see expected.jsonl notes)",
-						name, report.Summary, strings.Join(failed, "\n    "))
-				} else {
-					t.Errorf("validation failed (%s): %s\n  failed phases:\n    %s",
-						name, report.Summary, strings.Join(failed, "\n    "))
-				}
-			} else if report.Meta.KnownFailing {
-				// The "gap closed" signal: if a scenario is marked
-				// known-failing but actually passes now, the test
-				// fails LOUDLY so the maintainer notices and drops
-				// the flag.
-				t.Errorf("validation passed (%s) but meta.known_failing=true — the daemon-side gap appears to be CLOSED; remove the known_failing flag from expected.jsonl",
-					name)
-			}
+			assertExpectedValidation(t, scenarioDir, name)
 		})
 	}
+}
+
+// assertExpectedValidation runs ValidateExpected for one scenario and
+// checks its report against the meta.known_failing flag: a normal scenario
+// must fully pass; a known-failing one may fail (logged, not red) but must
+// error loudly if it unexpectedly starts passing — the "gap closed" signal
+// telling the maintainer to drop the flag.
+func assertExpectedValidation(t *testing.T, scenarioDir, name string) {
+	t.Helper()
+	report, err := ValidateExpected(scenarioDir)
+	if err != nil {
+		t.Fatalf("ValidateExpected: %v", err)
+	}
+	if report == nil {
+		t.Skip("no events.jsonl — recording not yet captured (applicable: false)")
+	}
+	if report.Pass {
+		if report.Meta.KnownFailing {
+			t.Errorf("validation passed (%s) but meta.known_failing=true — the daemon-side gap appears to be CLOSED; remove the known_failing flag from expected.jsonl",
+				name)
+		}
+		return
+	}
+	failed := failedPhaseSummaries(report.Phases)
+	if report.Meta.KnownFailing {
+		t.Logf("EXPECTED FAILURE (%s): %s\n  failed phases:\n    %s\n  (meta.known_failing=true — daemon-side gap; see expected.jsonl notes)",
+			name, report.Summary, strings.Join(failed, "\n    "))
+		return
+	}
+	t.Errorf("validation failed (%s): %s\n  failed phases:\n    %s",
+		name, report.Summary, strings.Join(failed, "\n    "))
+}
+
+// failedPhaseSummaries formats "phase: reason" for every failing phase.
+func failedPhaseSummaries(phases []ExpectedResult) []string {
+	var failed []string
+	for _, p := range phases {
+		if !p.Pass {
+			failed = append(failed, p.Phase+": "+p.Reason)
+		}
+	}
+	return failed
 }
 
 // TestValidateExpected_missingFileReturnsNil — when a scenario has no
@@ -413,19 +427,6 @@ func TestValidateExpectedAgainst_rejectsPathTraversal(t *testing.T) {
 // directory: events + manifest + exactly one transcript, and a replay golden iff
 // the transcript is jsonl (markdown adapters like aider have none).
 func TestRecordingComplete(t *testing.T) {
-	write := func(dir string, files ...string) string {
-		t.Helper()
-		d := filepath.Join(t.TempDir(), dir)
-		if err := os.MkdirAll(d, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		for _, f := range files {
-			if err := os.WriteFile(filepath.Join(d, f), []byte("{}\n"), 0o644); err != nil {
-				t.Fatal(err)
-			}
-		}
-		return d
-	}
 	const golden = "transcript.jsonl.replay.json.golden"
 	cases := []struct {
 		name  string
@@ -442,19 +443,45 @@ func TestRecordingComplete(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := RecordingComplete(write(c.name, c.files...))
-			if len(c.want) == 0 {
-				if len(got) != 0 {
-					t.Fatalf("want complete, got findings: %v", got)
-				}
-				return
-			}
-			joined := strings.Join(got, " | ")
-			for _, w := range c.want {
-				if !strings.Contains(joined, w) {
-					t.Errorf("want a finding containing %q, got: %v", w, got)
-				}
-			}
+			assertRecordingComplete(t, c.name, c.files, c.want)
 		})
+	}
+}
+
+// writeRecordingFiles creates t.TempDir()/name/ populated with the given
+// empty-JSON files, mimicking a recording directory's on-disk shape for
+// RecordingComplete.
+func writeRecordingFiles(t *testing.T, name string, files []string) string {
+	t.Helper()
+	d := filepath.Join(t.TempDir(), name)
+	if err := os.MkdirAll(d, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range files {
+		if err := os.WriteFile(filepath.Join(d, f), []byte("{}\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return d
+}
+
+// assertRecordingComplete builds a recording dir from files and checks
+// RecordingComplete's findings against want: nil want means it must report
+// no findings (complete); otherwise every substring in want must appear
+// among the findings.
+func assertRecordingComplete(t *testing.T, name string, files, want []string) {
+	t.Helper()
+	got := RecordingComplete(writeRecordingFiles(t, name, files))
+	if len(want) == 0 {
+		if len(got) != 0 {
+			t.Fatalf("want complete, got findings: %v", got)
+		}
+		return
+	}
+	joined := strings.Join(got, " | ")
+	for _, w := range want {
+		if !strings.Contains(joined, w) {
+			t.Errorf("want a finding containing %q, got: %v", w, got)
+		}
 	}
 }

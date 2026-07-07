@@ -89,25 +89,21 @@ func TestParseTranscriptPath_NoSessionQuery(t *testing.T) {
 	}
 }
 
-// TestComputeMetrics_TodowriteTasks builds a synthetic OpenCode SQLite DB
-// containing three todowrite parts (create three todos → mark first
-// in_progress → mark first completed, second in_progress, third pending)
-// and asserts that ComputeMetrics folds those parts into metrics.Tasks the
-// same way the tailer's TaskDelta accumulator does on the replay path.
-// Guards the inline TaskDelta loop in querySessionMetrics from drift now
-// that it lives separately from the tailer's reference implementation.
-func TestComputeMetrics_TodowriteTasks(t *testing.T) {
+// openTestOpencodeDB creates a temp SQLite DB with the minimal subset of the
+// live opencode schema — only the columns querySessionMetrics actually
+// reads. The full schema has NOT NULL constraints on
+// project_id/slug/title/version we satisfy with empty strings elsewhere,
+// since the query doesn't touch them. Returns the open DB and its path;
+// closes the DB via t.Cleanup.
+func openTestOpencodeDB(t *testing.T) (*sql.DB, string) {
+	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "opencode.db")
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	defer db.Close()
+	t.Cleanup(func() { db.Close() })
 
-	// Minimal subset of the live opencode schema — only the columns
-	// querySessionMetrics actually reads. The full schema has NOT NULL
-	// constraints on project_id/slug/title/version we satisfy with empty
-	// strings, since the query doesn't touch them.
 	schema := []string{
 		`CREATE TABLE session (
 			id text PRIMARY KEY, project_id text NOT NULL, parent_id text,
@@ -128,70 +124,113 @@ func TestComputeMetrics_TodowriteTasks(t *testing.T) {
 			t.Fatalf("schema: %v", err)
 		}
 	}
+	return db, dbPath
+}
 
-	const sid = "ses_test_todowrite"
-	const dir = "/tmp/opencode-todowrite-test"
+// insertTestSession inserts a minimal session row.
+func insertTestSession(t *testing.T, db *sql.DB, sid, dir string) {
+	t.Helper()
 	if _, err := db.Exec(
 		`INSERT INTO session(id, project_id, slug, directory, title, version, time_created, time_updated) VALUES (?, '', '', ?, '', '', 0, 0)`,
 		sid, dir,
 	); err != nil {
 		t.Fatalf("insert session: %v", err)
 	}
+}
+
+// insertTestMessage inserts a message row with time_created == time_updated == ts.
+func insertTestMessage(t *testing.T, db *sql.DB, id, sid string, ts int64, data string) {
+	t.Helper()
+	if _, err := db.Exec(
+		`INSERT INTO message(id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)`,
+		id, sid, ts, ts, data,
+	); err != nil {
+		t.Fatalf("insert message %s: %v", id, err)
+	}
+}
+
+// insertTestPart inserts a part row with time_created == time_updated == ts.
+func insertTestPart(t *testing.T, db *sql.DB, id, msgID, sid string, ts int64, data string) {
+	t.Helper()
+	if _, err := db.Exec(
+		`INSERT INTO part(id, message_id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?)`,
+		id, msgID, sid, ts, ts, data,
+	); err != nil {
+		t.Fatalf("insert part %s: %v", id, err)
+	}
+}
+
+// todowriteToolPart builds a todowrite tool part JSON blob (as opencode
+// records it) carrying the given todos.
+func todowriteToolPart(t *testing.T, callID string, todos []map[string]any) string {
+	t.Helper()
+	raw := map[string]any{
+		"type":   "tool",
+		"tool":   "todowrite",
+		"callID": callID,
+		"state": map[string]any{
+			"status": "completed",
+			"input":  map[string]any{"todos": todos},
+		},
+	}
+	b, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatalf("marshal part: %v", err)
+	}
+	return string(b)
+}
+
+// textPart builds a text content part JSON blob carrying text.
+func textPart(t *testing.T, text string) string {
+	t.Helper()
+	b, err := json.Marshal(map[string]any{"type": "text", "text": text})
+	if err != nil {
+		t.Fatalf("marshal part: %v", err)
+	}
+	return string(b)
+}
+
+// TestComputeMetrics_TodowriteTasks builds a synthetic OpenCode SQLite DB
+// containing three todowrite parts (create three todos → mark first
+// in_progress → mark first completed, second in_progress, third pending)
+// and asserts that ComputeMetrics folds those parts into metrics.Tasks the
+// same way the tailer's TaskDelta accumulator does on the replay path.
+// Guards the inline TaskDelta loop in querySessionMetrics from drift now
+// that it lives separately from the tailer's reference implementation.
+func TestComputeMetrics_TodowriteTasks(t *testing.T) {
+	db, dbPath := openTestOpencodeDB(t)
+
+	const sid = "ses_test_todowrite"
+	const dir = "/tmp/opencode-todowrite-test"
+	insertTestSession(t, db, sid, dir)
 
 	// One assistant message row carrying the three todowrite tool parts.
 	msgData := `{"role":"assistant","time":{"created":1000},"model":{"providerID":"test","modelID":"test-model"}}`
-	if _, err := db.Exec(
-		`INSERT INTO message(id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)`,
-		"msg_1", sid, 1000, 1000, msgData,
-	); err != nil {
-		t.Fatalf("insert message: %v", err)
-	}
-
-	todoPart := func(callID string, todos []map[string]any) string {
-		raw := map[string]any{
-			"type":   "tool",
-			"tool":   "todowrite",
-			"callID": callID,
-			"state": map[string]any{
-				"status": "completed",
-				"input":  map[string]any{"todos": todos},
-			},
-		}
-		b, err := json.Marshal(raw)
-		if err != nil {
-			t.Fatalf("marshal part: %v", err)
-		}
-		return string(b)
-	}
+	insertTestMessage(t, db, "msg_1", sid, 1000, msgData)
 
 	parts := []struct {
 		id      string
 		created int64
 		data    string
 	}{
-		{"part_1", 1100, todoPart("call_1", []map[string]any{
+		{"part_1", 1100, todowriteToolPart(t, "call_1", []map[string]any{
 			{"content": "Task A", "status": "pending"},
 			{"content": "Task B", "status": "pending"},
 			{"content": "Task C", "status": "pending"},
 		})},
-		{"part_2", 1200, todoPart("call_2", []map[string]any{
+		{"part_2", 1200, todowriteToolPart(t, "call_2", []map[string]any{
 			{"content": "Task A", "status": "in_progress"},
 			{"content": "Task B", "status": "pending"},
 			{"content": "Task C", "status": "pending"},
 		})},
-		{"part_3", 1300, todoPart("call_3", []map[string]any{
+		{"part_3", 1300, todowriteToolPart(t, "call_3", []map[string]any{
 			{"content": "Task A", "status": "completed"},
 			{"content": "Task B", "status": "in_progress"},
 			{"content": "Task C", "status": "pending"},
 		})},
 	}
 	for _, p := range parts {
-		if _, err := db.Exec(
-			`INSERT INTO part(id, message_id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?)`,
-			p.id, "msg_1", sid, p.created, p.created, p.data,
-		); err != nil {
-			t.Fatalf("insert part %s: %v", p.id, err)
-		}
+		insertTestPart(t, db, p.id, "msg_1", sid, p.created, p.data)
 	}
 
 	metrics, err := ComputeMetrics(dbPath, sid)
@@ -231,76 +270,30 @@ func TestComputeMetrics_TodowriteTasks(t *testing.T) {
 // back to pending. The snapshot reconcile must (a) remove the dropped
 // task from metrics.Tasks and (b) walk the reverted task back to pending.
 func TestComputeMetrics_TodowriteSnapshotPrune(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "opencode.db")
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	defer db.Close()
-
-	schema := []string{
-		`CREATE TABLE session (id text PRIMARY KEY, project_id text NOT NULL, parent_id text, slug text NOT NULL, directory text NOT NULL, title text NOT NULL, version text NOT NULL, time_created integer NOT NULL, time_updated integer NOT NULL);`,
-		`CREATE TABLE message (id text PRIMARY KEY, session_id text NOT NULL, time_created integer NOT NULL, time_updated integer NOT NULL, data text NOT NULL);`,
-		`CREATE TABLE part (id text PRIMARY KEY, message_id text NOT NULL, session_id text NOT NULL, time_created integer NOT NULL, time_updated integer NOT NULL, data text NOT NULL);`,
-	}
-	for _, stmt := range schema {
-		if _, err := db.Exec(stmt); err != nil {
-			t.Fatalf("schema: %v", err)
-		}
-	}
+	db, dbPath := openTestOpencodeDB(t)
 
 	const sid = "ses_test_prune"
-	if _, err := db.Exec(
-		`INSERT INTO session(id, project_id, slug, directory, title, version, time_created, time_updated) VALUES (?, '', '', ?, '', '', 0, 0)`,
-		sid, "/tmp/d",
-	); err != nil {
-		t.Fatalf("insert session: %v", err)
-	}
-	if _, err := db.Exec(
-		`INSERT INTO message(id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)`,
-		"msg_1", sid, 1000, 1000,
-		`{"role":"assistant","model":{"modelID":"test-model"}}`,
-	); err != nil {
-		t.Fatalf("insert message: %v", err)
-	}
-
-	todoPart := func(callID string, todos []map[string]any) string {
-		raw := map[string]any{
-			"type":   "tool",
-			"tool":   "todowrite",
-			"callID": callID,
-			"state": map[string]any{
-				"status": "completed",
-				"input":  map[string]any{"todos": todos},
-			},
-		}
-		b, _ := json.Marshal(raw)
-		return string(b)
-	}
+	insertTestSession(t, db, sid, "/tmp/d")
+	insertTestMessage(t, db, "msg_1", sid, 1000, `{"role":"assistant","model":{"modelID":"test-model"}}`)
 
 	parts := []struct {
 		id      string
 		created int64
 		data    string
 	}{
-		{"part_1", 1100, todoPart("c1", []map[string]any{
+		{"part_1", 1100, todowriteToolPart(t, "c1", []map[string]any{
 			{"content": "Task A", "status": "in_progress"},
 			{"content": "Task B", "status": "pending"},
 			{"content": "Task C", "status": "pending"},
 		})},
-		{"part_2", 1200, todoPart("c2", []map[string]any{
+		{"part_2", 1200, todowriteToolPart(t, "c2", []map[string]any{
 			{"content": "Task A", "status": "pending"}, // reverted
 			{"content": "Task B", "status": "pending"}, // unchanged
 			// Task C dropped from the snapshot.
 		})},
 	}
 	for _, p := range parts {
-		if _, err := db.Exec(
-			`INSERT INTO part(id, message_id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?)`,
-			p.id, "msg_1", sid, p.created, p.created, p.data,
-		); err != nil {
-			t.Fatalf("insert part %s: %v", p.id, err)
-		}
+		insertTestPart(t, db, p.id, "msg_1", sid, p.created, p.data)
 	}
 
 	metrics, err := ComputeMetrics(dbPath, sid)
@@ -326,71 +319,23 @@ func TestComputeMetrics_TodowriteSnapshotPrune(t *testing.T) {
 // path — which bypasses the tailer — surfaces the latest estimate and a
 // projected completion ETA.
 func TestComputeMetrics_TaskEstimate(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "opencode.db")
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	defer db.Close()
-
-	schema := []string{
-		`CREATE TABLE session (
-			id text PRIMARY KEY, project_id text NOT NULL, parent_id text,
-			slug text NOT NULL, directory text NOT NULL, title text NOT NULL,
-			version text NOT NULL, time_created integer NOT NULL, time_updated integer NOT NULL
-		);`,
-		`CREATE TABLE message (
-			id text PRIMARY KEY, session_id text NOT NULL,
-			time_created integer NOT NULL, time_updated integer NOT NULL, data text NOT NULL
-		);`,
-		`CREATE TABLE part (
-			id text PRIMARY KEY, message_id text NOT NULL, session_id text NOT NULL,
-			time_created integer NOT NULL, time_updated integer NOT NULL, data text NOT NULL
-		);`,
-	}
-	for _, stmt := range schema {
-		if _, err := db.Exec(stmt); err != nil {
-			t.Fatalf("schema: %v", err)
-		}
-	}
+	db, dbPath := openTestOpencodeDB(t)
 
 	const sid = "ses_test_taskestimate"
-	if _, err := db.Exec(
-		`INSERT INTO session(id, project_id, slug, directory, title, version, time_created, time_updated) VALUES (?, '', '', ?, '', '', 0, 0)`,
-		sid, "/tmp/opencode-eta-test",
-	); err != nil {
-		t.Fatalf("insert session: %v", err)
-	}
+	insertTestSession(t, db, sid, "/tmp/opencode-eta-test")
 	msgData := `{"role":"assistant","time":{"created":1000},"model":{"providerID":"test","modelID":"test-model"}}`
-	if _, err := db.Exec(
-		`INSERT INTO message(id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)`,
-		"msg_1", sid, 1000, 1000, msgData,
-	); err != nil {
-		t.Fatalf("insert message: %v", err)
-	}
+	insertTestMessage(t, db, "msg_1", sid, 1000, msgData)
 
-	textPart := func(text string) string {
-		b, err := json.Marshal(map[string]any{"type": "text", "text": text})
-		if err != nil {
-			t.Fatalf("marshal part: %v", err)
-		}
-		return string(b)
-	}
 	parts := []struct {
 		id      string
 		created int64
 		data    string
 	}{
-		{"part_1", 1100, textPart(`Step 1 done. <!-- {"marker":"irrlicht-eta","total_rounds":6,"completed_rounds":1} -->`)},
-		{"part_2", 240000, textPart(`Step 3 done. <!-- {"marker":"irrlicht-eta","total_rounds":6,"completed_rounds":3} -->`)},
+		{"part_1", 1100, textPart(t, `Step 1 done. <!-- {"marker":"irrlicht-eta","total_rounds":6,"completed_rounds":1} -->`)},
+		{"part_2", 240000, textPart(t, `Step 3 done. <!-- {"marker":"irrlicht-eta","total_rounds":6,"completed_rounds":3} -->`)},
 	}
 	for _, p := range parts {
-		if _, err := db.Exec(
-			`INSERT INTO part(id, message_id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?)`,
-			p.id, "msg_1", sid, p.created, p.created, p.data,
-		); err != nil {
-			t.Fatalf("insert part %s: %v", p.id, err)
-		}
+		insertTestPart(t, db, p.id, "msg_1", sid, p.created, p.data)
 	}
 
 	metrics, err := ComputeMetrics(dbPath, sid)

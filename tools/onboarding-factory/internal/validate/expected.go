@@ -401,21 +401,35 @@ func ParseShardSpec(metaLine json.RawMessage, phaseLines []json.RawMessage) (Exp
 		if err := json.Unmarshal(line, &p); err != nil {
 			return meta, nil, false, fmt.Errorf("expected phase %d: %w", i, err)
 		}
-		if p.Phase == "" {
-			return meta, nil, false, fmt.Errorf("expected phase %d: phase name is required", i)
-		}
-		if p.ExpectedState == "" && p.Kind == "" {
-			return meta, nil, false, fmt.Errorf("expected phase %d (%q): exactly one of expected_state or kind required", i, p.Phase)
-		}
-		if p.ExpectedState != "" && p.Kind != "" {
-			return meta, nil, false, fmt.Errorf("expected phase %d (%q): expected_state and kind are mutually exclusive", i, p.Phase)
-		}
-		if p.SameSessionAs != "" && p.NewSession {
-			return meta, nil, false, fmt.Errorf("expected phase %d (%q): same_session_as and new_session are mutually exclusive", i, p.Phase)
+		if msg := phaseShapeViolation(p); msg != "" {
+			if p.Phase == "" {
+				return meta, nil, false, fmt.Errorf("expected phase %d: %s", i, msg)
+			}
+			return meta, nil, false, fmt.Errorf("expected phase %d (%q): %s", i, p.Phase, msg)
 		}
 		phases = append(phases, p)
 	}
 	return meta, phases, true, nil
+}
+
+// phaseShapeViolation checks the structural rules shared by every
+// expected-phase source (on-disk expected.jsonl lines and shard-embedded
+// spec entries): phase name required, exactly one of expected_state/kind,
+// and same_session_as/new_session mutually exclusive. Returns "" when p is
+// well-formed.
+func phaseShapeViolation(p ExpectedPhase) string {
+	switch {
+	case p.Phase == "":
+		return "phase name is required"
+	case p.ExpectedState == "" && p.Kind == "":
+		return "exactly one of expected_state or kind required"
+	case p.ExpectedState != "" && p.Kind != "":
+		return "expected_state and kind are mutually exclusive"
+	case p.SameSessionAs != "" && p.NewSession:
+		return "same_session_as and new_session are mutually exclusive"
+	default:
+		return ""
+	}
 }
 
 func loadExpected(path string) (ExpectedMeta, []ExpectedPhase, error) {
@@ -441,25 +455,30 @@ func loadExpected(path string) (ExpectedMeta, []ExpectedPhase, error) {
 			}
 			continue
 		}
-		var p ExpectedPhase
-		if err := json.Unmarshal([]byte(line), &p); err != nil {
-			return meta, nil, fmt.Errorf("line %d: phase: %w", lineNum, err)
-		}
-		if p.Phase == "" {
-			return meta, nil, fmt.Errorf("line %d: phase name is required", lineNum)
-		}
-		if p.ExpectedState == "" && p.Kind == "" {
-			return meta, nil, fmt.Errorf("line %d (%q): exactly one of expected_state or kind required", lineNum, p.Phase)
-		}
-		if p.ExpectedState != "" && p.Kind != "" {
-			return meta, nil, fmt.Errorf("line %d (%q): expected_state and kind are mutually exclusive", lineNum, p.Phase)
-		}
-		if p.SameSessionAs != "" && p.NewSession {
-			return meta, nil, fmt.Errorf("line %d (%q): same_session_as and new_session are mutually exclusive", lineNum, p.Phase)
+		p, err := parseExpectedPhaseLine(line, lineNum)
+		if err != nil {
+			return meta, nil, err
 		}
 		phases = append(phases, p)
 	}
 	return meta, phases, scanner.Err()
+}
+
+// parseExpectedPhaseLine unmarshals and structurally validates one non-meta
+// line of expected.jsonl, using the same shared rules phaseShapeViolation
+// enforces for shard-embedded specs.
+func parseExpectedPhaseLine(line string, lineNum int) (ExpectedPhase, error) {
+	var p ExpectedPhase
+	if err := json.Unmarshal([]byte(line), &p); err != nil {
+		return p, fmt.Errorf("line %d: phase: %w", lineNum, err)
+	}
+	if msg := phaseShapeViolation(p); msg != "" {
+		if p.Phase == "" {
+			return p, fmt.Errorf("line %d: %s", lineNum, msg)
+		}
+		return p, fmt.Errorf("line %d (%q): %s", lineNum, p.Phase, msg)
+	}
+	return p, nil
 }
 
 func loadEvents(path string) ([]recordedEvent, error) {
@@ -489,54 +508,101 @@ func loadEvents(path string) ([]recordedEvent, error) {
 func matchPhase(p ExpectedPhase, events []recordedEvent, anchorTs map[string]time.Time, matchedSid map[string]string) ExpectedResult {
 	r := ExpectedResult{Phase: p.Phase}
 
-	anchorName := p.RelativeTo
-	if anchorName == "" {
-		anchorName = "start"
-	}
-	anchor, ok := anchorTs[anchorName]
+	anchorName, anchor, ok := resolvePhaseAnchor(p, anchorTs)
 	if !ok {
 		r.Reason = fmt.Sprintf("unknown anchor %q (must be declared in an earlier phase or 'start')", anchorName)
 		return r
 	}
 
-	// Resolve session-id constraint up front so candidate filtering is
-	// cheap inside the loop. SameSessionAs pins the matched session_id
-	// to a specific earlier phase's match; NewSession requires a
-	// session_id we haven't seen yet.
-	var requireSID string
+	requireSID, seenSIDs, errMsg := resolveSessionConstraint(p, matchedSid)
+	if errMsg != "" {
+		r.Reason = errMsg
+		return r
+	}
+
+	matched := findMatchingEvent(p, events, anchor, requireSID, seenSIDs)
+	if matched == nil {
+		r.Reason = noMatchReason(p, anchorName, requireSID)
+		return r
+	}
+	r.MatchedTs = matched.Ts
+	r.DeltaMs = matched.Ts.Sub(anchor).Milliseconds()
+	matchedSid[p.Phase] = matched.SessionID
+
+	if reason, fail := checkMaxDelay(p, r.DeltaMs); fail {
+		r.Reason = reason
+		return r
+	}
+	if reason, fail := checkDurationAtLeast(p, events, matched); fail {
+		r.Reason = reason
+		return r
+	}
+	if reason, fail := checkPhaseInvariants(p, events, matched, &r); fail {
+		r.Reason = reason
+		return r
+	}
+
+	r.Pass = true
+	r.Reason = passReason(p, r.DeltaMs, anchorName)
+	return r
+}
+
+// resolvePhaseAnchor resolves the phase's RelativeTo (defaulting to
+// "start") against the anchor timestamps recorded by earlier phases. ok is
+// false when the named anchor hasn't been recorded yet.
+func resolvePhaseAnchor(p ExpectedPhase, anchorTs map[string]time.Time) (name string, ts time.Time, ok bool) {
+	name = p.RelativeTo
+	if name == "" {
+		name = "start"
+	}
+	ts, ok = anchorTs[name]
+	return name, ts, ok
+}
+
+// resolveSessionConstraint computes the session-id filter for matching, up
+// front, so candidate filtering is cheap inside the search loop.
+// SameSessionAs pins the matched session_id to a specific earlier phase's
+// match; NewSession requires a session_id no earlier phase has matched yet.
+// errMsg is non-empty only when SameSessionAs references an unknown phase.
+func resolveSessionConstraint(p ExpectedPhase, matchedSid map[string]string) (requireSID string, seenSIDs map[string]struct{}, errMsg string) {
 	if p.SameSessionAs != "" {
 		sid, ok := matchedSid[p.SameSessionAs]
 		if !ok {
-			r.Reason = fmt.Sprintf("same_session_as references unknown phase %q", p.SameSessionAs)
-			return r
+			return "", nil, fmt.Sprintf("same_session_as references unknown phase %q", p.SameSessionAs)
 		}
 		requireSID = sid
 	}
-	var seenSIDs map[string]struct{}
 	if p.NewSession {
 		seenSIDs = make(map[string]struct{}, len(matchedSid))
 		for _, sid := range matchedSid {
 			seenSIDs[sid] = struct{}{}
 		}
 	}
+	return requireSID, seenSIDs, ""
+}
 
-	// 1. Find the first event matching expected_state or kind, at or
-	//    after the anchor, satisfying any session-id constraint. Skip
-	//    events strictly before anchor — earlier matches belong to an
-	//    earlier phase.
-	var matched *recordedEvent
+// eventMatchesPhaseKind reports whether ev satisfies the phase's match
+// predicate: exactly one of ExpectedState (a state_transition landing in
+// that state) or Kind (an event of that kind) is set on a well-formed
+// phase.
+func eventMatchesPhaseKind(p ExpectedPhase, ev *recordedEvent) bool {
+	if p.ExpectedState != "" {
+		return ev.Kind == "state_transition" && ev.NewState == p.ExpectedState
+	}
+	return p.Kind != "" && ev.Kind == p.Kind
+}
+
+// findMatchingEvent scans events in order for the first one at or after
+// anchor that satisfies the phase's kind predicate and session-id
+// constraints. Events strictly before anchor are skipped — earlier matches
+// belong to an earlier phase. Returns nil when no candidate qualifies.
+func findMatchingEvent(p ExpectedPhase, events []recordedEvent, anchor time.Time, requireSID string, seenSIDs map[string]struct{}) *recordedEvent {
 	for i := range events {
 		ev := &events[i]
 		if ev.Ts.Before(anchor) {
 			continue
 		}
-		kindOK := false
-		if p.ExpectedState != "" && ev.Kind == "state_transition" && ev.NewState == p.ExpectedState {
-			kindOK = true
-		} else if p.Kind != "" && ev.Kind == p.Kind {
-			kindOK = true
-		}
-		if !kindOK {
+		if !eventMatchesPhaseKind(p, ev) {
 			continue
 		}
 		if requireSID != "" && ev.SessionID != requireSID {
@@ -547,61 +613,69 @@ func matchPhase(p ExpectedPhase, events []recordedEvent, anchorTs map[string]tim
 				continue
 			}
 		}
-		matched = ev
-		break
+		return ev
 	}
-	if matched == nil {
-		want := p.ExpectedState
-		if want == "" {
-			want = p.Kind
-		}
-		switch {
-		case requireSID != "":
-			r.Reason = fmt.Sprintf("no event matching %q found for session %q at or after anchor %q", want, requireSID, anchorName)
-		case p.NewSession:
-			r.Reason = fmt.Sprintf("no event matching %q on a NEW session found at or after anchor %q (all candidates were already-seen session ids)", want, anchorName)
-		default:
-			r.Reason = fmt.Sprintf("no event matching %q found at or after anchor %q", want, anchorName)
-		}
-		return r
-	}
-	r.MatchedTs = matched.Ts
-	r.DeltaMs = matched.Ts.Sub(anchor).Milliseconds()
-	matchedSid[p.Phase] = matched.SessionID
+	return nil
+}
 
-	// 2. Check max_delay_ms.
-	if p.MaxDelayMs > 0 && r.DeltaMs > p.MaxDelayMs {
-		r.Reason = fmt.Sprintf("event arrived %d ms after anchor, exceeds max_delay_ms=%d", r.DeltaMs, p.MaxDelayMs)
-		return r
+// noMatchReason builds the "no matching event" failure explanation,
+// tailored to whichever session-id constraint (if any) narrowed the
+// search.
+func noMatchReason(p ExpectedPhase, anchorName, requireSID string) string {
+	want := p.ExpectedState
+	if want == "" {
+		want = p.Kind
 	}
+	switch {
+	case requireSID != "":
+		return fmt.Sprintf("no event matching %q found for session %q at or after anchor %q", want, requireSID, anchorName)
+	case p.NewSession:
+		return fmt.Sprintf("no event matching %q on a NEW session found at or after anchor %q (all candidates were already-seen session ids)", want, anchorName)
+	default:
+		return fmt.Sprintf("no event matching %q found at or after anchor %q", want, anchorName)
+	}
+}
 
-	// 3. Check duration_at_least_ms — the matched state must persist
-	//    that long. Scan forward for the next state_transition that
-	//    leaves expected_state; fail if it arrives too soon.
-	if p.DurationAtLeastMs > 0 && p.ExpectedState != "" {
-		endWindow := matched.Ts.Add(time.Duration(p.DurationAtLeastMs) * time.Millisecond)
-		for i := range events {
-			ev := &events[i]
-			if !ev.Ts.After(matched.Ts) {
-				continue
-			}
-			if ev.Ts.After(endWindow) {
-				break
-			}
-			if ev.Kind == "state_transition" && ev.NewState != p.ExpectedState && ev.SessionID == matched.SessionID {
-				early := ev.Ts.Sub(matched.Ts).Milliseconds()
-				r.Reason = fmt.Sprintf("state changed to %q after only %d ms (expected to hold %q for %d ms)", ev.NewState, early, p.ExpectedState, p.DurationAtLeastMs)
-				return r
-			}
+// checkMaxDelay enforces max_delay_ms when set. fail is true when the
+// matched event arrived too late; reason then explains why.
+func checkMaxDelay(p ExpectedPhase, deltaMs int64) (reason string, fail bool) {
+	if p.MaxDelayMs > 0 && deltaMs > p.MaxDelayMs {
+		return fmt.Sprintf("event arrived %d ms after anchor, exceeds max_delay_ms=%d", deltaMs, p.MaxDelayMs), true
+	}
+	return "", false
+}
+
+// checkDurationAtLeast enforces duration_at_least_ms: the matched state
+// must persist that long. Scans forward for the next state_transition that
+// leaves ExpectedState; fail is true if it arrives too soon.
+func checkDurationAtLeast(p ExpectedPhase, events []recordedEvent, matched *recordedEvent) (reason string, fail bool) {
+	if p.DurationAtLeastMs <= 0 || p.ExpectedState == "" {
+		return "", false
+	}
+	endWindow := matched.Ts.Add(time.Duration(p.DurationAtLeastMs) * time.Millisecond)
+	for i := range events {
+		ev := &events[i]
+		if !ev.Ts.After(matched.Ts) {
+			continue
+		}
+		if ev.Ts.After(endWindow) {
+			break
+		}
+		if ev.Kind == "state_transition" && ev.NewState != p.ExpectedState && ev.SessionID == matched.SessionID {
+			early := ev.Ts.Sub(matched.Ts).Milliseconds()
+			return fmt.Sprintf("state changed to %q after only %d ms (expected to hold %q for %d ms)", ev.NewState, early, p.ExpectedState, p.DurationAtLeastMs), true
 		}
 	}
+	return "", false
+}
 
-	// 4. Invariants over the phase's time window. Window starts at
-	//    matched.Ts; ends at matched.Ts + DurationAtLeastMs if set,
-	//    else at the next anchor referenced by a later phase, else
-	//    end of events. For this iteration, the simple interpretation:
-	//    window = matched.Ts ... matched.Ts + DurationAtLeastMs (or
-	//    forever if no duration).
+// checkPhaseInvariants runs the phase's Invariants DSL checks over its time
+// window: matched.Ts .. matched.Ts+DurationAtLeastMs if set, else forever.
+// For this iteration the simple interpretation applies: window =
+// matched.Ts ... matched.Ts + DurationAtLeastMs (or unbounded with no
+// duration). Appends a pass note to r for each satisfied invariant; fail is
+// true on the first violation, with reason set to the violation detail.
+func checkPhaseInvariants(p ExpectedPhase, events []recordedEvent, matched *recordedEvent, r *ExpectedResult) (reason string, fail bool) {
 	var windowEnd time.Time
 	if p.DurationAtLeastMs > 0 {
 		windowEnd = matched.Ts.Add(time.Duration(p.DurationAtLeastMs) * time.Millisecond)
@@ -609,19 +683,19 @@ func matchPhase(p ExpectedPhase, events []recordedEvent, anchorTs map[string]tim
 	for _, inv := range p.Invariants {
 		ok, why := checkInvariant(inv, events, matched, windowEnd)
 		if !ok {
-			r.Reason = fmt.Sprintf("invariant violated: %s — %s", inv, why)
-			return r
+			return fmt.Sprintf("invariant violated: %s — %s", inv, why), true
 		}
 		r.Notes = append(r.Notes, fmt.Sprintf("invariant ok: %s", inv))
 	}
+	return "", false
+}
 
-	r.Pass = true
+// passReason formats the success reason for a matched phase.
+func passReason(p ExpectedPhase, deltaMs int64, anchorName string) string {
 	if p.MaxDelayMs > 0 {
-		r.Reason = fmt.Sprintf("matched at +%d ms (under %d ms max)", r.DeltaMs, p.MaxDelayMs)
-	} else {
-		r.Reason = fmt.Sprintf("matched at +%d ms after anchor %q", r.DeltaMs, anchorName)
+		return fmt.Sprintf("matched at +%d ms (under %d ms max)", deltaMs, p.MaxDelayMs)
 	}
-	return r
+	return fmt.Sprintf("matched at +%d ms after anchor %q", deltaMs, anchorName)
 }
 
 // Invariant DSL — two forms supported in iteration 10:
@@ -646,39 +720,47 @@ func checkInvariant(inv string, events []recordedEvent, matched *recordedEvent, 
 	inv = strings.TrimSpace(inv)
 	if m := invariantNoStateRE.FindStringSubmatch(inv); m != nil {
 		forbiddenState := m[1]
-		for i := range events {
-			ev := &events[i]
-			if !ev.Ts.After(matched.Ts) {
-				continue
-			}
-			if !windowEnd.IsZero() && ev.Ts.After(windowEnd) {
-				break
-			}
-			if ev.Kind == "state_transition" && ev.NewState == forbiddenState && ev.SessionID == matched.SessionID {
-				return false, fmt.Sprintf("found state_transition to %q at +%d ms", forbiddenState, ev.Ts.Sub(matched.Ts).Milliseconds())
-			}
+		offsetMs, found := scanWindowForViolation(events, matched, windowEnd, func(ev *recordedEvent) bool {
+			return ev.Kind == "state_transition" && ev.NewState == forbiddenState && ev.SessionID == matched.SessionID
+		})
+		if found {
+			return false, fmt.Sprintf("found state_transition to %q at +%d ms", forbiddenState, offsetMs)
 		}
 		return true, ""
 	}
 	if m := invariantNoKindRE.FindStringSubmatch(inv); m != nil {
 		forbiddenKind := m[1]
 		// session-noun in m[2] is informational for now.
-		for i := range events {
-			ev := &events[i]
-			if !ev.Ts.After(matched.Ts) {
-				continue
-			}
-			if !windowEnd.IsZero() && ev.Ts.After(windowEnd) {
-				break
-			}
-			if ev.Kind == forbiddenKind && ev.SessionID == matched.SessionID {
-				return false, fmt.Sprintf("found %s at +%d ms", forbiddenKind, ev.Ts.Sub(matched.Ts).Milliseconds())
-			}
+		offsetMs, found := scanWindowForViolation(events, matched, windowEnd, func(ev *recordedEvent) bool {
+			return ev.Kind == forbiddenKind && ev.SessionID == matched.SessionID
+		})
+		if found {
+			return false, fmt.Sprintf("found %s at +%d ms", forbiddenKind, offsetMs)
 		}
 		return true, ""
 	}
 	// Unknown DSL — don't fail, but flag.
 	return true, "skipped (unknown invariant DSL form)"
+}
+
+// scanWindowForViolation walks events after matched.Ts up to windowEnd (or
+// forever if windowEnd is zero), returning the offset (ms, from
+// matched.Ts) of the first event for which violates reports true. found is
+// false when no violation occurs in the window.
+func scanWindowForViolation(events []recordedEvent, matched *recordedEvent, windowEnd time.Time, violates func(ev *recordedEvent) bool) (offsetMs int64, found bool) {
+	for i := range events {
+		ev := &events[i]
+		if !ev.Ts.After(matched.Ts) {
+			continue
+		}
+		if !windowEnd.IsZero() && ev.Ts.After(windowEnd) {
+			break
+		}
+		if violates(ev) {
+			return ev.Ts.Sub(matched.Ts).Milliseconds(), true
+		}
+	}
+	return 0, false
 }
 
 func summarize(results []ExpectedResult) string {

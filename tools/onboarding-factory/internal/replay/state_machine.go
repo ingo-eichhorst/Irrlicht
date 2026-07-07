@@ -218,46 +218,8 @@ func (m *StateMachine) Run(ctx context.Context) {
 		return
 	}
 	anchor := m.events[0].Timestamp
-	m.mu.Lock()
-	m.playStart = time.Now().UTC()
-	m.recordingStart = anchor
-	m.lastTickWall = time.Now()
-	m.playheadRunning = true
-	m.playheadMs = 0
-	m.playheadAtomicMs.Store(0)
-	m.mu.Unlock()
+	m.initPlaybackState(anchor)
 	paused := false
-
-	handle := func(c command) (stop bool) {
-		switch c.kind {
-		case "pause":
-			paused = true
-			m.mu.Lock()
-			m.tickPlayheadLocked()
-			m.playheadRunning = false
-			m.mu.Unlock()
-		case "resume":
-			paused = false
-			m.mu.Lock()
-			m.lastTickWall = time.Now()
-			m.playheadRunning = true
-			m.mu.Unlock()
-		case "stop":
-			m.mu.Lock()
-			m.tickPlayheadLocked()
-			m.playheadRunning = false
-			m.mu.Unlock()
-			return true
-		case "seek":
-			m.seekTo(c.seekToMs, anchor)
-			m.mu.Lock()
-			m.playheadMs = float64(c.seekToMs)
-			m.playheadAtomicMs.Store(c.seekToMs)
-			m.lastTickWall = time.Now()
-			m.mu.Unlock()
-		}
-		return false
-	}
 
 	for {
 		if ctx.Err() != nil {
@@ -265,13 +227,8 @@ func (m *StateMachine) Run(ctx context.Context) {
 		}
 		// While paused, only commands advance us.
 		if paused {
-			select {
-			case <-ctx.Done():
+			if m.waitWhilePaused(ctx, anchor, &paused) {
 				return
-			case c := <-m.cmd:
-				if handle(c) {
-					return
-				}
 			}
 			continue
 		}
@@ -286,63 +243,147 @@ func (m *StateMachine) Run(ctx context.Context) {
 		}
 		ev := m.events[cur]
 
-		// Compute the wait until this event's timestamp. The baseline is
-		// the last applied event's timestamp — EXCEPT after a backward
-		// seek, where seekTo sets playheadMs to the seek target while
-		// cursor lands on the first event AT OR AFTER that target. In
-		// that window the playhead is ahead of events[cur-1], and using
-		// events[cur-1] as the baseline computes the recording's natural
-		// inter-event gap — which makes the wall-clock-driven playhead
-		// visually cross state-transition markers seconds before the
-		// corresponding events actually fire. Clamp to whichever is
-		// later so the wait reflects "from where the user is NOW until
-		// the next event" rather than the recording's frozen gap.
-		var scaled time.Duration
-		if cur > 0 {
-			prev := m.events[cur-1].Timestamp
-			m.mu.Lock()
-			playheadTs := m.events[0].Timestamp.Add(time.Duration(m.playheadMs) * time.Millisecond)
-			m.mu.Unlock()
-			if playheadTs.After(prev) {
-				prev = playheadTs
-			}
-			scaled = time.Duration(float64(ev.Timestamp.Sub(prev)) / m.Speed())
+		scaled := m.computeEventWait(cur, ev)
+		applyNow, stop := m.awaitEventOrCommand(ctx, anchor, scaled, &paused)
+		if stop {
+			return
 		}
-
-		if scaled > 0 {
-			select {
-			case <-ctx.Done():
-				return
-			case c := <-m.cmd:
-				if handle(c) {
-					return
-				}
-				continue // don't apply ev; re-evaluate (possibly paused / seeked / new cursor)
-			case <-time.After(scaled):
-			}
-		} else {
-			// Still poll commands non-blocking so back-to-back zero-delta
-			// events stay responsive to pause/stop.
-			select {
-			case c := <-m.cmd:
-				if handle(c) {
-					return
-				}
-				continue
-			default:
-			}
+		if !applyNow {
+			// don't apply ev; re-evaluate (possibly paused / seeked / new cursor)
+			continue
 		}
 
 		m.apply(ev)
+		m.advanceCursorIfUnchanged(cur)
+	}
+}
+
+// initPlaybackState resets the wall-clock/playhead bookkeeping at the start
+// of Run. Caller must not hold m.mu.
+func (m *StateMachine) initPlaybackState(anchor time.Time) {
+	m.mu.Lock()
+	m.playStart = time.Now().UTC()
+	m.recordingStart = anchor
+	m.lastTickWall = time.Now()
+	m.playheadRunning = true
+	m.playheadMs = 0
+	m.playheadAtomicMs.Store(0)
+	m.mu.Unlock()
+}
+
+// handleCommand applies one control-channel command (pause/resume/stop/seek),
+// mutating *paused for the pause/resume cases. Returns true when Run should
+// stop (the "stop" command).
+func (m *StateMachine) handleCommand(c command, anchor time.Time, paused *bool) (stop bool) {
+	switch c.kind {
+	case "pause":
+		*paused = true
 		m.mu.Lock()
-		// Only advance if we're still on the same cursor (a seek may
-		// have moved us); applying out-of-order events is fine but the
-		// cursor must reflect that the just-applied event is consumed.
-		if m.cursor == cur {
-			m.cursor++
-		}
+		m.tickPlayheadLocked()
+		m.playheadRunning = false
+		m.mu.Unlock()
+	case "resume":
+		*paused = false
+		m.mu.Lock()
+		m.lastTickWall = time.Now()
+		m.playheadRunning = true
+		m.mu.Unlock()
+	case "stop":
+		m.mu.Lock()
+		m.tickPlayheadLocked()
+		m.playheadRunning = false
+		m.mu.Unlock()
+		return true
+	case "seek":
+		m.seekTo(c.seekToMs, anchor)
+		m.mu.Lock()
+		m.playheadMs = float64(c.seekToMs)
+		m.playheadAtomicMs.Store(c.seekToMs)
+		m.lastTickWall = time.Now()
 		m.mu.Unlock()
 	}
+	return false
+}
+
+// waitWhilePaused blocks on the command channel until either a command
+// resumes playback (returns false) or ctx is cancelled / a stop command
+// arrives (returns true, meaning Run should exit).
+func (m *StateMachine) waitWhilePaused(ctx context.Context, anchor time.Time, paused *bool) (stop bool) {
+	for *paused {
+		if ctx.Err() != nil {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return true
+		case c := <-m.cmd:
+			if m.handleCommand(c, anchor, paused) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// computeEventWait returns the scaled wait duration before applying
+// events[cur]. The baseline is the last applied event's timestamp — EXCEPT
+// after a backward seek, where seekTo sets playheadMs to the seek target
+// while cursor lands on the first event AT OR AFTER that target. In that
+// window the playhead is ahead of events[cur-1], and using events[cur-1] as
+// the baseline computes the recording's natural inter-event gap — which
+// makes the wall-clock-driven playhead visually cross state-transition
+// markers seconds before the corresponding events actually fire. Clamp to
+// whichever is later so the wait reflects "from where the user is NOW until
+// the next event" rather than the recording's frozen gap.
+func (m *StateMachine) computeEventWait(cur int, ev lifecycle.Event) time.Duration {
+	if cur == 0 {
+		return 0
+	}
+	prev := m.events[cur-1].Timestamp
+	m.mu.Lock()
+	playheadTs := m.events[0].Timestamp.Add(time.Duration(m.playheadMs) * time.Millisecond)
+	m.mu.Unlock()
+	if playheadTs.After(prev) {
+		prev = playheadTs
+	}
+	return time.Duration(float64(ev.Timestamp.Sub(prev)) / m.Speed())
+}
+
+// awaitEventOrCommand waits up to `scaled` for the next event, servicing
+// commands in the meantime. applyNow is true once the wait has elapsed (or,
+// for a zero/negative wait, immediately) with no intervening command; stop
+// is true when Run should exit (ctx cancelled or a stop command).
+func (m *StateMachine) awaitEventOrCommand(ctx context.Context, anchor time.Time, scaled time.Duration, paused *bool) (applyNow, stop bool) {
+	if scaled > 0 {
+		select {
+		case <-ctx.Done():
+			return false, true
+		case c := <-m.cmd:
+			return false, m.handleCommand(c, anchor, paused)
+		case <-time.After(scaled):
+			return true, false
+		}
+	}
+	// Still poll commands non-blocking so back-to-back zero-delta events
+	// stay responsive to pause/stop.
+	select {
+	case c := <-m.cmd:
+		return false, m.handleCommand(c, anchor, paused)
+	default:
+		return true, false
+	}
+}
+
+// advanceCursorIfUnchanged advances the cursor past a just-applied event,
+// but only if it's still on cur — a seek may have moved us. Applying
+// out-of-order events is fine but the cursor must reflect that the
+// just-applied event is consumed.
+func (m *StateMachine) advanceCursorIfUnchanged(cur int) {
+	m.mu.Lock()
+	if m.cursor == cur {
+		m.cursor++
+	}
+	m.mu.Unlock()
 }
 
 // seekTo fast-forwards (or rewinds) the cursor to the first event whose

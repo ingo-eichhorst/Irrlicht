@@ -183,42 +183,53 @@ func walkProto(buf []byte, fn func(field, wire int, data []byte, num uint64) boo
 		}
 		i += n
 		field, wire := int(tag>>3), int(tag&7)
-		switch wire {
-		case 0: // varint
-			v, n := readVarint(buf[i:])
-			if n == 0 {
-				return
-			}
-			i += n
-			if fn(field, wire, nil, v) {
-				return
-			}
-		case 2: // length-delimited
-			l, n := readVarint(buf[i:])
-			if n == 0 {
-				return
-			}
-			i += n
-			if i+int(l) > len(buf) {
-				return
-			}
-			if fn(field, wire, buf[i:i+int(l)], 0) {
-				return
-			}
-			i += int(l)
-		case 1: // 64-bit
-			if i+8 > len(buf) {
-				return
-			}
-			i += 8
-		case 5: // 32-bit
-			if i+4 > len(buf) {
-				return
-			}
-			i += 4
-		default:
+
+		next, stop, ok := consumeProtoField(buf, i, field, wire, fn)
+		if !ok {
 			return
 		}
+		i = next
+		if stop {
+			return
+		}
+	}
+}
+
+// consumeProtoField consumes the payload of one field per its wire type,
+// invoking fn for varint (0) and length-delimited (2) fields. It returns the
+// buffer offset just past the field, whether fn asked to stop the walk, and
+// whether the payload was well-formed — ok is false on truncated or
+// malformed input, which walkProto treats as "stop with no data".
+func consumeProtoField(buf []byte, i, field, wire int, fn func(field, wire int, data []byte, num uint64) bool) (next int, stop bool, ok bool) {
+	switch wire {
+	case 0: // varint
+		v, n := readVarint(buf[i:])
+		if n == 0 {
+			return 0, false, false
+		}
+		return i + n, fn(field, wire, nil, v), true
+	case 2: // length-delimited
+		l, n := readVarint(buf[i:])
+		if n == 0 {
+			return 0, false, false
+		}
+		i += n
+		if i+int(l) > len(buf) {
+			return 0, false, false
+		}
+		return i + int(l), fn(field, wire, buf[i:i+int(l)], 0), true
+	case 1: // 64-bit
+		if i+8 > len(buf) {
+			return 0, false, false
+		}
+		return i + 8, false, true
+	case 5: // 32-bit
+		if i+4 > len(buf) {
+			return 0, false, false
+		}
+		return i + 4, false, true
+	default:
+		return 0, false, false
 	}
 }
 

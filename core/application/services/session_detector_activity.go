@@ -63,199 +63,17 @@ func (d *SessionDetector) onNewSession(id agent.Identity, ev agent.Event) {
 	now := time.Now().Unix()
 
 	if isNew {
-		// Skip transcripts whose session was recently deleted (process exit
-		// or /clear cleanup). Allow re-creation if the cooldown has passed
-		// and the transcript has fresh activity (--continue scenario).
-		d.mu.Lock()
-		deletedAt, deleted := d.deletedSessions[ev.SessionID]
-		if deleted && time.Since(time.Unix(deletedAt, 0)) >= d.deletedCooldown && !isStaleTranscript(ev.TranscriptPath) {
-			delete(d.deletedSessions, ev.SessionID)
-			deleted = false
-			d.log.LogInfo(logComponentSessionDetector, ev.SessionID,
-				"previously deleted session has fresh activity (--continue), allowing re-creation")
-		}
-		d.mu.Unlock()
-		if deleted {
-			d.log.LogInfo(logComponentSessionDetector, ev.SessionID,
-				"skipping recently deleted session")
+		if !d.admitNewSession(id, &ev) {
 			return
 		}
-
-		// Skip orphan transcripts left by exited Claude Code processes —
-		// unless a live agent process still owns the transcript's cwd
-		// (issue #576: consent granted after sessions started makes
-		// "stale at first sight" the canonical backfill path).
-		if isStaleTranscript(ev.TranscriptPath) {
-			liveCWD, live := d.isLiveStaleSession(id.Name, ev)
-			if !live {
-				d.log.LogInfo(logComponentSessionDetector, ev.SessionID,
-					"skipping orphan transcript")
-				return
-			}
-			// Thread the transcript-derived cwd into the event so
-			// EnrichNewSession doesn't re-read the transcript for it (and
-			// PID discovery gets a usable cwd for its fallback).
-			if ev.CWD == "" {
-				ev.CWD = liveCWD
-			}
-			d.log.LogInfo(logComponentSessionDetector, ev.SessionID,
-				"stale transcript but live process owns its cwd — creating session")
-		}
-
-		// Skip zombie sessions whose worktree has been deleted from disk.
-		// A long-dead session can be re-touched via `claude --resume` from
-		// another worktree, which refreshes the transcript mtime and would
-		// otherwise sneak past the staleness check during a daemon restart
-		// (issue #321). The cwd directory missing on disk is an unambiguous
-		// orphan signal — no live process can be running in a gone cwd.
-		if cwdMissing(ev.CWD) {
-			d.log.LogInfo(logComponentSessionDetector, ev.SessionID,
-				"skipping session with missing cwd")
-			return
-		}
-
-		// Skip sessions previously rejected by the host-ancestry gate below.
-		// Checked unconditionally (before looking at id.Name) because the
-		// debounce-coalesce path re-enters onNewSession with an empty
-		// Identity (see processActivityWithoutIdentity) — without this cache,
-		// AllowsSession("", ...) would no-op on the unrecognized adapter name
-		// and let an already-rejected non-interactive session slip through on
-		// a same-window retry.
-		d.mu.Lock()
-		_, hostRejected := d.hostGateRejected[ev.SessionID]
-		d.mu.Unlock()
-		if hostRejected {
-			return
-		}
-
-		// Skip sessions whose adapter requires a known interactive host
-		// (currently antigravity only) when the process behind them was
-		// launched by something other than a recognized terminal or IDE — a
-		// synchronous, one-shot check so a non-interactive process never
-		// becomes a visible session in the first place, rather than appearing
-		// and being reaped later (issue #784).
-		if d.pidMgr.RequiresKnownHost(id.Name) {
-			cwd := ev.CWD
-			if cwd == "" {
-				cwd = d.enricher.git.GetCWDFromTranscript(ev.TranscriptPath)
-			}
-			if !d.pidMgr.AllowsSession(ev.SessionID, id.Name, cwd, ev.TranscriptPath) {
-				d.mu.Lock()
-				d.hostGateRejected[ev.SessionID] = struct{}{}
-				d.mu.Unlock()
-				d.log.LogInfo(logComponentSessionDetector, ev.SessionID,
-					"skipping session bound to a non-interactive host")
-				return
-			}
-		}
-
 		// All new sessions start as ready. Content-based detection on
 		// subsequent activity events will transition to working/waiting.
-		parentID := ev.ParentSessionID
-		if parentID == "" {
-			parentID = deriveParentSession(ev.TranscriptPath)
-		}
-		state := &session.SessionState{
-			Version:         1,
-			SessionID:       ev.SessionID,
-			State:           session.StateReady,
-			Adapter:         id.Name,
-			TranscriptPath:  ev.TranscriptPath,
-			CWD:             ev.CWD,
-			DaemonVersion:   d.version,
-			ParentSessionID: parentID,
-			FirstSeen:       now,
-			UpdatedAt:       now,
-			Confidence:      "medium",
-			EventCount:      1,
-			LastEvent:       "transcript_new",
-		}
-
-		// Record parent-child linkage if detected.
-		if state.ParentSessionID != "" {
-			d.record(lifecycle.Event{Kind: lifecycle.KindParentLinked, SessionID: ev.SessionID, ParentSessionID: state.ParentSessionID})
-		}
-
-		// Resolve git metadata and compute initial metrics.
-		d.enricher.EnrichNewSession(state, ev)
-
-		// A child's own first activity event may not arrive for a while — the
-		// same background-workflow discovery lag that leaves its parent
-		// needing holdParentWorkingForNewChild below. Classify it against its
-		// own freshly-computed metrics now instead of leaving it at the
-		// generic "ready until proven otherwise" bootstrap: a child stuck at
-		// ready doesn't count as active in hasActiveChildren, so the parent's
-		// hold below can't survive past the child's own next activity pass —
-		// e.g. the periodic stale-session sweep would see the parent's own
-		// turn-done metrics unchanged, find no active children, and flip it
-		// straight back to ready (issue #889).
-		if state.ParentSessionID != "" {
-			if newState, _ := ClassifyState(state.State, state.Metrics); newState != state.State {
-				state.State = newState
-			}
-		}
-
-		if err := d.repo.Save(state); err != nil {
-			d.log.LogError(logComponentSessionDetector, ev.SessionID,
-				fmt.Sprintf("failed to save new session: %v", err))
+		state := d.buildNewSessionState(id, ev, now)
+		if !d.finalizeNewSession(id, ev, state) {
 			return
 		}
-		d.recordCost(state)
-
-		// Record pre-session detection (proc-* IDs only — real transcript
-		// sessions are already covered by KindTranscriptNew above).
-		if strings.HasPrefix(ev.SessionID, "proc-") {
-			d.record(lifecycle.Event{Kind: lifecycle.KindPreSessionCreated, SessionID: ev.SessionID, Adapter: id.Name, ProjectDir: ev.ProjectDir, CWD: ev.CWD})
-		}
-
-		// Record initial state transition.
-		d.record(lifecycle.Event{Kind: lifecycle.KindStateTransition, SessionID: ev.SessionID, NewState: state.State, Reason: "new session created"})
-
-		d.broadcast(outbound.PushTypeCreated, state)
-
-		// This child's parent may have already flipped to ready before this
-		// child was discovered (e.g. a background Workflow-tool run whose
-		// turn-done fired while it had no active children yet). Hold it
-		// working now instead of waiting for the parent's own next
-		// transcript/hook event to catch it (issue #889).
-		if state.ParentSessionID != "" {
-			d.holdParentWorkingForNewChild(state.ParentSessionID)
-		}
-
-		// When a real transcript session arrives, remove any pre-sessions for
-		// the same project. Match by projectDir first (Claude Code layout),
-		// then fall back to CWD (Codex/Pi have different transcript layouts).
-		if ev.TranscriptPath != "" {
-			d.cleanupPreSessionsForProject(ev.ProjectDir, state.CWD, id.Name)
-		}
 	} else {
-		// Session already exists. Update transcript path if missing, and
-		// backfill Adapter when it's empty — this happens when an earlier
-		// processActivity fallback (debounce/refresh) created the session
-		// without an identity. The watcher's identity on the next real
-		// transcript event is the authoritative source.
-		//
-		// Under the PIDManager's state lock: a discovery goroutine spawned by
-		// the earlier event may still be in flight, and its assignPIDLocked
-		// writes state.PID/UpdatedAt on this same pointer (issue #606).
-		d.pidMgr.WithSessionStateLock(func() {
-			changed := false
-			if existing.TranscriptPath == "" {
-				existing.TranscriptPath = ev.TranscriptPath
-				changed = true
-			}
-			if existing.Adapter == "" && id.Name != "" {
-				existing.Adapter = id.Name
-				changed = true
-			}
-			if changed {
-				existing.UpdatedAt = now
-				if err := d.repo.Save(existing); err != nil {
-					d.log.LogError(logComponentSessionDetector, ev.SessionID,
-						fmt.Sprintf("failed to update existing session: %v", err))
-				}
-			}
-		})
+		d.backfillExistingSession(id, ev, existing, now)
 	}
 
 	// PID discovery (async). Each adapter has its own strategy:
@@ -273,6 +91,258 @@ func (d *SessionDetector) onNewSession(id agent.Identity, ev agent.Event) {
 		transcriptPath = existing.TranscriptPath
 	}
 	go d.pidMgr.DiscoverPIDWithRetry(ev.SessionID, cwd, transcriptPath, adapter)
+}
+
+// admitNewSession runs the full new-session admission gate in order:
+// recently-deleted cooldown, orphan/live-stale-transcript check, missing-cwd
+// check, cached host-gate rejection, and the host-ancestry gate itself. May
+// mutate ev.CWD when the stale-transcript check resolves one from the
+// transcript so EnrichNewSession doesn't have to re-read it. Returns false
+// (already logged) the moment any check rejects the session.
+func (d *SessionDetector) admitNewSession(id agent.Identity, ev *agent.Event) bool {
+	// Skip transcripts whose session was recently deleted (process exit or
+	// /clear cleanup). recentlyDeleted itself allows re-creation once the
+	// cooldown has passed and the transcript has fresh activity (--continue).
+	if d.recentlyDeleted(*ev) {
+		d.log.LogInfo(logComponentSessionDetector, ev.SessionID,
+			"skipping recently deleted session")
+		return false
+	}
+
+	if !d.admitStaleTranscript(id, ev) {
+		return false
+	}
+
+	// Skip zombie sessions whose worktree has been deleted from disk. A
+	// long-dead session can be re-touched via `claude --resume` from another
+	// worktree, which refreshes the transcript mtime and would otherwise
+	// sneak past the staleness check during a daemon restart (issue #321).
+	// The cwd directory missing on disk is an unambiguous orphan signal — no
+	// live process can be running in a gone cwd.
+	if cwdMissing(ev.CWD) {
+		d.log.LogInfo(logComponentSessionDetector, ev.SessionID,
+			"skipping session with missing cwd")
+		return false
+	}
+
+	// Skip sessions previously rejected by the host-ancestry gate below.
+	// Checked unconditionally (before looking at id.Name) because the
+	// debounce-coalesce path re-enters onNewSession with an empty Identity
+	// (see processActivityWithoutIdentity) — without this cache,
+	// AllowsSession("", ...) would no-op on the unrecognized adapter name and
+	// let an already-rejected non-interactive session slip through on a
+	// same-window retry.
+	if d.wasHostRejected(ev.SessionID) {
+		return false
+	}
+
+	return d.admitHost(id, *ev)
+}
+
+// recentlyDeleted reports whether ev's session was explicitly deleted
+// (process exit, /clear cleanup) recently enough that a late-arriving
+// transcript write should still be ignored. Once the cooldown has passed and
+// the transcript shows fresh activity, it's a genuine --continue: the
+// deletion record is cleared and false is returned. The cooldown prevents
+// ghost sessions from late-arriving writes of a dying process.
+func (d *SessionDetector) recentlyDeleted(ev agent.Event) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	deletedAt, deleted := d.deletedSessions[ev.SessionID]
+	if !deleted {
+		return false
+	}
+	if time.Since(time.Unix(deletedAt, 0)) < d.deletedCooldown || isStaleTranscript(ev.TranscriptPath) {
+		return true
+	}
+	delete(d.deletedSessions, ev.SessionID)
+	d.log.LogInfo(logComponentSessionDetector, ev.SessionID,
+		"previously deleted session has fresh activity (--continue), allowing re-creation")
+	return false
+}
+
+// admitStaleTranscript reports whether a stale transcript should still admit
+// a new session: skip orphan transcripts left by exited processes, but not
+// when a live agent process still owns the transcript's cwd (issue #576:
+// consent granted after sessions started makes "stale at first sight" the
+// canonical backfill path). A non-stale transcript always admits. Threads
+// the transcript-derived cwd into ev so EnrichNewSession and PID discovery's
+// fallback don't have to re-read the transcript for it.
+func (d *SessionDetector) admitStaleTranscript(id agent.Identity, ev *agent.Event) bool {
+	if !isStaleTranscript(ev.TranscriptPath) {
+		return true
+	}
+	liveCWD, live := d.isLiveStaleSession(id.Name, *ev)
+	if !live {
+		d.log.LogInfo(logComponentSessionDetector, ev.SessionID, "skipping orphan transcript")
+		return false
+	}
+	// Thread the transcript-derived cwd into the event so EnrichNewSession
+	// doesn't re-read the transcript for it (and PID discovery gets a usable
+	// cwd for its fallback).
+	if ev.CWD == "" {
+		ev.CWD = liveCWD
+	}
+	d.log.LogInfo(logComponentSessionDetector, ev.SessionID,
+		"stale transcript but live process owns its cwd — creating session")
+	return true
+}
+
+// wasHostRejected reports whether sessionID was already rejected by the
+// host-ancestry gate (issue #784). See admitNewSession's call site for why
+// this cache is checked unconditionally, ahead of admitHost itself.
+func (d *SessionDetector) wasHostRejected(sessionID string) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	_, rejected := d.hostGateRejected[sessionID]
+	return rejected
+}
+
+// admitHost reports whether id's adapter may create a session for ev,
+// rejecting one whose process was launched by something other than a known
+// interactive host (currently antigravity only) — a synchronous, one-shot
+// check so a non-interactive process never becomes a visible session in the
+// first place, rather than appearing and being reaped later (issue #784).
+// Adapters that don't require a known host always admit. A rejection is
+// cached in hostGateRejected (see wasHostRejected).
+func (d *SessionDetector) admitHost(id agent.Identity, ev agent.Event) bool {
+	if !d.pidMgr.RequiresKnownHost(id.Name) {
+		return true
+	}
+	cwd := ev.CWD
+	if cwd == "" {
+		cwd = d.enricher.git.GetCWDFromTranscript(ev.TranscriptPath)
+	}
+	if d.pidMgr.AllowsSession(ev.SessionID, id.Name, cwd, ev.TranscriptPath) {
+		return true
+	}
+	d.mu.Lock()
+	d.hostGateRejected[ev.SessionID] = struct{}{}
+	d.mu.Unlock()
+	d.log.LogInfo(logComponentSessionDetector, ev.SessionID,
+		"skipping session bound to a non-interactive host")
+	return false
+}
+
+// buildNewSessionState constructs the initial SessionState for a
+// just-admitted new session and enriches it with git metadata and metrics.
+func (d *SessionDetector) buildNewSessionState(id agent.Identity, ev agent.Event, now int64) *session.SessionState {
+	parentID := ev.ParentSessionID
+	if parentID == "" {
+		parentID = deriveParentSession(ev.TranscriptPath)
+	}
+	state := &session.SessionState{
+		Version:         1,
+		SessionID:       ev.SessionID,
+		State:           session.StateReady,
+		Adapter:         id.Name,
+		TranscriptPath:  ev.TranscriptPath,
+		CWD:             ev.CWD,
+		DaemonVersion:   d.version,
+		ParentSessionID: parentID,
+		FirstSeen:       now,
+		UpdatedAt:       now,
+		Confidence:      "medium",
+		EventCount:      1,
+		LastEvent:       "transcript_new",
+	}
+
+	// Record parent-child linkage if detected.
+	if state.ParentSessionID != "" {
+		d.record(lifecycle.Event{Kind: lifecycle.KindParentLinked, SessionID: ev.SessionID, ParentSessionID: state.ParentSessionID})
+	}
+
+	// Resolve git metadata and compute initial metrics.
+	d.enricher.EnrichNewSession(state, ev)
+
+	// A child's own first activity event may not arrive for a while — the
+	// same background-workflow discovery lag that leaves its parent needing
+	// holdParentWorkingForNewChild (in finalizeNewSession) below. Classify it
+	// against its own freshly-computed metrics now instead of leaving it at
+	// the generic "ready until proven otherwise" bootstrap: a child stuck at
+	// ready doesn't count as active in hasActiveChildren, so the parent's
+	// hold can't survive past the child's own next activity pass — e.g. the
+	// periodic stale-session sweep would see the parent's own turn-done
+	// metrics unchanged, find no active children, and flip it straight back
+	// to ready (issue #889).
+	if state.ParentSessionID != "" {
+		if newState, _ := ClassifyState(state.State, state.Metrics); newState != state.State {
+			state.State = newState
+		}
+	}
+	return state
+}
+
+// finalizeNewSession persists a freshly built session, records its creation
+// events, broadcasts it, and runs the two post-create side effects that
+// depend on it already being visible: holding a stalled parent working, and
+// clearing out any pre-session placeholder for the same project. Returns
+// false if the save failed (already logged), so the caller stops there.
+func (d *SessionDetector) finalizeNewSession(id agent.Identity, ev agent.Event, state *session.SessionState) bool {
+	if err := d.repo.Save(state); err != nil {
+		d.log.LogError(logComponentSessionDetector, ev.SessionID,
+			fmt.Sprintf("failed to save new session: %v", err))
+		return false
+	}
+	d.recordCost(state)
+
+	// Record pre-session detection (proc-* IDs only — real transcript
+	// sessions are already covered by KindTranscriptNew in handleTranscriptEvent).
+	if strings.HasPrefix(ev.SessionID, "proc-") {
+		d.record(lifecycle.Event{Kind: lifecycle.KindPreSessionCreated, SessionID: ev.SessionID, Adapter: id.Name, ProjectDir: ev.ProjectDir, CWD: ev.CWD})
+	}
+
+	// Record initial state transition.
+	d.record(lifecycle.Event{Kind: lifecycle.KindStateTransition, SessionID: ev.SessionID, NewState: state.State, Reason: "new session created"})
+
+	d.broadcast(outbound.PushTypeCreated, state)
+
+	// This child's parent may have already flipped to ready before this
+	// child was discovered (e.g. a background Workflow-tool run whose
+	// turn-done fired while it had no active children yet). Hold it working
+	// now instead of waiting for the parent's own next transcript/hook event
+	// to catch it (issue #889).
+	if state.ParentSessionID != "" {
+		d.holdParentWorkingForNewChild(state.ParentSessionID)
+	}
+
+	// When a real transcript session arrives, remove any pre-sessions for the
+	// same project. Match by projectDir first (Claude Code layout), then
+	// fall back to CWD (Codex/Pi have different transcript layouts).
+	if ev.TranscriptPath != "" {
+		d.cleanupPreSessionsForProject(ev.ProjectDir, state.CWD, id.Name)
+	}
+	return true
+}
+
+// backfillExistingSession fills in TranscriptPath/Adapter on an
+// already-known session when an earlier processActivity fallback
+// (debounce/refresh) created it without one — the watcher's identity on this
+// transcript event is the authoritative source. Runs under the PIDManager's
+// state lock: a discovery goroutine spawned by the earlier event may still
+// be in flight, and its assignPIDLocked writes state.PID/UpdatedAt on this
+// same pointer (issue #606).
+func (d *SessionDetector) backfillExistingSession(id agent.Identity, ev agent.Event, existing *session.SessionState, now int64) {
+	d.pidMgr.WithSessionStateLock(func() {
+		changed := false
+		if existing.TranscriptPath == "" {
+			existing.TranscriptPath = ev.TranscriptPath
+			changed = true
+		}
+		if existing.Adapter == "" && id.Name != "" {
+			existing.Adapter = id.Name
+			changed = true
+		}
+		if !changed {
+			return
+		}
+		existing.UpdatedAt = now
+		if err := d.repo.Save(existing); err != nil {
+			d.log.LogError(logComponentSessionDetector, ev.SessionID,
+				fmt.Sprintf("failed to update existing session: %v", err))
+		}
+	})
 }
 
 // isLiveStaleSession reports whether a stale transcript should still produce
@@ -432,39 +502,8 @@ func (d *SessionDetector) processActivity(id agent.Identity, ev agent.Event) {
 // id is the watcher's identity on the first event of a debounce window and
 // empty on the coalesced/refresh paths — see processActivity.
 func (d *SessionDetector) processActivityLocked(id agent.Identity, state *session.SessionState, ev agent.Event) {
-	// Backfill an empty Adapter from the watcher's identity. A session created
-	// via the no-identity fallback (debounce-coalesced / synthetic refresh
-	// during the startup race, see processActivity → onNewSession) starts with
-	// Adapter="" and never sees another transcript-NEW event while it stays
-	// continuously active, so onNewSession's existing-session backfill never
-	// fires. Doing it here unblocks PID discovery (TryDiscoverPID keys off the
-	// adapter) and the ghost sweep on the very next identity-carrying activity
-	// event (issue #643). Runs under WithSessionStateLock with the other
-	// existing-session writes (issue #606).
-	if state.Adapter == "" && id.Name != "" {
-		state.Adapter = id.Name
-		d.log.LogInfo(logComponentSessionDetector, ev.SessionID,
-			fmt.Sprintf("backfilled empty adapter=%s on activity", id.Name))
-	}
-
-	// Apply any deferred PID from background discovery goroutines.
-	// This must happen before ClassifyState so that the PID and state
-	// transition are saved atomically, avoiding the race where
-	// HandlePIDAssigned's separate Save would overwrite a state change.
-	if pid, ok := d.pidMgr.ConsumePendingPID(ev.SessionID); ok {
-		if state.PID != pid {
-			state.PID = pid
-			d.log.LogInfo(logComponentSessionDetector, ev.SessionID,
-				fmt.Sprintf("applied deferred pid %d", pid))
-		}
-		// Capture launcher identity + background-agent marker idempotently —
-		// HandlePIDAssigned normally populates them, but this path runs first in
-		// startup races where the pending PID is applied before the direct save.
-		// captureBackground must follow captureLauncher: it derives Detached from
-		// the just-captured TTY (#744).
-		d.pidMgr.captureLauncher(state, pid)
-		d.pidMgr.captureBackground(state, pid)
-	}
+	d.backfillAdapterFromIdentity(id, state, ev)
+	d.applyPendingPID(state, ev)
 
 	// Retry PID discovery if not yet known.
 	if state.PID == 0 {
@@ -474,39 +513,7 @@ func (d *SessionDetector) processActivityLocked(id agent.Identity, state *sessio
 	// Refresh CWD/branch/project and metrics from transcript.
 	d.enricher.RefreshOnActivity(state, ev.TranscriptPath)
 
-	// Did this pass observe new transcript bytes? The 5s refreshStaleSessions
-	// ticker re-reads working sessions to recover missed tool-call events, but
-	// for a frozen transcript (e.g. a gemini-cli session whose process died
-	// mid-turn, pid=0) that re-read sees nothing new — yet the unconditional
-	// UpdatedAt bump below would refresh it to wall-clock "now" every tick,
-	// defeating the ready-TTL age-out that reaps dead sessions (issue #667).
-	// Track size on the persisted LastTranscriptSize so UpdatedAt advances only
-	// on real activity. Fail-open: a stat error counts as growth so we only ever
-	// suppress the bump when we positively confirm the transcript is unchanged.
-	transcriptGrew := true
-	if ev.TranscriptPath != "" {
-		if fi, err := os.Stat(ev.TranscriptPath); err == nil {
-			transcriptGrew = fi.Size() != state.LastTranscriptSize
-			state.LastTranscriptSize = fi.Size()
-		}
-	}
-
-	// Extend the #667 byte-growth suppression above to a second ghost shape. A
-	// PID==0 session is transcript-first — discovered from its on-disk transcript
-	// with no agent process to liveness-check (an Antigravity IDE conversation is
-	// the canonical case). Its transcript can be a system log that keeps appending
-	// SYSTEM steps (CONVERSATION_HISTORY/CHECKPOINT, all parsed Skip=true) after
-	// the agent stopped, so #667's size check stays true and re-bumps UpdatedAt
-	// forever — now-UpdatedAt never crosses readyTTL and the PID==0 sweep
-	// (PIDManager.CheckPIDLiveness) can never reap it (issue #735). When this pass
-	// consumed only non-substantive lines, treat it as no growth so it ages out
-	// like a dead-process session (see TestCheckPIDLiveness_DeadProcessWorking_Reaped).
-	// Scoped to PID==0: a PID-bound session is reaped by process liveness instead,
-	// and keeps the activity bump for noisy post-turn recaps so its "last activity"
-	// stays fresh (issue #329).
-	if state.PID == 0 && state.Metrics != nil && state.Metrics.NoSubstantiveActivity {
-		transcriptGrew = false
-	}
+	transcriptGrew := d.observeTranscriptGrowth(state, ev)
 
 	// Probe Bash background-process liveness (run_in_background). Must run
 	// after RefreshOnActivity (which recomputes metrics, clearing the flag)
@@ -528,24 +535,7 @@ func (d *SessionDetector) processActivityLocked(id agent.Identity, state *sessio
 		d.applySubagentCompletions(state.SessionID, state.Metrics.SubagentCompletions)
 	}
 
-	// Record the task-list deltas folded in this pass — one task_delta
-	// lifecycle event each — so task tracking is an assertable observable in
-	// onboarding recordings (#662). Per-pass and transient (MergeMetrics copies
-	// AppliedTaskDeltas with no old-value fallback), so each delta is recorded
-	// exactly once. Recording-only: does not feed ClassifyState.
-	if state.Metrics != nil {
-		for _, td := range state.Metrics.AppliedTaskDeltas {
-			d.record(lifecycle.Event{
-				Kind:        lifecycle.KindTaskDelta,
-				SessionID:   ev.SessionID,
-				Adapter:     id.Name,
-				TaskOp:      td.Op,
-				TaskID:      td.ID,
-				TaskSubject: td.Subject,
-				TaskStatus:  td.Status,
-			})
-		}
-	}
+	d.recordTaskDeltas(id, ev, state)
 
 	// Short-circuit when this pass consumed transcript content but produced
 	// no state-relevant change — e.g. Claude Code's post-turn
@@ -556,149 +546,8 @@ func (d *SessionDetector) processActivityLocked(id agent.Identity, state *sessio
 	// UpdatedAt / broadcast) so the UI's "last activity" stays fresh —
 	// just don't re-run the state machine.
 	skipClassification := state.Metrics != nil && state.Metrics.NoSubstantiveActivity
-
 	if !skipClassification {
-		// Force ready→working when metrics show activity so ClassifyState can
-		// properly detect the working→ready transition. Without this, sessions
-		// that start as ready (initial state) and whose first activity event
-		// already shows IsAgentDone()=true would stay ready with no transition
-		// broadcast — the UI would never see the "agent finished" event.
-		if state.State == session.StateReady && state.Metrics != nil && state.Metrics.LastEventType != "" {
-			d.record(lifecycle.Event{Kind: lifecycle.KindStateTransition, SessionID: ev.SessionID, PrevState: session.StateReady, NewState: session.StateWorking, Reason: ForceReadyToWorkingReason})
-			state.State = session.StateWorking
-		}
-
-		// Overlay hook-based permission-pending signal onto metrics. Must happen
-		// after RefreshOnActivity (which recomputes metrics from the transcript)
-		// and before ClassifyState (which reads the flag). The flag persists in
-		// the map until PostToolUse/PostToolUseFailure clears it, so it survives
-		// fswatcher re-evaluations while the permission prompt is shown.
-		d.permMu.Lock()
-		if d.permissionPending[ev.SessionID] && state.Metrics != nil {
-			if state.Metrics.LastWasToolDenial {
-				// Permission was denied — Claude Code doesn't fire
-				// PostToolUseFailure on denial, so clear from transcript
-				// evidence. The denial text "[Request interrupted by user
-				// for tool use]" sets LastWasToolDenial in the parser.
-				delete(d.permissionPending, ev.SessionID)
-			} else {
-				state.Metrics.PermissionPending = true
-			}
-		}
-		d.permMu.Unlock()
-
-		// Overlay the PreCompact force-working hold (#657).
-		d.applyCompactHold(ev.SessionID, state.Metrics, time.Now().Unix())
-
-		// Overlay the transcript-based stalled-edit-tool fallback (#488).
-		d.markStalledEditTool(ev.SessionID, state.Metrics, time.Now().Unix())
-
-		// Content-based state detection.
-		now := time.Now().Unix()
-		newState, reason := ClassifyState(state.State, state.Metrics)
-
-		// Parent-child propagation: if a parent session would transition to
-		// ready but still has active children (working/waiting), hold it in
-		// working. The parent will be re-evaluated when children finish.
-		//
-		// Before holding, fast-forward any "orphaned" children — subagents
-		// whose own tail has no open tool calls but whose transcript ends
-		// with `stop_reason: null` (Claude Code never writes end_turn for
-		// in-process subagents). Since the parent's own turn is done,
-		// those subagents' work is definitionally complete: the parent's
-		// final assistant message already incorporated their results.
-		//
-		// The fast-forward also fires when the turn ends in waiting with a
-		// question/cue (#593) — IsAgentDone gates it, so permission-prompt
-		// waiting (open tool call) is excluded. Without this, a parent whose
-		// overnight run ends by asking a question leaves its finished
-		// children stuck in working until the liveness sweep.
-		//
-		// The waiting branch also holds the parent working when a genuinely
-		// active child remains (#897) — mirroring the ready branch below.
-		// A turn-ending cue like "I'll wait for its completion notification"
-		// can read as a question/cue to the classifier while actually
-		// describing a wait on the parent's own background subagent, not
-		// the user; surfacing "waiting" in that case reads as "nothing
-		// happening" on the dashboard when a subagent is still working.
-		// finishOrphanedChildren runs first so a child that's merely stale
-		// (not genuinely active) doesn't hold the parent forever; no
-		// cleanupChildren either way (finishOrphanedChildren's quiet-window
-		// and open-tool guards already leave a truly running child alone).
-		parentHeldWorking := false
-		holdWorkingIfChildrenActive := func(logMsg string) {
-			if !d.holdIfChildrenActive(state.SessionID) {
-				return
-			}
-			d.log.LogInfo(logComponentSessionDetector, ev.SessionID, logMsg)
-			newState = session.StateWorking
-			reason = ""
-			parentHeldWorking = true
-		}
-		if state.ParentSessionID == "" {
-			switch {
-			case newState == session.StateReady:
-				holdWorkingIfChildrenActive("holding parent working — active children still running")
-			case newState == session.StateWaiting && state.Metrics != nil && state.Metrics.IsAgentDone():
-				// Turn-done waiting (question/cue). Permission-prompt
-				// waiting never reaches here: its open tool call makes
-				// IsAgentDone return false.
-				holdWorkingIfChildrenActive("holding parent working — active children still running (turn ended in waiting cue)")
-			}
-		}
-
-		// Same-pass user-blocking tool collapse (issue #150): when fswatcher
-		// coalesces the AskUserQuestion / ExitPlanMode tool_use with its
-		// tool_result, the tailer observes both in one pass and HasOpenToolCall
-		// is already false by the time the classifier runs — the brief waiting
-		// episode collapses and observers never see it. Emit a synthetic
-		// working→waiting, then reclassify from waiting so the next transition
-		// carries the correct "while waiting" phrasing.
-		//
-		// Skip when the parent-hold branch above rewrote newState: that parent
-		// has active children and must stay working. Running the synth path
-		// would reclassify from waiting, let rule 3 fire, and transition the
-		// parent to ready despite children still running — undoing the hold.
-		if !parentHeldWorking && ShouldSynthesizeCollapsedWaiting(state.State, newState, state.Metrics) {
-			d.log.LogInfo(logComponentSessionDetector, ev.SessionID, SyntheticWaitingReason)
-			d.record(lifecycle.Event{
-				Kind:      lifecycle.KindStateTransition,
-				SessionID: ev.SessionID,
-				PrevState: session.StateWorking,
-				NewState:  session.StateWaiting,
-				Reason:    SyntheticWaitingReason,
-				Inputs:    classifierInputs(state.Metrics),
-			})
-			state.State = session.StateWaiting
-			newState, reason = ClassifyState(state.State, state.Metrics)
-		}
-
-		if newState != state.State {
-			if reason != "" {
-				d.log.LogInfo(logComponentSessionDetector, ev.SessionID, reason)
-			}
-			d.record(lifecycle.Event{Kind: lifecycle.KindStateTransition, SessionID: ev.SessionID, PrevState: state.State, NewState: newState, Reason: reason, Inputs: classifierInputs(state.Metrics)})
-			state.State = newState
-			state.UpdatedAt = now
-
-			// Side effects for specific transitions.
-			if newState == session.StateWaiting {
-				state.WaitingStartTime = &now
-			} else if newState == session.StateWorking {
-				state.WaitingStartTime = nil
-			} else if newState == session.StateReady {
-				// Stamp HEAD + yield verdict on the turn-done → ready edge so
-				// the yield sweep can correlate reverts back to it (#373).
-				d.enricher.CaptureYieldOnReady(state)
-			}
-		}
-
-		// Cache-creation regression detection (#374). Driven every substantive
-		// pass; the detector itself recognises turn boundaries (rising edge of
-		// IsAgentDone) and is a no-op otherwise or when disabled.
-		if d.cacheBloat != nil {
-			d.cacheBloat.OnActivity(state)
-		}
+		d.classifyAndTransition(state, ev)
 	}
 
 	// Refresh the unified sub-agent summary (in-process from the adapter
@@ -728,22 +577,7 @@ func (d *SessionDetector) processActivityLocked(id agent.Identity, state *sessio
 
 	// When a parent session finishes, clean up all its child sessions.
 	if state.State == session.StateReady && state.ParentSessionID == "" {
-		prevSummary := state.Subagents
-		d.pidMgr.cleanupChildren(state.SessionID)
-		// The broadcast above carried a summary counting children that were
-		// just deleted. Refresh, persist, and re-push so the turn's final
-		// parent message has the cleared badge AND the repo copy is clean —
-		// hook-path transitions re-broadcast the persisted summary as-is
-		// (#593). Gated on the summary changing so the common no-children
-		// case adds no push traffic.
-		d.refreshSubagentSummary(state)
-		if !state.Subagents.Equal(prevSummary) {
-			if err := d.repo.Save(state); err != nil {
-				d.log.LogError(logComponentSessionDetector, ev.SessionID,
-					fmt.Sprintf("failed to persist cleared subagent summary: %v", err))
-			}
-			d.broadcast(outbound.PushTypeUpdated, state)
-		}
+		d.cleanupFinishedParent(state)
 	}
 
 	// When a child session changes state, re-evaluate the parent — it may
@@ -751,6 +585,295 @@ func (d *SessionDetector) processActivityLocked(id agent.Identity, state *sessio
 	if state.ParentSessionID != "" {
 		d.reevaluateParent(state.ParentSessionID)
 	}
+}
+
+// backfillAdapterFromIdentity fills in an empty Adapter from the watcher's
+// identity. A session created via the no-identity fallback (debounce-
+// coalesced / synthetic refresh during the startup race, see
+// processActivity → onNewSession) starts with Adapter="" and never sees
+// another transcript-NEW event while it stays continuously active, so
+// onNewSession's existing-session backfill never fires. Doing it here
+// unblocks PID discovery (TryDiscoverPID keys off the adapter) and the ghost
+// sweep on the very next identity-carrying activity event (issue #643). Runs
+// under WithSessionStateLock with the other existing-session writes (issue
+// #606).
+func (d *SessionDetector) backfillAdapterFromIdentity(id agent.Identity, state *session.SessionState, ev agent.Event) {
+	if state.Adapter != "" || id.Name == "" {
+		return
+	}
+	state.Adapter = id.Name
+	d.log.LogInfo(logComponentSessionDetector, ev.SessionID,
+		fmt.Sprintf("backfilled empty adapter=%s on activity", id.Name))
+}
+
+// applyPendingPID applies any deferred PID from a background discovery
+// goroutine. This must happen before ClassifyState so that the PID and state
+// transition are saved atomically, avoiding the race where
+// HandlePIDAssigned's separate Save would overwrite a state change.
+func (d *SessionDetector) applyPendingPID(state *session.SessionState, ev agent.Event) {
+	pid, ok := d.pidMgr.ConsumePendingPID(ev.SessionID)
+	if !ok {
+		return
+	}
+	if state.PID != pid {
+		state.PID = pid
+		d.log.LogInfo(logComponentSessionDetector, ev.SessionID,
+			fmt.Sprintf("applied deferred pid %d", pid))
+	}
+	// Capture launcher identity + background-agent marker idempotently —
+	// HandlePIDAssigned normally populates them, but this path runs first in
+	// startup races where the pending PID is applied before the direct save.
+	// captureBackground must follow captureLauncher: it derives Detached from
+	// the just-captured TTY (#744).
+	d.pidMgr.captureLauncher(state, pid)
+	d.pidMgr.captureBackground(state, pid)
+}
+
+// observeTranscriptGrowth reports whether this pass observed new transcript
+// bytes. The 5s refreshStaleSessions ticker re-reads working sessions to
+// recover missed tool-call events, but for a frozen transcript (e.g. a
+// gemini-cli session whose process died mid-turn, pid=0) that re-read sees
+// nothing new — yet an unconditional UpdatedAt bump would refresh it to
+// wall-clock "now" every tick, defeating the ready-TTL age-out that reaps
+// dead sessions (issue #667). Tracks size on the persisted
+// LastTranscriptSize so UpdatedAt advances only on real activity. Fail-open:
+// a stat error counts as growth so the bump is only ever suppressed when the
+// transcript is positively confirmed unchanged.
+//
+// Extends the #667 byte-growth suppression to a second ghost shape. A PID==0
+// session is transcript-first — discovered from its on-disk transcript with
+// no agent process to liveness-check (an Antigravity IDE conversation is the
+// canonical case). Its transcript can be a system log that keeps appending
+// SYSTEM steps (CONVERSATION_HISTORY/CHECKPOINT, all parsed Skip=true) after
+// the agent stopped, so the size check alone stays true and re-bumps
+// UpdatedAt forever — now-UpdatedAt never crosses readyTTL and the PID==0
+// sweep (PIDManager.CheckPIDLiveness) can never reap it (issue #735). When
+// this pass consumed only non-substantive lines, treat it as no growth so it
+// ages out like a dead-process session (see
+// TestCheckPIDLiveness_DeadProcessWorking_Reaped). Scoped to PID==0: a
+// PID-bound session is reaped by process liveness instead, and keeps the
+// activity bump for noisy post-turn recaps so its "last activity" stays
+// fresh (issue #329).
+func (d *SessionDetector) observeTranscriptGrowth(state *session.SessionState, ev agent.Event) bool {
+	transcriptGrew := true
+	if ev.TranscriptPath != "" {
+		if fi, err := os.Stat(ev.TranscriptPath); err == nil {
+			transcriptGrew = fi.Size() != state.LastTranscriptSize
+			state.LastTranscriptSize = fi.Size()
+		}
+	}
+	if state.PID == 0 && state.Metrics != nil && state.Metrics.NoSubstantiveActivity {
+		transcriptGrew = false
+	}
+	return transcriptGrew
+}
+
+// recordTaskDeltas records the task-list deltas folded in this pass — one
+// task_delta lifecycle event each — so task tracking is an assertable
+// observable in onboarding recordings (#662). Per-pass and transient
+// (MergeMetrics copies AppliedTaskDeltas with no old-value fallback), so
+// each delta is recorded exactly once. Recording-only: does not feed
+// ClassifyState.
+func (d *SessionDetector) recordTaskDeltas(id agent.Identity, ev agent.Event, state *session.SessionState) {
+	if state.Metrics == nil {
+		return
+	}
+	for _, td := range state.Metrics.AppliedTaskDeltas {
+		d.record(lifecycle.Event{
+			Kind:        lifecycle.KindTaskDelta,
+			SessionID:   ev.SessionID,
+			Adapter:     id.Name,
+			TaskOp:      td.Op,
+			TaskID:      td.ID,
+			TaskSubject: td.Subject,
+			TaskStatus:  td.Status,
+		})
+	}
+}
+
+// classifyAndTransition runs the content-based state-detection pass: it
+// overlays the hook/transcript-derived signals ClassifyState reads, computes
+// the candidate next state, applies the parent-child and same-pass-collapse
+// corrections, and — if the corrected state differs from the current one —
+// records and applies the transition with its side effects. Only called
+// when this pass's metrics show substantive activity (see
+// processActivityLocked's skipClassification guard).
+func (d *SessionDetector) classifyAndTransition(state *session.SessionState, ev agent.Event) {
+	// Force ready→working when metrics show activity so ClassifyState can
+	// properly detect the working→ready transition. Without this, sessions
+	// that start as ready (initial state) and whose first activity event
+	// already shows IsAgentDone()=true would stay ready with no transition
+	// broadcast — the UI would never see the "agent finished" event.
+	d.forceReadyToWorkingIfActive(state, ev)
+
+	// Overlay hook-based permission-pending signal onto metrics. Must happen
+	// after RefreshOnActivity (which recomputes metrics from the transcript)
+	// and before ClassifyState (which reads the flag). The flag persists in
+	// the map until PostToolUse/PostToolUseFailure clears it, so it survives
+	// fswatcher re-evaluations while the permission prompt is shown.
+	d.overlayPermissionPending(state)
+
+	// Overlay the PreCompact force-working hold (#657).
+	d.applyCompactHold(ev.SessionID, state.Metrics, time.Now().Unix())
+
+	// Overlay the transcript-based stalled-edit-tool fallback (#488).
+	d.markStalledEditTool(ev.SessionID, state.Metrics, time.Now().Unix())
+
+	// Content-based state detection.
+	now := time.Now().Unix()
+	newState, reason := ClassifyState(state.State, state.Metrics)
+	newState, reason, parentHeldWorking := d.holdParentForActiveChildren(state, ev, newState, reason)
+	newState, reason = d.synthesizeCollapsedWaitingIfNeeded(state, ev, newState, reason, parentHeldWorking)
+
+	if newState != state.State {
+		d.applyStateTransition(state, ev, newState, reason, now)
+	}
+
+	// Cache-creation regression detection (#374). Driven every substantive
+	// pass; the detector itself recognises turn boundaries (rising edge of
+	// IsAgentDone) and is a no-op otherwise or when disabled.
+	if d.cacheBloat != nil {
+		d.cacheBloat.OnActivity(state)
+	}
+}
+
+// forceReadyToWorkingIfActive bounces a ready session straight to working
+// when its freshly refreshed metrics show activity, so ClassifyState can
+// then detect a genuine working→ready transition on this same pass. See
+// classifyAndTransition's call site for why this matters.
+func (d *SessionDetector) forceReadyToWorkingIfActive(state *session.SessionState, ev agent.Event) {
+	if state.State != session.StateReady || state.Metrics == nil || state.Metrics.LastEventType == "" {
+		return
+	}
+	d.record(lifecycle.Event{Kind: lifecycle.KindStateTransition, SessionID: ev.SessionID, PrevState: session.StateReady, NewState: session.StateWorking, Reason: ForceReadyToWorkingReason})
+	state.State = session.StateWorking
+}
+
+// overlayPermissionPending folds the hook-based permission-pending signal
+// onto metrics. See classifyAndTransition's call site for the ordering
+// requirement relative to RefreshOnActivity and ClassifyState.
+func (d *SessionDetector) overlayPermissionPending(state *session.SessionState) {
+	d.permMu.Lock()
+	defer d.permMu.Unlock()
+
+	if !d.permissionPending[state.SessionID] || state.Metrics == nil {
+		return
+	}
+	if state.Metrics.LastWasToolDenial {
+		// Permission was denied — Claude Code doesn't fire PostToolUseFailure
+		// on denial, so clear from transcript evidence. The denial text
+		// "[Request interrupted by user for tool use]" sets LastWasToolDenial
+		// in the parser.
+		delete(d.permissionPending, state.SessionID)
+		return
+	}
+	state.Metrics.PermissionPending = true
+}
+
+// holdParentForActiveChildren fast-forwards a parent's own transition when
+// it would otherwise land on ready, or on a turn-done "waiting"
+// (question/cue), while a child subagent is still working or waiting —
+// mirroring the ready case so the dashboard doesn't read "nothing happening"
+// while a subagent runs (issue #897). Before holding, it fast-forwards any
+// "orphaned" children — subagents whose own tail has no open tool calls but
+// whose transcript ends with `stop_reason: null` (Claude Code never writes
+// end_turn for in-process subagents) — via holdIfChildrenActive, so a merely
+// stale child doesn't hold the parent forever. Returns the (possibly
+// overridden) newState/reason and whether the hold fired, so the caller can
+// skip the same-pass collapsed-waiting synthesis: that path would otherwise
+// reclassify from waiting and undo the hold.
+func (d *SessionDetector) holdParentForActiveChildren(state *session.SessionState, ev agent.Event, newState, reason string) (string, string, bool) {
+	if state.ParentSessionID != "" {
+		return newState, reason, false
+	}
+	// The waiting case only counts as turn-done (question/cue), not a
+	// permission prompt: IsAgentDone gates it, and an open tool call
+	// (permission prompt) makes IsAgentDone return false.
+	turnDoneWaiting := newState == session.StateWaiting && state.Metrics != nil && state.Metrics.IsAgentDone()
+	if newState != session.StateReady && !turnDoneWaiting {
+		return newState, reason, false
+	}
+	if !d.holdIfChildrenActive(state.SessionID) {
+		return newState, reason, false
+	}
+	logMsg := "holding parent working — active children still running"
+	if turnDoneWaiting {
+		logMsg = "holding parent working — active children still running (turn ended in waiting cue)"
+	}
+	d.log.LogInfo(logComponentSessionDetector, ev.SessionID, logMsg)
+	return session.StateWorking, "", true
+}
+
+// synthesizeCollapsedWaitingIfNeeded emits a synthetic working→waiting
+// transition when fswatcher coalesces a user-blocking tool_use
+// (AskUserQuestion / ExitPlanMode) with its tool_result into a single pass —
+// HasOpenToolCall is already false by the time the classifier runs, so the
+// brief waiting episode would otherwise never be observed (issue #150). It
+// then reclassifies from waiting so the caller's next transition carries the
+// correct "while waiting" phrasing. Skipped when
+// holdParentForActiveChildren already rewrote newState: that parent has
+// active children and must stay working, and reclassifying from waiting
+// would let rule 3 fire and transition it to ready despite children still
+// running — undoing the hold.
+func (d *SessionDetector) synthesizeCollapsedWaitingIfNeeded(state *session.SessionState, ev agent.Event, newState, reason string, parentHeldWorking bool) (string, string) {
+	if parentHeldWorking || !ShouldSynthesizeCollapsedWaiting(state.State, newState, state.Metrics) {
+		return newState, reason
+	}
+	d.log.LogInfo(logComponentSessionDetector, ev.SessionID, SyntheticWaitingReason)
+	d.record(lifecycle.Event{
+		Kind:      lifecycle.KindStateTransition,
+		SessionID: ev.SessionID,
+		PrevState: session.StateWorking,
+		NewState:  session.StateWaiting,
+		Reason:    SyntheticWaitingReason,
+		Inputs:    classifierInputs(state.Metrics),
+	})
+	state.State = session.StateWaiting
+	return ClassifyState(state.State, state.Metrics)
+}
+
+// applyStateTransition records and applies a state transition already
+// determined to differ from state.State, plus the per-target-state side
+// effects: waiting stamps WaitingStartTime, working clears it, and ready
+// captures the yield verdict for the revert-correlation sweep (#373).
+func (d *SessionDetector) applyStateTransition(state *session.SessionState, ev agent.Event, newState, reason string, now int64) {
+	if reason != "" {
+		d.log.LogInfo(logComponentSessionDetector, ev.SessionID, reason)
+	}
+	d.record(lifecycle.Event{Kind: lifecycle.KindStateTransition, SessionID: ev.SessionID, PrevState: state.State, NewState: newState, Reason: reason, Inputs: classifierInputs(state.Metrics)})
+	state.State = newState
+	state.UpdatedAt = now
+
+	switch newState {
+	case session.StateWaiting:
+		state.WaitingStartTime = &now
+	case session.StateWorking:
+		state.WaitingStartTime = nil
+	case session.StateReady:
+		// Stamp HEAD + yield verdict on the turn-done → ready edge so the
+		// yield sweep can correlate reverts back to it (#373).
+		d.enricher.CaptureYieldOnReady(state)
+	}
+}
+
+// cleanupFinishedParent deletes all child sessions of a parent that just
+// reached ready, then refreshes and re-persists/re-broadcasts the subagent
+// summary so the turn's final parent message has the cleared badge AND the
+// repo copy is clean — hook-path transitions re-broadcast the persisted
+// summary as-is (#593). Gated on the summary actually changing so the common
+// no-children case adds no push traffic.
+func (d *SessionDetector) cleanupFinishedParent(state *session.SessionState) {
+	prevSummary := state.Subagents
+	d.pidMgr.cleanupChildren(state.SessionID)
+	d.refreshSubagentSummary(state)
+	if state.Subagents.Equal(prevSummary) {
+		return
+	}
+	if err := d.repo.Save(state); err != nil {
+		d.log.LogError(logComponentSessionDetector, state.SessionID,
+			fmt.Sprintf("failed to persist cleared subagent summary: %v", err))
+	}
+	d.broadcast(outbound.PushTypeUpdated, state)
 }
 
 // applyBackgroundLiveness sets HasLiveBackgroundProcess on the session's
@@ -775,35 +898,14 @@ func (d *SessionDetector) processActivityLocked(id agent.Identity, state *sessio
 func (d *SessionDetector) applyBackgroundLiveness(state *session.SessionState) {
 	sid := state.SessionID
 	m := state.Metrics
-	// Liveness is probed via output files (Claude Code) OR PIDs (Gemini CLI).
-	// A session with neither has no detached process to hold it `working`.
-	hasProbe := m != nil &&
-		(len(m.BackgroundProcessOutputs) > 0 && d.bgLiveProbe != nil ||
-			len(m.BackgroundProcessPIDs) > 0 && d.bgPIDProbe != nil)
+
 	if m == nil || state.State != session.StateWorking ||
-		m.BackgroundProcessCount == 0 || !hasProbe {
-		d.bgMu.Lock()
-		delete(d.bgLive, sid)
-		delete(d.bgProbing, sid)
-		d.bgMu.Unlock()
-		if m != nil {
-			m.HasLiveBackgroundProcess = false
-		}
+		m.BackgroundProcessCount == 0 || !d.hasBackgroundProbe(m) {
+		d.clearBackgroundTracking(sid, m)
 		return
 	}
 
-	d.bgMu.Lock()
-	known, seen := d.bgLive[sid]
-	alive := true // optimistic on first sight — never flip to ready before probing
-	if seen {
-		alive = known
-	}
-	startProbe := !d.bgProbing[sid]
-	if startProbe {
-		d.bgProbing[sid] = true
-	}
-	d.bgMu.Unlock()
-
+	alive, startProbe := d.beginBackgroundProbe(sid)
 	m.HasLiveBackgroundProcess = alive
 	if !startProbe {
 		return
@@ -811,47 +913,106 @@ func (d *SessionDetector) applyBackgroundLiveness(state *session.SessionState) {
 
 	outputs := append([]string(nil), m.BackgroundProcessOutputs...) // copy: goroutine must not alias state
 	pids := append([]string(nil), m.BackgroundProcessPIDs...)
-	transcriptPath := state.TranscriptPath
-	go func() {
-		// A session can carry both a Claude-Code output-file process and a
-		// Gemini PID process; it stays held while EITHER is alive.
-		liveOut := len(outputs) > 0 && d.bgLiveProbe != nil && d.bgLiveProbe(outputs)
-		livePID := len(pids) > 0 && d.bgPIDProbe != nil && d.bgPIDProbe(pids)
-		live := liveOut || livePID
-		// Dead verdict: drop the probed processes from the tailer's open set
-		// and the ledger. They died without a transcript-observable
-		// termination (e.g. the process exited with its parent shell), so
-		// the ledger entry would otherwise resurrect them as phantom open
-		// processes on every daemon restart, re-running this probe forever.
-		// Scoped to this probe's snapshot — a process spawned since must
-		// survive and be judged by its own probe. Outputs and PIDs are
-		// purged independently so a still-live one of either kind is kept.
-		// See issues #649, #661.
-		if d.metrics != nil {
-			if !liveOut && len(outputs) > 0 {
-				d.metrics.PurgeDeadBackgroundProcs(transcriptPath, outputs)
-			}
-			if !livePID && len(pids) > 0 {
-				d.metrics.PurgeDeadBackgroundPIDs(transcriptPath, pids)
-			}
-		}
-		d.bgMu.Lock()
-		prev, had := d.bgLive[sid]
-		d.bgLive[sid] = live
-		d.bgProbing[sid] = false
-		d.bgMu.Unlock()
-		// On a changed (or first) verdict, nudge the event loop to re-classify
-		// now rather than waiting for the next refresh tick. The send mirrors
-		// the debounce-timer path (single event-loop goroutine owns
-		// processActivity); drop if the buffer is full — the 5s refresh is the
-		// backstop.
-		if !had || prev != live {
-			select {
-			case d.debouncedEvents <- agent.Event{Type: agent.EventActivity, SessionID: sid, TranscriptPath: transcriptPath}:
-			default:
-			}
-		}
-	}()
+	go d.runBackgroundLivenessProbe(sid, state.TranscriptPath, outputs, pids)
+}
+
+// hasBackgroundProbe reports whether m has a background process AND the
+// matching liveness probe to check it: output files (Claude Code, via lsof)
+// or PIDs (Gemini CLI, via kill -0). A session with neither has no detached
+// process to hold it `working`. Only called once m's non-nilness is
+// established by the caller's short-circuiting guard.
+func (d *SessionDetector) hasBackgroundProbe(m *session.SessionMetrics) bool {
+	hasOutputProbe := len(m.BackgroundProcessOutputs) > 0 && d.bgLiveProbe != nil
+	hasPIDProbe := len(m.BackgroundProcessPIDs) > 0 && d.bgPIDProbe != nil
+	return hasOutputProbe || hasPIDProbe
+}
+
+// clearBackgroundTracking drops sid's liveness/in-flight-probe bookkeeping
+// and clears its HasLiveBackgroundProcess flag — the session no longer has a
+// background process worth tracking (it finished, left working, or lost its
+// last probeable process).
+func (d *SessionDetector) clearBackgroundTracking(sid string, m *session.SessionMetrics) {
+	d.bgMu.Lock()
+	delete(d.bgLive, sid)
+	delete(d.bgProbing, sid)
+	d.bgMu.Unlock()
+	if m != nil {
+		m.HasLiveBackgroundProcess = false
+	}
+}
+
+// beginBackgroundProbe reads the last-known liveness verdict for sid
+// (optimistically alive on first sight, issue #445, so a not-yet-probed
+// process is never prematurely declared dead) and claims the per-session
+// in-flight probe slot if none is already running.
+func (d *SessionDetector) beginBackgroundProbe(sid string) (alive, startProbe bool) {
+	d.bgMu.Lock()
+	defer d.bgMu.Unlock()
+
+	known, seen := d.bgLive[sid]
+	alive = true
+	if seen {
+		alive = known
+	}
+	startProbe = !d.bgProbing[sid]
+	if startProbe {
+		d.bgProbing[sid] = true
+	}
+	return alive, startProbe
+}
+
+// runBackgroundLivenessProbe shells out (lsof / kill -0) off the event-loop
+// goroutine to answer whether any of sid's background processes are still
+// alive — a session can carry both a Claude-Code output-file process and a
+// Gemini PID process, and stays held while EITHER is alive — purges any
+// that probed dead, and nudges the event loop to re-classify when the
+// verdict changed (issues #649, #661). Must not alias state: outputs/pids
+// are copies taken by the caller before this runs on its own goroutine.
+func (d *SessionDetector) runBackgroundLivenessProbe(sid, transcriptPath string, outputs, pids []string) {
+	liveOut := len(outputs) > 0 && d.bgLiveProbe != nil && d.bgLiveProbe(outputs)
+	livePID := len(pids) > 0 && d.bgPIDProbe != nil && d.bgPIDProbe(pids)
+	live := liveOut || livePID
+
+	d.purgeDeadBackgroundProcesses(transcriptPath, outputs, pids, liveOut, livePID)
+
+	d.bgMu.Lock()
+	prev, had := d.bgLive[sid]
+	d.bgLive[sid] = live
+	d.bgProbing[sid] = false
+	d.bgMu.Unlock()
+
+	// On a changed (or first) verdict, nudge the event loop to re-classify
+	// now rather than waiting for the next refresh tick. The send mirrors
+	// the debounce-timer path (single event-loop goroutine owns
+	// processActivity); drop if the buffer is full — the 5s refresh is the
+	// backstop.
+	if had && prev == live {
+		return
+	}
+	select {
+	case d.debouncedEvents <- agent.Event{Type: agent.EventActivity, SessionID: sid, TranscriptPath: transcriptPath}:
+	default:
+	}
+}
+
+// purgeDeadBackgroundProcesses drops probed-dead outputs/PIDs from the
+// tailer's open set and the metrics ledger. A dead process died without a
+// transcript-observable termination (e.g. it exited with its parent shell),
+// so the ledger entry would otherwise resurrect it as a phantom open process
+// on every daemon restart, re-running this probe forever. Scoped to this
+// probe's snapshot — a process spawned since must survive and be judged by
+// its own probe. Outputs and PIDs are purged independently so a still-live
+// one of either kind is kept. See issues #649, #661.
+func (d *SessionDetector) purgeDeadBackgroundProcesses(transcriptPath string, outputs, pids []string, liveOut, livePID bool) {
+	if d.metrics == nil {
+		return
+	}
+	if !liveOut && len(outputs) > 0 {
+		d.metrics.PurgeDeadBackgroundProcs(transcriptPath, outputs)
+	}
+	if !livePID && len(pids) > 0 {
+		d.metrics.PurgeDeadBackgroundPIDs(transcriptPath, pids)
+	}
 }
 
 // markStalledEditTool maintains the per-session editToolOpenSince window and

@@ -7,6 +7,24 @@ import (
 	"testing"
 )
 
+// assertBackgroundMeta asserts pid reads back as a background agent with the
+// given name.
+func assertBackgroundMeta(t *testing.T, pid int, wantName string) {
+	t.Helper()
+	if name, ok := ReadBackgroundMeta(pid); !ok || name != wantName {
+		t.Errorf("got (%q, %v), want (%q, true)", name, ok, wantName)
+	}
+}
+
+// assertNotBackgroundMeta asserts pid does not read back as a background
+// agent, using msg as the failure message.
+func assertNotBackgroundMeta(t *testing.T, pid int, msg string) {
+	t.Helper()
+	if _, ok := ReadBackgroundMeta(pid); ok {
+		t.Error(msg)
+	}
+}
+
 // TestReadBackgroundMeta verifies the #744 registry read: a kind:"bg" entry is
 // reported as a background agent (carrying Claude's job name), while interactive
 // sessions, missing files, and garbage are not.
@@ -24,33 +42,21 @@ func TestReadBackgroundMeta(t *testing.T) {
 	write(103, `not json`)
 
 	t.Run("bg with name", func(t *testing.T) {
-		if name, ok := ReadBackgroundMeta(100); !ok || name != "Add guiding colors" {
-			t.Errorf("got (%q, %v), want (\"Add guiding colors\", true)", name, ok)
-		}
+		assertBackgroundMeta(t, 100, "Add guiding colors")
 	})
 	t.Run("interactive is not background", func(t *testing.T) {
-		if _, ok := ReadBackgroundMeta(101); ok {
-			t.Error("interactive session reported as background")
-		}
+		assertNotBackgroundMeta(t, 101, "interactive session reported as background")
 	})
 	t.Run("bg without a name is still background", func(t *testing.T) {
-		if name, ok := ReadBackgroundMeta(102); !ok || name != "" {
-			t.Errorf("got (%q, %v), want (\"\", true)", name, ok)
-		}
+		assertBackgroundMeta(t, 102, "")
 	})
 	t.Run("garbage file is ignored", func(t *testing.T) {
-		if _, ok := ReadBackgroundMeta(103); ok {
-			t.Error("garbage file reported as background")
-		}
+		assertNotBackgroundMeta(t, 103, "garbage file reported as background")
 	})
 	t.Run("missing file", func(t *testing.T) {
-		if _, ok := ReadBackgroundMeta(999); ok {
-			t.Error("missing file reported as background")
-		}
+		assertNotBackgroundMeta(t, 999, "missing file reported as background")
 	})
 	t.Run("non-positive pid", func(t *testing.T) {
-		if _, ok := ReadBackgroundMeta(0); ok {
-			t.Error("pid<=0 reported as background")
-		}
+		assertNotBackgroundMeta(t, 0, "pid<=0 reported as background")
 	})
 }

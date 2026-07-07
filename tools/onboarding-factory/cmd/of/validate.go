@@ -173,52 +173,68 @@ func validateCells(repoRoot string, names map[string]bool, add func(path, msg st
 			if !e.IsDir() {
 				continue
 			}
-			folder := e.Name()
-			rel := filepath.Join("replaydata/agents", agent, "scenarios", folder)
-			metaPath := filepath.Join(scenDir, folder, "metadata.json")
-			hasRecordings := dirHasChildren(filepath.Join(scenDir, folder, "recordings"))
-
-			mb, err := os.ReadFile(metaPath)
-			if err != nil {
-				if hasRecordings {
-					add(rel, "orphan recording folder: has recordings/ but no metadata.json")
-				}
-				continue
-			}
-			var cell shard.ShardAgent
-			if err := json.Unmarshal(mb, &cell); err != nil {
-				add(rel+metadataJSONSuffix, fmt.Sprintf("not valid JSON: %v", err))
-				continue
-			}
-			if cell.ScenarioID == "" {
-				add(rel+metadataJSONSuffix, "missing scenario_id (the cell→catalog foreign key)")
-			} else if !names[cell.ScenarioID] {
-				add(rel+metadataJSONSuffix, fmt.Sprintf("scenario_id %q not in the catalog", cell.ScenarioID))
-			}
-			// A recipe the driver will run must carry the fields the driver reads
-			// positionally — a missing timeout_seconds once crashed a driver.
-			if msg := recipeTimeoutFinding(cell.Details.Recipe); msg != "" {
-				add(rel+metadataJSONSuffix, msg)
-			}
-			// A cell is "recorded" iff NewestRecordingDir resolves one — the SAME
-			// definition matrix.cellRecorded uses, so the two never disagree.
-			// (hasRecordings/dirHasChildren above is only for orphan detection:
-			// content present but no metadata.json.)
-			cellDir := filepath.Join(scenDir, folder)
-			if recDir, ok := validate.NewestRecordingDir(cellDir); ok {
-				if !fileExists(filepath.Join(cellDir, "expected.jsonl")) {
-					add(rel, "recorded cell is missing expected.jsonl")
-				}
-				// The newest recording is authoritative (it gates validation and
-				// the viewer autoselects it); it must be complete. Older recordings
-				// are kept as drift signals. The on-disk tree is the single source
-				// of truth, so an incomplete newest recording is a hard error.
-				recRel := filepath.Join(rel, "recordings", filepath.Base(recDir))
-				for _, finding := range validate.RecordingComplete(recDir) {
-					add(recRel, "incomplete recording: "+finding)
-				}
-			}
+			validateCell(scenDir, agent, e.Name(), names, add)
 		}
+	}
+}
+
+// validateCell checks one agent's scenario cell folder: metadata.json parses,
+// links to a real scenario (scenario_id FK), carries a well-formed recipe, and
+// (when recorded) is a complete recording. Orphan folders (recordings but no
+// metadata.json) are flagged.
+func validateCell(scenDir, agent, folder string, names map[string]bool, add func(path, msg string)) {
+	rel := filepath.Join("replaydata/agents", agent, "scenarios", folder)
+	cellDir := filepath.Join(scenDir, folder)
+	metaPath := filepath.Join(cellDir, "metadata.json")
+
+	mb, err := os.ReadFile(metaPath)
+	if err != nil {
+		if dirHasChildren(filepath.Join(cellDir, "recordings")) {
+			add(rel, "orphan recording folder: has recordings/ but no metadata.json")
+		}
+		return
+	}
+	var cell shard.ShardAgent
+	if err := json.Unmarshal(mb, &cell); err != nil {
+		add(rel+metadataJSONSuffix, fmt.Sprintf("not valid JSON: %v", err))
+		return
+	}
+	validateCellFK(cell.ScenarioID, rel, names, add)
+	// A recipe the driver will run must carry the fields the driver reads
+	// positionally — a missing timeout_seconds once crashed a driver.
+	if msg := recipeTimeoutFinding(cell.Details.Recipe); msg != "" {
+		add(rel+metadataJSONSuffix, msg)
+	}
+	validateCellRecording(cellDir, rel, add)
+}
+
+// validateCellFK checks that scenarioID is set and resolves to a catalog
+// scenario — the cell→catalog foreign key.
+func validateCellFK(scenarioID, rel string, names map[string]bool, add func(path, msg string)) {
+	if scenarioID == "" {
+		add(rel+metadataJSONSuffix, "missing scenario_id (the cell→catalog foreign key)")
+	} else if !names[scenarioID] {
+		add(rel+metadataJSONSuffix, fmt.Sprintf("scenario_id %q not in the catalog", scenarioID))
+	}
+}
+
+// validateCellRecording checks the cell's newest recording (if any) for
+// completeness. A cell is "recorded" iff NewestRecordingDir resolves one —
+// the SAME definition matrix.cellRecorded uses, so the two never disagree.
+// The newest recording is authoritative (it gates validation and the viewer
+// autoselects it); it must be complete. Older recordings are kept as drift
+// signals, so an incomplete newest recording is the hard error.
+func validateCellRecording(cellDir, rel string, add func(path, msg string)) {
+	recDir, ok := validate.NewestRecordingDir(cellDir)
+	if !ok {
+		return
+	}
+	if !fileExists(filepath.Join(cellDir, "expected.jsonl")) {
+		add(rel, "recorded cell is missing expected.jsonl")
+	}
+	recRel := filepath.Join(rel, "recordings", filepath.Base(recDir))
+	for _, finding := range validate.RecordingComplete(recDir) {
+		add(recRel, "incomplete recording: "+finding)
 	}
 }
 

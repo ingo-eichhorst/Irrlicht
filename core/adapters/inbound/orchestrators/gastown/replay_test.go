@@ -139,33 +139,40 @@ func runScenario(t *testing.T, scenarioDir string) {
 
 	for tick := 1; tick <= cfg.PollTicks; tick++ {
 		writeTick(t, tickFile, tick)
+		runTick(t, p, tick, goldenDir, gtRoot)
+	}
+}
 
-		// Generous outer cap matching the per-fetch budget above: under
-		// load the subprocess fan-out must not be guillotined mid-flight
-		// (#586). This bounds a genuine hang without racing the parallel sweep.
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-		state := p.BuildOrchestratorState(ctx)
-		cancel()
+// runTick drives one poll tick and either writes its golden file
+// (-update-goldens) or compares the resulting orchestrator state against it.
+func runTick(t *testing.T, p *poller, tick int, goldenDir, gtRoot string) {
+	t.Helper()
 
-		actualJSON := mustMarshal(t, normalizeState(state, gtRoot))
-		goldenPath := filepath.Join(goldenDir, fmt.Sprintf("state-%03d.json", tick))
+	// Generous outer cap matching the per-fetch budget above: under
+	// load the subprocess fan-out must not be guillotined mid-flight
+	// (#586). This bounds a genuine hang without racing the parallel sweep.
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	state := p.BuildOrchestratorState(ctx)
+	cancel()
 
-		if *updateGoldens {
-			if err := os.WriteFile(goldenPath, actualJSON, 0o644); err != nil {
-				t.Fatal(err)
-			}
-			t.Logf("wrote %s", goldenPath)
-			continue
+	actualJSON := mustMarshal(t, normalizeState(state, gtRoot))
+	goldenPath := filepath.Join(goldenDir, fmt.Sprintf("state-%03d.json", tick))
+
+	if *updateGoldens {
+		if err := os.WriteFile(goldenPath, actualJSON, 0o644); err != nil {
+			t.Fatal(err)
 		}
+		t.Logf("wrote %s", goldenPath)
+		return
+	}
 
-		expected, err := os.ReadFile(goldenPath)
-		if err != nil {
-			t.Fatalf("read golden %s: %v (run with -update-goldens to create)", goldenPath, err)
-		}
-		if string(expected) != string(actualJSON) {
-			t.Errorf("tick %d state mismatch\n--- expected (%s) ---\n%s\n--- actual ---\n%s",
-				tick, goldenPath, string(expected), string(actualJSON))
-		}
+	expected, err := os.ReadFile(goldenPath)
+	if err != nil {
+		t.Fatalf("read golden %s: %v (run with -update-goldens to create)", goldenPath, err)
+	}
+	if string(expected) != string(actualJSON) {
+		t.Errorf("tick %d state mismatch\n--- expected (%s) ---\n%s\n--- actual ---\n%s",
+			tick, goldenPath, string(expected), string(actualJSON))
 	}
 }
 

@@ -121,6 +121,34 @@ func TestGate_GetSessions(t *testing.T) {
 // adapter with non-empty branding. Catches the original foot-gun (#260): a
 // new adapter that forgets to fill DisplayName / IconSVGLight / IconSVGDark
 // would make this test fail before reaching review.
+// agentListEntry mirrors one entry of GET /api/v1/agents' response body.
+type agentListEntry struct {
+	Name         string `json:"name"`
+	DisplayName  string `json:"display_name"`
+	IconSVGLight string `json:"icon_svg_light"`
+	IconSVGDark  string `json:"icon_svg_dark"`
+}
+
+// assertAgentEntryValid checks that e is one of the expected adapters and
+// carries non-empty display metadata, marking its name seen in wantNames.
+func assertAgentEntryValid(t *testing.T, e agentListEntry, wantNames map[string]bool) {
+	t.Helper()
+	if _, expected := wantNames[e.Name]; !expected {
+		t.Errorf("unexpected adapter %q in response", e.Name)
+		return
+	}
+	wantNames[e.Name] = true
+	if e.DisplayName == "" {
+		t.Errorf("adapter %q: display_name must not be empty", e.Name)
+	}
+	if e.IconSVGLight == "" {
+		t.Errorf("adapter %q: icon_svg_light must not be empty", e.Name)
+	}
+	if e.IconSVGDark == "" {
+		t.Errorf("adapter %q: icon_svg_dark must not be empty", e.Name)
+	}
+}
+
 func TestGate_GetAgents(t *testing.T) {
 	srv, _ := newTestStack(t)
 	defer srv.Close()
@@ -137,12 +165,7 @@ func TestGate_GetAgents(t *testing.T) {
 		t.Errorf("Content-Type: got %q, want application/json", ct)
 	}
 
-	var entries []struct {
-		Name         string `json:"name"`
-		DisplayName  string `json:"display_name"`
-		IconSVGLight string `json:"icon_svg_light"`
-		IconSVGDark  string `json:"icon_svg_dark"`
-	}
+	var entries []agentListEntry
 	if err := json.NewDecoder(resp.Body).Decode(&entries); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -155,20 +178,7 @@ func TestGate_GetAgents(t *testing.T) {
 		"opencode":    false,
 	}
 	for _, e := range entries {
-		if _, expected := wantNames[e.Name]; !expected {
-			t.Errorf("unexpected adapter %q in response", e.Name)
-			continue
-		}
-		wantNames[e.Name] = true
-		if e.DisplayName == "" {
-			t.Errorf("adapter %q: display_name must not be empty", e.Name)
-		}
-		if e.IconSVGLight == "" {
-			t.Errorf("adapter %q: icon_svg_light must not be empty", e.Name)
-		}
-		if e.IconSVGDark == "" {
-			t.Errorf("adapter %q: icon_svg_dark must not be empty", e.Name)
-		}
+		assertAgentEntryValid(t, e, wantNames)
 	}
 	for name, seen := range wantNames {
 		if !seen {
@@ -387,28 +397,39 @@ func TestHandleGetSessions_AttachesGroupCosts(t *testing.T) {
 		t.Fatalf("decode: %v", err)
 	}
 
-	var projA *session.AgentGroup
-	for _, g := range payload.Groups {
-		if g.Name == "proj-a" {
-			projA = g
-			break
-		}
-	}
+	projA := findAgentGroup(payload.Groups, "proj-a")
 	if projA == nil {
 		t.Fatalf("proj-a group missing from response: %+v", payload.Groups)
 	}
 	if projA.Costs == nil {
 		t.Fatalf("proj-a.Costs must not be nil")
 	}
-	for _, tf := range []string{"day", "week", "month", "year"} {
-		if v, ok := projA.Costs[tf]; !ok || v <= 0 {
-			t.Errorf("proj-a.Costs[%q]: want > 0, got %v (ok=%v)", tf, v, ok)
-		}
-	}
+	assertPositiveCostForAllTimeframes(t, "proj-a", projA.Costs)
 	// The pre-window baseline $1.00 → max $1.25 ⇒ delta $0.25 for every
 	// window. Floating-point comparison tolerates tiny scanner artefacts.
 	if got := projA.Costs["day"]; got < 0.24 || got > 0.26 {
 		t.Errorf("proj-a.Costs[day]: want ≈0.25, got %v", got)
+	}
+}
+
+// findAgentGroup returns the group named name, or nil if none matches.
+func findAgentGroup(groups []*session.AgentGroup, name string) *session.AgentGroup {
+	for _, g := range groups {
+		if g.Name == name {
+			return g
+		}
+	}
+	return nil
+}
+
+// assertPositiveCostForAllTimeframes checks that costs carries a positive
+// value for every trailing window ("day", "week", "month", "year").
+func assertPositiveCostForAllTimeframes(t *testing.T, label string, costs map[string]float64) {
+	t.Helper()
+	for _, tf := range []string{"day", "week", "month", "year"} {
+		if v, ok := costs[tf]; !ok || v <= 0 {
+			t.Errorf("%s.Costs[%q]: want > 0, got %v (ok=%v)", label, tf, v, ok)
+		}
 	}
 }
 
@@ -642,108 +663,118 @@ func TestGate_UIServed(t *testing.T) {
 
 // TestResolveUIDir covers each branch of the runtime UI lookup and the
 // worktree-isolation guarantee of the dev walk-up.
+// writeIndexUI creates dir/index.html and returns dir, standing in for an
+// installed dashboard across TestResolveUIDir's subtests.
+func writeIndexUI(t *testing.T, dir string) string {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", dir, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("ok"), 0o644); err != nil {
+		t.Fatalf("write %s: %v", dir, err)
+	}
+	return dir
+}
+
+// markRepoRoot writes a .git marker file in dir (mimics a worktree's .git file).
+func markRepoRoot(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", dir, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".git"), []byte("gitdir: x"), 0o644); err != nil {
+		t.Fatalf("write .git: %v", err)
+	}
+}
+
+func testResolveUIDirEnvWinsWhenIndexPresent(t *testing.T) {
+	envDir := writeIndexUI(t, filepath.Join(t.TempDir(), "env"))
+	if got := resolveUIDirFor(envDir, "", ""); got != envDir {
+		t.Errorf("got %q, want %q", got, envDir)
+	}
+}
+
+func testResolveUIDirEnvWithoutIndexFallsThrough(t *testing.T) {
+	emptyEnv := t.TempDir()
+	homeDir := t.TempDir()
+	webDir := writeIndexUI(t, filepath.Join(homeDir, ".local", "share", "irrlicht", "web"))
+	if got := resolveUIDirFor(emptyEnv, "", homeDir); got != webDir {
+		t.Errorf("got %q, want %q", got, webDir)
+	}
+}
+
+func testResolveUIDirExeResources(t *testing.T) {
+	bundle := t.TempDir()
+	exe := filepath.Join(bundle, "MacOS", "irrlichd")
+	if err := os.MkdirAll(filepath.Dir(exe), 0o755); err != nil {
+		t.Fatalf("mkdir MacOS: %v", err)
+	}
+	want := writeIndexUI(t, filepath.Join(bundle, "Resources", "web"))
+	got := resolveUIDirFor("", exe, "")
+	// filepath.Join collapses ../, but the lookup uses
+	// <exe>/../Resources/web literally — compare via Clean.
+	if filepath.Clean(got) != filepath.Clean(want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func testResolveUIDirHomeInstall(t *testing.T) {
+	homeDir := t.TempDir()
+	want := writeIndexUI(t, filepath.Join(homeDir, ".local", "share", "irrlicht", "web"))
+	if got := resolveUIDirFor("", "", homeDir); got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func testResolveUIDirDevWalkUpFindsRepoPlatformsWeb(t *testing.T) {
+	repo := t.TempDir()
+	markRepoRoot(t, repo)
+	want := writeIndexUI(t, filepath.Join(repo, "platforms", "web"))
+	exe := filepath.Join(repo, "core", "bin", "irrlichd")
+	if err := os.MkdirAll(filepath.Dir(exe), 0o755); err != nil {
+		t.Fatalf("mkdir bin: %v", err)
+	}
+	if got := resolveUIDirFor("", exe, ""); got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func testResolveUIDirWalkUpDoesNotEscapeIntoOuterRepo(t *testing.T) {
+	// Outer "fake parent repo" with platforms/web/index.html — must NOT
+	// be served when the binary lives inside an inner repo (worktree).
+	outer := t.TempDir()
+	markRepoRoot(t, outer)
+	writeIndexUI(t, filepath.Join(outer, "platforms", "web"))
+
+	inner := filepath.Join(outer, "worktrees", "wt-1")
+	markRepoRoot(t, inner) // inner has .git but no platforms/web/
+	exe := filepath.Join(inner, "core", "bin", "irrlichd")
+	if err := os.MkdirAll(filepath.Dir(exe), 0o755); err != nil {
+		t.Fatalf("mkdir bin: %v", err)
+	}
+	if got := resolveUIDirFor("", exe, ""); got != "" {
+		t.Errorf("expected isolation (empty), got %q", got)
+	}
+}
+
+func testResolveUIDirNoSourceMatchesReturnsEmpty(t *testing.T) {
+	// exe in a tree with no .git anywhere → walk-up exhausts → "".
+	emptyHome := t.TempDir()
+	exe := filepath.Join(t.TempDir(), "elsewhere", "irrlichd")
+	if err := os.MkdirAll(filepath.Dir(exe), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if got := resolveUIDirFor("", exe, emptyHome); got != "" {
+		t.Errorf("expected empty, got %q", got)
+	}
+}
+
 func TestResolveUIDir(t *testing.T) {
-	// writeIndex creates dir/index.html and returns dir.
-	writeIndex := func(dir string) string {
-		t.Helper()
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			t.Fatalf("mkdir %s: %v", dir, err)
-		}
-		if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("ok"), 0o644); err != nil {
-			t.Fatalf("write %s: %v", dir, err)
-		}
-		return dir
-	}
-	// markRepo writes a .git marker file in dir (mimics a worktree's .git file).
-	markRepo := func(dir string) {
-		t.Helper()
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			t.Fatalf("mkdir %s: %v", dir, err)
-		}
-		if err := os.WriteFile(filepath.Join(dir, ".git"), []byte("gitdir: x"), 0o644); err != nil {
-			t.Fatalf("write .git: %v", err)
-		}
-	}
-
-	t.Run("env wins when index present", func(t *testing.T) {
-		envDir := writeIndex(filepath.Join(t.TempDir(), "env"))
-		if got := resolveUIDirFor(envDir, "", ""); got != envDir {
-			t.Errorf("got %q, want %q", got, envDir)
-		}
-	})
-
-	t.Run("env without index falls through", func(t *testing.T) {
-		emptyEnv := t.TempDir()
-		homeDir := t.TempDir()
-		webDir := writeIndex(filepath.Join(homeDir, ".local", "share", "irrlicht", "web"))
-		if got := resolveUIDirFor(emptyEnv, "", homeDir); got != webDir {
-			t.Errorf("got %q, want %q", got, webDir)
-		}
-	})
-
-	t.Run("exe Resources/web (production .app)", func(t *testing.T) {
-		bundle := t.TempDir()
-		exe := filepath.Join(bundle, "MacOS", "irrlichd")
-		if err := os.MkdirAll(filepath.Dir(exe), 0o755); err != nil {
-			t.Fatalf("mkdir MacOS: %v", err)
-		}
-		want := writeIndex(filepath.Join(bundle, "Resources", "web"))
-		got := resolveUIDirFor("", exe, "")
-		// filepath.Join collapses ../, but the lookup uses
-		// <exe>/../Resources/web literally — compare via Clean.
-		if filepath.Clean(got) != filepath.Clean(want) {
-			t.Errorf("got %q, want %q", got, want)
-		}
-	})
-
-	t.Run("home .local/share/irrlicht/web (daemon-only install)", func(t *testing.T) {
-		homeDir := t.TempDir()
-		want := writeIndex(filepath.Join(homeDir, ".local", "share", "irrlicht", "web"))
-		if got := resolveUIDirFor("", "", homeDir); got != want {
-			t.Errorf("got %q, want %q", got, want)
-		}
-	})
-
-	t.Run("dev walk-up finds repo platforms/web", func(t *testing.T) {
-		repo := t.TempDir()
-		markRepo(repo)
-		want := writeIndex(filepath.Join(repo, "platforms", "web"))
-		exe := filepath.Join(repo, "core", "bin", "irrlichd")
-		if err := os.MkdirAll(filepath.Dir(exe), 0o755); err != nil {
-			t.Fatalf("mkdir bin: %v", err)
-		}
-		if got := resolveUIDirFor("", exe, ""); got != want {
-			t.Errorf("got %q, want %q", got, want)
-		}
-	})
-
-	t.Run("walk-up does not escape inner repo into outer", func(t *testing.T) {
-		// Outer "fake parent repo" with platforms/web/index.html — must NOT
-		// be served when the binary lives inside an inner repo (worktree).
-		outer := t.TempDir()
-		markRepo(outer)
-		writeIndex(filepath.Join(outer, "platforms", "web"))
-
-		inner := filepath.Join(outer, "worktrees", "wt-1")
-		markRepo(inner) // inner has .git but no platforms/web/
-		exe := filepath.Join(inner, "core", "bin", "irrlichd")
-		if err := os.MkdirAll(filepath.Dir(exe), 0o755); err != nil {
-			t.Fatalf("mkdir bin: %v", err)
-		}
-		if got := resolveUIDirFor("", exe, ""); got != "" {
-			t.Errorf("expected isolation (empty), got %q", got)
-		}
-	})
-
-	t.Run("no source matches returns empty", func(t *testing.T) {
-		// exe in a tree with no .git anywhere → walk-up exhausts → "".
-		emptyHome := t.TempDir()
-		exe := filepath.Join(t.TempDir(), "elsewhere", "irrlichd")
-		if err := os.MkdirAll(filepath.Dir(exe), 0o755); err != nil {
-			t.Fatalf("mkdir: %v", err)
-		}
-		if got := resolveUIDirFor("", exe, emptyHome); got != "" {
-			t.Errorf("expected empty, got %q", got)
-		}
-	})
+	t.Run("env wins when index present", testResolveUIDirEnvWinsWhenIndexPresent)
+	t.Run("env without index falls through", testResolveUIDirEnvWithoutIndexFallsThrough)
+	t.Run("exe Resources/web (production .app)", testResolveUIDirExeResources)
+	t.Run("home .local/share/irrlicht/web (daemon-only install)", testResolveUIDirHomeInstall)
+	t.Run("dev walk-up finds repo platforms/web", testResolveUIDirDevWalkUpFindsRepoPlatformsWeb)
+	t.Run("walk-up does not escape inner repo into outer", testResolveUIDirWalkUpDoesNotEscapeIntoOuterRepo)
+	t.Run("no source matches returns empty", testResolveUIDirNoSourceMatchesReturnsEmpty)
 }

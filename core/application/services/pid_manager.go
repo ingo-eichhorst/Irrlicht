@@ -1071,13 +1071,9 @@ func (pm *PIDManager) seedAlivePIDs(states []*session.SessionState) map[int]*ses
 		switch {
 		case state.PID > 0:
 			if pm.handleAlivePIDState(state) {
-				if state.ParentSessionID == "" && !strings.HasPrefix(state.SessionID, "proc-") {
-					if prev, ok := newestByPID[state.PID]; !ok || state.FirstSeen > prev.FirstSeen {
-						newestByPID[state.PID] = state
-					}
-				}
+				pm.trackNewestByPID(state, newestByPID)
 			}
-		case state.PID == 0 && state.ParentSessionID == "" && (isStaleTranscript(state.TranscriptPath) || cwdMissing(state.CWD)):
+		case state.PID == 0 && isOrphanAtSeed(state):
 			// Orphan from exited process (PID discovery never succeeded).
 			// Child sessions (ParentSessionID set) are exempt — they run
 			// inside the parent process and never get their own PID.
@@ -1088,6 +1084,26 @@ func (pm *PIDManager) seedAlivePIDs(states []*session.SessionState) map[int]*ses
 		}
 	}
 	return newestByPID
+}
+
+// trackNewestByPID records state as the newest non-subagent, non-proc-*
+// session for its PID, for later dedup via dedupeByPID. Subagents (identified
+// by ParentSessionID) and proc-* placeholders are exempt from tracking.
+func (pm *PIDManager) trackNewestByPID(state *session.SessionState, newestByPID map[int]*session.SessionState) {
+	if state.ParentSessionID != "" || strings.HasPrefix(state.SessionID, "proc-") {
+		return
+	}
+	if prev, ok := newestByPID[state.PID]; ok && prev.FirstSeen >= state.FirstSeen {
+		return
+	}
+	newestByPID[state.PID] = state
+}
+
+// isOrphanAtSeed reports whether state is an orphan from an exited process at
+// seed time: not a child session, and either its transcript is stale or its
+// CWD no longer exists.
+func isOrphanAtSeed(state *session.SessionState) bool {
+	return state.ParentSessionID == "" && (isStaleTranscript(state.TranscriptPath) || cwdMissing(state.CWD))
 }
 
 // handleAlivePIDState processes a state whose PID > 0: deletes it when the
@@ -1131,47 +1147,77 @@ func (pm *PIDManager) backfillLauncher(state *session.SessionState) {
 	if state.Launcher == nil {
 		pm.captureLauncher(state, state.PID)
 		if state.Launcher != nil {
-			state.UpdatedAt = time.Now().Unix()
-			_ = pm.repo.Save(state)
+			pm.touchAndSave(state)
 		}
 		return
 	}
 	if pm.launcherEnv == nil {
 		return
 	}
-	missingTTY := state.Launcher.TTY == ""
-	isKitty := state.Launcher.TermProgram == "kitty"
-	missingKittyPID := isKitty && state.Launcher.KittyPID == 0
-	missingKittyListen := isKitty && state.Launcher.KittyListenOn == ""
-	missingKittyWindow := isKitty && state.Launcher.KittyWindowID == ""
-	if !missingTTY && !missingKittyPID && !missingKittyListen && !missingKittyWindow {
+	needs := launcherBackfillNeedsFor(state.Launcher)
+	if !needs.any() {
 		return
 	}
 	fresh := pm.launcherEnv(state.PID)
 	if fresh == nil {
 		return
 	}
+	if applyLauncherBackfill(state.Launcher, needs, fresh) {
+		pm.touchAndSave(state)
+	}
+}
+
+// touchAndSave bumps UpdatedAt and persists state, ignoring the save error
+// (mirrors the existing best-effort backfill-save call sites).
+func (pm *PIDManager) touchAndSave(state *session.SessionState) {
+	state.UpdatedAt = time.Now().Unix()
+	_ = pm.repo.Save(state)
+}
+
+// launcherBackfillNeeds tracks which Launcher fields are missing and should
+// be refreshed from a fresh env read.
+type launcherBackfillNeeds struct {
+	tty, kittyPID, kittyListen, kittyWindow bool
+}
+
+func (n launcherBackfillNeeds) any() bool {
+	return n.tty || n.kittyPID || n.kittyListen || n.kittyWindow
+}
+
+// launcherBackfillNeedsFor computes which fields of l are missing and
+// eligible for backfill. The three Kitty-specific fields only ever need
+// backfilling for a kitty launcher.
+func launcherBackfillNeedsFor(l *session.Launcher) launcherBackfillNeeds {
+	isKitty := l.TermProgram == "kitty"
+	return launcherBackfillNeeds{
+		tty:         l.TTY == "",
+		kittyPID:    isKitty && l.KittyPID == 0,
+		kittyListen: isKitty && l.KittyListenOn == "",
+		kittyWindow: isKitty && l.KittyWindowID == "",
+	}
+}
+
+// applyLauncherBackfill copies each field fresh has that l is missing per
+// needs. Returns true when any field was updated.
+func applyLauncherBackfill(l *session.Launcher, needs launcherBackfillNeeds, fresh *session.Launcher) bool {
 	updated := false
-	if missingTTY && fresh.TTY != "" {
-		state.Launcher.TTY = fresh.TTY
+	if needs.tty && fresh.TTY != "" {
+		l.TTY = fresh.TTY
 		updated = true
 	}
-	if missingKittyPID && fresh.KittyPID != 0 {
-		state.Launcher.KittyPID = fresh.KittyPID
+	if needs.kittyPID && fresh.KittyPID != 0 {
+		l.KittyPID = fresh.KittyPID
 		updated = true
 	}
-	if missingKittyListen && fresh.KittyListenOn != "" {
-		state.Launcher.KittyListenOn = fresh.KittyListenOn
+	if needs.kittyListen && fresh.KittyListenOn != "" {
+		l.KittyListenOn = fresh.KittyListenOn
 		updated = true
 	}
-	if missingKittyWindow && fresh.KittyWindowID != "" {
-		state.Launcher.KittyWindowID = fresh.KittyWindowID
+	if needs.kittyWindow && fresh.KittyWindowID != "" {
+		l.KittyWindowID = fresh.KittyWindowID
 		updated = true
 	}
-	if updated {
-		state.UpdatedAt = time.Now().Unix()
-		_ = pm.repo.Save(state)
-	}
+	return updated
 }
 
 // dedupeByPID removes non-subagent sessions that share a PID with a newer

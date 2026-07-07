@@ -100,8 +100,20 @@ func dataDir() string {
 	return filepath.Join(home, ".local", "share", "irrlicht")
 }
 
-// runServe parses the serve flags and runs the relay until SIGINT/SIGTERM.
-func runServe(args []string) {
+// serveConfig holds the parsed `serve` flags.
+type serveConfig struct {
+	addr            string
+	tlsCert         string
+	tlsKey          string
+	auth            string
+	originAllowlist string
+	dataDirFlag     string
+	lim             limits
+}
+
+// parseServeFlags parses the `serve` flag set, seeding the connection-cap
+// defaults from env when set (env < flag), mirroring IRRLICHT_UI_DIR.
+func parseServeFlags(args []string) serveConfig {
 	fs := flag.NewFlagSet("irrlichtrelay serve", flag.ExitOnError)
 	// Loopback by default: a no-auth relay must not be reachable from the LAN
 	// unless explicitly asked. Pass --addr 0.0.0.0:7839 to expose it — and only
@@ -112,8 +124,6 @@ func runServe(args []string) {
 	auth := fs.String("auth", "off", "authentication: 'off' (trusted LAN, accept any hello) or 'tokens-file[:PATH]' (verify a hashed bearer token; PATH defaults to <data-dir>/tokens.json)")
 	originAllowlist := fs.String("origin-allowlist", "", "comma-separated Origin hosts allowed for browser WS clients (empty = allow all, loopback-safe)")
 	dataDirFlag := fs.String("data-dir", "", "state directory for the tokens file (default: $IRRLICHT_HOME or ~/.local/share/irrlicht)")
-	// Connection-hardening caps for an exposed listener. Flag defaults are
-	// seeded from env when set (env < flag), mirroring IRRLICHT_UI_DIR.
 	def := defaultLimits()
 	maxMsgBytes := fs.Int64("max-msg-bytes", envInt64(envMaxMsgBytes, def.maxMsgBytes), "max inbound WebSocket message size in bytes (0 disables)")
 	maxConns := fs.Int("max-conns", envInt(envMaxConns, def.maxConns), "max total concurrent connections (0 disables)")
@@ -122,27 +132,45 @@ func runServe(args []string) {
 	// this becomes a de-facto global cap — set 0 to disable it in that topology.
 	maxConnsPerIP := fs.Int("max-conns-per-ip", envInt(envMaxConnsPerIP, def.maxConnsPerIP), "max concurrent connections per remote IP (0 disables; meaningless behind a proxy/NAT — see --max-conns)")
 	_ = fs.Parse(args)
-	lim := limits{maxMsgBytes: *maxMsgBytes, maxConns: *maxConns, maxConnsPerIP: *maxConnsPerIP}
+	return serveConfig{
+		addr:            *addr,
+		tlsCert:         *tlsCert,
+		tlsKey:          *tlsKey,
+		auth:            *auth,
+		originAllowlist: *originAllowlist,
+		dataDirFlag:     *dataDirFlag,
+		lim:             limits{maxMsgBytes: *maxMsgBytes, maxConns: *maxConns, maxConnsPerIP: *maxConnsPerIP},
+	}
+}
 
-	if (*tlsCert == "") != (*tlsKey == "") {
+// mustValidTLSPair fatals unless --tls-cert and --tls-key are both set or
+// both empty.
+func mustValidTLSPair(cert, key string) {
+	if (cert == "") != (key == "") {
 		log.Fatal("--tls-cert and --tls-key must be given together")
 	}
-	tlsEnabled := *tlsCert != ""
+}
 
-	ddir := *dataDirFlag
-	if ddir == "" {
-		ddir = dataDir()
+// resolveDataDir returns flagVal, falling back to dataDir() when unset.
+func resolveDataDir(flagVal string) string {
+	if flagVal != "" {
+		return flagVal
 	}
+	return dataDir()
+}
 
-	var store *authStore
+// buildAuthStore builds the bearer-token store from the --auth flag value, or
+// nil when auth is off. Fatals on an invalid --auth value or an unreadable
+// tokens file.
+func buildAuthStore(auth, ddir string) *authStore {
 	switch {
-	case *auth == "off":
-		// no auth
-	case *auth == tokensFileFlag || strings.HasPrefix(*auth, "tokens-file:"):
+	case auth == "off":
+		return nil
+	case auth == tokensFileFlag || strings.HasPrefix(auth, "tokens-file:"):
 		// TrimPrefix leaves a bare "tokens-file" (no colon) untouched and turns
 		// "tokens-file:PATH" into PATH; both the bare form and an empty PATH mean
 		// "use the default path".
-		path := strings.TrimPrefix(*auth, "tokens-file:")
+		path := strings.TrimPrefix(auth, "tokens-file:")
 		if path == "" || path == tokensFileFlag {
 			path = filepath.Join(ddir, tokensFilename)
 		}
@@ -150,29 +178,30 @@ func runServe(args []string) {
 		if err != nil {
 			log.Fatalf("loading tokens file %s: %v", path, err)
 		}
-		store = s
 		log.Printf("auth enabled: %d token(s) loaded from %s", len(s.hashes), path)
+		return s
 	default:
-		log.Fatalf("invalid --auth %q (want off | tokens-file[:PATH])", *auth)
+		log.Fatalf("invalid --auth %q (want off | tokens-file[:PATH])", auth)
+		return nil
 	}
+}
 
-	allowedOrigins := splitCSV(*originAllowlist)
-
-	// Loud warning when exposed without authentication. TLS encrypts the wire
-	// but does NOT authenticate the peer, so a non-loopback bind without --auth
-	// is wide open regardless of TLS — anyone who can reach it reads every
-	// session and can inject as a daemon. (A reverse proxy that terminates TLS
-	// still binds the relay on loopback, so this only fires on a real exposure.)
-	if !isLoopback(*addr) && store == nil {
-		log.Printf("WARNING: binding %s with no --auth — anyone who can reach this address can read every session and inject as a daemon. Enable --auth (TLS alone does not authenticate), or restrict access at the network layer.", *addr)
+// warnIfExposedWithoutAuth loudly logs when a non-loopback bind has no
+// bearer-token auth. TLS encrypts the wire but does NOT authenticate the
+// peer, so a non-loopback bind without --auth is wide open regardless of TLS
+// — anyone who can reach it reads every session and can inject as a daemon.
+// (A reverse proxy that terminates TLS still binds the relay on loopback, so
+// this only fires on a real exposure.)
+func warnIfExposedWithoutAuth(addr string, store *authStore) {
+	if !isLoopback(addr) && store == nil {
+		log.Printf("WARNING: binding %s with no --auth — anyone who can reach this address can read every session and inject as a daemon. Enable --auth (TLS alone does not authenticate), or restrict access at the network layer.", addr)
 	}
+}
 
-	// Serve web assets with correct Content-Type regardless of the host OS
-	// mime database (matches irrlichd).
-	_ = mime.AddExtensionType(".js", "application/javascript")
-	_ = mime.AddExtensionType(".css", "text/css")
-
-	h := newHubWithAuth(store, allowedOrigins, lim)
+// buildMux registers the relay's HTTP routes: the WS stream, the read-only
+// API mirrors (bearer-gated when auth is on), and the dashboard UI (or a 503
+// placeholder when it can't be found).
+func buildMux(h *hub, store *authStore) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/sessions/stream", h.ServeWS)
 	// The data endpoints carry the same session content as the WS stream, so
@@ -192,6 +221,49 @@ func runServe(args []string) {
 			http.Error(w, "dashboard UI not found", http.StatusServiceUnavailable)
 		})
 	}
+	return mux
+}
+
+// listenAndServe runs srv with or without native TLS depending on tlsEnabled.
+func listenAndServe(srv *http.Server, tlsEnabled bool, tlsCert, tlsKey string) error {
+	if tlsEnabled {
+		return srv.ListenAndServeTLS(tlsCert, tlsKey)
+	}
+	return srv.ListenAndServe()
+}
+
+// startListening runs srv in a goroutine, logging the scheme/address and
+// fataling on any listen error other than a graceful Shutdown.
+func startListening(srv *http.Server, addr, tlsCert, tlsKey string, tlsEnabled bool) {
+	go func() {
+		scheme := "ws"
+		if tlsEnabled {
+			scheme = "wss"
+		}
+		log.Printf("irrlichtrelay %s listening on %s (%s://)", Version, addr, scheme)
+		if err := listenAndServe(srv, tlsEnabled, tlsCert, tlsKey); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("listen on %s failed: %v", addr, err)
+		}
+	}()
+}
+
+// runServe parses the serve flags and runs the relay until SIGINT/SIGTERM.
+func runServe(args []string) {
+	cfg := parseServeFlags(args)
+	mustValidTLSPair(cfg.tlsCert, cfg.tlsKey)
+	tlsEnabled := cfg.tlsCert != ""
+
+	ddir := resolveDataDir(cfg.dataDirFlag)
+	store := buildAuthStore(cfg.auth, ddir)
+	warnIfExposedWithoutAuth(cfg.addr, store)
+
+	// Serve web assets with correct Content-Type regardless of the host OS
+	// mime database (matches irrlichd).
+	_ = mime.AddExtensionType(".js", "application/javascript")
+	_ = mime.AddExtensionType(".css", "text/css")
+
+	h := newHubWithAuth(store, splitCSV(cfg.originAllowlist), cfg.lim)
+	mux := buildMux(h, store)
 
 	stop := make(chan struct{})
 	if store != nil {
@@ -201,27 +273,11 @@ func runServe(args []string) {
 	// WS connections are hijacked by gorilla after the upgrade, so the only
 	// server-level timeout that applies is the header read.
 	srv := &http.Server{
-		Addr:              *addr,
+		Addr:              cfg.addr,
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
-
-	go func() {
-		scheme := "ws"
-		if tlsEnabled {
-			scheme = "wss"
-		}
-		log.Printf("irrlichtrelay %s listening on %s (%s://)", Version, *addr, scheme)
-		var err error
-		if tlsEnabled {
-			err = srv.ListenAndServeTLS(*tlsCert, *tlsKey)
-		} else {
-			err = srv.ListenAndServe()
-		}
-		if err != nil && err != http.ErrServerClosed {
-			log.Fatalf("listen on %s failed: %v", *addr, err)
-		}
-	}()
+	startListening(srv, cfg.addr, cfg.tlsCert, cfg.tlsKey, tlsEnabled)
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT)
@@ -232,6 +288,61 @@ func runServe(args []string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = srv.Shutdown(ctx)
+}
+
+// resolveTokensPath returns the --tokens-file value, falling back to
+// <data-dir>/tokens.json when unset.
+func resolveTokensPath(tokensFile, dataDirFlag string) string {
+	if tokensFile != "" {
+		return tokensFile
+	}
+	return filepath.Join(resolveDataDir(dataDirFlag), tokensFilename)
+}
+
+// runTokenIssue implements `token issue`.
+func runTokenIssue(path, label, workspace string) {
+	id, plaintext, err := issueToken(path, label, workspace)
+	if err != nil {
+		log.Fatalf("token issue: %v", err)
+	}
+	fmt.Printf("token %s issued (label %q, workspace %q)\n", id, label, workspace)
+	fmt.Printf("  %s\n", plaintext)
+	fmt.Println("Store it now — it is shown only once and only its hash is kept.")
+}
+
+// runTokenList implements `token list`.
+func runTokenList(path string) {
+	recs, err := sortedRecords(path)
+	if err != nil {
+		log.Fatalf("token list: %v", err)
+	}
+	if len(recs) == 0 {
+		fmt.Println("no tokens issued")
+		return
+	}
+	for _, r := range recs {
+		ws := r.Workspace
+		if ws == "" {
+			ws = "-"
+		}
+		fmt.Printf("%s\t%s\t%s\t%s\n", r.ID, time.Unix(r.Created, 0).Format(time.RFC3339), ws, r.Label)
+	}
+}
+
+// runTokenRevoke implements `token revoke`.
+func runTokenRevoke(fs *flag.FlagSet, path string) {
+	if len(fs.Args()) == 0 {
+		log.Fatal("token revoke: want a token id")
+	}
+	id := fs.Args()[0]
+	ok, err := revokeToken(path, id)
+	if err != nil {
+		log.Fatalf("token revoke: %v", err)
+	}
+	if !ok {
+		log.Fatalf("token revoke: no token with id %q", id)
+	}
+	fmt.Printf("token %s revoked; the peer's next frame will be closed with %d\n", id, 4401)
 }
 
 // runToken implements `token issue|list|revoke`, operating directly on the
@@ -248,53 +359,15 @@ func runToken(args []string) {
 	workspace := fs.String("workspace", "", "tenant workspace the issued token is scoped to (issue only; empty = default single-tenant workspace)")
 	_ = fs.Parse(rest)
 
-	path := *tokensFile
-	if path == "" {
-		ddir := *dataDirFlag
-		if ddir == "" {
-			ddir = dataDir()
-		}
-		path = filepath.Join(ddir, tokensFilename)
-	}
+	path := resolveTokensPath(*tokensFile, *dataDirFlag)
 
 	switch sub {
 	case "issue":
-		id, plaintext, err := issueToken(path, *label, *workspace)
-		if err != nil {
-			log.Fatalf("token issue: %v", err)
-		}
-		fmt.Printf("token %s issued (label %q, workspace %q)\n", id, *label, *workspace)
-		fmt.Printf("  %s\n", plaintext)
-		fmt.Println("Store it now — it is shown only once and only its hash is kept.")
+		runTokenIssue(path, *label, *workspace)
 	case "list":
-		recs, err := sortedRecords(path)
-		if err != nil {
-			log.Fatalf("token list: %v", err)
-		}
-		if len(recs) == 0 {
-			fmt.Println("no tokens issued")
-			return
-		}
-		for _, r := range recs {
-			ws := r.Workspace
-			if ws == "" {
-				ws = "-"
-			}
-			fmt.Printf("%s\t%s\t%s\t%s\n", r.ID, time.Unix(r.Created, 0).Format(time.RFC3339), ws, r.Label)
-		}
+		runTokenList(path)
 	case "revoke":
-		if len(fs.Args()) == 0 {
-			log.Fatal("token revoke: want a token id")
-		}
-		id := fs.Args()[0]
-		ok, err := revokeToken(path, id)
-		if err != nil {
-			log.Fatalf("token revoke: %v", err)
-		}
-		if !ok {
-			log.Fatalf("token revoke: no token with id %q", id)
-		}
-		fmt.Printf("token %s revoked; the peer's next frame will be closed with %d\n", id, 4401)
+		runTokenRevoke(fs, path)
 	default:
 		log.Fatalf("token: unknown subcommand %q (want issue|list|revoke)", sub)
 	}
@@ -369,42 +442,63 @@ func resolveUIDir() string {
 	return resolveUIDirFor(os.Getenv(envUIDir), exe, home)
 }
 
-func resolveUIDirFor(env, exe, home string) string {
-	hasIndex := func(dir string) bool {
-		if dir == "" {
-			return false
-		}
-		_, err := os.Stat(filepath.Join(dir, "index.html"))
-		return err == nil
+// hasIndexHTML reports whether dir contains an index.html.
+func hasIndexHTML(dir string) bool {
+	if dir == "" {
+		return false
 	}
-	if hasIndex(env) {
+	_, err := os.Stat(filepath.Join(dir, "index.html"))
+	return err == nil
+}
+
+// repoWebDir returns repoRoot's platforms/web when it has an index.html, else
+// "" — the repo root was found, but there's no UI inside it, so callers must
+// not keep walking further up past it.
+func repoWebDir(repoRoot string) string {
+	if cand := filepath.Join(repoRoot, "platforms", "web"); hasIndexHTML(cand) {
+		return cand
+	}
+	return ""
+}
+
+// walkUpForRepoWeb walks up from exe's directory (up to 8 levels) looking for
+// the repo root (a directory containing .git), and returns its platforms/web
+// if it has an index.html. Returns "" when exe is empty, no repo root is
+// found within the walk, or the repo root has no UI.
+func walkUpForRepoWeb(exe string) string {
+	if exe == "" {
+		return ""
+	}
+	dir := filepath.Dir(exe)
+	for range 8 {
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+			return repoWebDir(dir)
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		dir = parent
+	}
+	return ""
+}
+
+func resolveUIDirFor(env, exe, home string) string {
+	if hasIndexHTML(env) {
 		return env
 	}
 	if exe != "" {
-		if cand := filepath.Join(filepath.Dir(exe), "..", "Resources", "web"); hasIndex(cand) {
+		if cand := filepath.Join(filepath.Dir(exe), "..", "Resources", "web"); hasIndexHTML(cand) {
 			return cand
 		}
 	}
 	if home != "" {
-		if cand := filepath.Join(home, ".local", "share", "irrlicht", "web"); hasIndex(cand) {
+		if cand := filepath.Join(home, ".local", "share", "irrlicht", "web"); hasIndexHTML(cand) {
 			return cand
 		}
 	}
-	if exe != "" {
-		dir := filepath.Dir(exe)
-		for range 8 {
-			if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
-				if cand := filepath.Join(dir, "platforms", "web"); hasIndex(cand) {
-					return cand
-				}
-				return "" // repo root found, no UI inside — don't escape it
-			}
-			parent := filepath.Dir(dir)
-			if parent == dir {
-				break
-			}
-			dir = parent
-		}
+	if cand := walkUpForRepoWeb(exe); cand != "" {
+		return cand
 	}
 	return ""
 }

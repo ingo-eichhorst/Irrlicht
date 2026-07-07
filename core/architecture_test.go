@@ -10,6 +10,14 @@ import (
 	"golang.org/x/tools/go/packages"
 )
 
+// layeringRule pairs a source-package prefix with the import prefixes it may
+// not reach into.
+type layeringRule struct {
+	name              string
+	sourcePrefix      string
+	forbiddenPrefixes []string
+}
+
 func TestArchitectureLayerImportDirection(t *testing.T) {
 	cfg := &packages.Config{Mode: packages.NeedName | packages.NeedImports, Dir: "."}
 	pkgs, err := packages.Load(cfg, "./...")
@@ -23,11 +31,7 @@ func TestArchitectureLayerImportDirection(t *testing.T) {
 		t.Fatalf("packages.Load returned no packages for pattern \"./...\"")
 	}
 
-	rules := []struct {
-		name              string
-		sourcePrefix      string
-		forbiddenPrefixes []string
-	}{
+	rules := []layeringRule{
 		{
 			name:              "domain must not import ports, adapters, or application",
 			sourcePrefix:      "irrlicht/core/domain/",
@@ -46,19 +50,34 @@ func TestArchitectureLayerImportDirection(t *testing.T) {
 	}
 
 	for _, pkg := range pkgs {
-		for _, rule := range rules {
-			if !hasLayerPrefix(pkg.PkgPath, rule.sourcePrefix) {
-				continue
-			}
-			for importPath := range pkg.Imports { // map key is the direct import path
-				for _, forbidden := range rule.forbiddenPrefixes {
-					if hasLayerPrefix(importPath, forbidden) {
-						t.Errorf("layering violation (%s): %q imports %q", rule.name, pkg.PkgPath, importPath)
-					}
-				}
+		checkPackageLayering(t, pkg, rules)
+	}
+}
+
+// checkPackageLayering reports a layering violation for every rule whose
+// sourcePrefix matches pkg and which directly imports one of that rule's
+// forbidden prefixes.
+func checkPackageLayering(t *testing.T, pkg *packages.Package, rules []layeringRule) {
+	for _, rule := range rules {
+		if !hasLayerPrefix(pkg.PkgPath, rule.sourcePrefix) {
+			continue
+		}
+		for importPath := range pkg.Imports { // map key is the direct import path
+			if matchesAnyLayerPrefix(importPath, rule.forbiddenPrefixes) {
+				t.Errorf("layering violation (%s): %q imports %q", rule.name, pkg.PkgPath, importPath)
 			}
 		}
 	}
+}
+
+// matchesAnyLayerPrefix reports whether path falls under any of prefixes.
+func matchesAnyLayerPrefix(path string, prefixes []string) bool {
+	for _, prefix := range prefixes {
+		if hasLayerPrefix(path, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func hasLayerPrefix(path, prefix string) bool {

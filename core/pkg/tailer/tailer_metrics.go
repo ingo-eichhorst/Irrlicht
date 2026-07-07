@@ -240,79 +240,89 @@ func (t *TranscriptTailer) addMessageEvent(event MessageEvent) {
 // processed — so that ledger-rehydrated state is reflected immediately.
 func (t *TranscriptTailer) computeCumulativeTokens() {
 	if len(t.cumByModel) > 0 || t.cumProviderCostUSD > 0 {
-		// New path: price per-model, sum provider-reported costs.
-		var totalInput, totalOutput, totalCacheRead, totalCacheCreate int64
-		var pricedCost, co2Grams float64
-		var co2Tier capacity.CO2Tier
-		for modelName, bd := range t.cumByModel {
-			totalInput += bd.Input
-			totalOutput += bd.Output
-			totalCacheRead += bd.CacheRead
-			totalCacheCreate += bd.CacheCreation5m + bd.CacheCreation1h
-			if t.capacityMgr != nil {
+		t.computeCumulativeTokensPriced()
+		return
+	}
+	t.computeCumulativeTokensLegacy()
+}
+
+// computeCumulativeTokensPriced is the new path: price per-model, sum
+// provider-reported costs.
+func (t *TranscriptTailer) computeCumulativeTokensPriced() {
+	var totalInput, totalOutput, totalCacheRead, totalCacheCreate int64
+	var pricedCost, co2Grams float64
+	var co2Tier capacity.CO2Tier
+	for modelName, bd := range t.cumByModel {
+		totalInput += bd.Input
+		totalOutput += bd.Output
+		totalCacheRead += bd.CacheRead
+		totalCacheCreate += bd.CacheCreation5m + bd.CacheCreation1h
+		if t.capacityMgr != nil {
+			pricedCost += t.capacityMgr.EstimateCostFromBreakdown(
+				modelName, bd.Input, bd.Output, bd.CacheRead, bd.CacheCreation5m, bd.CacheCreation1h)
+		}
+		grams, tier := capacity.EstimateCO2Grams(
+			modelName, bd.Input+bd.Output+bd.CacheRead+bd.CacheCreation5m+bd.CacheCreation1h)
+		co2Grams += grams
+		co2Tier = capacity.WeakerCO2Tier(co2Tier, tier)
+	}
+	// Include the pending contribution from stateful parsers (Claude Code).
+	if pc, ok := t.parser.(pendingContributor); ok {
+		if pending := pc.PendingContribution(); pending != nil {
+			totalInput += pending.Usage.Input
+			totalOutput += pending.Usage.Output
+			totalCacheRead += pending.Usage.CacheRead
+			totalCacheCreate += pending.Usage.CacheCreation5m + pending.Usage.CacheCreation1h
+			if t.capacityMgr != nil && pending.Model != "" {
 				pricedCost += t.capacityMgr.EstimateCostFromBreakdown(
-					modelName, bd.Input, bd.Output, bd.CacheRead, bd.CacheCreation5m, bd.CacheCreation1h)
+					pending.Model,
+					pending.Usage.Input, pending.Usage.Output, pending.Usage.CacheRead,
+					pending.Usage.CacheCreation5m, pending.Usage.CacheCreation1h)
 			}
-			grams, tier := capacity.EstimateCO2Grams(
-				modelName, bd.Input+bd.Output+bd.CacheRead+bd.CacheCreation5m+bd.CacheCreation1h)
+			grams, tier := capacity.EstimateCO2Grams(pending.Model,
+				pending.Usage.Input+pending.Usage.Output+pending.Usage.CacheRead+
+					pending.Usage.CacheCreation5m+pending.Usage.CacheCreation1h)
 			co2Grams += grams
 			co2Tier = capacity.WeakerCO2Tier(co2Tier, tier)
 		}
-		// Include the pending contribution from stateful parsers (Claude Code).
-		if pc, ok := t.parser.(pendingContributor); ok {
-			if pending := pc.PendingContribution(); pending != nil {
-				totalInput += pending.Usage.Input
-				totalOutput += pending.Usage.Output
-				totalCacheRead += pending.Usage.CacheRead
-				totalCacheCreate += pending.Usage.CacheCreation5m + pending.Usage.CacheCreation1h
-				if t.capacityMgr != nil && pending.Model != "" {
-					pricedCost += t.capacityMgr.EstimateCostFromBreakdown(
-						pending.Model,
-						pending.Usage.Input, pending.Usage.Output, pending.Usage.CacheRead,
-						pending.Usage.CacheCreation5m, pending.Usage.CacheCreation1h)
-				}
-				grams, tier := capacity.EstimateCO2Grams(pending.Model,
-					pending.Usage.Input+pending.Usage.Output+pending.Usage.CacheRead+
-						pending.Usage.CacheCreation5m+pending.Usage.CacheCreation1h)
-				co2Grams += grams
-				co2Tier = capacity.WeakerCO2Tier(co2Tier, tier)
-			}
-		}
-		t.metrics.CumInputTokens = totalInput
-		t.metrics.CumOutputTokens = totalOutput
-		t.metrics.CumCacheReadTokens = totalCacheRead
-		t.metrics.CumCacheCreationTokens = totalCacheCreate
-		t.metrics.EstimatedCostUSD = pricedCost + t.cumProviderCostUSD
-		t.metrics.EstimatedCO2Grams = co2Grams
-		t.metrics.CO2Tier = string(co2Tier)
-	} else {
-		// Legacy path: scalar accumulators (testParser and pre-Contribution adapters).
-		effectiveCumInput := t.cumInputTokens
-		effectiveCumOutput := t.cumOutputTokens
-		effectiveCumCacheRead := t.cumCacheReadTokens
-		effectiveCumCacheCreate := t.cumCacheCreationTokens
-		if t.pendingSnapshot != nil {
-			effectiveCumInput += t.pendingSnapshot.Input
-			effectiveCumOutput += t.pendingSnapshot.Output
-			effectiveCumCacheRead += t.pendingSnapshot.CacheRead
-			effectiveCumCacheCreate += t.pendingSnapshot.CacheCreation
-		}
-		t.metrics.CumInputTokens = effectiveCumInput
-		t.metrics.CumOutputTokens = effectiveCumOutput
-		t.metrics.CumCacheReadTokens = effectiveCumCacheRead
-		t.metrics.CumCacheCreationTokens = effectiveCumCacheCreate
+	}
+	t.metrics.CumInputTokens = totalInput
+	t.metrics.CumOutputTokens = totalOutput
+	t.metrics.CumCacheReadTokens = totalCacheRead
+	t.metrics.CumCacheCreationTokens = totalCacheCreate
+	t.metrics.EstimatedCostUSD = pricedCost + t.cumProviderCostUSD
+	t.metrics.EstimatedCO2Grams = co2Grams
+	t.metrics.CO2Tier = string(co2Tier)
+}
 
-		if t.metrics.ModelName != "" {
-			if t.capacityMgr != nil {
-				t.metrics.EstimatedCostUSD = t.capacityMgr.EstimateCostUSD(
-					t.metrics.ModelName, effectiveCumInput, effectiveCumOutput,
-					effectiveCumCacheRead, effectiveCumCacheCreate)
-			}
-			grams, tier := capacity.EstimateCO2Grams(t.metrics.ModelName,
-				effectiveCumInput+effectiveCumOutput+effectiveCumCacheRead+effectiveCumCacheCreate)
-			t.metrics.EstimatedCO2Grams = grams
-			t.metrics.CO2Tier = string(tier)
+// computeCumulativeTokensLegacy is the legacy path: scalar accumulators
+// (testParser and pre-Contribution adapters).
+func (t *TranscriptTailer) computeCumulativeTokensLegacy() {
+	effectiveCumInput := t.cumInputTokens
+	effectiveCumOutput := t.cumOutputTokens
+	effectiveCumCacheRead := t.cumCacheReadTokens
+	effectiveCumCacheCreate := t.cumCacheCreationTokens
+	if t.pendingSnapshot != nil {
+		effectiveCumInput += t.pendingSnapshot.Input
+		effectiveCumOutput += t.pendingSnapshot.Output
+		effectiveCumCacheRead += t.pendingSnapshot.CacheRead
+		effectiveCumCacheCreate += t.pendingSnapshot.CacheCreation
+	}
+	t.metrics.CumInputTokens = effectiveCumInput
+	t.metrics.CumOutputTokens = effectiveCumOutput
+	t.metrics.CumCacheReadTokens = effectiveCumCacheRead
+	t.metrics.CumCacheCreationTokens = effectiveCumCacheCreate
+
+	if t.metrics.ModelName != "" {
+		if t.capacityMgr != nil {
+			t.metrics.EstimatedCostUSD = t.capacityMgr.EstimateCostUSD(
+				t.metrics.ModelName, effectiveCumInput, effectiveCumOutput,
+				effectiveCumCacheRead, effectiveCumCacheCreate)
 		}
+		grams, tier := capacity.EstimateCO2Grams(t.metrics.ModelName,
+			effectiveCumInput+effectiveCumOutput+effectiveCumCacheRead+effectiveCumCacheCreate)
+		t.metrics.EstimatedCO2Grams = grams
+		t.metrics.CO2Tier = string(tier)
 	}
 }
 
@@ -325,62 +335,12 @@ func (t *TranscriptTailer) computeMetrics() {
 	// more output). Skipping this would return CumInputTokens=0 in that window.
 	t.computeCumulativeTokens()
 
-	// Rate-limit snapshot has the same "must run even on empty pass"
-	// property — Claude Code's statusline hook can populate t.rateLimit
-	// out of band (no transcript line drives it), and the surface
-	// metrics need to expose that even on the first poll before any
-	// transcript activity exists. Lives above the early-return guard
-	// so an idle session still surfaces its last-known snapshot.
-	t.metrics.RateLimit = t.rateLimit
-	if len(t.rateLimitHistory) > 0 {
-		t.metrics.RateLimitHistory = append([]RateLimitSnapshot(nil), t.rateLimitHistory...)
-	} else {
-		t.metrics.RateLimitHistory = nil
-	}
-
-	// The task-estimate marker is sporadic like the rate-limit snapshot —
-	// surface the last-seen one even on an empty pass (issue #558).
-	t.metrics.TaskEstimate = t.lastTaskEstimate
-	t.metrics.TaskEstimateBase = t.firstTaskEstimate
-
-	// The task-summary marker and the heuristic fallback are surfaced the
-	// same way — even on an empty/resume-at-EOF pass, so the summary persists
-	// across daemon restarts before the next marker arrives (issue #738).
-	t.metrics.TaskSummary = t.lastTaskSummary
-	t.metrics.FirstUserText = t.firstUserText
-
-	// The task-question marker is surfaced the same way (issue #759) — last-seen
-	// one persists across empty/resume passes, cleared on a user message.
-	t.metrics.TaskQuestion = t.lastTaskQuestion
-
-	// Background-process count + output paths share the rate-limit block's
-	// "must run even on an empty pass" property: the open set can be
-	// rehydrated from the ledger after a daemon restart and must surface
-	// before any new transcript line arrives, so a still-running background
-	// process keeps holding the session `working`. See issue #445.
-	t.metrics.BackgroundProcessCount = len(t.openBackgroundProcs)
-	if len(t.openBackgroundProcs) > 0 {
-		outs := make([]string, 0, len(t.openBackgroundProcs))
-		var pids []string
-		for id, p := range t.openBackgroundProcs {
-			switch {
-			case p != "":
-				// Adapter wrote an output file (Claude Code) — probed via lsof.
-				outs = append(outs, p)
-			case isAllDigits(id):
-				// Adapter reports only a PID (Gemini CLI) — probed by signalling
-				// the PID directly. See issue #661.
-				pids = append(pids, id)
-			}
-		}
-		slices.Sort(outs)
-		slices.Sort(pids)
-		t.metrics.BackgroundProcessOutputs = outs
-		t.metrics.BackgroundProcessPIDs = pids
-	} else {
-		t.metrics.BackgroundProcessOutputs = nil
-		t.metrics.BackgroundProcessPIDs = nil
-	}
+	// The sporadic markers (rate-limit, task estimate/summary/question) and
+	// background-process bookkeeping all share the same "must run even on an
+	// empty pass" property and live above the early-return guard below, so an
+	// idle session still surfaces its last-known values.
+	t.surfaceSporadicMetrics()
+	t.computeBackgroundProcessMetrics()
 
 	if len(t.metrics.MessageHistory) == 0 {
 		t.metrics.MessagesPerMinute = 0
@@ -402,7 +362,82 @@ func (t *TranscriptTailer) computeMetrics() {
 	}
 
 	t.metrics.TotalEventCount = int64(len(t.metrics.MessageHistory))
+	t.computeRecentEventCount(currentTime)
+	t.computeOpenToolCallMetrics()
 
+	t.metrics.LastWasUserInterrupt = t.lastWasUserInterrupt
+	t.metrics.LastWasToolDenial = t.lastWasToolDenial
+	t.metrics.LastCWD = t.lastCWD
+	t.metrics.LastAssistantText = t.lastAssistantText
+
+	t.computeTaskSnapshotMetrics()
+
+	// Token snapshot (latest turn — for context utilization display).
+	t.metrics.InputTokens = t.inputTokens
+	t.metrics.OutputTokens = t.outputTokens
+	t.metrics.CacheReadTokens = t.cacheReadTokens
+	t.metrics.CacheCreationTokens = t.cacheCreationTokens
+
+	t.computeMessagesPerMinute(latestTime)
+}
+
+// surfaceSporadicMetrics copies onto t.metrics the fields that are populated
+// out of band — a rate-limit snapshot from Claude Code's statusline hook, or
+// task-estimate/summary/question markers — rather than derived from
+// MessageHistory. Runs unconditionally so an idle session still surfaces its
+// last-known values instead of flickering back to "no data yet" (issues
+// #558, #738, #759).
+func (t *TranscriptTailer) surfaceSporadicMetrics() {
+	t.metrics.RateLimit = t.rateLimit
+	if len(t.rateLimitHistory) > 0 {
+		t.metrics.RateLimitHistory = append([]RateLimitSnapshot(nil), t.rateLimitHistory...)
+	} else {
+		t.metrics.RateLimitHistory = nil
+	}
+
+	t.metrics.TaskEstimate = t.lastTaskEstimate
+	t.metrics.TaskEstimateBase = t.firstTaskEstimate
+
+	t.metrics.TaskSummary = t.lastTaskSummary
+	t.metrics.FirstUserText = t.firstUserText
+
+	t.metrics.TaskQuestion = t.lastTaskQuestion
+}
+
+// computeBackgroundProcessMetrics surfaces background-process bookkeeping.
+// Runs even on an empty pass: the open set can be rehydrated from the ledger
+// after a daemon restart and must surface before any new transcript line
+// arrives, so a still-running background process keeps holding the session
+// `working`. See issue #445.
+func (t *TranscriptTailer) computeBackgroundProcessMetrics() {
+	t.metrics.BackgroundProcessCount = len(t.openBackgroundProcs)
+	if len(t.openBackgroundProcs) == 0 {
+		t.metrics.BackgroundProcessOutputs = nil
+		t.metrics.BackgroundProcessPIDs = nil
+		return
+	}
+	outs := make([]string, 0, len(t.openBackgroundProcs))
+	var pids []string
+	for id, p := range t.openBackgroundProcs {
+		switch {
+		case p != "":
+			// Adapter wrote an output file (Claude Code) — probed via lsof.
+			outs = append(outs, p)
+		case isAllDigits(id):
+			// Adapter reports only a PID (Gemini CLI) — probed by signalling
+			// the PID directly. See issue #661.
+			pids = append(pids, id)
+		}
+	}
+	slices.Sort(outs)
+	slices.Sort(pids)
+	t.metrics.BackgroundProcessOutputs = outs
+	t.metrics.BackgroundProcessPIDs = pids
+}
+
+// computeRecentEventCount sets RecentEventWindowStart/RecentEventCount to the
+// last five minutes (or since session start, whichever is later).
+func (t *TranscriptTailer) computeRecentEventCount(currentTime time.Time) {
 	fiveMinutesAgo := currentTime.Add(-5 * time.Minute)
 	windowStart := fiveMinutesAgo
 	if t.metrics.SessionStartAt.After(fiveMinutesAgo) {
@@ -417,10 +452,12 @@ func (t *TranscriptTailer) computeMetrics() {
 		}
 	}
 	t.metrics.RecentEventCount = recentEventCount
+}
 
-	// Open tool calls are derived directly from the id-keyed map — the only
-	// source of truth. See the openToolCalls field comment for history (#102,
-	// #114, #117).
+// computeOpenToolCallMetrics derives the open-tool-call fields directly from
+// the id-keyed map — the only source of truth. See the openToolCalls field
+// comment for history (#102, #114, #117).
+func (t *TranscriptTailer) computeOpenToolCallMetrics() {
 	openCalls := len(t.openToolCalls)
 	t.metrics.OpenToolCallCount = openCalls
 	t.metrics.HasOpenToolCall = openCalls > 0
@@ -429,33 +466,27 @@ func (t *TranscriptTailer) computeMetrics() {
 		names = append(names, name)
 	}
 	t.metrics.LastOpenToolNames = names
-	t.metrics.LastWasUserInterrupt = t.lastWasUserInterrupt
-	t.metrics.LastWasToolDenial = t.lastWasToolDenial
-	t.metrics.LastCWD = t.lastCWD
-	t.metrics.LastAssistantText = t.lastAssistantText
-	// (rate-limit fields are populated above the empty-MessageHistory
-	// early return so an idle session still surfaces its last-known
-	// snapshot — UI decorates staleness rather than dropping it.)
+}
+
+// computeTaskSnapshotMetrics mirrors the running task list onto metrics,
+// using a non-nil empty slice (not nil) once tasks have existed this session
+// so MergeMetrics reads "no tasks" rather than "no data yet" and resurrects a
+// stale pre-prune list in the session record forever. See issue #615.
+func (t *TranscriptTailer) computeTaskSnapshotMetrics() {
 	switch {
 	case len(t.tasks) > 0:
 		t.metrics.Tasks = append([]Task(nil), t.tasks...)
 	case t.taskSeq > 0:
-		// Had tasks this session but the list emptied (snapshot prune). A
-		// non-nil empty slice tells MergeMetrics "no tasks" — nil would read
-		// as "no data yet" and resurrect the stale pre-prune list in the
-		// session record forever. See issue #615.
 		t.metrics.Tasks = []Task{}
 	default:
 		t.metrics.Tasks = nil
 	}
+}
 
-	// Token snapshot (latest turn — for context utilization display).
-	t.metrics.InputTokens = t.inputTokens
-	t.metrics.OutputTokens = t.outputTokens
-	t.metrics.CacheReadTokens = t.cacheReadTokens
-	t.metrics.CacheCreationTokens = t.cacheCreationTokens
-
-	// Sliding window for messages per minute.
+// computeMessagesPerMinute applies the sliding window for messages-per-minute
+// (trimming MessageHistory to the window as a side effect) given the current
+// pass's latest message time.
+func (t *TranscriptTailer) computeMessagesPerMinute(latestTime time.Time) {
 	legacyWindowStart := latestTime.Add(-t.windowSize)
 	messageCount := 0
 	filteredHistory := make([]MessageEvent, 0, len(t.metrics.MessageHistory))
@@ -467,19 +498,19 @@ func (t *TranscriptTailer) computeMetrics() {
 	}
 	t.metrics.MessageHistory = filteredHistory
 
-	if messageCount > 0 {
-		if len(filteredHistory) > 1 {
-			timeSpan := latestTime.Sub(filteredHistory[0].Timestamp)
-			if timeSpan > 0 {
-				t.metrics.MessagesPerMinute = float64(messageCount) / timeSpan.Minutes()
-			} else {
-				t.metrics.MessagesPerMinute = float64(messageCount)
-			}
-		} else {
-			t.metrics.MessagesPerMinute = float64(messageCount) / t.windowSize.Minutes()
-		}
-	} else {
+	if messageCount == 0 {
 		t.metrics.MessagesPerMinute = 0
+		return
+	}
+	if len(filteredHistory) <= 1 {
+		t.metrics.MessagesPerMinute = float64(messageCount) / t.windowSize.Minutes()
+		return
+	}
+	timeSpan := latestTime.Sub(filteredHistory[0].Timestamp)
+	if timeSpan > 0 {
+		t.metrics.MessagesPerMinute = float64(messageCount) / timeSpan.Minutes()
+	} else {
+		t.metrics.MessagesPerMinute = float64(messageCount)
 	}
 }
 
