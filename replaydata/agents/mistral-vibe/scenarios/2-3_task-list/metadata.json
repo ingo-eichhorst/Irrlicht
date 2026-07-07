@@ -67,7 +67,9 @@
         "driver's wait_turn seam ported from a reference driver before recording (driver=gap:wait_turn)"
       ],
       "timeout_seconds": 180,
-      "settings": {},
+      "settings": {
+        "bypass_tool_permissions": true
+      },
       "script": [
         {
           "type": "send",
