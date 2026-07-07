@@ -110,6 +110,9 @@ SES_MARKER=(); SES_CWD=(); SES_ALIVE=()
 # recipe-lint flags a recipe needing it as a semantic_gap before recording. Set
 # DRIVE_SLASH_REQUIRES_STEP_TYPE=true if mistral-vibe is headless-first (a bare
 # send "/cmd" stores literal text instead of reaching the REPL).
+# Tool-executing recipes: set the recipe's settings.bypass_tool_permissions=true
+# and launch_repl adds `vibe --auto-approve` so tool calls run unattended (not a
+# step type — a launch-mode toggle, so it stays out of DRIVE_ELICITS).
 DRIVE_ELICITS="send slash sleep wait_turn"
 DRIVE_SLASH_REQUIRES_STEP_TYPE=false
 RUN_CWD="${IRRLICHT_ONBOARD_CWD:-$STAGING/cwd}"
@@ -241,6 +244,17 @@ launch_repl() {
   # prevents the session dir from ever being created. --trust makes launch
   # deterministic regardless of where the staging cwd lands.
   local -a vibe_args=(--trust)
+  # --auto-approve (a.k.a. --yolo): approve ALL tool calls without prompting, so
+  # a recipe whose turn invokes a tool (bash/read/write) runs unattended and
+  # wait_turn sees the terminal assistant line instead of stalling on a blocking
+  # permission dialog. Gated on the recipe's settings blob (bypass_tool_permissions
+  # == true) — NOT unconditional, so a future vibe tool-gate/permission-prompt cell
+  # can still observe the working→waiting arc. run-cell.sh writes .settings to
+  # $SETTINGS_PATH; a missing/`{}`/false setting leaves tool calls gated (default).
+  if [[ -f "$SETTINGS_PATH" ]] && jq -e '.bypass_tool_permissions == true' "$SETTINGS_PATH" >/dev/null 2>&1; then
+    vibe_args+=(--auto-approve)
+    echo "[driver] bypass_tool_permissions: launching vibe with --auto-approve" >&2
+  fi
   if [[ -n "$FIRST_PROMPT" ]]; then
     vibe_args+=("$FIRST_PROMPT")
     FIRST_SEND_PENDING=1
