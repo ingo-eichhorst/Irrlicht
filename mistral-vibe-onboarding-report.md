@@ -17,6 +17,50 @@ against a real `~/.vibe` transcript. /
 | **Go daemon adapter** (`core/adapters/inbound/agents/vibe/`) | agent.go, parser.go, sidecar.go, pid.go, icons.go, adapter.go + tests | `e943e261` |
 | Assess sweep (46 scenarios) | all cells assessed + spec'd | 46 commits |
 | **Unlock pass** (6 daemon/parser fixes) | 7 cells moved daemon=bug → daemon=full | 6 fix commits + 8 re-assess |
+| **Record phase** (32 live recordings) | 28 observed, 4 known_failing; driver bootstrapped | driver + spec-backflow + 32 recordings |
+
+## Record phase — COMPLETED
+
+All 32 recordable cells were driven live against a current-build recording daemon
+(isolated on :7838; production :7837 untouched) and verified. Final column state:
+
+| Disposition | Count |
+|---|---|
+| observed | 28 |
+| blocked-daemon (known_failing, documented) | 4 |
+| n.a. (frozen, agent lacks feature) | 7 |
+| unobservable (frozen, daemon=incapable) | 7 |
+
+- **Driver bootstrapped from scratch** and hardened: send, slash, sleep,
+  wait_turn, exit_clean, restart, sigkill, resume, keys, start_session, session,
+  interrupt — plus `vibe --trust` launch, first-prompt-as-positional, snapshot-diff
+  session-dir resolution, rotating-slash (`/clear`,`/compact`) re-resolve,
+  settings-gated `--auto-approve`, atomic-write handling.
+- **Backflow spec corrections** (all honest, never weakened): presession two-phase
+  birth + kiro-style observations column-wide; `/loop` 30s-interval timing;
+  atomic-write (no streaming window); presession-only initial arc for
+  rotate-on-reset (#906); per-cell birth re-anchors surfaced by live capture.
+- **Live-verified unlocks:** `foreground-subagent` (8/8) proves the parent-link
+  fix works end-to-end; `backchannel-control` (5/5) proves the Control declaration
+  drives vibe live.
+
+### The 4 known_failing cells (documented daemon findings, not gaps)
+- **2.5 synchronous-slash-command / 1.3 long-idle** — issue **#905**: a content-less
+  `messages.jsonl` touch force-works a ready session (spurious blip). Root cause
+  confirmed; unsafe to fix without regressing the #329 hook path.
+- **2.10 mid-turn-message-queued** — the daemon coalesces the in-memory-queued
+  turn into turn 1's working span (debounce); distinct in the transcript,
+  under-observed. Finding payload prepared (unfiled).
+- **6.2 backchannel-observe** — needs vibe-specific `DetectUI` terminal-state
+  markers (`uidetect.go` is Claude-only); the control half works, the read-back
+  can't fire yet. Documented follow-up.
+
+### Filed issues
+- **#905** — content-less transcript touch force-works a ready session.
+- **#906** — session-rotation: initial presession not promoted on `/clear`.
+
+Gates: `of validate` OK; `replay-fixtures.sh` zero unexpected failures (all
+known_failing are expected); vibe + services tests pass.
 
 Adapter shape (verified against a real transcript, not the handover doc):
 
