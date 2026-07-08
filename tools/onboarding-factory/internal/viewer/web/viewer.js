@@ -1302,9 +1302,29 @@ function _buildPipelineStageLines(pipe, meas) {
   return lines;
 }
 
+// _pipelineFields derives the individual assessment/pipeline/measurement
+// fields renderPipelineStrip and _buildPipelineTooltip both need from one
+// coverage record, so neither has to carry them as a long parallel-value
+// parameter list (javascript:S107).
+function _pipelineFields(cov) {
+  const sup = cov.agent_supports || "unknown";
+  const daemon = cov.daemon_capability || "unknown";
+  const driver = cov.driver_capability || "ready";
+  const display = cov.display_state || "unknown";
+  const pipe = cov.pipeline || {};
+  const meas = cov.measurement || {};
+  // agent_supports=no freezes the whole pipeline — nothing downstream
+  // matters. The Supports segment shows the state; the Daemon + Driver
+  // pillars still render, and everything after them collapses to dim
+  // placeholders.
+  const blocked = (sup === "no");
+  return { sup, daemon, driver, display, pipe, meas, blocked };
+}
+
 // _buildPipelineTooltip composes the full per-stage tooltip text for a
 // pipeline strip.
-function _buildPipelineTooltip(agent, scenarioID, cov, sup, daemon, driver, display, blocked, pipe, meas, driftKind) {
+function _buildPipelineTooltip(agent, scenarioID, cov, driftKind) {
+  const { sup, daemon, driver, display, pipe, meas, blocked } = _pipelineFields(cov);
   const lines = [`${agent} × ${scenarioID}`];
   lines.push(`Assessment: supports=${sup}, daemon=${daemon}, driver=${driver} → ${_displayMeta(display).text}`);
   if (cov.notes) lines.push(`  ${cov.notes}`);
@@ -1319,17 +1339,7 @@ function _buildPipelineTooltip(agent, scenarioID, cov, sup, daemon, driver, disp
 }
 
 function renderPipelineStrip(agent, scenarioID, cov, rec) {
-  const sup = cov.agent_supports || "unknown";
-  const daemon = cov.daemon_capability || "unknown";
-  const driver = cov.driver_capability || "ready";
-  const display = cov.display_state || "unknown";
-  const pipe = cov.pipeline || {};
-  const meas = cov.measurement || {};
-
-  // agent_supports=no freezes the whole pipeline — nothing downstream
-  // matters. The Supports segment shows the state; the Daemon + Driver pillars
-  // still render, and everything after them collapses to dim placeholders.
-  const blocked = (sup === "no");
+  const { sup, daemon, driver, pipe, meas, blocked } = _pipelineFields(cov);
 
   // Outer container is a plain <div>; each segment is its own button.
   // This is the change from a single composite button to a true
@@ -1373,7 +1383,7 @@ function renderPipelineStrip(agent, scenarioID, cov, rec) {
     wrap.style.background = style.background;
   }
 
-  wrap.title = _buildPipelineTooltip(agent, scenarioID, cov, sup, daemon, driver, display, blocked, pipe, meas, driftKind);
+  wrap.title = _buildPipelineTooltip(agent, scenarioID, cov, driftKind);
 
   return wrap;
 }

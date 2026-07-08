@@ -206,12 +206,17 @@ func runScenario(args []string, stdout, stderr io.Writer) int {
 	}
 
 	idx := findScenarioIndex(cat, *name)
+	edit := scenarioEdit{
+		ID: *id, Name: *name, Description: *desc,
+		ProcessFile: *procF, AcceptanceFile: *accF,
+		Process: process, Acceptance: acceptance,
+	}
 	var rc int
 	switch verb {
 	case "add":
-		rc = applyScenarioAdd(cat, idx, *id, *name, *desc, process, acceptance, stderr)
+		rc = applyScenarioAdd(cat, idx, edit, stderr)
 	case "update":
-		rc = applyScenarioUpdate(cat, idx, fs, *desc, *procF, *accF, process, acceptance, *name, stderr)
+		rc = applyScenarioUpdate(cat, idx, fs, edit, stderr)
 	default:
 		fmt.Fprintln(stderr, "of scenario: verb must be add, update, or show")
 		return exitUsage
@@ -240,34 +245,47 @@ func findScenarioIndex(cat *writeCatalog, name string) int {
 	return -1
 }
 
+// scenarioEdit carries the field values read from `of scenario add`/`update`
+// flags, keeping applyScenarioAdd/applyScenarioUpdate's parameter lists small
+// (go:S107) instead of threading each field through individually.
+type scenarioEdit struct {
+	ID             string
+	Name           string
+	Description    string
+	ProcessFile    string
+	AcceptanceFile string
+	Process        string
+	Acceptance     string
+}
+
 // applyScenarioAdd appends a new scenario to cat after checking it doesn't
 // already exist (idx < 0) and that its id/name are well-formed and unique.
-func applyScenarioAdd(cat *writeCatalog, idx int, id, name, desc, process, acceptance string, stderr io.Writer) int {
+func applyScenarioAdd(cat *writeCatalog, idx int, edit scenarioEdit, stderr io.Writer) int {
 	if idx >= 0 {
-		fmt.Fprintf(stderr, "of scenario add: %q already exists (use update)\n", name)
+		fmt.Fprintf(stderr, "of scenario add: %q already exists (use update)\n", edit.Name)
 		return exitFail
 	}
-	if id == "" {
+	if edit.ID == "" {
 		fmt.Fprintln(stderr, "of scenario add: --id is required")
 		return exitUsage
 	}
-	if !idRe.MatchString(id) {
-		fmt.Fprintf(stderr, "of scenario add: id %q is not <section>.<index>\n", id)
+	if !idRe.MatchString(edit.ID) {
+		fmt.Fprintf(stderr, "of scenario add: id %q is not <section>.<index>\n", edit.ID)
 		return exitFail
 	}
-	if !nameRe.MatchString(name) {
-		fmt.Fprintf(stderr, "of scenario add: name %q is not a kebab slug\n", name)
+	if !nameRe.MatchString(edit.Name) {
+		fmt.Fprintf(stderr, "of scenario add: name %q is not a kebab slug\n", edit.Name)
 		return exitFail
 	}
 	for _, s := range cat.Scenarios {
-		if s.ID == id {
-			fmt.Fprintf(stderr, "of scenario add: id %q already in use by %q\n", id, s.Name)
+		if s.ID == edit.ID {
+			fmt.Fprintf(stderr, "of scenario add: id %q already in use by %q\n", edit.ID, s.Name)
 			return exitFail
 		}
 	}
 	cat.Scenarios = append(cat.Scenarios, shard.Shard{
-		ID: id, Name: name, Description: desc,
-		Process: process, AcceptanceCriteria: acceptance,
+		ID: edit.ID, Name: edit.Name, Description: edit.Description,
+		Process: edit.Process, AcceptanceCriteria: edit.Acceptance,
 	})
 	return exitOK
 }
@@ -276,20 +294,20 @@ func applyScenarioAdd(cat *writeCatalog, idx int, id, name, desc, process, accep
 // description only when --description was explicitly passed (so an empty
 // value can clear it), process/acceptance_criteria only when their file
 // flags were given.
-func applyScenarioUpdate(cat *writeCatalog, idx int, fs *flag.FlagSet, desc, procF, accF, process, acceptance, name string, stderr io.Writer) int {
+func applyScenarioUpdate(cat *writeCatalog, idx int, fs *flag.FlagSet, edit scenarioEdit, stderr io.Writer) int {
 	if idx < 0 {
-		fmt.Fprintf(stderr, "of scenario update: %q not found (use add)\n", name)
+		fmt.Fprintf(stderr, "of scenario update: %q not found (use add)\n", edit.Name)
 		return exitFail
 	}
 	s := &cat.Scenarios[idx]
 	if flagPassed(fs, "description") {
-		s.Description = desc
+		s.Description = edit.Description
 	}
-	if procF != "" {
-		s.Process = process
+	if edit.ProcessFile != "" {
+		s.Process = edit.Process
 	}
-	if accF != "" {
-		s.AcceptanceCriteria = acceptance
+	if edit.AcceptanceFile != "" {
+		s.AcceptanceCriteria = edit.Acceptance
 	}
 	return exitOK
 }
