@@ -101,6 +101,7 @@ struct SessionRowView: View {
             Text(text)
                 .font(.system(size: 9, weight: .medium, design: .monospaced))
                 .foregroundColor(.secondary)
+                .lineLimit(1)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

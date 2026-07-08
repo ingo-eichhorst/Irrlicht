@@ -623,7 +623,7 @@ struct SessionMetrics: Codable {
         }
         if grams < 1 { return String(format: "%.0fmg", grams * 1000) }
         if grams < 1000 { return String(format: "%.1fg", grams) }
-        return String(format: "%.2fkg", grams / 1000)
+        return String(format: "%.1fkg", grams / 1000)
     }
 
     // co2TierTooltip explains the confidence behind the CO2 estimate — every
