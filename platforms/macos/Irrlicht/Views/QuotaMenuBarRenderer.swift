@@ -158,40 +158,28 @@ enum QuotaMenuBarRenderer {
         return svg
     }
 
-    /// Mirrors SessionListView's quotaPacePercent exactly: "where you'd be
-    /// if usage had grown linearly since the window opened," expressed as
-    /// 0–100. A `resetsAt` already in the past clamps to 100 (marker pinned
-    /// at the far end) rather than being treated as unpaceable — same
-    /// choice the popover chip makes for a stale snapshot, and reachable
-    /// here because `selectedSnapshot` no longer drops stale snapshots.
+    /// Delegates to SessionListView.quotaPacePercent — same implementation
+    /// the popover chip uses, not a second copy — so "where you'd be if
+    /// usage had grown linearly since the window opened" can't drift between
+    /// the two. Reachable here because `selectedSnapshot` no longer drops
+    /// stale snapshots.
     private static func pacePercent(for window: RateLimitWindowInfo) -> Double? {
-        guard window.windowMinutes > 0, window.resetsAt.timeIntervalSince1970 > 0 else { return nil }
-        let windowSeconds = Double(window.windowMinutes) * 60
-        let windowStart = window.resetsAt.addingTimeInterval(-windowSeconds)
-        let elapsed = Date().timeIntervalSince(windowStart)
-        return min(100, max(0, (elapsed / windowSeconds) * 100.0))
+        SessionListView.quotaPacePercent(window)
     }
 
-    /// Mirrors SessionListView.barColor's pace-aware ramp exactly (same
-    /// SessionListView.QuotaBarThreshold constants) rather than an
-    /// absolute-only ramp — otherwise the same window could read green in
-    /// the icon while the popover shows it orange for being ahead of pace,
-    /// which fails the "honest signals" bar. Returns a bare hex (no '#')
-    /// since callers splice it into SVG fill attributes; SessionListView's
-    /// version returns a SwiftUI Color instead, since it's used in a View.
+    /// Delegates to SessionListView.quotaColorTier — the same pace-aware
+    /// ramp decision the popover chip's `barColor` uses, not a second
+    /// hand-synced copy — so the same window can't read green in the icon
+    /// while the popover shows it orange. Returns a bare hex (no '#') since
+    /// callers splice it into SVG fill attributes; SessionListView's
+    /// `barColor` maps the same tier to a SwiftUI `Color` instead, since
+    /// it's used in a View.
     private static func colorHex(usedPercent: Double, pacePercent: Double?) -> String {
-        if usedPercent >= SessionListView.QuotaBarThreshold.absoluteOrange { return systemOrangeHex }
-        guard let pace = pacePercent else {
-            switch usedPercent {
-            case SessionListView.QuotaBarThreshold.fallbackOrange...: return systemOrangeHex
-            case SessionListView.QuotaBarThreshold.fallbackYellow...: return systemYellowHex
-            default: return IrrSVG.ready
-            }
+        switch SessionListView.quotaColorTier(used: usedPercent, pace: pacePercent) {
+        case .green: return IrrSVG.ready
+        case .yellow: return systemYellowHex
+        case .orange: return systemOrangeHex
         }
-        let delta = usedPercent - pace
-        if delta >= SessionListView.QuotaBarThreshold.paceDeltaOrange { return systemOrangeHex }
-        if delta >= SessionListView.QuotaBarThreshold.paceDeltaYellow { return systemYellowHex }
-        return IrrSVG.ready
     }
 
     // Bare hex for the two ramp colors SessionListView expresses as SwiftUI
@@ -205,11 +193,12 @@ enum QuotaMenuBarRenderer {
     /// True when the app's effective appearance is dark — same signal
     /// SessionState.adapterIcon already uses to pick a light/dark SVG
     /// variant, kept consistent here rather than introducing a second way
-    /// to ask the same question. NSApp is nil in unit tests; default to
-    /// dark (today's only supported look before this fix) so tests don't
-    /// need an NSApplication instance.
+    /// to ask the same question — including its nil-fallback: NSApp is nil
+    /// in unit tests, and adapterIcon defaults to the light variant there
+    /// (the more common ambient appearance), so this matches rather than
+    /// disagreeing with it.
     private static var isDarkAppearance: Bool {
-        guard let app = NSApp else { return true }
+        guard let app = NSApp else { return false }
         return app.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
     }
 

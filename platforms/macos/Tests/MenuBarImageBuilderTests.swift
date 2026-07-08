@@ -74,34 +74,41 @@ final class MenuBarImageBuilderTests: XCTestCase {
 
     // MARK: - shouldFallBackToDotsForUsageStyle (issue #909 review fix)
 
-    /// `.usage` style with active sessions but no renderable quota yet must
+    /// `.usage` style with a renderable dots image but no quota yet must
     /// not collapse to the "no sessions" icon — see the fallback comment in
     /// `combinedImage`.
-    func testFallsBackToDotsWhenUsageStyleHasNoQuotaButHasSessions() {
+    func testFallsBackToDotsWhenUsageStyleHasNoQuotaButDotsRendered() {
+        let dots = NSImage(size: NSSize(width: 10, height: 18))
         XCTAssertTrue(MenuBarImageBuilder.shouldFallBackToDotsForUsageStyle(
-            style: .usage, quotaImage: nil, sessionCount: 3
+            style: .usage, quotaImage: nil, dotsImage: dots
         ))
     }
 
     func testDoesNotFallBackWhenUsageStyleHasQuotaImage() {
         let quota = NSImage(size: NSSize(width: 10, height: 18))
+        let dots = NSImage(size: NSSize(width: 10, height: 18))
         XCTAssertFalse(MenuBarImageBuilder.shouldFallBackToDotsForUsageStyle(
-            style: .usage, quotaImage: quota, sessionCount: 3
+            style: .usage, quotaImage: quota, dotsImage: dots
         ))
     }
 
-    func testDoesNotFallBackWhenUsageStyleHasNoSessionsEither() {
+    /// Sessions can be active (non-zero count) while `buildStatusImage` still
+    /// returns nil (e.g. every session is a subagent whose parent was pruned
+    /// out from under it) — the fallback must key off the actual dots image,
+    /// not a raw session count that doesn't guarantee dots render.
+    func testDoesNotFallBackWhenUsageStyleHasNoRenderableDotsEither() {
         XCTAssertFalse(MenuBarImageBuilder.shouldFallBackToDotsForUsageStyle(
-            style: .usage, quotaImage: nil, sessionCount: 0
+            style: .usage, quotaImage: nil, dotsImage: nil
         ))
     }
 
     func testDoesNotFallBackForLightsOrCombinedStyles() {
+        let dots = NSImage(size: NSSize(width: 10, height: 18))
         XCTAssertFalse(MenuBarImageBuilder.shouldFallBackToDotsForUsageStyle(
-            style: .lights, quotaImage: nil, sessionCount: 3
+            style: .lights, quotaImage: nil, dotsImage: dots
         ))
         XCTAssertFalse(MenuBarImageBuilder.shouldFallBackToDotsForUsageStyle(
-            style: .combined, quotaImage: nil, sessionCount: 3
+            style: .combined, quotaImage: nil, dotsImage: dots
         ))
     }
 }

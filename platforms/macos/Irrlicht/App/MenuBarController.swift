@@ -139,6 +139,13 @@ final class MenuBarController: NSObject {
         // a real change — same shape as SessionManager.init's
         // sourcesSettingsChanged observer.
         let defaultsSignal = NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)
+            // Unlike NotificationCenter.addObserver(forName:object:queue: .main)
+            // (what SessionManager's sourcesSettingsChanged observer actually
+            // uses), a plain Combine publisher delivers on whatever thread
+            // posted the notification. Hop to main before the compactMap
+            // below mutates lastMenuBarStyle/etc — those are plain, non-atomic
+            // properties read/written elsewhere on the main thread.
+            .receive(on: RunLoop.main)
             .compactMap { [weak self] _ -> Void? in
                 guard let self else { return nil }
                 let style = UserDefaults.standard.string(forKey: MenuBarStyle.storageKey) ?? ""

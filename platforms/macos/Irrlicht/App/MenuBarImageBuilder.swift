@@ -20,15 +20,21 @@ enum MenuBarImageBuilder {
     }
 
     /// True when `.usage` style has nothing to show (no renderable quota
-    /// yet) but sessions are actually active — see the fallback comment at
-    /// its call site in `combinedImage`. Pure decision, extracted for
-    /// testability without a SessionManager, mirroring `iconState`.
+    /// yet) but the dots view is actually renderable — see the fallback
+    /// comment at its call site in `combinedImage`. Takes the already-built
+    /// dots image rather than a raw session count: a non-zero session count
+    /// doesn't guarantee `buildStatusImage` succeeds (e.g. sessions whose
+    /// parent was pruned out from under them still carry a non-nil
+    /// `parentSessionId` and get excluded from every project group), and
+    /// checking the actual image avoids re-deriving that success/failure a
+    /// second time. Pure decision, extracted for testability without a
+    /// SessionManager, mirroring `iconState`.
     static func shouldFallBackToDotsForUsageStyle(
         style: MenuBarStyle,
         quotaImage: NSImage?,
-        sessionCount: Int
+        dotsImage: NSImage?
     ) -> Bool {
-        style == .usage && quotaImage == nil && sessionCount > 0
+        style == .usage && quotaImage == nil && dotsImage != nil
     }
 
     static func build(
@@ -66,7 +72,10 @@ enum MenuBarImageBuilder {
         // rate_limit data yet for .usage/.combined) without collapsing the
         // whole icon — composeSideBySide degrades to whichever half exists.
         let style = MenuBarStyle.current
-        var dotsImage = style == .usage ? nil : MenuBarStatusRenderer.buildStatusImage(
+        // Computed once regardless of style so the .usage fallback below can
+        // check its actual success/failure instead of re-deriving it from a
+        // raw session count (see shouldFallBackToDotsForUsageStyle's doc).
+        let computedDotsImage = MenuBarStatusRenderer.buildStatusImage(
             sessions: nonGtSessions,
             projectGroupOrder: sessionManager.projectGroupOrder
         )
@@ -81,12 +90,9 @@ enum MenuBarImageBuilder {
         // OffFlameImage.menuBar, the "no sessions running" icon, while
         // sessions are in fact active. Fall back to dots so the icon stays
         // honest about "something is running" even without quota data.
-        if shouldFallBackToDotsForUsageStyle(style: style, quotaImage: quotaImage, sessionCount: nonGtSessions.count) {
-            dotsImage = MenuBarStatusRenderer.buildStatusImage(
-                sessions: nonGtSessions,
-                projectGroupOrder: sessionManager.projectGroupOrder
-            )
-        }
+        let dotsImage = style != .usage || shouldFallBackToDotsForUsageStyle(
+            style: style, quotaImage: quotaImage, dotsImage: computedDotsImage
+        ) ? computedDotsImage : nil
         // Dots first (left), quota bars last (right) — closest to the
         // system status icons (WiFi/battery/clock), matching issue #909's
         // mockup ordering.

@@ -633,11 +633,21 @@ struct SettingsView: View {
         return keys.sorted()
     }
 
+    /// `providerKey(adapter:)` returns nil for plan types/adapters it
+    /// doesn't recognize (e.g. Team/Enterprise plans, or a wrapper adapter
+    /// like Pi/OpenCode whose inherited snapshot carries no plan type) —
+    /// `knownQuotaProviderKeys` then falls back to a raw `"unknown:<adapter>"`
+    /// bucket key. Surface the adapter name instead of that internal-looking
+    /// string so the picker still reads as a plausible option rather than
+    /// leaking implementation detail.
     private func quotaProviderLabel(_ key: String) -> String {
         switch key {
         case "anthropic": return "Claude"
         case "openai": return "Codex"
-        default: return key
+        default:
+            guard key.hasPrefix("unknown:") else { return key }
+            let adapter = key.dropFirst("unknown:".count)
+            return adapter.isEmpty ? "Other" : adapter.capitalized
         }
     }
 
