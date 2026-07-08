@@ -82,7 +82,7 @@
       "script": [
         {
           "type": "send",
-          "text": "Run the shell command: echo hello"
+          "text": "Run the shell command: touch onboarding-backchannel-observe.txt"
         },
         {
           "type": "sleep",
