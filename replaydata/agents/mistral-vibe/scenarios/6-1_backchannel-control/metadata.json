@@ -67,6 +67,14 @@
           "seconds": 5
         },
         {
+          "type": "slash",
+          "text": "/compact"
+        },
+        {
+          "type": "sleep",
+          "seconds": 28
+        },
+        {
           "type": "send",
           "text": "Now write a second haiku about the sea."
         },
@@ -76,14 +84,6 @@
         },
         {
           "type": "interrupt"
-        },
-        {
-          "type": "sleep",
-          "seconds": 3
-        },
-        {
-          "type": "slash",
-          "text": "/compact"
         },
         {
           "type": "sleep",
