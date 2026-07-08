@@ -188,4 +188,10 @@ var modelAliases = map[string]string{
 	// grok-build pricing yet). Zero-value capacity + log on miss until the key
 	// lands upstream.
 	"grok-build": "grok-build-0.1",
+
+	// Xiaomi MiMo and Kwaipilot KAT-Coder — new codeburn entries; neither
+	// canonical is in LiteLLM's pricing table yet. Zero-value capacity + log
+	// on miss until the keys land upstream.
+	"mimo-v2-flash":    "xiaomi/mimo-v2-flash",
+	"kat-coder-pro-v1": "kwaipilot/kat-coder-pro",
 }

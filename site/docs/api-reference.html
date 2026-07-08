@@ -182,7 +182,7 @@
       <p>Returns the running daemon's version. Used by the web dashboard's header chip and by client integrations (the upcoming VS Code panel, future relay-served clients) to gate behavior on daemon capabilities.</p>
 
       <pre><code>{
-  "version": "0.4.4"
+  "version": "0.5.6"
 }</code></pre>
 
       <h3>GET /api/v1/agents</h3>
@@ -251,8 +251,26 @@
 
       <p>The <code>cost</code> / <code>tokens</code> / <code>models</code> / <code>providers</code> charts return a time-series payload (<code>range</code>, <code>chart</code>, <code>group</code>, <code>start</code>, <code>end</code>, <code>bucket_seconds</code>, <code>bucket_starts</code>, <code>total</code>, <code>series</code>, <code>top_contributors</code>, with optional <code>forecast</code>, <code>token_split</code>, and <code>scope</code>). <code>chart=agents</code> swaps in a <code>concurrency</code> block; <code>chart=yield</code> returns a per-project shape (<code>productive_cost</code>, <code>reverted_cost</code>, <code>unknown_cost</code>, <code>total_cost</code>, <code>yield</code>, <code>projects</code>). Returns <code>400</code> for an unknown <code>chart</code> / <code>group</code> / <code>token_type</code> or an invalid range.</p>
 
+      <pre><code># Weekly cost by project
+curl "http://127.0.0.1:7837/api/v1/history?chart=cost&group=project&range=week" | jq</code></pre>
+
       <h3>GET /api/v1/permissions</h3>
       <p>Returns the consent-first permission snapshot: the permission mode (<code>ask</code> or <code>grant-all</code>), and for every agent its detection status plus each declared permission with its state (<code>pending</code> / <code>granted</code> / <code>denied</code>), title, what it touches, and the feature it unlocks. The macOS app and web dashboard drive the permission wizard from this endpoint.</p>
+
+      <pre><code>curl http://127.0.0.1:7837/api/v1/permissions | jq</code></pre>
+
+      <pre><code>{
+  "mode": "ask",
+  "agents": [
+    {
+      "name": "claude-code",
+      "detected": true,
+      "permissions": [
+        { "key": "hooks", "state": "granted", "title": "Install Claude Code hooks" }
+      ]
+    }
+  ]
+}</code></pre>
 
       <h3>POST /api/v1/permissions/answer</h3>
       <p>Submits wizard answers: <code>{"answers": [{"agent": "claude-code", "permission": "hooks", "grant": true}]}</code>. Grants are exercised immediately (hook install, watcher start); revokes actively undo (hook uninstall, watcher stop). Returns the updated snapshot. First answer wins when both surfaces have the wizard open &mdash; the daemon broadcasts <code>permissions_updated</code> so the other surface dismisses.</p>
@@ -310,6 +328,9 @@ curl -X POST http://127.0.0.1:7837/api/v1/sessions/52d087d1-.../input \
       <h3>POST /api/v1/sessions/{id}/interrupt</h3>
 
       <p>Delivers an interrupt to a running turn (the read of a Ctrl-C into the terminal backend). No request body; same gating and same response codes as the input endpoint.</p>
+
+      <pre><code># Interrupt a running turn
+curl -X POST http://127.0.0.1:7837/api/v1/sessions/52d087d1-.../interrupt</code></pre>
 
       <h3>GET / POST / DELETE /api/v1/activation/backchannel</h3>
 

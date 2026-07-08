@@ -117,7 +117,7 @@ of record verify --agent <agent> --scenario <scenario>
 ```
 
 This runs the go-test-style verify engine: the state-phase validation AND the
-observation vector — exact-match `model`/`agent`, non-zero + tolerance
+observation vector — exact-match `model`, non-zero + tolerance
 `cost`/`tokens`, with a soft-diff of the full vector against the prior committed
 recording (flagged, not failed, on live jitter). Report the per-field result in
 `observations`. Hard spec-phase failures are real: a sub-100% pass that is NOT
@@ -202,7 +202,7 @@ Return ONLY this (≤7 lines). Shared semantics + envelope rules live in
 status: pass | infra_fail | prereq_blocked | needs_design | frozen
 commit_sha: <short sha>            # the recording commit (or driver commit), "n/a" otherwise
 pass_rate: <N/M phases>            # "n/a" for non-pass statuses
-observations: model=<ok|MISMATCH> cost=<ok|zero> tokens=<ok|zero> agent=<ok|MISMATCH>
+observations: model=<ok|MISMATCH> cost=<ok|zero> tokens=<ok|zero>
 observability_correction: <none | the live recording overrode the assess verdict — e.g. assessed daemon=full but the store proved no trace (→ incapable/bug)>
 issue: <none | /tmp/<agent>-<scenario>.issue.md title="<one-line title>">   # daemon=bug only; the dispatcher files it
 notes: <one or two sentences — drift flag, retry count, infra/prereq reason>

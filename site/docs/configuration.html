@@ -262,6 +262,30 @@
             <td><code>~/gt</code></td>
             <td>Override the Gas Town root directory the orchestrator adapter probes for <code>daemon/state.json</code> and rig layout</td>
           </tr>
+          <tr>
+            <td><code>IRRLICHT_DAEMON_PORT</code></td>
+            <td>Integer</td>
+            <td><code>7837</code></td>
+            <td>macOS app only &mdash; override which daemon port the dashboard connects to, so a dev-build daemon (e.g. port 7838) can coexist with the production daemon</td>
+          </tr>
+          <tr>
+            <td><code>IRRLICHT_RELAY_MAX_MSG_BYTES</code></td>
+            <td>Integer (bytes)</td>
+            <td><code>1048576</code></td>
+            <td>Env fallback for <code>irrlichtrelay serve --max-msg-bytes</code> &mdash; max inbound WebSocket message size the relay accepts; <code>0</code> disables the cap</td>
+          </tr>
+          <tr>
+            <td><code>IRRLICHT_RELAY_MAX_CONNS</code></td>
+            <td>Integer</td>
+            <td><code>256</code></td>
+            <td>Env fallback for <code>irrlichtrelay serve --max-conns</code> &mdash; max total concurrent connections the relay accepts; <code>0</code> disables the cap</td>
+          </tr>
+          <tr>
+            <td><code>IRRLICHT_RELAY_MAX_CONNS_PER_IP</code></td>
+            <td>Integer</td>
+            <td><code>32</code></td>
+            <td>Env fallback for <code>irrlichtrelay serve --max-conns-per-ip</code> &mdash; max concurrent connections per remote IP; <code>0</code> disables the cap (meaningless behind a proxy/NAT)</td>
+          </tr>
         </tbody>
       </table>
 

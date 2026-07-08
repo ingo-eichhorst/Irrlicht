@@ -92,7 +92,7 @@
 
       <ul>
         <li><strong>macOS 13 (Ventura) or later</strong> &mdash; Irrlicht uses SwiftUI APIs that require Ventura as a minimum.</li>
-        <li><strong>Linux (daemon-only)</strong> &mdash; x86-64 or ARM64, Linux 5.3+ (for <code>pidfd</code> exit detection). The daemon runs headless with the web dashboard as its UI; there is no menu-bar app on Linux yet. See <a href="#linux">Linux setup</a> below.</li>
+        <li><strong>Linux (daemon-only)</strong> &mdash; x86-64 or ARM64, Linux 5.3+ (for <code>pidfd</code> exit detection). Irrlicht runs as a <strong>daemon</strong> (a background process, <code>irrlichd</code>) headless, with the web dashboard as its UI; there is no menu-bar app on Linux yet. See <a href="#linux">Linux setup</a> below.</li>
         <li><strong>At least one supported AI coding agent</strong> installed and working:
           <ul>
             <li><a href="https://docs.anthropic.com/en/docs/claude-code">Claude Code</a></li>
@@ -109,7 +109,7 @@
 
       <p>If you plan to <a href="#build-from-source">build from source</a>, you will also need:</p>
       <ul>
-        <li><strong>Go 1.21+</strong> &mdash; the daemon is written in Go</li>
+        <li><strong>Go 1.25+</strong> &mdash; the daemon is written in Go</li>
         <li><strong>Swift 5.9+</strong> &mdash; the menu-bar app is a native SwiftUI application</li>
         <li><strong>Xcode Command Line Tools</strong> &mdash; install with <code>xcode-select --install</code></li>
       </ul>

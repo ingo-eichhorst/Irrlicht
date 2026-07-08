@@ -34,8 +34,8 @@ recorded:
 
 The daemon only observes an agent it has an adapter for. Wiring a new adapter is
 a Go change (a package under `core/adapters/inbound/agents/<slug>/` exporting
-`Agent()`, plus one line in the `allAgents` slice in
-`core/cmd/irrlichd/main.go` — see AGENTS.md "Adding a new agent adapter"). That
+`Agent()`, plus one line in the `All()` slice in
+`core/adapters/inbound/agents/all.go`). That
 is out of scope for this skill. If no adapter exists yet, say so in `notes`:
 the column can be registered and the driver scaffolded, but recordings can't be
 observed until the adapter lands. Don't block — register what you can.

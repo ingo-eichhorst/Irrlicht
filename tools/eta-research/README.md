@@ -15,8 +15,10 @@ run.
 
 ## Methodology notes
 
-- **Episode** = one task within a session, segmented by the tailer's own task
-  anchor (the rate base re-anchors on a new task / user message).
+- **Episode** = one task within a session, segmented by the transcript
+  **tailer**'s (`core/pkg/tailer`, the daemon component that watches `.jsonl`
+  transcripts) own task anchor (the rate base re-anchors on a new task / user
+  message).
 - **Ground truth = the last marker**, not the working→waiting/ready transition.
   The issue named the transition as the candidate; replaying the real corpus
   showed it is idle-contaminated (it fires when the user next returns — a median

@@ -124,10 +124,10 @@ Note: transcript silence on a non-blocking open tool call (e.g. a long-running b
 
 ## Subagent Detection
 
-Parent-child relationships derived from a working session with an open `Agent` tool call in the same project dir. Parent sessions carry a `SubagentSummary`:
+Parent-child relationships derived from a working session with an open `Agent` tool call in the same project dir. Parent sessions carry a `subagentSummary` under the JSON key `subagents`:
 
 ```
-SubagentSummary { total, working, waiting, ready int }
+subagentSummary { total, working, waiting, ready int }
 ```
 
 Subagent sessions run independent state machines with the same 3 states.

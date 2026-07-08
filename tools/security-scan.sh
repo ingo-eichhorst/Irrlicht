@@ -66,7 +66,7 @@ ok()   { local msg="$1"; echo "OK: $msg"; return 0; }
 gh_alert_gate() {
   local label="$1" endpoint="$2" severity_filter="$3"
   local raw rc
-  raw=$(gh api --paginate "$endpoint" -f state=open --jq '.[]' 2>&1)
+  raw=$(gh api --method GET --paginate "$endpoint" -f state=open --jq '.[]' 2>&1)
   rc=$?
   if [[ $rc -ne 0 ]]; then
     fail "$label: \`gh api $endpoint\` failed — auth or missing scope? output: $raw"
