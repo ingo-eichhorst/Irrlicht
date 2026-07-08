@@ -7,15 +7,29 @@ import (
 	"irrlicht/core/domain/session"
 )
 
-// TestMarkStalledEditTool covers the transcript-based stalled-edit-tool
-// fallback (#488): an open permission-gated edit tool that lingers past the
-// stale-refresh interval is flagged OpenToolStalled, while a fresh one, a
-// non-edit tool, or one already covered by the hook is not. White-box so it
-// can exercise the unexported method + editToolOpenSince map directly,
-// injecting `now` instead of sleeping out the real 5s window.
-func TestMarkStalledEditTool(t *testing.T) {
-	threshold := int64(staleWorkingRefreshInterval.Seconds())
+// markStalledEditToolCase is one TestMarkStalledEditTool table row.
+type markStalledEditToolCase struct {
+	name      string
+	openSince map[string]int64
+	metrics   *session.SessionMetrics
+	now       int64
 
+	wantStalled bool
+
+	// The open-since-window assertion is opt-in per case (most of the
+	// original subtests didn't check it): checkOpenSince false means skip
+	// it entirely; true + wantOpenSinceGone means the key must be absent;
+	// true + !wantOpenSinceGone means it must equal wantOpenSince.
+	checkOpenSince    bool
+	wantOpenSinceGone bool
+	wantOpenSince     int64
+}
+
+// markStalledEditToolCases builds TestMarkStalledEditTool's table. Split out
+// of the test function itself so TestMarkStalledEditTool stays under
+// CodeScene's Large Method line threshold (the table's fixtures are the bulk
+// of its length, not test logic).
+func markStalledEditToolCases(threshold int64) []markStalledEditToolCase {
 	editOpen := func() *session.SessionMetrics {
 		return &session.SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"Edit"}}
 	}
@@ -25,22 +39,7 @@ func TestMarkStalledEditTool(t *testing.T) {
 		return m
 	}
 
-	tests := []struct {
-		name      string
-		openSince map[string]int64
-		metrics   *session.SessionMetrics
-		now       int64
-
-		wantStalled bool
-
-		// The open-since-window assertion is opt-in per case (most of the
-		// original subtests didn't check it): checkOpenSince false means skip
-		// it entirely; true + wantOpenSinceGone means the key must be absent;
-		// true + !wantOpenSinceGone means it must equal wantOpenSince.
-		checkOpenSince    bool
-		wantOpenSinceGone bool
-		wantOpenSince     int64
-	}{
+	return []markStalledEditToolCase{
 		{
 			name:           "fresh edit tool is not flagged, window recorded",
 			openSince:      map[string]int64{},
@@ -100,8 +99,18 @@ func TestMarkStalledEditTool(t *testing.T) {
 			wantOpenSinceGone: true,
 		},
 	}
+}
 
-	for _, tt := range tests {
+// TestMarkStalledEditTool covers the transcript-based stalled-edit-tool
+// fallback (#488): an open permission-gated edit tool that lingers past the
+// stale-refresh interval is flagged OpenToolStalled, while a fresh one, a
+// non-edit tool, or one already covered by the hook is not. White-box so it
+// can exercise the unexported method + editToolOpenSince map directly,
+// injecting `now` instead of sleeping out the real 5s window.
+func TestMarkStalledEditTool(t *testing.T) {
+	threshold := int64(staleWorkingRefreshInterval.Seconds())
+
+	for _, tt := range markStalledEditToolCases(threshold) {
 		t.Run(tt.name, func(t *testing.T) {
 			d := &SessionDetector{editToolOpenSince: tt.openSince}
 			d.markStalledEditTool("s", tt.metrics, tt.now)
