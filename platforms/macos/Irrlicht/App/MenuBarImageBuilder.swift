@@ -79,9 +79,13 @@ enum MenuBarImageBuilder {
             sessions: nonGtSessions,
             projectGroupOrder: sessionManager.projectGroupOrder
         )
+        // Combined style shares its width budget with the dots, so the
+        // quota bars render in a narrower, label-less layout there — see
+        // QuotaMenuBarRenderer.buildSVG's `compact` handling.
         let quotaImage = style == .lights ? nil : QuotaMenuBarRenderer.imageForSelectedProvider(
             sessions: nonGtSessions,
-            providerKey: MenuBarQuotaProvider.current
+            providerKey: MenuBarQuotaProvider.current,
+            compact: style == .combined
         )
         // .usage style with sessions active but no renderable quota yet
         // (fresh daemon start, or the selected provider hasn't ticked a
@@ -95,8 +99,10 @@ enum MenuBarImageBuilder {
         ) ? computedDotsImage : nil
         // Dots first (left), quota bars last (right) — closest to the
         // system status icons (WiFi/battery/clock), matching issue #909's
-        // mockup ordering.
-        let baseImage = composeSideBySide(dotsImage, quotaImage)
+        // mockup ordering. Uses the same gap as between dot-groups
+        // themselves (MenuBarStatusRenderer.groupGap) so the dots-to-quota
+        // seam in Combined style reads as "one more group," not a wider gap.
+        let baseImage = composeSideBySide(dotsImage, quotaImage, gap: MenuBarStatusRenderer.groupGap)
 
         guard gasTownProvider.isDaemonRunning else { return baseImage }
 

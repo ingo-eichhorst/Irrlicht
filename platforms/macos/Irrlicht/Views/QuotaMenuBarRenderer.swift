@@ -14,18 +14,26 @@ enum QuotaMenuBarRenderer {
     private static let barHeight: CGFloat = 5
     private static let fontSize: CGFloat = 8
     private static let gap: CGFloat = 3
+    /// Bars style is narrowed by this factor (35% narrower) in Combined
+    /// style specifically, where the icon's width budget is shared with the
+    /// dots — see `rowSVG`'s `compact` handling.
+    private static let compactBarWidthFactor: CGFloat = 0.65
 
     /// Picks the freshest renderable rate-limit snapshot for `providerKey`
     /// across `sessions` and renders it. `providerKey` nil means "whatever
     /// provider is freshest" — used until the user picks one in Settings.
+    /// `compact` requests the narrower, label-less bars layout used in
+    /// Combined style (ignored by the Circle visual style, which has no
+    /// label to drop and is already compact).
     static func imageForSelectedProvider(
         sessions: [SessionState],
-        providerKey: String?
+        providerKey: String?,
+        compact: Bool = false
     ) -> NSImage? {
         guard let info = selectedSnapshot(sessions: sessions, providerKey: providerKey) else {
             return nil
         }
-        return buildImage(for: info)
+        return buildImage(for: info, compact: compact)
     }
 
     /// Freshest-`sampledAt`-wins across `sessions`, matching
@@ -53,10 +61,10 @@ enum QuotaMenuBarRenderer {
         return filtered.max { $0.info.sampledAt < $1.info.sampledAt }?.info
     }
 
-    static func buildImage(for info: RateLimitInfo) -> NSImage? {
+    static func buildImage(for info: RateLimitInfo, compact: Bool = false) -> NSImage? {
         let built: (svg: String, width: CGFloat)?
         switch QuotaVisualStyle.current {
-        case .bars: built = buildSVG(for: info)
+        case .bars: built = buildSVG(for: info, compact: compact)
         case .circle: built = buildCircleSVG(for: info)
         }
         guard let (svg, width) = built else { return nil }
@@ -66,20 +74,24 @@ enum QuotaMenuBarRenderer {
         return image
     }
 
-    static func buildSVG(for info: RateLimitInfo) -> (svg: String, width: CGFloat)? {
+    /// `compact` drops the "5h"/"7d" text label and narrows the bars —
+    /// used in Combined style, where the icon's width is shared with the
+    /// session-state dots. Defaults to `false` (today's Usage-style layout).
+    static func buildSVG(for info: RateLimitInfo, compact: Bool = false) -> (svg: String, width: CGFloat)? {
         let fiveHour = info.windows.first { $0.canonicalWindowMinutes == 300 }
         let sevenDay = info.windows.first { $0.canonicalWindowMinutes == 10080 }
         guard fiveHour != nil || sevenDay != nil else { return nil }
 
-        let width = labelWidth + gap + barWidth
+        let effectiveBarWidth = compact ? barWidth * compactBarWidthFactor : barWidth
+        let width = compact ? effectiveBarWidth : labelWidth + gap + barWidth
         var svg = """
         <svg xmlns="http://www.w3.org/2000/svg" width="\(Int(width))" height="\(Int(height))">
         """
         if let fiveHour {
-            svg += rowSVG(label: "5h", window: fiveHour, rowY: 0)
+            svg += rowSVG(label: "5h", window: fiveHour, rowY: 0, compact: compact)
         }
         if let sevenDay {
-            svg += rowSVG(label: "7d", window: sevenDay, rowY: rowHeight)
+            svg += rowSVG(label: "7d", window: sevenDay, rowY: rowHeight, compact: compact)
         }
         svg += "</svg>"
         return (svg, width)
@@ -132,25 +144,33 @@ enum QuotaMenuBarRenderer {
         return (svg, size)
     }
 
-    private static func rowSVG(label: String, window: RateLimitWindowInfo, rowY: CGFloat) -> String {
+    /// `compact` omits the leading "5h"/"7d" label and narrows the bar by
+    /// `compactBarWidthFactor` — see `buildSVG`'s doc.
+    private static func rowSVG(label: String, window: RateLimitWindowInfo, rowY: CGFloat, compact: Bool = false) -> String {
+        let effectiveBarWidth = compact ? barWidth * compactBarWidthFactor : barWidth
         let pct = min(max(window.usedPercent, 0), 100) / 100
-        let filledWidth = barWidth * pct
-        let barX = labelWidth + gap
+        let filledWidth = effectiveBarWidth * pct
+        let barX: CGFloat = compact ? 0 : labelWidth + gap
         let barY = rowY + (rowHeight - barHeight) / 2
         let textY = rowY + rowHeight * 0.78
         let pace = pacePercent(for: window)
         let hex = colorHex(usedPercent: window.usedPercent, pacePercent: pace)
 
-        var svg = """
-        <text x="0" y="\(svgNumber(textY))" font-family="Menlo,monospace" font-size="\(Int(fontSize))" fill="\(labelColor)">\(label)</text>
-        <rect x="\(svgNumber(barX))" y="\(svgNumber(barY))" width="\(svgNumber(barWidth))" height="\(svgNumber(barHeight))" rx="1.5" fill="\(trackColor)"/>
+        var svg = ""
+        if !compact {
+            svg += """
+            <text x="0" y="\(svgNumber(textY))" font-family="Menlo,monospace" font-size="\(Int(fontSize))" fill="\(labelColor)">\(label)</text>
+            """
+        }
+        svg += """
+        <rect x="\(svgNumber(barX))" y="\(svgNumber(barY))" width="\(svgNumber(effectiveBarWidth))" height="\(svgNumber(barHeight))" rx="1.5" fill="\(trackColor)"/>
         <rect x="\(svgNumber(barX))" y="\(svgNumber(barY))" width="\(svgNumber(filledWidth))" height="\(svgNumber(barHeight))" rx="1.5" fill="#\(hex)"/>
         """
         // Pace marker (mirrors SessionListView.quotaPacePercent): reaching
         // the bar's right edge means the window's wall-clock time is up,
         // independent of the fill's used% value.
         if let pace {
-            let paceX = barX + barWidth * pace / 100
+            let paceX = barX + effectiveBarWidth * pace / 100
             svg += """
             <rect x="\(svgNumber(paceX - 0.5))" y="\(svgNumber(barY - 0.75))" width="1" height="\(svgNumber(barHeight + 1.5))" fill="red"/>
             """

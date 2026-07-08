@@ -35,6 +35,38 @@ final class QuotaMenuBarRendererTests: XCTestCase {
         XCTAssertTrue(result!.svg.contains(">7d<"))
     }
 
+    // MARK: - buildSVG compact mode (Combined style: no labels, narrower bars)
+
+    func testBuildSVGCompactOmitsWindowLabels() {
+        let info = makeInfo(fiveHour: 20, sevenDay: 40)
+        let result = QuotaMenuBarRenderer.buildSVG(for: info, compact: true)
+        XCTAssertNotNil(result)
+        XCTAssertFalse(result!.svg.contains(">5h<"))
+        XCTAssertFalse(result!.svg.contains(">7d<"))
+    }
+
+    func testBuildSVGCompactIsNarrowerThanDefault() {
+        let info = makeInfo(fiveHour: 20, sevenDay: 40)
+        let normal = QuotaMenuBarRenderer.buildSVG(for: info, compact: false)
+        let compact = QuotaMenuBarRenderer.buildSVG(for: info, compact: true)
+        XCTAssertNotNil(normal)
+        XCTAssertNotNil(compact)
+        XCTAssertLessThan(compact!.width, normal!.width)
+        // compact's total width IS the bar width (no label/gap column), so
+        // it can be compared directly against the known 32pt default bar
+        // width: the requested range is 30-40% narrower, i.e. 60-70% of 32.
+        XCTAssertGreaterThanOrEqual(compact!.width, 32 * 0.60)
+        XCTAssertLessThanOrEqual(compact!.width, 32 * 0.70)
+    }
+
+    func testBuildSVGCompactDefaultsToFalseWhenOmitted() {
+        let info = makeInfo(fiveHour: 20, sevenDay: 40)
+        let omitted = QuotaMenuBarRenderer.buildSVG(for: info)
+        let explicitFalse = QuotaMenuBarRenderer.buildSVG(for: info, compact: false)
+        XCTAssertEqual(omitted?.width, explicitFalse?.width)
+        XCTAssertTrue(omitted!.svg.contains(">5h<"))
+    }
+
     /// Same ramp QuotaChipBarColorTests pins for SessionListView.barColor
     /// — this renderer must reach the identical verdict (as a bare hex
     /// instead of a SwiftUI Color) so the same window can't read green in
