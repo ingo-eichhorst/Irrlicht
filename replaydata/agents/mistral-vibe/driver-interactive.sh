@@ -113,7 +113,7 @@ SES_MARKER=(); SES_CWD=(); SES_ALIVE=()
 # Tool-executing recipes: set the recipe's settings.bypass_tool_permissions=true
 # and launch_repl adds `vibe --auto-approve` so tool calls run unattended (not a
 # step type — a launch-mode toggle, so it stays out of DRIVE_ELICITS).
-DRIVE_ELICITS="send slash sleep wait_turn exit_clean restart sigkill resume keys start_session session"
+DRIVE_ELICITS="send slash sleep wait_turn exit_clean restart sigkill resume keys start_session session interrupt"
 DRIVE_SLASH_REQUIRES_STEP_TYPE=false
 RUN_CWD="${IRRLICHT_ONBOARD_CWD:-$STAGING/cwd}"
 mkdir -p "$RUN_CWD"
@@ -436,6 +436,25 @@ slash_cmd() { # <text>
   echo "[driver] slash[s$ACTIVE]: $text (no turn expected)" >&2
 }
 
+# --- SEAM: interrupt (backchannel Ctrl-C) ------------------------------------
+# step_interrupt — cancel the in-flight vibe turn. Vibe declares
+# Interrupt: InterruptCtrlC (core/adapters/inbound/agents/vibe/agent.go), so the
+# daemon's Controller aborts a running turn by delivering an ETX (Ctrl-C) into
+# the terminal backend; the driver mirrors that exact keystroke to reproduce the
+# backchannel interrupt. A cancelled turn never lands a completed assistant line
+# in messages.jsonl (turn_count only counts role:"assistant" WITH content and NO
+# tool_calls), so decrement EXPECTED_TURNS for the send whose turn we just
+# aborted — mirroring codex/claudecode so a later wait_turn doesn't block on a
+# turn that was interrupted away.
+step_interrupt() {
+  tmux send-keys -t "$SESSION" C-c
+  if [[ $EXPECTED_TURNS -gt 0 ]]; then
+    EXPECTED_TURNS=$((EXPECTED_TURNS - 1))
+  fi
+  echo "[driver] interrupt[s$ACTIVE] (Ctrl-C, expecting turn $EXPECTED_TURNS)" >&2
+  sleep 1
+}
+
 # --- SEAM: teardown primitives (exit_clean / restart / sigkill) --------------
 # step_exit_clean — graceful shutdown. Vibe's `/exit` slash (handler _exit_app)
 # quits directly with NO confirmation dialog (unlike Ctrl+D, which needs a
@@ -568,7 +587,7 @@ while IFS= read -r step; do
     slash)           slash_cmd "$(jq -r '.text' <<<"$step")" ;;
     wait_turn)       wait_turn || break ;;
     sleep)           sleep "$(jq -r '.seconds // 1' <<<"$step")" ;;
-    interrupt)       not_implemented interrupt || break ;;       # TODO(mistral-vibe): Escape/Ctrl-C the in-flight turn
+    interrupt)       step_interrupt ;;
     keys)            # Raw tmux key sequence (NOT literal text) for driving picker
                      # UIs — arrow keys / Enter for the /rewind RewindApp and the
                      # /model ModelPickerApp, C-c to clear a pre-filled input, etc.
