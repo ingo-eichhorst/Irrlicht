@@ -5,6 +5,7 @@ import Foundation
 /// status item — the Usage/Combined styles from issue #909. Shares
 /// MenuBarStatusRenderer's 18pt-tall coordinate system so the two pieces
 /// can sit side by side in MenuBarImageBuilder's composition.
+@MainActor
 enum QuotaMenuBarRenderer {
     private static let height: CGFloat = 18
     private static let rowHeight: CGFloat = height / 2
@@ -14,7 +15,7 @@ enum QuotaMenuBarRenderer {
     private static let fontSize: CGFloat = 8
     private static let gap: CGFloat = 3
 
-    /// Picks the freshest non-stale rate-limit snapshot for `providerKey`
+    /// Picks the freshest renderable rate-limit snapshot for `providerKey`
     /// across `sessions` and renders it. `providerKey` nil means "whatever
     /// provider is freshest" — used until the user picks one in Settings.
     static func imageForSelectedProvider(
@@ -27,19 +28,24 @@ enum QuotaMenuBarRenderer {
         return buildImage(for: info)
     }
 
-    /// Same freshest-wins / skip-stale rule SessionListView's quota-chip
-    /// bucketing uses (mergeIntoBuckets), simplified to a single provider
-    /// instead of one bucket per provider — the menu bar icon only ever
-    /// shows one subscription's numbers.
+    /// Freshest-`sampledAt`-wins across `sessions`, matching
+    /// SessionListView.mergeIntoBuckets' choice of representative snapshot
+    /// per provider. Unlike that bucketing, this does **not** drop stale
+    /// snapshots (any window past `resetsAt`): the popover keeps a stale
+    /// snapshot and dims the chip rather than blanking it, and the compact
+    /// icon has no room to dim — so it keeps showing the last-known reading
+    /// until the next statusline tick refreshes it, instead of disappearing
+    /// (which would otherwise make an active `.usage`-style icon look idle;
+    /// see MenuBarImageBuilder's fallback for the session-count side of that
+    /// same problem). What *is* filtered out is a snapshot with no windows
+    /// at all (the credits/usage-only path) — that can never render, so it
+    /// must not win over an older snapshot that actually has data.
     static func selectedSnapshot(
         sessions: [SessionState],
         providerKey: String?
     ) -> RateLimitInfo? {
-        let now = Date()
         let candidates: [(key: String, info: RateLimitInfo)] = sessions.compactMap { session in
-            guard let snap = session.metrics?.rateLimit else { return nil }
-            let isStale = snap.windows.contains { $0.resetsAt <= now }
-            guard !isStale else { return nil }
+            guard let snap = session.metrics?.rateLimit, !snap.windows.isEmpty else { return nil }
             let key = snap.providerKey(adapter: session.adapter) ?? "unknown:\(session.adapter ?? "")"
             return (key, snap)
         }
@@ -95,17 +101,18 @@ enum QuotaMenuBarRenderer {
         let cy = size / 2
         let radius = size / 2 - 2.25
         let strokeWidth: CGFloat = 2.5
-        let hex = colorHex(forPercent: window.usedPercent)
+        let pace = pacePercent(for: window)
+        let hex = colorHex(usedPercent: window.usedPercent, pacePercent: pace)
 
         let circumference = 2 * Double.pi * Double(radius)
         let dashOffset = circumference * (1 - pct)
 
         var svg = """
         <svg xmlns="http://www.w3.org/2000/svg" width="\(Int(size))" height="\(Int(size))">
-          <circle cx="\(svgNumber(cx))" cy="\(svgNumber(cy))" r="\(svgNumber(radius))" fill="none" stroke="rgba(255,255,255,0.18)" stroke-width="\(svgNumber(strokeWidth))"/>
+          <circle cx="\(svgNumber(cx))" cy="\(svgNumber(cy))" r="\(svgNumber(radius))" fill="none" stroke="\(trackColor)" stroke-width="\(svgNumber(strokeWidth))"/>
           <circle cx="\(svgNumber(cx))" cy="\(svgNumber(cy))" r="\(svgNumber(radius))" fill="none" stroke="#\(hex)" stroke-width="\(svgNumber(strokeWidth))" stroke-linecap="round" stroke-dasharray="\(String(format: "%.2f", circumference))" stroke-dashoffset="\(String(format: "%.2f", dashOffset))" transform="rotate(-90 \(svgNumber(cx)) \(svgNumber(cy)))"/>
         """
-        if let pace = pacePercent(for: window) {
+        if let pace {
             // Same origin as the fill arc (rotate(-90) = 12 o'clock at
             // pace 0) so a full lap back to the top means the window's
             // wall-clock time is up, independent of how much quota is
@@ -131,17 +138,18 @@ enum QuotaMenuBarRenderer {
         let barX = labelWidth + gap
         let barY = rowY + (rowHeight - barHeight) / 2
         let textY = rowY + rowHeight * 0.78
-        let hex = colorHex(forPercent: window.usedPercent)
+        let pace = pacePercent(for: window)
+        let hex = colorHex(usedPercent: window.usedPercent, pacePercent: pace)
 
         var svg = """
-        <text x="0" y="\(svgNumber(textY))" font-family="Menlo,monospace" font-size="\(Int(fontSize))" fill="#9CA3AF">\(label)</text>
-        <rect x="\(svgNumber(barX))" y="\(svgNumber(barY))" width="\(svgNumber(barWidth))" height="\(svgNumber(barHeight))" rx="1.5" fill="rgba(255,255,255,0.18)"/>
+        <text x="0" y="\(svgNumber(textY))" font-family="Menlo,monospace" font-size="\(Int(fontSize))" fill="\(labelColor)">\(label)</text>
+        <rect x="\(svgNumber(barX))" y="\(svgNumber(barY))" width="\(svgNumber(barWidth))" height="\(svgNumber(barHeight))" rx="1.5" fill="\(trackColor)"/>
         <rect x="\(svgNumber(barX))" y="\(svgNumber(barY))" width="\(svgNumber(filledWidth))" height="\(svgNumber(barHeight))" rx="1.5" fill="#\(hex)"/>
         """
         // Pace marker (mirrors SessionListView.quotaPacePercent): reaching
         // the bar's right edge means the window's wall-clock time is up,
         // independent of the fill's used% value.
-        if let pace = pacePercent(for: window) {
+        if let pace {
             let paceX = barX + barWidth * pace / 100
             svg += """
             <rect x="\(svgNumber(paceX - 0.5))" y="\(svgNumber(barY - 0.75))" width="1" height="\(svgNumber(barHeight + 1.5))" fill="red"/>
@@ -153,8 +161,9 @@ enum QuotaMenuBarRenderer {
     /// Mirrors SessionListView's quotaPacePercent exactly: "where you'd be
     /// if usage had grown linearly since the window opened," expressed as
     /// 0–100. A `resetsAt` already in the past clamps to 100 (marker pinned
-    /// at the far end) rather than throwing the snapshot away — same choice
-    /// the popover chip makes for a stale snapshot.
+    /// at the far end) rather than being treated as unpaceable — same
+    /// choice the popover chip makes for a stale snapshot, and reachable
+    /// here because `selectedSnapshot` no longer drops stale snapshots.
     private static func pacePercent(for window: RateLimitWindowInfo) -> Double? {
         guard window.windowMinutes > 0, window.resetsAt.timeIntervalSince1970 > 0 else { return nil }
         let windowSeconds = Double(window.windowMinutes) * 60
@@ -163,18 +172,57 @@ enum QuotaMenuBarRenderer {
         return min(100, max(0, (elapsed / windowSeconds) * 100.0))
     }
 
-    /// Reuses the pressure-level color ramp already established for
-    /// context-window pressure (Theme/Tokens.swift's IrrHex.pressure*)
-    /// instead of inventing new thresholds for quota.
-    private static func colorHex(forPercent percent: Double) -> String {
-        let hex: String
-        switch percent {
-        case ..<50: hex = IrrHex.pressureLow
-        case ..<80: hex = IrrHex.pressureMedium
-        case ..<95: hex = IrrHex.pressureHigh
-        default: hex = IrrHex.pressureCritical
+    /// Mirrors SessionListView.barColor's pace-aware ramp exactly (same
+    /// SessionListView.QuotaBarThreshold constants) rather than an
+    /// absolute-only ramp — otherwise the same window could read green in
+    /// the icon while the popover shows it orange for being ahead of pace,
+    /// which fails the "honest signals" bar. Returns a bare hex (no '#')
+    /// since callers splice it into SVG fill attributes; SessionListView's
+    /// version returns a SwiftUI Color instead, since it's used in a View.
+    private static func colorHex(usedPercent: Double, pacePercent: Double?) -> String {
+        if usedPercent >= SessionListView.QuotaBarThreshold.absoluteOrange { return systemOrangeHex }
+        guard let pace = pacePercent else {
+            switch usedPercent {
+            case SessionListView.QuotaBarThreshold.fallbackOrange...: return systemOrangeHex
+            case SessionListView.QuotaBarThreshold.fallbackYellow...: return systemYellowHex
+            default: return IrrSVG.ready
+            }
         }
-        return hex.replacingOccurrences(of: "#", with: "")
+        let delta = usedPercent - pace
+        if delta >= SessionListView.QuotaBarThreshold.paceDeltaOrange { return systemOrangeHex }
+        if delta >= SessionListView.QuotaBarThreshold.paceDeltaYellow { return systemYellowHex }
+        return IrrSVG.ready
+    }
+
+    // Bare hex for the two ramp colors SessionListView expresses as SwiftUI
+    // .orange / .yellow (system colors, not in IrrHex/IrrSVG). .orange
+    // already matches IrrHex.pressureMedium's value; kept as an explicit
+    // literal here since the naming ("pressureMedium") doesn't fit the
+    // pace-ramp vocabulary.
+    private static let systemOrangeHex = "FF9500"
+    private static let systemYellowHex = "FFCC00"
+
+    /// True when the app's effective appearance is dark — same signal
+    /// SessionState.adapterIcon already uses to pick a light/dark SVG
+    /// variant, kept consistent here rather than introducing a second way
+    /// to ask the same question. NSApp is nil in unit tests; default to
+    /// dark (today's only supported look before this fix) so tests don't
+    /// need an NSApplication instance.
+    private static var isDarkAppearance: Bool {
+        guard let app = NSApp else { return true }
+        return app.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+    }
+
+    /// Track (unfilled bar / ring) and label colors, appearance-aware: the
+    /// original translucent-white track and light-gray label were invisible
+    /// against a light menu bar (issue found in review — the dots renderer
+    /// avoids this by using only saturated fills, which this renderer can't
+    /// since the track must read as "empty" against the fill color).
+    private static var trackColor: String {
+        isDarkAppearance ? "rgba(255,255,255,0.18)" : "rgba(0,0,0,0.14)"
+    }
+    private static var labelColor: String {
+        isDarkAppearance ? "#9CA3AF" : "#6B7280"
     }
 
     private static func svgNumber(_ value: CGFloat) -> String {

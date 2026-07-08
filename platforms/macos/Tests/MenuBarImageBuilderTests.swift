@@ -71,4 +71,37 @@ final class MenuBarImageBuilderTests: XCTestCase {
         XCTAssertEqual(result?.size.width, 34) // 10 + 4 + 20
         XCTAssertEqual(result?.size.height, 18) // max(18, 12)
     }
+
+    // MARK: - shouldFallBackToDotsForUsageStyle (issue #909 review fix)
+
+    /// `.usage` style with active sessions but no renderable quota yet must
+    /// not collapse to the "no sessions" icon — see the fallback comment in
+    /// `combinedImage`.
+    func testFallsBackToDotsWhenUsageStyleHasNoQuotaButHasSessions() {
+        XCTAssertTrue(MenuBarImageBuilder.shouldFallBackToDotsForUsageStyle(
+            style: .usage, quotaImage: nil, sessionCount: 3
+        ))
+    }
+
+    func testDoesNotFallBackWhenUsageStyleHasQuotaImage() {
+        let quota = NSImage(size: NSSize(width: 10, height: 18))
+        XCTAssertFalse(MenuBarImageBuilder.shouldFallBackToDotsForUsageStyle(
+            style: .usage, quotaImage: quota, sessionCount: 3
+        ))
+    }
+
+    func testDoesNotFallBackWhenUsageStyleHasNoSessionsEither() {
+        XCTAssertFalse(MenuBarImageBuilder.shouldFallBackToDotsForUsageStyle(
+            style: .usage, quotaImage: nil, sessionCount: 0
+        ))
+    }
+
+    func testDoesNotFallBackForLightsOrCombinedStyles() {
+        XCTAssertFalse(MenuBarImageBuilder.shouldFallBackToDotsForUsageStyle(
+            style: .lights, quotaImage: nil, sessionCount: 3
+        ))
+        XCTAssertFalse(MenuBarImageBuilder.shouldFallBackToDotsForUsageStyle(
+            style: .combined, quotaImage: nil, sessionCount: 3
+        ))
+    }
 }

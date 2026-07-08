@@ -2,8 +2,10 @@ import XCTest
 @testable import Irrlicht
 
 /// Coverage for the menu-bar quota icon (issue #909): the stacked 5h/7d
-/// bars, the single-window compact ring, the pace marker both share, and
-/// the freshest-non-stale snapshot selection across live sessions.
+/// bars, the single-window compact ring, the pace marker both share, the
+/// pace-aware color ramp (must mirror SessionListView.barColor exactly —
+/// see QuotaChipBarColorTests for the popover-side pin of the same table),
+/// and the freshest-renderable snapshot selection across live sessions.
 @MainActor
 final class QuotaMenuBarRendererTests: XCTestCase {
 
@@ -33,17 +35,51 @@ final class QuotaMenuBarRendererTests: XCTestCase {
         XCTAssertTrue(result!.svg.contains(">7d<"))
     }
 
-    func testBuildSVGColorThresholds() {
-        // Mirrors QuotaChipBarColorTests' boundary pinning, for the bare-hex
-        // (no '#') ramp this renderer's SVG fill attributes use.
-        let cases: [(name: String, used: Double, wantHex: String)] = [
-            ("low",      30, "34C759"),
-            ("medium",   60, "FF9500"),
-            ("high",     85, "FF3B30"),
-            ("critical", 97, "D70015"),
+    /// Same ramp QuotaChipBarColorTests pins for SessionListView.barColor
+    /// — this renderer must reach the identical verdict (as a bare hex
+    /// instead of a SwiftUI Color) so the same window can't read green in
+    /// the icon while the popover shows it orange. Cases stay off the exact
+    /// threshold boundary on purpose: `windowWithPace` derives `pace` from
+    /// `Date()` at construction time and `buildSVG` re-evaluates it a moment
+    /// later, so an exact-boundary delta (e.g. precisely 5 or 15) can tip
+    /// either way on sub-millisecond wall-clock drift. Exact-boundary
+    /// pinning already lives in QuotaChipBarColorTests, which calls
+    /// `barColor(used:pace:)` directly with fixed Doubles and has none of
+    /// that drift.
+    func testBuildSVGColorThresholdsMirrorPopoverPaceRamp() {
+        let cases: [(name: String, used: Double, pace: Double, wantHex: String)] = [
+            ("on pace",                30, 30, "34C759"),
+            ("clearly still green",    33, 30, "34C759"),
+            ("clearly yellow",         36, 30, "FFCC00"),
+            ("clearly orange",         46, 30, "FF9500"),
+            ("far ahead",              70, 30, "FF9500"),
+            ("behind pace",            20, 40, "34C759"),
+            ("at cap (85%) overrides pace", 85, 50, "FF9500"),
         ]
         for c in cases {
-            let info = makeInfo(fiveHour: c.used, sevenDay: nil)
+            let window = windowWithPace(usedPercent: c.used, pace: c.pace)
+            let info = RateLimitInfo(windows: [window], sampledAt: Date())
+            let result = QuotaMenuBarRenderer.buildSVG(for: info)
+            XCTAssertTrue(
+                result?.svg.contains("#\(c.wantHex)") ?? false,
+                "\(c.name): expected #\(c.wantHex) in \(result?.svg ?? "nil")"
+            )
+        }
+    }
+
+    /// pace nil (no resetsAt) falls back to the absolute-only ramp, same as
+    /// SessionListView.barColor's nil-pace branch.
+    func testBuildSVGColorThresholdsFallBackToAbsoluteRampWhenUnpaceable() {
+        let cases: [(name: String, used: Double, wantHex: String)] = [
+            ("nil pace, low usage",    30, "34C759"),
+            ("nil pace, 50% — yellow", 50, "FFCC00"),
+            ("nil pace, 70% — orange", 70, "FF9500"),
+        ]
+        for c in cases {
+            let info = RateLimitInfo(
+                windows: [RateLimitWindowInfo(usedPercent: c.used, windowMinutes: 300, resetsAt: Date(timeIntervalSince1970: 0))],
+                sampledAt: Date()
+            )
             let result = QuotaMenuBarRenderer.buildSVG(for: info)
             XCTAssertTrue(
                 result?.svg.contains("#\(c.wantHex)") ?? false,
@@ -63,20 +99,24 @@ final class QuotaMenuBarRendererTests: XCTestCase {
     /// when the 7d window is more depleted — RateLimitInfo.imminentWindow
     /// would pick 7d here (80 > 20), which is deliberately *not* what the
     /// circle shows. A glance-value shouldn't silently swap which window
-    /// it's reading.
+    /// it's reading. Colors chosen so a wrong-window regression is
+    /// unambiguous: the 5h reading (20% used, 80% pace — well behind pace)
+    /// is green, while the 7d reading (80% used, ~57% pace — ahead of pace)
+    /// would be orange.
     func testBuildCircleSVGPrefersFiveHourOverSevenDayEvenWhenLessDepleted() {
-        let info = makeInfo(fiveHour: 20, sevenDay: 80)
+        let info = makeInfo(fiveHour: 20, sevenDay: 80, fiveHourResetsIn: 3600)
         let result = QuotaMenuBarRenderer.buildCircleSVG(for: info)
         XCTAssertNotNil(result)
-        XCTAssertTrue(result!.svg.contains("#34C759"), "should use the 5h window's low-usage green")
-        XCTAssertFalse(result!.svg.contains("#FF3B30"), "must not leak the 7d window's high-usage color")
+        XCTAssertTrue(result!.svg.contains("#34C759"), "should use the 5h window's green (behind pace)")
+        XCTAssertFalse(result!.svg.contains("#FF9500"), "must not leak the 7d window's orange (ahead of pace)")
     }
 
     func testBuildCircleSVGFallsBackToSevenDayWhenFiveHourAbsent() {
-        let info = RateLimitInfo(
-            windows: [RateLimitWindowInfo(usedPercent: 60, windowMinutes: 10080, resetsAt: Date().addingTimeInterval(3600))],
-            sampledAt: Date()
-        )
+        // Fresh 7d window (pace ≈ 0) so 60% used is unambiguously ahead of
+        // pace → orange, isolating "did it use the 7d window at all" from
+        // the color-ramp tests above.
+        let window = windowWithPace(usedPercent: 60, pace: 0, windowMinutes: 10080)
+        let info = RateLimitInfo(windows: [window], sampledAt: Date())
         let result = QuotaMenuBarRenderer.buildCircleSVG(for: info)
         XCTAssertNotNil(result)
         XCTAssertTrue(result!.svg.contains("#FF9500"))
@@ -116,7 +156,7 @@ final class QuotaMenuBarRendererTests: XCTestCase {
 
     // MARK: - selectedSnapshot
 
-    func testSelectedSnapshotPicksFreshestNonStaleAcrossSessions() {
+    func testSelectedSnapshotPicksFreshestAcrossSessions() {
         let older = makeSession(id: "1", adapter: "claude-code", usedPercent: 10, sampledSecondsAgo: 120)
         let newer = makeSession(id: "2", adapter: "claude-code", usedPercent: 90, sampledSecondsAgo: 5)
         let got = QuotaMenuBarRenderer.selectedSnapshot(sessions: [older, newer], providerKey: nil)
@@ -130,10 +170,37 @@ final class QuotaMenuBarRendererTests: XCTestCase {
         XCTAssertEqual(got?.windows.first?.usedPercent, 10)
     }
 
-    func testSelectedSnapshotSkipsStaleSnapshots() {
+    /// The popover (SessionListView.mergeIntoBuckets) keeps a stale
+    /// snapshot and dims the chip rather than dropping it — the icon has
+    /// no room to dim, but dropping entirely made an active session look
+    /// idle (it collapsed the whole quota display, which for `.usage`
+    /// style meant falling back to the "no sessions" icon). Keeping it
+    /// matches the popover's intent: show the last-known reading until the
+    /// next statusline tick refreshes it.
+    func testSelectedSnapshotKeepsStaleSnapshotsRatherThanDroppingThem() {
         let stale = makeSession(id: "1", adapter: "claude-code", usedPercent: 10, sampledSecondsAgo: 5, resetsInPast: true)
         let got = QuotaMenuBarRenderer.selectedSnapshot(sessions: [stale], providerKey: nil)
-        XCTAssertNil(got)
+        XCTAssertEqual(got?.windows.first?.usedPercent, 10)
+    }
+
+    /// A snapshot with no windows (the credits/usage-only path) can never
+    /// render — it must not win the freshest-wins race over an older
+    /// snapshot that actually has data.
+    func testSelectedSnapshotSkipsSnapshotWithEmptyWindows() {
+        let unrenderable = SessionState(
+            id: "sess_unrenderable", state: .working, model: "claude-sonnet", cwd: "/tmp",
+            firstSeen: Date(), updatedAt: Date(),
+            metrics: SessionMetrics(
+                elapsedSeconds: 0, totalTokens: 0, modelName: "claude-sonnet",
+                contextWindow: nil, contextUtilization: 0, pressureLevel: "safe",
+                contextWindowUnknown: nil, estimatedCostUSD: nil, lastAssistantText: nil, tasks: nil,
+                rateLimit: RateLimitInfo(windows: [], sampledAt: Date()) // freshest, but empty
+            ),
+            adapter: "claude-code"
+        )
+        let renderable = makeSession(id: "2", adapter: "claude-code", usedPercent: 42, sampledSecondsAgo: 120)
+        let got = QuotaMenuBarRenderer.selectedSnapshot(sessions: [unrenderable, renderable], providerKey: nil)
+        XCTAssertEqual(got?.windows.first?.usedPercent, 42)
     }
 
     func testSelectedSnapshotReturnsNilWhenNoSessionCarriesRateLimit() {
@@ -155,6 +222,16 @@ final class QuotaMenuBarRendererTests: XCTestCase {
             windows.append(RateLimitWindowInfo(usedPercent: sevenDay, windowMinutes: 10080, resetsAt: Date().addingTimeInterval(3 * 86400)))
         }
         return RateLimitInfo(windows: windows, sampledAt: Date())
+    }
+
+    /// Builds a window whose `resetsAt` implies exactly `pace` percent
+    /// elapsed, so color-ramp tests can target specific (used, pace) pairs
+    /// instead of whatever a fixed resetsAt happens to imply.
+    private func windowWithPace(usedPercent: Double, pace: Double, windowMinutes: Int = 300) -> RateLimitWindowInfo {
+        let windowSeconds = Double(windowMinutes) * 60
+        let elapsed = (pace / 100) * windowSeconds
+        let resetsAt = Date().addingTimeInterval(windowSeconds - elapsed)
+        return RateLimitWindowInfo(usedPercent: usedPercent, windowMinutes: windowMinutes, resetsAt: resetsAt)
     }
 
     private func makeSession(

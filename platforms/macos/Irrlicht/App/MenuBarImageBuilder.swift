@@ -19,6 +19,18 @@ enum MenuBarImageBuilder {
         return .off
     }
 
+    /// True when `.usage` style has nothing to show (no renderable quota
+    /// yet) but sessions are actually active — see the fallback comment at
+    /// its call site in `combinedImage`. Pure decision, extracted for
+    /// testability without a SessionManager, mirroring `iconState`.
+    static func shouldFallBackToDotsForUsageStyle(
+        style: MenuBarStyle,
+        quotaImage: NSImage?,
+        sessionCount: Int
+    ) -> Bool {
+        style == .usage && quotaImage == nil && sessionCount > 0
+    }
+
     static func build(
         sessionManager: SessionManager,
         gasTownProvider: GasTownProvider
@@ -54,7 +66,7 @@ enum MenuBarImageBuilder {
         // rate_limit data yet for .usage/.combined) without collapsing the
         // whole icon — composeSideBySide degrades to whichever half exists.
         let style = MenuBarStyle.current
-        let dotsImage = style == .usage ? nil : MenuBarStatusRenderer.buildStatusImage(
+        var dotsImage = style == .usage ? nil : MenuBarStatusRenderer.buildStatusImage(
             sessions: nonGtSessions,
             projectGroupOrder: sessionManager.projectGroupOrder
         )
@@ -62,6 +74,19 @@ enum MenuBarImageBuilder {
             sessions: nonGtSessions,
             providerKey: MenuBarQuotaProvider.current
         )
+        // .usage style with sessions active but no renderable quota yet
+        // (fresh daemon start, or the selected provider hasn't ticked a
+        // statusline sample) must not collapse to nothing here — with
+        // dotsImage nil and quotaImage nil, the caller falls through to
+        // OffFlameImage.menuBar, the "no sessions running" icon, while
+        // sessions are in fact active. Fall back to dots so the icon stays
+        // honest about "something is running" even without quota data.
+        if shouldFallBackToDotsForUsageStyle(style: style, quotaImage: quotaImage, sessionCount: nonGtSessions.count) {
+            dotsImage = MenuBarStatusRenderer.buildStatusImage(
+                sessions: nonGtSessions,
+                projectGroupOrder: sessionManager.projectGroupOrder
+            )
+        }
         // Dots first (left), quota bars last (right) — closest to the
         // system status icons (WiFi/battery/clock), matching issue #909's
         // mockup ordering.

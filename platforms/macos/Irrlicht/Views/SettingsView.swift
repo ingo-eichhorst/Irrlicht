@@ -612,14 +612,22 @@ struct SettingsView: View {
         }
     }
 
-    /// Provider keys with a live (non-stale) rate_limit snapshot right now,
-    /// for the Usage/Combined quota-provider picker. Not persisted anywhere
-    /// else — recomputed from whatever sessions happen to be visible when
-    /// Settings is open, same source SessionListView's quota chips read.
+    /// Provider keys with a rate_limit-carrying session right now, for the
+    /// Usage/Combined quota-provider picker. Not persisted anywhere else —
+    /// recomputed from whatever sessions happen to be visible when Settings
+    /// is open. Excludes Gas Town-owned sessions to match exactly what
+    /// MenuBarImageBuilder.combinedImage feeds into QuotaMenuBarRenderer —
+    /// offering a provider here that the icon can never actually render
+    /// (because its only carrying sessions are Gas Town's) would leave the
+    /// picker selection pointing at a permanently-empty quota display.
     private var knownQuotaProviderKeys: [String] {
+        let gasTownProvider = sessionManager.gasTownProvider
+        let eligibleSessions = gasTownProvider?.isDaemonRunning == true
+            ? sessionManager.sessions.filter { !(gasTownProvider?.ownsSession($0) ?? false) }
+            : sessionManager.sessions
         var keys = Set<String>()
-        for session in sessionManager.sessions {
-            guard let snap = session.metrics?.rateLimit else { continue }
+        for session in eligibleSessions {
+            guard let snap = session.metrics?.rateLimit, !snap.windows.isEmpty else { continue }
             keys.insert(snap.providerKey(adapter: session.adapter) ?? "unknown:\(session.adapter ?? "")")
         }
         return keys.sorted()
