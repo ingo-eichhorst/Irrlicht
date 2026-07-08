@@ -178,7 +178,11 @@ final class QuotaMenuBarRendererTests: XCTestCase {
     /// matches the popover's intent: show the last-known reading until the
     /// next statusline tick refreshes it.
     func testSelectedSnapshotKeepsStaleSnapshotsRatherThanDroppingThem() {
-        let stale = makeSession(id: "1", adapter: "claude-code", usedPercent: 10, sampledSecondsAgo: 5, resetsInPast: true)
+        let staleRateLimit = RateLimitInfo(
+            windows: [RateLimitWindowInfo(usedPercent: 10, windowMinutes: 300, resetsAt: Date().addingTimeInterval(-3600))],
+            sampledAt: Date().addingTimeInterval(-5)
+        )
+        let stale = sessionState(id: "1", adapter: "claude-code", rateLimit: staleRateLimit)
         let got = QuotaMenuBarRenderer.selectedSnapshot(sessions: [stale], providerKey: nil)
         XCTAssertEqual(got?.windows.first?.usedPercent, 10)
     }
@@ -187,16 +191,9 @@ final class QuotaMenuBarRendererTests: XCTestCase {
     /// render — it must not win the freshest-wins race over an older
     /// snapshot that actually has data.
     func testSelectedSnapshotSkipsSnapshotWithEmptyWindows() {
-        let unrenderable = SessionState(
-            id: "sess_unrenderable", state: .working, model: "claude-sonnet", cwd: "/tmp",
-            firstSeen: Date(), updatedAt: Date(),
-            metrics: SessionMetrics(
-                elapsedSeconds: 0, totalTokens: 0, modelName: "claude-sonnet",
-                contextWindow: nil, contextUtilization: 0, pressureLevel: "safe",
-                contextWindowUnknown: nil, estimatedCostUSD: nil, lastAssistantText: nil, tasks: nil,
-                rateLimit: RateLimitInfo(windows: [], sampledAt: Date()) // freshest, but empty
-            ),
-            adapter: "claude-code"
+        let unrenderable = sessionState(
+            id: "unrenderable", adapter: "claude-code",
+            rateLimit: RateLimitInfo(windows: [], sampledAt: Date()) // freshest, but empty
         )
         let renderable = makeSession(id: "2", adapter: "claude-code", usedPercent: 42, sampledSecondsAgo: 120)
         let got = QuotaMenuBarRenderer.selectedSnapshot(sessions: [unrenderable, renderable], providerKey: nil)
@@ -234,18 +231,25 @@ final class QuotaMenuBarRendererTests: XCTestCase {
         return RateLimitWindowInfo(usedPercent: usedPercent, windowMinutes: windowMinutes, resetsAt: resetsAt)
     }
 
+    /// Common case: a session with a fresh (future-resetting) rate-limit
+    /// window. Tests that need an already-expired window build a
+    /// RateLimitInfo directly and go through `sessionState` instead, so
+    /// this stays at 4 arguments rather than growing a resetsInPast flag
+    /// nobody but one test needed (CodeScene: excess function arguments).
     private func makeSession(
         id: String,
         adapter: String,
         usedPercent: Double,
-        sampledSecondsAgo: TimeInterval,
-        resetsInPast: Bool = false
+        sampledSecondsAgo: TimeInterval
     ) -> SessionState {
-        let resetsAt = resetsInPast ? Date().addingTimeInterval(-3600) : Date().addingTimeInterval(3600)
         let rateLimit = RateLimitInfo(
-            windows: [RateLimitWindowInfo(usedPercent: usedPercent, windowMinutes: 300, resetsAt: resetsAt)],
+            windows: [RateLimitWindowInfo(usedPercent: usedPercent, windowMinutes: 300, resetsAt: Date().addingTimeInterval(3600))],
             sampledAt: Date().addingTimeInterval(-sampledSecondsAgo)
         )
+        return sessionState(id: id, adapter: adapter, rateLimit: rateLimit)
+    }
+
+    private func sessionState(id: String, adapter: String, rateLimit: RateLimitInfo) -> SessionState {
         let metrics = SessionMetrics(
             elapsedSeconds: 0,
             totalTokens: 0,
