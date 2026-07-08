@@ -3,7 +3,7 @@
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
-    "driver_capability": "gap:wait_turn",
+    "driver_capability": "ready",
     "agent_cli_version": "2.19.0",
     "daemon_version": "0.5.5+fed146f.dirty",
     "confidence": 0.85,
@@ -17,7 +17,7 @@
       "assessed_at": "2026-07-07T00:00:00Z",
       "agent_supports": "yes",
       "daemon_capability": "full",
-      "driver_capability": "gap:wait_turn",
+      "driver_capability": "ready",
       "confidence": 0.85,
       "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: gap:wait_turn\n\n## Reasoning\n\nMistral Vibe auto-executes tools when `bypass_tool_permissions` is set — this is a real config key (confirmed in a live `~/.vibe/logs/session/.../meta.json` sidecar). The model emits an `assistant` message carrying OpenAI-shape `tool_calls[]` (each with a nested `function.name`, NOT a flat `name`), the runtime runs the tool without a prompt, and a `role:tool` line records the result linked by `tool_call_id`. A real transcript on this machine shows exactly this arc — 158 assistant-with-`tool_calls` messages (e.g. `function.name: \"bash\"`) each followed by a `role:tool` result — so the tool call AND its result are fully in messages.jsonl, not a hidden channel.\n\nThe scenario's assertions map cleanly onto the vibe parser (parser.go):\n\n**Bullet 1 — `ready → working` with a tool_use mid-turn.** The first `user` line maps to `user_message` (opens the turn, ready→working); the `assistant` line carrying `tool_calls[]` maps to `assistant_message` which keeps the session `working`. `parseToolCalls` extracts `function.name` into `ev.ToolUses`, so the Bash tool_use is observed inside the working span.\n\n**Bullet 2 — state never enters `waiting`.** The vibe adapter declares NO Control and the parser has no permission-gate / AskUser path — a `tool` line is just a `tool_result` (continued activity that never touches state). Under `bypass_tool_permissions` there is no permission prompt at all, so `waiting` is structurally unreachable for this flow.\n\n**Terminal `working → ready`.** When the model stops calling tools and emits a text-only `assistant` message (no `tool_calls`), the parser emits `turn_done` and the session settles to `ready`.\n\n## Daemon sensor capture\n\nSource is `FilesUnderRoot` over `~/.vibe/logs/session/<id>/messages.jsonl` (agent.go); the sibling `meta.json` sidecar supplies cwd, model NAME (`config.active_model` = `mistral-medium-3.5`), and `context_tokens` (sidecar.go). The entire ready→working→ready arc plus the tool_use is derivable from the tailed transcript, so `daemon=full` for the state topology this scenario asserts. Model `mistral-medium-3.5` passes `NormalizeModelName` unchanged (no matching alias/pattern in tailer/parser.go:532).\n\n## Driver pillar — gap:wait_turn\n\nThe interactive driver is freshly scaffolded: `DRIVE_ELICITS=\"send slash sleep\"` (driver-interactive.sh) — `wait_turn` is present only as a stubbed arm, so recipe-lint reports a SEMANTIC gap for the recipe's `wait_turn` step. `record` must port SEAM 2 (the turn-completion poll) from a reference driver before it can drive this cell. This is tooling work, not an observability limit — the recipe + spec stand.",
       "caveats": [

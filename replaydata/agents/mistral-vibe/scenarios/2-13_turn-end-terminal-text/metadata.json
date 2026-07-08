@@ -3,7 +3,7 @@
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
-    "driver_capability": "gap:wait_turn",
+    "driver_capability": "ready",
     "agent_cli_version": "2.19.0",
     "daemon_version": "0.5.5+91ca4fe.dirty",
     "confidence": 0.8,
@@ -17,7 +17,7 @@
       "assessed_at": "2026-07-07T00:00:00Z",
       "agent_supports": "yes",
       "daemon_capability": "full",
-      "driver_capability": "gap:wait_turn",
+      "driver_capability": "ready",
       "confidence": 0.8,
       "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: gap:wait_turn\n\n## Reasoning\n\nThe smallest tool-less round-trip: user prompts, the assistant replies with a final text message and no tool call, and the state arc is `ready → working → ready`. This is exactly the shape Vibe's transcript records and the adapter parses.\n\n**Agent (yes).** Mistral Vibe v2.19.0 appends one JSON object per line to `~/.vibe/logs/session/<id>/messages.jsonl`. A completed tool-less turn ends with a `role:\"assistant\"` line carrying a non-empty `content` string and NO `tool_calls[]`. This is confirmed in live transcripts on this machine — the final assistant line of finished sessions carries real answer text (e.g. `\"Yes, you can modify \\`mvnw\\`...\"`, `\"✅ **Handover document created!**...\"`). The terminal assistant text is therefore present and captured.\n\n**Daemon (full).** `vibe/parser.go` maps a `role:\"assistant\"` line to `turn_done` whenever `parseToolCalls` finds no tool calls (parser.go:67-75), setting `ev.AssistantText = TruncateAssistantText(content)` from the message body (parser.go:58-59). The preceding `role:\"user\"` line maps to `user_message` (parser.go:50-55). So the classifier gets `user_message` (ready → working) then `turn_done` (working → ready) — the full arc, with the terminal assistant text lit for the waiting/ready display. Model and context-token count come from the sibling `meta.json` sidecar (`config.active_model`, `stats.context_tokens`), applied on every event / on `turn_done` respectively (parser.go:98-115) — so `model` and a non-zero token snapshot are present. The daemon does NOT read `stats.session_cost` (the sidecar carries it, the adapter ignores it), and the JSONL has no per-line timestamps (ParseTimestamp falls back to now/scan-time). Neither is a signal this scenario asserts, so they are caveats, not a downgrade — the `ready → working → ready` arc is fully observable.\n\n**Driver (gap:wait_turn).** The recipe is a `send` / `wait_turn` / `sleep` script. `mistral-vibe`'s freshly-scaffolded interactive driver declares `DRIVE_ELICITS=\"send slash sleep\"` and its `wait_turn()` arm is `not_implemented wait_turn` (driver-interactive.sh:168-169) — SEAM 2 (the turn-done poll) is stubbed, and SEAM 3 (resolving the live session_id + transcript path onto the active slot after launch, driver-interactive.sh:158) is likewise a TODO. Without a real `wait_turn` the driver cannot detect that the terminal-text turn completed, so the settle phase can't be timed. This is tooling work, not an observability limit: `record` ports the `wait_turn` poll (and the SEAM-3 transcript-path resolution) from a reference driver before it drives — the cell keeps its recipe + spec and records the moment the seam lands.",
       "caveats": [
