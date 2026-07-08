@@ -77,6 +77,6 @@ The canonical field list lives in each verb's own `## Return contract`:
 | Verb | First-line key | Verb-specific fields |
 |---|---|---|
 | `create-scenario` | `scenario_id:` | `wrote`, `acceptance`, `next` |
-| `create-agent` | `agent:` | `provider`, `prereqs`, `driver_needs`, `next` |
+| `create-agent` | `agent:` | `provider`, `transport`, `prereqs`, `driver_needs`, `next` |
 | `assess` | `verdict:` + `route:` | `summary`, `wrote`, `prereqs` |
 | `record` | `status:` | `commit_sha`, `pass_rate`, `observations`, `observability_correction`, `issue` |

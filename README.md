@@ -84,7 +84,7 @@ Stages: `stable` production-ready · `beta` feature-complete, edge cases remain 
 | Web dashboard         | beta    | `http://127.0.0.1:7837`   |
 | CLI                   | alpha   | `irrlicht-ls` (`-w` for watch) — on PATH after install; DMG drag-installs: Settings → Install Command-Line Tool |
 | VS Code extension     | planned | tracked in [#350](https://github.com/ingo-eichhorst/Irrlicht/issues/350) |
-| Linux (daemon-only)   | alpha   | `curl -fsSL https://irrlicht.io/install.sh \| sh` |
+| Linux (**daemon**-only — background service, no menu-bar UI) | alpha   | `curl -fsSL https://irrlicht.io/install.sh \| sh` |
 | Windows               | planned | —                         |
 | iOS / iPadOS          | planned | —                         |
 

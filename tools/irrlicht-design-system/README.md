@@ -54,7 +54,7 @@ assets/
   favicon.svg               ← The wisp flame mark (vector, on-brand)
   favicon-16x16.png · favicon-32x32.png · apple-touch-icon.png
 
-preview/                    ← Design-system cards (see Design System tab)
+preview/                    ← Design-system cards — open any file directly in a browser to view
   type-*.html               · typography specimens
   color-*.html              · palette swatches
   spacing-*.html            · radii, shadows, tokens
@@ -104,7 +104,7 @@ Irrlicht writes like a quietly confident German open-source maintainer. Copy is 
 
 ### Emoji & unicode
 
-- **Emoji used sparingly and always semantically.** Only the four light glyphs: 🟣 🟠 🟢 ✦. Occasionally ⚡ ⛽ for Gas Town, 🚚 for Convoys. Never decorative.
+- **Emoji used sparingly and always semantically.** Only the four light glyphs: 🟣 🟠 🟢 ✦. Occasionally ⚡ ⛽ for Gas Town, 🚚 for Convoys (Gas Town's batches of related work units — see `GasTown.jsx` in `ui_kits/dashboard/`). Never decorative.
 - **Unicode-as-icon is common.** `→ ↵ ⌘ ✦ ● ○ ✓ ⚠` appear inline in code blocks and pipelines. The mono font carries them cleanly.
 - **No emoji in headings.** Keep section titles text-only.
 
@@ -262,7 +262,7 @@ Six small outline SVGs appear on the marketing feature grid (real-time monitorin
 
 ### 4. State icons in the web dashboard
 
-Three small 12×12 SVGs live inline in `platforms/web/index.html` (see `svgIcons` object):
+Three small 12×12 SVGs live inline in `platforms/web/formatters.js` (see the `svgIcons` object):
 - **working**: dashed-stroke circle, spinning.
 - **waiting**: two vertical bars (pause).
 - **ready**: circle + checkmark.

@@ -246,12 +246,12 @@
       <!-- Menu Bar Rendering -->
       <h2>Menu Bar Rendering</h2>
 
-      <p>Sessions appear in the macOS menu bar as a row of colored dots. Each dot is one session, its color reflecting the current state. Projects are grouped together so related sessions sit side by side.</p>
+      <p>Sessions appear in the macOS menu bar as a row of project groups. A group with up to 3 sessions renders one colored dot per session; a group with more than 3 sessions collapses into a single aggregated circle with a session count, colored by whichever state is most active in that group.</p>
 
       <table>
         <thead>
           <tr>
-            <th>Sessions</th>
+            <th>Project groups</th>
             <th>Display</th>
           </tr>
         </thead>
@@ -262,15 +262,11 @@
           </tr>
           <tr>
             <td>1 &ndash; 5</td>
-            <td>One colored dot per session, grouped by project</td>
+            <td>One group per project, left to right; &le;3-session groups show individual dots, &gt;3-session groups show an aggregated count circle</td>
           </tr>
           <tr>
-            <td>6</td>
-            <td>All six dots shown, menu bar getting full</td>
-          </tr>
-          <tr>
-            <td>7+</td>
-            <td>First 5 dots shown, then an ellipsis indicating overflow</td>
+            <td>6+</td>
+            <td>The first 5 groups are shown, then an ellipsis (&hellip;) &mdash; the cap is on project groups, not raw session count</td>
           </tr>
         </tbody>
       </table>

@@ -105,6 +105,17 @@
         <li><code>--record</code> &mdash; Enable lifecycle recording of session events to <code>&lt;dataDir&gt;/recordings</code> (equivalent to <code>IRRLICHT_RECORD=1</code>); the daemon starts normally otherwise</li>
       </ul>
 
+      <h3>Flag Examples</h3>
+
+      <pre><code># Print version and exit
+irrlichd --version
+
+# Write a diagnostics bundle to the current directory
+irrlichd --diagnose
+
+# Start with lifecycle recording enabled
+irrlichd --record</code></pre>
+
       <h3>What It Does</h3>
 
       <ul>
@@ -145,6 +156,14 @@
         <li><code>--adapter &lt;name&gt;</code> &mdash; Filter by <a href="adapters.html">agent adapter</a> (the per-agent integration, e.g. <code>claude-code</code>, <code>codex</code>)</li>
       </ul>
 
+      <h3>Flag Examples</h3>
+
+      <pre><code># Watch mode, refreshing every second
+irrlicht-ls -w
+
+# Only waiting Claude Code sessions, as JSON
+irrlicht-ls --state waiting --adapter claude-code --format json</code></pre>
+
       <h3>Output Format</h3>
 
       <p>Columns: state, project name, session ID (8 chars), model, context utilization (percent, color-coded by pressure level on a TTY; set <code>NO_COLOR</code> to disable) with context window, cost (USD), adapter, subagent badge, age. Child sessions are indented below their parent. When sessions span multiple projects, each project gets a header line with its session count. <code>waiting</code> sessions show the assistant's last message beneath the row; sessions with a task list show <code>N/M completed</code>.</p>
@@ -169,7 +188,7 @@ ready    api-server   e5f6g7h8 gpt-5 3% 400k codex  (1m ago)</code></pre>
 
       <h3>Installation</h3>
 
-      <p><code>irrlicht-ls</code> ships inside <code>Irrlicht.app</code> and lands on your PATH automatically: the PKG installer and the <code>curl … | sh</code> installer symlink it to <code>/usr/local/bin/irrlicht-ls</code>. If you installed by dragging the DMG, open the menu bar panel → Settings → <em>Install Command-Line Tool</em>. Building from source: <code>go build ./cmd/irrlicht-ls/</code>.</p>
+      <p><code>irrlicht-ls</code> ships inside <code>Irrlicht.app</code> and lands on your PATH automatically: the PKG installer and the <code>curl … | sh</code> installer symlink it to <code>/usr/local/bin/irrlicht-ls</code>. If you installed by dragging the DMG, open the menu bar panel → Settings → <em>Install Command-Line Tool</em>. Building from source (from the repo root): <code>cd core &amp;&amp; go build ./cmd/irrlicht-ls/</code>.</p>
 
       <!-- ── irrlicht-focus ── -->
       <h2>irrlicht-focus</h2>
@@ -234,6 +253,15 @@ irrlichtrelay --version</code></pre>
         <li><code>--max-conns-per-ip</code> &mdash; Max concurrent connections per remote IP; <code>0</code> disables (meaningless behind a proxy/NAT &mdash; see <code>--max-conns</code>) (default <code>32</code>)</li>
         <li><code>--version</code>, <code>-v</code> &mdash; Print version and exit</li>
       </ul>
+
+      <h3>serve Flag Examples</h3>
+
+      <pre><code># Listen on the LAN with a bearer-token allowlist and native TLS
+irrlichtrelay serve --addr 0.0.0.0:7839 --auth tokens-file \
+  --tls-cert /etc/irrlicht/relay.pem --tls-key /etc/irrlicht/relay.key
+
+# Cap message size and per-IP connections on a shared box
+irrlichtrelay serve --max-msg-bytes 524288 --max-conns-per-ip 8</code></pre>
 
       <h3>token Flags</h3>
 

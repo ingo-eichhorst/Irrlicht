@@ -169,7 +169,7 @@
         <li>fsnotify on the WAL file triggers polling of <code>session</code>/<code>part</code> tables; cursor uses <code>(time_created, part_id)</code> for dedup across identical-millisecond timestamps</li>
         <li>Parent-child linking from the <code>parent_id</code> column &mdash; <code>EventNewSession</code> carries <code>ParentSessionID</code> directly; no path-based heuristics</li>
         <li><code>EventRemoved</code> emitted on <code>session.time_archived</code> so the daemon transitions to <code>ready</code> immediately rather than waiting for TTL</li>
-        <li><code>step-finish</code> reasons (<code>stop</code>, <code>interrupted</code>, <code>length</code>, <code>error</code>) all map to <code>turn_done</code>; cost + token snapshots come from <code>MetricsProvider</code>, bypassing the JSONL tailer</li>
+        <li><code>step-finish</code> reasons (<code>stop</code>, <code>interrupted</code>, <code>length</code>, <code>error</code>, <code>content-filter</code>) all map to <code>turn_done</code>; cost + token snapshots come from <code>MetricsProvider</code>, bypassing the JSONL tailer</li>
         <li><strong>Adapter name:</strong> <code>opencode</code></li>
         <li>PID discovery via <code>pgrep -x opencode</code> + CWD match</li>
       </ul>
@@ -255,21 +255,17 @@
         <li><strong>Cleanup:</strong> Child sessions are deleted when they finish (ready state), when their transcript becomes stale (&gt;2min), or when the parent session is deleted (cascade)</li>
       </ul>
 
-      <h3>In-Process vs File-Based</h3>
+      <h3>File-Based Detection</h3>
 
-      <p>Claude Code runs two types of subagents:</p>
+      <p>Current Claude Code writes an <code>isSidechain</code> transcript under <code>subagents/agent-*.jsonl</code> for every <code>Agent</code> tool call &mdash; including Explore and Plan &mdash; so the filesystem watcher picks up every subagent as its own child session. An older in-process counting path (<code>CountOpenSubagents</code>) is kept as a seam for a future Claude Code revision that reintroduces true in-process subagents, but it currently always returns 0.</p>
 
-      <ul>
-        <li><strong>In-process</strong> (Explore, Plan) &mdash; detected via open <code>Agent</code> tool calls in the parent transcript; no separate file</li>
-        <li><strong>File-based</strong> (background agents, worktree agents) &mdash; create their own transcript in the <code>subagents/</code> directory</li>
-      </ul>
-
-      <p>The API's <code>SubagentSummary</code> merges both types into a single count.</p>
+      <p>The API's subagent summary (<code>session.ComputeSubagentSummary</code>) merges parent and child sessions into a single count.</p>
 
       <h2>Session ID</h2>
 
       <ul>
-        <li><strong>File-based:</strong> UUID extracted from the filename (<code>&lt;uuid&gt;.jsonl</code>)</li>
+        <li><strong>File-based (UUID filename):</strong> UUID extracted from the filename (<code>&lt;uuid&gt;.jsonl</code>) &mdash; Claude Code, Codex, Kiro CLI</li>
+        <li><strong>File-based (path-derived):</strong> Antigravity's transcript filename is the constant <code>transcript.jsonl</code>, so its session id comes from the conversation directory path instead; Gemini CLI's filename is <code>session-&lt;timestamp&gt;-&lt;hash&gt;</code>, not a bare UUID</li>
         <li><strong>Process-based:</strong> <code>proc-&lt;pid&gt;</code> format, used for pre-sessions before a transcript file is found</li>
       </ul>
 

@@ -7,9 +7,10 @@ description: >
   cell across the three pillars and write its spec), and `record` (drive the
   live agent and verify every websocket observation). Every read and every
   write goes through the `of` factory CLI (tools/onboarding-factory) — the skill
-  itself never touches `replaydata/`. Each subagent returns a ≤6-line summary so
-  the parent keeps its context for strategic decisions instead of drowning in
-  per-cell tool output. Use when the user says "/ir:onboarding-factory",
+  itself never touches `replaydata/`. Each subagent returns a short summary
+  (≤6 lines, ≤7 for `record`) so the parent keeps its context for strategic
+  decisions instead of drowning in per-cell tool output. Use when the user
+  says "/ir:onboarding-factory",
   "onboard agent", "add a scenario", "assess fixtures", "record fixtures", or
   "regenerate recordings". For unattended / overnight runs ("push through",
   "onboard everything", "implement everything that can be"), see the Overnight
@@ -37,7 +38,7 @@ transcript — enough to exhaust the parent's context long before the work is
 done. So each cell's work is ONE `Agent` call that burns its OWN context and
 returns a short summary. The parent decides *which* cells to touch; the
 subagents do the work and report back. See
-[`return-contract.md`](return-contract.md) for the shared ≤6-line envelope.
+[`return-contract.md`](return-contract.md) for the shared envelope (≤6 lines, ≤7 for `record`).
 
 ## Overnight push-through mode (the maintainer's default for unattended runs)
 

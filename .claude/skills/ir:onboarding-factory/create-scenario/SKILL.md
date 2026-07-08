@@ -62,8 +62,8 @@ of status --json | jq -r '.scenarios[].id' | sort -t. -k1,1n -k2,2n
 ```
 
 Group ids by their `<section>` integer (1 = session lifecycle, 2 = turn / tool
-interaction, 3 = subagents, 4 = multi-session/workspace, 5 = metrics — infer
-the section from sibling scenarios). Pick the section that fits the behavior and
+interaction, 3 = subagents, 4 = multi-session/workspace, 5 = metrics, 6 =
+backchannel/control — infer the section from sibling scenarios). Pick the section that fits the behavior and
 take the next free `<index>` in it. Confirm the slug isn't already present.
 
 ### 2. Research the behavior across every onboarded agent

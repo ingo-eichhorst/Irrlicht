@@ -301,13 +301,14 @@
 
       <!-- ─── Subagent Detection ─── -->
       <h2>Subagent Detection</h2>
-      <p>Claude Code can spawn sub-agents (child tasks). Irrlicht detects parent-child relationships between sessions and exposes this through the <code>SubagentSummary</code> structure.</p>
+      <p>Claude Code can spawn sub-agents (child tasks). Irrlicht detects parent-child relationships between sessions and exposes this through the <code>subagentSummary</code> structure (JSON key <code>subagents</code>).</p>
 
       <p>The summary tracks subagent counts by state:</p>
-<pre><code>type SubagentSummary struct {
-    Working  int  // subagents currently executing
-    Waiting  int  // subagents blocked on user input
-    Ready    int  // subagents that have finished their turn
+<pre><code>type subagentSummary struct {
+    Total   int  // total subagent count across all states
+    Working int  // subagents currently executing
+    Waiting int  // subagents blocked on user input
+    Ready   int  // subagents that have finished their turn
 }</code></pre>
 
       <p>The parent session's state display incorporates subagent status. If the parent is <span class="badge badge-ready">ready</span> but a child subagent is <span class="badge badge-working">working</span>, the parent's effective state adjusts accordingly &mdash; the light reflects the most "active" state across the tree.</p>
