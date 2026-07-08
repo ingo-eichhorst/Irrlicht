@@ -1,0 +1,6 @@
+{"role": "user", "content": "Reply with exactly the word: alpha", "injected": false, "message_id": "9eaa2a8a-46c9-4cf6-a135-cddfa7177b0b"}
+{"role": "assistant", "content": "alpha", "injected": false, "message_id": "e5baf39b-6d4c-4f72-b053-19dc59812894"}
+{"role": "user", "content": "Reply with exactly the word: alpha2", "injected": false, "message_id": "cd2007a2-9b8e-4f26-a1c4-fccb94d86482"}
+{"role": "assistant", "content": "alpha2", "injected": false, "message_id": "00e48f36-cd4c-4439-868f-d5867c9604e8"}
+{"role": "user", "content": "Reply with exactly the word: bravo", "injected": false, "message_id": "883afc9c-5cc7-475f-ab10-1824860157d6"}
+{"role": "assistant", "content": "bravo", "injected": false, "message_id": "dbfb8486-8742-41aa-b7dc-1c82952c42e3"}
