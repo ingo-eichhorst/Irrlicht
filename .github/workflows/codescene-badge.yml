@@ -13,6 +13,18 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: DEBUG dump raw API responses
+        env:
+          CODESCENE_API_TOKEN: ${{ secrets.CODESCENE_API_TOKEN }}
+          CODESCENE_PROJECT_ID: "82148"
+        run: |
+          echo "=== analyses/latest ==="
+          tools/codescene-report.sh "analyses/latest"
+          echo "=== analyses (list, if it exists) ==="
+          tools/codescene-report.sh "analyses" || echo "(no such endpoint)"
+          echo "=== repository (project overview, if it exists) ==="
+          tools/codescene-report.sh "" || echo "(no such endpoint)"
+
       - name: Fetch current code health score
         env:
           CODESCENE_API_TOKEN: ${{ secrets.CODESCENE_API_TOKEN }}
