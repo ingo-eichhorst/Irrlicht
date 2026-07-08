@@ -113,7 +113,7 @@ SES_MARKER=(); SES_CWD=(); SES_ALIVE=()
 # Tool-executing recipes: set the recipe's settings.bypass_tool_permissions=true
 # and launch_repl adds `vibe --auto-approve` so tool calls run unattended (not a
 # step type — a launch-mode toggle, so it stays out of DRIVE_ELICITS).
-DRIVE_ELICITS="send slash sleep wait_turn exit_clean restart sigkill resume keys"
+DRIVE_ELICITS="send slash sleep wait_turn exit_clean restart sigkill resume keys start_session session"
 DRIVE_SLASH_REQUIRES_STEP_TYPE=false
 RUN_CWD="${IRRLICHT_ONBOARD_CWD:-$STAGING/cwd}"
 mkdir -p "$RUN_CWD"
@@ -518,11 +518,51 @@ step_resume() {
   boot_vibe_active "" "$resume_id"
 }
 
+# step_start_session — launch a NEW concurrent vibe session WITHOUT tearing the
+# active one down (the multiple-sessions-same-cwd contract). The prior session's
+# tmux + process survive, so the daemon observes BOTH as independent rows; vibe
+# keys each session on its own lazily-minted session_<ts>_<hash> dir (id is
+# timestamp+hash-keyed, NOT cwd-keyed), so two concurrent sessions in the SAME
+# cwd never merge. Defaults to session 1's cwd (the same-cwd scenario); pass a
+# directory to launch elsewhere. Mirror of step_restart, minus the teardown.
+step_start_session() {
+  local req_cwd="$1"
+  # Bind + freeze the current slot's transcript BEFORE spawning a concurrent
+  # one. resolve_transcript here claims the prior slot's session dir so it is in
+  # PRE_LAUNCH_DIRS when boot_vibe_active re-snapshots — otherwise the new slot's
+  # set-diff in resolve_transcript could bind to the OLD (still-streaming) dir.
+  resolve_transcript || true
+  save_active
+  local idx=$(( N_SLOTS + 1 ))
+  local new_cwd="${req_cwd:-$RUN_CWD}"
+  # Bare launch (no positional prompt): the following send/slash steps type into
+  # the now-live REPL. boot_vibe_active's bare path waits for banner readiness, so
+  # the concurrent session's input box is live before the next keystroke lands.
+  alloc_slot "mistral-vibedrv-$$-$(date +%s)-start${idx}" "$new_cwd"
+  echo "[driver] start_session: concurrent session slot #${ACTIVE} (cwd=$new_cwd, prior slots stay alive)" >&2
+  boot_vibe_active "" ""
+}
+
 # --- Step dispatch: ALL standard arms present; stubs fail loudly -------------
 launch_repl
 EXPECTED_TURNS=0
 while IFS= read -r step; do
   type="$(jq -r '.type' <<<"$step")"
+  # Optional inline session target: switch the active slot to N before running
+  # the step (send/wait_turn on {"session":1} route back to slot 1 while slot 2
+  # stays alive). start_session is exempt — it allocates its own slot. A target
+  # slot must already exist.
+  tgt="$(jq -r '.session // empty' <<<"$step")"
+  if [[ -n "$tgt" && "$type" != "start_session" && "$tgt" != "$ACTIVE" ]]; then
+    if [[ "$tgt" =~ ^[0-9]+$ && "$tgt" -ge 1 && "$tgt" -le "$N_SLOTS" ]]; then
+      save_active
+      load_slot "$tgt"
+      echo "[driver] switch -> session slot $tgt (sid=$(daemon_sid "$TRANSCRIPT"))" >&2
+    else
+      echo "[driver] switch: invalid session slot '$tgt' (have $N_SLOTS)" >&2
+      EXIT_REASON="nonzero(2)"; break
+    fi
+  fi
   case "$type" in
     send)            send_text "$(jq -r '.text' <<<"$step")" ;;
     slash)           slash_cmd "$(jq -r '.text' <<<"$step")" ;;
@@ -543,8 +583,8 @@ while IFS= read -r step; do
     resume)          step_resume ;;
     sigkill)         step_sigkill ;;
     exit_clean)      step_exit_clean ;;
-    start_session)   not_implemented start_session || break ;;   # TODO(mistral-vibe): save_active; alloc_slot; launch a CONCURRENT session, keep the first alive
-    session)         not_implemented session || break ;;         # TODO(mistral-vibe): save_active; load_slot N — switch the active slot
+    start_session)   step_start_session "$(jq -r '.cwd // empty' <<<"$step")" ;;
+    session)         : ;;   # pure focus switch — already handled by the inline target block above
     *)               echo "[driver] unknown step type: $type" >&2; EXIT_REASON="nonzero(2)"; break ;;
   esac
   (( $(remaining_seconds) <= 0 )) && { EXIT_REASON="timeout"; break; }
@@ -556,6 +596,10 @@ done < <(jq -c '.[]' <<<"$SCRIPT_JSON")
 # active slot's transcript is still unbound. Bind it now — the session dir exists
 # by end-of-run — so the contract carries a real session id instead of "missing".
 resolve_transcript || true
+# Persist the final active slot's view back into its slot so the multi-session
+# session.uuids / transcript.paths lists carry EVERY slot (start_session's
+# concurrent sessions), not just slot 1.
+save_active
 #
 # emit_session_contract writes session.uuid + transcript.path (slot 1) plus the
 # multi-session session.uuids / transcript.paths lists from SES_TRANSCRIPT, and
