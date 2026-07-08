@@ -13,26 +13,23 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: DEBUG dump raw API responses
-        env:
-          CODESCENE_API_TOKEN: ${{ secrets.CODESCENE_API_TOKEN }}
-          CODESCENE_PROJECT_ID: "82148"
-        run: |
-          echo "=== analyses/latest ==="
-          tools/codescene-report.sh "analyses/latest"
-          echo "=== analyses (list, if it exists) ==="
-          tools/codescene-report.sh "analyses" || echo "(no such endpoint)"
-          echo "=== repository (project overview, if it exists) ==="
-          tools/codescene-report.sh "" || echo "(no such endpoint)"
-
       - name: Fetch current code health score
         env:
           CODESCENE_API_TOKEN: ${{ secrets.CODESCENE_API_TOKEN }}
           CODESCENE_PROJECT_ID: "82148"
         run: |
-          SCORE=$(tools/codescene-report.sh "analyses/latest" | jq -r '.high_level_metrics.current_score')
+          # high_level_metrics.current_score is an alias for
+          # hotspots_code_health_now_weighted_average (hotspot files only,
+          # i.e. the most-frequently-changed ones) — NOT the whole-codebase
+          # score shown on the CodeScene dashboard. That's
+          # code_health_weighted_average_current. The two normally track
+          # closely, but diverge sharply after a PR that concentrates its
+          # changes in hotspot files (see #901's cognitive-complexity pass,
+          # which showed a false ~1-point badge drop while the dashboard's
+          # real score improved).
+          SCORE=$(tools/codescene-report.sh "analyses/latest" | jq -r '.high_level_metrics.code_health_weighted_average_current')
           if [ -z "$SCORE" ] || [ "$SCORE" = "null" ]; then
-            echo "::error::could not read high_level_metrics.current_score from analyses/latest"
+            echo "::error::could not read high_level_metrics.code_health_weighted_average_current from analyses/latest"
             exit 1
           fi
           echo "SCORE=$SCORE" >> "$GITHUB_ENV"
