@@ -89,6 +89,15 @@ struct RateLimitWindowInfo: Codable, Hashable {
         case resetsAt = "resets_at"
     }
 
+    /// Explicit memberwise initializer for tests — `init(from:)` below
+    /// suppresses Swift's synthesized one, mirroring the pattern already
+    /// used on SessionMetrics for the same reason.
+    init(usedPercent: Double, windowMinutes: Int, resetsAt: Date) {
+        self.usedPercent = usedPercent
+        self.windowMinutes = windowMinutes
+        self.resetsAt = resetsAt
+    }
+
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         usedPercent = try c.decode(Double.self, forKey: .usedPercent)
@@ -200,6 +209,16 @@ struct RateLimitInfo: Codable, Hashable {
         case credits
         case reachedType = "reached_type"
         case sampledAt = "sampled_at"
+    }
+
+    /// Explicit memberwise initializer for tests — see RateLimitWindowInfo's
+    /// for why one isn't synthesized.
+    init(windows: [RateLimitWindowInfo], planType: String? = nil, credits: CreditsInfo? = nil, reachedType: String? = nil, sampledAt: Date) {
+        self.windows = windows
+        self.planType = planType
+        self.credits = credits
+        self.reachedType = reachedType
+        self.sampledAt = sampledAt
     }
 
     init(from decoder: Decoder) throws {

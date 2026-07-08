@@ -840,7 +840,7 @@ struct SessionListView: View {
         // Compute once per row — SwiftUI re-invokes view bodies on every
         // SessionManager publish, and calling quotaPacePercent twice
         // would also let two Date() captures disagree by microseconds.
-        let pace = quotaPacePercent(w)
+        let pace = Self.quotaPacePercent(w)
         HStack(spacing: 6) {
             Text(quotaWindowLabel(w.windowMinutes))
                 .font(.system(size: 9, weight: .medium, design: .monospaced))
@@ -883,7 +883,10 @@ struct SessionListView: View {
     /// `10079` instead of `10080`) is left as-is here — the
     /// ≤60-second drift in the implied window-start time is well
     /// below the resolution the marker conveys visually.
-    private func quotaPacePercent(_ w: RateLimitWindowInfo) -> Double? {
+    /// `static` + non-private (like `barColor`) so `QuotaMenuBarRenderer`'s
+    /// menu-bar icon can share this exact implementation instead of
+    /// re-deriving the same math in a second place.
+    static func quotaPacePercent(_ w: RateLimitWindowInfo) -> Double? {
         guard w.windowMinutes > 0 else { return nil }
         guard w.resetsAt.timeIntervalSince1970 > 0 else { return nil }
         let windowSeconds = Double(w.windowMinutes) * 60
@@ -949,7 +952,7 @@ struct SessionListView: View {
                 let label = quotaWindowLabel(w.windowMinutes)
                 let resets = formatTimeUntil(w.resetsAt)
                 var line = "\(label): \(used)% used · resets in \(resets)"
-                if let pace = quotaPacePercent(w) {
+                if let pace = Self.quotaPacePercent(w) {
                     let delta = used - Int(pace.rounded())
                     let verdict: String
                     if delta > 0 { verdict = "\(delta)pt over pace" }
@@ -1037,21 +1040,39 @@ struct SessionListView: View {
         static let fallbackYellow: Double = 50
     }
 
+    /// Three-way verdict the pace-aware ramp above resolves to, decoupled
+    /// from any particular color representation so both the SwiftUI chip
+    /// (`barColor`, a `Color`) and the menu-bar icon (`QuotaMenuBarRenderer`,
+    /// a bare hex string for SVG) can share the one branching implementation
+    /// instead of keeping two hand-synced copies of the same thresholds.
+    enum QuotaColorTier {
+        case green, yellow, orange
+    }
+
     /// `static` + non-private so XCTests can table-drive the threshold
-    /// boundaries without instantiating the view.
-    static func barColor(used: Double, pace: Double?) -> Color {
+    /// boundaries without instantiating the view, and so QuotaMenuBarRenderer
+    /// can call it directly.
+    static func quotaColorTier(used: Double, pace: Double?) -> QuotaColorTier {
         if used >= QuotaBarThreshold.absoluteOrange { return .orange }
         guard let pace = pace else {
             switch used {
             case QuotaBarThreshold.fallbackOrange...: return .orange
             case QuotaBarThreshold.fallbackYellow...: return .yellow
-            default: return IrrColors.pressureLow
+            default: return .green
             }
         }
         let delta = used - pace
         if delta >= QuotaBarThreshold.paceDeltaOrange { return .orange }
         if delta >= QuotaBarThreshold.paceDeltaYellow { return .yellow }
-        return IrrColors.pressureLow
+        return .green
+    }
+
+    static func barColor(used: Double, pace: Double?) -> Color {
+        switch quotaColorTier(used: used, pace: pace) {
+        case .green: return IrrColors.pressureLow
+        case .yellow: return .yellow
+        case .orange: return .orange
+        }
     }
 
     private func formatClockTime(_ date: Date) -> String {

@@ -40,6 +40,11 @@ struct SettingsView: View {
     @AppStorage("advancedSettingsExpanded") private var advancedSettingsExpanded: Bool = false
     @AppStorage("providerMode_anthropic") private var providerModeAnthropic: String = ProviderModePreference.auto.rawValue
     @AppStorage("providerMode_openai") private var providerModeOpenAI: String = ProviderModePreference.auto.rawValue
+    // Menu bar icon content (issue #909): dots / quota bars / both. Default
+    // .lights keeps today's icon unchanged for existing users.
+    @AppStorage(MenuBarStyle.storageKey) private var menuBarStyle: String = MenuBarStyle.lights.rawValue
+    @AppStorage(MenuBarQuotaProvider.storageKey) private var menuBarQuotaProvider: String = ""
+    @AppStorage(QuotaVisualStyle.storageKey) private var menuBarQuotaVisual: String = QuotaVisualStyle.bars.rawValue
     @AppStorage(NotificationEvent.ready.enabledKey) private var notifyOnReady: Bool = false
     @AppStorage(NotificationEvent.waiting.enabledKey) private var notifyOnWaiting: Bool = false
     @AppStorage(NotificationEvent.contextPressure.enabledKey) private var notifyOnContextPressure: Bool = false
@@ -113,6 +118,55 @@ struct SettingsView: View {
                             }
                             providerModeRow(label: "Anthropic", selection: $providerModeAnthropic)
                             providerModeRow(label: "OpenAI", selection: $providerModeOpenAI)
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 6) {
+                            Text("Menu Bar Icon")
+                                .font(.caption)
+                                .fontWeight(.medium)
+                                .foregroundColor(.secondary)
+                            InfoIcon(text: "Lights shows session-state dots (today's default). Usage replaces them with 5h/7d subscription quota bars. Combined shows both side by side.")
+                            Spacer()
+                        }
+                        Picker("", selection: $menuBarStyle) {
+                            ForEach(MenuBarStyle.allCases) { style in
+                                Text(style.label).tag(style.rawValue)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+
+                        if menuBarStyle != MenuBarStyle.lights.rawValue {
+                            HStack(spacing: 6) {
+                                Text("Quota provider")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                Spacer()
+                                Picker("", selection: $menuBarQuotaProvider) {
+                                    Text("Auto").tag("")
+                                    ForEach(knownQuotaProviderKeys, id: \.self) { key in
+                                        Text(quotaProviderLabel(key)).tag(key)
+                                    }
+                                }
+                                .labelsHidden()
+                                .frame(maxWidth: 140)
+                            }
+                            HStack(spacing: 6) {
+                                Text("Quota shape")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                Spacer()
+                                Picker("", selection: $menuBarQuotaVisual) {
+                                    ForEach(QuotaVisualStyle.allCases) { visual in
+                                        Text(visual.label).tag(visual.rawValue)
+                                    }
+                                }
+                                .pickerStyle(.segmented)
+                                .labelsHidden()
+                                .frame(maxWidth: 140)
+                            }
                         }
                     }
 
@@ -555,6 +609,45 @@ struct SettingsView: View {
             .labelsHidden()
             .fixedSize()
             Spacer()
+        }
+    }
+
+    /// Provider keys with a rate_limit-carrying session right now, for the
+    /// Usage/Combined quota-provider picker. Not persisted anywhere else —
+    /// recomputed from whatever sessions happen to be visible when Settings
+    /// is open. Excludes Gas Town-owned sessions to match exactly what
+    /// MenuBarImageBuilder.combinedImage feeds into QuotaMenuBarRenderer —
+    /// offering a provider here that the icon can never actually render
+    /// (because its only carrying sessions are Gas Town's) would leave the
+    /// picker selection pointing at a permanently-empty quota display.
+    private var knownQuotaProviderKeys: [String] {
+        let gasTownProvider = sessionManager.gasTownProvider
+        let eligibleSessions = gasTownProvider?.isDaemonRunning == true
+            ? sessionManager.sessions.filter { !(gasTownProvider?.ownsSession($0) ?? false) }
+            : sessionManager.sessions
+        var keys = Set<String>()
+        for session in eligibleSessions {
+            guard let snap = session.metrics?.rateLimit, !snap.windows.isEmpty else { continue }
+            keys.insert(snap.providerKey(adapter: session.adapter) ?? "unknown:\(session.adapter ?? "")")
+        }
+        return keys.sorted()
+    }
+
+    /// `providerKey(adapter:)` returns nil for plan types/adapters it
+    /// doesn't recognize (e.g. Team/Enterprise plans, or a wrapper adapter
+    /// like Pi/OpenCode whose inherited snapshot carries no plan type) —
+    /// `knownQuotaProviderKeys` then falls back to a raw `"unknown:<adapter>"`
+    /// bucket key. Surface the adapter name instead of that internal-looking
+    /// string so the picker still reads as a plausible option rather than
+    /// leaking implementation detail.
+    private func quotaProviderLabel(_ key: String) -> String {
+        switch key {
+        case "anthropic": return "Claude"
+        case "openai": return "Codex"
+        default:
+            guard key.hasPrefix("unknown:") else { return key }
+            let adapter = key.dropFirst("unknown:".count)
+            return adapter.isEmpty ? "Other" : adapter.capitalized
         }
     }
 

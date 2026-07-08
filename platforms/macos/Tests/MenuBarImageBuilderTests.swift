@@ -45,4 +45,70 @@ final class MenuBarImageBuilderTests: XCTestCase {
             "Irrlicht — action required: permission pending"
         )
     }
+
+    // MARK: - composeSideBySide (issue #909: dots + quota composition)
+
+    func testComposeSideBySideReturnsNilWhenBothNil() {
+        XCTAssertNil(MenuBarImageBuilder.composeSideBySide(nil, nil))
+    }
+
+    func testComposeSideBySideReturnsLeftUnchangedWhenRightNil() {
+        let left = NSImage(size: NSSize(width: 10, height: 18))
+        let result = MenuBarImageBuilder.composeSideBySide(left, nil)
+        XCTAssertEqual(result?.size, NSSize(width: 10, height: 18))
+    }
+
+    func testComposeSideBySideReturnsRightUnchangedWhenLeftNil() {
+        let right = NSImage(size: NSSize(width: 12, height: 18))
+        let result = MenuBarImageBuilder.composeSideBySide(nil, right)
+        XCTAssertEqual(result?.size, NSSize(width: 12, height: 18))
+    }
+
+    func testComposeSideBySideSumsWidthAndTakesTallerHeightWhenBothPresent() {
+        let left = NSImage(size: NSSize(width: 10, height: 18))
+        let right = NSImage(size: NSSize(width: 20, height: 12))
+        let result = MenuBarImageBuilder.composeSideBySide(left, right, gap: 4)
+        XCTAssertEqual(result?.size.width, 34) // 10 + 4 + 20
+        XCTAssertEqual(result?.size.height, 18) // max(18, 12)
+    }
+
+    // MARK: - shouldFallBackToDotsForUsageStyle (issue #909 review fix)
+
+    /// `.usage` style with a renderable dots image but no quota yet must
+    /// not collapse to the "no sessions" icon — see the fallback comment in
+    /// `combinedImage`.
+    func testFallsBackToDotsWhenUsageStyleHasNoQuotaButDotsRendered() {
+        let dots = NSImage(size: NSSize(width: 10, height: 18))
+        XCTAssertTrue(MenuBarImageBuilder.shouldFallBackToDotsForUsageStyle(
+            style: .usage, quotaImage: nil, dotsImage: dots
+        ))
+    }
+
+    func testDoesNotFallBackWhenUsageStyleHasQuotaImage() {
+        let quota = NSImage(size: NSSize(width: 10, height: 18))
+        let dots = NSImage(size: NSSize(width: 10, height: 18))
+        XCTAssertFalse(MenuBarImageBuilder.shouldFallBackToDotsForUsageStyle(
+            style: .usage, quotaImage: quota, dotsImage: dots
+        ))
+    }
+
+    /// Sessions can be active (non-zero count) while `buildStatusImage` still
+    /// returns nil (e.g. every session is a subagent whose parent was pruned
+    /// out from under it) — the fallback must key off the actual dots image,
+    /// not a raw session count that doesn't guarantee dots render.
+    func testDoesNotFallBackWhenUsageStyleHasNoRenderableDotsEither() {
+        XCTAssertFalse(MenuBarImageBuilder.shouldFallBackToDotsForUsageStyle(
+            style: .usage, quotaImage: nil, dotsImage: nil
+        ))
+    }
+
+    func testDoesNotFallBackForLightsOrCombinedStyles() {
+        let dots = NSImage(size: NSSize(width: 10, height: 18))
+        XCTAssertFalse(MenuBarImageBuilder.shouldFallBackToDotsForUsageStyle(
+            style: .lights, quotaImage: nil, dotsImage: dots
+        ))
+        XCTAssertFalse(MenuBarImageBuilder.shouldFallBackToDotsForUsageStyle(
+            style: .combined, quotaImage: nil, dotsImage: dots
+        ))
+    }
 }

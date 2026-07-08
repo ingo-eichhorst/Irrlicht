@@ -19,6 +19,24 @@ enum MenuBarImageBuilder {
         return .off
     }
 
+    /// True when `.usage` style has nothing to show (no renderable quota
+    /// yet) but the dots view is actually renderable — see the fallback
+    /// comment at its call site in `combinedImage`. Takes the already-built
+    /// dots image rather than a raw session count: a non-zero session count
+    /// doesn't guarantee `buildStatusImage` succeeds (e.g. sessions whose
+    /// parent was pruned out from under them still carry a non-nil
+    /// `parentSessionId` and get excluded from every project group), and
+    /// checking the actual image avoids re-deriving that success/failure a
+    /// second time. Pure decision, extracted for testability without a
+    /// SessionManager, mirroring `iconState`.
+    static func shouldFallBackToDotsForUsageStyle(
+        style: MenuBarStyle,
+        quotaImage: NSImage?,
+        dotsImage: NSImage?
+    ) -> Bool {
+        style == .usage && quotaImage == nil && dotsImage != nil
+    }
+
     static func build(
         sessionManager: SessionManager,
         gasTownProvider: GasTownProvider
@@ -47,12 +65,46 @@ enum MenuBarImageBuilder {
         let nonGtSessions = gasTownProvider.isDaemonRunning
             ? sessionManager.sessions.filter { !gasTownProvider.ownsSession($0) }
             : sessionManager.sessions
-        let dotsImage = MenuBarStatusRenderer.buildStatusImage(
+
+        // Issue #909: which content the icon shows is a user choice (default
+        // .lights = today's behavior, unchanged for existing users). Either
+        // half can come back nil (no sessions for .usage-only, or no
+        // rate_limit data yet for .usage/.combined) without collapsing the
+        // whole icon — composeSideBySide degrades to whichever half exists.
+        let style = MenuBarStyle.current
+        // Computed once regardless of style so the .usage fallback below can
+        // check its actual success/failure instead of re-deriving it from a
+        // raw session count (see shouldFallBackToDotsForUsageStyle's doc).
+        let computedDotsImage = MenuBarStatusRenderer.buildStatusImage(
             sessions: nonGtSessions,
             projectGroupOrder: sessionManager.projectGroupOrder
         )
+        // Combined style shares its width budget with the dots, so the
+        // quota bars render in a narrower, label-less layout there — see
+        // QuotaMenuBarRenderer.buildSVG's `compact` handling.
+        let quotaImage = style == .lights ? nil : QuotaMenuBarRenderer.imageForSelectedProvider(
+            sessions: nonGtSessions,
+            providerKey: MenuBarQuotaProvider.current,
+            compact: style == .combined
+        )
+        // .usage style with sessions active but no renderable quota yet
+        // (fresh daemon start, or the selected provider hasn't ticked a
+        // statusline sample) must not collapse to nothing here — with
+        // dotsImage nil and quotaImage nil, the caller falls through to
+        // OffFlameImage.menuBar, the "no sessions running" icon, while
+        // sessions are in fact active. Fall back to dots so the icon stays
+        // honest about "something is running" even without quota data.
+        let dotsImage = style != .usage || shouldFallBackToDotsForUsageStyle(
+            style: style, quotaImage: quotaImage, dotsImage: computedDotsImage
+        ) ? computedDotsImage : nil
+        // Dots first (left), quota bars last (right) — closest to the
+        // system status icons (WiFi/battery/clock), matching issue #909's
+        // mockup ordering. Uses the same gap as between dot-groups
+        // themselves (MenuBarStatusRenderer.groupGap) so the dots-to-quota
+        // seam in Combined style reads as "one more group," not a wider gap.
+        let baseImage = composeSideBySide(dotsImage, quotaImage, gap: MenuBarStatusRenderer.groupGap)
 
-        guard gasTownProvider.isDaemonRunning else { return dotsImage }
+        guard gasTownProvider.isDaemonRunning else { return baseImage }
 
         let rigCount = sessionManager.apiGroups.first { $0.isGasTown }?.groups?.count ?? 0
         let emoji = NSAttributedString(string: "\u{26FD}", attributes: [
@@ -65,26 +117,46 @@ enum MenuBarImageBuilder {
         let badge = NSMutableAttributedString()
         badge.append(emoji)
         badge.append(countStr)
-        let badgeSize = badge.size()
 
-        let gap: CGFloat = dotsImage != nil ? 4 : 0
-        let dotsWidth = dotsImage?.size.width ?? 0
-        let dotsHeight = dotsImage?.size.height ?? 0
-        let totalWidth = badgeSize.width + gap + dotsWidth
-        let totalHeight = max(badgeSize.height, dotsHeight)
+        return composeSideBySide(attributedStringImage(badge), baseImage)
+    }
 
-        let combined = NSImage(size: NSSize(width: totalWidth, height: totalHeight))
-        combined.lockFocus()
-        let badgeY = (totalHeight - badgeSize.height) / 2
-        badge.draw(at: NSPoint(x: 0, y: badgeY))
-        if let dotsImage {
-            let dotsY = (totalHeight - dotsHeight) / 2
-            dotsImage.draw(at: NSPoint(x: badgeSize.width + gap, y: dotsY),
-                           from: .zero, operation: .sourceOver, fraction: 1)
+    /// Horizontally concatenates two optional images with a fixed gap,
+    /// vertically centering each on the taller one's height. Either side
+    /// may be nil — the other renders alone with no artificial gap. Shared
+    /// by the quota+dots composition and the Gas Town badge+base
+    /// composition, which both used to hand-roll this same NSImage math.
+    static func composeSideBySide(_ left: NSImage?, _ right: NSImage?, gap: CGFloat = 4) -> NSImage? {
+        switch (left, right) {
+        case (nil, nil):
+            return nil
+        case (let l?, nil):
+            return l
+        case (nil, let r?):
+            return r
+        case (let l?, let r?):
+            let totalWidth = l.size.width + gap + r.size.width
+            let totalHeight = max(l.size.height, r.size.height)
+            let combined = NSImage(size: NSSize(width: totalWidth, height: totalHeight))
+            combined.lockFocus()
+            l.draw(at: NSPoint(x: 0, y: (totalHeight - l.size.height) / 2),
+                   from: .zero, operation: .sourceOver, fraction: 1)
+            r.draw(at: NSPoint(x: l.size.width + gap, y: (totalHeight - r.size.height) / 2),
+                   from: .zero, operation: .sourceOver, fraction: 1)
+            combined.unlockFocus()
+            combined.isTemplate = false
+            return combined
         }
-        combined.unlockFocus()
-        combined.isTemplate = false
-        return combined
+    }
+
+    private static func attributedStringImage(_ text: NSAttributedString) -> NSImage {
+        let size = text.size()
+        let image = NSImage(size: size)
+        image.lockFocus()
+        text.draw(at: .zero)
+        image.unlockFocus()
+        image.isTemplate = false
+        return image
     }
 
 }
