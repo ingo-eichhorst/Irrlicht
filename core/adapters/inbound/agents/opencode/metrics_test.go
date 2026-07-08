@@ -138,25 +138,41 @@ func insertTestSession(t *testing.T, db *sql.DB, sid, dir string) {
 	}
 }
 
+// testMessageRow bundles insertTestMessage's row fields so the helper's
+// parameter list stays small (CodeScene: Excess Number of Function Arguments).
+type testMessageRow struct {
+	id, sid string
+	ts      int64
+	data    string
+}
+
 // insertTestMessage inserts a message row with time_created == time_updated == ts.
-func insertTestMessage(t *testing.T, db *sql.DB, id, sid string, ts int64, data string) {
+func insertTestMessage(t *testing.T, db *sql.DB, row testMessageRow) {
 	t.Helper()
 	if _, err := db.Exec(
 		`INSERT INTO message(id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)`,
-		id, sid, ts, ts, data,
+		row.id, row.sid, row.ts, row.ts, row.data,
 	); err != nil {
-		t.Fatalf("insert message %s: %v", id, err)
+		t.Fatalf("insert message %s: %v", row.id, err)
 	}
 }
 
+// testPartRow bundles insertTestPart's row fields so the helper's parameter
+// list stays small (CodeScene: Excess Number of Function Arguments).
+type testPartRow struct {
+	id, msgID, sid string
+	ts             int64
+	data           string
+}
+
 // insertTestPart inserts a part row with time_created == time_updated == ts.
-func insertTestPart(t *testing.T, db *sql.DB, id, msgID, sid string, ts int64, data string) {
+func insertTestPart(t *testing.T, db *sql.DB, row testPartRow) {
 	t.Helper()
 	if _, err := db.Exec(
 		`INSERT INTO part(id, message_id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?)`,
-		id, msgID, sid, ts, ts, data,
+		row.id, row.msgID, row.sid, row.ts, row.ts, row.data,
 	); err != nil {
-		t.Fatalf("insert part %s: %v", id, err)
+		t.Fatalf("insert part %s: %v", row.id, err)
 	}
 }
 
@@ -206,7 +222,7 @@ func TestComputeMetrics_TodowriteTasks(t *testing.T) {
 
 	// One assistant message row carrying the three todowrite tool parts.
 	msgData := `{"role":"assistant","time":{"created":1000},"model":{"providerID":"test","modelID":"test-model"}}`
-	insertTestMessage(t, db, "msg_1", sid, 1000, msgData)
+	insertTestMessage(t, db, testMessageRow{id: "msg_1", sid: sid, ts: 1000, data: msgData})
 
 	parts := []struct {
 		id      string
@@ -230,7 +246,7 @@ func TestComputeMetrics_TodowriteTasks(t *testing.T) {
 		})},
 	}
 	for _, p := range parts {
-		insertTestPart(t, db, p.id, "msg_1", sid, p.created, p.data)
+		insertTestPart(t, db, testPartRow{id: p.id, msgID: "msg_1", sid: sid, ts: p.created, data: p.data})
 	}
 
 	metrics, err := ComputeMetrics(dbPath, sid)
@@ -274,7 +290,7 @@ func TestComputeMetrics_TodowriteSnapshotPrune(t *testing.T) {
 
 	const sid = "ses_test_prune"
 	insertTestSession(t, db, sid, "/tmp/d")
-	insertTestMessage(t, db, "msg_1", sid, 1000, `{"role":"assistant","model":{"modelID":"test-model"}}`)
+	insertTestMessage(t, db, testMessageRow{id: "msg_1", sid: sid, ts: 1000, data: `{"role":"assistant","model":{"modelID":"test-model"}}`})
 
 	parts := []struct {
 		id      string
@@ -293,7 +309,7 @@ func TestComputeMetrics_TodowriteSnapshotPrune(t *testing.T) {
 		})},
 	}
 	for _, p := range parts {
-		insertTestPart(t, db, p.id, "msg_1", sid, p.created, p.data)
+		insertTestPart(t, db, testPartRow{id: p.id, msgID: "msg_1", sid: sid, ts: p.created, data: p.data})
 	}
 
 	metrics, err := ComputeMetrics(dbPath, sid)
@@ -324,7 +340,7 @@ func TestComputeMetrics_TaskEstimate(t *testing.T) {
 	const sid = "ses_test_taskestimate"
 	insertTestSession(t, db, sid, "/tmp/opencode-eta-test")
 	msgData := `{"role":"assistant","time":{"created":1000},"model":{"providerID":"test","modelID":"test-model"}}`
-	insertTestMessage(t, db, "msg_1", sid, 1000, msgData)
+	insertTestMessage(t, db, testMessageRow{id: "msg_1", sid: sid, ts: 1000, data: msgData})
 
 	parts := []struct {
 		id      string
@@ -335,7 +351,7 @@ func TestComputeMetrics_TaskEstimate(t *testing.T) {
 		{"part_2", 240000, textPart(t, `Step 3 done. <!-- {"marker":"irrlicht-eta","total_rounds":6,"completed_rounds":3} -->`)},
 	}
 	for _, p := range parts {
-		insertTestPart(t, db, p.id, "msg_1", sid, p.created, p.data)
+		insertTestPart(t, db, testPartRow{id: p.id, msgID: "msg_1", sid: sid, ts: p.created, data: p.data})
 	}
 
 	metrics, err := ComputeMetrics(dbPath, sid)

@@ -232,17 +232,25 @@ func listenAndServe(srv *http.Server, tlsEnabled bool, tlsCert, tlsKey string) e
 	return srv.ListenAndServe()
 }
 
+// listenParams bundles startListening's addressing and TLS parameters.
+type listenParams struct {
+	addr       string
+	tlsCert    string
+	tlsKey     string
+	tlsEnabled bool
+}
+
 // startListening runs srv in a goroutine, logging the scheme/address and
 // fataling on any listen error other than a graceful Shutdown.
-func startListening(srv *http.Server, addr, tlsCert, tlsKey string, tlsEnabled bool) {
+func startListening(srv *http.Server, p listenParams) {
 	go func() {
 		scheme := "ws"
-		if tlsEnabled {
+		if p.tlsEnabled {
 			scheme = "wss"
 		}
-		log.Printf("irrlichtrelay %s listening on %s (%s://)", Version, addr, scheme)
-		if err := listenAndServe(srv, tlsEnabled, tlsCert, tlsKey); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("listen on %s failed: %v", addr, err)
+		log.Printf("irrlichtrelay %s listening on %s (%s://)", Version, p.addr, scheme)
+		if err := listenAndServe(srv, p.tlsEnabled, p.tlsCert, p.tlsKey); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("listen on %s failed: %v", p.addr, err)
 		}
 	}()
 }
@@ -277,7 +285,7 @@ func runServe(args []string) {
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
-	startListening(srv, cfg.addr, cfg.tlsCert, cfg.tlsKey, tlsEnabled)
+	startListening(srv, listenParams{addr: cfg.addr, tlsCert: cfg.tlsCert, tlsKey: cfg.tlsKey, tlsEnabled: tlsEnabled})
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT)

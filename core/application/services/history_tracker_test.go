@@ -450,7 +450,7 @@ func TestHistoryTracker_GenerationsMatchBuckets(t *testing.T) {
 	if !ok {
 		t.Fatal("Encode failed")
 	}
-	assertGenerations(t, "pre-tick", enc, 0, 0, 0)
+	assertGenerations(t, enc, wantGenerations{Phase: "pre-tick", One: 0, Ten: 0, Sixty: 0})
 
 	var ticks []HistoryEvent
 	ht.SetEmitFunc(func(ev HistoryEvent) {
@@ -470,7 +470,7 @@ func TestHistoryTracker_GenerationsMatchBuckets(t *testing.T) {
 
 	// Snapshot after tick: 1s gen = 1, 10s/60s gen still 0.
 	enc, _ = ht.Encode(sid)
-	assertGenerations(t, "post-tick", enc, 1, 0, 0)
+	assertGenerations(t, enc, wantGenerations{Phase: "post-tick", One: 1, Ten: 0, Sixty: 0})
 
 	// Ten more ticks: 1s rolls 10×, 10s rolls 1×, 60s still 0.
 	ticks = nil
@@ -478,7 +478,7 @@ func TestHistoryTracker_GenerationsMatchBuckets(t *testing.T) {
 		ht.tick()
 	}
 	enc, _ = ht.Encode(sid)
-	assertGenerations(t, "after 10 ticks", enc, 11, 1, 0)
+	assertGenerations(t, enc, wantGenerations{Phase: "after 10 ticks", One: 11, Ten: 1, Sixty: 0})
 
 	// The most recent 1s tick event must carry the current 1s generation,
 	// so client logic of `gen <= last → skip` deduplicates exactly once.
@@ -488,12 +488,23 @@ func TestHistoryTracker_GenerationsMatchBuckets(t *testing.T) {
 	}
 }
 
+// wantGenerations bundles assertGenerations' expected per-granularity values
+// and the phase label naming the assertion point, keeping its parameter list
+// within CodeScene's argument-count limit instead of threading each value
+// through individually.
+type wantGenerations struct {
+	Phase string
+	One   uint64
+	Ten   uint64
+	Sixty uint64
+}
+
 // assertGenerations checks enc's per-granularity Generations against the
-// expected {1s, 10s, 60s} values, labeling a failure with phase.
-func assertGenerations(t *testing.T, phase string, enc EncodedHistory, want1, want10, want60 uint64) {
+// expected {1s, 10s, 60s} values in want, labeling a failure with want.Phase.
+func assertGenerations(t *testing.T, enc EncodedHistory, want wantGenerations) {
 	t.Helper()
-	if enc.Generations["1"] != want1 || enc.Generations["10"] != want10 || enc.Generations["60"] != want60 {
-		t.Errorf("%s generations = %+v, want {1:%d, 10:%d, 60:%d}", phase, enc.Generations, want1, want10, want60)
+	if enc.Generations["1"] != want.One || enc.Generations["10"] != want.Ten || enc.Generations["60"] != want.Sixty {
+		t.Errorf("%s generations = %+v, want {1:%d, 10:%d, 60:%d}", want.Phase, enc.Generations, want.One, want.Ten, want.Sixty)
 	}
 }
 

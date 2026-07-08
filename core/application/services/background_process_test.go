@@ -387,21 +387,21 @@ func TestSessionDetector_BackgroundMixed_IndependentLivenessAndPurge(t *testing.
 		rec, metrics, path := runMixed(t, true, false)
 		assertNoReadyTransition(t, rec, "bgmix", "the output process is alive")
 		assertNotPurged(t, metrics.purgedProcsFor, path, "output process")
-		assertPurgedExactly(t, metrics.purgedPIDsFor, path, "PID", "PIDs", pid)
+		assertPurgedExactly(t, metrics.purgedPIDsFor, purgeExpectation{Path: path, SingularNoun: "PID", PluralNoun: "PIDs", Want: pid})
 	})
 
 	t.Run("output dead, PID alive -> held working, only output purged", func(t *testing.T) {
 		rec, metrics, path := runMixed(t, false, true)
 		assertNoReadyTransition(t, rec, "bgmix", "the PID process is alive")
 		assertNotPurged(t, metrics.purgedPIDsFor, path, "PID")
-		assertPurgedExactly(t, metrics.purgedProcsFor, path, "output process", "outputs", outPath)
+		assertPurgedExactly(t, metrics.purgedProcsFor, purgeExpectation{Path: path, SingularNoun: "output process", PluralNoun: "outputs", Want: outPath})
 	})
 
 	t.Run("both dead -> settles ready, both purged", func(t *testing.T) {
 		rec, metrics, path := runMixed(t, false, false)
 		waitForReadyTransition(t, rec, "bgmix")
-		assertPurgedExactly(t, metrics.purgedProcsFor, path, "output process", "outputs", outPath)
-		assertPurgedExactly(t, metrics.purgedPIDsFor, path, "PID", "PIDs", pid)
+		assertPurgedExactly(t, metrics.purgedProcsFor, purgeExpectation{Path: path, SingularNoun: "output process", PluralNoun: "outputs", Want: outPath})
+		assertPurgedExactly(t, metrics.purgedPIDsFor, purgeExpectation{Path: path, SingularNoun: "PID", PluralNoun: "PIDs", Want: pid})
 	})
 }
 
@@ -426,15 +426,25 @@ func assertNotPurged(t *testing.T, query purgeQuery, path, noun string) {
 	}
 }
 
-// assertPurgedExactly fails t unless query reports path was purged with
-// exactly [want] — used for the dead half of a mixed liveness pair.
-func assertPurgedExactly(t *testing.T, query purgeQuery, path, singularNoun, pluralNoun, want string) {
+// purgeExpectation bundles assertPurgedExactly's expected-purge fields,
+// keeping its parameter list within CodeScene's argument-count limit
+// instead of threading each field through individually.
+type purgeExpectation struct {
+	Path         string
+	SingularNoun string
+	PluralNoun   string
+	Want         string
+}
+
+// assertPurgedExactly fails t unless query reports exp.Path was purged with
+// exactly [exp.Want] — used for the dead half of a mixed liveness pair.
+func assertPurgedExactly(t *testing.T, query purgeQuery, exp purgeExpectation) {
 	t.Helper()
-	got, called := query(path)
+	got, called := query(exp.Path)
 	if !called {
-		t.Fatalf("the dead %s must be purged", singularNoun)
+		t.Fatalf("the dead %s must be purged", exp.SingularNoun)
 	}
-	if len(got) != 1 || got[0] != want {
-		t.Errorf("purged %s = %v, want [%s]", pluralNoun, got, want)
+	if len(got) != 1 || got[0] != exp.Want {
+		t.Errorf("purged %s = %v, want [%s]", exp.PluralNoun, got, exp.Want)
 	}
 }

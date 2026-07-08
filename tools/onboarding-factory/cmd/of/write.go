@@ -208,7 +208,8 @@ func runScenario(args []string, stdout, stderr io.Writer) int {
 	idx := findScenarioIndex(cat, *name)
 	edit := scenarioEdit{
 		ID: *id, Name: *name, Description: *desc,
-		ProcessFile: *procF, AcceptanceFile: *accF,
+		DescriptionSet: flagPassed(fs, "description"),
+		ProcessFile:    *procF, AcceptanceFile: *accF,
 		Process: process, Acceptance: acceptance,
 	}
 	var rc int
@@ -216,7 +217,7 @@ func runScenario(args []string, stdout, stderr io.Writer) int {
 	case "add":
 		rc = applyScenarioAdd(cat, idx, edit, stderr)
 	case "update":
-		rc = applyScenarioUpdate(cat, idx, fs, edit, stderr)
+		rc = applyScenarioUpdate(cat, idx, edit, stderr)
 	default:
 		fmt.Fprintln(stderr, "of scenario: verb must be add, update, or show")
 		return exitUsage
@@ -248,10 +249,14 @@ func findScenarioIndex(cat *writeCatalog, name string) int {
 // scenarioEdit carries the field values read from `of scenario add`/`update`
 // flags, keeping applyScenarioAdd/applyScenarioUpdate's parameter lists small
 // (go:S107) instead of threading each field through individually.
+// DescriptionSet distinguishes "--description ”" (clear it) from "not
+// passed" (leave it) — computed once at the flag.FlagSet the caller already
+// holds, so applyScenarioUpdate itself doesn't need a *flag.FlagSet param.
 type scenarioEdit struct {
 	ID             string
 	Name           string
 	Description    string
+	DescriptionSet bool
 	ProcessFile    string
 	AcceptanceFile string
 	Process        string
@@ -294,13 +299,13 @@ func applyScenarioAdd(cat *writeCatalog, idx int, edit scenarioEdit, stderr io.W
 // description only when --description was explicitly passed (so an empty
 // value can clear it), process/acceptance_criteria only when their file
 // flags were given.
-func applyScenarioUpdate(cat *writeCatalog, idx int, fs *flag.FlagSet, edit scenarioEdit, stderr io.Writer) int {
+func applyScenarioUpdate(cat *writeCatalog, idx int, edit scenarioEdit, stderr io.Writer) int {
 	if idx < 0 {
 		fmt.Fprintf(stderr, "of scenario update: %q not found (use add)\n", edit.Name)
 		return exitFail
 	}
 	s := &cat.Scenarios[idx]
-	if flagPassed(fs, "description") {
+	if edit.DescriptionSet {
 		s.Description = edit.Description
 	}
 	if edit.ProcessFile != "" {

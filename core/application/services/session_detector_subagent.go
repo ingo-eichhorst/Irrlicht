@@ -83,10 +83,25 @@ func (d *SessionDetector) isOrphanedChild(s *session.SessionState, parentID stri
 	return time.Since(info.ModTime()) >= SubagentQuietWindow
 }
 
-// promoteOrphanedChild transitions an orphaned child (see isOrphanedChild)
-// to ready. now is injected so every child promoted in the same
-// finishOrphanedChildren pass gets an identical timestamp.
-func (d *SessionDetector) promoteOrphanedChild(s *session.SessionState, parentID string, now int64) {
+// childReadyMessages carries the wording that differs between
+// promoteOrphanedChild and applyOneSubagentCompletion — the lifecycle
+// event's Reason, the save-error log format (one %v verb for the error),
+// and the success log format (two %s verbs, in order: the child's
+// prior state and parentID) — so promoteChildToReady can share their
+// otherwise-identical mutate/save/broadcast tail.
+type childReadyMessages struct {
+	Reason      string
+	ErrorFormat string
+	InfoFormat  string
+}
+
+// promoteChildToReady transitions child session s to ready and persists +
+// broadcasts the change, sharing the tail duplicated between
+// promoteOrphanedChild and applyOneSubagentCompletion (both promote a
+// finished child; they differ only in the recorded reason and log
+// wording — see childReadyMessages). now is injected so every child
+// promoted in the same caller pass gets an identical timestamp.
+func (d *SessionDetector) promoteChildToReady(s *session.SessionState, parentID string, now int64, msgs childReadyMessages) {
 	prev := s.State
 	s.State = session.StateReady
 	s.UpdatedAt = now
@@ -96,16 +111,27 @@ func (d *SessionDetector) promoteOrphanedChild(s *session.SessionState, parentID
 		SessionID: s.SessionID,
 		PrevState: prev,
 		NewState:  session.StateReady,
-		Reason:    "subagent orphaned (parent turn done, no open tools)",
+		Reason:    msgs.Reason,
 	})
 	if err := d.repo.Save(s); err != nil {
 		d.log.LogError(logComponentSessionDetector, s.SessionID,
-			fmt.Sprintf("failed to finish orphaned child: %v", err))
+			fmt.Sprintf(msgs.ErrorFormat, err))
 		return
 	}
 	d.log.LogInfo(logComponentSessionDetector, s.SessionID,
-		fmt.Sprintf("finished orphaned subagent (%s → ready) — parent %s turn done", prev, parentID))
+		fmt.Sprintf(msgs.InfoFormat, prev, parentID))
 	d.broadcast(outbound.PushTypeUpdated, s)
+}
+
+// promoteOrphanedChild transitions an orphaned child (see isOrphanedChild)
+// to ready. now is injected so every child promoted in the same
+// finishOrphanedChildren pass gets an identical timestamp.
+func (d *SessionDetector) promoteOrphanedChild(s *session.SessionState, parentID string, now int64) {
+	d.promoteChildToReady(s, parentID, now, childReadyMessages{
+		Reason:      "subagent orphaned (parent turn done, no open tools)",
+		ErrorFormat: "failed to finish orphaned child: %v",
+		InfoFormat:  "finished orphaned subagent (%s → ready) — parent %s turn done",
+	})
 }
 
 // applySubagentCompletions resolves each completion to a child session and
@@ -159,25 +185,11 @@ func (d *SessionDetector) findCompletionTarget(states []*session.SessionState, p
 // applyOneSubagentCompletion transitions a child session located by
 // findCompletionTarget to ready.
 func (d *SessionDetector) applyOneSubagentCompletion(s *session.SessionState, parentID string, now int64) {
-	prev := s.State
-	s.State = session.StateReady
-	s.UpdatedAt = now
-	s.WaitingStartTime = nil
-	d.record(lifecycle.Event{
-		Kind:      lifecycle.KindStateTransition,
-		SessionID: s.SessionID,
-		PrevState: prev,
-		NewState:  session.StateReady,
-		Reason:    "subagent completed (parent task-notification)",
+	d.promoteChildToReady(s, parentID, now, childReadyMessages{
+		Reason:      "subagent completed (parent task-notification)",
+		ErrorFormat: "failed to apply subagent completion: %v",
+		InfoFormat:  "subagent completed via parent task-notification (%s → ready, parent %s)",
 	})
-	if err := d.repo.Save(s); err != nil {
-		d.log.LogError(logComponentSessionDetector, s.SessionID,
-			fmt.Sprintf("failed to apply subagent completion: %v", err))
-		return
-	}
-	d.log.LogInfo(logComponentSessionDetector, s.SessionID,
-		fmt.Sprintf("subagent completed via parent task-notification (%s → ready, parent %s)", prev, parentID))
-	d.broadcast(outbound.PushTypeUpdated, s)
 }
 
 // hasActiveChildren returns true if any child session of the given parent is
@@ -301,14 +313,30 @@ func (d *SessionDetector) reevaluateParent(parentID string) {
 // gate would instead compare against the persisted summary and fire on
 // staleness — correct in both worlds.
 func (d *SessionDetector) refreshParentSummaryIfChanged(parent *session.SessionState, parentID string) {
+	d.persistSummaryIfChanged(parent, parentID, nil, "failed to persist refreshed subagent summary: %v")
+}
+
+// persistSummaryIfChanged snapshots parent.Subagents, runs an optional extra
+// step (before, e.g. deleting finished children) followed by
+// refreshSubagentSummary, and persists + broadcasts only if the summary
+// actually changed — shared by refreshParentSummaryIfChanged and
+// cleanupParentChildrenOnReady, which differ only in whether they first
+// clean up children and in their save-error log wording (errFormat takes a
+// single %v verb for the error). Neither caller treats a save failure as
+// fatal to the broadcast — matching both functions' original behavior of
+// still pushing the in-memory update even if persistence failed.
+func (d *SessionDetector) persistSummaryIfChanged(parent *session.SessionState, parentID string, before func(), errFormat string) {
 	prevSummary := parent.Subagents
+	if before != nil {
+		before()
+	}
 	d.refreshSubagentSummary(parent)
 	if parent.Subagents.Equal(prevSummary) {
 		return
 	}
 	if err := d.repo.Save(parent); err != nil {
 		d.log.LogError(logComponentSessionDetector, parentID,
-			fmt.Sprintf("failed to persist refreshed subagent summary: %v", err))
+			fmt.Sprintf(errFormat, err))
 	}
 	d.broadcast(outbound.PushTypeUpdated, parent)
 }
@@ -353,15 +381,5 @@ func (d *SessionDetector) transitionParentAfterChildrenDone(parent *session.Sess
 // re-persists/re-broadcasts the cleared subagent summary, so the parent's
 // final message doesn't count children that were just deleted (#593).
 func (d *SessionDetector) cleanupParentChildrenOnReady(parent *session.SessionState, parentID string) {
-	prev := parent.Subagents
-	d.pidMgr.cleanupChildren(parentID)
-	d.refreshSubagentSummary(parent)
-	if parent.Subagents.Equal(prev) {
-		return
-	}
-	if err := d.repo.Save(parent); err != nil {
-		d.log.LogError(logComponentSessionDetector, parentID,
-			fmt.Sprintf("failed to persist cleared subagent summary: %v", err))
-	}
-	d.broadcast(outbound.PushTypeUpdated, parent)
+	d.persistSummaryIfChanged(parent, parentID, func() { d.pidMgr.cleanupChildren(parentID) }, "failed to persist cleared subagent summary: %v")
 }

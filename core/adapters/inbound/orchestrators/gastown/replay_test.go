@@ -139,13 +139,21 @@ func runScenario(t *testing.T, scenarioDir string) {
 
 	for tick := 1; tick <= cfg.PollTicks; tick++ {
 		writeTick(t, tickFile, tick)
-		runTick(t, p, tick, goldenDir, gtRoot)
+		runTick(t, p, tickParams{Tick: tick, GoldenDir: goldenDir, GTRoot: gtRoot})
 	}
+}
+
+// tickParams carries the per-tick data runTick needs, keeping its parameter
+// list small (go:S107) instead of threading each field through individually.
+type tickParams struct {
+	Tick      int
+	GoldenDir string
+	GTRoot    string
 }
 
 // runTick drives one poll tick and either writes its golden file
 // (-update-goldens) or compares the resulting orchestrator state against it.
-func runTick(t *testing.T, p *poller, tick int, goldenDir, gtRoot string) {
+func runTick(t *testing.T, p *poller, tp tickParams) {
 	t.Helper()
 
 	// Generous outer cap matching the per-fetch budget above: under
@@ -155,8 +163,8 @@ func runTick(t *testing.T, p *poller, tick int, goldenDir, gtRoot string) {
 	state := p.BuildOrchestratorState(ctx)
 	cancel()
 
-	actualJSON := mustMarshal(t, normalizeState(state, gtRoot))
-	goldenPath := filepath.Join(goldenDir, fmt.Sprintf("state-%03d.json", tick))
+	actualJSON := mustMarshal(t, normalizeState(state, tp.GTRoot))
+	goldenPath := filepath.Join(tp.GoldenDir, fmt.Sprintf("state-%03d.json", tp.Tick))
 
 	if *updateGoldens {
 		if err := os.WriteFile(goldenPath, actualJSON, 0o644); err != nil {
@@ -172,7 +180,7 @@ func runTick(t *testing.T, p *poller, tick int, goldenDir, gtRoot string) {
 	}
 	if string(expected) != string(actualJSON) {
 		t.Errorf("tick %d state mismatch\n--- expected (%s) ---\n%s\n--- actual ---\n%s",
-			tick, goldenPath, string(expected), string(actualJSON))
+			tp.Tick, goldenPath, string(expected), string(actualJSON))
 	}
 }
 

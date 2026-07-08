@@ -521,24 +521,20 @@ func TestHandleGetSessions_OmitsCostsWhenTrackerNil(t *testing.T) {
 }
 
 // writeCostRow appends a raw JSONL row to <costDir>/<project>.jsonl matching
-// the CostTracker's on-disk schema. Used to seed historical rows that
-// RecordSnapshot (which stamps time.Now) cannot produce.
+// the CostTracker's on-disk schema, with no provider set. Used to seed
+// historical rows that RecordSnapshot (which stamps time.Now) cannot
+// produce. Thin wrapper over writeCostRowWithProvider — CostTracker decodes
+// a row's Provider field via json.Unmarshal, which treats an omitted key and
+// an explicit empty string identically, so the two share one implementation.
 func writeCostRow(t *testing.T, costDir, project string, ts int64, sessionID string, cost float64) {
 	t.Helper()
-	line := fmt.Sprintf(`{"ts":%d,"project":%q,"session":%q,"cost":%g}`+"\n", ts, project, sessionID, cost)
-	path := filepath.Join(costDir, project+".jsonl")
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
-	if err != nil {
-		t.Fatalf("open %s: %v", path, err)
-	}
-	defer f.Close()
-	if _, err := f.WriteString(line); err != nil {
-		t.Fatalf("write: %v", err)
-	}
+	writeCostRowWithProvider(t, costDir, project, "", ts, sessionID, cost)
 }
 
-// writeCostRowWithProvider is writeCostRow with the provider field set, for
-// exercising the per-provider rollup surfaced as provider_costs.
+// writeCostRowWithProvider appends a raw JSONL row to <costDir>/<project>.jsonl
+// matching the CostTracker's on-disk schema, for exercising the per-provider
+// rollup surfaced as provider_costs. An empty provider is written as
+// `"provider":""`, decoding the same as an omitted field (see writeCostRow).
 func writeCostRowWithProvider(t *testing.T, costDir, project, provider string, ts int64, sessionID string, cost float64) {
 	t.Helper()
 	line := fmt.Sprintf(`{"ts":%d,"project":%q,"provider":%q,"session":%q,"cost":%g}`+"\n", ts, project, provider, sessionID, cost)
@@ -663,28 +659,31 @@ func TestGate_UIServed(t *testing.T) {
 
 // TestResolveUIDir covers each branch of the runtime UI lookup and the
 // worktree-isolation guarantee of the dev walk-up.
-// writeIndexUI creates dir/index.html and returns dir, standing in for an
-// installed dashboard across TestResolveUIDir's subtests.
-func writeIndexUI(t *testing.T, dir string) string {
+// writeMarkerFile creates dir and writes a single marker file (name/content)
+// inside it, shared by writeIndexUI (index.html) and markRepoRoot (.git) —
+// otherwise identical mkdir+write+Fatalf boilerplate.
+func writeMarkerFile(t *testing.T, dir, name, content string) {
 	t.Helper()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir %s: %v", dir, err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("ok"), 0o644); err != nil {
-		t.Fatalf("write %s: %v", dir, err)
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+		t.Fatalf("write %s: %v", name, err)
 	}
+}
+
+// writeIndexUI creates dir/index.html and returns dir, standing in for an
+// installed dashboard across TestResolveUIDir's subtests.
+func writeIndexUI(t *testing.T, dir string) string {
+	t.Helper()
+	writeMarkerFile(t, dir, "index.html", "ok")
 	return dir
 }
 
 // markRepoRoot writes a .git marker file in dir (mimics a worktree's .git file).
 func markRepoRoot(t *testing.T, dir string) {
 	t.Helper()
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatalf("mkdir %s: %v", dir, err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, ".git"), []byte("gitdir: x"), 0o644); err != nil {
-		t.Fatalf("write .git: %v", err)
-	}
+	writeMarkerFile(t, dir, ".git", "gitdir: x")
 }
 
 func testResolveUIDirEnvWinsWhenIndexPresent(t *testing.T) {

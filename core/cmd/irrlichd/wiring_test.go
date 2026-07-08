@@ -32,27 +32,36 @@ func countWatcherKinds(t *testing.T, name string, watchers []inbound.Watcher) (s
 	return scanners, fswatchers, stores
 }
 
+// watcherCounts bundles the fswatcher/store counts assertWatcherCountsForSource
+// checks against a Source variant, keeping the parameter list within
+// CodeScene's argument-count threshold (S107) instead of passing each count
+// positionally.
+type watcherCounts struct {
+	FS    int
+	Store int
+}
+
 // assertWatcherCountsForSource checks the fswatcher/store counts match the
 // adapter's Source variant: one fswatcher per root (FilesUnderRoot, plus any
 // ExtraDirs), exactly one store watcher (ProcessOwnedStore), or neither
 // (FilesUnderCWD, scanner-only).
-func assertWatcherCountsForSource(t *testing.T, name string, source agent.Source, fswatchers, stores int) {
+func assertWatcherCountsForSource(t *testing.T, name string, source agent.Source, counts watcherCounts) {
 	t.Helper()
 	switch s := source.(type) {
 	case agent.FilesUnderRoot:
 		// One fswatcher per root: the primary Dir plus any ExtraDirs
 		// (Antigravity watches both the CLI and IDE brain stores).
 		wantFs := 1 + len(s.ExtraDirs)
-		if fswatchers != wantFs || stores != 0 {
-			t.Errorf("%s (FilesUnderRoot): fswatchers=%d stores=%d, want %d/0", name, fswatchers, stores, wantFs)
+		if counts.FS != wantFs || counts.Store != 0 {
+			t.Errorf("%s (FilesUnderRoot): fswatchers=%d stores=%d, want %d/0", name, counts.FS, counts.Store, wantFs)
 		}
 	case agent.ProcessOwnedStore:
-		if stores != 1 || fswatchers != 0 {
-			t.Errorf("%s (ProcessOwnedStore): stores=%d fswatchers=%d, want 1/0", name, stores, fswatchers)
+		if counts.Store != 1 || counts.FS != 0 {
+			t.Errorf("%s (ProcessOwnedStore): stores=%d fswatchers=%d, want 1/0", name, counts.Store, counts.FS)
 		}
 	case agent.FilesUnderCWD:
-		if fswatchers != 0 || stores != 0 {
-			t.Errorf("%s (FilesUnderCWD): want scanner-only, got fswatchers=%d stores=%d", name, fswatchers, stores)
+		if counts.FS != 0 || counts.Store != 0 {
+			t.Errorf("%s (FilesUnderCWD): want scanner-only, got fswatchers=%d stores=%d", name, counts.FS, counts.Store)
 		}
 	default:
 		t.Fatalf("%s: unhandled Source variant %T — update this test", name, source)
@@ -68,7 +77,7 @@ func assertAgentWatcherSet(t *testing.T, a agent.Agent, noCheck func(string, int
 	if scanners != 1 {
 		t.Errorf("%s: got %d process scanners, want 1", a.Identity.Name, scanners)
 	}
-	assertWatcherCountsForSource(t, a.Identity.Name, a.Source, fswatchers, stores)
+	assertWatcherCountsForSource(t, a.Identity.Name, a.Source, watcherCounts{FS: fswatchers, Store: stores})
 }
 
 // buildAgentWatchers must dispatch every registered adapter's Source variant

@@ -723,10 +723,18 @@ func (d *SessionDetector) classifyAndTransition(state *session.SessionState, ev 
 	now := time.Now().Unix()
 	newState, reason := ClassifyState(state.State, state.Metrics)
 	newState, reason, parentHeldWorking := d.holdParentForActiveChildren(state, ev, newState, reason)
-	newState, reason = d.synthesizeCollapsedWaitingIfNeeded(state, ev, newState, reason, parentHeldWorking)
+	newState, reason = d.synthesizeCollapsedWaitingIfNeeded(state, ev, collapsedWaitingCandidate{
+		NewState:          newState,
+		Reason:            reason,
+		ParentHeldWorking: parentHeldWorking,
+	})
 
 	if newState != state.State {
-		d.applyStateTransition(state, ev, newState, reason, now)
+		d.applyStateTransition(state, ev, stateTransitionUpdate{
+			NewState: newState,
+			Reason:   reason,
+			Now:      now,
+		})
 	}
 
 	// Cache-creation regression detection (#374). Driven every substantive
@@ -804,6 +812,16 @@ func (d *SessionDetector) holdParentForActiveChildren(state *session.SessionStat
 	return session.StateWorking, "", true
 }
 
+// collapsedWaitingCandidate carries the classifier's candidate next
+// state/reason plus whether holdParentForActiveChildren already overrode it
+// — keeping synthesizeCollapsedWaitingIfNeeded's parameter list small
+// (go:S107) instead of threading each field through individually.
+type collapsedWaitingCandidate struct {
+	NewState          string
+	Reason            string
+	ParentHeldWorking bool
+}
+
 // synthesizeCollapsedWaitingIfNeeded emits a synthetic working→waiting
 // transition when fswatcher coalesces a user-blocking tool_use
 // (AskUserQuestion / ExitPlanMode) with its tool_result into a single pass —
@@ -815,8 +833,9 @@ func (d *SessionDetector) holdParentForActiveChildren(state *session.SessionStat
 // active children and must stay working, and reclassifying from waiting
 // would let rule 3 fire and transition it to ready despite children still
 // running — undoing the hold.
-func (d *SessionDetector) synthesizeCollapsedWaitingIfNeeded(state *session.SessionState, ev agent.Event, newState, reason string, parentHeldWorking bool) (string, string) {
-	if parentHeldWorking || !ShouldSynthesizeCollapsedWaiting(state.State, newState, state.Metrics) {
+func (d *SessionDetector) synthesizeCollapsedWaitingIfNeeded(state *session.SessionState, ev agent.Event, candidate collapsedWaitingCandidate) (string, string) {
+	newState, reason := candidate.NewState, candidate.Reason
+	if candidate.ParentHeldWorking || !ShouldSynthesizeCollapsedWaiting(state.State, newState, state.Metrics) {
 		return newState, reason
 	}
 	d.log.LogInfo(logComponentSessionDetector, ev.SessionID, SyntheticWaitingReason)
@@ -832,11 +851,22 @@ func (d *SessionDetector) synthesizeCollapsedWaitingIfNeeded(state *session.Sess
 	return ClassifyState(state.State, state.Metrics)
 }
 
+// stateTransitionUpdate carries a state transition already determined to
+// differ from state.State, plus the timestamp to stamp it with — keeping
+// applyStateTransition's parameter list small (go:S107) instead of
+// threading each field through individually.
+type stateTransitionUpdate struct {
+	NewState string
+	Reason   string
+	Now      int64
+}
+
 // applyStateTransition records and applies a state transition already
 // determined to differ from state.State, plus the per-target-state side
 // effects: waiting stamps WaitingStartTime, working clears it, and ready
 // captures the yield verdict for the revert-correlation sweep (#373).
-func (d *SessionDetector) applyStateTransition(state *session.SessionState, ev agent.Event, newState, reason string, now int64) {
+func (d *SessionDetector) applyStateTransition(state *session.SessionState, ev agent.Event, update stateTransitionUpdate) {
+	newState, reason, now := update.NewState, update.Reason, update.Now
 	if reason != "" {
 		d.log.LogInfo(logComponentSessionDetector, ev.SessionID, reason)
 	}
@@ -973,7 +1003,13 @@ func (d *SessionDetector) runBackgroundLivenessProbe(sid, transcriptPath string,
 	livePID := len(pids) > 0 && d.bgPIDProbe != nil && d.bgPIDProbe(pids)
 	live := liveOut || livePID
 
-	d.purgeDeadBackgroundProcesses(transcriptPath, outputs, pids, liveOut, livePID)
+	d.purgeDeadBackgroundProcesses(backgroundProbeResult{
+		TranscriptPath: transcriptPath,
+		Outputs:        outputs,
+		PIDs:           pids,
+		LiveOut:        liveOut,
+		LivePID:        livePID,
+	})
 
 	d.bgMu.Lock()
 	prev, had := d.bgLive[sid]
@@ -995,6 +1031,18 @@ func (d *SessionDetector) runBackgroundLivenessProbe(sid, transcriptPath string,
 	}
 }
 
+// backgroundProbeResult carries one runBackgroundLivenessProbe pass's probed
+// outputs/PIDs and their liveness verdicts — keeping
+// purgeDeadBackgroundProcesses's parameter list small (go:S107) instead of
+// threading each field through individually.
+type backgroundProbeResult struct {
+	TranscriptPath string
+	Outputs        []string
+	PIDs           []string
+	LiveOut        bool
+	LivePID        bool
+}
+
 // purgeDeadBackgroundProcesses drops probed-dead outputs/PIDs from the
 // tailer's open set and the metrics ledger. A dead process died without a
 // transcript-observable termination (e.g. it exited with its parent shell),
@@ -1003,14 +1051,15 @@ func (d *SessionDetector) runBackgroundLivenessProbe(sid, transcriptPath string,
 // probe's snapshot — a process spawned since must survive and be judged by
 // its own probe. Outputs and PIDs are purged independently so a still-live
 // one of either kind is kept. See issues #649, #661.
-func (d *SessionDetector) purgeDeadBackgroundProcesses(transcriptPath string, outputs, pids []string, liveOut, livePID bool) {
+func (d *SessionDetector) purgeDeadBackgroundProcesses(result backgroundProbeResult) {
 	if d.metrics == nil {
 		return
 	}
-	if !liveOut && len(outputs) > 0 {
+	transcriptPath, outputs, pids := result.TranscriptPath, result.Outputs, result.PIDs
+	if !result.LiveOut && len(outputs) > 0 {
 		d.metrics.PurgeDeadBackgroundProcs(transcriptPath, outputs)
 	}
-	if !livePID && len(pids) > 0 {
+	if !result.LivePID && len(pids) > 0 {
 		d.metrics.PurgeDeadBackgroundPIDs(transcriptPath, pids)
 	}
 }

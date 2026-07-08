@@ -66,7 +66,7 @@ func (s *Server) handleScenarioDetail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	d := ScenarioDetail{Agent: agent, Subtree: subtree, ID: id}
-	populateLatestRecordingFields(&d, store, scenarioDir, agent, s.RepoRoot)
+	populateLatestRecordingFields(&d, store, scenarioDir)
 	// Spec-grounded expected.jsonl validation (against the newest recording).
 	// Errors are swallowed so a malformed expected.jsonl doesn't 500 the response.
 	if rep, err := validate.ValidateExpected(scenarioDir); err == nil && rep != nil {
@@ -99,8 +99,11 @@ func (s *Server) handleRecordingHistoryRoute(w http.ResponseWriter, scenarioDir 
 // populateLatestRecordingFields fills d's recording-derived fields (meta,
 // degraded flag, transitions, tools, manifest) from the NEWEST recording
 // under scenarioDir — the same recording the recordings list puts first —
-// or marks d degraded when no recording has been captured yet.
-func populateLatestRecordingFields(d *ScenarioDetail, store RecordingStore, scenarioDir, agent, repoRoot string) {
+// or marks d degraded when no recording has been captured yet. Reads
+// agent from d.Agent and repoRoot from store.RepoRoot rather than taking
+// them as separate parameters — both are already available on the values
+// the caller passes in.
+func populateLatestRecordingFields(d *ScenarioDetail, store RecordingStore, scenarioDir string) {
 	recDir, hasRec := validate.NewestRecordingDir(scenarioDir)
 	if !hasRec {
 		d.Degraded = true
@@ -128,7 +131,7 @@ func populateLatestRecordingFields(d *ScenarioDetail, store RecordingStore, scen
 		}
 	}
 	d.Tools = extractToolCalls(filepath.Join(recDir, "transcript.jsonl"))
-	d.LatestManifest = buildLatestManifest(recDir, agent, d, repoRoot)
+	d.LatestManifest = buildLatestManifest(recDir, d, store)
 }
 
 // loadAssessment returns the cell's Stage-1 assessment. Post-#510 a scenarios/
@@ -203,8 +206,10 @@ func shardCellForFolder(repoRoot, agent, folder string) (shard.ShardAgent, bool)
 // (recordings/<name>/); it prefers a real manifest.json there, otherwise
 // synthesizes from already-loaded data. Returns nil when recDir has no
 // events.jsonl to describe. The recipe-hash is keyed by the CELL folder
-// (filepath.Base of recDir's grandparent), not the recording name.
-func buildLatestManifest(recDir, agent string, d *ScenarioDetail, repoRoot string) *RecordingArchive {
+// (filepath.Base of recDir's grandparent), not the recording name. agent
+// comes from d.Agent and repoRoot from store.RepoRoot rather than separate
+// parameters — d and store already carry them.
+func buildLatestManifest(recDir string, d *ScenarioDetail, store RecordingStore) *RecordingArchive {
 	if _, err := os.Stat(filepath.Join(recDir, eventsFileName)); err != nil {
 		return nil
 	}
@@ -233,7 +238,7 @@ func buildLatestManifest(recDir, agent string, d *ScenarioDetail, repoRoot strin
 	}
 	// Cell folder = recDir/../.. (recordings/<name> → cell).
 	cellFolder := filepath.Base(filepath.Dir(filepath.Dir(recDir)))
-	m.RecipeHash = computeRecipeHash(repoRoot, agent, cellFolder)
+	m.RecipeHash = computeRecipeHash(store.RepoRoot, d.Agent, cellFolder)
 	return m
 }
 

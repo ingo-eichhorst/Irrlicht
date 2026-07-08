@@ -173,18 +173,40 @@ func validateCells(repoRoot string, names map[string]bool, add func(path, msg st
 			if !e.IsDir() {
 				continue
 			}
-			validateCell(scenDir, agent, e.Name(), names, add)
+			validateCell(cellLoc{ScenDir: scenDir, Agent: agent, Folder: e.Name()}, names, add)
 		}
 	}
+}
+
+// cellLoc bundles the path-shaped fields identifying one agent's scenario
+// cell folder — validateCell/validateCellFK/validateCellRecording used to
+// thread scenDir/agent/folder/cellDir/rel individually (go:S107 excess args
+// plus a CodeScene "string heavy function arguments" flag); rel()/dir() give
+// the two derived paths every caller actually wants, computed once per call
+// from the three fields that identify the folder.
+type cellLoc struct {
+	ScenDir string
+	Agent   string
+	Folder  string
+}
+
+// rel is the finding-message path: replaydata/agents/<agent>/scenarios/<folder>.
+func (l cellLoc) rel() string {
+	return filepath.Join("replaydata/agents", l.Agent, "scenarios", l.Folder)
+}
+
+// dir is the on-disk cell folder: <scenDir>/<folder>.
+func (l cellLoc) dir() string {
+	return filepath.Join(l.ScenDir, l.Folder)
 }
 
 // validateCell checks one agent's scenario cell folder: metadata.json parses,
 // links to a real scenario (scenario_id FK), carries a well-formed recipe, and
 // (when recorded) is a complete recording. Orphan folders (recordings but no
 // metadata.json) are flagged.
-func validateCell(scenDir, agent, folder string, names map[string]bool, add func(path, msg string)) {
-	rel := filepath.Join("replaydata/agents", agent, "scenarios", folder)
-	cellDir := filepath.Join(scenDir, folder)
+func validateCell(loc cellLoc, names map[string]bool, add func(path, msg string)) {
+	rel := loc.rel()
+	cellDir := loc.dir()
 	metaPath := filepath.Join(cellDir, "metadata.json")
 
 	mb, err := os.ReadFile(metaPath)
@@ -199,18 +221,19 @@ func validateCell(scenDir, agent, folder string, names map[string]bool, add func
 		add(rel+metadataJSONSuffix, fmt.Sprintf("not valid JSON: %v", err))
 		return
 	}
-	validateCellFK(cell.ScenarioID, rel, names, add)
+	validateCellFK(cell.ScenarioID, loc, names, add)
 	// A recipe the driver will run must carry the fields the driver reads
 	// positionally — a missing timeout_seconds once crashed a driver.
 	if msg := recipeTimeoutFinding(cell.Details.Recipe); msg != "" {
 		add(rel+metadataJSONSuffix, msg)
 	}
-	validateCellRecording(cellDir, rel, add)
+	validateCellRecording(loc, add)
 }
 
 // validateCellFK checks that scenarioID is set and resolves to a catalog
 // scenario — the cell→catalog foreign key.
-func validateCellFK(scenarioID, rel string, names map[string]bool, add func(path, msg string)) {
+func validateCellFK(scenarioID string, loc cellLoc, names map[string]bool, add func(path, msg string)) {
+	rel := loc.rel()
 	if scenarioID == "" {
 		add(rel+metadataJSONSuffix, "missing scenario_id (the cell→catalog foreign key)")
 	} else if !names[scenarioID] {
@@ -224,7 +247,9 @@ func validateCellFK(scenarioID, rel string, names map[string]bool, add func(path
 // The newest recording is authoritative (it gates validation and the viewer
 // autoselects it); it must be complete. Older recordings are kept as drift
 // signals, so an incomplete newest recording is the hard error.
-func validateCellRecording(cellDir, rel string, add func(path, msg string)) {
+func validateCellRecording(loc cellLoc, add func(path, msg string)) {
+	cellDir := loc.dir()
+	rel := loc.rel()
 	recDir, ok := validate.NewestRecordingDir(cellDir)
 	if !ok {
 		return

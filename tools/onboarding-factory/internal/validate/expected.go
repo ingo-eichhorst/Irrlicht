@@ -514,15 +514,15 @@ func matchPhase(p ExpectedPhase, events []recordedEvent, anchorTs map[string]tim
 		return r
 	}
 
-	requireSID, seenSIDs, errMsg := resolveSessionConstraint(p, matchedSid)
+	sc, errMsg := resolveSessionConstraint(p, matchedSid)
 	if errMsg != "" {
 		r.Reason = errMsg
 		return r
 	}
 
-	matched := findMatchingEvent(p, events, anchor, requireSID, seenSIDs)
+	matched := findMatchingEvent(p, events, anchor, sc)
 	if matched == nil {
-		r.Reason = noMatchReason(p, anchorName, requireSID)
+		r.Reason = noMatchReason(p, anchorName, sc.RequireSID)
 		return r
 	}
 	r.MatchedTs = matched.Ts
@@ -559,26 +559,38 @@ func resolvePhaseAnchor(p ExpectedPhase, anchorTs map[string]time.Time) (name st
 	return name, ts, ok
 }
 
+// sessionConstraint is the session-id filter for matching an event to a
+// phase, computed once per phase by resolveSessionConstraint and passed as a
+// unit into findMatchingEvent (go:S107 excess args) instead of its two
+// fields individually. RequireSID pins the match to a specific session_id
+// (from SameSessionAs); SeenSIDs holds every session_id matched so far (from
+// NewSession) — at most one of the two is populated per phase, since
+// SameSessionAs and NewSession are mutually exclusive.
+type sessionConstraint struct {
+	RequireSID string
+	SeenSIDs   map[string]struct{}
+}
+
 // resolveSessionConstraint computes the session-id filter for matching, up
 // front, so candidate filtering is cheap inside the search loop.
 // SameSessionAs pins the matched session_id to a specific earlier phase's
 // match; NewSession requires a session_id no earlier phase has matched yet.
 // errMsg is non-empty only when SameSessionAs references an unknown phase.
-func resolveSessionConstraint(p ExpectedPhase, matchedSid map[string]string) (requireSID string, seenSIDs map[string]struct{}, errMsg string) {
+func resolveSessionConstraint(p ExpectedPhase, matchedSid map[string]string) (sc sessionConstraint, errMsg string) {
 	if p.SameSessionAs != "" {
 		sid, ok := matchedSid[p.SameSessionAs]
 		if !ok {
-			return "", nil, fmt.Sprintf("same_session_as references unknown phase %q", p.SameSessionAs)
+			return sessionConstraint{}, fmt.Sprintf("same_session_as references unknown phase %q", p.SameSessionAs)
 		}
-		requireSID = sid
+		sc.RequireSID = sid
 	}
 	if p.NewSession {
-		seenSIDs = make(map[string]struct{}, len(matchedSid))
+		sc.SeenSIDs = make(map[string]struct{}, len(matchedSid))
 		for _, sid := range matchedSid {
-			seenSIDs[sid] = struct{}{}
+			sc.SeenSIDs[sid] = struct{}{}
 		}
 	}
-	return requireSID, seenSIDs, ""
+	return sc, ""
 }
 
 // eventMatchesPhaseKind reports whether ev satisfies the phase's match
@@ -596,7 +608,7 @@ func eventMatchesPhaseKind(p ExpectedPhase, ev *recordedEvent) bool {
 // anchor that satisfies the phase's kind predicate and session-id
 // constraints. Events strictly before anchor are skipped — earlier matches
 // belong to an earlier phase. Returns nil when no candidate qualifies.
-func findMatchingEvent(p ExpectedPhase, events []recordedEvent, anchor time.Time, requireSID string, seenSIDs map[string]struct{}) *recordedEvent {
+func findMatchingEvent(p ExpectedPhase, events []recordedEvent, anchor time.Time, sc sessionConstraint) *recordedEvent {
 	for i := range events {
 		ev := &events[i]
 		if ev.Ts.Before(anchor) {
@@ -605,11 +617,11 @@ func findMatchingEvent(p ExpectedPhase, events []recordedEvent, anchor time.Time
 		if !eventMatchesPhaseKind(p, ev) {
 			continue
 		}
-		if requireSID != "" && ev.SessionID != requireSID {
+		if sc.RequireSID != "" && ev.SessionID != sc.RequireSID {
 			continue
 		}
 		if p.NewSession {
-			if _, seen := seenSIDs[ev.SessionID]; seen {
+			if _, seen := sc.SeenSIDs[ev.SessionID]; seen {
 				continue
 			}
 		}

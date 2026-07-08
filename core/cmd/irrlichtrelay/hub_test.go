@@ -76,16 +76,25 @@ func connectDaemon(t *testing.T, wsURL, daemonID, label string) (*websocket.Conn
 	return d, ack
 }
 
+// daemonSession bundles the auth token and the single session that
+// connectDaemonWithSession seeds via daemon_snapshot after the hello
+// handshake.
+type daemonSession struct {
+	token string
+	sid   string
+	proj  string
+}
+
 // connectDaemonWithSession dials wsURL, sends a daemon hello (optionally
 // bearer token-authenticated), and pushes a one-session daemon_snapshot — the
 // connect-and-seed pattern used to test workspace isolation between two
 // same-daemon-id tenants.
-func connectDaemonWithSession(t *testing.T, wsURL, token, sid, proj string) *websocket.Conn {
+func connectDaemonWithSession(t *testing.T, wsURL string, ds daemonSession) *websocket.Conn {
 	t.Helper()
 	d := dial(t, wsURL)
 	if err := d.WriteJSON(relay.Hello{
 		Type: relay.MsgHello, ProtocolVersion: relay.ProtocolVersion,
-		Role: relay.RoleDaemon, DaemonID: "d1", DaemonLabel: "host", Token: token,
+		Role: relay.RoleDaemon, DaemonID: "d1", DaemonLabel: "host", Token: ds.token,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +104,7 @@ func connectDaemonWithSession(t *testing.T, wsURL, token, sid, proj string) *web
 	}
 	if err := d.WriteJSON(relay.DaemonSnapshot{
 		Type:     relay.MsgDaemonSnapshot,
-		Sessions: []*session.SessionState{{SessionID: sid, State: "working", ProjectName: proj}},
+		Sessions: []*session.SessionState{{SessionID: ds.sid, State: "working", ProjectName: ds.proj}},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -486,8 +495,8 @@ func TestWorkspaceIsolation(t *testing.T) {
 	// Both daemons claim the SAME daemon_id "d1" but authenticate into different
 	// workspaces, so a colliding id must not let one tenant read or overwrite
 	// the other's slot.
-	connectDaemonWithSession(t, wsURL, daemonA, "sa", "proj-a")
-	dB := connectDaemonWithSession(t, wsURL, daemonB, "sb", "proj-b")
+	connectDaemonWithSession(t, wsURL, daemonSession{token: daemonA, sid: "sa", proj: "proj-a"})
+	dB := connectDaemonWithSession(t, wsURL, daemonSession{token: daemonB, sid: "sb", proj: "proj-b"})
 	// Let both snapshots ingest before the clients connect (the replay path).
 	time.Sleep(50 * time.Millisecond)
 
