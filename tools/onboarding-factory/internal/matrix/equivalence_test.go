@@ -37,8 +37,16 @@ func TestShardCellEquivalence(t *testing.T) {
 		t.Skipf("matrix could not load committed repo data: %v", err)
 	}
 
-	// Expected cell set per agent = every scenario that has a metadata.json for
-	// that agent (i.e. LoadAllCells returns a cell).
+	wantByAgent := wantedCellsByAgent(repoRoot, shards)
+	assertApplicableCellsMatchShard(t, m, wantByAgent)
+	assertBenignDivergencesAbsent(t, m)
+	assertCounterCasesPresent(t, m)
+}
+
+// wantedCellsByAgent computes the expected cell set per agent: every
+// scenario that has a metadata.json for that agent (i.e. LoadAllCells
+// returns a cell).
+func wantedCellsByAgent(repoRoot string, shards []shard.Shard) map[string]map[string]bool {
 	wantByAgent := map[string]map[string]bool{}
 	for _, sh := range shards {
 		for ag := range shard.LoadAllCells(repoRoot, sh.Name) {
@@ -48,7 +56,14 @@ func TestShardCellEquivalence(t *testing.T) {
 			wantByAgent[ag][sh.Name] = true
 		}
 	}
+	return wantByAgent
+}
 
+// assertApplicableCellsMatchShard is the P2 wiring oracle proper: for every
+// onboarded agent, ApplicableCells' coverage_ids must exactly equal the
+// shard agent-keys wantByAgent computed.
+func assertApplicableCellsMatchShard(t *testing.T, m *Matrix, wantByAgent map[string]map[string]bool) {
+	t.Helper()
 	for _, agent := range m.Agents() {
 		got := map[string]bool{}
 		for _, cs := range m.ApplicableCells(agent) {
@@ -60,10 +75,14 @@ func TestShardCellEquivalence(t *testing.T) {
 				agent, sortedKeys(got), sortedKeys(want))
 		}
 	}
+}
 
-	// The benign divergences from the legacy model: NOT in the shard cell set
-	// (the migrator dropped these empty cells; the consistency gate stays green
-	// because there are zero disagreements once they're gone).
+// assertBenignDivergencesAbsent checks the benign divergences from the
+// legacy model: NOT in the shard cell set (the migrator dropped these empty
+// cells; the consistency gate stays green because there are zero
+// disagreements once they're gone).
+func assertBenignDivergencesAbsent(t *testing.T, m *Matrix) {
+	t.Helper()
 	benignAbsent := []struct{ agent, cid string }{
 		{"opencode", "provider-failover-midturn"},
 	}
@@ -72,10 +91,13 @@ func TestShardCellEquivalence(t *testing.T) {
 			t.Errorf("benign divergence %s/%s should be ABSENT from the shard cell set, but Cell() found it", b.agent, b.cid)
 		}
 	}
+}
 
-	// Counter-case: claudecode/architect-editor-pair and
-	// codex/provider-failover-midturn are NOT drops — each shard carries a
-	// frozen assessment block, so they remain real cells.
+// assertCounterCasesPresent checks claudecode/architect-editor-pair and
+// codex/provider-failover-midturn are NOT drops — each shard carries a
+// frozen assessment block, so they remain real cells.
+func assertCounterCasesPresent(t *testing.T, m *Matrix) {
+	t.Helper()
 	if _, ok := m.Cell("claudecode", "architect-editor-pair"); !ok {
 		t.Errorf("claudecode/architect-editor-pair should be PRESENT (its shard has an assessment block) but Cell() did not find it")
 	}

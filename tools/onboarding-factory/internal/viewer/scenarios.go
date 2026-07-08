@@ -61,50 +61,12 @@ func (s *Server) handleScenarioDetail(w http.ResponseWriter, r *http.Request) {
 	// Recording history endpoints:
 	//   /api/scenarios/{a}/{s}/{id}/recordings        → list archived recordings
 	//   /api/scenarios/{a}/{s}/{id}/recordings/{name}  → one archive's detail
-	if len(parts) >= 4 && parts[3] == "recordings" {
-		if len(parts) == 4 {
-			s.handleRecordingsList(w, scenarioDir)
-			return
-		}
-		if len(parts) == 5 {
-			s.handleArchivedRecording(w, scenarioDir, parts[4])
-			return
-		}
+	if s.handleRecordingHistoryRoute(w, scenarioDir, parts) {
+		return
 	}
 
 	d := ScenarioDetail{Agent: agent, Subtree: subtree, ID: id}
-	// Every recording lives under recordings/<name>/; the detail view's
-	// recording-derived fields come from the NEWEST one (the same recording
-	// the recordings list puts first). expected.jsonl + assessment stay at the
-	// cell root. recDir is "" when no recording is captured yet.
-	recDir, hasRec := validate.NewestRecordingDir(scenarioDir)
-	if hasRec {
-		// Rebuild recDir from its own filepath.Base() rather than trusting the
-		// string NewestRecordingDir returned directly — a no-op round trip
-		// (recDir is already exactly scenarioDir/recordings/<name>) that gives
-		// every os.Open/os.ReadFile below a value CodeQL's path-injection query
-		// recognizes as derived from a sanitizer, several hops closer to each
-		// sink than the agent/id validation up in the URL parsing above.
-		recDir = filepath.Join(scenarioDir, "recordings", filepath.Base(recDir))
-		d.LatestRecording = filepath.Base(recDir)
-		if b, ok := store.readFile(filepath.Join(recDir, "recording-meta.json")); ok {
-			d.Meta = b
-		}
-		// No events.jsonl sidecar → the viewer synthesizes the timeline from the
-		// transcript via the shared classifier engine. Flag it so the UI badges a
-		// reconstructed arc rather than passing it off as recorded.
-		d.Degraded = !store.exists(filepath.Join(recDir, eventsFileName))
-		d.Transitions = readTransitionsRaw(filepath.Join(recDir, eventsFileName))
-		if d.Meta == nil {
-			if synth := synthesizeMetaFromEvents(filepath.Join(recDir, eventsFileName)); synth != nil {
-				d.Meta = synth
-			}
-		}
-		d.Tools = extractToolCalls(filepath.Join(recDir, "transcript.jsonl"))
-		d.LatestManifest = buildLatestManifest(recDir, agent, &d, s.RepoRoot)
-	} else {
-		d.Degraded = true
-	}
+	populateLatestRecordingFields(&d, store, scenarioDir)
 	// Spec-grounded expected.jsonl validation (against the newest recording).
 	// Errors are swallowed so a malformed expected.jsonl doesn't 500 the response.
 	if rep, err := validate.ValidateExpected(scenarioDir); err == nil && rep != nil {
@@ -112,6 +74,64 @@ func (s *Server) handleScenarioDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	d.Assessment = loadAssessment(scenarioDir)
 	writeJSON(w, d)
+}
+
+// handleRecordingHistoryRoute serves the /recordings and /recordings/{name}
+// sub-routes of /api/scenarios/{agent}/{subtree}/{id} — writing the response
+// itself when the URL matches one of them. Reports whether it handled the
+// request, so the caller returns instead of falling through to the plain
+// scenario-detail response.
+func (s *Server) handleRecordingHistoryRoute(w http.ResponseWriter, scenarioDir string, parts []string) bool {
+	if len(parts) < 4 || parts[3] != "recordings" {
+		return false
+	}
+	if len(parts) == 4 {
+		s.handleRecordingsList(w, scenarioDir)
+		return true
+	}
+	if len(parts) == 5 {
+		s.handleArchivedRecording(w, scenarioDir, parts[4])
+		return true
+	}
+	return false
+}
+
+// populateLatestRecordingFields fills d's recording-derived fields (meta,
+// degraded flag, transitions, tools, manifest) from the NEWEST recording
+// under scenarioDir — the same recording the recordings list puts first —
+// or marks d degraded when no recording has been captured yet. Reads
+// agent from d.Agent and repoRoot from store.RepoRoot rather than taking
+// them as separate parameters — both are already available on the values
+// the caller passes in.
+func populateLatestRecordingFields(d *ScenarioDetail, store RecordingStore, scenarioDir string) {
+	recDir, hasRec := validate.NewestRecordingDir(scenarioDir)
+	if !hasRec {
+		d.Degraded = true
+		return
+	}
+	// Rebuild recDir from its own filepath.Base() rather than trusting the
+	// string NewestRecordingDir returned directly — a no-op round trip
+	// (recDir is already exactly scenarioDir/recordings/<name>) that gives
+	// every os.Open/os.ReadFile below a value CodeQL's path-injection query
+	// recognizes as derived from a sanitizer, several hops closer to each
+	// sink than the agent/id validation up in the URL parsing above.
+	recDir = filepath.Join(scenarioDir, "recordings", filepath.Base(recDir))
+	d.LatestRecording = filepath.Base(recDir)
+	if b, ok := store.readFile(filepath.Join(recDir, "recording-meta.json")); ok {
+		d.Meta = b
+	}
+	// No events.jsonl sidecar → the viewer synthesizes the timeline from the
+	// transcript via the shared classifier engine. Flag it so the UI badges a
+	// reconstructed arc rather than passing it off as recorded.
+	d.Degraded = !store.exists(filepath.Join(recDir, eventsFileName))
+	d.Transitions = readTransitionsRaw(filepath.Join(recDir, eventsFileName))
+	if d.Meta == nil {
+		if synth := synthesizeMetaFromEvents(filepath.Join(recDir, eventsFileName)); synth != nil {
+			d.Meta = synth
+		}
+	}
+	d.Tools = extractToolCalls(filepath.Join(recDir, "transcript.jsonl"))
+	d.LatestManifest = buildLatestManifest(recDir, d, store)
 }
 
 // loadAssessment returns the cell's Stage-1 assessment. Post-#510 a scenarios/
@@ -186,8 +206,10 @@ func shardCellForFolder(repoRoot, agent, folder string) (shard.ShardAgent, bool)
 // (recordings/<name>/); it prefers a real manifest.json there, otherwise
 // synthesizes from already-loaded data. Returns nil when recDir has no
 // events.jsonl to describe. The recipe-hash is keyed by the CELL folder
-// (filepath.Base of recDir's grandparent), not the recording name.
-func buildLatestManifest(recDir, agent string, d *ScenarioDetail, repoRoot string) *RecordingArchive {
+// (filepath.Base of recDir's grandparent), not the recording name. agent
+// comes from d.Agent and repoRoot from store.RepoRoot rather than separate
+// parameters — d and store already carry them.
+func buildLatestManifest(recDir string, d *ScenarioDetail, store RecordingStore) *RecordingArchive {
 	if _, err := os.Stat(filepath.Join(recDir, eventsFileName)); err != nil {
 		return nil
 	}
@@ -216,7 +238,7 @@ func buildLatestManifest(recDir, agent string, d *ScenarioDetail, repoRoot strin
 	}
 	// Cell folder = recDir/../.. (recordings/<name> → cell).
 	cellFolder := filepath.Base(filepath.Dir(filepath.Dir(recDir)))
-	m.RecipeHash = computeRecipeHash(repoRoot, agent, cellFolder)
+	m.RecipeHash = computeRecipeHash(store.RepoRoot, d.Agent, cellFolder)
 	return m
 }
 
@@ -264,32 +286,41 @@ func extractToolCalls(transcriptPath string) []ToolCall {
 	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
 	var out []ToolCall
 	for scanner.Scan() {
-		var raw map[string]any
-		if err := json.Unmarshal(scanner.Bytes(), &raw); err != nil {
+		out = append(out, toolCallsInLine(scanner.Bytes())...)
+	}
+	return out
+}
+
+// toolCallsInLine extracts the tool_use blocks from one transcript.jsonl
+// line's message.content[], in order. Empty when the line isn't a message
+// event, has no content, or is malformed JSON.
+func toolCallsInLine(line []byte) []ToolCall {
+	var raw map[string]any
+	if err := json.Unmarshal(line, &raw); err != nil {
+		return nil
+	}
+	msg, _ := raw["message"].(map[string]any)
+	if msg == nil {
+		return nil
+	}
+	content, _ := msg["content"].([]any)
+	if len(content) == 0 {
+		return nil
+	}
+	ts, _ := raw["timestamp"].(string)
+	sid, _ := raw["sessionId"].(string)
+	var out []ToolCall
+	for _, blkRaw := range content {
+		blk, ok := blkRaw.(map[string]any)
+		if !ok {
 			continue
 		}
-		msg, _ := raw["message"].(map[string]any)
-		if msg == nil {
+		if t, _ := blk["type"].(string); t != "tool_use" {
 			continue
 		}
-		content, _ := msg["content"].([]any)
-		if len(content) == 0 {
-			continue
-		}
-		ts, _ := raw["timestamp"].(string)
-		sid, _ := raw["sessionId"].(string)
-		for _, blkRaw := range content {
-			blk, ok := blkRaw.(map[string]any)
-			if !ok {
-				continue
-			}
-			if t, _ := blk["type"].(string); t != "tool_use" {
-				continue
-			}
-			name, _ := blk["name"].(string)
-			id, _ := blk["id"].(string)
-			out = append(out, ToolCall{Ts: ts, SessionID: sid, Name: name, ID: id})
-		}
+		name, _ := blk["name"].(string)
+		id, _ := blk["id"].(string)
+		out = append(out, ToolCall{Ts: ts, SessionID: sid, Name: name, ID: id})
 	}
 	return out
 }
@@ -304,21 +335,62 @@ func synthesizeMetaFromEvents(path string) json.RawMessage {
 		return nil
 	}
 	defer f.Close()
+	st := scanEventStats(f)
+	if st.total == 0 {
+		return nil
+	}
+	var durationMs int64
+	if t0, err0 := time.Parse(time.RFC3339Nano, st.firstTs); err0 == nil {
+		if t1, err1 := time.Parse(time.RFC3339Nano, st.lastTs); err1 == nil {
+			durationMs = t1.Sub(t0).Milliseconds()
+		}
+	}
+	doc := map[string]any{
+		"synthesized":            true,
+		"adapter":                st.adapter,
+		"started_at":             st.firstTs,
+		"ended_at":               st.lastTs,
+		"duration_ms":            durationMs,
+		"total_events":           st.total,
+		"kinds":                  st.kinds,
+		"presession_session_ids": sortedKeys(st.presessionSet),
+		"real_session_ids":       sortedKeys(st.realSet),
+		"session_count":          map[string]int{"presession": len(st.presessionSet), "real": len(st.realSet)},
+	}
+	b, err := json.Marshal(doc)
+	if err != nil {
+		return nil
+	}
+	return b
+}
+
+// eventScanStats aggregates the per-event fields synthesizeMetaFromEvents
+// needs from one events.jsonl scan.
+type eventScanStats struct {
+	adapter         string
+	firstTs, lastTs string
+	total           int
+	kinds           map[string]int
+	presessionSet   map[string]struct{}
+	realSet         map[string]struct{}
+}
+
+// scanEventStats scans events.jsonl-shaped lines from r, aggregating the
+// first/last timestamp, per-kind counts, adapter, and the presession vs.
+// real session_id sets. Malformed or blank lines are skipped.
+func scanEventStats(r io.Reader) eventScanStats {
 	type rawEvent struct {
 		Ts        string `json:"ts"`
 		Kind      string `json:"kind"`
 		SessionID string `json:"session_id"`
 		Adapter   string `json:"adapter,omitempty"`
 	}
-	var (
-		adapter         string
-		firstTs, lastTs string
-		total           int
-		kinds           = map[string]int{}
-		presessionSet   = map[string]struct{}{}
-		realSet         = map[string]struct{}{}
-	)
-	scanner := bufio.NewScanner(f)
+	st := eventScanStats{
+		kinds:         map[string]int{},
+		presessionSet: map[string]struct{}{},
+		realSet:       map[string]struct{}{},
+	}
+	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
 	for scanner.Scan() {
 		b := scanner.Bytes()
@@ -329,59 +401,43 @@ func synthesizeMetaFromEvents(path string) json.RawMessage {
 		if err := json.Unmarshal(b, &ev); err != nil {
 			continue
 		}
-		total++
-		if firstTs == "" {
-			firstTs = ev.Ts
+		st.total++
+		if st.firstTs == "" {
+			st.firstTs = ev.Ts
 		}
-		lastTs = ev.Ts
+		st.lastTs = ev.Ts
 		if ev.Kind != "" {
-			kinds[ev.Kind]++
+			st.kinds[ev.Kind]++
 		}
-		if adapter == "" && ev.Adapter != "" {
-			adapter = ev.Adapter
+		if st.adapter == "" && ev.Adapter != "" {
+			st.adapter = ev.Adapter
 		}
-		if ev.SessionID != "" {
-			if strings.HasPrefix(ev.SessionID, "proc-") {
-				presessionSet[ev.SessionID] = struct{}{}
-			} else {
-				realSet[ev.SessionID] = struct{}{}
-			}
-		}
+		recordSessionID(st.presessionSet, st.realSet, ev.SessionID)
 	}
-	if total == 0 {
-		return nil
+	return st
+}
+
+// recordSessionID buckets a non-empty session_id into the presession or
+// real set, based on the "proc-" prefix synthetic pre-session IDs carry.
+func recordSessionID(presessionSet, realSet map[string]struct{}, sessionID string) {
+	if sessionID == "" {
+		return
 	}
-	var durationMs int64
-	if t0, err0 := time.Parse(time.RFC3339Nano, firstTs); err0 == nil {
-		if t1, err1 := time.Parse(time.RFC3339Nano, lastTs); err1 == nil {
-			durationMs = t1.Sub(t0).Milliseconds()
-		}
+	if strings.HasPrefix(sessionID, "proc-") {
+		presessionSet[sessionID] = struct{}{}
+		return
 	}
-	keys := func(m map[string]struct{}) []string {
-		out := make([]string, 0, len(m))
-		for k := range m {
-			out = append(out, k)
-		}
-		sort.Strings(out)
-		return out
+	realSet[sessionID] = struct{}{}
+}
+
+// sortedKeys returns m's keys in sorted order.
+func sortedKeys(m map[string]struct{}) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
 	}
-	doc := map[string]any{
-		"synthesized":            true,
-		"adapter":                adapter,
-		"started_at":             firstTs,
-		"ended_at":               lastTs,
-		"duration_ms":            durationMs,
-		"total_events":           total,
-		"kinds":                  kinds,
-		"presession_session_ids": keys(presessionSet),
-		"real_session_ids":       keys(realSet),
-		"session_count":          map[string]int{"presession": len(presessionSet), "real": len(realSet)},
-	}
-	b, err := json.Marshal(doc)
-	if err != nil {
-		return nil
-	}
-	return b
+	sort.Strings(out)
+	return out
 }
 
 // readTransitionsRaw extracts the state_transition rows from events.jsonl,
@@ -403,50 +459,76 @@ func readTransitionsRaw(path string) []json.RawMessage {
 	lastState := make(map[string]string)
 	for {
 		var raw map[string]json.RawMessage
+		// Both a clean EOF and any other decode error end the scan the same
+		// way: return whatever rows have been collected so far.
 		if err := dec.Decode(&raw); err != nil {
-			if err == io.EOF {
-				return out
-			}
 			return out
 		}
-		var kind string
-		if v, ok := raw["kind"]; ok {
-			_ = json.Unmarshal(v, &kind)
-		}
-		var sid string
-		if v, ok := raw["session_id"]; ok {
-			_ = json.Unmarshal(v, &sid)
-		}
-		switch kind {
-		case "state_transition":
-			var newState string
-			if v, ok := raw["new_state"]; ok {
-				_ = json.Unmarshal(v, &newState)
-			}
-			if newState != "" {
-				lastState[sid] = newState
-			}
-			b, _ := json.Marshal(raw)
-			out = append(out, b)
-		case "transcript_removed", "process_exited", "presession_removed":
-			if ended[sid] {
-				continue
-			}
-			ended[sid] = true
-			// Reshape into a state_transition-shaped row so the existing
-			// renderer just works. "∅" renders as a neutral grey chip.
-			raw["kind"] = json.RawMessage(`"state_transition"`)
-			raw["new_state"] = json.RawMessage(`"∅"`)
-			if kindJSON, err := json.Marshal(kind); err == nil {
-				raw["reason"] = json.RawMessage(kindJSON)
-			}
-			if prev := lastState[sid]; prev != "" {
-				if prevJSON, err := json.Marshal(prev); err == nil {
-					raw["prev_state"] = json.RawMessage(prevJSON)
-				}
-			}
-			b, _ := json.Marshal(raw)
+		if b, ok := transitionRow(raw, ended, lastState); ok {
 			out = append(out, b)
 		}
 	}
+}
+
+// transitionRow turns one decoded events.jsonl record into a transitions-panel
+// row, if it's relevant: a state_transition row passes through (after
+// recording its new_state); one of the three session-end lifecycle kinds is
+// reshaped into a synthetic "<state> → ∅" row. Any other kind reports
+// ok=false.
+func transitionRow(raw map[string]json.RawMessage, ended map[string]bool, lastState map[string]string) (json.RawMessage, bool) {
+	kind := decodeStringField(raw, "kind")
+	sid := decodeStringField(raw, "session_id")
+	switch kind {
+	case "state_transition":
+		return stateTransitionRow(raw, sid, lastState)
+	case "transcript_removed", "process_exited", "presession_removed":
+		return sessionEndedRow(raw, kind, sid, ended, lastState)
+	default:
+		return nil, false
+	}
+}
+
+// decodeStringField unmarshals raw[key] into a string, or "" when the key
+// is absent or its value isn't a JSON string.
+func decodeStringField(raw map[string]json.RawMessage, key string) string {
+	v, ok := raw[key]
+	if !ok {
+		return ""
+	}
+	var s string
+	_ = json.Unmarshal(v, &s)
+	return s
+}
+
+// stateTransitionRow records the row's new_state (so a later session-end row
+// can report the state the session left from) and marshals the row unchanged.
+func stateTransitionRow(raw map[string]json.RawMessage, sid string, lastState map[string]string) (json.RawMessage, bool) {
+	if newState := decodeStringField(raw, "new_state"); newState != "" {
+		lastState[sid] = newState
+	}
+	b, _ := json.Marshal(raw)
+	return b, true
+}
+
+// sessionEndedRow reshapes a session-end lifecycle event into a synthetic
+// state_transition-shaped row ("<prev_state> → ∅") so the existing renderer
+// just works. Only the first ended event per session_id produces a row.
+func sessionEndedRow(raw map[string]json.RawMessage, kind, sid string, ended map[string]bool, lastState map[string]string) (json.RawMessage, bool) {
+	if ended[sid] {
+		return nil, false
+	}
+	ended[sid] = true
+	// "∅" renders as a neutral grey chip.
+	raw["kind"] = json.RawMessage(`"state_transition"`)
+	raw["new_state"] = json.RawMessage(`"∅"`)
+	if kindJSON, err := json.Marshal(kind); err == nil {
+		raw["reason"] = json.RawMessage(kindJSON)
+	}
+	if prev := lastState[sid]; prev != "" {
+		if prevJSON, err := json.Marshal(prev); err == nil {
+			raw["prev_state"] = json.RawMessage(prevJSON)
+		}
+	}
+	b, _ := json.Marshal(raw)
+	return b, true
 }

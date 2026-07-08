@@ -114,7 +114,17 @@ type orphanTrigger struct {
 // live daemon.
 func bucketSidecarEvents(sidecarEvents []lifecycle.Event, primarySessionID string) sidecarBuckets {
 	b := sidecarBuckets{children: map[string]*childInfo{}}
-	// First pass on the primary's own events plus child discovery.
+	bucketPrimaryEvents(sidecarEvents, primarySessionID, &b)
+	bucketChildEvents(sidecarEvents, &b)
+	b.orphanTriggers = computeOrphanTriggers(b.children)
+	return b
+}
+
+// bucketPrimaryEvents is the first pass over sidecarEvents: it partitions the
+// primary session's own events into the fswatch/process-exit/hook/lifecycle-
+// start streams, and discovers subagent sessions linked to the primary via
+// parent_linked.
+func bucketPrimaryEvents(sidecarEvents []lifecycle.Event, primarySessionID string, b *sidecarBuckets) {
 	for _, ev := range sidecarEvents {
 		if ev.Kind == lifecycle.KindParentLinked && ev.ParentSessionID == primarySessionID {
 			if _, ok := b.children[ev.SessionID]; !ok {
@@ -124,24 +134,34 @@ func bucketSidecarEvents(sidecarEvents []lifecycle.Event, primarySessionID strin
 		if ev.SessionID != primarySessionID {
 			continue
 		}
-		switch ev.Kind {
-		case lifecycle.KindTranscriptActivity:
-			if ev.FileSize > 0 {
-				b.fswatches = append(b.fswatches, ev)
-			}
-		case lifecycle.KindProcessExited:
-			b.processExits = append(b.processExits, ev)
-		case lifecycle.KindHookReceived:
-			b.hookEvents = append(b.hookEvents, ev)
-		case lifecycle.KindTranscriptNew:
+		bucketPrimaryEventByKind(ev, b)
+	}
+}
+
+// bucketPrimaryEventByKind routes one primary-session event into its stream.
+func bucketPrimaryEventByKind(ev lifecycle.Event, b *sidecarBuckets) {
+	switch ev.Kind {
+	case lifecycle.KindTranscriptActivity:
+		if ev.FileSize > 0 {
+			b.fswatches = append(b.fswatches, ev)
+		}
+	case lifecycle.KindProcessExited:
+		b.processExits = append(b.processExits, ev)
+	case lifecycle.KindHookReceived:
+		b.hookEvents = append(b.hookEvents, ev)
+	case lifecycle.KindTranscriptNew:
+		b.lifecycleStarts = append(b.lifecycleStarts, ev)
+	case lifecycle.KindStateTransition:
+		if ev.PrevState == "" {
 			b.lifecycleStarts = append(b.lifecycleStarts, ev)
-		case lifecycle.KindStateTransition:
-			if ev.PrevState == "" {
-				b.lifecycleStarts = append(b.lifecycleStarts, ev)
-			}
 		}
 	}
-	// Second pass over child sessions to gather transitions + last-activity.
+}
+
+// bucketChildEvents is the second pass, over child sessions discovered by
+// bucketPrimaryEvents: it gathers each child's state transitions and tracks
+// its last-activity time (consumed by computeOrphanTriggers).
+func bucketChildEvents(sidecarEvents []lifecycle.Event, b *sidecarBuckets) {
 	for _, ev := range sidecarEvents {
 		ci, ok := b.children[ev.SessionID]
 		if !ok {
@@ -150,27 +170,33 @@ func bucketSidecarEvents(sidecarEvents []lifecycle.Event, primarySessionID strin
 		if ev.Timestamp.After(ci.lastActivityAt) {
 			ci.lastActivityAt = ev.Timestamp
 		}
-		if ev.Kind == lifecycle.KindStateTransition {
-			b.childTransitions = append(b.childTransitions, ev)
-			if ev.NewState != "" {
-				ci.finalState = ev.NewState
-			}
+		if ev.Kind != lifecycle.KindStateTransition {
+			continue
+		}
+		b.childTransitions = append(b.childTransitions, ev)
+		if ev.NewState != "" {
+			ci.finalState = ev.NewState
 		}
 	}
-	// Any child whose final recorded state is working/waiting would have
-	// been fast-forwarded to ready by the daemon's stale-sweep once its
-	// transcript went quiet for SubagentQuietWindow. Fire a synthetic
-	// trigger at lastActivityAt + quiet window so the parent's held-
-	// working releases at roughly the virtual time the daemon would have.
-	for id, ci := range b.children {
-		if ci.finalState == session.StateWorking || ci.finalState == session.StateWaiting {
-			b.orphanTriggers = append(b.orphanTriggers, orphanTrigger{
-				sessionID: id,
-				at:        ci.lastActivityAt.Add(services.SubagentQuietWindow),
-			})
+}
+
+// computeOrphanTriggers synthesizes the stale-sweep promotion that the live
+// daemon's finishOrphanedChildren would have emitted for each child whose
+// final recorded state is still working/waiting — fired at lastActivityAt +
+// quiet window so the parent's held-working releases at roughly the virtual
+// time the daemon would have.
+func computeOrphanTriggers(children map[string]*childInfo) []orphanTrigger {
+	var triggers []orphanTrigger
+	for id, ci := range children {
+		if ci.finalState != session.StateWorking && ci.finalState != session.StateWaiting {
+			continue
 		}
+		triggers = append(triggers, orphanTrigger{
+			sessionID: id,
+			at:        ci.lastActivityAt.Add(services.SubagentQuietWindow),
+		})
 	}
-	return b
+	return triggers
 }
 
 // sidecarReplayer bundles the mutable state that the sidecar-driven replay

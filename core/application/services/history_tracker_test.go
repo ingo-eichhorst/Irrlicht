@@ -450,9 +450,7 @@ func TestHistoryTracker_GenerationsMatchBuckets(t *testing.T) {
 	if !ok {
 		t.Fatal("Encode failed")
 	}
-	if enc.Generations["1"] != 0 || enc.Generations["10"] != 0 || enc.Generations["60"] != 0 {
-		t.Errorf("pre-tick generations = %+v, want all 0", enc.Generations)
-	}
+	assertGenerations(t, enc, wantGenerations{Phase: "pre-tick", One: 0, Ten: 0, Sixty: 0})
 
 	var ticks []HistoryEvent
 	ht.SetEmitFunc(func(ev HistoryEvent) {
@@ -472,9 +470,7 @@ func TestHistoryTracker_GenerationsMatchBuckets(t *testing.T) {
 
 	// Snapshot after tick: 1s gen = 1, 10s/60s gen still 0.
 	enc, _ = ht.Encode(sid)
-	if enc.Generations["1"] != 1 || enc.Generations["10"] != 0 || enc.Generations["60"] != 0 {
-		t.Errorf("post-tick generations = %+v, want {1:1, 10:0, 60:0}", enc.Generations)
-	}
+	assertGenerations(t, enc, wantGenerations{Phase: "post-tick", One: 1, Ten: 0, Sixty: 0})
 
 	// Ten more ticks: 1s rolls 10×, 10s rolls 1×, 60s still 0.
 	ticks = nil
@@ -482,21 +478,46 @@ func TestHistoryTracker_GenerationsMatchBuckets(t *testing.T) {
 		ht.tick()
 	}
 	enc, _ = ht.Encode(sid)
-	if enc.Generations["1"] != 11 || enc.Generations["10"] != 1 || enc.Generations["60"] != 0 {
-		t.Errorf("after 10 ticks generations = %+v, want {1:11, 10:1, 60:0}", enc.Generations)
-	}
+	assertGenerations(t, enc, wantGenerations{Phase: "after 10 ticks", One: 11, Ten: 1, Sixty: 0})
 
 	// The most recent 1s tick event must carry the current 1s generation,
 	// so client logic of `gen <= last → skip` deduplicates exactly once.
-	var lastOneSec uint64
-	for _, ev := range ticks {
-		if ev.GranularitySec == 1 {
-			lastOneSec = ev.BucketGenerations[sid]
-		}
-	}
+	lastOneSec := lastGenerationForGranularity(ticks, sid, 1)
 	if lastOneSec != enc.Generations["1"] {
 		t.Errorf("last 1s tick gen = %d, snapshot gen = %d — must match", lastOneSec, enc.Generations["1"])
 	}
+}
+
+// wantGenerations bundles assertGenerations' expected per-granularity values
+// and the phase label naming the assertion point, keeping its parameter list
+// within CodeScene's argument-count limit instead of threading each value
+// through individually.
+type wantGenerations struct {
+	Phase string
+	One   uint64
+	Ten   uint64
+	Sixty uint64
+}
+
+// assertGenerations checks enc's per-granularity Generations against the
+// expected {1s, 10s, 60s} values in want, labeling a failure with want.Phase.
+func assertGenerations(t *testing.T, enc EncodedHistory, want wantGenerations) {
+	t.Helper()
+	if enc.Generations["1"] != want.One || enc.Generations["10"] != want.Ten || enc.Generations["60"] != want.Sixty {
+		t.Errorf("%s generations = %+v, want {1:%d, 10:%d, 60:%d}", want.Phase, enc.Generations, want.One, want.Ten, want.Sixty)
+	}
+}
+
+// lastGenerationForGranularity returns sessionID's BucketGenerations from the
+// last tick event in ticks matching granularitySec.
+func lastGenerationForGranularity(ticks []HistoryEvent, sessionID string, granularitySec int) uint64 {
+	var last uint64
+	for _, ev := range ticks {
+		if ev.GranularitySec == granularitySec {
+			last = ev.BucketGenerations[sessionID]
+		}
+	}
+	return last
 }
 
 func TestHistoryTracker_TickEmitsAllGranularitiesAt60s(t *testing.T) {

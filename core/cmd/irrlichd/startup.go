@@ -88,6 +88,15 @@ func pruneOrphanLedgers(fsRepo *filesystem.SessionRepository, logger outbound.Lo
 	if err != nil {
 		return
 	}
+	removed := removeOrphanLedgerFiles(dir, entries, expectedLedgerNames(allSessions))
+	if removed > 0 {
+		logger.LogInfo("startup", "", fmt.Sprintf("pruned %d orphan ledger files", removed))
+	}
+}
+
+// expectedLedgerNames maps each session with a transcript to its ledger
+// filename, the set of ledger files that are still owned by a known session.
+func expectedLedgerNames(allSessions []*session.SessionState) map[string]struct{} {
 	expected := make(map[string]struct{}, len(allSessions))
 	for _, s := range allSessions {
 		if s.TranscriptPath == "" {
@@ -95,6 +104,12 @@ func pruneOrphanLedgers(fsRepo *filesystem.SessionRepository, logger outbound.Lo
 		}
 		expected[metrics.LedgerFilename(s.TranscriptPath)] = struct{}{}
 	}
+	return expected
+}
+
+// removeOrphanLedgerFiles deletes every ledger-suffixed file in dir/entries
+// that isn't in expected, returning the count removed.
+func removeOrphanLedgerFiles(dir string, entries []os.DirEntry, expected map[string]struct{}) int {
 	removed := 0
 	for _, e := range entries {
 		if e.IsDir() {
@@ -111,9 +126,7 @@ func pruneOrphanLedgers(fsRepo *filesystem.SessionRepository, logger outbound.Lo
 			removed++
 		}
 	}
-	if removed > 0 {
-		logger.LogInfo("startup", "", fmt.Sprintf("pruned %d orphan ledger files", removed))
-	}
+	return removed
 }
 
 // pruneDeadProcSessions removes proc-<pid> session files whose backing

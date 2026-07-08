@@ -185,22 +185,37 @@ func annotateDisplayState(top map[string]any) {
 			if !ok {
 				continue
 			}
-			supports, _ := cell["agent_supports"].(string)
-			daemon, _ := cell["daemon_capability"].(string)
-			driver, _ := cell["driver_capability"].(string)
-			hasRecording := false
-			if meas, ok := cell["measurement"].(map[string]any); ok {
-				if st, ok := meas["status"].(string); ok {
-					hasRecording = st != "" && st != "no_recording" && st != "no_expected"
-				}
-			}
-			applicable := true
-			if v, ok := cell["applicable"].(bool); ok {
-				applicable = v
-			}
-			cell["display_state"] = deriveDisplayState(supports, daemon, driver, hasRecording, applicable)
+			annotateCellDisplayState(cell)
 		}
 	}
+}
+
+// annotateCellDisplayState computes and stores display_state for one
+// coverage cell, per deriveDisplayState.
+func annotateCellDisplayState(cell map[string]any) {
+	supports, _ := cell["agent_supports"].(string)
+	daemon, _ := cell["daemon_capability"].(string)
+	driver, _ := cell["driver_capability"].(string)
+	applicable := true
+	if v, ok := cell["applicable"].(bool); ok {
+		applicable = v
+	}
+	cell["display_state"] = deriveDisplayState(supports, daemon, driver, cellHasRecording(cell), applicable)
+}
+
+// cellHasRecording reports whether the cell's `measurement` axis (set by
+// annotateMeasurements, which must run first) indicates a captured
+// recording rather than an absent/unspecced one.
+func cellHasRecording(cell map[string]any) bool {
+	meas, ok := cell["measurement"].(map[string]any)
+	if !ok {
+		return false
+	}
+	st, ok := meas["status"].(string)
+	if !ok {
+		return false
+	}
+	return st != "" && st != "no_recording" && st != "no_expected"
 }
 
 // annotateMeasurements decorates each scenarios[].coverage[<agent>] cell
@@ -232,15 +247,22 @@ func annotateMeasurements(top map[string]any, repoRoot string) {
 			if !ok {
 				continue
 			}
-			folder, ok := resolveScenarioFolderForAgent(recipes, agentSlug, sid)
-			if !ok {
-				// No cell on disk for this (agent, scenario) — genuinely absent.
-				cell["measurement"] = map[string]any{"status": "no_recording"}
-				continue
-			}
-			cell["measurement"] = measureScenario(repoRoot, agentSlug, folder)
+			annotateMeasurementCell(repoRoot, recipes, sid, agentSlug, cell)
 		}
 	}
+}
+
+// annotateMeasurementCell sets the `measurement` field on one coverage
+// cell: "no_recording" when the (agent, scenario) has no cell on disk,
+// otherwise the result of probing its recording + expected.jsonl.
+func annotateMeasurementCell(repoRoot string, recipes recipeIndex, sid, agentSlug string, cell map[string]any) {
+	folder, ok := resolveScenarioFolderForAgent(recipes, agentSlug, sid)
+	if !ok {
+		// No cell on disk for this (agent, scenario) — genuinely absent.
+		cell["measurement"] = map[string]any{"status": "no_recording"}
+		return
+	}
+	cell["measurement"] = measureScenario(repoRoot, agentSlug, folder)
 }
 
 // measureScenario probes one (agent, scenario) cell: looks for a recording
@@ -303,64 +325,90 @@ func annotatePipelineState(top map[string]any, repoRoot string) {
 			if !ok {
 				continue
 			}
-			folder, ok := resolveScenarioFolderForAgent(recipes, agentSlug, sid)
-			if !ok {
-				// No cell on disk for this (agent, scenario) — genuinely absent.
-				cell["pipeline"] = pipelineForCell(repoRoot, agentSlug, sid, "", recipes)
-				continue
-			}
-			cell["pipeline"] = pipelineForCell(repoRoot, agentSlug, sid, folder, recipes)
+			annotatePipelineCell(repoRoot, recipes, sid, agentSlug, cell)
 		}
 	}
+}
+
+// annotatePipelineCell sets the `pipeline` field on one coverage cell.
+// folder is resolved from disk when available; a cell absent on disk still
+// gets a pipeline block (via a "" folder) so recipe-authored-but-unrecorded
+// cells still show their recipe/spec status.
+func annotatePipelineCell(repoRoot string, recipes recipeIndex, sid, agentSlug string, cell map[string]any) {
+	folder, ok := resolveScenarioFolderForAgent(recipes, agentSlug, sid)
+	if !ok {
+		// No cell on disk for this (agent, scenario) — genuinely absent.
+		folder = ""
+	}
+	cell["pipeline"] = pipelineForCell(repoRoot, agentSlug, sid, folder, recipes)
 }
 
 // pipelineForCell computes the recipe/spec/recordings status for one
 // (agent, scenario) cell.
 func pipelineForCell(repoRoot, agent, coverageID, folder string, recipes recipeIndex) map[string]any {
-	out := map[string]any{}
+	recipeAuthored, stepCount := recipeStats(recipes, agent, coverageID, folder)
+	specAuthored, phaseCount, recCount := specAndRecordingStats(repoRoot, agent, folder)
+	return map[string]any{
+		"recipe":     map[string]any{"authored": recipeAuthored, "step_count": stepCount},
+		"spec":       map[string]any{"authored": specAuthored, "phase_count": phaseCount},
+		"recordings": map[string]any{"latest": recCount > 0, "archive_count": recCount},
+	}
+}
 
+// recipeStats reports whether an authored (applicable) recipe script exists
+// for (agent, scenario) and how many steps it has. Falls back from the
+// on-disk folder name to the scenario's canonical coverage ID when no
+// by-name recipe entry exists.
+func recipeStats(recipes recipeIndex, agent, coverageID, folder string) (authored bool, stepCount int) {
 	rec, ok := recipes.byName[folder]
 	if !ok {
 		rec = recipes.canonical[coverageID]
 	}
-	recipeAuthored := false
-	stepCount := 0
-	if rec.ByAdapter != nil {
-		if entry, ok := rec.ByAdapter[agent]; ok {
-			if entry.Applicable == nil || *entry.Applicable {
-				recipeAuthored = true
-				stepCount = len(entry.Script)
-			}
+	if rec.ByAdapter == nil {
+		return false, 0
+	}
+	entry, ok := rec.ByAdapter[agent]
+	if !ok {
+		return false, 0
+	}
+	if entry.Applicable != nil && !*entry.Applicable {
+		return false, 0
+	}
+	return true, len(entry.Script)
+}
+
+// specAndRecordingStats reports whether an expected.jsonl spec exists for
+// this cell, how many phases it describes, and how many recording archives
+// have been captured. folder == "" means the cell is absent on disk (no
+// metadata.json for this agent/scenario): there is no spec or recording,
+// and joining an empty folder would stat the scenarios/ parent, so the
+// disk reads are skipped entirely.
+func specAndRecordingStats(repoRoot, agent, folder string) (authored bool, phaseCount, recCount int) {
+	if folder == "" {
+		return false, 0, 0
+	}
+	scenarioDir := filepath.Join(repoRoot, "replaydata", "agents", agent, "scenarios", folder)
+	// Every recording lives under recordings/<name>/; "latest" means at least
+	// one recording exists, "archive_count" is the total recording count.
+	recCount = len(RecordingStore{RepoRoot: repoRoot}.listArchiveDirs(scenarioDir))
+	specBytes, err := os.ReadFile(filepath.Join(scenarioDir, "expected.jsonl"))
+	if err != nil {
+		return false, 0, recCount
+	}
+	return true, countJSONLPhases(specBytes), recCount
+}
+
+// countJSONLPhases counts expected.jsonl phase lines: total lines minus the
+// leading meta object.
+func countJSONLPhases(specBytes []byte) int {
+	lines := 0
+	for _, b := range specBytes {
+		if b == '\n' {
+			lines++
 		}
 	}
-	out["recipe"] = map[string]any{"authored": recipeAuthored, "step_count": stepCount}
-
-	specAuthored := false
-	phaseCount := 0
-	recCount := 0
-	// folder == "" means the cell is absent on disk (no metadata.json for this
-	// agent/scenario): there is no spec or recording, and joining an empty folder
-	// would stat the scenarios/ parent. Skip the disk reads entirely.
-	if folder != "" {
-		scenarioDir := filepath.Join(repoRoot, "replaydata", "agents", agent, "scenarios", folder)
-		if specBytes, err := os.ReadFile(filepath.Join(scenarioDir, "expected.jsonl")); err == nil {
-			specAuthored = true
-			lines := 0
-			for _, b := range specBytes {
-				if b == '\n' {
-					lines++
-				}
-			}
-			if lines > 0 {
-				phaseCount = lines - 1 // first line is the meta object
-			}
-		}
-		// Every recording lives under recordings/<name>/; "latest" means at least
-		// one recording exists, "archive_count" is the total recording count.
-		recCount = len(RecordingStore{RepoRoot: repoRoot}.listArchiveDirs(scenarioDir))
+	if lines == 0 {
+		return 0
 	}
-	out["spec"] = map[string]any{"authored": specAuthored, "phase_count": phaseCount}
-	out["recordings"] = map[string]any{"latest": recCount > 0, "archive_count": recCount}
-
-	return out
+	return lines - 1
 }

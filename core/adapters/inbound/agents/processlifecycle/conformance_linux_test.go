@@ -56,7 +56,29 @@ func TestLinuxObserverConformance(t *testing.T) {
 	}
 	transcript := filepath.Join(tmpResolved, "transcript.jsonl")
 
-	cmd := exec.Command(os.Args[0], "-test.run=^TestObserverHelper$", "-test.count=1")
+	cmd, pid, killed := spawnObserverHelper(t, tmpResolved, transcript)
+
+	// WriterOf becomes true only once the child has chdir'd and opened the
+	// transcript — use it as the readiness signal (bounded poll).
+	waitForTranscriptWriter(t, transcript, pid)
+
+	// FindByName: the helper's comm (the test binary, truncated to 15 chars)
+	// must be discoverable, and the result must include the helper pid.
+	assertFindByNameIncludesHelper(t, pid)
+
+	// CWDOf: the helper chdir'd to the temp dir.
+	assertCWDOfHelper(t, pid, tmpResolved)
+
+	// Exit detection via pidfd: Watch the helper, kill it, expect the handler.
+	assertExitDetected(t, cmd, pid, killed)
+}
+
+// spawnObserverHelper starts the TestObserverHelper child process rooted at
+// tmpResolved, with transcript as the file it holds open, and registers a
+// cleanup that kills/reaps it unless the caller already did (via *killed).
+func spawnObserverHelper(t *testing.T, tmpResolved, transcript string) (cmd *exec.Cmd, pid int, killed *bool) {
+	t.Helper()
+	cmd = exec.Command(os.Args[0], "-test.run=^TestObserverHelper$", "-test.count=1")
 	cmd.Env = append(os.Environ(),
 		"GO_WANT_OBSERVER_HELPER=1",
 		"OBSERVER_HELPER_DIR="+tmpResolved,
@@ -65,30 +87,37 @@ func TestLinuxObserverConformance(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("spawn helper: %v", err)
 	}
-	pid := cmd.Process.Pid
-	killed := false
+	pid = cmd.Process.Pid
+	killed = new(bool)
 	t.Cleanup(func() {
-		if !killed {
+		if !*killed {
 			_ = cmd.Process.Kill()
 		}
 		_, _ = cmd.Process.Wait()
 	})
+	return cmd, pid, killed
+}
 
-	// WriterOf becomes true only once the child has chdir'd and opened the
-	// transcript — use it as the readiness signal (bounded poll).
+// waitForTranscriptWriter blocks until WriterOf(transcript) reports pid, or
+// fails the test after a 5s bound.
+func waitForTranscriptWriter(t *testing.T, transcript string, pid int) {
+	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		if w, _ := osProc.WriterOf(transcript); w == pid {
-			break
+			return
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("WriterOf(%q) never returned helper pid %d", transcript, pid)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
+}
 
-	// FindByName: the helper's comm (the test binary, truncated to 15 chars)
-	// must be discoverable, and the result must include the helper pid.
+// assertFindByNameIncludesHelper checks that FindByName, given the helper's
+// truncated comm, returns a PID set that includes pid.
+func assertFindByNameIncludesHelper(t *testing.T, pid int) {
+	t.Helper()
 	commBytes, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "comm"))
 	if err != nil {
 		t.Fatalf("read helper comm: %v", err)
@@ -101,8 +130,12 @@ func TestLinuxObserverConformance(t *testing.T) {
 	if !slices.Contains(pids, pid) {
 		t.Errorf("FindByName(%q) = %v, want it to include helper pid %d", comm, pids, pid)
 	}
+}
 
-	// CWDOf: the helper chdir'd to the temp dir.
+// assertCWDOfHelper checks that CWDOf(pid) matches the directory the helper
+// chdir'd into.
+func assertCWDOfHelper(t *testing.T, pid int, tmpResolved string) {
+	t.Helper()
 	cwd, err := osProc.CWDOf(pid)
 	if err != nil {
 		t.Fatalf("CWDOf(%d): %v", pid, err)
@@ -110,8 +143,13 @@ func TestLinuxObserverConformance(t *testing.T) {
 	if cwd != tmpResolved {
 		t.Errorf("CWDOf(%d) = %q, want %q", pid, cwd, tmpResolved)
 	}
+}
 
-	// Exit detection via pidfd: Watch the helper, kill it, expect the handler.
+// assertExitDetected watches pid via pidfd, kills the helper, and asserts the
+// exit handler fires with pid within 3s. Sets *killed so spawnObserverHelper's
+// cleanup doesn't redundantly kill an already-reaped process.
+func assertExitDetected(t *testing.T, cmd *exec.Cmd, pid int, killed *bool) {
+	t.Helper()
 	exited := make(chan int, 1)
 	mon, err := NewMonitor(func(p int, _ string) { exited <- p })
 	if err != nil {
@@ -123,7 +161,7 @@ func TestLinuxObserverConformance(t *testing.T) {
 		t.Fatalf("Watch(%d): %v", pid, err)
 	}
 
-	killed = true
+	*killed = true
 	if err := cmd.Process.Kill(); err != nil {
 		t.Fatalf("kill helper: %v", err)
 	}

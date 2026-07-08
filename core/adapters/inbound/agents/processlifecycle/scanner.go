@@ -242,13 +242,7 @@ func (s *Scanner) Unsubscribe(ch <-chan agent.Event) {
 // for newcomers without transcripts, and removes pre-sessions that have exited
 // or whose real transcript has appeared.
 func (s *Scanner) poll() {
-	var pids []int
-	var err error
-	if s.commandLineMatch != "" {
-		pids, err = osProc.FindByCmdline(s.commandLineMatch)
-	} else {
-		pids, err = osProc.FindByName(s.processName)
-	}
+	pids, err := s.findMatchingPIDs()
 	if err != nil {
 		return
 	}
@@ -258,149 +252,206 @@ func (s *Scanner) poll() {
 		live[pid] = true
 	}
 
-	// --- handle newly-seen PIDs ---
 	for _, pid := range pids {
-		// Per-adapter argv exclusion: a matched binary that is the agent's
-		// background infrastructure (daemon/wrapper) rather than a session.
-		// Drop it from the live set too so it isn't treated as a tracked PID
-		// that "exited" on the next poll. A nil argv (unreadable) is passed
-		// through; the predicate must default to not-excluding in that case.
-		if s.argvFilter != nil && s.argvExcluded(pid) {
-			delete(live, pid)
-			continue
+		s.handleMatchedPID(pid, live)
+	}
+
+	s.probeCWDResidentTranscripts()
+	s.handleExitedPIDs(live)
+	s.pruneArgvVerdicts(pids)
+}
+
+// findMatchingPIDs finds the PIDs currently matching this scanner's process
+// name or command-line pattern.
+func (s *Scanner) findMatchingPIDs() ([]int, error) {
+	if s.commandLineMatch != "" {
+		return osProc.FindByCmdline(s.commandLineMatch)
+	}
+	return osProc.FindByName(s.processName)
+}
+
+// handleMatchedPID processes one PID from the current poll's matched set:
+// applying the argv exclusion filter, then either updating its already-tracked
+// pre-session or considering it for a brand-new one. live is mutated to drop
+// argv-excluded PIDs so they aren't later treated as "exited".
+func (s *Scanner) handleMatchedPID(pid int, live map[int]bool) {
+	// Per-adapter argv exclusion: a matched binary that is the agent's
+	// background infrastructure (daemon/wrapper) rather than a session.
+	// Drop it from the live set too so it isn't treated as a tracked PID
+	// that "exited" on the next poll. A nil argv (unreadable) is passed
+	// through; the predicate must default to not-excluding in that case.
+	if s.argvFilter != nil && s.argvExcluded(pid) {
+		delete(live, pid)
+		return
+	}
+
+	s.mu.Lock()
+	_, alreadyTracked := s.tracked[pid]
+	s.mu.Unlock()
+
+	cwd, err := osProc.CWDOf(pid)
+	if err != nil || cwd == "" || cwd == "/" {
+		return
+	}
+	projectDir := CWDToProjectDir(cwd)
+
+	if alreadyTracked {
+		s.updateTrackedPID(pid, projectDir)
+		return
+	}
+
+	s.maybeTrackNewPID(pid, cwd, projectDir)
+}
+
+// updateTrackedPID checks whether a real transcript has since appeared for an
+// already-tracked pre-session and, if so, marks it superseded and emits its
+// removal. Kept in the tracked map (rather than deleted) so the pre-session
+// isn't recreated on the next poll.
+func (s *Scanner) updateTrackedPID(pid int, projectDir string) {
+	s.mu.Lock()
+	proc := s.tracked[pid]
+	s.mu.Unlock()
+
+	// Already superseded — real transcript took over; nothing to do.
+	if proc.superseded {
+		return
+	}
+
+	// Check whether a real transcript has appeared since we last looked.
+	if !s.hasActiveSession(projectDir, pid) {
+		return
+	}
+
+	s.mu.Lock()
+	proc.superseded = true
+	s.tracked[pid] = proc
+	s.mu.Unlock()
+	s.broadcast(agent.Event{
+		Type:       agent.EventRemoved,
+		SessionID:  proc.sessionID,
+		ProjectDir: projectDir,
+	})
+}
+
+// maybeTrackNewPID starts tracking a freshly-seen PID and emits its
+// EventNewSession, unless a real session already covers it or no subscriber
+// is attached yet to receive the event.
+func (s *Scanner) maybeTrackNewPID(pid int, cwd, projectDir string) {
+	// Skip if an active transcript was recently modified in this project
+	// dir (the file watcher handles those). Old transcripts from previous
+	// sessions are ignored so new processes are still detected.
+	if s.hasActiveSession(projectDir, pid) {
+		return
+	}
+
+	sessionID := fmt.Sprintf("proc-%d", pid)
+	ev := agent.Event{
+		Type:       agent.EventNewSession,
+		SessionID:  sessionID,
+		ProjectDir: projectDir,
+		CWD:        cwd,
+	}
+
+	// Track the PID and emit atomically — but only if subscribers exist.
+	// If no subscribers yet (startup race with SessionDetector.Run), skip
+	// tracking so the next poll retries rather than silently losing the event.
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.subs) == 0 {
+		return
+	}
+	s.tracked[pid] = trackedProc{sessionID: sessionID, projectDir: projectDir, cwd: cwd}
+	for _, ch := range s.subs {
+		select {
+		case ch <- ev:
+		default:
 		}
+	}
+}
 
-		s.mu.Lock()
-		_, alreadyTracked := s.tracked[pid]
-		s.mu.Unlock()
+// probeCWDResidentTranscripts is the per-adapter opt-in probe for agents that
+// write transcripts per-project (e.g. aider's .aider.chat.history.md), rather
+// than under a fixed watched RootDir:
+//   - First sight of the file → emit EventNewSession with TranscriptPath
+//   - Subsequent polls where size grew → emit EventActivity
+//
+// This bypasses the fswatcher (which only watches one fixed RootDir under
+// $HOME and filters to .jsonl) so non-JSONL, per-project agents produce the
+// same lifecycle event stream as fswatcher-friendly ones.
+func (s *Scanner) probeCWDResidentTranscripts() {
+	if s.transcriptFilename == "" {
+		return
+	}
 
-		cwd, err := osProc.CWDOf(pid)
-		if err != nil || cwd == "" || cwd == "/" {
-			continue
+	s.mu.Lock()
+	var emit []agent.Event
+	for pid, proc := range s.tracked {
+		if ev, ok := s.checkTranscriptFile(&proc); ok {
+			emit = append(emit, ev)
+			s.tracked[pid] = proc
 		}
-		projectDir := CWDToProjectDir(cwd)
+	}
+	subs := s.subs
+	s.mu.Unlock()
 
-		if alreadyTracked {
-			s.mu.Lock()
-			proc := s.tracked[pid]
-			s.mu.Unlock()
-
-			// Already superseded — real transcript took over; nothing to do.
-			if proc.superseded {
-				continue
+	for _, ev := range emit {
+		for _, ch := range subs {
+			select {
+			case ch <- ev:
+			default:
 			}
-
-			// Check whether a real transcript has appeared since we last looked.
-			if s.hasActiveSession(projectDir, pid) {
-				// Mark as superseded and emit removal. Keep in tracked map
-				// so we don't recreate the pre-session on the next poll.
-				s.mu.Lock()
-				proc.superseded = true
-				s.tracked[pid] = proc
-				s.mu.Unlock()
-				s.broadcast(agent.Event{
-					Type:       agent.EventRemoved,
-					SessionID:  proc.sessionID,
-					ProjectDir: projectDir,
-				})
-			}
-			continue
 		}
+	}
+}
 
-		// Skip if an active transcript was recently modified in this project
-		// dir (the file watcher handles those). Old transcripts from previous
-		// sessions are ignored so new processes are still detected.
-		if s.hasActiveSession(projectDir, pid) {
-			continue
-		}
+// checkTranscriptFile stats one tracked PID's CWD-resident transcript file
+// and reports the event to emit — EventNewSession on first sight or
+// EventActivity on growth — mutating proc's emitted/size bookkeeping in
+// place. ok is false when there's nothing to report this poll.
+func (s *Scanner) checkTranscriptFile(proc *trackedProc) (agent.Event, bool) {
+	if proc.cwd == "" {
+		return agent.Event{}, false
+	}
+	path := filepath.Join(proc.cwd, s.transcriptFilename)
+	info, err := os.Stat(path)
+	if err != nil {
+		return agent.Event{}, false
+	}
+	size := info.Size()
 
-		sessionID := fmt.Sprintf("proc-%d", pid)
+	switch {
+	case !proc.transcriptEmitted:
+		// First sight — announce the transcript.
 		ev := agent.Event{
-			Type:       agent.EventNewSession,
-			SessionID:  sessionID,
-			ProjectDir: projectDir,
-			CWD:        cwd,
+			Type:           agent.EventNewSession,
+			SessionID:      proc.sessionID,
+			ProjectDir:     proc.projectDir,
+			TranscriptPath: path,
+			Size:           size,
+			CWD:            proc.cwd,
 		}
-
-		// Track the PID and emit atomically — but only if subscribers exist.
-		// If no subscribers yet (startup race with SessionDetector.Run), skip
-		// tracking so the next poll retries rather than silently losing the event.
-		s.mu.Lock()
-		if len(s.subs) > 0 {
-			s.tracked[pid] = trackedProc{sessionID: sessionID, projectDir: projectDir, cwd: cwd}
-			for _, ch := range s.subs {
-				select {
-				case ch <- ev:
-				default:
-				}
-			}
+		proc.transcriptEmitted = true
+		proc.transcriptSize = size
+		return ev, true
+	case size != proc.transcriptSize:
+		// File grew (or shrank, e.g. on rotation) — emit activity.
+		ev := agent.Event{
+			Type:           agent.EventActivity,
+			SessionID:      proc.sessionID,
+			ProjectDir:     proc.projectDir,
+			TranscriptPath: path,
+			Size:           size,
+			CWD:            proc.cwd,
 		}
-		s.mu.Unlock()
+		proc.transcriptSize = size
+		return ev, true
 	}
+	return agent.Event{}, false
+}
 
-	// --- probe for CWD-resident transcripts (per-adapter opt-in) ---
-	// For agents that write transcripts per-project (e.g. aider's
-	// .aider.chat.history.md), check each tracked PID's CWD for the
-	// configured filename:
-	//   - First sight of the file → emit EventNewSession with TranscriptPath
-	//   - Subsequent polls where size grew → emit EventActivity
-	// This bypasses the fswatcher (which only watches one fixed RootDir
-	// under $HOME and filters to .jsonl) so non-JSONL, per-project agents
-	// produce the same lifecycle event stream as fswatcher-friendly ones.
-	if s.transcriptFilename != "" {
-		s.mu.Lock()
-		var emit []agent.Event
-		for pid, proc := range s.tracked {
-			if proc.cwd == "" {
-				continue
-			}
-			path := filepath.Join(proc.cwd, s.transcriptFilename)
-			info, err := os.Stat(path)
-			if err != nil {
-				continue
-			}
-			size := info.Size()
-			switch {
-			case !proc.transcriptEmitted:
-				// First sight — announce the transcript.
-				emit = append(emit, agent.Event{
-					Type:           agent.EventNewSession,
-					SessionID:      proc.sessionID,
-					ProjectDir:     proc.projectDir,
-					TranscriptPath: path,
-					Size:           size,
-					CWD:            proc.cwd,
-				})
-				proc.transcriptEmitted = true
-				proc.transcriptSize = size
-				s.tracked[pid] = proc
-			case size != proc.transcriptSize:
-				// File grew (or shrank, e.g. on rotation) — emit activity.
-				emit = append(emit, agent.Event{
-					Type:           agent.EventActivity,
-					SessionID:      proc.sessionID,
-					ProjectDir:     proc.projectDir,
-					TranscriptPath: path,
-					Size:           size,
-					CWD:            proc.cwd,
-				})
-				proc.transcriptSize = size
-				s.tracked[pid] = proc
-			}
-		}
-		subs := s.subs
-		s.mu.Unlock()
-		for _, ev := range emit {
-			for _, ch := range subs {
-				select {
-				case ch <- ev:
-				default:
-				}
-			}
-		}
-	}
-
-	// --- handle exited PIDs ---
+// handleExitedPIDs removes tracked pre-sessions whose PID is no longer live
+// and broadcasts their removal.
+func (s *Scanner) handleExitedPIDs(live map[int]bool) {
 	s.mu.Lock()
 	var exited []trackedProc
 	for pid, proc := range s.tracked {
@@ -418,24 +469,27 @@ func (s *Scanner) poll() {
 			ProjectDir: proc.projectDir,
 		})
 	}
+}
 
-	// Prune argv-verdict cache entries whose PID no longer matches (process
-	// exited). Compare against the full matched set, not live — excluded
-	// PIDs were dropped from live but are still running and must keep their
-	// cached verdict.
+// pruneArgvVerdicts drops cached argv-filter verdicts for PIDs that no longer
+// matched this poll (process exited). Compares against the full matched set,
+// not live — excluded PIDs were dropped from live but are still running and
+// must keep their cached verdict.
+func (s *Scanner) pruneArgvVerdicts(pids []int) {
 	s.mu.Lock()
-	if len(s.argvVerdicts) > 0 {
-		matched := make(map[int]bool, len(pids))
-		for _, pid := range pids {
-			matched[pid] = true
-		}
-		for pid := range s.argvVerdicts {
-			if !matched[pid] {
-				delete(s.argvVerdicts, pid)
-			}
+	defer s.mu.Unlock()
+	if len(s.argvVerdicts) == 0 {
+		return
+	}
+	matched := make(map[int]bool, len(pids))
+	for _, pid := range pids {
+		matched[pid] = true
+	}
+	for pid := range s.argvVerdicts {
+		if !matched[pid] {
+			delete(s.argvVerdicts, pid)
 		}
 	}
-	s.mu.Unlock()
 }
 
 // argvExcluded reports whether pid's argv marks it as agent infrastructure

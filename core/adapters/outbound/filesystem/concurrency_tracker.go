@@ -115,12 +115,28 @@ func (t *ConcurrencyTracker) AgentsSeries(q outbound.SeriesQuery) (*outbound.Con
 		return nil, err
 	}
 
-	// Collect each session's active intervals, clamped to the window. Group by
-	// project for the per-bucket peak series, and keep a flat list for the exact
-	// total peak/average. Current counts sessions active strictly across End
-	// (their real, pre-clamp interval spans "now").
-	byProject := map[string][]interval{}
-	var all []interval
+	byProject, all, current := collectScopedIntervals(timelines, q, start, end)
+	out.Current = current
+
+	// Per-project per-bucket peak concurrency.
+	for project, ivs := range byProject {
+		dst, peak := bucketPeakSeries(ivs, start, bucketSeconds, n)
+		out.ByKey[project] = dst
+		out.PeakByKey[project] = peak
+	}
+
+	// Exact total peak (max simultaneous across all projects) and time-weighted
+	// average over [start, end).
+	out.Peak, out.Average = totalPeakAndAverage(all, start, end)
+	return out, nil
+}
+
+// collectScopedIntervals gathers each in-scope session's active intervals,
+// clamped to [start, end), grouped by project for the per-bucket peak series
+// and flattened for the exact total peak/average. current counts sessions
+// active strictly across end — their real, pre-clamp interval spans "now".
+func collectScopedIntervals(timelines map[string]*sessionTimeline, q outbound.SeriesQuery, start, end int64) (byProject map[string][]interval, all []interval, current float64) {
+	byProject = map[string][]interval{}
 	for sid, tl := range timelines {
 		if !concurrencyScopeMatches(q, sid, tl.project) {
 			continue
@@ -131,63 +147,76 @@ func (t *ConcurrencyTracker) AgentsSeries(q outbound.SeriesQuery) (*outbound.Con
 		}
 		for _, iv := range tl.activeIntervals() {
 			if iv.enter < end && iv.exit > end {
-				out.Current++ // spans the window end → still active "now"
+				current++ // spans the window end → still active "now"
 			}
-			a, b := iv.enter, iv.exit
-			if a < start {
-				a = start
-			}
-			if b > end {
-				b = end
-			}
-			if b <= a {
+			cl, ok := clampInterval(iv, start, end)
+			if !ok {
 				continue
 			}
-			cl := interval{a, b}
 			byProject[project] = append(byProject[project], cl)
 			all = append(all, cl)
 		}
 	}
+	return byProject, all, current
+}
 
-	// Per-project per-bucket peak concurrency.
-	for project, ivs := range byProject {
-		dst := make([]float64, n)
-		peak := 0.0
-		sweepIntervals(ivs, func(t0, t1 int64, v float64) {
-			if v > peak {
-				peak = v
-			}
-			lo := int((t0 - start) / bucketSeconds)
-			hi := int((t1 - 1 - start) / bucketSeconds)
-			if lo < 0 {
-				lo = 0
-			}
-			if hi >= n {
-				hi = n - 1
-			}
-			for i := lo; i <= hi; i++ {
-				if v > dst[i] {
-					dst[i] = v
-				}
-			}
-		})
-		out.ByKey[project] = dst
-		out.PeakByKey[project] = peak
+// clampInterval clips iv to [start, end), reporting ok=false when the
+// clamped span is empty.
+func clampInterval(iv interval, start, end int64) (interval, bool) {
+	a, b := iv.enter, iv.exit
+	if a < start {
+		a = start
 	}
+	if b > end {
+		b = end
+	}
+	if b <= a {
+		return interval{}, false
+	}
+	return interval{a, b}, true
+}
 
-	// Exact total peak (max simultaneous across all projects) and time-weighted
-	// average over [start, end).
+// bucketPeakSeries computes one project's per-bucket peak concurrency series
+// (length n, starting at start and stepping by bucketSeconds) plus its exact
+// peak across ivs.
+func bucketPeakSeries(ivs []interval, start, bucketSeconds int64, n int) ([]float64, float64) {
+	dst := make([]float64, n)
+	peak := 0.0
+	sweepIntervals(ivs, func(t0, t1 int64, v float64) {
+		if v > peak {
+			peak = v
+		}
+		lo := int((t0 - start) / bucketSeconds)
+		hi := int((t1 - 1 - start) / bucketSeconds)
+		if lo < 0 {
+			lo = 0
+		}
+		if hi >= n {
+			hi = n - 1
+		}
+		for i := lo; i <= hi; i++ {
+			if v > dst[i] {
+				dst[i] = v
+			}
+		}
+	})
+	return dst, peak
+}
+
+// totalPeakAndAverage computes the exact max-simultaneous count across all
+// projects and the time-weighted average over [start, end).
+func totalPeakAndAverage(all []interval, start, end int64) (peak, average float64) {
 	integral := 0.0
 	sweepIntervals(all, func(t0, t1 int64, v float64) {
-		if v > out.Peak {
-			out.Peak = v
+		if v > peak {
+			peak = v
 		}
 		integral += v * float64(t1-t0)
 	})
 	if end > start {
-		out.Average = integral / float64(end-start)
+		average = integral / float64(end-start)
 	}
-	return out, nil
+	return peak, average
 }
 
 // emptyConcurrencyResult returns a valid zero-data result so the dashboard
@@ -312,34 +341,44 @@ func (t *ConcurrencyTracker) loadTimelines() (map[string]*sessionTimeline, error
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
 			continue
 		}
-		if err := scanRecordingFile(filepath.Join(t.dir, e.Name()), func(ev lifecycle.Event) {
-			tl := timelines[ev.SessionID]
-			if tl == nil {
-				tl = &sessionTimeline{}
-				timelines[ev.SessionID] = tl
-			}
-			ts := ev.Timestamp.Unix()
-			if ts > tl.lastEventTS {
-				tl.lastEventTS = ts
-			}
-			if p := concurrencyProject(ev); p != "" {
-				tl.project = p
-			}
-			switch ev.Kind {
-			case lifecycle.KindStateTransition:
-				if session.IsCanonicalState(ev.NewState) {
-					tl.transitions = append(tl.transitions, stateChange{ts, ev.NewState})
-				}
-			case lifecycle.KindProcessExited, lifecycle.KindTranscriptRemoved:
-				// A terminated session is ready, even if no state_transition
-				// to ready was recorded for it.
-				tl.transitions = append(tl.transitions, stateChange{ts, session.StateReady})
-			}
+		path := filepath.Join(t.dir, e.Name())
+		if err := scanRecordingFile(path, func(ev lifecycle.Event) {
+			recordTimelineEvent(timelines, ev)
 		}); err != nil {
 			return nil, err
 		}
 	}
 	return timelines, nil
+}
+
+// recordTimelineEvent folds one recording event into the session timeline it
+// belongs to (creating the timeline on first sight), updating lastEventTS,
+// the project label ("last non-empty wins"), and appending a state
+// transition when the event is a canonical state change or a terminator
+// (process exit / transcript removal, both treated as going ready — a
+// terminated session is ready even if no state_transition to ready was
+// recorded for it).
+func recordTimelineEvent(timelines map[string]*sessionTimeline, ev lifecycle.Event) {
+	tl := timelines[ev.SessionID]
+	if tl == nil {
+		tl = &sessionTimeline{}
+		timelines[ev.SessionID] = tl
+	}
+	ts := ev.Timestamp.Unix()
+	if ts > tl.lastEventTS {
+		tl.lastEventTS = ts
+	}
+	if p := concurrencyProject(ev); p != "" {
+		tl.project = p
+	}
+	switch ev.Kind {
+	case lifecycle.KindStateTransition:
+		if session.IsCanonicalState(ev.NewState) {
+			tl.transitions = append(tl.transitions, stateChange{ts, ev.NewState})
+		}
+	case lifecycle.KindProcessExited, lifecycle.KindTranscriptRemoved:
+		tl.transitions = append(tl.transitions, stateChange{ts, session.StateReady})
+	}
 }
 
 // scanRecordingFile streams one recording file, invoking perEvent for each

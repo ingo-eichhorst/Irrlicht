@@ -153,45 +153,63 @@ func formatRow(a *session.Agent, useColor, showYield bool) string {
 
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "%-8s %-20s %s", s.State, projectName(s), shortID(s.SessionID))
-
-	if m := s.Metrics; m != nil {
-		if m.ModelName != "" {
-			sb.WriteString(" " + m.ModelName)
-		}
-		if m.ContextWindow > 0 {
-			pct := colorize(fmt.Sprintf("%.0f%%", m.ContextUtilization), m.PressureLevel, useColor)
-			fmt.Fprintf(&sb, " %s %dk", pct, m.ContextWindow/1000)
-		}
-		if cost := formatCostUSD(m.EstimatedCostUSD); cost != "" {
-			sb.WriteString(" " + cost)
-		}
-	}
-
+	sb.WriteString(formatMetricsSegment(s.Metrics, useColor))
 	if showYield {
-		state := s.YieldState
-		if state == "" {
-			state = session.YieldUnknown
-		}
-		sha := s.HeadCommit
-		if len(sha) > 7 {
-			sha = sha[:7]
-		}
-		if sha == "" {
-			sha = "-"
-		}
-		fmt.Fprintf(&sb, " %s %s", state, sha)
+		sb.WriteString(formatYieldSegment(s))
 	}
-
 	sb.WriteString(" " + adapterName(s))
-
-	if sub := s.Subagents; sub != nil && sub.Total > 0 {
-		noun := "agents"
-		if sub.Total == 1 {
-			noun = "agent"
-		}
-		fmt.Fprintf(&sb, " [%d %s: %dw/%dr]", sub.Total, noun, sub.Working, sub.Ready)
-	}
-
+	sb.WriteString(formatSubagentsSegment(s))
 	fmt.Fprintf(&sb, "  (%s ago)", age)
 	return sb.String()
+}
+
+// formatMetricsSegment renders the "model ctx% Nk $cost" portion of a row,
+// or "" when the session has no metrics yet.
+func formatMetricsSegment(m *session.SessionMetrics, useColor bool) string {
+	if m == nil {
+		return ""
+	}
+	var sb strings.Builder
+	if m.ModelName != "" {
+		sb.WriteString(" " + m.ModelName)
+	}
+	if m.ContextWindow > 0 {
+		pct := colorize(fmt.Sprintf("%.0f%%", m.ContextUtilization), m.PressureLevel, useColor)
+		fmt.Fprintf(&sb, " %s %dk", pct, m.ContextWindow/1000)
+	}
+	if cost := formatCostUSD(m.EstimatedCostUSD); cost != "" {
+		sb.WriteString(" " + cost)
+	}
+	return sb.String()
+}
+
+// formatYieldSegment renders the "yieldState sha7" columns shown when
+// --yield is on.
+func formatYieldSegment(s *session.SessionState) string {
+	state := s.YieldState
+	if state == "" {
+		state = session.YieldUnknown
+	}
+	sha := s.HeadCommit
+	if len(sha) > 7 {
+		sha = sha[:7]
+	}
+	if sha == "" {
+		sha = "-"
+	}
+	return fmt.Sprintf(" %s %s", state, sha)
+}
+
+// formatSubagentsSegment renders the "[N agents: Ww/Rr]" suffix, or "" when
+// the session has no subagents.
+func formatSubagentsSegment(s *session.SessionState) string {
+	sub := s.Subagents
+	if sub == nil || sub.Total == 0 {
+		return ""
+	}
+	noun := "agents"
+	if sub.Total == 1 {
+		noun = "agent"
+	}
+	return fmt.Sprintf(" [%d %s: %dw/%dr]", sub.Total, noun, sub.Working, sub.Ready)
 }

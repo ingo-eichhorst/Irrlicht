@@ -282,6 +282,49 @@ func (m *PlaybackManager) Current() *Playback {
 	return m.current
 }
 
+// resolveEventsDir picks the recording directory StartViewerInternal should
+// replay: recording == "" → the newest recording under scenarioDir;
+// otherwise the named recording, after reducing it to a single path segment
+// and validating it. Returns the resolved (Base()'d) recording name
+// alongside eventsDir so the caller can record the sanitized value onto the
+// Playback rather than the caller-supplied one.
+func resolveEventsDir(scenarioDir, scenario, recording string) (eventsDir, resolvedRecording string, err error) {
+	if recording == "" {
+		// Default to the newest recording.
+		newest, ok := validate.NewestRecordingDir(scenarioDir)
+		if !ok {
+			return "", "", fmt.Errorf("scenario %s has no recordings", scenario)
+		}
+		return newest, "", nil
+	}
+	// filepath.Base reduces recording to a single path segment before its
+	// regex check — a no-op for anything already regex-valid, but
+	// filepath.Base is the sanitizer CodeQL's go/path-injection query
+	// recognizes for the os.Stat below (a regex match alone doesn't visibly
+	// clear the taint; see shard.sanitizePathComponent for the same idiom).
+	// It also closes a real gap: archiveNameRE's charset includes "." and
+	// permits the literal value "..", which slugRE (no "." at all) already
+	// excludes for agent/scenario.
+	recording = filepath.Base(recording)
+	if isInvalidRecordingName(recording) {
+		return "", "", fmt.Errorf("invalid recording name")
+	}
+	eventsDir = filepath.Join(scenarioDir, "recordings", recording)
+	// eventsDir is built from the already-Base()'d/validated recording
+	// above, so this is a no-op for any legitimate value — but CodeQL's
+	// go/path-injection query doesn't credit that validation across the
+	// intervening filepath.Join (see the store.underRoot doc comment for
+	// the same rationale); checking the exact value reaching os.Stat,
+	// right here, is what it recognizes.
+	if strings.Contains(eventsDir, "..") {
+		return "", "", fmt.Errorf("invalid recording name")
+	}
+	if _, statErr := os.Stat(filepath.Join(eventsDir, "events.jsonl")); statErr != nil {
+		return "", "", fmt.Errorf("recording %q has no events.jsonl", recording)
+	}
+	return eventsDir, recording, nil
+}
+
 // Start a viewer-internal playback. Stops any existing playback first.
 // Every recording lives under <scenarioDir>/recordings/<recording>/. recording:
 // "" → the newest recording; non-empty → that specific recording.
@@ -289,11 +332,10 @@ func (m *PlaybackManager) StartViewerInternal(agent, subtree, scenario string, s
 	// filepath.Base reduces each value to a single path segment before its
 	// regex check — a no-op for anything already regex-valid, but
 	// filepath.Base is the sanitizer CodeQL's go/path-injection query
-	// recognizes for the os.Stat below (a regex match alone doesn't visibly
-	// clear the taint; see shard.sanitizePathComponent for the same idiom).
-	// It also closes a real gap for recording: archiveNameRE's charset
-	// includes "." and permits the literal value "..", which slugRE (no "."
-	// at all) already excludes for agent/scenario.
+	// recognizes for the file reads several hops downstream (a regex match
+	// alone doesn't visibly clear the taint; see shard.sanitizePathComponent
+	// for the same idiom). recording gets the same treatment inside
+	// resolveEventsDir below.
 	agent, scenario = filepath.Base(agent), filepath.Base(scenario)
 	if !slugRE.MatchString(agent) || !slugRE.MatchString(scenario) {
 		return nil, fmt.Errorf("invalid agent or scenario id")
@@ -302,32 +344,9 @@ func (m *PlaybackManager) StartViewerInternal(agent, subtree, scenario string, s
 		return nil, fmt.Errorf("subtree must be 'scenarios' or 'regressions'")
 	}
 	scenarioDir := filepath.Join(m.repoRoot, "replaydata", "agents", agent, subtree, scenario)
-	var eventsDir string
-	if recording != "" {
-		recording = filepath.Base(recording)
-		if isInvalidRecordingName(recording) {
-			return nil, fmt.Errorf("invalid recording name")
-		}
-		eventsDir = filepath.Join(scenarioDir, "recordings", recording)
-		// eventsDir is built from the already-Base()'d/validated recording
-		// above, so this is a no-op for any legitimate value — but CodeQL's
-		// go/path-injection query doesn't credit that validation across the
-		// intervening filepath.Join (see the store.underRoot doc comment for
-		// the same rationale); checking the exact value reaching os.Stat,
-		// right here, is what it recognizes.
-		if strings.Contains(eventsDir, "..") {
-			return nil, fmt.Errorf("invalid recording name")
-		}
-		if _, err := os.Stat(filepath.Join(eventsDir, "events.jsonl")); err != nil {
-			return nil, fmt.Errorf("recording %q has no events.jsonl", recording)
-		}
-	} else {
-		// Default to the newest recording.
-		newest, ok := validate.NewestRecordingDir(scenarioDir)
-		if !ok {
-			return nil, fmt.Errorf("scenario %s has no recordings", scenario)
-		}
-		eventsDir = newest
+	eventsDir, recording, err := resolveEventsDir(scenarioDir, scenario, recording)
+	if err != nil {
+		return nil, err
 	}
 	events, degraded, err := replay.LoadEventsOrSynthesize(eventsDir, agent)
 	if err != nil {

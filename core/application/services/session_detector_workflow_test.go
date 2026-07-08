@@ -64,28 +64,37 @@ func TestSessionDetector_WorkflowAgent_LinkedToParent(t *testing.T) {
 	// The lifecycle stream must carry the parent link, and the recorded
 	// transcript_new must use the stable layout label instead of the
 	// ephemeral wf_<run-id> directory name.
-	var linked, transcriptNew bool
-	for _, lev := range rec.snapshot() {
-		switch lev.Kind {
-		case lifecycle.KindParentLinked:
-			if lev.SessionID == "agent-a1" && lev.ParentSessionID == "parent-wf" {
-				linked = true
-			}
-		case lifecycle.KindTranscriptNew:
-			if lev.SessionID == "agent-a1" {
-				transcriptNew = true
-				if lev.ProjectDir != "subagents/workflows" {
-					t.Errorf("transcript_new ProjectDir = %q, want %q", lev.ProjectDir, "subagents/workflows")
-				}
-			}
-		}
-	}
+	linked, transcriptNew, transcriptNewProjectDir := findWorkflowLinkEvents(rec.snapshot(), "agent-a1", "parent-wf")
 	if !linked {
 		t.Error("no parent_linked lifecycle event recorded for agent-a1 → parent-wf")
 	}
 	if !transcriptNew {
 		t.Error("no transcript_new lifecycle event recorded for agent-a1")
+	} else if transcriptNewProjectDir != "subagents/workflows" {
+		t.Errorf("transcript_new ProjectDir = %q, want %q", transcriptNewProjectDir, "subagents/workflows")
 	}
+}
+
+// findWorkflowLinkEvents scans recorded lifecycle events for the two entries
+// the workflow-agent fan-out test cares about: a parent_linked event for
+// sessionID pointing at parentID, and a transcript_new event for sessionID
+// (returning its ProjectDir so the caller can assert on it).
+func findWorkflowLinkEvents(events []lifecycle.Event, sessionID, parentID string) (linked, transcriptNew bool, transcriptNewProjectDir string) {
+	for _, lev := range events {
+		if lev.SessionID != sessionID {
+			continue
+		}
+		switch lev.Kind {
+		case lifecycle.KindParentLinked:
+			if lev.ParentSessionID == parentID {
+				linked = true
+			}
+		case lifecycle.KindTranscriptNew:
+			transcriptNew = true
+			transcriptNewProjectDir = lev.ProjectDir
+		}
+	}
+	return linked, transcriptNew, transcriptNewProjectDir
 }
 
 func TestSessionDetector_WorkflowJournal_NotASession(t *testing.T) {

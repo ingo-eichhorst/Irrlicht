@@ -214,43 +214,13 @@ func (c *CacheBloatDetector) attributeVersion(state *session.SessionState, curre
 	if newest == "" {
 		return "", "", "", 0
 	}
-	all := c.snapshot()
 	cutoff := c.now() - int64(c.cfg.BaselineDays)*secondsPerDay
-
-	type group struct {
-		samples  []float64
-		lastSeen int64
-	}
-	groups := map[string]*group{}
-	for _, s := range all {
-		if !c.eligible(s, state.ProjectName, state.Adapter, cutoff) ||
-			s.SessionID == state.SessionID || s.Metrics.AgentVersion == "" {
-			continue
-		}
-		g := groups[s.Metrics.AgentVersion]
-		if g == nil {
-			g = &group{}
-			groups[s.Metrics.AgentVersion] = g
-		}
-		g.samples = append(g.samples, perTurnCacheCreation(s))
-		if s.UpdatedAt > g.lastSeen {
-			g.lastSeen = s.UpdatedAt
-		}
-	}
+	groups := c.groupByVersion(state, cutoff)
 	if len(groups) < 2 {
 		return "", "", "", 0 // single version → no attribution
 	}
 
-	// Prior version = the most-recently-seen version other than the newest.
-	var priorLastSeen int64 = -1
-	for v, g := range groups {
-		if v == newest {
-			continue
-		}
-		if g.lastSeen > priorLastSeen {
-			priorLastSeen, prior = g.lastSeen, v
-		}
-	}
+	prior = findPriorVersion(groups, newest)
 	if prior == "" {
 		return "", "", "", 0
 	}
@@ -258,12 +228,7 @@ func (c *CacheBloatDetector) attributeVersion(state *session.SessionState, curre
 	// Newest-version median: prefer the project's history; fall back to the
 	// live session's running median when the newest version has no completed
 	// sessions persisted yet.
-	newestMedian := currentMedian
-	if g := groups[newest]; g != nil {
-		if m, ok := stats.Median(g.samples); ok {
-			newestMedian = m
-		}
-	}
+	newestMedian := medianForVersion(groups, newest, currentMedian)
 	priorMedian, ok := stats.Median(groups[prior].samples)
 	if !ok {
 		return "", "", "", 0
@@ -276,6 +241,65 @@ func (c *CacheBloatDetector) attributeVersion(state *session.SessionState, curre
 	deltaTokens = int64(delta)
 	tooltip = fmt.Sprintf("%s %s +%dK cache tokens vs %s", state.Adapter, newest, deltaTokens/1000, prior)
 	return tooltip, newest, prior, deltaTokens
+}
+
+// versionGroup accumulates one AgentVersion's per-turn cache-creation samples
+// and the most recent UpdatedAt seen among its sessions, for attributeVersion.
+type versionGroup struct {
+	samples  []float64
+	lastSeen int64
+}
+
+// groupByVersion buckets the project's eligible completed sessions (same
+// project/adapter, recent enough, excluding state itself) by AgentVersion.
+func (c *CacheBloatDetector) groupByVersion(state *session.SessionState, cutoff int64) map[string]*versionGroup {
+	groups := map[string]*versionGroup{}
+	for _, s := range c.snapshot() {
+		if !c.eligible(s, state.ProjectName, state.Adapter, cutoff) ||
+			s.SessionID == state.SessionID || s.Metrics.AgentVersion == "" {
+			continue
+		}
+		g := groups[s.Metrics.AgentVersion]
+		if g == nil {
+			g = &versionGroup{}
+			groups[s.Metrics.AgentVersion] = g
+		}
+		g.samples = append(g.samples, perTurnCacheCreation(s))
+		if s.UpdatedAt > g.lastSeen {
+			g.lastSeen = s.UpdatedAt
+		}
+	}
+	return groups
+}
+
+// findPriorVersion returns the most-recently-seen version in groups other
+// than newest, or "" when no other version is present.
+func findPriorVersion(groups map[string]*versionGroup, newest string) string {
+	var priorLastSeen int64 = -1
+	var prior string
+	for v, g := range groups {
+		if v == newest {
+			continue
+		}
+		if g.lastSeen > priorLastSeen {
+			priorLastSeen, prior = g.lastSeen, v
+		}
+	}
+	return prior
+}
+
+// medianForVersion returns the median of version's samples in groups,
+// falling back to fallback when the version has no group or no computable
+// median.
+func medianForVersion(groups map[string]*versionGroup, version string, fallback float64) float64 {
+	g := groups[version]
+	if g == nil {
+		return fallback
+	}
+	if m, ok := stats.Median(g.samples); ok {
+		return m
+	}
+	return fallback
 }
 
 // cacheBloatExplanation composes the CacheBloat badge's longer plain-language

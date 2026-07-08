@@ -263,6 +263,46 @@ func assertBundleEndpoint(t *testing.T, client *http.Client, url string) {
 	}
 }
 
+// permissionsSnapshotAgent mirrors one entry of GET /api/v1/permissions'
+// "agents" array, used by assertPermissionsAllPending.
+type permissionsSnapshotAgent struct {
+	Name        string `json:"name"`
+	Permissions []struct {
+		Key   string `json:"key"`
+		State string `json:"state"`
+	} `json:"permissions"`
+}
+
+// countAgentsWithDeclaredPermissions returns how many agent adapters declare
+// at least one permission — the expected size of the permissions snapshot's
+// "agents" array minus the daemon-wide entries wired outside agents.All().
+func countAgentsWithDeclaredPermissions() int {
+	n := 0
+	for _, a := range agents.All() {
+		if len(a.Permissions) > 0 {
+			n++
+		}
+	}
+	return n
+}
+
+// assertAllPermissionsPending checks that every snapshot agent has at least
+// one permission and every permission is in the "pending" state — the
+// consent-first fresh-install invariant.
+func assertAllPermissionsPending(t *testing.T, snapAgents []permissionsSnapshotAgent) {
+	t.Helper()
+	for _, a := range snapAgents {
+		if len(a.Permissions) == 0 {
+			t.Errorf("agent %s has no permissions in the snapshot", a.Name)
+		}
+		for _, p := range a.Permissions {
+			if p.State != "pending" {
+				t.Errorf("%s/%s state = %q, want pending on fresh install", a.Name, p.Key, p.State)
+			}
+		}
+	}
+}
+
 // assertPermissionsAllPending GETs /api/v1/permissions and checks that every
 // agent with declared permissions appears and every permission is pending —
 // the consent-first fresh-install state.
@@ -277,14 +317,8 @@ func assertPermissionsAllPending(t *testing.T, client *http.Client, url string) 
 		t.Fatalf("GET %s: status %d, want 200", url, resp.StatusCode)
 	}
 	var snap struct {
-		Mode   string `json:"mode"`
-		Agents []struct {
-			Name        string `json:"name"`
-			Permissions []struct {
-				Key   string `json:"key"`
-				State string `json:"state"`
-			} `json:"permissions"`
-		} `json:"agents"`
+		Mode   string                     `json:"mode"`
+		Agents []permissionsSnapshotAgent `json:"agents"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&snap); err != nil {
 		t.Fatalf("decode %s: %v", url, err)
@@ -295,25 +329,10 @@ func assertPermissionsAllPending(t *testing.T, client *http.Client, url string) 
 	// Every agent adapter with declared permissions, plus the three daemon-
 	// wide entries wired in main.go outside agents.All(): the Gas Town
 	// orchestrator, launcher-identity capture, and the kitty config patch.
-	declared := 3
-	for _, a := range agents.All() {
-		if len(a.Permissions) > 0 {
-			declared++
-		}
+	if want := 3 + countAgentsWithDeclaredPermissions(); len(snap.Agents) != want {
+		t.Fatalf("GET %s returned %d agents, want %d", url, len(snap.Agents), want)
 	}
-	if len(snap.Agents) != declared {
-		t.Fatalf("GET %s returned %d agents, want %d", url, len(snap.Agents), declared)
-	}
-	for _, a := range snap.Agents {
-		if len(a.Permissions) == 0 {
-			t.Errorf("agent %s has no permissions in the snapshot", a.Name)
-		}
-		for _, p := range a.Permissions {
-			if p.State != "pending" {
-				t.Errorf("%s/%s state = %q, want pending on fresh install", a.Name, p.Key, p.State)
-			}
-		}
-	}
+	assertAllPermissionsPending(t, snap.Agents)
 }
 
 // dumpLogsOnFail registers a cleanup that prints the daemon's event log when

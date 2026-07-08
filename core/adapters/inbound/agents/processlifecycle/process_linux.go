@@ -153,22 +153,32 @@ func (linuxObserver) WriterOf(path string) (int, error) {
 		if pid == myPID {
 			continue
 		}
-		fdDir := fmt.Sprintf("/proc/%d/fd", pid)
-		fds, err := os.ReadDir(fdDir)
-		if err != nil {
-			continue // process exited or fds unreadable (not ours)
-		}
-		for _, fd := range fds {
-			target, err := os.Readlink(fdDir + "/" + fd.Name())
-			if err != nil || target != want {
-				continue
-			}
-			if fdWritable(pid, fd.Name()) {
-				return pid, nil
-			}
+		if pidHasFileOpenForWrite(pid, want) {
+			return pid, nil
 		}
 	}
 	return 0, nil
+}
+
+// pidHasFileOpenForWrite reports whether pid has an fd resolving to want open
+// for writing, by scanning /proc/<pid>/fd/* symlinks and confirming write
+// access via /proc/<pid>/fdinfo for any fd that already points at want.
+func pidHasFileOpenForWrite(pid int, want string) bool {
+	fdDir := fmt.Sprintf("/proc/%d/fd", pid)
+	fds, err := os.ReadDir(fdDir)
+	if err != nil {
+		return false // process exited or fds unreadable (not ours)
+	}
+	for _, fd := range fds {
+		target, err := os.Readlink(fdDir + "/" + fd.Name())
+		if err != nil || target != want {
+			continue
+		}
+		if fdWritable(pid, fd.Name()) {
+			return true
+		}
+	}
+	return false
 }
 
 // EnvOf returns the whitelisted launcher env of pid via /proc/<pid>/environ

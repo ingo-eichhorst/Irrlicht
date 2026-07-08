@@ -422,73 +422,102 @@ import { reconcile, paintRowNum } from './domReconcile.js';
     function applySessionUpdate(s) {
       const entry = sessionIndex.get(s.session_id);
       if (entry) {
-        const a = entry.agent;
-        // Capture previous state + pressure before merging so we can fire
-        // notifications on the transition (web parity for the menu-bar app's
-        // ready/waiting/pressure alerts).
-        const prevSnap = { state: a.state, metrics: a.metrics ? { pressure_level: a.metrics.pressure_level } : null };
-        const role = a.role, wn = a.worker_name, wid = a.worker_id, ch = a.children;
-        Object.assign(a, s);
-        if (role && !a.role) a.role = role;
-        if (wn && !a.worker_name) a.worker_name = wn;
-        if (wid && !a.worker_id) a.worker_id = wid;
-        a.children = ch;
-        // Migrate the agent if its project_name now points at a different
-        // group than where it currently lives. Without this, sessions whose
-        // first WS push arrived before metadata enrichment landed (empty
-        // project_name → "unknown" bucket) stay stranded there forever even
-        // after later updates carry the correct name. Children inherit their
-        // parent's group, so only migrate top-level entries. Rig sessions
-        // (nested under a Gas Town sub-group) are exempt — their group is
-        // structural, not project-derived, so a project_name mismatch must
-        // not tear them out of their rig.
-        if (!entry.parent && !entry.group._nested) {
-          const desired = a.project_name || 'unknown';
-          if (entry.group.name !== desired) {
-            const oldGroup = entry.group;
-            const ai = oldGroup.agents.findIndex(x => x.session_id === s.session_id);
-            if (ai >= 0) oldGroup.agents.splice(ai, 1);
-            let target = dashboardGroups.find(g => g.name === desired);
-            if (!target) {
-              target = {name: desired, agents: []};
-              dashboardGroups.push(target);
-            }
-            target.agents.push(a);
-            entry.group = target;
-            // Children's sessionIndex entries still point at the old group;
-            // refresh them so any future site that reads child.entry.group
-            // (e.g. a parent-deletion cleanup that drills into children)
-            // doesn't follow a reference to a group we just spliced out.
-            indexChildren(target, a);
-            if (oldGroup.agents.length === 0) {
-              const gi = dashboardGroups.indexOf(oldGroup);
-              if (gi >= 0) dashboardGroups.splice(gi, 1);
-            }
-          }
-        }
-        maybeNotifyOnUpdate(prevSnap, a);
+        updateExistingSession(entry, s);
         return;
       }
+      insertNewSession(s);
+    }
+
+    function updateExistingSession(entry, s) {
+      const a = entry.agent;
+      // Capture previous state + pressure before merging so we can fire
+      // notifications on the transition (web parity for the menu-bar app's
+      // ready/waiting/pressure alerts).
+      const prevSnap = { state: a.state, metrics: a.metrics ? { pressure_level: a.metrics.pressure_level } : null };
+      const role = a.role, wn = a.worker_name, wid = a.worker_id, ch = a.children;
+      Object.assign(a, s);
+      if (role && !a.role) a.role = role;
+      if (wn && !a.worker_name) a.worker_name = wn;
+      if (wid && !a.worker_id) a.worker_id = wid;
+      a.children = ch;
+      migrateSessionGroupIfNeeded(entry, a);
+      maybeNotifyOnUpdate(prevSnap, a);
+    }
+
+    // Migrate the agent if its project_name now points at a different
+    // group than where it currently lives. Without this, sessions whose
+    // first WS push arrived before metadata enrichment landed (empty
+    // project_name → "unknown" bucket) stay stranded there forever even
+    // after later updates carry the correct name. Children inherit their
+    // parent's group, so only migrate top-level entries. Rig sessions
+    // (nested under a Gas Town sub-group) are exempt — their group is
+    // structural, not project-derived, so a project_name mismatch must
+    // not tear them out of their rig.
+    // findOrCreateGroup returns the dashboard group with the given name,
+    // creating and registering an empty one if none exists yet. Extracted
+    // from migrateSessionGroupIfNeeded (issue #901 cognitive-complexity
+    // cleanup) and shared with insertNewSession, which needed the same
+    // lookup-or-create logic.
+    function findOrCreateGroup(name) {
+      let group = dashboardGroups.find(g => g.name === name);
+      if (!group) {
+        group = {name: name, agents: []};
+        dashboardGroups.push(group);
+      }
+      return group;
+    }
+
+    // removeAgentFromGroup splices an agent out of a group's flat agent
+    // list and drops the group entirely once it's left empty. Extracted
+    // from migrateSessionGroupIfNeeded (issue #901 cognitive-complexity
+    // cleanup).
+    function removeAgentFromGroup(group, sessionId) {
+      const ai = group.agents.findIndex(x => x.session_id === sessionId);
+      if (ai >= 0) group.agents.splice(ai, 1);
+      if (group.agents.length === 0) {
+        const gi = dashboardGroups.indexOf(group);
+        if (gi >= 0) dashboardGroups.splice(gi, 1);
+      }
+    }
+
+    function migrateSessionGroupIfNeeded(entry, a) {
+      if (entry.parent || entry.group._nested) return;
+      const desired = a.project_name || 'unknown';
+      if (entry.group.name === desired) return;
+      const oldGroup = entry.group;
+      removeAgentFromGroup(oldGroup, a.session_id);
+      const target = findOrCreateGroup(desired);
+      target.agents.push(a);
+      entry.group = target;
+      // Children's sessionIndex entries still point at the old group;
+      // refresh them so any future site that reads child.entry.group
+      // (e.g. a parent-deletion cleanup that drills into children)
+      // doesn't follow a reference to a group we just spliced out.
+      indexChildren(target, a);
+    }
+
+    function insertNewSession(s) {
       // First sight of this session — treat any non-trivial state as a
       // transition for notification purposes.
       maybeNotifyOnUpdate(null, s);
       const groupName = s.project_name || 'unknown';
-      let group = dashboardGroups.find(g => g.name === groupName);
-      if (!group) {
-        group = {name: groupName, agents: []};
-        dashboardGroups.push(group);
-      }
-      if (s.parent_session_id) {
-        const parentEntry = sessionIndex.get(s.parent_session_id);
-        if (parentEntry) {
-          if (!parentEntry.agent.children) parentEntry.agent.children = [];
-          parentEntry.agent.children.push(s);
-          sessionIndex.set(s.session_id, {group: parentEntry.group, agent: s, parent: parentEntry.agent});
-          return;
-        }
-      }
+      const group = findOrCreateGroup(groupName);
+      if (attachToParentIfPresent(s)) return;
       group.agents.push(s);
       sessionIndex.set(s.session_id, {group: group, agent: s, parent: null});
+    }
+
+    // attachToParentIfPresent links a newly-seen subagent session under its
+    // already-indexed parent (as a child), if the parent is known. Returns
+    // whether it did so, so the caller can skip the flat group.agents insert.
+    function attachToParentIfPresent(s) {
+      if (!s.parent_session_id) return false;
+      const parentEntry = sessionIndex.get(s.parent_session_id);
+      if (!parentEntry) return false;
+      if (!parentEntry.agent.children) parentEntry.agent.children = [];
+      parentEntry.agent.children.push(s);
+      sessionIndex.set(s.session_id, {group: parentEntry.group, agent: s, parent: parentEntry.agent});
+      return true;
     }
 
     function applySessionDelete(sessionId) {
@@ -1005,6 +1034,73 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       }
     }
 
+    // pressureAlertItem builds the pressure-alert sub-row for an active
+    // agent in an alert-worthy pressure state, or null otherwise. Extracted
+    // from emitAgentRowItems (issue #901 cognitive-complexity cleanup).
+    function pressureAlertItem(a) {
+      const isActive = a.state === 'working' || a.state === 'waiting';
+      const pressure = a.metrics ? a.metrics.pressure_level : '';
+      if (!isActive || !isAlertPressure(pressure)) return null;
+      return {type: 'alert', key: 'al:' + a.session_id, pressure: pressure};
+    }
+
+    // cacheBloatItem builds the cache-creation regression badge sub-row
+    // (#813) — separate row beneath the parent; the version-attribution
+    // string can be a full sentence, too wide for this fixed-width icon row
+    // (mirrors macOS's cacheBloatBlock) — or null when there's no bloat to
+    // report. Extracted from emitAgentRowItems (issue #901
+    // cognitive-complexity cleanup).
+    function cacheBloatItem(a) {
+      if (!a.metrics?.cache_bloat) return null;
+      return {type: 'cachebloat', key: 'cb:' + a.session_id, agent: a};
+    }
+
+    // taskSummaryItem builds the task-summary + waiting-question
+    // collapsible sub-row (issue #738) — shown when there's a summary (any
+    // state) or a pending question (waiting) — or null otherwise. Extracted
+    // from emitAgentRowItems (issue #901 cognitive-complexity cleanup).
+    function taskSummaryItem(a) {
+      if (!hasTaskSummaryOrQuestion(a)) return null;
+      return {type: 'summary', key: 's:' + a.session_id, agent: a, isChild: false};
+    }
+
+    // taskProgressItem builds the task-progress-dots sub-row — separate
+    // from the parent row so the dots don't push the meta columns off the
+    // session row, matching the overlay's TaskListView placement
+    // (SessionListView.swift:629-632) — or null when there are no open
+    // tasks. Extracted from emitAgentRowItems (issue #901
+    // cognitive-complexity cleanup).
+    function taskProgressItem(a) {
+      const tasks = a.metrics?.tasks || [];
+      const tasksOpen = tasks.length > 0 && !tasks.every(t => t.status === 'completed');
+      if (!tasksOpen) return null;
+      return {type: 'tasks', key: 'tk:' + a.session_id, agent: a, isChild: false};
+    }
+
+    // emitAgentRowItems pushes an agent's own row plus its collapsible
+    // sub-rows (pressure alert, cache-bloat badge, task summary, task
+    // progress) onto the flat render-item list. Extracted from emitGroup's
+    // per-agent loop body (issue #901 cognitive-complexity cleanup).
+    function emitAgentRowItems(items, a, agentNum, depth) {
+      items.push({type: 'agent', key: 'a:' + a.session_id, agent: a, num: agentNum, isChild: false, depth: depth});
+      const alert = pressureAlertItem(a);
+      if (alert) items.push(alert);
+      const cacheBloat = cacheBloatItem(a);
+      if (cacheBloat) items.push(cacheBloat);
+      const summary = taskSummaryItem(a);
+      if (summary) items.push(summary);
+      const taskProgress = taskProgressItem(a);
+      if (taskProgress) items.push(taskProgress);
+    }
+
+    function isAlertPressure(pressure) {
+      return pressure === 'high' || pressure === 'warning' || pressure === 'critical';
+    }
+
+    function hasTaskSummaryOrQuestion(a) {
+      return !!(a.metrics && (a.metrics.task_summary || (a.state === 'waiting' && a.metrics.last_assistant_text)));
+    }
+
     // --- Render ---
     function render() {
       const list = document.getElementById('session-list');
@@ -1050,34 +1146,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
           for (const a of (g.agents || [])) {
             if (isShadowedRemote(a, localIds)) continue;
             agentNum++;
-            items.push({type: 'agent', key: 'a:' + a.session_id, agent: a, num: agentNum, isChild: false, depth: depth});
-            // Pressure alert
-            const isActive = a.state === 'working' || a.state === 'waiting';
-            const pressure = a.metrics ? a.metrics.pressure_level : '';
-            if (isActive && (pressure === 'high' || pressure === 'warning' || pressure === 'critical')) {
-              items.push({type: 'alert', key: 'al:' + a.session_id, pressure: pressure});
-            }
-            // Cache-creation regression badge (#813) — separate row beneath
-            // the parent; the version-attribution string can be a full
-            // sentence, too wide for this fixed-width icon row (mirrors
-            // macOS's cacheBloatBlock).
-            if (a.metrics?.cache_bloat) {
-              items.push({type: 'cachebloat', key: 'cb:' + a.session_id, agent: a});
-            }
-            // Task summary + waiting question — collapsible block beneath the
-            // parent (issue #738). Renders when there's a summary (any state)
-            // or a pending question (waiting).
-            if (a.metrics && (a.metrics.task_summary || (a.state === 'waiting' && a.metrics.last_assistant_text))) {
-              items.push({type: 'summary', key: 's:' + a.session_id, agent: a, isChild: false});
-            }
-            // Task progress dots — separate row beneath the parent so they
-            // don't push the meta columns off the session row. Matches the
-            // overlay's TaskListView placement (SessionListView.swift:629-632).
-            const tasks = a.metrics?.tasks || [];
-            const tasksOpen = tasks.length > 0 && !tasks.every(t => t.status === 'completed');
-            if (tasksOpen) {
-              items.push({type: 'tasks', key: 'tk:' + a.session_id, agent: a, isChild: false});
-            }
+            emitAgentRowItems(items, a, agentNum, depth);
           }
           for (const sub of (g.groups || [])) emitGroup(sub, key, depth + 1);
         }
@@ -1322,41 +1391,45 @@ import { reconcile, paintRowNum } from './domReconcile.js';
     // --- Elapsed time tick (1s) ---
     function tickElapsed() {
       const now = Date.now() / 1000;
-      for (const el of document.querySelectorAll('.row-elapsed')) {
-        if (el.dataset.active === '1') {
-          const fs = Number.parseFloat(el.dataset.firstSeen);
-          if (fs) el.textContent = fmtDuration(Math.max(0, Math.floor(now - fs)));
-        }
-      }
+      for (const el of document.querySelectorAll('.row-elapsed')) tickRowElapsed(el, now);
       // Task-ETA chips burn down between polls. Only rows whose chip is
       // visible carry dataset.eta (updateSessionRow clears it otherwise),
       // and visibility/suppression decisions stay with updateSessionRow —
       // the tick only refreshes the countdown and staleness.
-      for (const el of document.querySelectorAll('.row-eta')) {
-        const eta = Number.parseFloat(el.dataset.eta);
-        if (!eta) continue;
-        const info = taskEtaPresentation({
-          task_completion_eta: eta,
-          task_estimate: {
-            total_rounds: Number.parseInt(el.dataset.total, 10) || 0,
-            completed_rounds: Number.parseInt(el.dataset.completed, 10) || 0,
-            updated_at: Number.parseFloat(el.dataset.updatedAt) || 0,
-          },
-        }, 'working', now);
-        if (info) {
-          el.textContent = info.text;
-          el.title = info.title;
-          el.classList.toggle('stale', info.stale);
-        }
-      }
+      for (const el of document.querySelectorAll('.row-eta')) tickRowEta(el, now);
       // Debug-mode "created" chip — only iterate when the toggle is on so
       // we don't waste DOM reads when the chip is hidden.
       if (settings.debugMode) {
-        for (const el of document.querySelectorAll('.row-created')) {
-          const fs = Number.parseFloat(el.dataset.firstSeen);
-          if (fs) el.textContent = 'created ' + fmtDuration(Math.max(0, Math.floor(now - fs))) + ' ago';
-        }
+        for (const el of document.querySelectorAll('.row-created')) tickRowCreated(el, now);
       }
+    }
+
+    function tickRowElapsed(el, now) {
+      if (el.dataset.active !== '1') return;
+      const fs = Number.parseFloat(el.dataset.firstSeen);
+      if (fs) el.textContent = fmtDuration(Math.max(0, Math.floor(now - fs)));
+    }
+
+    function tickRowEta(el, now) {
+      const eta = Number.parseFloat(el.dataset.eta);
+      if (!eta) return;
+      const info = taskEtaPresentation({
+        task_completion_eta: eta,
+        task_estimate: {
+          total_rounds: Number.parseInt(el.dataset.total, 10) || 0,
+          completed_rounds: Number.parseInt(el.dataset.completed, 10) || 0,
+          updated_at: Number.parseFloat(el.dataset.updatedAt) || 0,
+        },
+      }, 'working', now);
+      if (!info) return;
+      el.textContent = info.text;
+      el.title = info.title;
+      el.classList.toggle('stale', info.stale);
+    }
+
+    function tickRowCreated(el, now) {
+      const fs = Number.parseFloat(el.dataset.firstSeen);
+      if (fs) el.textContent = 'created ' + fmtDuration(Math.max(0, Math.floor(now - fs))) + ' ago';
     }
     setInterval(tickElapsed, 1000);
 
@@ -1425,26 +1498,39 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       fetch('/api/v1/agents').then(r => r.ok ? r.json() : null).catch(() => null),
       fetch('/api/v1/sessions').then(r => r.ok ? r.json() : null).catch(() => null),
     ]).then(([entries, resp]) => {
-      if (Array.isArray(entries)) {
-        for (const e of entries) {
-          if (e?.name) agentRegistry[e.name] = e;
-        }
-      }
-      if (resp) {
-        dashboardGroups = Array.isArray(resp) ? resp : (resp.groups || []);
-        // A group with no direct agents (e.g. a gastown orchestrator group
-        // whose agents all live in rig sub-groups) omits `agents` entirely
-        // (json omitempty). Normalize once at ingest so every consumer —
-        // rebuildIndex, render, group headers — can iterate unconditionally.
-        for (const g of dashboardGroups) {
-          if (g && !g.agents) g.agents = [];
-        }
-        dashboardProviderCosts = (resp && !Array.isArray(resp) && resp.provider_costs) || {};
-        rebuildIndex();
-      }
+      ingestAgentRegistry(entries);
+      ingestInitialSessions(resp);
       render();
       repaintHistory();
     });
+
+    function ingestAgentRegistry(entries) {
+      if (!Array.isArray(entries)) return;
+      for (const e of entries) {
+        if (e?.name) agentRegistry[e.name] = e;
+      }
+    }
+
+    // normalizeGroupAgents ensures every group has an `agents` array. A
+    // group with no direct agents (e.g. a gastown orchestrator group whose
+    // agents all live in rig sub-groups) omits `agents` entirely (json
+    // omitempty) — normalize once at ingest so every consumer —
+    // rebuildIndex, render, group headers — can iterate unconditionally.
+    // Extracted from ingestInitialSessions (issue #901
+    // cognitive-complexity cleanup).
+    function normalizeGroupAgents(groups) {
+      for (const g of groups) {
+        if (g && !g.agents) g.agents = [];
+      }
+    }
+
+    function ingestInitialSessions(resp) {
+      if (!resp) return;
+      dashboardGroups = Array.isArray(resp) ? resp : (resp.groups || []);
+      normalizeGroupAgents(dashboardGroups);
+      dashboardProviderCosts = (resp && !Array.isArray(resp) && resp.provider_costs) || {};
+      rebuildIndex();
+    }
     // structureSignature captures the daemon-computed shape of the group tree:
     // group nesting (Gas Town rig sub-groups) + each session's role/icon/worker
     // id. WS session deltas carry NONE of this (just the flat session), and the

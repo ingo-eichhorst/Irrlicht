@@ -245,7 +245,15 @@ func parseProcargs2(buf []byte) map[string]string {
 	if !ok {
 		return out
 	}
-	// Skip argv entries.
+	p = skipProcargs2ArgvEntries(buf, argc, p)
+	collectProcargs2EnvEntries(buf, p, out)
+	return out
+}
+
+// skipProcargs2ArgvEntries advances past the argc NUL-terminated argv[]
+// strings starting at offset p, returning the offset of the first envp
+// entry (or len(buf) if the buffer ends first).
+func skipProcargs2ArgvEntries(buf []byte, argc, p int) int {
 	for i := 0; i < argc && p < len(buf); i++ {
 		for p < len(buf) && buf[p] != 0 {
 			p++
@@ -254,15 +262,20 @@ func parseProcargs2(buf []byte) map[string]string {
 			p++ // skip NUL
 		}
 	}
-	// Remaining NUL-terminated strings are env entries until we hit an empty
-	// string or the end of the buffer.
+	return p
+}
+
+// collectProcargs2EnvEntries reads NUL-terminated "KEY=VALUE" envp entries
+// starting at offset p until an empty string or the end of the buffer,
+// recording the whitelisted ones into out.
+func collectProcargs2EnvEntries(buf []byte, p int, out map[string]string) {
 	for p < len(buf) {
 		start := p
 		for p < len(buf) && buf[p] != 0 {
 			p++
 		}
 		if p == start {
-			break
+			return
 		}
 		entry := string(buf[start:p])
 		if eq := strings.IndexByte(entry, '='); eq > 0 {
@@ -275,7 +288,6 @@ func parseProcargs2(buf []byte) map[string]string {
 			p++
 		}
 	}
-	return out
 }
 
 // procargs2ArgvOffset reads the int32 argc header of a KERN_PROCARGS2 buffer

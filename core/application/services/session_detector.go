@@ -566,6 +566,43 @@ func (d *SessionDetector) EnqueueTerminalUISignal(sessionID string, ui backchann
 	}
 }
 
+// terminalUITransition computes the state/reason/uiReason for a terminal UI
+// edge. ok is false when the edge is a no-op the caller should skip without
+// recording: the rising edge finding the session already waiting (e.g. the
+// claudecode hook beat us to it), the clearing edge finding a waiting state
+// we're not responsible for, or the clearing edge's re-classification
+// independently landing back on waiting.
+func terminalUITransition(state *session.SessionState, ui backchannel.UIKind) (newState, reason, uiReason string, ok bool) {
+	if ui == backchannel.UIKindTrustDialog {
+		// Rising edge. Already waiting means nothing to do — no double-count.
+		if state.State == session.StateWaiting {
+			return "", "", "", false
+		}
+		return session.StateWaiting, TerminalUIDetectedReason, TerminalUIDetectedReason, true
+	}
+
+	// Clearing edge. Only undo a waiting we are responsible for.
+	if state.State != session.StateWaiting {
+		return "", "", "", false
+	}
+	// Re-classify from a WORKING base, not from the current waiting state:
+	// ClassifyState is a no-op when called with currentState == waiting and
+	// nil/ambiguous metrics, which would strand the session in waiting forever
+	// once the dialog we forced is gone. From a working base it re-derives
+	// ready/working from the metrics, while a genuine transcript reason to
+	// keep waiting (an open user-blocking tool, a question cue) still routes
+	// back to waiting — in which case newState == waiting and the caller
+	// leaves it untouched.
+	newState, reason = ClassifyState(session.StateWorking, state.Metrics)
+	if newState == state.State {
+		return "", "", "", false // transcript independently keeps it waiting — leave it
+	}
+	if reason == "" {
+		reason = TerminalUIClearedReason
+	}
+	return newState, reason, TerminalUIClearedReason, true
+}
+
 // handleTerminalUISignal folds a rendered-terminal UI edge into the session
 // lifecycle. It runs on the event-loop goroutine, but the load-modify-save runs
 // under WithSessionStateLock — the same lock processActivity and the async
@@ -581,36 +618,9 @@ func (d *SessionDetector) handleTerminalUISignal(sig terminalUISignal) {
 			return // session gone since the signal was queued
 		}
 
-		var newState, reason, uiReason string
-		switch sig.ui {
-		case backchannel.UIKindTrustDialog:
-			// Rising edge. Already waiting (e.g. the claudecode hook beat us to
-			// it) means nothing to do — no double-count.
-			if state.State == session.StateWaiting {
-				return
-			}
-			newState, reason, uiReason = session.StateWaiting, TerminalUIDetectedReason, TerminalUIDetectedReason
-		default:
-			// Clearing edge. Only undo a waiting we are responsible for.
-			if state.State != session.StateWaiting {
-				return
-			}
-			// Re-classify from a WORKING base, not from the current waiting
-			// state: ClassifyState is a no-op when called with currentState ==
-			// waiting and nil/ambiguous metrics, which would strand the session
-			// in waiting forever once the dialog we forced is gone. From a
-			// working base it re-derives ready/working from the metrics, while a
-			// genuine transcript reason to keep waiting (an open user-blocking
-			// tool, a question cue) still routes back to waiting — in which case
-			// newState == waiting and we leave it untouched below.
-			newState, reason = ClassifyState(session.StateWorking, state.Metrics)
-			if newState == state.State {
-				return // transcript independently keeps it waiting — leave it
-			}
-			if reason == "" {
-				reason = TerminalUIClearedReason
-			}
-			uiReason = TerminalUIClearedReason
+		newState, reason, uiReason, ok := terminalUITransition(state, sig.ui)
+		if !ok {
+			return
 		}
 
 		// Record only once we are actually acting, so a no-op edge never inflates

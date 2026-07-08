@@ -220,22 +220,8 @@ func (w *Watcher) Unsubscribe(ch <-chan agent.Event) {
 func (w *Watcher) handleEvent(watcher *fsnotify.Watcher, ev fsnotify.Event) {
 	name := ev.Name
 
-	// If a new directory was created anywhere under root, start watching it
-	// and any subdirectories it already contains. A recursive walk is
-	// required because the directory may already contain nested
-	// subdirectories by the time we process the event — e.g. Claude Code
-	// creates <session>/, <session>/subagents/, and the subagent files
-	// inside it in rapid succession, and our handler runs late enough
-	// that only <session>/ appears in the fsnotify event stream. Without
-	// the recursive walk, the nested subagents/ dir never gets a watch
-	// and every subagent transcript is silently missed.
-	if ev.Op&fsnotify.Create != 0 {
-		if info, err := os.Stat(name); err == nil && info.IsDir() {
-			if strings.HasPrefix(name, w.root) {
-				w.addSubtree(watcher, name)
-			}
-			return
-		}
+	if ev.Op&fsnotify.Create != 0 && w.handleDirCreate(watcher, name) {
+		return
 	}
 
 	// Only process .jsonl files (transcript files).
@@ -253,7 +239,7 @@ func (w *Watcher) handleEvent(watcher *fsnotify.Watcher, ev fsnotify.Event) {
 	switch {
 	case ev.Op&fsnotify.Create != 0:
 		size, mtime := fileSizeAndMtime(name)
-		if w.maxAge > 0 && !mtime.IsZero() && time.Since(mtime) > w.maxAge {
+		if w.isStale(mtime) {
 			return
 		}
 		w.broadcast(agent.Event{
@@ -266,7 +252,7 @@ func (w *Watcher) handleEvent(watcher *fsnotify.Watcher, ev fsnotify.Event) {
 
 	case ev.Op&fsnotify.Write != 0:
 		size, mtime := fileSizeAndMtime(name)
-		if w.maxAge > 0 && !mtime.IsZero() && time.Since(mtime) > w.maxAge {
+		if w.isStale(mtime) {
 			return
 		}
 		w.broadcast(agent.Event{
@@ -286,6 +272,34 @@ func (w *Watcher) handleEvent(watcher *fsnotify.Watcher, ev fsnotify.Event) {
 			Size:           0,
 		})
 	}
+}
+
+// handleDirCreate handles a Create event that names a directory: starts
+// watching it and any subdirectories it already contains, and reports
+// whether the event was for a directory (in which case handleEvent should
+// stop — directories are never transcript files). A recursive walk is
+// required because the directory may already contain nested subdirectories
+// by the time we process the event — e.g. Claude Code creates <session>/,
+// <session>/subagents/, and the subagent files inside it in rapid
+// succession, and our handler runs late enough that only <session>/ appears
+// in the fsnotify event stream. Without the recursive walk, the nested
+// subagents/ dir never gets a watch and every subagent transcript is
+// silently missed. Split out of handleEvent (go:S3776).
+func (w *Watcher) handleDirCreate(watcher *fsnotify.Watcher, name string) bool {
+	info, err := os.Stat(name)
+	if err != nil || !info.IsDir() {
+		return false
+	}
+	if strings.HasPrefix(name, w.root) {
+		w.addSubtree(watcher, name)
+	}
+	return true
+}
+
+// isStale reports whether mtime is older than the watcher's maxAge cutoff.
+// A non-positive maxAge disables the cutoff.
+func (w *Watcher) isStale(mtime time.Time) bool {
+	return w.maxAge > 0 && !mtime.IsZero() && time.Since(mtime) > w.maxAge
 }
 
 // broadcast sends an event to all subscribers. Non-blocking: drops if consumer

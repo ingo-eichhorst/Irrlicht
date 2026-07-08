@@ -212,27 +212,44 @@ func extractLineText(raw map[string]any) string {
 	case string:
 		return c
 	case []any:
-		var parts []string
-		for _, blk := range c {
-			if len(parts) >= 2 {
-				break
-			}
-			b, ok := blk.(map[string]any)
-			if !ok {
-				continue
-			}
-			if t, _ := b["type"].(string); t != "" && t != "text" {
-				continue
-			}
-			if s, _ := b["text"].(string); s != "" {
-				parts = append(parts, s)
-			}
-		}
-		if len(parts) > 0 {
-			return strings.Join(parts, " ")
-		}
+		return extractTextFromBlocks(c)
 	}
 	return ""
+}
+
+// extractTextFromBlocks concatenates the first two text blocks of a
+// claudecode-style content array. tool_use and tool_result blocks are
+// skipped so the lane shows the conversation the user actually wrote/read,
+// not tool internals. Returns "" if there are no text blocks.
+func extractTextFromBlocks(blocks []any) string {
+	var parts []string
+	for _, blk := range blocks {
+		if len(parts) >= 2 {
+			break
+		}
+		if s, ok := blockText(blk); ok {
+			parts = append(parts, s)
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
+// blockText returns the text of a single content block, and false if the
+// block isn't a map, is a non-text block (tool_use/tool_result), or carries
+// no text.
+func blockText(blk any) (string, bool) {
+	b, ok := blk.(map[string]any)
+	if !ok {
+		return "", false
+	}
+	if t, _ := b["type"].(string); t != "" && t != "text" {
+		return "", false
+	}
+	s, _ := b["text"].(string)
+	if s == "" {
+		return "", false
+	}
+	return s, true
 }
 
 // extractLineSession picks up the session id from the various places

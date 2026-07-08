@@ -27,10 +27,7 @@ func TestHandlePIDAssigned_BackgroundCapture(t *testing.T) {
 		})
 
 		pm.HandlePIDAssigned(42, "s")
-		bg := repo.states["s"].Background
-		if bg == nil {
-			t.Fatal("background not captured")
-		}
+		bg := requireBackground(t, repo, "s")
 		if bg.Name != "bg job" {
 			t.Errorf("name: got %q, want \"bg job\"", bg.Name)
 		}
@@ -57,10 +54,7 @@ func TestHandlePIDAssigned_BackgroundCapture(t *testing.T) {
 		})
 
 		pm.HandlePIDAssigned(42, "s")
-		bg := repo.states["s"].Background
-		if bg == nil {
-			t.Fatal("background not captured")
-		}
+		bg := requireBackground(t, repo, "s")
 		if bg.Detached {
 			t.Error("Detached: got true, want false (launcher TTY present)")
 		}
@@ -71,9 +65,7 @@ func TestHandlePIDAssigned_BackgroundCapture(t *testing.T) {
 		repo.states["s"] = newReady()
 		pm := newPIDManagerForTest(repo)
 		pm.HandlePIDAssigned(42, "s")
-		if repo.states["s"].Background != nil {
-			t.Error("Background set without a reader installed")
-		}
+		assertNoBackground(t, repo, "s", "Background set without a reader installed")
 	})
 
 	t.Run("nil result leaves interactive sessions unmarked", func(t *testing.T) {
@@ -82,8 +74,25 @@ func TestHandlePIDAssigned_BackgroundCapture(t *testing.T) {
 		pm := newPIDManagerForTest(repo)
 		pm.SetBackgroundReader(func(pid int) *session.BackgroundAgent { return nil })
 		pm.HandlePIDAssigned(42, "s")
-		if repo.states["s"].Background != nil {
-			t.Error("Background set for an unrecognized (nil-result) PID")
-		}
+		assertNoBackground(t, repo, "s", "Background set for an unrecognized (nil-result) PID")
 	})
+}
+
+// requireBackground fetches sessionID's captured Background from repo,
+// failing t fatally when it wasn't set.
+func requireBackground(t *testing.T, repo *mockRepo, sessionID string) *session.BackgroundAgent {
+	t.Helper()
+	bg := repo.states[sessionID].Background
+	if bg == nil {
+		t.Fatal("background not captured")
+	}
+	return bg
+}
+
+// assertNoBackground fails t with msg when sessionID's Background got set.
+func assertNoBackground(t *testing.T, repo *mockRepo, sessionID, msg string) {
+	t.Helper()
+	if repo.states[sessionID].Background != nil {
+		t.Error(msg)
+	}
 }

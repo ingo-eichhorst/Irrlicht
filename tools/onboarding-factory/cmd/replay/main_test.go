@@ -30,45 +30,61 @@ func fixturePath(t *testing.T, rel string) string {
 	parts := strings.SplitN(rel, "/", 3)
 	if len(parts) != 3 {
 		// No scenario/basename split — treat rel as a literal agents-relative path.
-		abs, err := filepath.Abs(filepath.Join("..", "..", "..", "..", "replaydata", "agents", rel))
-		if err != nil {
-			t.Fatalf("abs fixture path: %v", err)
-		}
-		return abs
+		return mustAbs(t, filepath.Join("..", "..", "..", "..", "replaydata", "agents", rel))
 	}
 	adapter, scenario, base := parts[0], parts[1], parts[2]
 	for _, subtree := range []string{"scenarios", "regressions"} {
-		cellDir := filepath.Join("..", "..", "..", "..", "replaydata", "agents", adapter, subtree, scenario)
-		recsDir := filepath.Join(cellDir, "recordings")
-		entries, err := os.ReadDir(recsDir)
-		if err != nil {
-			continue
-		}
-		// Newest-first by name (timestamp-prefixed → chronological).
-		names := make([]string, 0, len(entries))
-		for _, e := range entries {
-			if e.IsDir() {
-				names = append(names, e.Name())
-			}
-		}
-		sort.Sort(sort.Reverse(sort.StringSlice(names)))
-		for _, name := range names {
-			cand := filepath.Join(recsDir, name, base)
-			if _, err := os.Stat(cand); err == nil {
-				abs, err := filepath.Abs(cand)
-				if err != nil {
-					t.Fatalf("abs fixture path: %v", err)
-				}
-				return abs
-			}
+		if cand, ok := findNewestFixture(subtree, adapter, scenario, base); ok {
+			return mustAbs(t, cand)
 		}
 	}
 	// Nothing found — return a scenarios/ recordings path for a clear error.
-	abs, err := filepath.Abs(filepath.Join("..", "..", "..", "..", "replaydata", "agents", adapter, "scenarios", scenario, "recordings", base))
+	return mustAbs(t, filepath.Join("..", "..", "..", "..", "replaydata", "agents", adapter, "scenarios", scenario, "recordings", base))
+}
+
+// mustAbs resolves path to an absolute path, failing the test on error.
+func mustAbs(t *testing.T, path string) string {
+	t.Helper()
+	abs, err := filepath.Abs(path)
 	if err != nil {
 		t.Fatalf("abs fixture path: %v", err)
 	}
 	return abs
+}
+
+// findNewestFixture looks for base inside the newest (lexicographically-
+// greatest name) recordings/<name>/ directory under
+// replaydata/agents/<adapter>/<subtree>/<scenario>/recordings/, returning
+// (path, false) when the subtree or a matching recording doesn't exist.
+func findNewestFixture(subtree, adapter, scenario, base string) (string, bool) {
+	cellDir := filepath.Join("..", "..", "..", "..", "replaydata", "agents", adapter, subtree, scenario)
+	recsDir := filepath.Join(cellDir, "recordings")
+	entries, err := os.ReadDir(recsDir)
+	if err != nil {
+		return "", false
+	}
+	// Newest-first by name (timestamp-prefixed → chronological).
+	names := recordingDirNames(entries)
+	sort.Sort(sort.Reverse(sort.StringSlice(names)))
+	for _, name := range names {
+		cand := filepath.Join(recsDir, name, base)
+		if _, err := os.Stat(cand); err == nil {
+			return cand, true
+		}
+	}
+	return "", false
+}
+
+// recordingDirNames returns the directory names among entries (recording
+// folders live directly under recordings/; any plain file there is ignored).
+func recordingDirNames(entries []os.DirEntry) []string {
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() {
+			names = append(names, e.Name())
+		}
+	}
+	return names
 }
 
 // TestReplayWithSidecar_GoldenFixture locks in the regression oracle: the
@@ -179,50 +195,18 @@ func TestReplayWithSidecar_ContinueFixture(t *testing.T) {
 	// at 21:11:40.970) — no daemon was attached then.
 	gapStart := mustParseRFC3339(t, "2026-04-11T20:56:47.276869+02:00")
 	gapEnd := mustParseRFC3339(t, "2026-04-11T21:11:40.970771+02:00")
-	for _, tr := range report.Transitions {
-		if tr.VirtualTime.After(gapStart) && tr.VirtualTime.Before(gapEnd) {
-			t.Errorf("ghost transition inside process-exit gap: idx=%d %s→%s at %s",
-				tr.Index, tr.PrevState, tr.NewState,
-				tr.VirtualTime.Format(time.RFC3339Nano))
-		}
-	}
+	assertNoTransitionsInGap(t, report.Transitions, gapStart, gapEnd)
 
 	// Lifetime 2's recorded sequence (pre-#329 daemon) ends with a
 	// spurious ready→working→ready pair at the same timestamp
 	// (21:11:50.310406) — the same skip-only-pass flicker the #329 fix
 	// eliminates. Post-fix the replay produces only the first two
 	// lifetime-2 transitions; the recorded pair at seq 724/725 is gone.
-	lifetime2Want := []struct {
-		ts        string
-		prevState string
-		newState  string
-	}{
+	lifetime2Want := []wantTransition{
 		{"2026-04-11T21:11:45.046448+02:00", session.StateReady, session.StateWorking},
 		{"2026-04-11T21:11:47.76431+02:00", session.StateWorking, session.StateReady},
 	}
-	var lifetime2Got []transition
-	for _, tr := range report.Transitions {
-		if tr.VirtualTime.After(gapEnd) {
-			lifetime2Got = append(lifetime2Got, tr)
-		}
-	}
-	if len(lifetime2Got) != len(lifetime2Want) {
-		t.Fatalf("lifetime 2 transitions: got %d, want %d — %+v",
-			len(lifetime2Got), len(lifetime2Want), lifetime2Got)
-	}
-	for i, w := range lifetime2Want {
-		wantTime := mustParseRFC3339(t, w.ts)
-		got := lifetime2Got[i]
-		if !got.VirtualTime.Equal(wantTime) {
-			t.Errorf("lifetime 2 transition[%d] time: got %s, want %s",
-				i, got.VirtualTime.Format(time.RFC3339Nano),
-				wantTime.Format(time.RFC3339Nano))
-		}
-		if got.PrevState != w.prevState || got.NewState != w.newState {
-			t.Errorf("lifetime 2 transition[%d] states: got %s→%s, want %s→%s",
-				i, got.PrevState, got.NewState, w.prevState, w.newState)
-		}
-	}
+	assertLifetime2Transitions(t, report.Transitions, gapEnd, lifetime2Want)
 
 	// The sidecar still has 10 recorded transitions (pre-#329 daemon).
 	// Two effects shape OrderedMatches:
@@ -255,6 +239,58 @@ func mustParseRFC3339(t *testing.T, s string) time.Time {
 		t.Fatalf("parse %q: %v", s, err)
 	}
 	return ts
+}
+
+// assertNoTransitionsInGap fails the test if any replayed transition's
+// virtual time falls strictly inside (gapStart, gapEnd) — the process-exit
+// gap where no daemon was attached, so no transition should have been
+// classified there (issue #144).
+func assertNoTransitionsInGap(t *testing.T, transitions []transition, gapStart, gapEnd time.Time) {
+	t.Helper()
+	for _, tr := range transitions {
+		if tr.VirtualTime.After(gapStart) && tr.VirtualTime.Before(gapEnd) {
+			t.Errorf("ghost transition inside process-exit gap: idx=%d %s→%s at %s",
+				tr.Index, tr.PrevState, tr.NewState,
+				tr.VirtualTime.Format(time.RFC3339Nano))
+		}
+	}
+}
+
+// wantTransition is one expected (timestamp, prevState, newState) triple
+// asserted by assertLifetime2Transitions.
+type wantTransition struct {
+	ts        string
+	prevState string
+	newState  string
+}
+
+// assertLifetime2Transitions collects the replayed transitions after gapEnd
+// (lifetime 2) and checks them against want, by index, on both timestamp and
+// state pair.
+func assertLifetime2Transitions(t *testing.T, transitions []transition, gapEnd time.Time, want []wantTransition) {
+	t.Helper()
+	var got []transition
+	for _, tr := range transitions {
+		if tr.VirtualTime.After(gapEnd) {
+			got = append(got, tr)
+		}
+	}
+	if len(got) != len(want) {
+		t.Fatalf("lifetime 2 transitions: got %d, want %d — %+v", len(got), len(want), got)
+	}
+	for i, w := range want {
+		wantTime := mustParseRFC3339(t, w.ts)
+		g := got[i]
+		if !g.VirtualTime.Equal(wantTime) {
+			t.Errorf("lifetime 2 transition[%d] time: got %s, want %s",
+				i, g.VirtualTime.Format(time.RFC3339Nano),
+				wantTime.Format(time.RFC3339Nano))
+		}
+		if g.PrevState != w.prevState || g.NewState != w.newState {
+			t.Errorf("lifetime 2 transition[%d] states: got %s→%s, want %s→%s",
+				i, g.PrevState, g.NewState, w.prevState, w.newState)
+		}
+	}
 }
 
 // TestReplayWithSidecar_NoTranscriptNew verifies that a sidecar with no

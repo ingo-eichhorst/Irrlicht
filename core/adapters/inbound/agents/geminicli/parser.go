@@ -226,12 +226,10 @@ func (p *Parser) parseInfo(raw map[string]interface{}, ev *tailer.ParsedEvent) b
 	return false
 }
 
-// parseUser handles a user-role message: a real text prompt, or the model's
-// tool outputs recorded as functionResponse parts.
-func (p *Parser) parseUser(raw map[string]interface{}, ev *tailer.ParsedEvent) bool {
-	parts, _ := raw["content"].([]interface{})
-	var toolResultIDs []string
-	var firstText string
+// collectGeminiUserParts walks a user-role message's parts, collecting any
+// functionResponse ids (tool results) and the first non-empty text part.
+// Split out of parseUser (go:S3776).
+func collectGeminiUserParts(parts []interface{}) (toolResultIDs []string, firstText string) {
 	for _, part := range parts {
 		pm, ok := part.(map[string]interface{})
 		if !ok {
@@ -247,6 +245,14 @@ func (p *Parser) parseUser(raw map[string]interface{}, ev *tailer.ParsedEvent) b
 			firstText = text
 		}
 	}
+	return toolResultIDs, firstText
+}
+
+// parseUser handles a user-role message: a real text prompt, or the model's
+// tool outputs recorded as functionResponse parts.
+func (p *Parser) parseUser(raw map[string]interface{}, ev *tailer.ParsedEvent) bool {
+	parts, _ := raw["content"].([]interface{})
+	toolResultIDs, firstText := collectGeminiUserParts(parts)
 
 	// Tool results: Gemini records the model's tool outputs as a user-role
 	// message of functionResponse parts. This closes the matching open tools
@@ -312,34 +318,7 @@ func (p *Parser) parseAssistant(raw map[string]interface{}, ev *tailer.ParsedEve
 		if !ok {
 			continue
 		}
-		callID, _ := tcm["id"].(string)
-		name, _ := tcm["name"].(string)
-		if callID != "" || name != "" {
-			ev.ToolUses = append(ev.ToolUses, tailer.ToolUse{ID: callID, Name: name})
-		}
-		// write_todos carries a full-list snapshot of the session's todos;
-		// reconcile it into TaskDeltas so the dashboard's task dots populate.
-		if name == "write_todos" {
-			p.appendWriteTodosDeltas(tcm, ev)
-		}
-		if sp := backgroundSpawnFromToolCall(tcm); sp != nil {
-			ev.BackgroundSpawns = append(ev.BackgroundSpawns, *sp)
-		}
-		// Gemini persists a finished toolCall with a terminal status and an
-		// embedded result, so close it here too — a session the daemon only
-		// observes after the fact still balances. A duplicate close from the
-		// later functionResponse line is harmless.
-		switch status, _ := tcm["status"].(string); status {
-		case "success":
-			if callID != "" {
-				ev.ToolResultIDs = append(ev.ToolResultIDs, callID)
-			}
-		case "error", "cancelled":
-			if callID != "" {
-				ev.ToolResultIDs = append(ev.ToolResultIDs, callID)
-			}
-			ev.IsError = true
-		}
+		p.applyGeminiToolCall(tcm, ev)
 	}
 
 	// Gemini emits no explicit end-of-turn marker. An assistant message that
@@ -350,6 +329,40 @@ func (p *Parser) parseAssistant(raw map[string]interface{}, ev *tailer.ParsedEve
 		ev.EventType = "turn_done"
 	}
 	return true
+}
+
+// applyGeminiToolCall folds one toolCalls[] entry into ev: the tool-use
+// record, write_todos delta reconciliation, background-spawn detection, and
+// terminal-status result closing. Split out of parseAssistant (go:S3776).
+func (p *Parser) applyGeminiToolCall(tcm map[string]interface{}, ev *tailer.ParsedEvent) {
+	callID, _ := tcm["id"].(string)
+	name, _ := tcm["name"].(string)
+	if callID != "" || name != "" {
+		ev.ToolUses = append(ev.ToolUses, tailer.ToolUse{ID: callID, Name: name})
+	}
+	// write_todos carries a full-list snapshot of the session's todos;
+	// reconcile it into TaskDeltas so the dashboard's task dots populate.
+	if name == "write_todos" {
+		p.appendWriteTodosDeltas(tcm, ev)
+	}
+	if sp := backgroundSpawnFromToolCall(tcm); sp != nil {
+		ev.BackgroundSpawns = append(ev.BackgroundSpawns, *sp)
+	}
+	// Gemini persists a finished toolCall with a terminal status and an
+	// embedded result, so close it here too — a session the daemon only
+	// observes after the fact still balances. A duplicate close from the
+	// later functionResponse line is harmless.
+	switch status, _ := tcm["status"].(string); status {
+	case "success":
+		if callID != "" {
+			ev.ToolResultIDs = append(ev.ToolResultIDs, callID)
+		}
+	case "error", "cancelled":
+		if callID != "" {
+			ev.ToolResultIDs = append(ev.ToolResultIDs, callID)
+		}
+		ev.IsError = true
+	}
 }
 
 // applyTokens reads Gemini's per-message token block and emits the latest-turn

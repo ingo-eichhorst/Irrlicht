@@ -142,29 +142,37 @@ func (e *metadataEnricher) RefreshMetrics(state *session.SessionState) {
 func (e *metadataEnricher) BackfillMetadata(states []*session.SessionState) []*session.SessionState {
 	var changed []*session.SessionState
 	for _, state := range states {
-		if state.ProjectName != "" {
-			continue
-		}
-		updated := false
-		if state.CWD == "" && state.TranscriptPath != "" {
-			if cwd := e.git.GetCWDFromTranscript(state.TranscriptPath); cwd != "" {
-				state.CWD = cwd
-				updated = true
-			}
-		}
-		if state.CWD != "" {
-			if state.ProjectName == "" {
-				state.ProjectName = e.git.GetProjectName(state.CWD)
-				updated = true
-			}
-			if state.GitBranch == "" {
-				state.GitBranch = e.git.GetBranch(state.CWD)
-				updated = true
-			}
-		}
-		if updated {
+		if e.backfillOne(state) {
 			changed = append(changed, state)
 		}
 	}
 	return changed
+}
+
+// backfillOne fills in state's missing CWD, ProjectName, and GitBranch in
+// place (state.ProjectName already set means it was fully backfilled before,
+// so it's left untouched). Returns true when any field was updated.
+func (e *metadataEnricher) backfillOne(state *session.SessionState) bool {
+	if state.ProjectName != "" {
+		return false
+	}
+	updated := false
+	if state.CWD == "" && state.TranscriptPath != "" {
+		if cwd := e.git.GetCWDFromTranscript(state.TranscriptPath); cwd != "" {
+			state.CWD = cwd
+			updated = true
+		}
+	}
+	if state.CWD == "" {
+		return updated
+	}
+	if state.ProjectName == "" {
+		state.ProjectName = e.git.GetProjectName(state.CWD)
+		updated = true
+	}
+	if state.GitBranch == "" {
+		state.GitBranch = e.git.GetBranch(state.CWD)
+		updated = true
+	}
+	return updated
 }

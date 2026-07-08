@@ -385,48 +385,66 @@ func TestSessionDetector_BackgroundMixed_IndependentLivenessAndPurge(t *testing.
 
 	t.Run("output alive, PID dead -> held working, only PID purged", func(t *testing.T) {
 		rec, metrics, path := runMixed(t, true, false)
-		if n := readyTransitions(rec, "bgmix"); n != 0 {
-			t.Fatalf("session flipped to ready %d time(s) while the output process is alive", n)
-		}
-		if _, called := metrics.purgedProcsFor(path); called {
-			t.Error("the live output process must not be purged")
-		}
-		got, called := metrics.purgedPIDsFor(path)
-		if !called {
-			t.Fatal("the dead PID must be purged")
-		}
-		if len(got) != 1 || got[0] != pid {
-			t.Errorf("purged PIDs = %v, want [%s]", got, pid)
-		}
+		assertNoReadyTransition(t, rec, "bgmix", "the output process is alive")
+		assertNotPurged(t, metrics.purgedProcsFor, path, "output process")
+		assertPurgedExactly(t, metrics.purgedPIDsFor, purgeExpectation{Path: path, SingularNoun: "PID", PluralNoun: "PIDs", Want: pid})
 	})
 
 	t.Run("output dead, PID alive -> held working, only output purged", func(t *testing.T) {
 		rec, metrics, path := runMixed(t, false, true)
-		if n := readyTransitions(rec, "bgmix"); n != 0 {
-			t.Fatalf("session flipped to ready %d time(s) while the PID process is alive", n)
-		}
-		if _, called := metrics.purgedPIDsFor(path); called {
-			t.Error("the live PID must not be purged")
-		}
-		got, called := metrics.purgedProcsFor(path)
-		if !called {
-			t.Fatal("the dead output process must be purged")
-		}
-		if len(got) != 1 || got[0] != outPath {
-			t.Errorf("purged outputs = %v, want [%s]", got, outPath)
-		}
+		assertNoReadyTransition(t, rec, "bgmix", "the PID process is alive")
+		assertNotPurged(t, metrics.purgedPIDsFor, path, "PID")
+		assertPurgedExactly(t, metrics.purgedProcsFor, purgeExpectation{Path: path, SingularNoun: "output process", PluralNoun: "outputs", Want: outPath})
 	})
 
 	t.Run("both dead -> settles ready, both purged", func(t *testing.T) {
 		rec, metrics, path := runMixed(t, false, false)
 		waitForReadyTransition(t, rec, "bgmix")
-		gotProcs, procsCalled := metrics.purgedProcsFor(path)
-		gotPIDs, pidsCalled := metrics.purgedPIDsFor(path)
-		if !procsCalled || len(gotProcs) != 1 || gotProcs[0] != outPath {
-			t.Errorf("dead output purge = %v (called=%v), want [%s]", gotProcs, procsCalled, outPath)
-		}
-		if !pidsCalled || len(gotPIDs) != 1 || gotPIDs[0] != pid {
-			t.Errorf("dead PID purge = %v (called=%v), want [%s]", gotPIDs, pidsCalled, pid)
-		}
+		assertPurgedExactly(t, metrics.purgedProcsFor, purgeExpectation{Path: path, SingularNoun: "output process", PluralNoun: "outputs", Want: outPath})
+		assertPurgedExactly(t, metrics.purgedPIDsFor, purgeExpectation{Path: path, SingularNoun: "PID", PluralNoun: "PIDs", Want: pid})
 	})
+}
+
+// purgeQuery mirrors funcMetrics' purgedProcsFor/purgedPIDsFor query methods.
+type purgeQuery func(transcriptPath string) ([]string, bool)
+
+// assertNoReadyTransition fails t when sessionID transitioned to ready while
+// becauseAlive describes why it should have been held.
+func assertNoReadyTransition(t *testing.T, rec *mockRecorder, sessionID, becauseAlive string) {
+	t.Helper()
+	if n := readyTransitions(rec, sessionID); n != 0 {
+		t.Fatalf("session flipped to ready %d time(s) while %s", n, becauseAlive)
+	}
+}
+
+// assertNotPurged fails t if query reports path was purged — used for the
+// still-alive half of a mixed liveness pair.
+func assertNotPurged(t *testing.T, query purgeQuery, path, noun string) {
+	t.Helper()
+	if _, called := query(path); called {
+		t.Errorf("the live %s must not be purged", noun)
+	}
+}
+
+// purgeExpectation bundles assertPurgedExactly's expected-purge fields,
+// keeping its parameter list within CodeScene's argument-count limit
+// instead of threading each field through individually.
+type purgeExpectation struct {
+	Path         string
+	SingularNoun string
+	PluralNoun   string
+	Want         string
+}
+
+// assertPurgedExactly fails t unless query reports exp.Path was purged with
+// exactly [exp.Want] — used for the dead half of a mixed liveness pair.
+func assertPurgedExactly(t *testing.T, query purgeQuery, exp purgeExpectation) {
+	t.Helper()
+	got, called := query(exp.Path)
+	if !called {
+		t.Fatalf("the dead %s must be purged", exp.SingularNoun)
+	}
+	if len(got) != 1 || got[0] != exp.Want {
+		t.Errorf("purged %s = %v, want [%s]", exp.PluralNoun, got, exp.Want)
+	}
 }

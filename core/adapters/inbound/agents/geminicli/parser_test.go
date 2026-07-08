@@ -490,6 +490,65 @@ func TestTailer_BackgroundProcessCount_GeminiSpawn(t *testing.T) {
 	}
 }
 
+// geminiRealSessionSummary accumulates the session-level signals
+// TestParse_RealSession asserts on, across every non-skipped event in the
+// replayed transcript.
+type geminiRealSessionSummary struct {
+	userMsgs, turnDones               int
+	lastCWD, finalText                string
+	toolNames                         map[string]bool
+	toolResults                       map[string]bool
+	sumInput, sumOutput, sumCacheRead int64
+}
+
+// apply folds one non-skipped event into the summary.
+func (s *geminiRealSessionSummary) apply(ev *tailer.ParsedEvent) {
+	if ev.CWD != "" {
+		s.lastCWD = ev.CWD
+	}
+	switch ev.EventType {
+	case "user_message":
+		s.userMsgs++
+	case "turn_done":
+		s.turnDones++
+		s.finalText = ev.AssistantText
+	}
+	for _, tu := range ev.ToolUses {
+		s.toolNames[tu.Name] = true
+	}
+	for _, id := range ev.ToolResultIDs {
+		s.toolResults[id] = true
+	}
+	if ev.Contribution != nil {
+		s.sumInput += ev.Contribution.Usage.Input
+		s.sumOutput += ev.Contribution.Usage.Output
+		s.sumCacheRead += ev.Contribution.Usage.CacheRead
+	}
+}
+
+// scanGeminiRealSession drives every line of sc through p and accumulates the
+// resulting events into a summary. Split out of TestParse_RealSession
+// (go:S3776).
+func scanGeminiRealSession(t *testing.T, p *Parser, sc *bufio.Scanner) geminiRealSessionSummary {
+	t.Helper()
+	summary := geminiRealSessionSummary{
+		toolNames:   map[string]bool{},
+		toolResults: map[string]bool{},
+	}
+	for sc.Scan() {
+		var raw map[string]interface{}
+		if err := json.Unmarshal(sc.Bytes(), &raw); err != nil {
+			t.Fatalf("decode line: %v", err)
+		}
+		ev := p.ParseLine(raw)
+		if ev.Skip {
+			continue
+		}
+		summary.apply(ev)
+	}
+	return summary
+}
+
 // TestParse_RealSession replays the real captured transcript end-to-end and
 // asserts the session-level signals: exactly one user turn, exactly one
 // settle-to-ready, the workspace cwd, tool open/close, and deduped billing.
@@ -501,79 +560,41 @@ func TestParse_RealSession(t *testing.T) {
 	defer f.Close()
 
 	p := &Parser{}
-	var (
-		userMsgs, turnDones               int
-		lastCWD, finalText                string
-		toolNames                         = map[string]bool{}
-		toolResults                       = map[string]bool{}
-		sumInput, sumOutput, sumCacheRead int64
-	)
-
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
-	for sc.Scan() {
-		var raw map[string]interface{}
-		if err := json.Unmarshal(sc.Bytes(), &raw); err != nil {
-			t.Fatalf("decode line: %v", err)
-		}
-		ev := p.ParseLine(raw)
-		if ev.Skip {
-			continue
-		}
-		if ev.CWD != "" {
-			lastCWD = ev.CWD
-		}
-		switch ev.EventType {
-		case "user_message":
-			userMsgs++
-		case "turn_done":
-			turnDones++
-			finalText = ev.AssistantText
-		}
-		for _, tu := range ev.ToolUses {
-			toolNames[tu.Name] = true
-		}
-		for _, id := range ev.ToolResultIDs {
-			toolResults[id] = true
-		}
-		if ev.Contribution != nil {
-			sumInput += ev.Contribution.Usage.Input
-			sumOutput += ev.Contribution.Usage.Output
-			sumCacheRead += ev.Contribution.Usage.CacheRead
-		}
-	}
+	summary := scanGeminiRealSession(t, p, sc)
 	if err := sc.Err(); err != nil {
 		t.Fatalf("scan: %v", err)
 	}
 
-	if lastCWD != "/private/tmp/gem-probe" {
-		t.Errorf("cwd: want /private/tmp/gem-probe, got %q", lastCWD)
+	if summary.lastCWD != "/private/tmp/gem-probe" {
+		t.Errorf("cwd: want /private/tmp/gem-probe, got %q", summary.lastCWD)
 	}
-	if userMsgs != 1 {
-		t.Errorf("user_message count: want 1, got %d", userMsgs)
+	if summary.userMsgs != 1 {
+		t.Errorf("user_message count: want 1, got %d", summary.userMsgs)
 	}
-	if turnDones != 1 {
-		t.Errorf("turn_done count: want 1, got %d", turnDones)
+	if summary.turnDones != 1 {
+		t.Errorf("turn_done count: want 1, got %d", summary.turnDones)
 	}
-	if finalText == "" {
+	if summary.finalText == "" {
 		t.Error("final turn_done carried no AssistantText")
 	}
-	if !toolNames["update_topic"] {
-		t.Errorf("expected update_topic in ToolUses, got %v", toolNames)
+	if !summary.toolNames["update_topic"] {
+		t.Errorf("expected update_topic in ToolUses, got %v", summary.toolNames)
 	}
 	// Both tool results close: update_topic + list_directory.
-	if len(toolResults) < 2 {
-		t.Errorf("expected >=2 tool results closed, got %v", toolResults)
+	if len(summary.toolResults) < 2 {
+		t.Errorf("expected >=2 tool results closed, got %v", summary.toolResults)
 	}
 	// 91bc4bb9 (input 9925, contributed once across its two emissions) +
 	// 8fcff41a (input 10081 - cached 7443 = 2638).
-	if sumInput != 12563 {
-		t.Errorf("billed Input: want 12563 (dedup across re-emission), got %d", sumInput)
+	if summary.sumInput != 12563 {
+		t.Errorf("billed Input: want 12563 (dedup across re-emission), got %d", summary.sumInput)
 	}
-	if sumOutput != 99 {
-		t.Errorf("billed Output: want 99, got %d", sumOutput)
+	if summary.sumOutput != 99 {
+		t.Errorf("billed Output: want 99, got %d", summary.sumOutput)
 	}
-	if sumCacheRead != 7443 {
-		t.Errorf("billed CacheRead: want 7443, got %d", sumCacheRead)
+	if summary.sumCacheRead != 7443 {
+		t.Errorf("billed CacheRead: want 7443, got %d", summary.sumCacheRead)
 	}
 }
