@@ -123,8 +123,8 @@ final class HistoryViewSnapshotTests: XCTestCase {
         let view = HistoryContentView(
             data: populated(),
             range: .month,
-            onExportCSV: {},
-            onExportJSON: {}
+            onExportCSV: { /* unused in this snapshot */ },
+            onExportJSON: { /* unused in this snapshot */ }
         )
         assertSnapshot(of: host(view, height: 460), as: .image)
     }
@@ -136,8 +136,8 @@ final class HistoryViewSnapshotTests: XCTestCase {
             chart: .tokens,
             group: .branch,
             scope: nil,
-            onExportCSV: {},
-            onExportJSON: {}
+            onExportCSV: { /* unused in this snapshot */ },
+            onExportJSON: { /* unused in this snapshot */ }
         )
         assertSnapshot(of: host(view, height: 460), as: .image)
     }
@@ -149,8 +149,8 @@ final class HistoryViewSnapshotTests: XCTestCase {
             chart: .cost,
             group: .branch,
             scope: HistoryScope(field: .project, value: "irrlicht"),
-            onExportCSV: {},
-            onExportJSON: {}
+            onExportCSV: { /* unused in this snapshot */ },
+            onExportJSON: { /* unused in this snapshot */ }
         )
         assertSnapshot(of: host(view, height: 500), as: .image)
     }
@@ -159,8 +159,8 @@ final class HistoryViewSnapshotTests: XCTestCase {
         let view = HistoryContentView(
             data: empty(),
             range: .day,
-            onExportCSV: {},
-            onExportJSON: {}
+            onExportCSV: { /* unused in this snapshot */ },
+            onExportJSON: { /* unused in this snapshot */ }
         )
         assertSnapshot(of: host(view, height: 320), as: .image)
     }

@@ -88,5 +88,4 @@ global.fetch = () => Promise.reject(new Error('no server'));
 global.Notification = class {
   static permission = 'default';
   static requestPermission() { return Promise.resolve('default'); }
-  constructor() {}
 };

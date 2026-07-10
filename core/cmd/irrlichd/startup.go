@@ -889,7 +889,9 @@ func setupRecording(detector *services.SessionDetector, sockPath string, logger 
 	rec, err := recorder.NewJSONLRecorder(recordingsDir)
 	if err != nil {
 		logger.LogError("startup", "", fmt.Sprintf("failed to init lifecycle recorder: %v", err))
-		return func() {}
+		return func() {
+			// no-op cleanup — recorder never initialized
+		}
 	}
 	detector.SetRecorder(rec)
 	logger.LogInfo("startup", "", fmt.Sprintf("lifecycle recording enabled: %s", rec.Path()))
