@@ -52,7 +52,7 @@ export function reconcile(parent, items, keyFn, createFn, updateFn) {
   // Remove orphans
   for (const [key, el] of existingByKey) {
     if (!desiredKeys.has(key)) {
-      parent.removeChild(el);
+      el.remove();
     }
   }
 }

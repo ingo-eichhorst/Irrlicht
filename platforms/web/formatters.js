@@ -191,8 +191,9 @@ export function taskEtaPresentation(metrics, state, nowSec) {
   const est = metrics?.task_estimate;
   const eta = metrics?.task_completion_eta;
   if (state !== 'working' || !est) return null;
-  const sourceLabel = est.source === 'tasks' ? 'from task list'
-    : est.source === 'subagents' ? 'from subagents' : 'agent-reported';
+  let sourceLabel = 'agent-reported';
+  if (est.source === 'tasks') sourceLabel = 'from task list';
+  else if (est.source === 'subagents') sourceLabel = 'from subagents';
   // Explicit null/undefined check before the <= comparison (SonarQube
   // javascript:S1940 wants <= over !(... > ...), but `undefined <= 0` is
   // false while `!(undefined > 0)` is true — a missing completed_rounds

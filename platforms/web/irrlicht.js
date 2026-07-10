@@ -76,8 +76,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       const onChange = () => {
         if (!storedTheme()) { updateThemeToggleGlyph(); render(); }
       };
-      if (mq.addEventListener) mq.addEventListener('change', onChange);
-      else if (mq.addListener) mq.addListener(onChange);
+      mq.addEventListener('change', onChange);
     }
 
     // --- Display mode (Context / 1 Min / 10 Min / 60 Min) ---
@@ -1366,11 +1365,9 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       const host = document.getElementById('app-state-icons');
       if (!host) return;
       const list = topLevel || [];
-      const sig = list.length === 0
-        ? 'empty'
-        : list.length <= 3
-          ? 'icons:' + list.map(s => s.state || 'ready').join(',')
-          : 'count:' + list.length;
+      let sig = 'count:' + list.length;
+      if (list.length === 0) sig = 'empty';
+      else if (list.length <= 3) sig = 'icons:' + list.map(s => s.state || 'ready').join(',');
       if (host.dataset.sig === sig) return;
       host.dataset.sig = sig;
       if (list.length === 0) {
@@ -1713,7 +1710,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
     function rebuildSources() {
       const desired = desiredSources();
       const desiredById = new Map(desired.map(s => [s.id, s]));
-      for (const [id, src] of [...sources]) {
+      for (const [id, src] of sources) {
         const want = desiredById.get(id);
         // Drop a source that's no longer desired, OR a relay source whose token
         // changed / is parked in 'unauthorized'. The source id is keyed by URL

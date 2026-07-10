@@ -591,8 +591,8 @@ struct HistoryContentView: View {
     var scope: HistoryScope?
     // No-op defaults so previews/snapshot tests can host this view without
     // wiring drill-down interaction.
-    var onDrill: (HistoryGroup, String) -> Void = { _, _ in }
-    var onClearDrill: () -> Void = {}
+    var onDrill: (HistoryGroup, String) -> Void = { _, _ in /* no-op default */ }
+    var onClearDrill: () -> Void = { /* no-op default */ }
     let onExportCSV: () -> Void
     let onExportJSON: () -> Void
 

@@ -28,10 +28,10 @@
               title="Toggle light/dark theme" aria-label="Toggle theme">☾</button>
       <button class="theme-toggle" id="settings-toggle" type="button"
               title="Settings" aria-label="Settings">⚙</button>
-      <div class="ws-status" role="status" aria-live="polite">
-        <div class="ws-dot connecting" id="ws-dot"></div>
+      <output class="ws-status" aria-live="polite">
+        <span class="ws-dot connecting" id="ws-dot"></span>
         <span id="ws-label">connecting</span>
-      </div>
+      </output>
     </div>
   </header>
 
@@ -167,7 +167,7 @@
       <div class="history-controls">
         <div class="history-ctl-row">
           <span class="history-ctl-label">Range</span>
-          <div class="history-seg" id="history-range" role="group" aria-label="Range">
+          <fieldset class="history-seg" id="history-range" aria-label="Range">
             <button type="button" data-range="day" class="active">Day</button>
             <button type="button" data-range="week">Week</button>
             <button type="button" data-range="month">Month</button>
@@ -188,7 +188,7 @@
         </div>
         <div class="history-ctl-row">
           <span class="history-ctl-label">Chart</span>
-          <div class="history-seg" id="history-chart-sel" role="group" aria-label="Chart type">
+          <fieldset class="history-seg" id="history-chart-sel" aria-label="Chart type">
             <button type="button" data-chart="cost" class="active">Cost</button>
             <button type="button" data-chart="yield" title="Productive vs reverted spend per project">Yield</button>
             <button type="button" data-chart="tokens">Tokens</button>
@@ -200,7 +200,7 @@
         </div>
         <div class="history-ctl-row">
           <span class="history-ctl-label">Group</span>
-          <div class="history-seg" id="history-group-sel" role="group" aria-label="Group by">
+          <fieldset class="history-seg" id="history-group-sel" aria-label="Group by">
             <button type="button" data-group="project" class="active">Project</button>
             <button type="button" data-group="branch">Branch</button>
             <button type="button" data-group="provider">Provider</button>
