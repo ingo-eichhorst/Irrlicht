@@ -837,8 +837,8 @@ document.addEventListener('DOMContentLoaded', function() {
       var rows = Array.from(tbody.querySelectorAll('tr'));
       rows.sort(function(a, b) {
         var cellA = a.children[idx], cellB = b.children[idx];
-        var valA = (cellA.getAttribute('data-sort') || cellA.textContent).trim();
-        var valB = (cellB.getAttribute('data-sort') || cellB.textContent).trim();
+        var valA = (cellA.dataset.sort || cellA.textContent).trim();
+        var valB = (cellB.dataset.sort || cellB.textContent).trim();
         var numA = Number.parseFloat(valA), numB = Number.parseFloat(valB);
         if (!Number.isNaN(numA) && !Number.isNaN(numB)) {
           return sortAsc ? numA - numB : numB - numA;

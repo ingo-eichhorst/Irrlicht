@@ -52,6 +52,6 @@ export function relayWsUrl(raw) {
   // honors that.
   if (!/^wss?:\/\//i.test(u)) u = 'ws://' + u; // NOSONAR (javascript:S5332) — see comment above
   while (u.endsWith('/')) u = u.slice(0, -1);
-  if (!/\/api\/v1\/sessions\/stream$/.test(u)) u += '/api/v1/sessions/stream';
+  if (!u.endsWith('/api/v1/sessions/stream')) u += '/api/v1/sessions/stream';
   return u;
 }

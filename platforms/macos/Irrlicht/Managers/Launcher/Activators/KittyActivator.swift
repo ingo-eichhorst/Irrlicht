@@ -42,7 +42,7 @@ struct KittyActivator: HostActivator {
             // `activated` already carries the synchronous result; the async
             // `then` completion (fires once a cold-launched app finishes
             // opening) isn't needed here.
-            activated = AppActivator.activate(bundleID: bundleID) { _ in }
+            activated = AppActivator.activate(bundleID: bundleID) { _ in /* completion not needed here */ }
         }
 
         // 2. Switch to the right tab via kitty's remote control if the user

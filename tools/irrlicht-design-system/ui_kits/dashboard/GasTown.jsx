@@ -15,7 +15,7 @@ function dotBar(total, done) {
 }
 
 window.GasTown = function GasTown({ orchestrator }) {
-  if (!orchestrator || !orchestrator.running) return null;
+  if (!orchestrator?.running) return null;
   const convoys = (orchestrator.work_units || []).filter(w => w.type === 'convoy');
   return (
     <div className="gt-section">
@@ -26,7 +26,7 @@ window.GasTown = function GasTown({ orchestrator }) {
       {orchestrator.global_agents?.length > 0 && (
         <div className="gt-agents-row">
           {orchestrator.global_agents.map((ga, i) => (
-            <div key={i} className="gt-agent-chip" title={ga.description || ga.role}>
+            <div key={ga.session_id || ga.role || i} className="gt-agent-chip" title={ga.description || ga.role}>
               <span>{ga.icon && ga.icon + ' '}{ga.role}</span>
               <span className="gt-chip-dot" style={{background: stateColor(ga.state)}}/>
               <span className="gt-chip-id">{ga.session_id ? ga.session_id.slice(0,6) : 'idle'}</span>
@@ -38,11 +38,11 @@ window.GasTown = function GasTown({ orchestrator }) {
         const workers = (cb.worktrees || []).flatMap(wt => wt.workers || []);
         if (!workers.length) return null;
         return (
-          <div key={ci} className="gt-rig-block">
+          <div key={cb.name || ci} className="gt-rig-block">
             <div className="gt-rig-name">rig: {cb.name}</div>
             <div className="gt-workers">
               {workers.map((w, wi) => (
-                <div key={wi} className="gt-agent-chip" title={w.description || w.role}>
+                <div key={w.id || wi} className="gt-agent-chip" title={w.description || w.role}>
                   <span>{w.icon && w.icon + ' '}{w.role}{w.name && <span style={{color:'var(--text)'}}> {w.name}</span>}</span>
                   <span className="gt-chip-dot" style={{background: stateColor(w.state)}}/>
                   {w.id && <span className="gt-chip-id">{w.id.slice(0,8)}</span>}
@@ -58,7 +58,7 @@ window.GasTown = function GasTown({ orchestrator }) {
           {convoys.map((c, i) => {
             const done = c.done >= c.total;
             return (
-              <div key={i} className="gt-convoy-row">
+              <div key={c.name || i} className="gt-convoy-row">
                 <span className={'gt-convoy-name' + (done ? ' done' : '')}>{c.name}</span>
                 <span className="gt-dotbar" style={{color: done ? 'var(--ready)' : 'var(--working)'}}>{dotBar(c.total, c.done)}</span>
                 <span className="gt-convoy-fraction">{c.done} / {c.total}</span>

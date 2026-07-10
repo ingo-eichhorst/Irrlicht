@@ -1224,9 +1224,10 @@ function _appendPipelineTailSegments(wrap, blocked, pipe, meas, jump) {
         "Spec — not authored yet"));
   // Recordings count (latest counts as 1; archive_count is additional)
   const totalRecs = (rcs.latest ? 1 : 0) + (rcs.archive_count || 0);
+  const recsSuffix = totalRecs === 1 ? "" : "s";
   wrap.appendChild(totalRecs > 0
     ? _pipeBtn(String(totalRecs), "#d6f0d4", "#1f5a1d", jump("recordings"), false,
-        `${totalRecs} recording${totalRecs === 1 ? "" : "s"}`)
+        `${totalRecs} recording${recsSuffix}`)
     : _pipeBtn("·", "transparent", "#bbb", jump("recordings"), false,
         "No recordings yet"));
   // Validation
@@ -1586,13 +1587,12 @@ async function loadScenario(s, initialArchive, focus) {
     return;
   }
   const recordingPath = `${encodeURIComponent(s.agent)}/${encodeURIComponent(s.subtree)}/${encodeURIComponent(s.id)}`;
-  const [data, archives, recipes, catalog] = await Promise.all([
+  // Recipe lookup uses recipesByCoverageId (populated once at init from
+  // /api/recipes — see comment above), so no per-recording recipes fetch
+  // is needed here.
+  const [data, archives, catalog] = await Promise.all([
     fetch(`/api/scenarios/${recordingPath}`).then(r => r.json()),
     fetch(`/api/scenarios/${recordingPath}/recordings`).then(r => r.ok ? r.json() : []).catch(() => []),
-    // Recipes for the new Recipe panel target on this page (anchor:
-    // recipe). Same payload the coverage page uses. Look up the
-    // by_adapter entry under the scenario name and agent slug.
-    fetch(`/api/recipes`).then(r => r.ok ? r.json() : null).catch(() => null),
     // Coverage catalog: lets us render a stub Assessment panel from
     // the matrix verdict + notes when no assessment.json exists.
     // Without this fallback the ⚙ / ◉ pipeline-strip jumps would
@@ -2066,9 +2066,8 @@ function _buildExpectedRow(ph, def, specOnly) {
   // delta_ms may be 0 (phase matched exactly at its anchor) — treat
   // anything numeric as renderable, only fall back to "—" when the
   // phase never matched at all.
-  const delta = ph.matched_ts
-    ? `+${Number.isFinite(ph.delta_ms) ? ph.delta_ms : 0} ms`
-    : "—";
+  const deltaMs = Number.isFinite(ph.delta_ms) ? ph.delta_ms : 0;
+  const delta = ph.matched_ts ? `+${deltaMs} ms` : "—";
   tr.innerHTML = `
         <td><code>${escapeHtml(ph.phase)}</code></td>
         <td style="font-size: 11px;">${target}</td>
@@ -2179,6 +2178,16 @@ export function renderManifestFields(m, passRateLabel, alwaysEllipsis) {
 //   other <name>   → an older recording: fetched via the recordings endpoint;
 //                    Playback retargets to its events via /api/replay/start's
 //                    recording field.
+// Label: recording_started_at, daemon version, fresh pass rate. Uses
+// recording_started_at (not promoted_at) so the timestamps describe WHEN
+// the recording was captured.
+function fmtLabel(startedAt, daemonVer, passRate) {
+  const ts = startedAt || "(no timestamp)";
+  const ver = daemonVer ? ` · daemon ${daemonVer}` : "";
+  const pass = passRate ? ` · ${passRate}` : "";
+  return `${ts}${ver}${pass}`;
+}
+
 function renderRecordingHistory(s, latestData, archives, initialArchive, recipeEntry, coverageEntry) {
   const wrap = document.createElement("div");
 
@@ -2188,9 +2197,10 @@ function renderRecordingHistory(s, latestData, archives, initialArchive, recipeE
   const intro = document.createElement("div");
   intro.style.cssText = "margin-bottom: 8px; font-size: 12px; color: #555;";
   const recCount = (archives || []).length;
+  const recCountSuffix = recCount === 1 ? "" : "s";
   intro.innerHTML = `Select which recording to inspect — all live under <code>recordings/</code>, newest first. <b>expected.jsonl</b> is the constant benchmark across all of them; picking an older recording re-evaluates the current spec against its events (drift signal).` +
     (recCount > 0
-      ? ` <b>${recCount}</b> recording${recCount === 1 ? "" : "s"} available.`
+      ? ` <b>${recCount}</b> recording${recCountSuffix} available.`
       : ` No recordings yet.`);
   selPanel.appendChild(intro);
 
@@ -2200,17 +2210,6 @@ function renderRecordingHistory(s, latestData, archives, initialArchive, recipeE
   noneOpt.value = "__none__";
   noneOpt.textContent = "— No recording (spec only) —";
   select.appendChild(noneOpt);
-
-  // Label: recording_started_at, daemon version, fresh pass rate. Uses
-  // recording_started_at (not promoted_at) so the timestamps describe WHEN
-  // the recording was captured.
-  function fmtLabel(startedAt, daemonVer, passRate) {
-    const ts = startedAt || "(no timestamp)";
-    const ver = daemonVer ? ` · daemon ${daemonVer}` : "";
-    const pass = passRate ? ` · ${passRate}` : "";
-    return `${ts}${ver}${pass}`;
-  }
-
 
   // Every recording lives under recordings/<name>/ — there is no separate
   // "Latest" entry. The list is newest-first by name; the newest (the one the

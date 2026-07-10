@@ -32,11 +32,11 @@ FROM node:${NODE_VERSION}-bookworm-slim AS runtime
 # `curl … || true`; without curl the hook silently no-ops (the `|| true`
 # swallows "command not found"), so PermissionRequest never reaches the
 # daemon and tool-use permission prompts never surface as `waiting` (#488).
+# Claude Code CLI (the real agent this testbed observes).
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates git tini procps curl \
-    && rm -rf /var/lib/apt/lists/*
-# Claude Code CLI (the real agent this testbed observes).
-RUN npm install -g @anthropic-ai/claude-code
+    && rm -rf /var/lib/apt/lists/* \
+    && npm install -g @anthropic-ai/claude-code
 
 # Non-root `agent` — avoids claude's run-as-root friction; both claude and
 # irrlichd run as this user.

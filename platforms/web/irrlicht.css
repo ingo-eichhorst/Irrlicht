@@ -1218,7 +1218,7 @@
       border: 1px solid var(--border-subtle);
       border-radius: 4px;
       line-height: 1.5;
-      word-break: break-word;
+      overflow-wrap: break-word;
     }
     .settings-modal .settings-modal-close {
       background: none;
@@ -1299,6 +1299,7 @@
     .history-seg {
       display: inline-flex; border: 1px solid var(--border);
       border-radius: 5px; overflow: hidden;
+      margin: 0; padding: 0; min-width: 0;
     }
     .history-seg button {
       background: none; border: none; border-right: 1px solid var(--border);
