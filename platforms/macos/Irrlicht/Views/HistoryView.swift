@@ -47,15 +47,6 @@ struct HistoryView: View {
     @State private var appliedCustomStart: Int64?
     @State private var appliedCustomEnd: Int64?
 
-    // Orthogonal cross-filters (#750): each narrows the others; the grouped
-    // dimension's filter is hidden. knownProviders/knownProjects accumulate the
-    // option lists seen across responses (token types are a fixed set).
-    @State private var filterProvider: Set<String> = []
-    @State private var filterTokenType: Set<HistoryTokenType> = []
-    @State private var filterProject: Set<String> = []
-    @State private var knownProviders: [String] = []
-    @State private var knownProjects: [String] = []
-
     @State private var response: HistoryResponse?
     @State private var yieldResponse: HistoryYieldResponse?
     @State private var loadFailed = false
@@ -65,19 +56,11 @@ struct HistoryView: View {
         self._tab = State(initialValue: initialTab)
     }
 
-    /// The cross-filters keyed by dimension, for `queryItems` and the query key.
-    private var filtersDict: [HistoryGroup: [String]] {
-        [.provider: Array(filterProvider),
-         .tokenType: filterTokenType.map(\.rawValue),
-         .project: Array(filterProject)]
-    }
-
     /// Re-runs the fetch via `.task(id:)` whenever the effective query changes.
     /// This is the macOS equivalent of the web's manual `historyFetchSeq`
     /// dedup — `.task(id:)` cancels the in-flight request when the key changes.
     private var queryKey: String {
-        let flt = "\(filterProvider.sorted().joined(separator: ","))|\(filterTokenType.map(\.rawValue).sorted().joined(separator: ","))|\(filterProject.sorted().joined(separator: ","))"
-        let dims = "\(tab.rawValue)-\(fetchChart.rawValue)-\(effectiveGroup.rawValue)-\(scope?.query ?? "")-\(flt)"
+        let dims = "\(tab.rawValue)-\(fetchChart.rawValue)-\(effectiveGroup.rawValue)-\(scope?.query ?? "")"
         if range == .custom {
             return "custom-\(appliedCustomStart ?? 0)-\(appliedCustomEnd ?? 0)-\(dims)"
         }
@@ -133,7 +116,6 @@ struct HistoryView: View {
         // token concept); keep them consistent however either is changed.
         .onChange(of: group) { newGroup in
             if newGroup == .tokenType && chart != .tokens { chart = .tokens }
-            clearFilter(for: newGroup) // a dimension is never both axis and filter
         }
         .onChange(of: chart) { newChart in
             if newChart != .tokens && group == .tokenType { group = .project }
@@ -143,16 +125,6 @@ struct HistoryView: View {
         .onChange(of: tab) { newTab in
             scope = nil
             if newTab == .usage, chart == .yieldRatio { chart = .cost }
-        }
-    }
-
-    /// Clears the filter on whichever dimension just became the stacking axis.
-    private func clearFilter(for group: HistoryGroup) {
-        switch group {
-        case .provider: filterProvider = []
-        case .tokenType: filterTokenType = []
-        case .project: filterProject = []
-        default: break
         }
     }
 
@@ -196,9 +168,8 @@ struct HistoryView: View {
         .padding(.vertical, IrrSpacing.sp3)
     }
 
-    /// Range picker, shared by the Usage and Yield tabs. Labels are hidden —
-    /// with the row down to Range/Chart/Group/Filters, the value alone
-    /// ("Day", "Cost", "Proj") reads fine and keeps everything on one line.
+    /// Range picker for the Yield tab (Usage builds its own Range/Chart/Group
+    /// row where all three share the width evenly, so it doesn't reuse this).
     @ViewBuilder private var rangePicker: some View {
         Picker("Range", selection: $range) {
             ForEach(HistoryRange.allCases) { Text($0.label).tag($0) }
@@ -207,13 +178,20 @@ struct HistoryView: View {
         .fixedSize()
     }
 
-    /// Usage tab: cost/token time series. Range, Chart, Group, and the
-    /// cross-filters (as one "Filters" dropdown) all fit on a single row —
-    /// the models/providers presets are gone, they're just Cost grouped by
-    /// model/provider, which the Group axis already offers.
+    /// Usage tab: cost/token time series. Range, Chart, and Group share the
+    /// row evenly, each a third of the width (issue #940 — the "Filters"
+    /// cross-filter dropdown was dropped: narrowing to one project/branch/
+    /// model already works via drilldown, and the extra dimension wasn't
+    /// earning its row space) — the models/providers presets are gone too,
+    /// they're just Cost grouped by model/provider, which the Group axis
+    /// already offers.
     @ViewBuilder private var usageControls: some View {
         HStack(spacing: IrrSpacing.sp3) {
-            rangePicker
+            Picker("Range", selection: $range) {
+                ForEach(HistoryRange.allCases) { Text($0.label).tag($0) }
+            }
+            .labelsHidden()
+            .frame(maxWidth: .infinity)
             Picker("Chart", selection: Binding(
                 get: { chart },
                 set: { chart = $0; scope = nil } // a new metric resets any drilldown
@@ -221,7 +199,7 @@ struct HistoryView: View {
                 ForEach(visibleCharts) { Text($0.label).tag($0) }
             }
             .labelsHidden()
-            .fixedSize()
+            .frame(maxWidth: .infinity)
             Picker("Group", selection: Binding(
                 get: { effectiveGroup },
                 set: { newGroup in
@@ -233,13 +211,7 @@ struct HistoryView: View {
                 ForEach(HistoryGroup.allCases) { Text($0.shortLabel).tag($0) }
             }
             .labelsHidden()
-            .fixedSize()
-            // Cross-filters (#750) as one dropdown (#750's three separate menus
-            // didn't fit the row); the daemon query still drops the grouped
-            // dimension and the token_type filter outside the tokens metric,
-            // so those act as no-ops rather than vanishing from the UI.
-            filtersMenu
-            Spacer(minLength: 0)
+            .frame(maxWidth: .infinity)
         }
         .pickerStyle(.menu)
         .controlSize(.small)
@@ -277,63 +249,6 @@ struct HistoryView: View {
     /// Metrics shown in the Chart dropdown — Cost, Tokens, and CO2 (issue #829;
     /// Yield is its own tab; the models/providers presets fold into the Group axis).
     private var visibleCharts: [HistoryChart] { [.cost, .tokens, .co2] }
-
-    // MARK: Cross-filter menus
-
-    private func filterLabel(_ name: String, count: Int) -> String {
-        count > 0 ? "\(name) (\(count))" : name
-    }
-
-    private func setBinding(_ set: Binding<Set<String>>, _ value: String) -> Binding<Bool> {
-        Binding(
-            get: { set.wrappedValue.contains(value) },
-            set: { on in if on { set.wrappedValue.insert(value) } else { set.wrappedValue.remove(value) } }
-        )
-    }
-
-    private func tokenBinding(_ tt: HistoryTokenType) -> Binding<Bool> {
-        Binding(
-            get: { filterTokenType.contains(tt) },
-            set: { on in if on { filterTokenType.insert(tt) } else { filterTokenType.remove(tt) } }
-        )
-    }
-
-    /// Total selections across all three filter dimensions, shown as the
-    /// "Filters" dropdown's badge count.
-    private var activeFilterCount: Int {
-        filterProvider.count + filterTokenType.count + filterProject.count
-    }
-
-    /// One dropdown holding all three cross-filters as submenus — Provider,
-    /// Type, and Project no longer need a row slot each.
-    @ViewBuilder private var filtersMenu: some View {
-        Menu(filterLabel("Filters", count: activeFilterCount)) {
-            Menu(filterLabel("Provider", count: filterProvider.count)) {
-                if knownProviders.isEmpty {
-                    Text("none seen yet")
-                } else {
-                    ForEach(knownProviders, id: \.self) { p in
-                        Toggle(p, isOn: setBinding($filterProvider, p))
-                    }
-                }
-            }
-            Menu(filterLabel("Type", count: filterTokenType.count)) {
-                ForEach(HistoryTokenType.allCases) { tt in
-                    Toggle(tt.label, isOn: tokenBinding(tt))
-                }
-            }
-            Menu(filterLabel("Project", count: filterProject.count)) {
-                if knownProjects.isEmpty {
-                    Text("none seen yet")
-                } else {
-                    ForEach(knownProjects, id: \.self) { p in
-                        Toggle(p, isOn: setBinding($filterProject, p))
-                    }
-                }
-            }
-        }
-        .fixedSize()
-    }
 
     // MARK: Content
 
@@ -429,7 +344,7 @@ struct HistoryView: View {
         loadFailed = false
         var comps = URLComponents(string: "\(DaemonEndpoint.httpBase)/api/v1/history")
         // queryItems ignores the custom bounds unless range == .custom.
-        comps?.queryItems = range.queryItems(chart: fetchChart, group: effectiveGroup, scope: scope, filters: filtersDict, forecast: false, customStart: appliedCustomStart, customEnd: appliedCustomEnd)
+        comps?.queryItems = range.queryItems(chart: fetchChart, group: effectiveGroup, scope: scope, forecast: false, customStart: appliedCustomStart, customEnd: appliedCustomEnd)
         guard let url = comps?.url else { return }
         do {
             let (data, resp) = try await URLSession.shared.data(from: url)
@@ -446,25 +361,10 @@ struct HistoryView: View {
                 let decoded = try JSONDecoder().decode(HistoryResponse.self, from: data)
                 if Task.isCancelled { return }
                 response = decoded
-                // Grow the provider/project filter vocabularies from any
-                // response grouped on that axis (token types are a fixed set).
-                if decoded.group == "provider" {
-                    knownProviders = mergeKnown(knownProviders, decoded.topContributors)
-                } else if decoded.group == "project" {
-                    knownProjects = mergeKnown(knownProjects, decoded.topContributors)
-                }
             }
         } catch {
             if !Task.isCancelled { loadFailed = true }
         }
-    }
-
-    /// Merges a response's contributor labels into an accumulated option list,
-    /// dropping the synthetic "unknown" bucket and keeping it sorted.
-    private func mergeKnown(_ existing: [String], _ contribs: [HistoryContributor]) -> [String] {
-        var set = Set(existing)
-        for c in contribs where !c.label.isEmpty && c.label != "unknown" { set.insert(c.label) }
-        return set.sorted()
     }
 
     private func save(ext: String, text: String) {
@@ -483,7 +383,7 @@ struct HistoryView: View {
 // only part of History that needs `sessionManager`, which publishes on every
 // live session tick (as often as every ~100ms during active sessions). If
 // HistoryView itself subscribed, that churn would re-evaluate the whole body
-// — including the Usage tab's Filters menu — dismissing any open submenu.
+// — including the Usage tab's Chart/Group menus — dismissing any open one.
 
 private struct HistoryQuotaTabContent: View {
     @EnvironmentObject var sessionManager: SessionManager

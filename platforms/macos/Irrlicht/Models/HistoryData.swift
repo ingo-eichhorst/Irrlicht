@@ -123,10 +123,7 @@ enum HistoryRange: String, CaseIterable, Identifiable {
 
     /// Query items for `GET /api/v1/history`, mirroring the web `historyQuery()`:
     /// presets send `range`; `.custom` sends explicit `start`/`end` unix seconds.
-    /// `filters` carries the orthogonal cross-filters keyed by dimension; the
-    /// dimension being grouped on is dropped (never both axis and filter), and
-    /// token_type is omitted outside the tokens metric.
-    func queryItems(chart: HistoryChart, group: HistoryGroup, scope: HistoryScope?, filters: [HistoryGroup: [String]], forecast: Bool, customStart: Int64?, customEnd: Int64?) -> [URLQueryItem] {
+    func queryItems(chart: HistoryChart, group: HistoryGroup, scope: HistoryScope?, forecast: Bool, customStart: Int64?, customEnd: Int64?) -> [URLQueryItem] {
         var items = [
             URLQueryItem(name: "chart", value: chart.rawValue),
             URLQueryItem(name: "group", value: group.rawValue),
@@ -134,13 +131,6 @@ enum HistoryRange: String, CaseIterable, Identifiable {
         ]
         if let scope {
             items.append(URLQueryItem(name: "scope", value: scope.query))
-        }
-        for dim in [HistoryGroup.provider, .tokenType, .project] {
-            if dim == group { continue }
-            if dim == .tokenType && chart != .tokens { continue }
-            if let vals = filters[dim], !vals.isEmpty {
-                items.append(URLQueryItem(name: dim.rawValue, value: vals.sorted().joined(separator: ",")))
-            }
         }
         if self == .custom, let customStart, let customEnd {
             items.append(URLQueryItem(name: "start", value: String(customStart)))
@@ -152,8 +142,9 @@ enum HistoryRange: String, CaseIterable, Identifiable {
     }
 }
 
-/// Token kind for the `token_type` group axis and the token_type cross-filter
-/// (#750). Raw values match the daemon's `outbound.TokenTypeKeys`.
+/// Token kind for the `token_type` group axis and its band labels in the
+/// content-view legend (#750). Raw values match the daemon's
+/// `outbound.TokenTypeKeys`.
 enum HistoryTokenType: String, CaseIterable, Identifiable {
     case input, output
     case cacheRead = "cache_read"
