@@ -31,34 +31,31 @@ func writeTranscript(t *testing.T, path string, mtime time.Time) {
 // mockLogger from testhelpers_test.go. readyTTL is set large so the normal
 // idle sweep doesn't interfere with the fast-delete path under test.
 func newPIDManagerForTest(repo *mockRepo) *services.PIDManager {
-	return services.NewPIDManager(
-		nil, // no ProcessWatcher
-		repo,
-		&mockLogger{},
-		nil, // no broadcaster
-		10*time.Minute,
-		nil, // no pid discovers
-		nil, // no process names
-		nil, // no live-CWDs lookup
-		func(string) {},
-	)
+	return services.NewPIDManager(services.PIDManagerDeps{
+		PW:               nil, // no ProcessWatcher
+		Repo:             repo,
+		Log:              &mockLogger{},
+		Broadcaster:      nil, // no broadcaster
+		ReadyTTL:         10 * time.Minute,
+		PIDDiscovers:     nil, // no pid discovers
+		ProcessNames:     nil, // no process names
+		LiveCWDs:         nil, // no live-CWDs lookup
+		OnSessionDeleted: func(string) {},
+	})
 }
 
 // newPIDManagerForTestWithLiveCWDs builds a PIDManager whose startup zombie
 // sweep can use the DB-backed-orphan branch — the sweep needs both an
 // adapter→process-name map and a live-CWDs lookup.
 func newPIDManagerForTestWithLiveCWDs(repo *mockRepo, processNames map[string]string, liveCWDs services.LiveCWDsFunc) *services.PIDManager {
-	return services.NewPIDManager(
-		nil,
-		repo,
-		&mockLogger{},
-		nil,
-		10*time.Minute,
-		nil,
-		processNames,
-		liveCWDs,
-		func(string) {},
-	)
+	return services.NewPIDManager(services.PIDManagerDeps{
+		Repo:             repo,
+		Log:              &mockLogger{},
+		ReadyTTL:         10 * time.Minute,
+		ProcessNames:     processNames,
+		LiveCWDs:         liveCWDs,
+		OnSessionDeleted: func(string) {},
+	})
 }
 
 // TestAllowsSession covers the #784 host-ancestry admission gate: an adapter
@@ -88,11 +85,13 @@ func TestAllowsSession(t *testing.T) {
 				discoverCalls++
 				return tc.discoverPID, tc.discoverErr
 			})
-			pm := services.NewPIDManager(
-				nil, repo, &mockLogger{}, nil, 10*time.Minute,
-				map[string]agent.PIDDiscoverFunc{"antigravity": discover},
-				nil, nil, func(string) {},
-			)
+			pm := services.NewPIDManager(services.PIDManagerDeps{
+				Repo:             repo,
+				Log:              &mockLogger{},
+				ReadyTTL:         10 * time.Minute,
+				PIDDiscovers:     map[string]agent.PIDDiscoverFunc{"antigravity": discover},
+				OnSessionDeleted: func(string) {},
+			})
 			requireKnownHost := map[string]bool{}
 			if tc.requireKnownHost {
 				requireKnownHost["antigravity"] = true
@@ -128,11 +127,13 @@ func TestAllowsSession_ClaimAwareDisambiguation(t *testing.T) {
 	discover := agent.PIDDiscoverFunc(func(cwd, transcriptPath string, disambiguate func([]int) int) (int, error) {
 		return disambiguate([]int{100, 200}), nil
 	})
-	pm := services.NewPIDManager(
-		nil, repo, &mockLogger{}, nil, 10*time.Minute,
-		map[string]agent.PIDDiscoverFunc{"antigravity": discover},
-		nil, nil, func(string) {},
-	)
+	pm := services.NewPIDManager(services.PIDManagerDeps{
+		Repo:             repo,
+		Log:              &mockLogger{},
+		ReadyTTL:         10 * time.Minute,
+		PIDDiscovers:     map[string]agent.PIDDiscoverFunc{"antigravity": discover},
+		OnSessionDeleted: func(string) {},
+	})
 	var checkedPID int
 	pm.SetHostGate(map[string]bool{"antigravity": true}, func(pid int) bool {
 		checkedPID = pid
@@ -965,17 +966,14 @@ func TestTryDiscoverPID_ProcSession_BypassesDiscoverFn(t *testing.T) {
 		},
 	}
 
-	pm := services.NewPIDManager(
-		newMockProcessWatcher(),
-		repo,
-		&mockLogger{},
-		nil,
-		10*time.Minute,
-		discovers,
-		nil,
-		nil,
-		func(string) {},
-	)
+	pm := services.NewPIDManager(services.PIDManagerDeps{
+		PW:               newMockProcessWatcher(),
+		Repo:             repo,
+		Log:              &mockLogger{},
+		ReadyTTL:         10 * time.Minute,
+		PIDDiscovers:     discovers,
+		OnSessionDeleted: func(string) {},
+	})
 
 	if !pm.TryDiscoverPID("proc-12345", "/tmp/shared-cwd", "", "claude-code") {
 		t.Fatal("TryDiscoverPID returned false for proc-12345")
@@ -1001,17 +999,12 @@ func TestTryDiscoverPID_ProcSession_BypassesDiscoverFn(t *testing.T) {
 // detector's history/projectSessions eviction helper. Locks the #593 deletion
 // funnel: every PIDManager removal must fire it, or history rings leak.
 func newPIDManagerForTestWithDeleteSpy(repo *mockRepo, deleted *[]string) *services.PIDManager {
-	return services.NewPIDManager(
-		nil,
-		repo,
-		&mockLogger{},
-		nil,
-		10*time.Minute,
-		nil,
-		nil,
-		nil,
-		func(sid string) { *deleted = append(*deleted, sid) },
-	)
+	return services.NewPIDManager(services.PIDManagerDeps{
+		Repo:             repo,
+		Log:              &mockLogger{},
+		ReadyTTL:         10 * time.Minute,
+		OnSessionDeleted: func(sid string) { *deleted = append(*deleted, sid) },
+	})
 }
 
 // TestCheckPIDLiveness_ChildSweep_EvictsHistory: before #593 the liveness

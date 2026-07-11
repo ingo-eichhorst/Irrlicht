@@ -174,11 +174,13 @@ func TestBackchannelE2E_Remote(t *testing.T) {
 	fwd := relay.NewForwarder(
 		"ws"+strings.TrimPrefix(srv.URL, "http"),
 		relay.Identity{DaemonID: "d-e2e", DaemonLabel: "e2e"},
-		"", e2ePush{},
-		func() ([]*session.SessionState, []relay.AgentInfo) { return nil, nil },
-		in,                          // ControlHandler
-		func() bool { return true }, // relay-control toggle ON
-		e2eLog{},
+		relay.ForwarderDeps{
+			Push:           e2ePush{},
+			Snapshot:       func() ([]*session.SessionState, []relay.AgentInfo) { return nil, nil },
+			Control:        in,                          // ControlHandler
+			ControlEnabled: func() bool { return true }, // relay-control toggle ON
+			Logger:         e2eLog{},
+		},
 	)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

@@ -157,7 +157,19 @@ func TestObserverGates(t *testing.T) {
 // recorder. git/metrics/pw/broadcaster are nil — the handler never touches them.
 func newFusionDetector(repo outbound.SessionRepository) (*SessionDetector, *captureRecorder) {
 	rec := &captureRecorder{}
-	d := NewSessionDetector(nil, nil, repo, bcNopLog{}, nil, nil, nil, "", 0, nil, nil, nil)
+	d := NewSessionDetector(nil, SessionDetectorDeps{
+		PW:           nil,
+		Repo:         repo,
+		Log:          bcNopLog{},
+		Git:          nil,
+		Metrics:      nil,
+		Broadcaster:  nil,
+		Version:      "",
+		ReadyTTL:     0,
+		PIDDiscovers: nil,
+		ProcessNames: nil,
+		LiveCWDs:     nil,
+	})
 	d.SetRecorder(rec)
 	return d, rec
 }

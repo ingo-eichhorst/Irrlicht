@@ -52,31 +52,32 @@ type DiagnosticsService struct {
 	paths          DiagnosticsPaths
 }
 
-// NewDiagnosticsService wires the service. isAlive is the per-PID liveness probe
-// (processlifecycle.IsAlive in production); agents supply both the process
-// matchers (for the full landscape) and the per-adapter infra-argv predicates
-// (for the ghost-session diagnosis). defaultAdapter is the adapter an
-// empty-Adapter session belongs to (claudecode.AdapterName), injected so the
-// application layer needn't import the inbound adapter.
-func NewDiagnosticsService(
-	repo outbound.SessionRepository,
-	obs outbound.ProcessObserver,
-	isAlive func(int) bool,
-	agents []agent.Agent,
-	defaultAdapter string,
-	cfg config.Config,
-	version string,
-	paths DiagnosticsPaths,
-) *DiagnosticsService {
+// DiagnosticsServiceDeps bundles NewDiagnosticsService's dependencies.
+type DiagnosticsServiceDeps struct {
+	Repo    outbound.SessionRepository
+	Obs     outbound.ProcessObserver
+	IsAlive func(int) bool // per-PID liveness probe (processlifecycle.IsAlive in production)
+	Agents  []agent.Agent  // supplies both process matchers (full landscape) and per-adapter infra-argv predicates (ghost-session diagnosis)
+	// DefaultAdapter is the adapter an empty-Adapter session belongs to
+	// (claudecode.AdapterName), injected so the application layer needn't
+	// import the inbound adapter.
+	DefaultAdapter string
+	Cfg            config.Config
+	Version        string
+	Paths          DiagnosticsPaths
+}
+
+// NewDiagnosticsService wires the service.
+func NewDiagnosticsService(deps DiagnosticsServiceDeps) *DiagnosticsService {
 	return &DiagnosticsService{
-		repo:           repo,
-		obs:            obs,
-		isAlive:        isAlive,
-		agents:         agents,
-		defaultAdapter: defaultAdapter,
-		cfg:            cfg,
-		version:        version,
-		paths:          paths,
+		repo:           deps.Repo,
+		obs:            deps.Obs,
+		isAlive:        deps.IsAlive,
+		agents:         deps.Agents,
+		defaultAdapter: deps.DefaultAdapter,
+		cfg:            deps.Cfg,
+		version:        deps.Version,
+		paths:          deps.Paths,
 	}
 }
 

@@ -13,9 +13,26 @@ import (
 	"time"
 
 	"irrlicht/core/adapters/inbound/agents/processlifecycle"
+	"irrlicht/core/application/services"
 	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/session"
+	"irrlicht/core/ports/outbound"
 )
+
+// defaultSessionDetectorDeps returns the SessionDetectorDeps every e2e test in
+// this package builds identically (nopLogger/stubGit/stubMetrics, no
+// broadcaster, "test" version, zero ReadyTTL, no PID/process-name maps) —
+// callers overwrite only the field(s) their scenario needs.
+func defaultSessionDetectorDeps(repo outbound.SessionRepository) services.SessionDetectorDeps {
+	return services.SessionDetectorDeps{
+		Repo:     repo,
+		Log:      &nopLogger{},
+		Git:      &stubGit{},
+		Metrics:  &stubMetrics{},
+		Version:  "test",
+		ReadyTTL: 0,
+	}
+}
 
 // realTempDir returns a temp dir with macOS /var → /private/var symlinks resolved,
 // so paths match what lsof reports for process CWDs.
