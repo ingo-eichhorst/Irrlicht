@@ -278,43 +278,44 @@ func skipMarkdownWrapper(text string, j int) int {
 	return j
 }
 
-// sentenceEndsAt reports whether a terminator rune r, having consumed any
-// trailing markdown wrapper up to index j, actually ends the sentence there.
-// CJK terminators always do (no inter-sentence spacing convention); Latin/
-// Arabic/Greek terminators only do at end-of-string or before whitespace —
-// otherwise it's an abbreviation (`e.g.`) or URL fragment, not a boundary.
-func sentenceEndsAt(r rune, text string, j int) bool {
-	return isCJKSentenceTerminator(r) || j == len(text) || isSentenceBreak(text[j])
+// sentenceBoundaryAfter decodes the rune at i and reports where to resume
+// scanning next, plus whether that position is a sentence boundary. next is
+// always a valid resume point (whether or not boundary is true), so the
+// caller never needs to re-decode. A position is a boundary when the rune
+// is a newline, or a terminator (`.`/`!`/`?`/Arabic/Greek/CJK) that actually
+// ends the sentence there — for Latin/Arabic/Greek terminators, only at
+// end-of-string or before whitespace, so `e.g.` and URL fragments don't
+// split; CJK terminators (`？！。`) always end the sentence, since CJK text
+// is conventionally written without inter-sentence spaces.
+func sentenceBoundaryAfter(text string, i int) (next int, boundary bool) {
+	r, size := utf8.DecodeRuneInString(text[i:])
+	if r == '\n' {
+		return i + size, true
+	}
+	if !isSentenceTerminatorRune(r) {
+		return i + size, false
+	}
+	j := skipMarkdownWrapper(text, i+size)
+	if isCJKSentenceTerminator(r) || j == len(text) || isSentenceBreak(text[j]) {
+		return j, true
+	}
+	return i + size, false
 }
 
 // splitSentences splits text on sentence terminators (`.`, `!`, `?`, and
-// their CJK/Arabic/Greek counterparts) and newlines. A Latin/Arabic/Greek
-// terminator only ends a sentence when followed by whitespace, end-of-string,
-// or markdown wrappers leading to either — so URL `?` and abbreviations like
-// `e.g.` don't split. CJK terminators (`？！。`) end a sentence unconditionally
-// since CJK text is conventionally written without inter-sentence spaces.
+// their CJK/Arabic/Greek counterparts) and newlines, via sentenceBoundaryAfter.
 // Each returned sentence retains its terminator and any wrapper characters.
 func splitSentences(text string) []string {
 	var sentences []string
 	start := 0
 	for i := 0; i < len(text); {
-		r, size := utf8.DecodeRuneInString(text[i:])
-		if r == '\n' {
-			sentences = append(sentences, text[start:i])
-			start = i + size
-			i += size
+		next, boundary := sentenceBoundaryAfter(text, i)
+		if !boundary {
+			i = next
 			continue
 		}
-		if isSentenceTerminatorRune(r) {
-			j := skipMarkdownWrapper(text, i+size)
-			if sentenceEndsAt(r, text, j) {
-				sentences = append(sentences, text[start:j])
-				start = j
-				i = j
-				continue
-			}
-		}
-		i += size
+		sentences = append(sentences, text[start:next])
+		start, i = next, next
 	}
 	if start < len(text) {
 		sentences = append(sentences, text[start:])
