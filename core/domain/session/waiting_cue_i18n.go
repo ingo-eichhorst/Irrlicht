@@ -22,13 +22,24 @@ var (
 		regexp.MustCompile(`(?i)\b(?:sag|sagt|sagen sie)\s+(?:mir|uns)\s+bescheid\b`),
 		regexp.MustCompile(`(?i)\blass(?:en sie)?\s+(?:mich|uns)\s+wissen\b`),
 		regexp.MustCompile(`(?i)\bkannst du|könnten sie\b`),
-		// B. Approval / review framings
-		regexp.MustCompile(`(?i)\bwarte(?:n sie)? auf (?:dein|deine|ihr|ihre)\b`),
+		// B. Approval / review framings. "ihr"/"ihre" (her/their/formal-your)
+		// is deliberately excluded — unlike English "its"/"their" it isn't
+		// lexically distinguishable from formal-address "your" here, so
+		// including it would reproduce the false-positive class #897 fixed
+		// for English ("Ich warte auf ihre Fertigstellung" about a
+		// background job would otherwise misregister as waiting-on-user).
+		regexp.MustCompile(`(?i)\bwarte(?:n sie)? auf (?:dein|deine)\b`),
 		regexp.MustCompile(`(?i)\bbereit für (?:dein|deine|ihr|ihre) (?:feedback|freigabe|review)\b`),
-		// C. Action gates
+		// C. Action gates. A bare "ich warte" (I'm waiting) catch-all is
+		// deliberately omitted — with no disambiguating object, it would be
+		// as context-free as English's `\bI'?ll wait\b`, which is only safe
+		// there because the exclusion veto (waitingCueExclusions) can
+		// distinguish "its"/"their" from "your"; German has no equivalent
+		// unambiguous non-human pronoun to veto on (see the "ihr"/"ihre"
+		// comment above), so the scoped "warte auf dein/deine" pattern above
+		// is the only supported form.
 		regexp.MustCompile(`(?i)\bbevor ich\b`),
 		regexp.MustCompile(`(?i)\bsobald du\b|\bsobald sie\b`),
-		regexp.MustCompile(`(?i)\bich warte\b`),
 		// D. Curated imperatives
 		regexp.MustCompile(`(?i)\bbitte\s+\w+\b`),
 		regexp.MustCompile(`(?i)\b(?:prüfe|überprüfe|bestätige|teste|schau dir)\s+\w+\b`),
@@ -41,11 +52,15 @@ var (
 		regexp.MustCompile(`(?i)\bavísame|avíseme\b`),
 		regexp.MustCompile(`(?i)\bdime|dígame\b`),
 		regexp.MustCompile(`(?i)\b¿?podrías|¿?podría\b`),
-		regexp.MustCompile(`(?i)\besperando tu|esperando su\b`),
-		regexp.MustCompile(`(?i)\blisto para tu|listo para su\b`),
+		// "su" (his/her/their/formal-your) is excluded — see the German
+		// "ihr"/"ihre" comment above for why the ambiguous form is dropped.
+		regexp.MustCompile(`(?i)\besperando tu\b`),
+		// "su" is excluded from the two patterns below for the same reason
+		// as "esperando su" above.
+		regexp.MustCompile(`(?i)\blisto para tu\b`),
 		regexp.MustCompile(`(?i)\bantes de que (?:yo|nosotros)\b`),
 		regexp.MustCompile(`(?i)\ben cuanto (?:tú|usted)\b`),
-		regexp.MustCompile(`(?i)\bespero tu|espero su\b`),
+		regexp.MustCompile(`(?i)\bespero tu\b`),
 		regexp.MustCompile(`(?i)\bpor favor\s+\w+\b`),
 		regexp.MustCompile(`(?i)\b(?:confirma|verifica|revisa|comprueba)\s+\w+\b`),
 		regexp.MustCompile(`(?i)\bqué (?:opinas|piensas)\b`),
@@ -68,7 +83,12 @@ var (
 		regexp.MustCompile(`(?i)\bme avise|avisa-me\b`),
 		regexp.MustCompile(`(?i)\bme diga|diga-me\b`),
 		regexp.MustCompile(`(?i)\bpoderia você|você poderia\b`),
-		regexp.MustCompile(`(?i)\baguardo (?:sua|seu|teu|tua)\b`),
+		// "sua"/"seu" (his/her/their/formal-your) is excluded here — same
+		// reasoning as the German/Spanish comments above — but kept in the
+		// pattern below, where the trailing "revisão"/"aprovação" (review/
+		// approval) disambiguates: those are user-facing actions a
+		// background job wouldn't plausibly be described as awaiting.
+		regexp.MustCompile(`(?i)\baguardo (?:teu|tua)\b`),
 		regexp.MustCompile(`(?i)\bpronto para (?:sua|seu|teu|tua) (?:revisão|aprovação)\b`),
 		regexp.MustCompile(`(?i)\bantes de eu\b`),
 		regexp.MustCompile(`(?i)\bassim que você\b`),

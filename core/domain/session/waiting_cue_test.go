@@ -172,6 +172,14 @@ func TestExtractWaitingCue(t *testing.T) {
 		// Non-English negatives — plain statements must not trigger.
 		{"neg de: statement", "Ich habe die Änderungen vorgenommen.", false},
 		{"neg fr: statement", "J'ai terminé les modifications.", false},
+		// Ambiguous formal-possessive false positives — issue #933 code
+		// review. "ihre"/"su"/"sua" mean her/their/formal-your all at once
+		// in these languages (unlike English "its"/"their"), so a background
+		// job's completion described with the formal possessive must not be
+		// misread as addressed to the user, mirroring #897 for English.
+		{"neg de: warte auf ihre (ambiguous, background job)", "Der andere Agent arbeitet noch. Ich warte auf ihre Fertigstellung.", false},
+		{"neg es: esperando su (ambiguous, background job)", "El otro agente sigue trabajando — estoy esperando su finalización.", false},
+		{"neg pt: aguardo sua (ambiguous, background job)", "O outro agente ainda está rodando — aguardo sua finalização.", false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
