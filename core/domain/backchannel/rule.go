@@ -61,9 +61,10 @@ type Action struct {
 	// daemon translates per the session's agent + terminal backend (issue
 	// #754). One of the Preset* ids. When empty, Data is sent verbatim (Custom).
 	Preset string `json:"preset,omitempty"`
-	// Data is the raw text injected for a Custom ActionInput (Preset empty),
-	// sent byte-for-byte including any submit sequence the user typed. Ignored
-	// when Preset is set.
+	// Data is the command text injected for a Custom ActionInput (Preset
+	// empty); the backend appends whatever submit sequence it needs (issue
+	// #963), so Data should not include a trailing CR itself. Ignored when
+	// Preset is set.
 	Data string `json:"data,omitempty"`
 }
 

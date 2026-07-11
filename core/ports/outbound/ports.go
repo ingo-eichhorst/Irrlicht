@@ -411,7 +411,7 @@ type AgentController interface {
 	// SendCommand injects a command and submits it. Unlike SendInput, the
 	// submit sequence is owned by the backend: tmux/kitty get a trailing CR
 	// appended; AppleScript hosts auto-submit the bare command. Used for
-	// preset actions whose command text is agent-declared (issue #754).
+	// backchannel actions — both preset (issue #754) and custom.
 	SendCommand(sessionID, command string) error
 	// Interrupt delivers an interrupt (e.g. Ctrl-C) to the session.
 	Interrupt(sessionID string) error
