@@ -935,6 +935,16 @@ private struct HistoryCostChart: View {
         let value: Double
     }
 
+    /// One CO2-equivalent reference line, with `nearTop` flagging whether its
+    /// label should flip below the line (mirrors the web's pixel-space
+    /// `(y - padT) < 10` check — done here in data-space instead, since Swift
+    /// Charts doesn't expose rendered plot geometry to the view pre-macOS 14).
+    private struct CO2Line: Identifiable {
+        let id: String
+        let equivalent: CO2Equivalent
+        let nearTop: Bool
+    }
+
     /// Densify the sparse series into a **cumulative** value for every (bucket,
     /// project): each project's per-bucket deltas are summed forward over
     /// `bucketStarts` (the daemon omits zero buckets, so the running total keeps
@@ -958,6 +968,27 @@ private struct HistoryCostChart: View {
         return out
     }
 
+    /// Tallest stacked column across all buckets, ×1.12 headroom, floored at
+    /// 1 — the macOS twin of the web `historyMaxY` (no forecast term: the
+    /// daemon's history response carries no forecast field for this chart).
+    /// Only meaningful for the CO2 chart, but cheap enough to leave unguarded.
+    private var co2MaxY: Double {
+        var perDate: [Date: Double] = [:]
+        for d in costData { perDate[d.date, default: 0] += d.value }
+        let peak = perDate.values.max() ?? 0
+        return (peak > 0 ? peak : 1) * 1.12
+    }
+
+    /// Red dotted reference lines for relatable everyday CO2e activities
+    /// (issue #952) — empty for every chart type except CO2.
+    private var co2Lines: [CO2Line] {
+        guard chart.isCO2 else { return [] }
+        let maxY = co2MaxY
+        return CO2Equivalents.pick(maxY: maxY).map { eq in
+            CO2Line(id: eq.id, equivalent: eq, nearTop: eq.grams > maxY * 0.9)
+        }
+    }
+
     var body: some View {
         Chart {
             ForEach(costData) { d in
@@ -968,7 +999,22 @@ private struct HistoryCostChart: View {
                 .foregroundStyle(by: .value("Project", d.project))
                 .interpolationMethod(.monotone)
             }
+            // Drawn after the AreaMarks, so painted on top of them — Swift
+            // Charts, like SwiftUI's ZStack, layers later marks over earlier
+            // ones with no explicit z-order API needed.
+            ForEach(co2Lines) { line in
+                RuleMark(y: .value("CO2 equivalent", line.equivalent.grams))
+                    .foregroundStyle(IrrColors.pressureHigh.opacity(0.8))
+                    .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [1, 4]))
+                    .annotation(position: line.nearTop ? .bottom : .top, alignment: .leading) {
+                        Text("≈ \(line.equivalent.label)")
+                            .font(.caption2)
+                            .foregroundColor(IrrColors.pressureHigh)
+                            .lineLimit(1)
+                    }
+            }
         }
+        .modifier(CO2YScale(isCO2: chart.isCO2, maxY: co2MaxY))
         .chartForegroundStyleScale(
             domain: orderedProjects,
             range: orderedProjects.indices.map { HistoryPalette.color(at: $0) }
@@ -993,6 +1039,24 @@ private struct HistoryCostChart: View {
                     }
                 }
             }
+        }
+    }
+}
+
+/// Applies an explicit Y domain only for the CO2 chart, leaving every other
+/// chart type's automatic Swift Charts scale untouched — `.chartYScale`
+/// takes a concrete, non-optional domain, so a ternary can't switch between
+/// "a range" and "no scale" inline. Gating this to CO2 only matters: applying
+/// it unconditionally would change tick-value selection for cost/tokens/
+/// models/providers too and risk their existing snapshot tests.
+private struct CO2YScale: ViewModifier {
+    let isCO2: Bool
+    let maxY: Double
+    func body(content: Content) -> some View {
+        if isCO2 {
+            content.chartYScale(domain: 0...maxY)
+        } else {
+            content
         }
     }
 }

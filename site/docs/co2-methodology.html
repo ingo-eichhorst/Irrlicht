@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CO2 Methodology — Irrlicht Docs</title>
+<meta name="description" content="How Irrlicht estimates the CO2e footprint of an AI coding session, what the History tab's reference lines mean, and the studies behind every coefficient.">
+<link rel="canonical" href="https://irrlicht.io/docs/co2-methodology.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="CO2 Methodology — Irrlicht Docs">
+<meta property="og:description" content="How Irrlicht estimates the CO2e footprint of an AI coding session, what the History tab's reference lines mean, and the studies behind every coefficient.">
+<meta property="og:url" content="https://irrlicht.io/docs/co2-methodology.html">
+<meta property="og:site_name" content="Irrlicht">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="CO2 Methodology — Irrlicht Docs">
+<meta name="twitter:description" content="How Irrlicht estimates the CO2e footprint of an AI coding session, what the History tab's reference lines mean, and the studies behind every coefficient.">
+
+<link rel="icon" type="image/svg+xml" href="../assets/favicon.svg">
+<link rel="icon" type="image/png" sizes="32x32" href="../assets/favicon-32x32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="../assets/favicon-16x16.png">
+<link rel="apple-touch-icon" sizes="180x180" href="../assets/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://cdn.counter.dev">
+<link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=DM+Mono:wght@300;400;500&family=Outfit:wght@200;300;400;500;600&display=swap">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=DM+Mono:wght@300;400;500&family=Outfit:wght@200;300;400;500;600&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+<noscript><link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=DM+Mono:wght@300;400;500&family=Outfit:wght@200;300;400;500;600&display=swap" rel="stylesheet"></noscript>
+<link rel="stylesheet" href="docs.css">
+</head>
+<body>
+
+<div class="docs-layout">
+
+  <!-- Sidebar -->
+  <nav class="sidebar" aria-label="Documentation sections">
+    <a href="../index.html" class="sidebar-logo">
+      <span class="dot"></span>
+      <span>Irrlicht</span>
+      <small>docs</small>
+    </a>
+
+    <div class="sidebar-section">
+      <h4>Getting Started</h4>
+      <a href="index.html">Overview</a>
+      <a href="installation.html">Installation</a>
+      <a href="quickstart.html">Quick Start</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Core Concepts</h4>
+      <a href="story.html">The Story</a>
+      <a href="light-system.html">The Light System</a>
+      <a href="state-machine.html">State Machine</a>
+      <a href="session-detection.html">Session Detection</a>
+      <a href="co2-methodology.html" class="active">CO2 Methodology</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Usage</h4>
+      <a href="configuration.html">Configuration</a>
+      <a href="macos-setup.html">macOS Setup</a>
+      <a href="cli-tools.html">CLI Tools</a>
+      <a href="api-reference.html">API Reference</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Architecture</h4>
+      <a href="architecture.html">System Design</a>
+      <a href="adapters.html">Adapters</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Project</h4>
+      <a href="roadmap.html">Roadmap</a>
+      <a href="changelog.html">Changelog</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Community</h4>
+      <a href="contributing.html">Contributing</a>
+      <a href="code-of-conduct.html">Code of Conduct</a>
+    </div>
+  </nav>
+
+  <!-- Main content -->
+  <main class="docs-main">
+    <div class="docs-content">
+
+      <h1>CO2 Methodology</h1>
+      <p class="page-subtitle">How the History tab's CO2 chart is calculated, what its red dotted reference lines mean, and the studies behind every number. Nothing here is measured — no AI provider exposes per-request energy telemetry — so treat every figure as an informed estimate, not a fact.</p>
+
+      <h2>The CO2e Estimate</h2>
+
+      <p>Every session's CO2e footprint comes from <code>capacity.EstimateCO2Grams</code>, which multiplies a session's total tokens by a per-model coefficient. Which coefficient it uses depends on whether the model's own vendor has published one:</p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Tier</th>
+            <th>Meaning</th>
+            <th>Formula</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Provider-disclosed</strong></td>
+            <td>A vendor or peer-reviewed lifecycle assessment already publishes a gCO2e-per-token figure, grid mix and datacenter overhead baked in.</td>
+            <td><code>grams = tokens × gCO2ePerToken</code></td>
+          </tr>
+          <tr>
+            <td><strong>Fallback</strong></td>
+            <td>No model-specific figure exists (true for Claude, GPT, Llama, and most others). Falls back to a cross-model energy estimate converted through a global-average grid intensity and datacenter efficiency.</td>
+            <td><code>grams = tokens × 0.0003 Wh × 1.15 PUE × 460 gCO2/kWh ÷ 1000</code></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Coefficients &amp; Sources</h3>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Model family</th>
+            <th>Tier</th>
+            <th>Coefficient</th>
+            <th>Source</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Gemini</td>
+            <td>Provider-disclosed</td>
+            <td>0.00003 gCO2e/token</td>
+            <td>Google, <em>Measuring the environmental impact of delivering AI at Google scale</em> (Aug 2025): 0.24 Wh / 0.03 gCO2e median text prompt, normalized to ~1,000 tokens. <a href="https://services.google.com/fh/files/misc/measuring_the_environmental_impact_of_delivering_ai_at_google_scale.pdf" target="_blank" rel="noopener">PDF</a></td>
+          </tr>
+          <tr>
+            <td>Mistral / Mixtral</td>
+            <td>Provider-disclosed</td>
+            <td>0.00285 gCO2e/token</td>
+            <td>Mistral AI, Carbone4 &amp; ADEME lifecycle assessment (Jul 2025): 1.14 gCO2e per 400-token prompt, full lifecycle including amortized training. <a href="https://mistral.ai/news/our-contribution-to-a-global-environmental-standard-for-ai/" target="_blank" rel="noopener">Announcement</a></td>
+          </tr>
+          <tr>
+            <td>Everything else (Claude, GPT, Llama, etc.)</td>
+            <td>Fallback</td>
+            <td>0.0003 Wh/token</td>
+            <td>Epoch AI's revised estimate of ~0.3 Wh per frontier-model query (Feb 2025), divided by an assumed ~1,000 tokens/query &mdash; the tier most sessions land in, since neither Anthropic nor OpenAI publishes per-token energy figures. <a href="https://epoch.ai/gradient-updates/how-much-energy-does-chatgpt-use" target="_blank" rel="noopener">Article</a></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>The fallback formula's other two constants: a <strong>1.15 PUE</strong> (datacenter power-usage-effectiveness overhead), the midpoint of EcoLogits' disclosed 1.1&ndash;1.2 hyperscaler range (<a href="https://github.com/genai-impact/ecologits" target="_blank" rel="noopener">EcoLogits</a>), and a <strong>460 gCO2/kWh</strong> global-average grid carbon intensity, from Ember's 2025 Global Electricity Review (<a href="https://ember-energy.org/latest-insights/global-electricity-review-2025/" target="_blank" rel="noopener">report</a>).
+
+      <div class="callout callout-warning">
+        <strong>This is always an estimate, never a measurement</strong>
+        No provider exposes real per-request energy telemetry, and hosting-path family names are inconsistent across providers (Gemini can appear as <code>gemini</code>, <code>vertex_ai-language-models</code>, or a Bedrock alias depending on how it's served). Irrlicht matches on the model name itself and always surfaces the tier alongside the number rather than presenting it as precise.
+      </div>
+
+      <h2>Reference Lines: Everyday Equivalents</h2>
+
+      <p>A raw gram count is hard to judge on its own, so the CO2 chart overlays up to 3 red dotted horizontal lines, each at the height of an everyday activity's CO2e footprint &mdash; picked to span the visible range so a session's footprint reads as "about a car mile" or "about a third of a flight" rather than an abstract number. Lines are chosen automatically from the table below and scale with the chart's zoom level; a chart showing a few grams won't draw a flight line.</p>
+
+      <p>Like the estimate itself, these equivalents fall into two confidence tiers: some come from a government methodology or a primary study; others are physics-based ballpark figures with no single authoritative source. Both are labeled below.</p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Equivalent</th>
+            <th>Estimated CO2e</th>
+            <th>Confidence</th>
+            <th>Source</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>A web search</td>
+            <td>0.2 g</td>
+            <td>Primary source</td>
+            <td>Google's own 2009 estimate. <a href="https://googleblog.blogspot.com/2009/01/powering-google-search.html" target="_blank" rel="noopener">Official Google Blog</a> &mdash; no updated official figure has been published since; efficiency gains since 2009 mean the true figure today is likely lower.</td>
+          </tr>
+          <tr>
+            <td>Charging a smartphone</td>
+            <td>~10 g</td>
+            <td>Order-of-magnitude estimate</td>
+            <td>No authoritative single source. A ~10&ndash;20 Wh battery, plus charging losses, at the global-average grid intensity (~460 gCO2/kWh, Ember 2025) works out to roughly 2&ndash;30 g depending almost entirely on local grid mix.</td>
+          </tr>
+          <tr>
+            <td>1 hour of video streaming</td>
+            <td>36 g</td>
+            <td>Primary source, contested</td>
+            <td>IEA's 2020 global-average midpoint. <a href="https://www.iea.org/commentaries/the-carbon-footprint-of-streaming-video-fact-checking-the-headlines" target="_blank" rel="noopener">IEA</a> stresses this varies by roughly 100x depending on device, network, and grid &mdash; treat it as a rough midpoint, not a constant.</td>
+          </tr>
+          <tr>
+            <td>Boiling a kettle</td>
+            <td>~60 g</td>
+            <td>Order-of-magnitude estimate</td>
+            <td>No authoritative single source. Physics baseline (~0.1&ndash;0.12 kWh to boil ~1L of water) at varying grid intensity works out to roughly 15&ndash;85 g depending on country.</td>
+          </tr>
+          <tr>
+            <td>Driving 1 km by car</td>
+            <td>170 g</td>
+            <td>Primary source</td>
+            <td>UK Government (DESNZ), <em>GHG Conversion Factors for Company Reporting 2025</em> &mdash; average petrol/diesel car, tank-to-wheel. <a href="https://www.gov.uk/government/publications/greenhouse-gas-reporting-conversion-factors-2025" target="_blank" rel="noopener">Conversion factors</a></td>
+          </tr>
+          <tr>
+            <td>Driving 1 mile by car</td>
+            <td>393 g</td>
+            <td>Primary source</td>
+            <td>US EPA, <em>Greenhouse Gas Equivalencies Calculator</em> &mdash; 2022 average fleet fuel economy (22.8 mpg). <a href="https://www.epa.gov/energy/greenhouse-gas-equivalencies-calculator-calculations-and-references" target="_blank" rel="noopener">Methodology &amp; references</a></td>
+          </tr>
+          <tr>
+            <td>1 kWh of average grid electricity</td>
+            <td>460 g</td>
+            <td>Primary source</td>
+            <td>The same 460 gCO2/kWh global-average grid intensity used in the fallback CO2e formula above. Ember, <em>Global Electricity Review 2025</em>. <a href="https://ember-energy.org/latest-insights/global-electricity-review-2025/" target="_blank" rel="noopener">Report</a></td>
+          </tr>
+          <tr>
+            <td>A load of laundry</td>
+            <td>~1.5 kg</td>
+            <td>Order-of-magnitude estimate</td>
+            <td>No authoritative single source. Widely cited figures range from ~0.6 kg (cold wash, line-dried) to ~3.3 kg (hot wash, tumble-dried); 1.5 kg represents a mixed-practice midpoint.</td>
+          </tr>
+          <tr>
+            <td>Burning 1 gallon of gasoline</td>
+            <td>~8.9 kg</td>
+            <td>Primary source</td>
+            <td>US EPA, <em>Greenhouse Gas Equivalencies Calculator</em>: "8,887 grams of CO2 emissions per gallon of gasoline consumed." <a href="https://www.epa.gov/energy/greenhouse-gas-equivalencies-calculator-calculations-and-references" target="_blank" rel="noopener">Methodology &amp; references</a></td>
+          </tr>
+          <tr>
+            <td>A short-haul flight (London &rarr; Paris)</td>
+            <td>~43.8 kg</td>
+            <td>Primary source</td>
+            <td>DEFRA/DESNZ 2025 short-haul, economy, radiative-forcing-inclusive factor (125.76 gCO2e/passenger-km) &times; ~348 km. Older studies (e.g. a 2006 Eurostar-commissioned figure of 122 kg) put this route ~3x higher, likely reflecting older, less efficient aircraft. <a href="https://www.gov.uk/government/publications/greenhouse-gas-reporting-conversion-factors-2025" target="_blank" rel="noopener">Conversion factors</a></td>
+          </tr>
+          <tr>
+            <td>A tree's CO2 absorption for a year</td>
+            <td>~60 kg</td>
+            <td>Primary source</td>
+            <td>US EPA's equivalencies-calculator methodology: an urban tree's average annual uptake over its first 10 years (mixed conifer/deciduous), citing McPherson et al. 2016. <a href="https://www.epa.gov/energy/greenhouse-gas-equivalencies-calculator-calculations-and-references" target="_blank" rel="noopener">Methodology &amp; references</a>. A smaller, commonly cited ~22 kg/year figure comes from the <a href="https://www.arborday.org/value" target="_blank" rel="noopener">Arbor Day Foundation</a>, which doesn't publish its underlying methodology &mdash; we use EPA's documented figure instead.</td>
+          </tr>
+          <tr>
+            <td>A month of average car commuting</td>
+            <td>~118 kg</td>
+            <td>Derived estimate</td>
+            <td>Derived, not a separate primary figure: ~15 miles/day round trip &times; 393 g/mile (the EPA per-mile figure above) &times; 20 workdays &asymp; 118 kg.</td>
+          </tr>
+          <tr>
+            <td>A long-haul flight (London &rarr; New York)</td>
+            <td>~650 kg</td>
+            <td>Primary source</td>
+            <td>DEFRA/DESNZ 2025 long-haul, economy, radiative-forcing-inclusive factor (117.04 gCO2e/passenger-km) &times; ~5,555 km. Other calculators put this route anywhere from ~590 kg to ~1 tonne depending on load-factor and lifecycle assumptions. <a href="https://www.gov.uk/government/publications/greenhouse-gas-reporting-conversion-factors-2025" target="_blank" rel="noopener">Conversion factors</a></td>
+          </tr>
+          <tr>
+            <td>An average car's emissions for a year</td>
+            <td>~4.29 t</td>
+            <td>Primary source</td>
+            <td>US EPA, <em>Greenhouse Gas Equivalencies Calculator</em>: "4.29 metric tons CO2e/vehicle/year" for a typical passenger vehicle. <a href="https://www.epa.gov/energy/greenhouse-gas-equivalencies-calculator-calculations-and-references" target="_blank" rel="noopener">Methodology &amp; references</a></td>
+          </tr>
+          <tr>
+            <td>An average person's annual carbon footprint</td>
+            <td>~4.8 t</td>
+            <td>Primary source, high variance</td>
+            <td>Global average, not a single-country figure &mdash; deliberately chosen to stay relatable worldwide. Our World in Data: "4.8 tonnes per person." <a href="https://ourworldindata.org/per-capita-co2" target="_blank" rel="noopener">Per-capita CO2 emissions</a>. National averages vary hugely (some countries well under 1 t/year, others well over 10 t/year).</td>
+          </tr>
+          <tr>
+            <td>Roughly 6 average cars' annual emissions</td>
+            <td>~25 t</td>
+            <td>Derived estimate</td>
+            <td>A simple multiple of the average-car-per-year figure above (25 t / 4.29 t &asymp; 5.8), not a separate source &mdash; included to keep the ladder dense near the top of the range.</td>
+          </tr>
+          <tr>
+            <td>Roughly 21 people's average annual carbon footprint</td>
+            <td>~100 t</td>
+            <td>Derived estimate</td>
+            <td>A simple multiple of the average-person-per-year figure above (100 t / 4.8 t &asymp; 20.8) &mdash; a generous ceiling for the reference-line ladder; real sessions, even aggregated org-wide over a year, are extremely unlikely to approach this scale.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="callout callout-tip">
+        <strong>A lower-carbon comparison</strong>
+        For contrast: the same 2025 UK conversion factors put a national rail trip at roughly 44 g CO2e per passenger-km (including well-to-tank) and a coach/long-distance bus at roughly 34 g &mdash; both well below the ~170&ndash;215 g/km for an average car, and far below flying.
+      </div>
+
+      <h2>Caveats &amp; Uncertainty</h2>
+
+      <ul>
+        <li>Every figure above is a widely-cited public average, not a measurement of irrlicht's own AI provider traffic or your own local habits.</li>
+        <li>Flight, tree, and car figures assume specific routes, load factors, or growth conditions spelled out in the table &mdash; a real trip or a real tree will vary.</li>
+        <li>The smartphone, kettle, and laundry figures have no single authoritative source; they're physics-based ballpark ranges, not government statistics.</li>
+        <li>Grid carbon intensity varies enormously by country and even by time of day &mdash; anywhere from near-zero (hydro/nuclear-heavy grids) to well over 700 gCO2/kWh (coal-heavy grids), against the ~460 g global average used in the fallback formula.</li>
+      </ul>
+
+      <!-- Bottom nav -->
+      <nav class="docs-nav-bottom" aria-label="Previous and next page">
+        <a href="session-detection.html">
+          <span class="label">Previous</span>
+          Session Detection
+        </a>
+        <a href="configuration.html" style="text-align:right">
+          <span class="label">Next</span>
+          Configuration
+        </a>
+      </nav>
+
+    </div>
+  </main>
+
+</div>
+
+<script async src="https://cdn.counter.dev/script.js" data-id="2d845c2a-ed61-4410-8850-e6339766176f" data-utcoffset="1"></script>
+</body>
+</html>
