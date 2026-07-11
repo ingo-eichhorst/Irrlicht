@@ -13,7 +13,6 @@ final class HistoryPhase2Tests: XCTestCase {
         let p = params(HistoryRange.day.queryItems(
             chart: .tokens, group: .branch,
             scope: HistoryScope(field: .project, value: "irrlicht"),
-            filters: [:],
             forecast: true, customStart: nil, customEnd: nil))
         XCTAssertEqual(p["chart"], "tokens")
         XCTAssertEqual(p["group"], "branch")
@@ -25,7 +24,6 @@ final class HistoryPhase2Tests: XCTestCase {
     func testQueryItemsCustomRangeSendsStartEndNotRange() {
         let p = params(HistoryRange.custom.queryItems(
             chart: .cost, group: .project, scope: nil,
-            filters: [:],
             forecast: false, customStart: 900, customEnd: 2000))
         XCTAssertEqual(p["start"], "900")
         XCTAssertEqual(p["end"], "2000")
@@ -79,34 +77,6 @@ final class HistoryPhase2Tests: XCTestCase {
 
     func testScopeQueryForm() {
         XCTAssertEqual(HistoryScope(field: .branch, value: "main").query, "branch:main")
-    }
-
-    func testQueryItemsEmitsNonGroupedFiltersAndDropsGroupedDimension() {
-        let p = params(HistoryRange.day.queryItems(
-            chart: .tokens, group: .project, scope: nil,
-            filters: [.provider: ["anthropic"], .tokenType: ["input", "output"], .project: ["x"]],
-            forecast: true, customStart: nil, customEnd: nil))
-        XCTAssertEqual(p["provider"], "anthropic")
-        XCTAssertEqual(p["token_type"], "input,output")
-        XCTAssertNil(p["project"]) // project is the active group
-    }
-
-    func testQueryItemsTokenTypeFilterOmittedUnlessTokensMetric() {
-        let p = params(HistoryRange.day.queryItems(
-            chart: .cost, group: .project, scope: nil,
-            filters: [.tokenType: ["input"], .provider: ["anthropic"]],
-            forecast: true, customStart: nil, customEnd: nil))
-        XCTAssertNil(p["token_type"])
-        XCTAssertEqual(p["provider"], "anthropic")
-    }
-
-    func testQueryItemsEmptyFiltersEmitNothing() {
-        let p = params(HistoryRange.day.queryItems(
-            chart: .tokens, group: .project, scope: nil,
-            filters: [.provider: [], .tokenType: []],
-            forecast: true, customStart: nil, customEnd: nil))
-        XCTAssertNil(p["provider"])
-        XCTAssertNil(p["token_type"])
     }
 
     func testTokenTypeGroupIsLeafWithLabel() {
