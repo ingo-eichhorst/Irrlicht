@@ -300,14 +300,13 @@ func TestSessionDetector_ParentReleasedToReady_WhenChildFinishes(t *testing.T) {
 		TranscriptPath: "/home/.claude/projects/-Users-test/parent2/subagents/child2.jsonl",
 	}
 
-	time.Sleep(50 * time.Millisecond)
+	waitForSessionState(repo, "parent2", session.StateReady, 500*time.Millisecond)
 
-	parent, _ := repo.Load("parent2")
-	if parent == nil {
-		t.Fatal("parent session should still exist")
-	}
-	if parent.State != session.StateReady {
-		t.Errorf("parent state: got %q, want ready (child finished, parent turn was done)", parent.State)
+	repo.mu.Lock()
+	got := repo.lastSavedState["parent2"]
+	repo.mu.Unlock()
+	if got != session.StateReady {
+		t.Errorf("parent state: got %q, want ready (child finished, parent turn was done)", got)
 	}
 
 	cancel()

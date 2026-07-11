@@ -34,7 +34,7 @@ func TestDebounce_FirstEventFiresImmediately(t *testing.T) {
 		EventCount:     1,
 	})
 
-	savesBefore := repo.saves
+	savesBefore := repo.savesCount()
 
 	// Send a single activity event.
 	tw.ch <- agent.Event{
@@ -44,16 +44,14 @@ func TestDebounce_FirstEventFiresImmediately(t *testing.T) {
 		TranscriptPath: "/home/.claude/projects/-Users-test/deb1.jsonl",
 	}
 
-	// The leading-edge fires immediately — check within 50ms (well before the
-	// 2-second debounce window).
-	time.Sleep(50 * time.Millisecond)
+	// The leading-edge fires immediately — poll well before the 2-second
+	// debounce window so a slow scheduler under load doesn't false-fail a
+	// fixed sleep.
+	waitForCondition(func() bool { return repo.savesCount() > savesBefore }, 500*time.Millisecond)
 
-	repo.mu.Lock()
-	savesAfter := repo.saves
-	repo.mu.Unlock()
-
+	savesAfter := repo.savesCount()
 	if savesAfter <= savesBefore {
-		t.Errorf("expected at least one save within 50ms (leading-edge), got saves before=%d after=%d", savesBefore, savesAfter)
+		t.Errorf("expected at least one save within 500ms (leading-edge), got saves before=%d after=%d", savesBefore, savesAfter)
 	}
 
 	cancel()
@@ -208,17 +206,16 @@ func TestDebounce_TerminalEventShortCircuits(t *testing.T) {
 	})
 
 	// First non-terminal event — fires immediately (leading edge) and starts the 2s timer.
+	savesBeforeFirst := repo.savesCount()
 	tw.ch <- agent.Event{
 		Type:           agent.EventActivity,
 		SessionID:      "term1",
 		ProjectDir:     "-Users-test",
 		TranscriptPath: "/home/.claude/projects/-Users-test/term1.jsonl",
 	}
-	time.Sleep(50 * time.Millisecond)
+	waitForCondition(func() bool { return repo.savesCount() > savesBeforeFirst }, 500*time.Millisecond)
 
-	repo.mu.Lock()
-	savesAfterFirst := repo.saves
-	repo.mu.Unlock()
+	savesAfterFirst := repo.savesCount()
 
 	// Terminal event mid-window — should fire immediately, not after 2s.
 	tw.ch <- agent.Event{
@@ -229,13 +226,10 @@ func TestDebounce_TerminalEventShortCircuits(t *testing.T) {
 		Terminal:       true,
 	}
 
-	// Wait well under the 2s debounce window.
-	time.Sleep(100 * time.Millisecond)
+	// Poll well under the 2s debounce window.
+	waitForCondition(func() bool { return repo.savesCount() > savesAfterFirst }, 500*time.Millisecond)
 
-	repo.mu.Lock()
-	savesAfterTerminal := repo.saves
-	repo.mu.Unlock()
-
+	savesAfterTerminal := repo.savesCount()
 	if savesAfterTerminal <= savesAfterFirst {
 		t.Errorf("terminal event should trigger processActivity immediately: saves before=%d after=%d", savesAfterFirst, savesAfterTerminal)
 	}
@@ -267,7 +261,7 @@ func TestDebounce_FirstEventTerminalFiresImmediately(t *testing.T) {
 		EventCount:     1,
 	})
 
-	savesBefore := repo.saves
+	savesBefore := repo.savesCount()
 
 	// First event for the session is already terminal — should fire immediately
 	// via the leading-edge path (no prior debounce entry).
@@ -279,12 +273,9 @@ func TestDebounce_FirstEventTerminalFiresImmediately(t *testing.T) {
 		Terminal:       true,
 	}
 
-	time.Sleep(50 * time.Millisecond)
+	waitForCondition(func() bool { return repo.savesCount() > savesBefore }, 500*time.Millisecond)
 
-	repo.mu.Lock()
-	savesAfter := repo.saves
-	repo.mu.Unlock()
-
+	savesAfter := repo.savesCount()
 	if savesAfter <= savesBefore {
 		t.Errorf("first terminal event should fire immediately: saves before=%d after=%d", savesBefore, savesAfter)
 	}

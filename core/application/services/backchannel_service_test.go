@@ -94,18 +94,18 @@ func TestRunActions_UnsupportedPresetDoesNotFire(t *testing.T) {
 	}
 }
 
-func TestRunActions_CustomSendsRawVerbatim(t *testing.T) {
+func TestRunActions_CustomSubmitsViaSendCommand(t *testing.T) {
 	on := true
 	fw := &fakeForwarder{}
 	e := NewBackchannelEngine(stubRules{}, fw, claudeCompactPresets(), nil, func() bool { return on }, bcNopLog{})
 	r := backchannel.Rule{ID: "r", Enabled: true,
-		Actions: []backchannel.Action{{Kind: backchannel.ActionInput, Data: "/foo\r"}}}
+		Actions: []backchannel.Action{{Kind: backchannel.ActionInput, Data: "/foo"}}}
 	e.runActions(r, "s1", "claude-code")
-	if string(fw.sentInput) != "/foo\r" {
-		t.Errorf("SendInput = %q, want %q", fw.sentInput, "/foo\r")
+	if fw.sentCommand != "/foo" {
+		t.Errorf("SendCommand = %q, want %q", fw.sentCommand, "/foo")
 	}
-	if fw.commandSet {
-		t.Errorf("SendCommand must not be used for Custom, got %q", fw.sentCommand)
+	if fw.sentInput != nil {
+		t.Errorf("SendInput must not be used for Custom, got %q", fw.sentInput)
 	}
 }
 

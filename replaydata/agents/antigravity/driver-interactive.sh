@@ -110,7 +110,7 @@ SES_MARKER=(); SES_CWD=(); SES_ALIVE=()
 # recipe-lint flags a recipe needing it as a semantic_gap before recording. Set
 # DRIVE_SLASH_REQUIRES_STEP_TYPE=true if antigravity is headless-first (a bare
 # send "/cmd" stores literal text instead of reaching the REPL).
-DRIVE_ELICITS="send slash wait_turn keys sleep exit_clean restart resume sigkill start_session session"
+DRIVE_ELICITS="send slash wait_turn keys sleep interrupt exit_clean restart resume sigkill start_session session"
 DRIVE_SLASH_REQUIRES_STEP_TYPE=false
 RUN_CWD="${IRRLICHT_ONBOARD_CWD:-$STAGING/cwd}"
 mkdir -p "$RUN_CWD"
@@ -141,19 +141,21 @@ remaining_seconds() { local now; now=$(date +%s); (( now >= DEADLINE )) && echo 
 
 # not_implemented reports a stubbed arm. The optional <reason> distinguishes
 # two different situations sharing the same mechanics (log + fail(3)):
-#   - omitted: a genuine porting gap — the seam just hasn't been ported yet
-#     (e.g. interrupt).
+#   - omitted: a genuine porting gap — the seam just hasn't been ported yet.
+#     Every standard arm is currently ported except reset_session below, so
+#     this default fires only if a FUTURE standard step type is scaffolded
+#     but not yet wired up.
 #   - given: NOT a porting gap — agy has no underlying command to drive at
-#     all for this step type (e.g. reset_session, see the dispatch arm
-#     below). Live-verified by scrolling the full slash-command picker under
-#     tmux (38 commands enumerated; typing /clear returns "No matches"; `agy
-#     --help` has no reset flag either — see the session-reset scenario
-#     assessment). Re-checked against agy 1.0.13 (newer than the assessed
-#     prerequisite): the binary's embedded command-help strings are
-#     unchanged from the assessed build, with no new evidence of a
-#     registered /clear/new/reset command — consistent with, not
-#     contradicting, the prior live finding. There is nothing for `record`
-#     to port until a future agy release adds one.
+#     all for this step type (currently only reset_session, see the dispatch
+#     arm below). Live-verified by scrolling the full slash-command picker
+#     under tmux (38 commands enumerated; typing /clear returns "No
+#     matches"; `agy --help` has no reset flag either — see the
+#     session-reset scenario assessment). Re-checked against agy 1.0.13
+#     (newer than the assessed prerequisite): the binary's embedded
+#     command-help strings are unchanged from the assessed build, with no
+#     new evidence of a registered /clear/new/reset command — consistent
+#     with, not contradicting, the prior live finding. There is nothing for
+#     `record` to port until a future agy release adds one.
 not_implemented() { # <step-type> [reason]
   local step_type="$1" reason="${2:-not yet ported for antigravity — see scripts/templates/drive-interactive.sh.tmpl and drive-claudecode-interactive.sh}"
   echo "[driver] STUB: step type '$step_type' $reason" >&2
@@ -365,6 +367,27 @@ step_keys() { # <keys>
   sleep 0.3
 }
 
+# --- AGENT-SPECIFIC SEAM: interrupt — cancel the in-flight turn (Escape) -----
+# agy's TUI binds Escape to cancel the in-flight turn (footer reads
+# "esc to cancel" while generating). Live-verified (#934): sending Escape
+# mid-turn shows "Interrupted · What should Antigravity CLI do instead?" and
+# ends the generation. The cancelled turn DOES land a terminal marker: a
+# MODEL/PLANNER_RESPONSE with status "DONE" and no tool_calls — same shape as
+# a normal completed turn, just with content omitted rather than the model's
+# text (this matches parser.go's own comment: a no-tool-calls PLANNER_RESPONSE
+# is "often empty content" and still settles the session). So turn_count sees
+# it exactly like any other completed turn. No EXPECTED_TURNS bookkeeping is
+# needed here regardless: unlike claudecode/codex/pi (which bump
+# EXPECTED_TURNS at send time and so must decrement it on interrupt), this
+# driver bumps EXPECTED_TURNS inside wait_turn() itself (SEAM 2) — an
+# interrupt that is never followed by its own wait_turn call never touches
+# the counter.
+step_interrupt() {
+  tmux send-keys -t "$SESSION" Escape
+  echo "[driver] interrupt[s$ACTIVE]: sent Escape" >&2
+  sleep 1
+}
+
 # --- AGENT-SPECIFIC SEAM: find the agy PID the daemon binds ------------------
 # Mirror core/adapters/inbound/agents/antigravity/pid.go: a plain process-name
 # (agy) + cwd match, lowest PID — agy is a single native process per
@@ -512,7 +535,7 @@ while IFS= read -r step; do
     send|slash)      send_text "$(jq -r '.text' <<<"$step")" ;;
     wait_turn)       wait_turn || break ;;
     sleep)           sleep "$(jq -r '.seconds // 1' <<<"$step")" ;;
-    interrupt)       not_implemented interrupt || break ;;       # TODO(antigravity): Escape/Ctrl-C the in-flight turn
+    interrupt)       step_interrupt ;;
     keys)            step_keys "$(jq -r '.keys' <<<"$step")" ;;
     reset_session)   not_implemented reset_session "has no agy command to drive -- agy has no /clear, /new, or /reset (live-verified; see not_implemented above)" || break ;;
     restart)         step_restart ;;

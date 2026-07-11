@@ -254,7 +254,7 @@ func (e *BackchannelEngine) runActions(r backchannel.Rule, sid, adapter string) 
 				}
 				err = e.input.SendCommand(sid, cmd)
 			} else {
-				err = e.input.SendInput(sid, []byte(a.Data))
+				err = e.input.SendCommand(sid, a.Data)
 			}
 		case backchannel.ActionInterrupt:
 			err = e.input.Interrupt(sid)
