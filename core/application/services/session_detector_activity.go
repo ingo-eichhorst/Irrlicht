@@ -515,6 +515,26 @@ func (d *SessionDetector) processActivityLocked(id agent.Identity, state *sessio
 
 	transcriptGrew := d.observeTranscriptGrowth(state, ev)
 
+	// Short-circuit when this pass consumed transcript content but produced
+	// no state-relevant change — e.g. Claude Code's post-turn
+	// `system/away_summary` recap, which the parser marks Skip=true. The
+	// force-bounce below would otherwise see the stale LastEventType from
+	// the prior turn_done and flip a ready session back to working
+	// (issue #329).
+	skipClassification := state.Metrics != nil && state.Metrics.NoSubstantiveActivity
+
+	// Bounce a ready session back to working on fresh activity BEFORE the
+	// background-liveness probe below, which is gated on state==working
+	// (issue #445) and would otherwise see this pass's stale `ready` and
+	// clear/skip the probe — silently dropping the hold for a background
+	// process (e.g. a retried `git push`) launched right after the session
+	// had settled to ready. See issue #937. Skipped in lockstep with
+	// classifyAndTransition below so a no-substantive-activity pass still
+	// can't force the bounce (issue #329).
+	if !skipClassification {
+		d.forceReadyToWorkingIfActive(state, ev)
+	}
+
 	// Probe Bash background-process liveness (run_in_background). Must run
 	// after RefreshOnActivity (which recomputes metrics, clearing the flag)
 	// and before ClassifyState (whose IsAgentDone check reads it). Gated on
@@ -537,15 +557,9 @@ func (d *SessionDetector) processActivityLocked(id agent.Identity, state *sessio
 
 	d.recordTaskDeltas(id, ev, state)
 
-	// Short-circuit when this pass consumed transcript content but produced
-	// no state-relevant change — e.g. Claude Code's post-turn
-	// `system/away_summary` recap, which the parser marks Skip=true. The
-	// force-bounce below would otherwise see the stale LastEventType from
-	// the prior turn_done and flip a ready session back to working
-	// (issue #329). Still record this as activity (LastEvent / EventCount /
-	// UpdatedAt / broadcast) so the UI's "last activity" stays fresh —
-	// just don't re-run the state machine.
-	skipClassification := state.Metrics != nil && state.Metrics.NoSubstantiveActivity
+	// Still record this pass as activity (LastEvent / EventCount / UpdatedAt /
+	// broadcast) below even when classification is skipped, so the UI's
+	// "last activity" stays fresh — just don't re-run the state machine.
 	if !skipClassification {
 		d.classifyAndTransition(state, ev)
 	}
@@ -699,12 +713,8 @@ func (d *SessionDetector) recordTaskDeltas(id agent.Identity, ev agent.Event, st
 // when this pass's metrics show substantive activity (see
 // processActivityLocked's skipClassification guard).
 func (d *SessionDetector) classifyAndTransition(state *session.SessionState, ev agent.Event) {
-	// Force ready→working when metrics show activity so ClassifyState can
-	// properly detect the working→ready transition. Without this, sessions
-	// that start as ready (initial state) and whose first activity event
-	// already shows IsAgentDone()=true would stay ready with no transition
-	// broadcast — the UI would never see the "agent finished" event.
-	d.forceReadyToWorkingIfActive(state, ev)
+	// Ready→working (if applicable) already ran in processActivityLocked,
+	// before applyBackgroundLiveness — see that call site.
 
 	// Overlay hook-based permission-pending signal onto metrics. Must happen
 	// after RefreshOnActivity (which recomputes metrics from the transcript)
@@ -747,8 +757,10 @@ func (d *SessionDetector) classifyAndTransition(state *session.SessionState, ev 
 
 // forceReadyToWorkingIfActive bounces a ready session straight to working
 // when its freshly refreshed metrics show activity, so ClassifyState can
-// then detect a genuine working→ready transition on this same pass. See
-// classifyAndTransition's call site for why this matters.
+// then detect a genuine working→ready transition on this same pass, and so
+// the background-liveness probe (see processActivityLocked's call site)
+// evaluates against this pass's effective state rather than the prior
+// pass's stale `ready`.
 func (d *SessionDetector) forceReadyToWorkingIfActive(state *session.SessionState, ev agent.Event) {
 	if state.State != session.StateReady || state.Metrics == nil || state.Metrics.LastEventType == "" {
 		return
