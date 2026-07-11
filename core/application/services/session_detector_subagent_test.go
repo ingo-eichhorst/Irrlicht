@@ -738,11 +738,13 @@ func TestSessionDetector_ParentNotAffected_WhenNoChildren(t *testing.T) {
 		TranscriptPath: "/home/.claude/projects/-Users-test/solo1.jsonl",
 	}
 
-	time.Sleep(50 * time.Millisecond)
+	waitForSessionState(repo, "solo1", session.StateReady, 500*time.Millisecond)
 
-	state, _ := repo.Load("solo1")
-	if state.State != session.StateReady {
-		t.Errorf("state: got %q, want ready (no children, turn done)", state.State)
+	repo.mu.Lock()
+	got := repo.lastSavedState["solo1"]
+	repo.mu.Unlock()
+	if got != session.StateReady {
+		t.Errorf("state: got %q, want ready (no children, turn done)", got)
 	}
 
 	cancel()
