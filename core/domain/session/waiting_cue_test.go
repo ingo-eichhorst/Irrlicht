@@ -193,6 +193,13 @@ func TestExtractWaitingCue(t *testing.T) {
 		{"neg de: warte auf ihre (ambiguous, background job)", "Der andere Agent arbeitet noch. Ich warte auf ihre Fertigstellung.", false},
 		{"neg es: esperando su (ambiguous, background job)", "El otro agente sigue trabajando — estoy esperando su finalización.", false},
 		{"neg pt: aguardo sua (ambiguous, background job)", "O outro agente ainda está rodando — aguardo sua finalização.", false},
+		// Further cross-language word collisions — issue #933, found by an
+		// independent Opus review pass. Spanish "dime" (tell me) is also the
+		// English coin; Portuguese "revise" is literally an English verb
+		// with the same meaning, not just a lookalike.
+		{"neg en: 'a dime' does not trigger Spanish dime-cue", "The fix costs a dime.", false},
+		{"neg en: 'turn on a dime' does not trigger Spanish dime-cue", "It could turn on a dime.", false},
+		{"neg en: 'I'll revise' does not trigger Portuguese revise-cue", "I'll revise my approach and continue.", false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

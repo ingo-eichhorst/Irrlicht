@@ -50,7 +50,10 @@ var (
 
 	waitingCuePatternsES = []*regexp.Regexp{
 		regexp.MustCompile(`(?i)\b(?:avísame|avíseme)\b`),
-		regexp.MustCompile(`(?i)\b(?:dime|dígame)\b`),
+		// "dime" is excluded — it's also the English coin ("costs a dime",
+		// "turn on a dime"), same collision class as the German "da"/French
+		// "car" fix above. "dígame" (formal, no English collision) is kept.
+		regexp.MustCompile(`(?i)\bdígame\b`),
 		regexp.MustCompile(`(?i)¿?\b(?:podrías|podría)\b`),
 		// "su" (his/her/their/formal-your) is excluded — see the German
 		// "ihr"/"ihre" comment above for why the ambiguous form is dropped.
@@ -93,7 +96,10 @@ var (
 		regexp.MustCompile(`(?i)\bantes de eu\b`),
 		regexp.MustCompile(`(?i)\bassim que você\b`),
 		regexp.MustCompile(`(?i)\bpor favor\s+\w+\b`),
-		regexp.MustCompile(`(?i)\b(?:confirme|verifique|revise|teste)\s+\w+\b`),
+		// "revise" is excluded — it's an actual English verb with the same
+		// meaning ("I'll revise my approach"), not just a lookalike; same
+		// collision class as "dime"/"da"/"car" above.
+		regexp.MustCompile(`(?i)\b(?:confirme|verifique|teste)\s+\w+\b`),
 		regexp.MustCompile(`(?i)\bo que você acha\b`),
 	}
 
