@@ -205,11 +205,12 @@ extension SessionManager {
 
     /// Applied once a relay reconnect attempt's WebSocket is confirmed alive
     /// by an arrived frame. Mirrors `recordConfirmedLocalConnect()` for the
-    /// relay path (#846).
+    /// relay path (#846). Unlike the local path, `relayConnectionState` is
+    /// already set eagerly in `relayConnect()` right after `resume()` — this
+    /// only needs to reset the backoff/failure bookkeeping, which is exactly
+    /// `resetRelayConnectBackoff()`'s job, so it delegates there.
     func recordConfirmedRelayConnect() {
-        relayReconnectDelay = 1.0
-        consecutiveRelayConnectFailures = 0
-        relayConnectionStalled = false
+        resetRelayConnectBackoff()
     }
 
     /// Applied once a relay reconnect attempt's cycle closes without ever

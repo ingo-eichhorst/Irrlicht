@@ -20,6 +20,12 @@ const SPEED_PRESETS = [1, 2, 5, 10, 25, 100];
 // lowercase-alnum-dash-underscore slugs, never containing "/", "?", or "#".
 const RECORDING_SLUG_RE = /^[a-z0-9][a-z0-9_-]*$/;
 
+// pluralSuffix returns "" for a count of exactly 1, "s" otherwise — the
+// English-plural suffix used by every "N recording(s)" label in this file.
+function pluralSuffix(n) {
+  return n === 1 ? "" : "s";
+}
+
 // Strip control characters and cap length before logging a server-provided
 // string (SonarQube jssecurity:S5145 — fetch response fields are tainted
 // regardless of same-origin trust). Uses String(), not `value || ""`, so
@@ -271,7 +277,7 @@ function renderSidebarGroups(sidebar, scenarios, codeById) {
   }
 }
 
-(async function init() {
+{
   const scenarios = await loadInitData();
   // Re-render the overview when a window resize changes how many agent
   // columns fit (debounced; no-op on detail pages and when the fit count
@@ -288,17 +294,14 @@ function renderSidebarGroups(sidebar, scenarios, codeById) {
 
   if (!scenarios || scenarios.length === 0) {
     renderEmptySidebarNote(sidebar);
-    // Wire router even without recordings — overview view still works.
-    window.addEventListener("hashchange", route);
-    route();
-    return;
+  } else {
+    renderSidebarGroups(sidebar, scenarios, codeById);
   }
-  renderSidebarGroups(sidebar, scenarios, codeById);
   // Wire the router and dispatch the initial route. Deep links land
   // directly on the requested view; bare `/` falls through to overview.
   window.addEventListener("hashchange", route);
   route();
-})();
+}
 
 // parseCatalogCode splits a catalog code ("5.4") into [section, index]
 // for numeric sort. Missing/blank codes sort to the end.
@@ -860,7 +863,7 @@ async function loadCoverageDetail(scenarioId) {
     if (spec && (spec.description || spec.process || spec.acceptance_criteria)) {
       detail.appendChild(renderSpecPanel(spec));
     }
-  } catch (_) { /* spec unavailable — show recipe-only */ }
+  } catch (e) { console.debug('scenario spec unavailable — showing recipe-only', e); }
 
   // Recipe lookup by coverage_id — used by the per-agent plan panels below.
   // The old scenario-level "Recording recipe" panel was removed: a scenario has
@@ -1224,10 +1227,9 @@ function _appendPipelineTailSegments(wrap, blocked, pipe, meas, jump) {
         "Spec — not authored yet"));
   // Recordings count (latest counts as 1; archive_count is additional)
   const totalRecs = (rcs.latest ? 1 : 0) + (rcs.archive_count || 0);
-  const recsSuffix = totalRecs === 1 ? "" : "s";
   wrap.appendChild(totalRecs > 0
     ? _pipeBtn(String(totalRecs), "#d6f0d4", "#1f5a1d", jump("recordings"), false,
-        `${totalRecs} recording${recsSuffix}`)
+        `${totalRecs} recording${pluralSuffix(totalRecs)}`)
     : _pipeBtn("·", "transparent", "#bbb", jump("recordings"), false,
         "No recordings yet"));
   // Validation
@@ -1694,6 +1696,7 @@ function renderMeta(data) {
   try {
     meta = typeof data.meta === "string" ? JSON.parse(data.meta) : data.meta;
   } catch (e) {
+    console.debug('viewer: failed to parse recording meta', e);
     p.appendChild(text("(could not parse meta)"));
     return p;
   }
@@ -2178,9 +2181,9 @@ export function renderManifestFields(m, passRateLabel, alwaysEllipsis) {
 //   other <name>   → an older recording: fetched via the recordings endpoint;
 //                    Playback retargets to its events via /api/replay/start's
 //                    recording field.
-// Label: recording_started_at, daemon version, fresh pass rate. Uses
-// recording_started_at (not promoted_at) so the timestamps describe WHEN
-// the recording was captured.
+// fmtLabel formats one recording-history <option>'s label: recording_started_at,
+// daemon version, fresh pass rate. Uses recording_started_at (not promoted_at)
+// so the timestamps describe WHEN the recording was captured.
 function fmtLabel(startedAt, daemonVer, passRate) {
   const ts = startedAt || "(no timestamp)";
   const ver = daemonVer ? ` · daemon ${daemonVer}` : "";
@@ -2197,10 +2200,9 @@ function renderRecordingHistory(s, latestData, archives, initialArchive, recipeE
   const intro = document.createElement("div");
   intro.style.cssText = "margin-bottom: 8px; font-size: 12px; color: #555;";
   const recCount = (archives || []).length;
-  const recCountSuffix = recCount === 1 ? "" : "s";
   intro.innerHTML = `Select which recording to inspect — all live under <code>recordings/</code>, newest first. <b>expected.jsonl</b> is the constant benchmark across all of them; picking an older recording re-evaluates the current spec against its events (drift signal).` +
     (recCount > 0
-      ? ` <b>${recCount}</b> recording${recCountSuffix} available.`
+      ? ` <b>${recCount}</b> recording${pluralSuffix(recCount)} available.`
       : ` No recordings yet.`);
   selPanel.appendChild(intro);
 

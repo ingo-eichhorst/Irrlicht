@@ -145,12 +145,15 @@ import { reconcile, paintRowNum } from './domReconcile.js';
         const parsed = JSON.parse(raw);
         return { ...SETTINGS_DEFAULTS, ...((parsed && typeof parsed === 'object') ? parsed : {}) };
       } catch (e) {
+        console.debug('irrlicht: failed to load settings, using defaults', e);
         return { ...SETTINGS_DEFAULTS };
       }
     }
     let settings = loadSettings();
     function persistSettings() {
-      try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (e) {}
+      try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (e) {
+        console.debug('irrlicht: failed to persist settings', e);
+      }
     }
     function applySettings() {
       document.body.classList.toggle('no-cost', !settings.showCostDisplay);
@@ -169,7 +172,9 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       if (typeof Notification === 'undefined') return;
       if (Notification.permission !== 'granted') return;
       if (document.visibilityState === 'visible') return;
-      try { new Notification(title, { body: body || '', tag: 'irrlicht-' + toggleKey, silent: false }); } catch (e) {}
+      try { new Notification(title, { body: body || '', tag: 'irrlicht-' + toggleKey, silent: false }); } catch (e) {
+        console.debug('irrlicht: failed to show notification', e);
+      }
     }
     function rowLabel(s) {
       // Best-effort "project · branch" label that matches what the row shows.
@@ -275,7 +280,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
     function decodeHistoryBuckets(b64) {
       // Daemon ships 60 buckets × 2 bits MSB-first = 15 bytes = 20 base64 chars.
       let raw;
-      try { raw = atob(b64); } catch (e) { return null; }
+      try { raw = atob(b64); } catch (e) { console.debug('irrlicht: failed to decode history buckets', e); return null; }
       if (raw.length !== 15) return null;
       const out = new Array(60);
       for (let i = 0; i < 15; i++) {
@@ -1720,7 +1725,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
         const stale = want && src.kind === 'relay' && (src.token !== want.token || src.state === 'unauthorized');
         if (!want || stale) {
           src.closing = true;
-          try { if (src.ws) src.ws.close(); } catch (e) {}
+          try { if (src.ws) src.ws.close(); } catch (e) { console.debug('irrlicht: failed to close stale source socket', e); }
           sources.delete(id);
         }
       }
@@ -1738,7 +1743,11 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       src.state = src.ws ? 'reconnecting' : 'connecting';
       updateWsStatus();
       let ws;
-      try { ws = new WebSocket(src.wsUrl); } catch (e) { scheduleReconnect(src); return; }
+      try { ws = new WebSocket(src.wsUrl); } catch (e) {
+        console.debug('irrlicht: failed to open source socket', e);
+        scheduleReconnect(src);
+        return;
+      }
       src.ws = ws;
       ws.onopen = function() {
         src.state = 'connected';
@@ -1747,12 +1756,12 @@ import { reconcile, paintRowNum } from './domReconcile.js';
         // relay's bearer token rides in this first frame (relay sources only).
         const hello = { type: 'hello', protocol_version: 1, role: 'client' };
         if (src.kind === 'relay' && settings.relayToken) hello.token = settings.relayToken;
-        try { ws.send(JSON.stringify(hello)); } catch (e) {}
+        try { ws.send(JSON.stringify(hello)); } catch (e) { console.debug('irrlicht: failed to send hello frame', e); }
         updateWsStatus();
       };
       ws.onmessage = function(evt) {
         let msg;
-        try { msg = JSON.parse(evt.data); } catch (e) { return; }
+        try { msg = JSON.parse(evt.data); } catch (e) { console.debug('irrlicht: failed to parse source frame', e); return; }
         handleSourceFrame(src, msg);
       };
       ws.onerror = function() {};
@@ -2079,6 +2088,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
               return;
             }
           } catch (err) {
+            console.debug('irrlicht: notification permission request failed', err);
             this.checked = false;
             refreshPermNote();
             return;
@@ -2098,9 +2108,13 @@ import { reconcile, paintRowNum } from './domReconcile.js';
     // Mirrors the macOS @AppStorage("advancedSettingsExpanded") behavior.
     const advancedDetails = document.getElementById('settings-advanced');
     if (advancedDetails) {
-      try { advancedDetails.open = localStorage.getItem('irrlicht_advancedSettingsExpanded') === 'true'; } catch (e) {}
+      try { advancedDetails.open = localStorage.getItem('irrlicht_advancedSettingsExpanded') === 'true'; } catch (e) {
+        console.debug('irrlicht: failed to load advanced settings expanded state', e);
+      }
       advancedDetails.addEventListener('toggle', () => {
-        try { localStorage.setItem('irrlicht_advancedSettingsExpanded', advancedDetails.open ? 'true' : 'false'); } catch (e) {}
+        try { localStorage.setItem('irrlicht_advancedSettingsExpanded', advancedDetails.open ? 'true' : 'false'); } catch (e) {
+          console.debug('irrlicht: failed to persist advanced settings expanded state', e);
+        }
       });
     }
 
