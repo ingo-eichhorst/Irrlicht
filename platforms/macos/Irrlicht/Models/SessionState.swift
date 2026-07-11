@@ -385,6 +385,7 @@ struct SessionMetrics: Codable {
     let taskEstimate: TaskEstimateInfo?    // agent-authored task progress from the in-band marker (issue #558)
     let taskCompletionEta: Date?           // projected task completion (nil when no marker / no progress yet)
     let cacheBloat: Bool?                  // cache-creation regression detected for this session (issue #374)
+    let cacheBloatPercent: Int?            // how far above the project baseline, as a rounded percent (issue #946)
     let cacheBloatTooltip: String?         // hover text naming the regressing version (empty when no attribution)
     let cacheBloatExplanation: String?     // longer plain-language hover text, composed daemon-side (issue #827)
 
@@ -409,6 +410,7 @@ struct SessionMetrics: Codable {
         case taskEstimate = "task_estimate"
         case taskCompletionEta = "task_completion_eta"
         case cacheBloat = "cache_bloat"
+        case cacheBloatPercent = "cache_bloat_percent"
         case cacheBloatTooltip = "cache_bloat_tooltip"
         case cacheBloatExplanation = "cache_bloat_explanation"
     }
@@ -447,6 +449,7 @@ struct SessionMetrics: Codable {
             taskCompletionEta = nil
         }
         cacheBloat = try c.decodeIfPresent(Bool.self, forKey: .cacheBloat)
+        cacheBloatPercent = try c.decodeIfPresent(Int.self, forKey: .cacheBloatPercent)
         cacheBloatTooltip = try c.decodeIfPresent(String.self, forKey: .cacheBloatTooltip)
         cacheBloatExplanation = try c.decodeIfPresent(String.self, forKey: .cacheBloatExplanation)
     }
@@ -475,6 +478,7 @@ struct SessionMetrics: Codable {
         taskEstimate: TaskEstimateInfo? = nil,
         taskCompletionEta: Date? = nil,
         cacheBloat: Bool? = nil,
+        cacheBloatPercent: Int? = nil,
         cacheBloatTooltip: String? = nil,
         cacheBloatExplanation: String? = nil
     ) {
@@ -498,6 +502,7 @@ struct SessionMetrics: Codable {
         self.taskEstimate = taskEstimate
         self.taskCompletionEta = taskCompletionEta
         self.cacheBloat = cacheBloat
+        self.cacheBloatPercent = cacheBloatPercent
         self.cacheBloatTooltip = cacheBloatTooltip
         self.cacheBloatExplanation = cacheBloatExplanation
     }
@@ -524,6 +529,7 @@ struct SessionMetrics: Codable {
         try c.encodeIfPresent(taskEstimate, forKey: .taskEstimate)
         try c.encodeIfPresent(taskCompletionEta.map { $0.timeIntervalSince1970 }, forKey: .taskCompletionEta)
         try c.encodeIfPresent(cacheBloat, forKey: .cacheBloat)
+        try c.encodeIfPresent(cacheBloatPercent, forKey: .cacheBloatPercent)
         try c.encodeIfPresent(cacheBloatTooltip, forKey: .cacheBloatTooltip)
         try c.encodeIfPresent(cacheBloatExplanation, forKey: .cacheBloatExplanation)
     }
