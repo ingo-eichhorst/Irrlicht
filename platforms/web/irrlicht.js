@@ -1252,7 +1252,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
 
     function updateCacheBloatRow(el, agent) {
       const metrics = agent.metrics || {};
-      const badgeText = cacheBloatBadgeText(metrics.cache_bloat_tooltip);
+      const badgeText = cacheBloatBadgeText(metrics.cache_bloat_tooltip, metrics.cache_bloat_percent);
       if (el.dataset.badge !== badgeText) {
         el.dataset.badge = badgeText;
         el.innerHTML = '<span class="row-cache-bloat">' + esc(badgeText) + '</span>';

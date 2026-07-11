@@ -174,7 +174,9 @@ struct SessionRowView: View {
     private var cacheBloatBlock: some View {
         if session.metrics?.cacheBloat == true {
             let tooltip = session.metrics?.cacheBloatTooltip
-            let badgeText = (tooltip?.isEmpty == false) ? tooltip! : "cache \u{2191}"
+            let base = (tooltip?.isEmpty == false) ? tooltip! : "cache \u{2191}"
+            let percent = session.metrics?.cacheBloatPercent ?? 0
+            let badgeText = percent > 0 ? "\(base) +\(percent)%" : base
             Text(badgeText)
                 .pill(color: IrrColors.pressureHigh, font: .system(size: 9, weight: .semibold, design: .monospaced))
                 .padding(.top, 2)

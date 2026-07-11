@@ -136,6 +136,7 @@ final class SessionRowSnapshotTests: XCTestCase {
         taskEstimate: TaskEstimateInfo? = nil,
         taskCompletionEta: Date? = nil,
         cacheBloat: Bool? = nil,
+        cacheBloatPercent: Int? = nil,
         cacheBloatTooltip: String? = nil,
         cacheBloatExplanation: String? = nil
     ) -> SessionMetrics {
@@ -154,6 +155,7 @@ final class SessionRowSnapshotTests: XCTestCase {
             taskEstimate: taskEstimate,
             taskCompletionEta: taskCompletionEta,
             cacheBloat: cacheBloat,
+            cacheBloatPercent: cacheBloatPercent,
             cacheBloatTooltip: cacheBloatTooltip,
             cacheBloatExplanation: cacheBloatExplanation
         )

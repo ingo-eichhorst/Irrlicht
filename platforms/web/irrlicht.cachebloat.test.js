@@ -38,6 +38,7 @@ const sessionsPayload = {
           first_seen: 1764800000,
           metrics: {
             cache_bloat: true,
+            cache_bloat_percent: 340,
             cache_bloat_tooltip: 'claude-code 2.1.143 +14K cache tokens vs 2.1.98',
             cache_bloat_explanation: attributedExplanation,
           },
@@ -48,7 +49,12 @@ const sessionsPayload = {
           project_name: 'irrlicht',
           adapter: 'claude-code',
           first_seen: 1764800100,
-          metrics: { cache_bloat: true, cache_bloat_tooltip: '', cache_bloat_explanation: unattributedExplanation },
+          metrics: {
+            cache_bloat: true,
+            cache_bloat_percent: 210,
+            cache_bloat_tooltip: '',
+            cache_bloat_explanation: unattributedExplanation,
+          },
         },
         {
           session_id: 'normal',
@@ -97,13 +103,14 @@ describe('cache-creation regression badge (#813)', () => {
     // rendered verbatim (issue #827 — no client-side re-derivation).
     const attributed = cacheBloatBadge('attributed')
     expect(attributed).not.toBeNull()
-    expect(attributed.textContent).toBe('claude-code 2.1.143 +14K cache tokens vs 2.1.98')
+    expect(attributed.textContent).toBe('claude-code 2.1.143 +14K cache tokens vs 2.1.98 +340%')
     expect(attributed.title).toBe(attributedExplanation)
 
-    // Unattributed: compact fallback label, not the old generic sentence.
+    // Unattributed: compact fallback label, not the old generic sentence,
+    // plus the percentage-above-baseline suffix (issue #946).
     const unattributed = cacheBloatBadge('unattributed')
     expect(unattributed).not.toBeNull()
-    expect(unattributed.textContent).toBe('cache ↑')
+    expect(unattributed.textContent).toBe('cache ↑ +210%')
     expect(unattributed.title).toBe(unattributedExplanation)
     expect(unattributed.title).not.toContain('Likely tied to')
 
