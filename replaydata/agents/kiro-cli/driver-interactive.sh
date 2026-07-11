@@ -17,8 +17,14 @@
 # concurrent multi-slot primitives) are ALSO ported from
 # drive-codex-interactive.sh — kiro's per-slot MARKER + transcript_claimed model
 # is byte-identical to codex's, so two concurrent same-cwd sessions each resolve
-# to a distinct <uuid>.jsonl. The remaining signal primitives (interrupt,
-# reset_session) stay stubbed — `record` ports each when a recipe first needs it.
+# to a distinct <uuid>.jsonl. reset_session sends `/chat new` (live-verified on
+# kiro-cli 2.6.0, 2026-07-11: mints a brand-new <uuid>.jsonl in the SAME process,
+# the old file is never appended to again, and its .lock disappears immediately —
+# unlike `/clear`, which only wipes context in the SAME file — see the scenario
+# 1.5 assessment's "what would unblock this cell" note) — ported below as
+# step_reset_session, mirroring drive-codex-interactive.sh's `/new` handling.
+# The remaining signal primitive (interrupt) stays stubbed — `record` ports it
+# when a recipe first needs it.
 #
 # IMPORTANT — how a stubbed arm is caught: every standard arm is PRESENT here
 # (so recipe-lint's GRAMMAR check treats it as handled and will NOT report a
@@ -35,7 +41,8 @@
 #   interrupt      — cancel the in-flight turn (Escape / Ctrl-C)
 #   keys           — raw tmux key sequence (arrow-key pickers, etc.)
 #   sleep          — pause N seconds
-#   reset_session  — in-REPL reset (/clear, /new): same process, new session id
+#   reset_session  — /chat new: same process, new session id (NOT /clear, which
+#                    only wipes context in the same file — see header above)
 #   restart        — end the session, start a FRESH one (new id, new cwd)
 #   resume         — relaunch the SAME id+cwd (daemon sees one session, 2 PIDs)
 #   sigkill        — kill -9 the active session's PID
@@ -172,7 +179,7 @@ source "$_DRIVE_LIB/contracts.sh"
 # it is invisible to the daemon and MUST NOT be used for recording (FINDINGS.md
 # §7). slash commands reach the live TUI directly (a bare send "/cmd" is NOT
 # stored as literal text), so DRIVE_SLASH_REQUIRES_STEP_TYPE stays false.
-DRIVE_ELICITS="send slash wait_turn sleep keys restart resume sigkill exit_clean start_session session"
+DRIVE_ELICITS="send slash wait_turn sleep keys restart resume reset_session sigkill exit_clean start_session session"
 DRIVE_SLASH_REQUIRES_STEP_TYPE=false
 
 remaining_seconds() { local now; now=$(date +%s); (( now >= DEADLINE )) && echo 0 || echo $((DEADLINE - now)); }
@@ -250,8 +257,17 @@ boot_session() {
 # MARKER. kiro writes it lazily (only after the first prompt), so this is called
 # from wait_turn (after a send) and polls briefly. The session id is the
 # filename stem — the daemon keys on it and it is the `--resume-id` arg.
-resolve_transcript() {
+#
+# <allow-empty> (default unset = require content, via `-s`): a fresh
+# ~/.kiro/sessions/cli/<uuid>.jsonl is created EMPTY the instant a new
+# session starts (both the initial boot and `/chat new`'s rotation) and only
+# gains content once a turn actually completes. wait_turn needs `-s` (an
+# empty file has nothing to count a turn from); step_reset_session's own
+# rotation check does NOT — it only wants to confirm the new file exists
+# before the caller moves on, so it passes "1" to skip the size check.
+resolve_transcript() { # [allow-empty]
   [[ -n "$TRANSCRIPT" ]] && return 0
+  local allow_empty="${1:-}"
   local f line
   for _ in $(seq 1 60); do
     # newest .jsonl with mtime > this slot's MARKER. `find -newer` filters by the
@@ -264,7 +280,7 @@ resolve_transcript() {
       if [[ -z "$f" || "$line" -nt "$f" ]]; then f="$line"; fi
     done < <(find "$KIRO_SESSIONS_DIR" -maxdepth 1 -type f -name '*.jsonl' \
                   -newer "$MARKER" 2>/dev/null)
-    if [[ -n "$f" && -s "$f" ]]; then
+    if [[ -n "$f" ]] && { [[ -n "$allow_empty" ]] || [[ -s "$f" ]]; }; then
       TRANSCRIPT="$f"
       UUID="$(basename "$f" .jsonl)"
       echo "[driver] resolve_transcript[s$ACTIVE]: $TRANSCRIPT (uuid=$UUID)" >&2
@@ -386,7 +402,17 @@ send_keys() { # <key-token-list>
 # Enter), then give kiro time to flush its final transcript lines and tear down
 # before the next step. Unlike claudecode/codex (Ctrl-D), kiro binds the exit to
 # the /quit command, not to Ctrl-D — though Ctrl-D also works.
+#
+# Guard: refuse a slot already marked retired (SES_ALIVE=0). reset_session
+# reuses the SAME tmux/process for its new slot, so an already-retired slot
+# number can alias the tmux pane a DIFFERENT, still-live slot now owns — a
+# recipe mistakenly re-targeting the old slot number for teardown must not
+# be allowed to /quit the live post-reset session out from under it.
 step_exit_clean() {
+  if [[ "${SES_ALIVE[$ACTIVE]:-0}" != "1" ]]; then
+    echo "[driver] exit_clean[s$ACTIVE]: slot already retired -- refusing (its tmux/process may be owned by another live slot)" >&2
+    return 0
+  fi
   resolve_transcript || true
   tmux send-keys -t "$SESSION" -l -- "/quit"
   sleep 0.3
@@ -409,7 +435,15 @@ step_exit_clean() {
 # never matches the always-running `kiro_cli_desktop` companion (different comm).
 # We then narrow to THIS slot's cwd via lsof, so a concurrent kiro-cli in a
 # different cwd (another recording, a user REPL) is never touched.
+#
+# Guard: refuse a slot already marked retired (SES_ALIVE=0) — see the
+# identical guard + rationale on step_exit_clean above (reset_session aliases
+# an old slot number to a live slot's tmux/process).
 step_sigkill() {
+  if [[ "${SES_ALIVE[$ACTIVE]:-0}" != "1" ]]; then
+    echo "[driver] sigkill[s$ACTIVE]: slot already retired -- refusing (its tmux/process may be owned by another live slot)" >&2
+    return 0
+  fi
   # NB: separate `local` statements — `local a=… b=$a` reads $a before it is set
   # under `set -u` (bash evaluates the RHS of a same-line second var against the
   # PRIOR scope), which trips "unbound variable".
@@ -510,7 +544,102 @@ step_resume() {
   fi
 }
 
-# --- CONCURRENCY SEAM E: start_session ---------------------------------------
+# --- TEARDOWN SEAM E: reset_session -------------------------------------------
+# `/chat new` abandons the current conversation and starts a fresh one IN THE
+# SAME process: kiro mints a new session id and materializes a NEW
+# ~/.kiro/sessions/cli/<uuid>.jsonl; the old file stops being appended and its
+# .lock is removed immediately (live-verified on kiro-cli 2.6.0, 2026-07-11).
+# This is `/chat new`, NOT `/clear` — `/clear` only wipes context inside the
+# SAME .jsonl (same uuid, a single appended Clear event, no rotation), which is
+# why the scenario 1.5 assessment previously found no in-REPL reset available;
+# `/chat new`'s on-disk behavior was the one piece left unverified there.
+#
+# Mirrors drive-codex-interactive.sh's swap_after_slash, with two timing
+# details reversed because kiro's rotation is NOT lazy like codex's `/new`
+# (which only materializes a rollout on the NEXT prompt):
+#
+#   1. Marker BEFORE send, not after. codex/gemini touch the new slot's
+#      marker AFTER sending their reset slash, because their new
+#      rollout/chats-file doesn't exist yet at that point (lazy). kiro's
+#      `/chat new` mints the new (empty) .jsonl essentially SYNCHRONOUSLY —
+#      live-verified: the file appears within ~1s of Enter, before any
+#      further prompt. Touching the marker only after sending would risk the
+#      marker's mtime POSTDATING the new .jsonl's, and resolve_transcript's
+#      `-newer "$MARKER"` filter would then never match it. So the new slot
+#      (and its marker) is allocated FIRST, with a settle sleep, THEN the
+#      slash is sent.
+#   2. The OLD slot is not marked dead (SES_ALIVE=0) until the swap is
+#      fully durable (new slot allocated+alive+resolved). If `tmux send-keys`
+#      or anything else aborts the script mid-swap, the old slot's tmux
+#      session is the ONLY live resource and must still be reachable by
+#      `cleanup`'s EXIT-trap sweep — retiring it early (before the new slot
+#      exists) would leak it on a mid-swap abort.
+#
+# The function also eagerly resolves + verifies the new slot's transcript
+# before returning (propagated via `|| STEP_OK=false` at the dispatch site),
+# instead of silently deferring detection to a later wait_turn that may never
+# come. As a side effect this persists the new slot's transcript into
+# SES_TRANSCRIPT before the end-of-script best-effort resolution loop runs,
+# so that loop's `transcript_claimed` check correctly excludes it from being
+# mis-claimed by another slot's stale-marker search.
+#
+# Precondition: only call reset_session on a slot that has already completed
+# at least one wait_turn. Without a prior turn, the OLD slot's own transcript
+# may never have resolved, and its stale (pre-reset) marker has no upper
+# bound — the shared epilogue resolution loop (see codex/gemini-cli, which
+# have the identical structure) could then claim a file it shouldn't. This is
+# an existing property of the slot model's best-effort epilogue pass, not
+# something unique to kiro; recipes should always drive at least one turn per
+# slot before resetting or retiring it.
+step_reset_session() {
+  resolve_transcript || true
+  local old_tmux="$SESSION"
+  local old_cwd="${SES_CWD[$ACTIVE]}"
+  local old_slot="$ACTIVE"
+  save_active
+  echo "[driver] reset_session: recorded old session uuid=$UUID" >&2
+
+  # Allocate the new slot (and its marker) BEFORE sending /chat new — see
+  # point 1 above. Settle a full second so the marker's mtime sorts strictly
+  # BEFORE the new .jsonl's (1s mtime granularity: a same-second tie would
+  # make `-newer "$MARKER"` never match).
+  alloc_slot "$old_tmux" "$old_cwd"
+  SES_ALIVE[$ACTIVE]=1
+  sleep 1
+
+  # Rewire this pane's tmux pipe-pane capture to the NEW slot's stdout file.
+  # boot_session's `-o` (only-if-not-already-piping) would silently no-op
+  # here since a pipe from the ORIGINAL boot is still active on this same
+  # pane — close it explicitly first, then open the new one.
+  local new_stdout="$DRIVER_LOG.stdout.$ACTIVE"
+  : > "$new_stdout"
+  tmux pipe-pane -t "$old_tmux"
+  tmux pipe-pane -t "$old_tmux" -o "cat >> '$new_stdout'"
+
+  tmux send-keys -t "$old_tmux" -l -- "/chat new"
+  sleep 0.3
+  tmux send-keys -t "$old_tmux" Enter
+  sleep 1.5
+
+  # Only now retire the old slot number — the new slot is fully live and
+  # owns the shared tmux/process, so an abort from here on still tears down
+  # via the (still-tracked) new slot's entry.
+  SES_ALIVE[$old_slot]=0
+
+  # allow-empty: the new .jsonl is created EMPTY the instant /chat new runs
+  # and only gains content once a turn completes (kiro's own timing, not a
+  # driver artifact — live-verified). Requiring content here (wait_turn's
+  # default) would make this check block for the full poll window on every
+  # reset, since nothing has been sent to the new session yet.
+  if ! resolve_transcript 1; then
+    echo "[driver] reset_session: WARNING — no new session file detected after /chat new; the reset may have failed" >&2
+    EXIT_REASON="nonzero(3)"
+    return 3
+  fi
+  echo "[driver] reset_session: new slot #${ACTIVE} (was #${old_slot}) resolved -> $TRANSCRIPT" >&2
+}
+
+# --- CONCURRENCY SEAM F: start_session ---------------------------------------
 # Launch a NEW concurrent kiro-cli session WITHOUT tearing down the active one.
 # Mirrors step_start_session in drive-codex-interactive.sh: the previous session
 # keeps running (its tmux survives), so the daemon observes both as independent
@@ -586,7 +715,7 @@ while IFS= read -r step; do
     sleep)           sleep "$(jq -r '.seconds // 1' <<<"$step")" ;;
     interrupt)       not_implemented interrupt || STEP_OK=false ;;     # TODO(kiro-cli): Escape/Ctrl-C the in-flight turn
     keys)            send_keys "$(jq -r '.keys' <<<"$step")" ;;
-    reset_session)   not_implemented reset_session || STEP_OK=false ;; # TODO(kiro-cli): in-REPL /clear|/new → new session id
+    reset_session)   step_reset_session || STEP_OK=false ;;
     restart)         step_restart ;;
     resume)          step_resume || STEP_OK=false ;;
     sigkill)         step_sigkill ;;
