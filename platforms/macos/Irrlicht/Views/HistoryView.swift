@@ -277,7 +277,10 @@ struct HistoryView: View {
 
     /// DORA's project picker (#951), sourced from knownProjects — already
     /// populated from cost fetches grouped by project, so no separate
-    /// project-discovery fetch is needed.
+    /// project-discovery fetch is needed. Capped with maxWidth (not
+    /// `.fixedSize()`, unlike its Section/Range siblings) because project
+    /// names are unbounded-length user data; without a ceiling a long name
+    /// pushes the row past the panel's fixed width (#962).
     @ViewBuilder private var doraProjectPicker: some View {
         Picker("Project", selection: Binding(
             get: { doraProject ?? "" },
@@ -287,7 +290,7 @@ struct HistoryView: View {
             ForEach(knownProjects, id: \.self) { Text($0).tag($0) }
         }
         .labelsHidden()
-        .fixedSize()
+        .frame(maxWidth: 140)
     }
 
     /// Custom-range date pickers, shared by the Usage and Metrics tabs.
