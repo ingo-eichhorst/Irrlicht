@@ -144,13 +144,22 @@ func concatWaitingCuePatterns() []*regexp.Regexp {
 // issue #236) with the top languages' "because/since" equivalents, so a
 // rhetorical Q&A pair in those languages is also correctly skipped rather
 // than misread as a real waiting question.
+//
+// German "da" ("since") and French "car" ("because") are deliberately
+// excluded — both are also common English words/names ("Da Vinci", "Car
+// trouble aside, ..."), and looksLikeAnswer lowercases before the prefix
+// check, so case can't disambiguate them. Unlike the ambiguous possessives
+// in waitingCuePatterns*, there's no unambiguous fallback token that keeps
+// German/French recall for the single-word form, so those two are dropped
+// entirely; "weil"/"parce que" (unambiguous, no English collision) still
+// cover the common case.
 var i18nAnswerPrefixes = []string{
 	// German
-	"weil ", "weil,", "da ",
+	"weil ", "weil,",
 	// Spanish / Portuguese share "porque"
 	"porque ", "porque,",
 	// French
-	"parce que ", "car ", "car,",
+	"parce que ",
 	// Japanese
 	"なぜなら",
 	// Chinese

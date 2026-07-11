@@ -87,6 +87,13 @@ func TestExtractQuestionSnippet(t *testing.T) {
 		// Rhetorical Q&A veto in other languages — issue #933.
 		{"de: rhetorical weil-answer returns empty", "Warum? Weil der Cache das schon hat.", ""},
 		{"es: rhetorical porque-answer returns empty", "¿Por qué? Porque el caché ya lo tiene.", ""},
+		// Cross-language word collisions in the rhetorical veto — issue #933
+		// code review. German "da" ("since") and French "car" ("because")
+		// are also common English words/names; a bare-prefix veto on them
+		// would wrongly suppress a real English question followed by an
+		// unrelated sentence that happens to start with the same word.
+		{"en: 'Da Vinci' does not trigger German da-veto", "Should we proceed? Da Vinci's sketches are relevant background.", "Should we proceed?"},
+		{"en: 'Car trouble' does not trigger French car-veto", "What broke the build? Car analogies aside, let's debug.", "What broke the build?"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
