@@ -38,7 +38,7 @@ func doHistory(t *testing.T, tracker *filesystem.CostTracker, query string) (*ht
 	t.Helper()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/history?"+query, nil)
 	rec := httptest.NewRecorder()
-	handleGetHistory(tracker, nil, nil)(rec, req)
+	handleGetHistory(tracker, nil, nil, nil)(rec, req)
 	var resp historyResponse
 	if rec.Code == http.StatusOK {
 		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
@@ -150,7 +150,7 @@ func TestHandleGetHistory_AgentsConcurrency(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/history?range=day&chart=agents", nil)
 	rec := httptest.NewRecorder()
-	handleGetHistory(cost, nil, conc)(rec, req)
+	handleGetHistory(cost, nil, conc, nil)(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("chart=agents: want 200, got %d (%s)", rec.Code, rec.Body.String())
 	}
@@ -181,7 +181,7 @@ func TestHandleGetHistory_AgentsEmpty(t *testing.T) {
 	conc := filesystem.NewConcurrencyTrackerWithDir(filepath.Join(t.TempDir(), "recordings"))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/history?range=day&chart=agents", nil)
 	rec := httptest.NewRecorder()
-	handleGetHistory(nil, nil, conc)(rec, req)
+	handleGetHistory(nil, nil, conc, nil)(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("empty agents: want 200, got %d", rec.Code)
 	}
@@ -369,7 +369,7 @@ func TestHandleGetHistory_BadRequests(t *testing.T) {
 	for _, q := range []string{"chart=bogus", "group=bogus", "range=bogus", "start=abc&end=def", "start=2000&end=1000", "chart=cost&group=token_type", "chart=tokens&token_type=bogus"} {
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/history?"+q, nil)
 		rec := httptest.NewRecorder()
-		handleGetHistory(tr, nil, nil)(rec, req)
+		handleGetHistory(tr, nil, nil, nil)(rec, req)
 		if rec.Code != http.StatusBadRequest {
 			t.Errorf("%q: want 400, got %d", q, rec.Code)
 		}
@@ -433,7 +433,7 @@ func TestHandleGetHistory_CrossFilter(t *testing.T) {
 func TestHandleGetHistory_NilTrackerEmpty(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/history?range=week", nil)
 	rec := httptest.NewRecorder()
-	handleGetHistory(nil, nil, nil)(rec, req)
+	handleGetHistory(nil, nil, nil, nil)(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("nil tracker: want 200, got %d", rec.Code)
 	}

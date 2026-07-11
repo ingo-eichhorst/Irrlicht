@@ -567,6 +567,7 @@ type registerSessionRoutesDeps struct {
 	SockPath     string
 	Push         outbound.PushBroadcaster
 	Logger       outbound.Logger
+	GitResolver  *git.Adapter
 }
 
 // registerSessionRoutes wires the sessions/history/focus endpoints. Kept
@@ -587,8 +588,10 @@ func registerSessionRoutes(mux *http.ServeMux, deps registerSessionRoutesDeps) {
 	// chart=yield (per-project productive-vs-reverted spend over sessions). Phase
 	// 3 (#751) adds chart=agents, a concurrent-agents series reconstructed from
 	// the lifecycle recordings (read-only; empty unless --record has been used).
+	// #951 adds chart=dora, computed on request from deps.GitResolver — no
+	// persistence, no background sweep.
 	concurrencyTracker := filesystem.NewConcurrencyTrackerWithDir(resolveRecordingsDir(deps.SockPath))
-	mux.HandleFunc("GET /api/v1/history", handleGetHistory(deps.CostTracker, deps.CachedRepo, concurrencyTracker))
+	mux.HandleFunc("GET /api/v1/history", handleGetHistory(deps.CostTracker, deps.CachedRepo, concurrencyTracker, deps.GitResolver))
 
 	focusService := services.NewFocusService(deps.CachedRepo, deps.Push, deps.Logger)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/focus", sessionshandler.NewFocusHandler(focusService, deps.Logger))

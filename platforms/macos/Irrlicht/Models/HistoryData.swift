@@ -102,6 +102,46 @@ struct HistoryYieldProject: Codable, Identifiable {
     }
 }
 
+// Codable mirror of the daemon's `chart=dora` response (#951): DORA metrics
+// for one project's git repo over the selected window — a period summary,
+// not a time series, computed on request with no persistence.
+struct HistoryDoraResponse: Codable {
+    let range: String
+    let project: String
+    let start: Int64
+    let end: Int64
+    let available: Bool
+    let message: String?
+    let deploymentFrequency: DoraMetric
+    let leadTime: DoraMetric
+    let changeFailureRate: DoraMetric
+    let mttr: DoraMetric
+
+    enum CodingKeys: String, CodingKey {
+        case range, project, start, end, available, message
+        case deploymentFrequency = "deployment_frequency"
+        case leadTime = "lead_time"
+        case changeFailureRate = "change_failure_rate"
+        case mttr
+    }
+}
+
+/// One computed DORA statistic. `available` is false when there wasn't
+/// enough data to compute `value` — `message` explains why, and `value`/
+/// `unit` should not be rendered in that case.
+struct DoraMetric: Codable {
+    let value: Double
+    let unit: String
+    let sampleSize: Int
+    let available: Bool
+    let message: String?
+
+    enum CodingKeys: String, CodingKey {
+        case value, unit, available, message
+        case sampleSize = "sample_size"
+    }
+}
+
 /// The History range selector — the cost calendar spans shown in the dropdown.
 /// The subscription rate-limit windows (5h / 7d) are no longer a range; quota is
 /// surfaced as a live per-provider forecast strip instead (see HistoryView).
@@ -168,6 +208,7 @@ enum HistoryTokenType: String, CaseIterable, Identifiable {
 enum HistoryChart: String, CaseIterable, Identifiable {
     case cost, tokens, co2, models, providers
     case yieldRatio = "yield" // #373 — per-project productive vs reverted spend
+    case dora // #951 — per-project DORA metrics (deploy frequency, lead time, CFR, MTTR)
 
     var id: String { rawValue }
 
@@ -179,6 +220,7 @@ enum HistoryChart: String, CaseIterable, Identifiable {
         case .models: return "Models"
         case .providers: return "Providers"
         case .yieldRatio: return "Yield"
+        case .dora: return "DORA"
         }
     }
 

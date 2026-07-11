@@ -12,18 +12,37 @@ import SwiftUI
 
 /// Top-level History tabs. The three concerns are too different to share one
 /// control bar, so each is its own tab with only the controls it needs:
-/// Usage (cost/token time series), Yield (productive-vs-reverted), and Quota
+/// Usage (cost/token time series), Metrics (a growing set of derived
+/// analytics — Yield's productive-vs-reverted plus DORA, #951), and Quota
 /// (live per-provider subscription rate-limit forecast).
 enum HistoryTab: String, CaseIterable, Identifiable {
-    case usage, yield, quota
+    case usage, metrics, quota
 
     var id: String { rawValue }
 
     var label: String {
         switch self {
         case .usage: return "Usage"
-        case .yield: return "Yield"
+        case .metrics: return "Metrics"
         case .quota: return "Quota"
+        }
+    }
+}
+
+/// Which analytic is shown inside the Metrics tab (#951) — a single-selection
+/// inner picker, since both platforms render exactly one active
+/// chart/section at a time. Yield is #373's existing productive-vs-reverted
+/// aggregate; DORA is the first new section; more (AI-specific) metrics
+/// arrive later.
+enum MetricsSection: String, CaseIterable, Identifiable {
+    case yield, dora
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .yield: return "Yield"
+        case .dora: return "DORA"
         }
     }
 }
@@ -32,9 +51,10 @@ struct HistoryView: View {
     let onClose: () -> Void
 
     // Top-level view: each tab is a self-contained concern with its own controls
-    // (Usage = cost/token time series, Yield = productive-vs-reverted, Quota =
+    // (Usage = cost/token time series, Metrics = Yield + DORA sections, Quota =
     // live per-provider rate-limit forecast).
     @State private var tab: HistoryTab
+    @State private var metricsSection: MetricsSection = .yield
     @State private var range: HistoryRange = .day
     @State private var chart: HistoryChart = .cost
     @State private var group: HistoryGroup = .project
@@ -47,8 +67,16 @@ struct HistoryView: View {
     @State private var appliedCustomStart: Int64?
     @State private var appliedCustomEnd: Int64?
 
+    // DORA (#951) is inherently repo-scoped — needs exactly one project,
+    // unlike cost/yield's implicit "all projects." knownProjects accumulates
+    // the option list from any cost fetch grouped by project, so DORA's
+    // picker doesn't need a separate project-discovery fetch.
+    @State private var knownProjects: [String] = []
+    @State private var doraProject: String?
+
     @State private var response: HistoryResponse?
     @State private var yieldResponse: HistoryYieldResponse?
+    @State private var doraResponse: HistoryDoraResponse?
     @State private var loadFailed = false
 
     init(onClose: @escaping () -> Void, initialTab: HistoryTab = .usage) {
@@ -60,17 +88,20 @@ struct HistoryView: View {
     /// This is the macOS equivalent of the web's manual `historyFetchSeq`
     /// dedup — `.task(id:)` cancels the in-flight request when the key changes.
     private var queryKey: String {
-        let dims = "\(tab.rawValue)-\(fetchChart.rawValue)-\(effectiveGroup.rawValue)-\(scope?.query ?? "")"
+        let dims = "\(tab.rawValue)-\(fetchChart.rawValue)-\(effectiveGroup.rawValue)-\(scope?.query ?? "")-\(doraProject ?? "")"
         if range == .custom {
             return "custom-\(appliedCustomStart ?? 0)-\(appliedCustomEnd ?? 0)-\(dims)"
         }
         return "\(range.rawValue)-\(dims)"
     }
 
-    /// The chart metric actually sent to the daemon: the Yield tab forces the
-    /// yield aggregate; otherwise the Usage tab's Cost/Tokens choice. (Quota does
-    /// not fetch.)
-    private var fetchChart: HistoryChart { tab == .yield ? .yieldRatio : chart }
+    /// The chart metric actually sent to the daemon: the Metrics tab forces
+    /// whichever section is active (Yield's aggregate or DORA); otherwise the
+    /// Usage tab's Cost/Tokens choice. (Quota does not fetch.)
+    private var fetchChart: HistoryChart {
+        guard tab == .metrics else { return chart }
+        return metricsSection == .dora ? .dora : .yieldRatio
+    }
 
     /// The stacking axis actually sent to the daemon: pinned to model/provider
     /// for the models/providers presets, else the user's group choice.
@@ -121,10 +152,10 @@ struct HistoryView: View {
             if newChart != .tokens && group == .tokenType { group = .project }
         }
         // Switching tabs drops any drilldown and keeps the Usage metric valid
-        // (Cost/Tokens only — Yield lives in its own tab now).
+        // (Cost/Tokens only — Yield/DORA live in the Metrics tab now).
         .onChange(of: tab) { newTab in
             scope = nil
-            if newTab == .usage, chart == .yieldRatio { chart = .cost }
+            if newTab == .usage, chart == .yieldRatio || chart == .dora { chart = .cost }
         }
     }
 
@@ -154,13 +185,14 @@ struct HistoryView: View {
     // MARK: Controls
 
     /// Only the controls that apply to the active tab — Quota needs none,
-    /// Yield needs just a range, Usage gets the full set (the tab selector
-    /// itself lives in `tabSwitcher`, above).
+    /// Metrics needs a section picker + range (+ a project picker for DORA),
+    /// Usage gets the full set (the tab selector itself lives in
+    /// `tabSwitcher`, above).
     private var topControls: some View {
         VStack(alignment: .leading, spacing: IrrSpacing.sp2) {
             switch tab {
             case .usage: usageControls
-            case .yield: yieldControls
+            case .metrics: metricsControls
             case .quota: EmptyView()
             }
         }
@@ -168,8 +200,9 @@ struct HistoryView: View {
         .padding(.vertical, IrrSpacing.sp3)
     }
 
-    /// Range picker for the Yield tab (Usage builds its own Range/Chart/Group
-    /// row where all three share the width evenly, so it doesn't reuse this).
+    /// Range picker for the Metrics tab's Yield/DORA sections (Usage builds
+    /// its own Range/Chart/Group row where all three share the width evenly,
+    /// so it doesn't reuse this).
     @ViewBuilder private var rangePicker: some View {
         Picker("Range", selection: $range) {
             ForEach(HistoryRange.allCases) { Text($0.label).tag($0) }
@@ -220,10 +253,19 @@ struct HistoryView: View {
         if range == .custom { customRangeRow }
     }
 
-    /// Yield tab: a per-project aggregate over the range — just the range picker.
-    @ViewBuilder private var yieldControls: some View {
+    /// Metrics tab (#951): a section picker (Yield | DORA, more later) plus
+    /// the range picker Yield needs — and, only for the DORA section, a
+    /// project picker, since DORA is inherently repo-scoped and needs
+    /// exactly one project (unlike Yield's implicit "all projects").
+    @ViewBuilder private var metricsControls: some View {
         HStack(spacing: IrrSpacing.sp3) {
+            Picker("Section", selection: $metricsSection) {
+                ForEach(MetricsSection.allCases) { Text($0.label).tag($0) }
+            }
+            .labelsHidden()
+            .fixedSize()
             rangePicker
+            if metricsSection == .dora { doraProjectPicker }
             Spacer(minLength: 0)
         }
         .pickerStyle(.menu)
@@ -233,7 +275,22 @@ struct HistoryView: View {
         if range == .custom { customRangeRow }
     }
 
-    /// Custom-range date pickers, shared by the Usage and Yield tabs.
+    /// DORA's project picker (#951), sourced from knownProjects — already
+    /// populated from cost fetches grouped by project, so no separate
+    /// project-discovery fetch is needed.
+    @ViewBuilder private var doraProjectPicker: some View {
+        Picker("Project", selection: Binding(
+            get: { doraProject ?? "" },
+            set: { doraProject = $0.isEmpty ? nil : $0 }
+        )) {
+            Text("Select a project…").tag("")
+            ForEach(knownProjects, id: \.self) { Text($0).tag($0) }
+        }
+        .labelsHidden()
+        .fixedSize()
+    }
+
+    /// Custom-range date pickers, shared by the Usage and Metrics tabs.
     private var customRangeRow: some View {
         HStack(spacing: IrrSpacing.sp2) {
             DatePicker("", selection: $customStart, displayedComponents: .date)
@@ -272,7 +329,7 @@ struct HistoryView: View {
             VStack(alignment: .leading, spacing: 0) {
                 switch tab {
                 case .usage: usageContent
-                case .yield: yieldContent
+                case .metrics: metricsContent
                 case .quota: quotaContent
                 }
             }
@@ -302,10 +359,39 @@ struct HistoryView: View {
         }
     }
 
-    /// Yield tab: per-project productive-vs-reverted aggregate over the range.
+    /// Metrics tab (#951): whichever section is active. DORA with no project
+    /// selected is a distinct empty state, not a load failure or a spinner —
+    /// nothing was fetched at all (queryKey still changes on project
+    /// selection, so picking one triggers the fetch normally).
+    @ViewBuilder private var metricsContent: some View {
+        switch metricsSection {
+        case .yield: yieldContent
+        case .dora: doraContent
+        }
+    }
+
+    /// Yield section: per-project productive-vs-reverted aggregate over the range.
     @ViewBuilder private var yieldContent: some View {
         if let y = yieldResponse {
             HistoryYieldContentView(data: y, range: range)
+        } else if loadFailed {
+            loadFailedText
+        } else {
+            ProgressView()
+                .frame(maxWidth: .infinity, minHeight: 220)
+        }
+    }
+
+    /// DORA section (#951): a project must be selected first — its picker
+    /// lives in metricsControls above.
+    @ViewBuilder private var doraContent: some View {
+        if doraProject == nil {
+            Text("select a project to see its DORA metrics")
+                .font(.callout)
+                .foregroundColor(.secondary)
+                .frame(maxWidth: .infinity, minHeight: 220)
+        } else if let d = doraResponse {
+            HistoryDoraContentView(data: d)
         } else if loadFailed {
             loadFailedText
         } else {
@@ -341,10 +427,17 @@ struct HistoryView: View {
 
     private func fetch() async {
         guard tab != .quota else { return }  // quota reads the live snapshot, no fetch
+        // DORA needs exactly one project — with none selected, there's
+        // nothing to fetch at all (a distinct empty state, not a load
+        // failure or a spinner; see doraContent).
+        if fetchChart == .dora, doraProject == nil { return }
         loadFailed = false
         var comps = URLComponents(string: "\(DaemonEndpoint.httpBase)/api/v1/history")
         // queryItems ignores the custom bounds unless range == .custom.
         comps?.queryItems = range.queryItems(chart: fetchChart, group: effectiveGroup, scope: scope, forecast: false, customStart: appliedCustomStart, customEnd: appliedCustomEnd)
+        if fetchChart == .dora, let doraProject {
+            comps?.queryItems?.append(URLQueryItem(name: "project", value: doraProject))
+        }
         guard let url = comps?.url else { return }
         do {
             let (data, resp) = try await URLSession.shared.data(from: url)
@@ -353,7 +446,11 @@ struct HistoryView: View {
                 loadFailed = true
                 return
             }
-            if fetchChart == .yieldRatio {
+            if fetchChart == .dora {
+                let decoded = try JSONDecoder().decode(HistoryDoraResponse.self, from: data)
+                if Task.isCancelled { return }
+                doraResponse = decoded
+            } else if fetchChart == .yieldRatio {
                 let decoded = try JSONDecoder().decode(HistoryYieldResponse.self, from: data)
                 if Task.isCancelled { return }
                 yieldResponse = decoded
@@ -361,10 +458,25 @@ struct HistoryView: View {
                 let decoded = try JSONDecoder().decode(HistoryResponse.self, from: data)
                 if Task.isCancelled { return }
                 response = decoded
+                // Grows DORA's project picker vocabulary — no separate
+                // project-discovery fetch needed (#951).
+                if decoded.group == "project" {
+                    knownProjects = mergeKnownProjects(knownProjects, decoded.topContributors)
+                }
             }
         } catch {
             if !Task.isCancelled { loadFailed = true }
         }
+    }
+
+    /// Merges a response's contributor labels into an accumulated project
+    /// list, dropping the synthetic "unknown" bucket and keeping it sorted
+    /// (#951 — DORA's project picker; #750's broader multi-dimension
+    /// version of this was removed along with the Filters dropdown).
+    private func mergeKnownProjects(_ existing: [String], _ contribs: [HistoryContributor]) -> [String] {
+        var set = Set(existing)
+        for c in contribs where !c.label.isEmpty && c.label != "unknown" { set.insert(c.label) }
+        return set.sorted()
     }
 
     private func save(ext: String, text: String) {
@@ -749,6 +861,66 @@ private struct HistoryYieldRow: View {
     }
 }
 
+// MARK: - DORA metrics (#951)
+
+struct HistoryDoraContentView: View {
+    let data: HistoryDoraResponse
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: IrrSpacing.sp3) {
+            Text("DORA · \(data.project)")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            if !data.available {
+                Text(data.message ?? "not enough data to compute DORA metrics")
+                    .font(.callout)
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 160)
+            } else {
+                VStack(alignment: .leading, spacing: IrrSpacing.sp3) {
+                    HistoryDoraMetricRow(label: "Deployment Frequency", metric: data.deploymentFrequency, format: HistoryFormat.doraPerWeek)
+                    HistoryDoraMetricRow(label: "Lead Time for Changes", metric: data.leadTime, format: HistoryFormat.doraHours)
+                    HistoryDoraMetricRow(label: "Change Failure Rate", metric: data.changeFailureRate, format: HistoryFormat.doraPercent)
+                    HistoryDoraMetricRow(label: "Mean Time to Restore", metric: data.mttr, format: HistoryFormat.doraHours)
+                }
+            }
+        }
+        .padding(.horizontal, IrrSpacing.sp4)
+        .padding(.vertical, IrrSpacing.sp3)
+    }
+}
+
+private struct HistoryDoraMetricRow: View {
+    let label: String
+    let metric: DoraMetric
+    let format: (Double) -> String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: IrrSpacing.sp1) {
+            Text(label)
+                .font(.caption)
+                .foregroundColor(.secondary)
+            if metric.available {
+                HStack(alignment: .firstTextBaseline, spacing: IrrSpacing.sp2) {
+                    Text(format(metric.value))
+                        .font(.title3)
+                        .fontWeight(.semibold)
+                        .monospacedDigit()
+                    if let message = metric.message {
+                        Text(message)
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                }
+            } else {
+                Text(metric.message ?? "n/a")
+                    .font(.callout)
+                    .foregroundColor(.secondary)
+            }
+        }
+    }
+}
+
 // MARK: - Stacked-area cost chart (Swift Charts)
 
 private struct HistoryCostChart: View {
@@ -1061,6 +1233,19 @@ enum HistoryPalette {
 enum HistoryFormat {
     /// `$X.XX`, matching the web `histDollar`.
     static func dollar(_ v: Double) -> String { String(format: "$%.2f", v) }
+
+    /// "X.X/week", for DORA Deployment Frequency (#951).
+    static func doraPerWeek(_ v: Double) -> String { String(format: "%.1f/week", v) }
+
+    /// "X%", for DORA Change Failure Rate (#951).
+    static func doraPercent(_ v: Double) -> String { String(format: "%.0f%%", v) }
+
+    /// Hours → "N hours" below a day, "X.X days" at or above — matching the
+    /// daemon's own format_hours convention for Lead Time / MTTR (#951).
+    static func doraHours(_ v: Double) -> String {
+        if v >= 24 { return String(format: "%.1f days", v / 24) }
+        return String(format: "%.0f hours", v)
+    }
 
     /// "5h" / "7d" from a canonical rate-limit window length in minutes.
     static func quotaWindowLabel(_ minutes: Int) -> String {

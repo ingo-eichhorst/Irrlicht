@@ -213,3 +213,93 @@ func TestGetCWDFromTranscript_WrappedCodex(t *testing.T) {
 		t.Errorf("got %q, want %q", got, "/Users/test/override")
 	}
 }
+
+func TestListReleaseTags(t *testing.T) {
+	a := New()
+
+	if got := a.ListReleaseTags(t.TempDir()); got != nil {
+		t.Errorf("non-repo dir: want nil, got %v", got)
+	}
+
+	dir := gitInitForTest(t)
+	commitFileForTest(t, dir, "a.txt", "A")
+	if got := a.ListReleaseTags(dir); got != nil {
+		t.Fatalf("no tags yet: want nil, got %v", got)
+	}
+
+	runGitForTest(t, dir, "tag", "v0.1.0")
+	runGitForTest(t, dir, "tag", "not-a-release") // filtered out
+	commitFileForTest(t, dir, "b.txt", "B")
+	runGitForTest(t, dir, "tag", "v0.2.0")
+
+	got := a.ListReleaseTags(dir)
+	if len(got) != 2 {
+		t.Fatalf("got %d tags, want 2 (non-release tag must be filtered): %+v", len(got), got)
+	}
+	if got[0].Name != "v0.1.0" || got[1].Name != "v0.2.0" {
+		t.Fatalf("got %+v, want v0.1.0 then v0.2.0 (creation order)", got)
+	}
+	if got[0].Epoch > got[1].Epoch {
+		t.Fatalf("got %+v, want ascending epoch order", got)
+	}
+}
+
+func TestCommitsInRange(t *testing.T) {
+	a := New()
+
+	if got := a.CommitsInRange(t.TempDir(), "", "HEAD"); got != nil {
+		t.Errorf("non-repo dir: want nil, got %v", got)
+	}
+
+	dir := gitInitForTest(t)
+	shaA := commitFileForTest(t, dir, "a.txt", "A")
+	runGitForTest(t, dir, "tag", "v0.1.0")
+
+	// Multi-line body, so the record/field separator parsing is exercised
+	// against real newline-bearing commit messages, not just single-liners.
+	if err := os.WriteFile(filepath.Join(dir, "b.txt"), []byte("B"), 0o644); err != nil {
+		t.Fatalf("write b.txt: %v", err)
+	}
+	runGitForTest(t, dir, "add", "b.txt")
+	runGitForTest(t, dir, "commit", "-m", "add b.txt\n\nFixes #123.")
+	shaB := runGitForTest(t, dir, "rev-parse", "HEAD")
+	runGitForTest(t, dir, "tag", "v0.2.0")
+
+	oldest := a.CommitsInRange(dir, "", "v0.1.0")
+	if len(oldest) != 1 || oldest[0].Hash != shaA {
+		t.Fatalf("oldest tag (no predecessor): got %+v, want just %s", oldest, shaA)
+	}
+
+	between := a.CommitsInRange(dir, "v0.1.0", "v0.2.0")
+	if len(between) != 1 || between[0].Hash != shaB {
+		t.Fatalf("v0.1.0..v0.2.0: got %+v, want just %s", between, shaB)
+	}
+	if !strings.Contains(between[0].Body, "Fixes #123.") {
+		t.Fatalf("multi-line body not preserved: %q", between[0].Body)
+	}
+
+	if got := a.CommitsInRange(dir, "v0.2.0", "v0.2.0"); got != nil {
+		t.Fatalf("empty range: want nil, got %v", got)
+	}
+}
+
+func TestTagContaining(t *testing.T) {
+	a := New()
+
+	if got := a.TagContaining(t.TempDir(), "deadbeef"); got != "" {
+		t.Errorf("non-repo dir: want empty, got %q", got)
+	}
+
+	dir := gitInitForTest(t)
+	shaA := commitFileForTest(t, dir, "a.txt", "A")
+	runGitForTest(t, dir, "tag", "v0.1.0")
+	commitFileForTest(t, dir, "b.txt", "B")
+	runGitForTest(t, dir, "tag", "v0.2.0")
+
+	if got := a.TagContaining(dir, shaA); got != "v0.1.0" {
+		t.Errorf("got %q, want v0.1.0 (earliest tag containing the first commit)", got)
+	}
+	if got := a.TagContaining(dir, "0000000000000000000000000000000000000000"); got != "" {
+		t.Errorf("unknown hash: want empty, got %q", got)
+	}
+}

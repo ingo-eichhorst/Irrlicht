@@ -295,6 +295,7 @@ func runDaemon() {
 		SockPath:     sockPath,
 		Push:         push,
 		Logger:       logger,
+		GitResolver:  gitResolver,
 	})
 
 	var watcherFactories map[string]services.WatcherFactory

@@ -16,6 +16,7 @@ import (
 	"irrlicht/core/adapters/outbound/relay"
 	"irrlicht/core/application/services"
 	"irrlicht/core/domain/agent"
+	"irrlicht/core/domain/dora"
 	"irrlicht/core/domain/session"
 	"irrlicht/core/ports/outbound"
 )
@@ -383,6 +384,85 @@ type historySessionLister interface {
 	ListAll() ([]*session.SessionState, error)
 }
 
+// historyDoraResponse is the chart=dora payload (#951): DORA metrics for one
+// project's git repo over the selected window. Unlike the cost chart it's a
+// period summary, not a time series — computed fresh per request, no
+// persistence (see services.ComputeDoraMetrics).
+type historyDoraResponse struct {
+	Range               string     `json:"range"`
+	Chart               string     `json:"chart"`
+	Project             string     `json:"project"`
+	Start               int64      `json:"start"`
+	End                 int64      `json:"end"`
+	Available           bool       `json:"available"`
+	Message             string     `json:"message,omitempty"`
+	DeploymentFrequency doraMetric `json:"deployment_frequency"`
+	LeadTime            doraMetric `json:"lead_time"`
+	ChangeFailureRate   doraMetric `json:"change_failure_rate"`
+	MTTR                doraMetric `json:"mttr"`
+}
+
+// doraMetric mirrors dora.Metric for the wire as its own type, so a JSON tag
+// change here never has to touch the domain package.
+type doraMetric struct {
+	Value      float64 `json:"value"`
+	Unit       string  `json:"unit"`
+	SampleSize int     `json:"sample_size"`
+	Available  bool    `json:"available"`
+	Message    string  `json:"message,omitempty"`
+}
+
+func toDoraMetric(m dora.Metric) doraMetric {
+	return doraMetric{Value: m.Value, Unit: m.Unit, SampleSize: m.SampleSize, Available: m.Available, Message: m.Message}
+}
+
+// historyGitReader is the narrow git surface chart=dora needs, matching the
+// historySessionLister convention of small per-consumer interfaces.
+type historyGitReader interface {
+	GetGitRoot(dir string) string
+	ListReleaseTags(dir string) []dora.TagInfo
+	CommitsInRange(dir, fromRef, toRef string) []dora.CommitInfo
+	TagContaining(dir, hash string) string
+}
+
+// serveHistoryDoraChart serves chart=dora (#951): requires exactly one
+// ?project=, since DORA metrics are inherently repo-scoped — unlike
+// cost/yield's implicit "all projects." Any other resolution failure
+// (project not found, not a git repo, no release tags) is a well-formed 200
+// with Available:false, not an error, mirroring
+// serveHistoryAgentsChart's nil-reader / fetchHistoryCostSeries's
+// nil-tracker empty-but-valid payload convention.
+func serveHistoryDoraChart(w http.ResponseWriter, git historyGitReader, sessions historySessionLister, project, rangeKey string, start, end int64) {
+	if project == "" {
+		http.Error(w, "chart=dora requires ?project=<name>", http.StatusBadRequest)
+		return
+	}
+	if strings.Contains(project, ",") {
+		http.Error(w, "chart=dora requires exactly one project, not a comma-separated list", http.StatusBadRequest)
+		return
+	}
+
+	result, err := services.ComputeDoraMetrics(git, sessions, project, start, end)
+	if err != nil {
+		http.Error(w, errInternalErrorMsg, http.StatusInternalServerError)
+		return
+	}
+
+	writeHistoryJSON(w, historyDoraResponse{
+		Range:               rangeKey,
+		Chart:               "dora",
+		Project:             project,
+		Start:               start,
+		End:                 end,
+		Available:           result.Available,
+		Message:             result.Message,
+		DeploymentFrequency: toDoraMetric(result.DeploymentFrequency),
+		LeadTime:            toDoraMetric(result.LeadTime),
+		ChangeFailureRate:   toDoraMetric(result.ChangeFailureRate),
+		MTTR:                toDoraMetric(result.MTTR),
+	})
+}
+
 // historyChartKnown validates the requested ?chart= value. Charts implemented
 // in Phase 1-3 pass through; chart=state is scaffolded in the UI but not wired
 // yet (writes a 501); anything else is a client error (writes a 400). Returns
@@ -394,6 +474,8 @@ func historyChartKnown(w http.ResponseWriter, chart string) bool {
 		// implemented (Phase 2); co2 added for issue #829
 	case "yield":
 		// implemented (#373) — handled after range resolution below
+	case "dora":
+		// implemented (#951) — handled after range resolution below
 	case "agents":
 		// implemented (Phase 3) — handled after range resolution below
 	case "state":
@@ -600,7 +682,7 @@ func resolveHistoryQuery(w http.ResponseWriter, q url.Values) (historyQuery, boo
 	}, true
 }
 
-func handleGetHistory(tracker outbound.CostTracker, sessions historySessionLister, concurrency outbound.ConcurrencyReader) http.HandlerFunc {
+func handleGetHistory(tracker outbound.CostTracker, sessions historySessionLister, concurrency outbound.ConcurrencyReader, git historyGitReader) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 
@@ -613,6 +695,13 @@ func handleGetHistory(tracker outbound.CostTracker, sessions historySessionListe
 		// time series — handle it before the cost-tracker path (#373).
 		if hq.chart == "yield" {
 			writeHistoryJSON(w, buildYieldResponse(hq.rangeKey, hq.group, hq.start, hq.end, sessions))
+			return
+		}
+
+		// DORA metrics are a per-project period summary, not a cost time
+		// series — handle it before the cost-tracker path (#951).
+		if hq.chart == "dora" {
+			serveHistoryDoraChart(w, git, sessions, q.Get("project"), hq.rangeKey, hq.start, hq.end)
 			return
 		}
 

@@ -191,6 +191,48 @@ final class HistoryViewSnapshotTests: XCTestCase {
         assertSnapshot(of: host(view, height: 360), as: .image)
     }
 
+    // MARK: DORA (#951)
+
+    private func doraFixture() -> HistoryDoraResponse {
+        HistoryDoraResponse(
+            range: "month",
+            project: "irrlicht",
+            start: 1_700_000_000,
+            end: 1_702_678_400,
+            available: true,
+            message: nil,
+            deploymentFrequency: DoraMetric(value: 2.55, unit: "per_week", sampleSize: 35, available: true, message: nil),
+            leadTime: DoraMetric(value: 22.8, unit: "hours", sampleSize: 935, available: true, message: nil),
+            changeFailureRate: DoraMetric(value: 42.9, unit: "percent", sampleSize: 35, available: true, message: "15 of 35 releases flagged"),
+            mttr: DoraMetric(value: 8.5, unit: "hours", sampleSize: 15, available: true, message: nil)
+        )
+    }
+
+    private func doraUnavailableFixture() -> HistoryDoraResponse {
+        HistoryDoraResponse(
+            range: "month",
+            project: "scratch",
+            start: 1_700_000_000,
+            end: 1_702_678_400,
+            available: false,
+            message: "no releases found for this project",
+            deploymentFrequency: DoraMetric(value: 0, unit: "per_week", sampleSize: 0, available: false, message: nil),
+            leadTime: DoraMetric(value: 0, unit: "hours", sampleSize: 0, available: false, message: nil),
+            changeFailureRate: DoraMetric(value: 0, unit: "percent", sampleSize: 0, available: false, message: nil),
+            mttr: DoraMetric(value: 0, unit: "hours", sampleSize: 0, available: false, message: nil)
+        )
+    }
+
+    func testDoraPopulated() {
+        let view = HistoryDoraContentView(data: doraFixture())
+        assertSnapshot(of: host(view, height: 260), as: .image)
+    }
+
+    func testDoraUnavailable() {
+        let view = HistoryDoraContentView(data: doraUnavailableFixture())
+        assertSnapshot(of: host(view, height: 200), as: .image)
+    }
+
     // MARK: Quota projection
 
     /// 5h window, 60% used 2h in → over pace, projected to hit the cap before

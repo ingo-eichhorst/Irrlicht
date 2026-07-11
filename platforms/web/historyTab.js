@@ -11,7 +11,7 @@ const HISTORY_COLORS = [
   '#5E5CE6', '#FFD60A', '#30D158', '#BF5AF2', '#64D2FF',
 ];
 const RANGE_LABELS = { day: 'Day', week: 'Week', month: 'Month', year: 'Year', 'this-month': 'This Month', custom: 'Custom' };
-export const CHART_LABELS = { cost: 'Cost', tokens: 'Tokens', co2: 'CO2', models: 'Models', providers: 'Providers', agents: 'Agents' };
+export const CHART_LABELS = { cost: 'Cost', tokens: 'Tokens', co2: 'CO2', models: 'Models', providers: 'Providers', agents: 'Agents', yield: 'Yield', dora: 'DORA' };
 // Drilldown order: clicking a contributor scopes to it and re-groups by the
 // next finer axis. A leaf (no entry) makes that contributor non-drillable.
 export const DRILL_NEXT = { project: 'branch', branch: 'session', provider: 'model', model: 'session' };
@@ -27,6 +27,11 @@ const historyState = {
   range: 'day', chart: 'cost', group: 'project', forecast: true, start: null, end: null, scope: null, data: null,
   filters: { provider: [], token_type: [], project: [] },
   known: { provider: [], project: [] },
+  // DORA (#951) is inherently repo-scoped — needs exactly one project,
+  // unlike cost/yield's implicit "all projects." Sourced from
+  // known.project (already populated from cost fetches grouped by
+  // project), so no separate project-discovery fetch is needed.
+  doraProject: null,
 };
 let historyFetchSeq = 0;
 let historyResizeRAF = 0;
@@ -51,6 +56,16 @@ export function histCO2(v) {
   if (v < 1000) return v.toFixed(1) + 'g';
   return (v / 1000).toFixed(2) + 'kg';
 }
+// DORA (#951) metric formatters — mirror the daemon's own format_hours
+// convention (hours below a day, days at or above) for Lead Time/MTTR.
+export function histDoraPerWeek(v) { return (Number(v) || 0).toFixed(1) + '/week'; }
+export function histDoraPercent(v) { return Math.round(Number(v) || 0) + '%'; }
+export function histDoraHours(v) {
+  v = Number(v) || 0;
+  if (v >= 24) return (v / 24).toFixed(1) + ' days';
+  return Math.round(v) + ' hours';
+}
+
 // The value formatter for the active chart — dollars for cost/models/providers,
 // token counts for tokens, integer agent counts for agents, grams for co2.
 function histValue(v) {
@@ -107,10 +122,21 @@ export function historyQuery(state = historyState) {
     const vals = filters[dim];
     if (vals?.length) p.set(dim, vals.join(','));
   }
+  // DORA is repo-scoped — exactly one project, not the multi-select project
+  // filter above (#951).
+  if (state.chart === 'dora' && state.doraProject) p.set('project', state.doraProject);
   return p.toString();
 }
 
 function fetchHistory() {
+  // DORA needs exactly one project — with none selected, there's nothing
+  // to fetch at all (a distinct empty state, not a load failure or a
+  // spinner; see renderDoraPanel).
+  if (historyState.chart === 'dora' && !historyState.doraProject) {
+    historyState.data = null;
+    renderHistory();
+    return Promise.resolve();
+  }
   const seq = ++historyFetchSeq;
   return fetch('/api/v1/history?' + historyQuery())
     .then(r => (r.ok ? r.json() : null))
@@ -134,22 +160,32 @@ function fetchHistory() {
 function renderHistory() {
   renderHistoryBreadcrumb();
   renderHistoryFilters();
+  syncDoraProjectRow();
   const isYield = historyState.chart === 'yield';
+  const isDora = historyState.chart === 'dora';
   // Yield counts completed sessions; agents are reconstructed from opt-in
-  // recordings — each gets its own empty caption.
+  // recordings — each gets its own empty caption. DORA never paints the
+  // canvas at all (it's a period summary, not a time series) — its content
+  // lives entirely in the side panel (see renderDoraPanel).
   const emptyEl = document.getElementById('history-chart-empty');
   if (emptyEl) {
     let emptyText = 'no cost data in this range yet';
     if (isYield) emptyText = 'no completed sessions in this range yet';
+    else if (isDora) emptyText = historyState.doraProject ? 'DORA metrics — see panel' : 'select a project to see DORA metrics';
     else if (historyState.chart === 'agents') emptyText = 'no recordings in this range yet';
     emptyEl.textContent = emptyText;
   }
   if (!historyState.data) {
     const wrap = document.getElementById('history-chart-wrap');
     if (wrap) wrap.classList.add('empty');
+    if (isDora) renderDoraPanel();
     return;
   }
-  if (isYield) {
+  if (isDora) {
+    const wrap = document.getElementById('history-chart-wrap');
+    if (wrap) wrap.classList.add('empty');
+    renderDoraPanel();
+  } else if (isYield) {
     paintYieldChart();
     renderYieldPanel();
   } else {
@@ -577,6 +613,8 @@ function clearHistoryDrilldown() {
 function syncHistorySelectors() {
   const chartSeg = document.getElementById('history-chart-sel');
   if (chartSeg) for (const b of chartSeg.querySelectorAll('button')) b.classList.toggle('active', b.dataset.chart === historyState.chart);
+  const metricsSeg = document.getElementById('history-metrics-sel');
+  if (metricsSeg) for (const b of metricsSeg.querySelectorAll('button')) b.classList.toggle('active', b.dataset.chart === historyState.chart);
   const groupSeg = document.getElementById('history-group-sel');
   if (groupSeg) for (const b of groupSeg.querySelectorAll('button')) b.classList.toggle('active', b.dataset.group === historyState.group);
 }
@@ -690,6 +728,78 @@ function renderYieldPanel() {
   function red() { return (getComputedStyle(document.documentElement).getPropertyValue('--pressure-high') || '#FF3B30').trim(); }
 }
 
+// syncDoraProjectRow shows/hides the DORA project picker and refreshes its
+// option list from known.project — called on every render so a project
+// discovered after switching to DORA still shows up (#951).
+function syncDoraProjectRow() {
+  const row = document.getElementById('history-dora-row');
+  if (row) row.hidden = historyState.chart !== 'dora';
+  const sel = document.getElementById('history-dora-project');
+  if (!sel) return;
+  const known = historyState.known.project || [];
+  const current = sel.value;
+  sel.innerHTML = '<option value="">Select a project…</option>';
+  for (const p of known) {
+    const opt = document.createElement('option');
+    opt.value = p;
+    opt.textContent = p;
+    sel.appendChild(opt);
+  }
+  sel.value = known.includes(current) ? current : (historyState.doraProject || '');
+}
+
+// DORA metrics (#951): a per-project period summary, not a time series — no
+// canvas, no bucket series. All four metrics render as rows in the side
+// panel's contributor list, mirroring the panel shape yield/cost already use.
+function renderDoraPanel() {
+  const titleEl = document.getElementById('history-panel-title');
+  const totalEl = document.getElementById('history-total');
+  const fcEl = document.getElementById('history-forecast-line');
+  const listEl = document.getElementById('history-contrib');
+  const project = historyState.doraProject;
+  if (titleEl) titleEl.textContent = 'DORA' + (project ? ' · ' + project : '') + ' · ' + (RANGE_LABELS[historyState.range] || historyState.range);
+  if (totalEl) totalEl.textContent = '';
+  if (fcEl) fcEl.textContent = '';
+  if (!listEl) return;
+  listEl.innerHTML = '';
+
+  const data = historyState.data;
+  if (!project) {
+    appendHistoryEmpty(listEl, 'select a project above');
+    return;
+  }
+  if (!data) {
+    appendHistoryEmpty(listEl, 'loading…');
+    return;
+  }
+  if (!data.available) {
+    appendHistoryEmpty(listEl, data.message || 'not enough data to compute DORA metrics');
+    return;
+  }
+  const rows = [
+    ['Deployment Frequency', data.deployment_frequency, histDoraPerWeek],
+    ['Lead Time for Changes', data.lead_time, histDoraHours],
+    ['Change Failure Rate', data.change_failure_rate, histDoraPercent],
+    ['Mean Time to Restore', data.mttr, histDoraHours],
+  ];
+  for (const [label, metric, format] of rows) {
+    const li = document.createElement('li');
+    const dot = document.createElement('span');
+    dot.className = 'dot';
+    dot.style.background = 'transparent';
+    const lbl = document.createElement('span');
+    lbl.className = 'label';
+    lbl.textContent = label;
+    const val = document.createElement('span');
+    val.className = 'val';
+    val.textContent = metric && metric.available ? format(metric.value) : (metric?.message || 'n/a');
+    li.appendChild(dot);
+    li.appendChild(lbl);
+    li.appendChild(val);
+    listEl.appendChild(li);
+  }
+}
+
 function historyDownload(filename, mime, text) {
   const blob = new Blob([text], { type: mime });
   const url = URL.createObjectURL(blob);
@@ -717,6 +827,21 @@ function exportHistoryCSV() {
         (p.productive_cost || 0).toFixed(6), (p.reverted_cost || 0).toFixed(6),
         (p.unknown_cost || 0).toFixed(6), (p.total_cost || 0).toFixed(6),
         (p.yield || 0).toFixed(6), String(p.reverted_count || 0),
+      ].join(','));
+    }
+  } else if (historyState.chart === 'dora') {
+    lines = ['metric,value,unit,sample_size,available,message'];
+    const rows = [
+      ['deployment_frequency', d.deployment_frequency],
+      ['lead_time', d.lead_time],
+      ['change_failure_rate', d.change_failure_rate],
+      ['mttr', d.mttr],
+    ];
+    for (const [name, m] of rows) {
+      lines.push([
+        name, m ? String(m.value) : '', m ? historyCsvCell(m.unit) : '',
+        m ? String(m.sample_size) : '', m ? String(!!m.available) : '',
+        m?.message ? historyCsvCell(m.message) : '',
       ].join(','));
     }
   } else {
@@ -770,8 +895,10 @@ export function initHistoryTab() {
     fetchHistory();
   });
 
-  const histChartSeg = document.getElementById('history-chart-sel');
-  if (histChartSeg) histChartSeg.addEventListener('click', (e) => {
+  // Shared by both chart-button groups (#history-chart-sel and the
+  // #history-metrics-sel Yield/DORA group, #951) — same data-chart
+  // attribute, same effect either way.
+  const handleChartClick = (e) => {
     const b = e.target.closest('button[data-chart]');
     if (!b || b.disabled) return;
     const c = b.dataset.chart;
@@ -784,6 +911,16 @@ export function initHistoryTab() {
     else if (c !== 'tokens' && historyState.group === 'token_type') historyState.group = 'project'; // token_type needs the tokens metric
     historyState.scope = null; // a new metric resets any drilldown
     syncHistorySelectors();
+    fetchHistory();
+  };
+  const histChartSeg = document.getElementById('history-chart-sel');
+  if (histChartSeg) histChartSeg.addEventListener('click', handleChartClick);
+  const histMetricsSeg = document.getElementById('history-metrics-sel');
+  if (histMetricsSeg) histMetricsSeg.addEventListener('click', handleChartClick);
+
+  const histDoraProjectSel = document.getElementById('history-dora-project');
+  if (histDoraProjectSel) histDoraProjectSel.addEventListener('change', () => {
+    historyState.doraProject = histDoraProjectSel.value || null;
     fetchHistory();
   });
 
