@@ -530,80 +530,114 @@ func fetchHistoryCostSeries(tracker outbound.CostTracker, query outbound.SeriesQ
 // &bucket=&forecast=&forecast_buckets=. Range is a trailing window
 // (day|week|month|year), a calendar shorthand (this-month), or an explicit
 // start&end (unix seconds). Bucket granularity is downsampled at read time.
+// historyQuery is the validated, defaulted request shape handleGetHistory's
+// callers (the yield/agents/cost-series branches) all build their response
+// from. Assembled by resolveHistoryQuery, which owns every early-exit
+// validation so handleGetHistory's own body stays a flat dispatch.
+type historyQuery struct {
+	chart       string
+	group       string
+	metric      string
+	scopeEcho   string
+	rangeKey    string
+	start, end  int64
+	seriesQuery outbound.SeriesQuery
+}
+
+// resolveHistoryQuery parses and validates handleGetHistory's query params,
+// writing the appropriate 400 response and returning ok=false on the first
+// invalid one.
+func resolveHistoryQuery(w http.ResponseWriter, q url.Values) (historyQuery, bool) {
+	chart := q.Get("chart")
+	if chart == "" {
+		chart = "cost"
+	}
+	if !historyChartKnown(w, chart) {
+		return historyQuery{}, false
+	}
+
+	group := q.Get("group")
+	if group == "" {
+		group = "project"
+	}
+	if !historyGroupKnown(w, group) {
+		return historyQuery{}, false
+	}
+
+	metric, group := historyMetricAndGroup(chart, group)
+	if historyGroupMetricMismatch(group, metric) {
+		http.Error(w, "group=token_type requires chart=tokens", http.StatusBadRequest)
+		return historyQuery{}, false
+	}
+
+	scopeField, scopeValue := parseHistoryScope(q.Get("scope"))
+	scopeEcho := historyScopeEcho(scopeField, scopeValue)
+
+	rangeKey, start, end, ok := resolveHistoryRange(q)
+	if !ok {
+		http.Error(w, "invalid range: use range=day|week|month|year|this-month or start&end (unix seconds)", http.StatusBadRequest)
+		return historyQuery{}, false
+	}
+
+	seriesQuery := outbound.SeriesQuery{
+		Start:         start,
+		End:           end,
+		BucketSeconds: historyBucketSeconds(q, end-start),
+		Group:         group,
+		ScopeField:    scopeField,
+		ScopeValue:    scopeValue,
+	}
+
+	return historyQuery{
+		chart:       chart,
+		group:       group,
+		metric:      metric,
+		scopeEcho:   scopeEcho,
+		rangeKey:    rangeKey,
+		start:       start,
+		end:         end,
+		seriesQuery: seriesQuery,
+	}, true
+}
+
 func handleGetHistory(tracker outbound.CostTracker, sessions historySessionLister, concurrency outbound.ConcurrencyReader) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 
-		chart := q.Get("chart")
-		if chart == "" {
-			chart = "cost"
-		}
-		if !historyChartKnown(w, chart) {
-			return
-		}
-
-		group := q.Get("group")
-		if group == "" {
-			group = "project"
-		}
-		if !historyGroupKnown(w, group) {
-			return
-		}
-
-		metric, group := historyMetricAndGroup(chart, group)
-		if historyGroupMetricMismatch(group, metric) {
-			http.Error(w, "group=token_type requires chart=tokens", http.StatusBadRequest)
-			return
-		}
-
-		scopeField, scopeValue := parseHistoryScope(q.Get("scope"))
-		scopeEcho := historyScopeEcho(scopeField, scopeValue)
-
-		rangeKey, start, end, ok := resolveHistoryRange(q)
+		hq, ok := resolveHistoryQuery(w, q)
 		if !ok {
-			http.Error(w, "invalid range: use range=day|week|month|year|this-month or start&end (unix seconds)", http.StatusBadRequest)
 			return
 		}
 
 		// Yield is a per-project aggregate over completed sessions, not a cost
 		// time series — handle it before the cost-tracker path (#373).
-		if chart == "yield" {
-			writeHistoryJSON(w, buildYieldResponse(rangeKey, group, start, end, sessions))
+		if hq.chart == "yield" {
+			writeHistoryJSON(w, buildYieldResponse(hq.rangeKey, hq.group, hq.start, hq.end, sessions))
 			return
 		}
 
-		bucketSeconds := historyBucketSeconds(q, end-start)
-		seriesQuery := outbound.SeriesQuery{
-			Start:         start,
-			End:           end,
-			BucketSeconds: bucketSeconds,
-			Group:         group,
-			ScopeField:    scopeField,
-			ScopeValue:    scopeValue,
-		}
-
-		if chart == "agents" {
-			serveHistoryAgentsChart(w, concurrency, rangeKey, scopeEcho, seriesQuery)
+		if hq.chart == "agents" {
+			serveHistoryAgentsChart(w, concurrency, hq.rangeKey, hq.scopeEcho, hq.seriesQuery)
 			return
 		}
 
-		projects, providers, tokenTypes, ok := historyCrossFilters(q, group)
+		projects, providers, tokenTypes, ok := historyCrossFilters(q, hq.group)
 		if !ok {
 			http.Error(w, "invalid token_type: use input|output|cache_read|cache_creation", http.StatusBadRequest)
 			return
 		}
-		seriesQuery.Metric = metric
-		seriesQuery.Projects = projects
-		seriesQuery.Providers = providers
-		seriesQuery.TokenTypes = tokenTypes
+		hq.seriesQuery.Metric = hq.metric
+		hq.seriesQuery.Projects = projects
+		hq.seriesQuery.Providers = providers
+		hq.seriesQuery.TokenTypes = tokenTypes
 
-		series, ok := fetchHistoryCostSeries(tracker, seriesQuery)
+		series, ok := fetchHistoryCostSeries(tracker, hq.seriesQuery)
 		if !ok {
 			http.Error(w, errInternalErrorMsg, http.StatusInternalServerError)
 			return
 		}
 
-		writeHistoryJSON(w, buildHistoryResponse(rangeKey, chart, group, scopeEcho, series, q))
+		writeHistoryJSON(w, buildHistoryResponse(hq.rangeKey, hq.chart, hq.group, hq.scopeEcho, series, q))
 	}
 }
 

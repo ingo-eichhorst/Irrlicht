@@ -2063,26 +2063,29 @@ function copyInstallCmd(btn) {
 <!-- ─── Scroll reveal ─── -->
 <script>
 (function() {
-  const observer = new IntersectionObserver((entries) => {
-    entries.forEach(entry => {
-      if (entry.isIntersecting) {
-        entry.target.classList.add('visible');
-        // Stagger children
-        const children = entry.target.querySelectorAll('.feature-card, .light-card, .pipeline-step, .install-card');
-        children.forEach((child, i) => {
-          child.style.transitionDelay = `${i * 0.08}s`;
-          child.style.opacity = '0';
-          child.style.transform = 'translateY(20px)';
-          child.style.transition = 'opacity 0.6s cubic-bezier(0.16,1,0.3,1), transform 0.6s cubic-bezier(0.16,1,0.3,1)';
-          requestAnimationFrame(() => {
-            setTimeout(() => {
-              child.style.opacity = '1';
-              child.style.transform = 'translateY(0)';
-            }, i * 80);
-          });
-        });
-      }
+  function revealChild(child, i) {
+    child.style.transitionDelay = `${i * 0.08}s`;
+    child.style.opacity = '0';
+    child.style.transform = 'translateY(20px)';
+    child.style.transition = 'opacity 0.6s cubic-bezier(0.16,1,0.3,1), transform 0.6s cubic-bezier(0.16,1,0.3,1)';
+    requestAnimationFrame(() => {
+      setTimeout(() => {
+        child.style.opacity = '1';
+        child.style.transform = 'translateY(0)';
+      }, i * 80);
     });
+  }
+
+  function revealEntry(entry) {
+    if (!entry.isIntersecting) return;
+    entry.target.classList.add('visible');
+    // Stagger children
+    const children = entry.target.querySelectorAll('.feature-card, .light-card, .pipeline-step, .install-card');
+    children.forEach(revealChild);
+  }
+
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(revealEntry);
   }, { threshold: 0.1, rootMargin: '0px 0px -50px 0px' });
 
   document.querySelectorAll('.reveal').forEach(el => observer.observe(el));

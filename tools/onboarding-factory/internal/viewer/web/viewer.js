@@ -271,7 +271,7 @@ function renderSidebarGroups(sidebar, scenarios, codeById) {
   }
 }
 
-(async function init() {
+{
   const scenarios = await loadInitData();
   // Re-render the overview when a window resize changes how many agent
   // columns fit (debounced; no-op on detail pages and when the fit count
@@ -288,17 +288,14 @@ function renderSidebarGroups(sidebar, scenarios, codeById) {
 
   if (!scenarios || scenarios.length === 0) {
     renderEmptySidebarNote(sidebar);
-    // Wire router even without recordings — overview view still works.
-    window.addEventListener("hashchange", route);
-    route();
-    return;
+  } else {
+    renderSidebarGroups(sidebar, scenarios, codeById);
   }
-  renderSidebarGroups(sidebar, scenarios, codeById);
   // Wire the router and dispatch the initial route. Deep links land
   // directly on the requested view; bare `/` falls through to overview.
   window.addEventListener("hashchange", route);
   route();
-})();
+}
 
 // parseCatalogCode splits a catalog code ("5.4") into [section, index]
 // for numeric sort. Missing/blank codes sort to the end.
