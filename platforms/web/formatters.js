@@ -238,10 +238,14 @@ export function activeSubagentCount(a) {
 
 // Cache-creation regression badge (#813) — short visible text. `tooltip` is
 // the daemon's cache_bloat_tooltip: the version-attribution string when it
-// could name the regressing upstream version, else '' (no attribution). The
-// longer hover explanation is composed daemon-side (cache_bloat_explanation,
-// issue #827) and rendered verbatim — see updateCacheBloatRow in irrlicht.js.
-export function cacheBloatBadgeText(tooltip) {
-  return tooltip || 'cache ↑';
+// could name the regressing upstream version, else '' (no attribution).
+// `percent` is cache_bloat_percent — how far the session's median
+// cache-creation per turn sits above the project baseline, appended so the
+// badge carries a magnitude, not just an up-arrow (issue #946). The longer
+// hover explanation is composed daemon-side (cache_bloat_explanation, issue
+// #827) and rendered verbatim — see updateCacheBloatRow in irrlicht.js.
+export function cacheBloatBadgeText(tooltip, percent) {
+  const base = tooltip || 'cache ↑';
+  return percent > 0 ? `${base} +${percent}%` : base;
 }
 

@@ -227,6 +227,14 @@ func (l *mockLogger) LogError(_, _, msg string) {
 func (l *mockLogger) LogProcessingTime(_, _ string, _ int64, _ int, _ string) {}
 func (l *mockLogger) Close() error                                            { return nil }
 
+func (l *mockLogger) infoSnapshot() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	out := make([]string, len(l.infos))
+	copy(out, l.infos)
+	return out
+}
+
 type mockGit struct{}
 
 func (g *mockGit) GetBranch(dir string) string { return "main" }

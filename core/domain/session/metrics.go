@@ -140,6 +140,14 @@ type SessionMetrics struct {
 	// transcript.
 	CacheBloat bool `json:"cache_bloat,omitempty"`
 
+	// CacheBloatPercent is how far the session's current median cache-creation
+	// per turn sits above the project's p25 baseline, as a rounded percentage
+	// (e.g. 340 means 340% above baseline). Set alongside CacheBloat by the
+	// detector; both UIs append it to the badge so the glyph carries a
+	// magnitude, not just an up-arrow (issue #946). Zero when CacheBloat is
+	// false.
+	CacheBloatPercent int `json:"cache_bloat_percent,omitempty"`
+
 	// CacheBloatTooltip is the human-readable hover text for the CacheBloat
 	// glyph, composed daemon-side so both UIs stay dumb. When the project's
 	// lookback window contains ≥2 distinct agent versions with a large enough
