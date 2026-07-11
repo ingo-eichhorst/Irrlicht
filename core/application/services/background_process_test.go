@@ -235,10 +235,8 @@ func TestSessionDetector_ForceReadyToWorking_LogsTransition(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- det.Run(ctx) }()
-	defer func() {
-		cancel()
-		<-done
-	}()
+	defer func() { <-done }()
+	defer cancel()
 
 	tw.ch <- agent.Event{
 		Type:           agent.EventActivity,
