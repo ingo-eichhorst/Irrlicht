@@ -74,33 +74,29 @@ struct SettingsView: View {
 
     var body: some View {
         // Header and footer are pinned; only the settings sections scroll.
-        // This keeps the "Done" button visible no matter how many sections
-        // expand — the old fixed `height: 860` frame overflowed the menu-bar
-        // popover and clipped the footer. The scroll area is capped the same
-        // way SessionListView caps its list (see `groupListMaxHeight`).
-        // Horizontal insets live on the header, footer, scroll *content*, and
-        // dividers — NOT on the outer container — so the ScrollView spans the
-        // full panel width and its scroll track sits flush against the right
-        // edge, while the text stays inset.
+        // This keeps the footer visible no matter how many sections expand —
+        // the old fixed `height: 860` frame overflowed the menu-bar popover
+        // and clipped it. The scroll area is capped the same way
+        // SessionListView caps its list (see `groupListMaxHeight`).
+        // Horizontal insets live on the scroll *content* only — NOT on the
+        // outer container or the dividers (issue #940: dividers run full-bleed
+        // everywhere, matching History) — so the ScrollView spans the full
+        // panel width and its scroll track sits flush against the right edge,
+        // while the text stays inset.
         VStack(alignment: .leading, spacing: 0) {
-            Text("Settings")
-                .font(.headline)
-                .padding(.horizontal, 20)
-                .padding(.top, 20)
-                .padding(.bottom, 12)
+            PanelHeader(title: "Settings", onBack: { isPresented = false })
 
             Divider()
-                .padding(.horizontal, 20)
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: IrrSpacing.sp4) {
                     LeadingToggle(
                         isOn: $showCostDisplay,
                         label: "Show Estimated Cost",
                         info: "Display estimated USD cost per session and per project group. Cost estimates are approximate."
                     )
 
-                    VStack(alignment: .leading, spacing: 8) {
+                    VStack(alignment: .leading, spacing: IrrSpacing.sp2) {
                         LeadingToggle(
                             isOn: $showQuotaForecast,
                             label: "Show Quota Forecast",
@@ -121,7 +117,7 @@ struct SettingsView: View {
                         }
                     }
 
-                    VStack(alignment: .leading, spacing: 8) {
+                    VStack(alignment: .leading, spacing: IrrSpacing.sp2) {
                         HStack(spacing: 6) {
                             Text("Menu Bar Icon")
                                 .font(.caption)
@@ -137,6 +133,10 @@ struct SettingsView: View {
                         }
                         .pickerStyle(.segmented)
                         .labelsHidden()
+                        // Tint with the app's accent instead of the system default
+                        // blue, matching every other session-state color in the
+                        // app (issue #940).
+                        .tint(IrrColors.working)
 
                         if menuBarStyle != MenuBarStyle.lights.rawValue {
                             HStack(spacing: 6) {
@@ -166,11 +166,12 @@ struct SettingsView: View {
                                 .pickerStyle(.segmented)
                                 .labelsHidden()
                                 .frame(maxWidth: 140)
+                                .tint(IrrColors.working)
                             }
                         }
                     }
 
-                    VStack(alignment: .leading, spacing: 8) {
+                    VStack(alignment: .leading, spacing: IrrSpacing.sp2) {
                         LeadingToggle(
                             isOn: $launchAtLogin,
                             label: "Open at Login",
@@ -205,7 +206,7 @@ struct SettingsView: View {
 
                     Divider()
 
-                    VStack(alignment: .leading, spacing: 8) {
+                    VStack(alignment: .leading, spacing: IrrSpacing.sp2) {
                         HStack(spacing: 6) {
                             Text("Permissions")
                                 .font(.subheadline)
@@ -223,7 +224,7 @@ struct SettingsView: View {
 
                     Divider()
 
-                    VStack(alignment: .leading, spacing: 10) {
+                    VStack(alignment: .leading, spacing: IrrSpacing.sp3) {
                         HStack(spacing: 6) {
                             Text("Notifications")
                                 .font(.subheadline)
@@ -251,7 +252,7 @@ struct SettingsView: View {
                             onImportError: { customImportError = $0 }
                         )
                         ContextThresholdRow(enabled: notifyOnContextPressure)
-                            .padding(.leading, 18)
+                            .padding(.leading, IrrSpacing.sp4)
 
                         if let error = customImportError {
                             Text(error)
@@ -287,7 +288,7 @@ struct SettingsView: View {
 
                     Divider()
 
-                    VStack(alignment: .leading, spacing: 10) {
+                    VStack(alignment: .leading, spacing: IrrSpacing.sp3) {
                         Text("Updates")
                             .font(.subheadline)
                             .fontWeight(.medium)
@@ -330,7 +331,7 @@ struct SettingsView: View {
                     // Advanced Settings (#694): power-user and still-maturing
                     // controls, collapsed by default. Disclosure state persists
                     // via @AppStorage("advancedSettingsExpanded").
-                    VStack(alignment: .leading, spacing: 12) {
+                    VStack(alignment: .leading, spacing: IrrSpacing.sp3) {
                         Button {
                             withAnimation(IrrMotion.easeOut(duration: IrrMotion.fast)) {
                                 advancedSettingsExpanded.toggle()
@@ -438,10 +439,10 @@ struct SettingsView: View {
 
                             if backchannelActivation {
                                 BackchannelRulesView()
-                                    .padding(.leading, 16)
+                                    .padding(.leading, IrrSpacing.sp4)
                             }
 
-                            VStack(alignment: .leading, spacing: 8) {
+                            VStack(alignment: .leading, spacing: IrrSpacing.sp2) {
                                 HStack(spacing: 6) {
                                     Text("Sources")
                                         .font(.subheadline)
@@ -549,28 +550,29 @@ struct SettingsView: View {
                         }
                     }
                 }
-                .padding(.horizontal, 20)
-                .padding(.vertical, 16)
+                .padding(.horizontal, IrrSpacing.sp4)
+                .padding(.vertical, IrrSpacing.sp4)
             }
             .frame(maxHeight: 520)
             .fixedSize(horizontal: false, vertical: true)
 
             Divider()
-                .padding(.horizontal, 20)
 
+            // "Back" in the header above is the only way to close this panel
+            // now (issue #940 — no separate footer "Done" button), so the
+            // footer is just the version string, matching History's footer-less
+            // pattern as closely as Settings' still-useful version display allows.
             HStack {
                 Text("Irrlicht v\(appVersion)")
                     .font(.caption)
                     .foregroundColor(.secondary)
                 Spacer()
-                Button("Done") { isPresented = false }
-                    .keyboardShortcut(.defaultAction)
             }
-            .padding(.horizontal, 20)
-            .padding(.top, 12)
-            .padding(.bottom, 20)
+            .padding(.horizontal, IrrSpacing.sp4)
+            .padding(.top, IrrSpacing.sp3)
+            .padding(.bottom, IrrSpacing.sp4)
         }
-        .frame(width: 360)
+        .frame(width: SessionListView.panelWidth)
         .background(Color(NSColor.windowBackgroundColor))
         .toggleStyle(IrrlichtSwitchToggleStyle())
         .background(
@@ -598,7 +600,7 @@ struct SettingsView: View {
                 .font(.callout)
                 .frame(width: 80, alignment: .leading)
             // A .menu (not .segmented) picker: the "Subscription" option makes a
-            // segmented control ~315pt wide, which overflows the 360pt panel and
+            // segmented control ~315pt wide, which overflows the panel and
             // clips the whole settings stack. The dropdown stays compact.
             Picker("", selection: selection) {
                 ForEach(ProviderModePreference.allCases) { mode in
@@ -713,7 +715,7 @@ private struct CLIToolSection: View {
     @State private var errorMessage: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: IrrSpacing.sp3) {
             Text("Command-Line Tool")
                 .font(.subheadline)
                 .fontWeight(.medium)
@@ -798,7 +800,7 @@ private struct ContextThresholdRow: View {
     }
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: IrrSpacing.sp2) {
             Text("Alert at")
                 .font(.caption)
                 .foregroundColor(.secondary)
@@ -865,7 +867,7 @@ private struct NotificationEventRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             LeadingToggle(isOn: $enabled, label: event.displayName)
-            HStack(spacing: 8) {
+            HStack(spacing: IrrSpacing.sp2) {
                 Picker("", selection: $selection) {
                     ForEach(SoundChoice.builtIns, id: \.self) { choice in
                         Text(choice.displayName).tag(choice)
@@ -1033,10 +1035,18 @@ struct InfoIcon: View {
 /// Internal (not private): PermissionWizardView applies it too.
 struct IrrlichtSwitchToggleStyle: ToggleStyle {
     func makeBody(configuration: Configuration) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: IrrSpacing.sp2) {
             ZStack(alignment: configuration.isOn ? .trailing : .leading) {
                 Capsule()
-                    .fill(configuration.isOn ? IrrColors.ready : IrrColors.cancelled.opacity(0.4))
+                    // Off state needs its own visible fill + stroke, not just a
+                    // dim tint of the on-color — at 0.4 opacity the old fill
+                    // read as almost invisible against the dark background,
+                    // leaving off switches looking like a bare floating knob
+                    // rather than a switch (issue #940).
+                    .fill(configuration.isOn ? IrrColors.ready : Color.primary.opacity(0.14))
+                    .overlay(
+                        Capsule().strokeBorder(Color.primary.opacity(configuration.isOn ? 0 : 0.20), lineWidth: 1)
+                    )
                 Circle()
                     .fill(Color.white)
                     .shadow(color: Color.black.opacity(0.18), radius: 1, x: 0, y: 0.5)

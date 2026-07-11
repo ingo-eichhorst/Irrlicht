@@ -110,7 +110,9 @@ struct HistoryView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            header
+            PanelHeader(title: "History", onBack: onClose)
+            Divider()
+            tabSwitcher
             Divider()
             // Quota has no controls (topControls renders EmptyView for it) —
             // skip the row entirely rather than showing a blank padded gap
@@ -156,45 +158,32 @@ struct HistoryView: View {
 
     // MARK: Header
 
-    private var header: some View {
-        // A leading Back button, a centered tab switcher, and an invisible
-        // mirror of the Back button on the trailing side to balance the
-        // centering — the two Spacers guarantee a minimum gap on both sides
-        // of the switcher regardless of how wide Dynamic Type/accessibility
-        // text sizing makes the Back button, so it can never overlap it.
+    /// Tab switcher row, below the shared `PanelHeader` (issue #940 — the
+    /// header itself is now identical across every sub-panel; view-specific
+    /// controls live in their own row underneath it).
+    private var tabSwitcher: some View {
         HStack {
-            backButton
-            Spacer(minLength: IrrSpacing.sp2)
+            Spacer(minLength: 0)
             Picker("", selection: $tab) {
                 ForEach(HistoryTab.allCases) { Text($0.label).tag($0) }
             }
             .pickerStyle(.segmented)
             .labelsHidden()
             .fixedSize()
-            Spacer(minLength: IrrSpacing.sp2)
-            backButton.opacity(0).allowsHitTesting(false).accessibilityHidden(true)
+            // App accent instead of system blue, matching Settings' Menu Bar
+            // Icon control and every session-state color (issue #940).
+            .tint(IrrColors.working)
+            Spacer(minLength: 0)
         }
         .padding(.horizontal, IrrSpacing.sp4)
         .padding(.vertical, IrrSpacing.sp3)
-    }
-
-    private var backButton: some View {
-        Button(action: onClose) {
-            HStack(spacing: 2) {
-                Image(systemName: "chevron.left")
-                Text("Back")
-            }
-            .foregroundColor(.secondary)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
     }
 
     // MARK: Controls
 
     /// Only the controls that apply to the active tab — Quota needs none,
     /// Yield needs just a range, Usage gets the full set (the tab selector
-    /// itself now lives in the header).
+    /// itself lives in `tabSwitcher`, above).
     private var topControls: some View {
         VStack(alignment: .leading, spacing: IrrSpacing.sp2) {
             switch tab {
