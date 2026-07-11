@@ -1403,6 +1403,15 @@
       text-transform: uppercase; color: var(--muted);
     }
     .history-chart-wrap.empty .history-chart-empty { display: flex; }
+    .history-co2-info {
+      position: absolute; top: 8px; right: 8px;
+      font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.02em;
+      color: var(--muted); text-decoration: none;
+      padding: 3px 7px; border-radius: 5px;
+      border: 1px solid var(--border); background: var(--surface);
+    }
+    .history-co2-info:hover { color: var(--text-bright); border-color: var(--pressure-high); }
+    .history-co2-info[hidden] { display: none; }
 
     .history-panel {
       flex: 0 0 260px; display: flex; flex-direction: column;

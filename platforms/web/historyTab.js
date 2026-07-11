@@ -74,6 +74,77 @@ function histValue(v) {
   if (historyState.chart === 'co2') return histCO2(v);
   return histDollar(v);
 }
+
+// CO2 equivalents (issue #952): everyday high-carbon activities used as red
+// dotted reference lines on the CO2 chart, so a raw gram total maps to
+// something tangible instead of an abstract number. Every figure is a
+// widely-cited public average — not measured against irrlicht's own
+// sessions — chosen to be recognizable across different countries rather
+// than US/UK-centric only. Full citations live in the "CO2 Methodology"
+// docs page linked from the chart. Kept ascending by grams.
+export const CO2_EQUIVALENTS = [
+  { id: 'search', grams: 0.2, label: 'a web search' },
+  { id: 'phone-charge', grams: 10, label: 'charging a smartphone' },
+  { id: 'stream-hour', grams: 36, label: '1 hour of video streaming' },
+  { id: 'kettle', grams: 60, label: 'boiling a kettle' },
+  { id: 'car-km', grams: 170, label: 'driving 1 km by car' },
+  { id: 'car-mile', grams: 393, label: 'driving 1 mile by car' },
+  { id: 'grid-kwh', grams: 460, label: '1 kWh of average grid electricity' },
+  { id: 'laundry', grams: 1500, label: 'a load of laundry' },
+  { id: 'gasoline-gallon', grams: 8900, label: 'burning 1 gallon of gasoline' },
+  { id: 'flight-short', grams: 43800, label: 'a short-haul flight (London → Paris)' },
+  { id: 'tree-year', grams: 60000, label: "a tree's CO2 absorption for a year" },
+  { id: 'car-commute-month', grams: 118000, label: 'a month of average car commuting' },
+  { id: 'flight-long', grams: 650000, label: 'a long-haul flight (London → New York)' },
+  { id: 'car-year', grams: 4290000, label: "an average car's emissions for a year" },
+  { id: 'person-year', grams: 4800000, label: "an average person's annual carbon footprint" },
+  { id: 'cars-25t', grams: 25000000, label: "roughly 6 average cars' annual emissions" },
+  { id: 'people-100t', grams: 100000000, label: "roughly 21 people's average annual carbon footprint" },
+];
+
+// co2EquivalentTargets returns the log-scale fractions of the axis maximum
+// pickCO2Equivalents aims each reference line at, based on how many
+// candidates are available to fill them — 3 spread bands when there's
+// enough range to fill them, fewer otherwise. Deliberately wide spread
+// (0.04/0.2/0.8, not evenly spaced) so the 3 lines read as low/mid/high
+// scale rather than clustering in the middle of the visible range.
+function co2EquivalentTargets(candidateCount) {
+  if (candidateCount >= 3) return [0.04, 0.2, 0.8];
+  if (candidateCount === 2) return [0.1, 0.7];
+  return [0.4];
+}
+
+// nearestUnpickedEquivalent returns whichever candidate not already in picks
+// sits closest (in log-space, so magnitudes compare fairly) to targetLog.
+function nearestUnpickedEquivalent(candidates, picks, targetLog) {
+  let best = null, bestDist = Infinity;
+  for (const eq of candidates) {
+    if (picks.includes(eq)) continue;
+    const dist = Math.abs(Math.log(eq.grams) - targetLog);
+    if (dist < bestDist) { bestDist = dist; best = eq; }
+  }
+  return best;
+}
+
+// pickCO2Equivalents chooses up to 3 reference lines that sit inside the
+// chart's y-axis range, spread across low/mid/high bands (rather than
+// picking the 3 closest to maxY, which would cluster them together) so a
+// viewer gets a sense of scale. Values within 2% of the axis ceiling are
+// excluded — a line drawn on top of the topmost gridline reads as clutter,
+// not a reference. Deterministic (no randomness), so the same data always
+// draws the same lines.
+export function pickCO2Equivalents(maxY) {
+  if (maxY <= 0) return [];
+  const ceiling = maxY * 0.98;
+  const candidates = CO2_EQUIVALENTS.filter(eq => eq.grams > 0 && eq.grams < ceiling);
+  if (!candidates.length) return [];
+  const picks = [];
+  for (const frac of co2EquivalentTargets(candidates.length)) {
+    const best = nearestUnpickedEquivalent(candidates, picks, Math.log(maxY * frac));
+    if (best) picks.push(best);
+  }
+  return picks.sort((a, b) => a.grams - b.grams);
+}
 function histAxisLabel(ts, bucketSeconds) {
   const d = new Date(ts * 1000);
   if (bucketSeconds < 86400) {
@@ -157,10 +228,18 @@ function fetchHistory() {
     });
 }
 
+// syncHistoryCO2Info shows the "how is this calculated" methodology link
+// only while the CO2 chart is active — it's meaningless for cost/tokens/etc.
+function syncHistoryCO2Info() {
+  const el = document.getElementById('history-co2-info');
+  if (el) el.hidden = historyState.chart !== 'co2';
+}
+
 function renderHistory() {
   renderHistoryBreadcrumb();
   renderHistoryFilters();
   syncDoraProjectRow();
+  syncHistoryCO2Info();
   const isYield = historyState.chart === 'yield';
   const isDora = historyState.chart === 'dora';
   // Yield counts completed sessions; agents are reconstructed from opt-in
@@ -314,6 +393,37 @@ function drawHistoryForecastLine(geo, { B, H, cumulative, grandTotal, fcY, waiti
   ctx.restore();
 }
 
+// drawHistoryCO2Equivalents overlays red dotted reference lines at grams
+// equivalent to a relatable everyday activity (issue #952) — only called for
+// the CO2 chart, so every other chart type is unaffected. Labels are left-
+// aligned near where the line starts (not the far right, which used to
+// overlap the stacked-area content) and flip below the line instead of
+// above near the top edge so they don't clip off-canvas.
+function drawHistoryCO2Equivalents(geo, { w, padL, padR, padT, maxY, danger }) {
+  const { ctx, yAt } = geo;
+  const picks = pickCO2Equivalents(maxY);
+  if (!picks.length) return;
+  ctx.save();
+  ctx.font = '10px ui-monospace, monospace';
+  ctx.strokeStyle = danger;
+  ctx.fillStyle = danger;
+  ctx.lineWidth = 1.5;
+  ctx.lineCap = 'round';
+  ctx.setLineDash([1, 4]);
+  ctx.textAlign = 'left';
+  for (const eq of picks) {
+    const y = yAt(eq.grams);
+    ctx.beginPath();
+    ctx.moveTo(padL, y);
+    ctx.lineTo(w - padR, y);
+    ctx.stroke();
+    const below = (y - padT) < 10;
+    ctx.textBaseline = below ? 'top' : 'bottom';
+    ctx.fillText('≈ ' + eq.label, padL + 4, below ? y + 3 : y - 3);
+  }
+  ctx.restore();
+}
+
 // drawHistoryXAxisLabels draws up to 6 evenly-spaced time labels.
 function drawHistoryXAxisLabels(geo, { buckets, B, bucketSeconds, muted, h, padB }) {
   const { ctx, xAt } = geo;
@@ -343,6 +453,7 @@ function paintHistoryChart() {
   const cs = getComputedStyle(document.documentElement);
   const muted = (cs.getPropertyValue('--muted') || '#888').trim();
   const waiting = (cs.getPropertyValue('--waiting') || '#FF9500').trim();
+  const danger = (cs.getPropertyValue('--pressure-high') || '#FF3B30').trim();
   const gridColor = 'rgba(128,140,170,0.18)';
 
   const { projects, matrix } = buildHistoryMatrix(data, buckets, B);
@@ -382,6 +493,10 @@ function paintHistoryChart() {
 
   // Forecast: a dashed line into the future.
   drawHistoryForecastLine(geo, { B, H, cumulative, grandTotal, fcY, waiting });
+
+  // CO2 equivalents: red dotted reference lines for relatable everyday
+  // activities (issue #952) — meaningless for any other chart.
+  if (historyState.chart === 'co2') drawHistoryCO2Equivalents(geo, { w, padL, padR, padT, maxY, danger });
 
   // X axis time labels.
   drawHistoryXAxisLabels(geo, { buckets, B, bucketSeconds: data.bucket_seconds, muted, h, padB });

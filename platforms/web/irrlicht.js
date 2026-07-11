@@ -2150,4 +2150,5 @@ export { pendingWizardAgents, buildPermissionAnswers, stillPendingForAgents } fr
 export {
   historyQuery, histTokens, histCount, histCO2, CHART_LABELS, DRILL_NEXT, historyRunningSum,
   histDoraPerWeek, histDoraPercent, histDoraHours,
+  CO2_EQUIVALENTS, pickCO2Equivalents,
 } from './historyTab.js';

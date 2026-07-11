@@ -36,6 +36,8 @@ import {
   CHART_LABELS,
   DRILL_NEXT,
   historyRunningSum,
+  CO2_EQUIVALENTS,
+  pickCO2Equivalents,
 } from './irrlicht.js'
 
 describe('resolvedTheme', () => {
@@ -930,5 +932,57 @@ describe('dora chart (#951)', () => {
     expect(histDoraHours(24)).toBe('1.0 days')
     expect(histDoraHours(48)).toBe('2.0 days')
     expect(histDoraHours(undefined)).toBe('0 hours')
+  })
+})
+
+describe('CO2 equivalents (issue #952)', () => {
+  test('CO2_EQUIVALENTS is ascending by grams with no duplicate ids', () => {
+    for (let i = 1; i < CO2_EQUIVALENTS.length; i++) {
+      expect(CO2_EQUIVALENTS[i].grams).toBeGreaterThan(CO2_EQUIVALENTS[i - 1].grams)
+    }
+    expect(new Set(CO2_EQUIVALENTS.map(e => e.id)).size).toBe(CO2_EQUIVALENTS.length)
+  })
+
+  test('pickCO2Equivalents returns nothing for a zero or negative axis', () => {
+    expect(pickCO2Equivalents(0)).toEqual([])
+    expect(pickCO2Equivalents(-5)).toEqual([])
+    expect(pickCO2Equivalents(undefined)).toEqual([])
+  })
+
+  test('a tiny axis (below the smallest equivalent) draws no lines', () => {
+    expect(pickCO2Equivalents(0.05)).toEqual([])
+  })
+
+  test('every pick sits under the axis ceiling and none repeat', () => {
+    const picks = pickCO2Equivalents(2_000_000)
+    expect(picks.length).toBeGreaterThan(0)
+    for (const eq of picks) expect(eq.grams).toBeLessThan(2_000_000 * 0.98)
+    expect(new Set(picks.map(e => e.id)).size).toBe(picks.length)
+  })
+
+  test('picks are sorted ascending by grams', () => {
+    const picks = pickCO2Equivalents(1_000_000)
+    for (let i = 1; i < picks.length; i++) expect(picks[i].grams).toBeGreaterThan(picks[i - 1].grams)
+  })
+
+  test('a small axis only surfaces small-scale equivalents (no flights for a few grams)', () => {
+    const picks = pickCO2Equivalents(100)
+    expect(picks.every(eq => eq.grams < 100)).toBe(true)
+    expect(picks.some(eq => eq.id.startsWith('flight'))).toBe(false)
+  })
+
+  test('a large axis is capped at 3 reference lines', () => {
+    expect(pickCO2Equivalents(5_000_000).length).toBeLessThanOrEqual(3)
+  })
+
+  test('the list is dense across ~100g to ~100 tonnes, not just the original 10 entries', () => {
+    expect(CO2_EQUIVALENTS.length).toBeGreaterThanOrEqual(17)
+    expect(CO2_EQUIVALENTS[CO2_EQUIVALENTS.length - 1].grams).toBeGreaterThanOrEqual(100_000_000)
+  })
+
+  test('a 50kg axis picks ~1.5kg/~8.9kg/~43.8kg, matching the reported real-world example', () => {
+    const picks = pickCO2Equivalents(50_000)
+    expect(picks.map(e => e.id)).toEqual(['laundry', 'gasoline-gallon', 'flight-short'])
+    expect(picks.map(e => e.grams)).toEqual([1500, 8900, 43800])
   })
 })
