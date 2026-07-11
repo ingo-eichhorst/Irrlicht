@@ -30,6 +30,9 @@ import {
   histTokens,
   histCount,
   histCO2,
+  histDoraPerWeek,
+  histDoraPercent,
+  histDoraHours,
   CHART_LABELS,
   DRILL_NEXT,
   historyRunningSum,
@@ -818,6 +821,26 @@ describe('historyQuery cross-filters (#750 faceted)', () => {
   })
 })
 
+describe('historyQuery dora project (#951)', () => {
+  const base = { range: 'day', chart: 'dora', group: 'project', forecast: true, start: null, end: null, scope: null }
+
+  test('emits project when chart=dora and a project is selected', () => {
+    const q = new URLSearchParams(historyQuery({ ...base, doraProject: 'irrlicht' }))
+    expect(q.get('chart')).toBe('dora')
+    expect(q.get('project')).toBe('irrlicht')
+  })
+
+  test('omits project when none selected', () => {
+    const q = new URLSearchParams(historyQuery({ ...base, doraProject: null }))
+    expect(q.get('project')).toBeNull()
+  })
+
+  test('omits project for non-dora charts even if doraProject is set', () => {
+    const q = new URLSearchParams(historyQuery({ ...base, chart: 'cost', doraProject: 'irrlicht' }))
+    expect(q.get('project')).toBeNull()
+  })
+})
+
 describe('historyRunningSum (cumulative chart)', () => {
   test('produces a monotonic running total', () => {
     expect(historyRunningSum([1, 0, 2, 0, 3])).toEqual([1, 1, 3, 3, 6])
@@ -875,5 +898,37 @@ describe('co2 chart (issue #829)', () => {
     expect(histCO2(158.7)).toBe('158.7g')
     expect(histCO2(2850)).toBe('2.85kg')
     expect(histCO2(undefined)).toBe('0mg')
+  })
+})
+
+describe('dora chart (#951)', () => {
+  test('chart=dora serializes with the selected project', () => {
+    const q = new URLSearchParams(historyQuery({
+      range: 'day', chart: 'dora', group: 'project', forecast: true, start: null, end: null, scope: null, doraProject: 'irrlicht',
+    }))
+    expect(q.get('chart')).toBe('dora')
+    expect(q.get('project')).toBe('irrlicht')
+  })
+
+  test('CHART_LABELS includes DORA', () => {
+    expect(CHART_LABELS.dora).toBe('DORA')
+  })
+
+  test('histDoraPerWeek renders one decimal place', () => {
+    expect(histDoraPerWeek(2.551)).toBe('2.6/week')
+    expect(histDoraPerWeek(undefined)).toBe('0.0/week')
+  })
+
+  test('histDoraPercent rounds to a whole percent', () => {
+    expect(histDoraPercent(42.9)).toBe('43%')
+    expect(histDoraPercent(0)).toBe('0%')
+  })
+
+  test('histDoraHours is unit-adaptive: hours below a day, days at or above', () => {
+    expect(histDoraHours(8)).toBe('8 hours')
+    expect(histDoraHours(23.9)).toBe('24 hours')
+    expect(histDoraHours(24)).toBe('1.0 days')
+    expect(histDoraHours(48)).toBe('2.0 days')
+    expect(histDoraHours(undefined)).toBe('0 hours')
   })
 })

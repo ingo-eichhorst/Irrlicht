@@ -2135,4 +2135,5 @@ export { formatUsageCost } from './quotaChips.js';
 export { pendingWizardAgents, buildPermissionAnswers, stillPendingForAgents } from './permissionsWizard.js';
 export {
   historyQuery, histTokens, histCount, histCO2, CHART_LABELS, DRILL_NEXT, historyRunningSum,
+  histDoraPerWeek, histDoraPercent, histDoraHours,
 } from './historyTab.js';

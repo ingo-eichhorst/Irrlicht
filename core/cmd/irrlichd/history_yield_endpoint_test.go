@@ -82,7 +82,7 @@ func TestHandleGetHistory_YieldEndpoint(t *testing.T) {
 	}}
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/history?chart=yield&range=day", nil)
 	rec := httptest.NewRecorder()
-	handleGetHistory(nil, lister, nil)(rec, req)
+	handleGetHistory(nil, lister, nil, nil)(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())

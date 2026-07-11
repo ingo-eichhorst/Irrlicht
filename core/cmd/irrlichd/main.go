@@ -278,7 +278,7 @@ func runDaemon() {
 	// resolved at request time via rel.inputService (published once
 	// setupBackchannel runs), so a session reports controllable only once
 	// that wiring completes.
-	registerSessionRoutes(mux, cachedRepo, orchMonitor, costTracker, &rel.inputService, sockPath, push, logger)
+	registerSessionRoutes(mux, cachedRepo, orchMonitor, costTracker, &rel.inputService, sockPath, push, logger, gitResolver)
 
 	var watcherFactories map[string]services.WatcherFactory
 	detector, watcherFactories = buildDetector(demoMode, pwPort, cachedRepo, logger, gitResolver, metricsCollector, push, Version, cfg, allAgents, costTracker, historyTracker)

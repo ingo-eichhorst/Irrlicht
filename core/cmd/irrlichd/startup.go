@@ -569,6 +569,7 @@ func registerSessionRoutes(
 	sockPath string,
 	push outbound.PushBroadcaster,
 	logger outbound.Logger,
+	gitResolver *git.Adapter,
 ) {
 	mux.HandleFunc("GET /api/v1/sessions", handleGetSessions(cachedRepo, orchMonitor, costTracker,
 		func(sessionID string) bool {
@@ -583,8 +584,10 @@ func registerSessionRoutes(
 	// chart=yield (per-project productive-vs-reverted spend over sessions). Phase
 	// 3 (#751) adds chart=agents, a concurrent-agents series reconstructed from
 	// the lifecycle recordings (read-only; empty unless --record has been used).
+	// #951 adds chart=dora, computed on request from gitResolver — no
+	// persistence, no background sweep.
 	concurrencyTracker := filesystem.NewConcurrencyTrackerWithDir(resolveRecordingsDir(sockPath))
-	mux.HandleFunc("GET /api/v1/history", handleGetHistory(costTracker, cachedRepo, concurrencyTracker))
+	mux.HandleFunc("GET /api/v1/history", handleGetHistory(costTracker, cachedRepo, concurrencyTracker, gitResolver))
 
 	focusService := services.NewFocusService(cachedRepo, push, logger)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/focus", sessionshandler.NewFocusHandler(focusService, logger))

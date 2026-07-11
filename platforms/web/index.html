@@ -190,13 +190,22 @@
           <span class="history-ctl-label">Chart</span>
           <fieldset class="history-seg" id="history-chart-sel" aria-label="Chart type">
             <button type="button" data-chart="cost" class="active">Cost</button>
-            <button type="button" data-chart="yield" title="Productive vs reverted spend per project">Yield</button>
             <button type="button" data-chart="tokens">Tokens</button>
             <button type="button" data-chart="co2" title="Estimated CO2e footprint — modeled, not measured">CO2</button>
             <button type="button" data-chart="models">Models</button>
             <button type="button" data-chart="providers">Providers</button>
             <button type="button" data-chart="agents">Agents</button>
-          </div>
+          </fieldset>
+          <fieldset class="history-seg" id="history-metrics-sel" aria-label="Metrics">
+            <button type="button" data-chart="yield" title="Metrics: productive vs reverted spend per project">Yield</button>
+            <button type="button" data-chart="dora" title="Metrics: DORA deployment metrics per project">DORA</button>
+          </fieldset>
+        </div>
+        <div class="history-ctl-row" id="history-dora-row" hidden>
+          <span class="history-ctl-label">Project</span>
+          <select id="history-dora-project" aria-label="DORA project">
+            <option value="">Select a project…</option>
+          </select>
         </div>
         <div class="history-ctl-row">
           <span class="history-ctl-label">Group</span>
