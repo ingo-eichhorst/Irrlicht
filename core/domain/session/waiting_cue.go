@@ -9,6 +9,7 @@ package session
 import (
 	"regexp"
 	"strings"
+	"unicode/utf8"
 )
 
 // trailingMarkdownNoise are characters that commonly appear AFTER a
@@ -73,7 +74,7 @@ func ExtractQuestionSnippet(text string) string {
 		if stripped == "" {
 			continue
 		}
-		if stripped[len(stripped)-1] != '?' {
+		if !endsWithQuestionMark(stripped) {
 			continue
 		}
 		if isRhetorical(sentences, i) {
@@ -172,7 +173,7 @@ func ExtractWaitingCue(text string) string {
 		if isSelfReferentialWait(stripped) {
 			continue
 		}
-		for _, re := range waitingCuePatterns {
+		for _, re := range allWaitingCuePatterns {
 			if re.MatchString(stripped) {
 				return s
 			}
@@ -235,34 +236,66 @@ func looksLikeAnswer(s string) bool {
 			return true
 		}
 	}
+	for _, p := range i18nAnswerPrefixes {
+		if strings.HasPrefix(lower, p) {
+			return true
+		}
+	}
 	return false
 }
 
-// splitSentences splits text on sentence terminators (`.`, `!`, `?`) and
-// newlines. A terminator only ends a sentence when followed by whitespace,
-// end-of-string, or markdown wrappers leading to either — so URL `?` and
-// abbreviations like `e.g.` don't split. Each returned sentence retains its
-// terminator and any wrapper characters.
+// questionTerminators are the runes that end a question sentence across
+// scripts: ASCII `?`, full-width `？` (CJK), `؟` (Arabic), and `;`
+// (Greek question mark — NOT the ASCII semicolon it visually resembles).
+// See issue #933: question detection was ASCII-`?`-only, missing every
+// non-Latin question mark.
+const questionTerminators = "?？؟;"
+
+// cjkSentenceTerminators additionally end a *sentence* (for splitSentences)
+// without requiring a following whitespace/EOS — CJK text is typically
+// written without spaces between sentences, unlike Latin/Arabic/Greek.
+const cjkSentenceTerminators = "？！。"
+
+func endsWithQuestionMark(s string) bool {
+	r, _ := utf8.DecodeLastRuneInString(s)
+	return strings.ContainsRune(questionTerminators, r)
+}
+
+func isCJKSentenceTerminator(r rune) bool {
+	return strings.ContainsRune(cjkSentenceTerminators, r)
+}
+
+// splitSentences splits text on sentence terminators (`.`, `!`, `?`, and
+// their CJK/Arabic/Greek counterparts) and newlines. A Latin/Arabic/Greek
+// terminator only ends a sentence when followed by whitespace, end-of-string,
+// or markdown wrappers leading to either — so URL `?` and abbreviations like
+// `e.g.` don't split. CJK terminators (`？！。`) end a sentence unconditionally
+// since CJK text is conventionally written without inter-sentence spaces.
+// Each returned sentence retains its terminator and any wrapper characters.
 func splitSentences(text string) []string {
 	var sentences []string
 	start := 0
-	for i := 0; i < len(text); i++ {
-		c := text[i]
-		switch c {
-		case '.', '!', '?':
-			j := i + 1
+	for i := 0; i < len(text); {
+		r, size := utf8.DecodeRuneInString(text[i:])
+		switch {
+		case r == '\n':
+			sentences = append(sentences, text[start:i])
+			start = i + size
+			i += size
+			continue
+		case r == '.' || r == '!' || r == '?' || isCJKSentenceTerminator(r) || r == '؟' || r == ';':
+			j := i + size
 			for j < len(text) && strings.IndexByte(markdownWrapper, text[j]) >= 0 {
 				j++
 			}
-			if j == len(text) || isSentenceBreak(text[j]) {
+			if isCJKSentenceTerminator(r) || j == len(text) || isSentenceBreak(text[j]) {
 				sentences = append(sentences, text[start:j])
 				start = j
-				i = j - 1
+				i = j
+				continue
 			}
-		case '\n':
-			sentences = append(sentences, text[start:i])
-			start = i + 1
 		}
+		i += size
 	}
 	if start < len(text) {
 		sentences = append(sentences, text[start:])

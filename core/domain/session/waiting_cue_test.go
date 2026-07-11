@@ -39,6 +39,10 @@ func TestIsWaitingForUserInput_TrailingMarkdown(t *testing.T) {
 		{"joke with Because answer across newline", "Why do programmers prefer dark mode?\nBecause light attracts bugs.", false},
 		{"Since-prefixed answer is rhetorical", "Why bother? Since the cache already has it, we skip.", false},
 		{"rhetorical Q followed by real Q", "Why? Because reasons. Should I proceed?", true},
+		// Non-Latin question marks — issue #933.
+		{"CJK full-width question mark", "続けますか？", true},
+		{"Arabic question mark", "هل تريد أن أتابع؟", true},
+		{"Greek question mark", "Θέλετε να συνεχίσω;", true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -74,6 +78,15 @@ func TestExtractQuestionSnippet(t *testing.T) {
 		{"joke with Because across newline returns empty", "Why do programmers prefer dark mode?\nBecause light attracts bugs.", ""},
 		{"rhetorical Q followed by real Q returns the real one", "Why? Because reasons. Should I proceed?", "Should I proceed?"},
 		{"non-answer continuation is not rhetorical", "What would you like? In the meantime I'll move on.", "What would you like?"},
+		// Non-Latin question marks — issue #933.
+		{"CJK full-width question mark", "続けますか？", "続けますか？"},
+		{"CJK question with trailing status, no space (no inter-sentence spaces)", "続けますか？念のため確認します。", "続けますか？"},
+		{"Arabic question mark", "هل تريد أن أتابع؟", "هل تريد أن أتابع؟"},
+		{"Greek question mark", "Θέλετε να συνεχίσω;", "Θέλετε να συνεχίσω;"},
+		{"CJK question wrapped in bold markdown", "**続けますか？**", "**続けますか？**"},
+		// Rhetorical Q&A veto in other languages — issue #933.
+		{"de: rhetorical weil-answer returns empty", "Warum? Weil der Cache das schon hat.", ""},
+		{"es: rhetorical porque-answer returns empty", "¿Por qué? Porque el caché ya lo tiene.", ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -144,6 +157,21 @@ func TestExtractWaitingCue(t *testing.T) {
 		{"neg wait for background agent (its)", "The Go agent is doing significant interface-renaming work — I'll wait for its completion notification before touching any Go/JS files myself.", false},
 		{"neg wait for background agents (their)", "The Go and JS agents are still running — I'll wait for their completion before merging.", false},
 		{"neg wait for it", "The background job is almost done — I'll wait for it to finish before continuing.", false},
+
+		// Non-English cue patterns — issue #933.
+		{"de: sag mir bescheid", "Sag mir Bescheid, bevor ich fortfahre.", true},
+		{"de: bitte + verb", "Bitte prüfe die Änderungen.", true},
+		{"es: avísame", "Avísame si quieres que continúe.", true},
+		{"es: por favor + verb", "Por favor confirma el despliegue.", true},
+		{"fr: dis-moi", "Dis-moi si tu veux que je continue.", true},
+		{"fr: s'il te plaît + verb", "S'il te plaît vérifie le diff.", true},
+		{"pt: me avise", "Me avise se quiser que eu continue.", true},
+		{"pt: por favor + verb", "Por favor confirme o deploy.", true},
+		{"ja: kakunin shite kudasai", "変更を確認してください。", true},
+		{"zh: qing quren", "请确认部署是否正确。", true},
+		// Non-English negatives — plain statements must not trigger.
+		{"neg de: statement", "Ich habe die Änderungen vorgenommen.", false},
+		{"neg fr: statement", "J'ai terminé les modifications.", false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
