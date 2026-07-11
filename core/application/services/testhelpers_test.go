@@ -53,6 +53,17 @@ func newMockRepo() *mockRepo {
 	}
 }
 
+// Load returns an independent deep copy of the stored state, matching the
+// real filesystem.SessionRepository (which unmarshals a fresh struct from
+// disk on every call — see repository.go) and cachedSessionRepository.ListAll
+// (deepCopySessions, "so callers can safely mutate"). Before this fix, Load
+// handed back the same pointer stored in r.states, so a test goroutine
+// reading a field off the result raced the detector's own goroutine
+// mutating that struct in place under PIDManager.WithSessionStateLock — a
+// lock this map's r.mu knows nothing about. That mismatch with production
+// (where no two Load() calls can ever alias the same struct) is what made
+// bare `state, _ := repo.Load(id); state.Field` reads flaky under -race
+// (#606, #942/#944, #956/#964) instead of impossible by construction.
 func (r *mockRepo) Load(sessionID string) (*session.SessionState, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -60,14 +71,21 @@ func (r *mockRepo) Load(sessionID string) (*session.SessionState, error) {
 	if !ok {
 		return nil, errors.New("not found")
 	}
-	return s, nil
+	return deepCopySessionState(s), nil
 }
 
+// Save stores an independent copy of s, not the caller's pointer — matching
+// the real repository, where Save serializes to disk and nothing downstream
+// ever shares memory with the caller's struct again. Without this, a caller
+// that kept mutating s in place after Save() (as processActivityLocked's
+// helpers do across a single locked pass) would leave that live, unlocked
+// mutation reachable through r.states, racing any concurrent Load().
 func (r *mockRepo) Save(s *session.SessionState) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.states[s.SessionID] = s
-	r.lastSavedState[s.SessionID] = s.State
+	cp := deepCopySessionState(s)
+	r.states[cp.SessionID] = cp
+	r.lastSavedState[cp.SessionID] = cp.State
 	r.saves++
 	return nil
 }
@@ -80,14 +98,63 @@ func (r *mockRepo) Delete(sessionID string) error {
 	return nil
 }
 
+// ListAll returns independent deep copies for the same reason Load does —
+// see Load's doc comment.
 func (r *mockRepo) ListAll() ([]*session.SessionState, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	out := make([]*session.SessionState, 0, len(r.states))
 	for _, s := range r.states {
-		out = append(out, s)
+		out = append(out, deepCopySessionState(s))
 	}
 	return out, nil
+}
+
+// deepCopySessionState returns an independent copy of s, one level deep: the
+// top-level struct plus a fresh copy of every pointer-typed field (Metrics,
+// Launcher, Background, Subagents, WaitingStartTime) so none of them is still
+// reachable from two goroutines at once — a plain `cp := *s` would leave
+// those pointers aliased, and production code does mutate through them in
+// place (e.g. cache_bloat_detector.go's `state.Metrics.CacheBloat = ...`,
+// session_detector_activity.go's `state.Metrics.PermissionPending = true`),
+// not just by wholesale reassignment.
+//
+// Deliberately NOT a JSON round-trip like cached_repository.go's
+// deepCopySessions: many SessionMetrics fields are `json:"-"` by design
+// (NoSubstantiveActivity, PermissionPending, SawManualCompactBoundary, ...) —
+// per-pass signals a live tailer/hook-receiver call computes fresh into
+// state.Metrics and the same processActivityLocked call reads back moments
+// later, never persisted to disk on purpose (see metrics.go's field
+// comments). Production's repo.Load() never needs to preserve them across
+// calls — every real Load() is its own independent disk read that starts
+// those fields at zero, same as a fresh struct literal. But tests fake the
+// tailer by seeding a mockRepo state directly with e.g. NoSubstantiveActivity
+// already set (there's no real transcript file backing the test), so this
+// copy must hand that value back unchanged rather than silently dropping it
+// the way a JSON round-trip would.
+func deepCopySessionState(s *session.SessionState) *session.SessionState {
+	cp := *s
+	if s.Launcher != nil {
+		l := *s.Launcher
+		cp.Launcher = &l
+	}
+	if s.Background != nil {
+		b := *s.Background
+		cp.Background = &b
+	}
+	if s.Subagents != nil {
+		sub := *s.Subagents
+		cp.Subagents = &sub
+	}
+	if s.WaitingStartTime != nil {
+		w := *s.WaitingStartTime
+		cp.WaitingStartTime = &w
+	}
+	if s.Metrics != nil {
+		m := *s.Metrics
+		cp.Metrics = &m
+	}
+	return &cp
 }
 
 // pidOf reads a session's PID under r.mu. Background PID-discovery goroutines
