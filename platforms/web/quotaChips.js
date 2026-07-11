@@ -19,8 +19,7 @@ const QUOTA_FORECAST_KEY = 'showQuotaForecast';
 export function showQuotaForecast() {
   // Default ON, mirroring macOS @AppStorage("showQuotaForecast") default.
   const v = localStorage.getItem(QUOTA_FORECAST_KEY);
-  if (v === '0' || v === 'false') return false;
-  return true;
+  return v !== '0' && v !== 'false';
 }
 export function setShowQuotaForecast(on) {
   // Safari Private mode and storage-disabled contexts throw on
@@ -229,9 +228,7 @@ function bucketChips(sessions, nowMs) {
     mergeChipIntoBucket(existing, snap, s, mode, imm, stale);
     existing.totalCostUSD += cost;
   }
-  return Array.from(buckets.values()).sort((a, b) =>
-    a.key < b.key ? -1 : a.key > b.key ? 1 : 0
-  );
+  return Array.from(buckets.values()).sort((a, b) => a.key.localeCompare(b.key));
 }
 
 // subscriptionWindowLine renders one quota window's tooltip line: percent
@@ -243,9 +240,14 @@ function subscriptionWindowLine(w, nowMs) {
   let line = label + ': ' + used + '% used';
   if (pace != null) {
     const delta = used - Math.round(pace);
-    const verdict = delta > 0 ? (delta + 'pt over pace')
-                  : delta < 0 ? ((-delta) + 'pt under pace')
-                  : 'on pace';
+    let verdict;
+    if (delta > 0) {
+      verdict = delta + 'pt over pace';
+    } else if (delta < 0) {
+      verdict = (-delta) + 'pt under pace';
+    } else {
+      verdict = 'on pace';
+    }
     line += ' · ' + verdict;
   }
   if (w.resets_at) line += ' · resets in ' + formatTimeUntil(w.resets_at);
