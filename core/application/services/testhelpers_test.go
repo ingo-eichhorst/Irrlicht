@@ -251,6 +251,23 @@ type cwdGit struct {
 
 func (g *cwdGit) GetCWDFromTranscript(path string) string { return g.cwd }
 
+// defaultSessionDetectorDeps returns the SessionDetectorDeps most detector
+// tests in this file build identically (mockLogger/mockGit/mockMetrics, no
+// broadcaster, "test" version, zero ReadyTTL, no process-name map) — callers
+// set PW/Repo/PIDDiscovers and override Git when the scenario needs a
+// specific cwd.
+func defaultSessionDetectorDeps(pw outbound.ProcessWatcher, repo outbound.SessionRepository, discovers map[string]agent.PIDDiscoverFunc) services.SessionDetectorDeps {
+	return services.SessionDetectorDeps{
+		PW:           pw,
+		Repo:         repo,
+		Log:          &mockLogger{},
+		Git:          &mockGit{},
+		Metrics:      &mockMetrics{},
+		Version:      "test",
+		PIDDiscovers: discovers,
+	}
+}
+
 // mockMetrics records PruneEntry calls. Safe for concurrent use: PruneEntry
 // fires on the detector's Run goroutine while tests poll prunedSnapshot from
 // the test goroutine (issue #606 flaky-sibling fix replaced a fixed sleep with
