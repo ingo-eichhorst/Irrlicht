@@ -21,7 +21,7 @@ var (
 		// A. Direct ask
 		regexp.MustCompile(`(?i)\b(?:sag|sagt|sagen sie)\s+(?:mir|uns)\s+bescheid\b`),
 		regexp.MustCompile(`(?i)\blass(?:en sie)?\s+(?:mich|uns)\s+wissen\b`),
-		regexp.MustCompile(`(?i)\bkannst du|könnten sie\b`),
+		regexp.MustCompile(`(?i)\b(?:kannst du|könnten sie)\b`),
 		// B. Approval / review framings. "ihr"/"ihre" (her/their/formal-your)
 		// is deliberately excluded — unlike English "its"/"their" it isn't
 		// lexically distinguishable from formal-address "your" here, so
@@ -39,7 +39,7 @@ var (
 		// comment above), so the scoped "warte auf dein/deine" pattern above
 		// is the only supported form.
 		regexp.MustCompile(`(?i)\bbevor ich\b`),
-		regexp.MustCompile(`(?i)\bsobald du\b|\bsobald sie\b`),
+		regexp.MustCompile(`(?i)\bsobald (?:du|sie)\b`),
 		// D. Curated imperatives
 		regexp.MustCompile(`(?i)\bbitte\s+\w+\b`),
 		regexp.MustCompile(`(?i)\b(?:prüfe|überprüfe|bestätige|teste|schau dir)\s+\w+\b`),
@@ -49,9 +49,9 @@ var (
 	}
 
 	waitingCuePatternsES = []*regexp.Regexp{
-		regexp.MustCompile(`(?i)\bavísame|avíseme\b`),
-		regexp.MustCompile(`(?i)\bdime|dígame\b`),
-		regexp.MustCompile(`(?i)\b¿?podrías|¿?podría\b`),
+		regexp.MustCompile(`(?i)\b(?:avísame|avíseme)\b`),
+		regexp.MustCompile(`(?i)\b(?:dime|dígame)\b`),
+		regexp.MustCompile(`(?i)¿?\b(?:podrías|podría)\b`),
 		// "su" (his/her/their/formal-your) is excluded — see the German
 		// "ihr"/"ihre" comment above for why the ambiguous form is dropped.
 		regexp.MustCompile(`(?i)\besperando tu\b`),
@@ -67,22 +67,22 @@ var (
 	}
 
 	waitingCuePatternsFR = []*regexp.Regexp{
-		regexp.MustCompile(`(?i)\bdis-moi|dites-moi\b`),
-		regexp.MustCompile(`(?i)\bfais-moi savoir|faites-le-moi savoir\b`),
-		regexp.MustCompile(`(?i)\bpourrais-tu|pourriez-vous\b`),
-		regexp.MustCompile(`(?i)\bj'attends ta|j'attends votre\b`),
-		regexp.MustCompile(`(?i)\bprêt pour ta|prêt pour votre\b`),
+		regexp.MustCompile(`(?i)\b(?:dis-moi|dites-moi)\b`),
+		regexp.MustCompile(`(?i)\b(?:fais-moi savoir|faites-le-moi savoir)\b`),
+		regexp.MustCompile(`(?i)\b(?:pourrais-tu|pourriez-vous)\b`),
+		regexp.MustCompile(`(?i)\b(?:j'attends ta|j'attends votre)\b`),
+		regexp.MustCompile(`(?i)\bprêt pour (?:ta|votre)\b`),
 		regexp.MustCompile(`(?i)\bavant que je\b`),
-		regexp.MustCompile(`(?i)\bdès que tu\b|\bdès que vous\b`),
-		regexp.MustCompile(`(?i)\bs'il te plaît|s'il vous plaît\b`),
+		regexp.MustCompile(`(?i)\bdès que (?:tu|vous)\b`),
+		regexp.MustCompile(`(?i)\bs'il (?:te|vous) plaît\b`),
 		regexp.MustCompile(`(?i)\b(?:confirme|vérifie|teste|relis)\s+\w+\b`),
 		regexp.MustCompile(`(?i)\bqu'en penses-tu\b`),
 	}
 
 	waitingCuePatternsPT = []*regexp.Regexp{
-		regexp.MustCompile(`(?i)\bme avise|avisa-me\b`),
-		regexp.MustCompile(`(?i)\bme diga|diga-me\b`),
-		regexp.MustCompile(`(?i)\bpoderia você|você poderia\b`),
+		regexp.MustCompile(`(?i)\b(?:me avise|avisa-me)\b`),
+		regexp.MustCompile(`(?i)\b(?:me diga|diga-me)\b`),
+		regexp.MustCompile(`(?i)\b(?:poderia você|você poderia)\b`),
 		// "sua"/"seu" (his/her/their/formal-your) is excluded here — same
 		// reasoning as the German/Spanish comments above — but kept in the
 		// pattern below, where the trailing "revisão"/"aprovação" (review/

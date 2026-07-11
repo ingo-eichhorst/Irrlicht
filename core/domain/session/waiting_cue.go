@@ -64,6 +64,7 @@ func ExtractQuestionSnippet(text string) string {
 	if text == "" {
 		return ""
 	}
+	text = foldCombiningDiacritics(text)
 	sentences := splitSentences(text)
 	for i, s := range sentences {
 		trimmed := strings.TrimSpace(s)
@@ -160,6 +161,7 @@ func ExtractWaitingCue(text string) string {
 	if text == "" {
 		return ""
 	}
+	text = foldCombiningDiacritics(text)
 	// Walk the tail newest-first so when both the last and second-to-last
 	// sentence match a cue, the more recent (and usually more natural for
 	// display) sentence is returned.

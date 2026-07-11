@@ -176,6 +176,12 @@ func TestExtractWaitingCue(t *testing.T) {
 		{"pt: por favor + verb", "Por favor confirme o deploy.", true},
 		{"ja: kakunin shite kudasai", "変更を確認してください。", true},
 		{"zh: qing quren", "请确认部署是否正确。", true},
+		// NFD-decomposed (combining-mark) input — issue #933 code review.
+		// The i18n patterns use precomposed (NFC) accented runes; a
+		// transcript source emitting NFD text (base letter + combining
+		// mark as separate runes) must still match after foldCombiningDiacritics.
+		{"es: NFD-decomposed avísame still matches", "Avísame si quieres que continúe.", true},
+		{"fr: NFD-decomposed plaît still matches", "S'il te plaît vérifie le diff.", true},
 		// Non-English negatives — plain statements must not trigger.
 		{"neg de: statement", "Ich habe die Änderungen vorgenommen.", false},
 		{"neg fr: statement", "J'ai terminé les modifications.", false},
