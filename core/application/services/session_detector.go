@@ -234,28 +234,31 @@ type terminalUISignal struct {
 	ui        backchannel.UIKind
 }
 
+// SessionDetectorDeps bundles NewSessionDetector's dependencies beyond the
+// watcher list. PW and Broadcaster may be nil (optional).
+type SessionDetectorDeps struct {
+	PW           outbound.ProcessWatcher
+	Repo         outbound.SessionRepository
+	Log          outbound.Logger
+	Git          outbound.GitResolver
+	Metrics      outbound.MetricsCollector
+	Broadcaster  outbound.PushBroadcaster
+	Version      string
+	ReadyTTL     time.Duration
+	PIDDiscovers map[string]agent.PIDDiscoverFunc
+	ProcessNames map[string]string
+	LiveCWDs     LiveCWDsFunc
+}
+
 // NewSessionDetector creates a SessionDetector with all required
-// dependencies. pw and broadcaster may be nil (optional).
+// dependencies.
 //
 // Panics if any supplied watcher has a zero-value Identity. Every
 // downstream session created from that watcher's events would otherwise
 // have an empty Adapter field — a silent partial-failure mode (the
 // adapter-aware code paths fall back gracefully, but logs and the
 // /api/v1/agents endpoint surface "" instead of the real name).
-func NewSessionDetector(
-	watchers []inbound.Watcher,
-	pw outbound.ProcessWatcher,
-	repo outbound.SessionRepository,
-	log outbound.Logger,
-	git outbound.GitResolver,
-	metrics outbound.MetricsCollector,
-	broadcaster outbound.PushBroadcaster,
-	version string,
-	readyTTL time.Duration,
-	pidDiscovers map[string]agent.PIDDiscoverFunc,
-	processNames map[string]string,
-	liveCWDs LiveCWDsFunc,
-) *SessionDetector {
+func NewSessionDetector(watchers []inbound.Watcher, deps SessionDetectorDeps) *SessionDetector {
 	for i, w := range watchers {
 		if w.Identity() == (agent.Identity{}) {
 			panic(fmt.Sprintf("session_detector: watchers[%d] (%T) has no Identity — call .WithIdentity() before passing it to NewSessionDetector", i, w))
@@ -264,12 +267,12 @@ func NewSessionDetector(
 	det := &SessionDetector{
 		watchers:          watchers,
 		merged:            make(chan identifiedEvent, 16),
-		repo:              repo,
-		log:               log,
-		broadcaster:       broadcaster,
-		version:           version,
-		enricher:          newMetadataEnricher(git, metrics),
-		metrics:           metrics,
+		repo:              deps.Repo,
+		log:               deps.Log,
+		broadcaster:       deps.Broadcaster,
+		version:           deps.Version,
+		enricher:          newMetadataEnricher(deps.Git, deps.Metrics),
+		metrics:           deps.Metrics,
 		projectSessions:   make(map[string]string),
 		deletedSessions:   make(map[string]int64),
 		hostGateRejected:  make(map[string]struct{}),
@@ -285,10 +288,17 @@ func NewSessionDetector(
 		bgProbing:         make(map[string]bool),
 		uiSignals:         make(chan terminalUISignal, 64),
 	}
-	det.pidMgr = NewPIDManager(
-		pw, repo, log, broadcaster, readyTTL,
-		pidDiscovers, processNames, liveCWDs, det.removeFromProjectSessions,
-	)
+	det.pidMgr = NewPIDManager(PIDManagerDeps{
+		PW:               deps.PW,
+		Repo:             deps.Repo,
+		Log:              deps.Log,
+		Broadcaster:      deps.Broadcaster,
+		ReadyTTL:         deps.ReadyTTL,
+		PIDDiscovers:     deps.PIDDiscovers,
+		ProcessNames:     deps.ProcessNames,
+		LiveCWDs:         deps.LiveCWDs,
+		OnSessionDeleted: det.removeFromProjectSessions,
+	})
 	det.pidMgr.SetChildDeletedHandler(det.reevaluateParent)
 	return det
 }

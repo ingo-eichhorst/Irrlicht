@@ -130,31 +130,33 @@ type PIDManager struct {
 	recorderSeq *int64 // shared with SessionDetector for monotonic ordering
 }
 
+// PIDManagerDeps bundles NewPIDManager's dependencies. PW and Broadcaster may
+// be nil (optional). ProcessNames + LiveCWDs may both be nil — that disables
+// the DB-backed-orphan branch of the startup zombie sweep.
+type PIDManagerDeps struct {
+	PW               outbound.ProcessWatcher
+	Repo             outbound.SessionRepository
+	Log              outbound.Logger
+	Broadcaster      outbound.PushBroadcaster
+	ReadyTTL         time.Duration
+	PIDDiscovers     map[string]agent.PIDDiscoverFunc
+	ProcessNames     map[string]string
+	LiveCWDs         LiveCWDsFunc
+	OnSessionDeleted func(sessionID string)
+}
+
 // NewPIDManager creates a PIDManager with the given dependencies.
-// pw and broadcaster may be nil (optional). processNames + liveCWDs may
-// both be nil — that disables the DB-backed-orphan branch of the startup
-// zombie sweep.
-func NewPIDManager(
-	pw outbound.ProcessWatcher,
-	repo outbound.SessionRepository,
-	log outbound.Logger,
-	broadcaster outbound.PushBroadcaster,
-	readyTTL time.Duration,
-	pidDiscovers map[string]agent.PIDDiscoverFunc,
-	processNames map[string]string,
-	liveCWDs LiveCWDsFunc,
-	onSessionDeleted func(sessionID string),
-) *PIDManager {
+func NewPIDManager(deps PIDManagerDeps) *PIDManager {
 	return &PIDManager{
-		pw:               pw,
-		repo:             repo,
-		log:              log,
-		broadcaster:      broadcaster,
-		readyTTL:         readyTTL,
-		pidDiscovers:     pidDiscovers,
-		processNames:     processNames,
-		liveCWDs:         liveCWDs,
-		onSessionDeleted: onSessionDeleted,
+		pw:               deps.PW,
+		repo:             deps.Repo,
+		log:              deps.Log,
+		broadcaster:      deps.Broadcaster,
+		readyTTL:         deps.ReadyTTL,
+		pidDiscovers:     deps.PIDDiscovers,
+		processNames:     deps.ProcessNames,
+		liveCWDs:         deps.LiveCWDs,
+		onSessionDeleted: deps.OnSessionDeleted,
 		pendingPIDs:      make(map[string]int),
 	}
 }

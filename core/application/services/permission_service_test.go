@@ -177,10 +177,16 @@ func TestPermissionServiceFreshStateIsAllPendingAndInert(t *testing.T) {
 	c := &effectCounter{}
 	store := &mockPermStore{}
 	reg := &mockRegistrar{}
-	svc := services.NewPermissionService(
-		[]agent.Agent{testAgentDecl(c)}, store, &mockPush{}, &mockLogger{},
-		config.PermissionModeAsk, reg, nil, nil,
-	)
+	svc := services.NewPermissionService(services.PermissionServiceDeps{
+		Agents:    []agent.Agent{testAgentDecl(c)},
+		Store:     store,
+		Push:      &mockPush{},
+		Log:       &mockLogger{},
+		Mode:      config.PermissionModeAsk,
+		Registrar: reg,
+		Factories: nil,
+		HasLive:   nil,
+	})
 	svc.Start(context.Background())
 
 	if svc.Granted("testagent", "config") || svc.Granted("testagent", "transcripts") {
@@ -210,10 +216,16 @@ func TestPermissionServiceGrantAppliesAndDenyRemoves(t *testing.T) {
 	c := &effectCounter{}
 	store := &mockPermStore{}
 	push := &mockPush{}
-	svc := services.NewPermissionService(
-		[]agent.Agent{testAgentDecl(c)}, store, push, &mockLogger{},
-		config.PermissionModeAsk, &mockRegistrar{}, nil, nil,
-	)
+	svc := services.NewPermissionService(services.PermissionServiceDeps{
+		Agents:    []agent.Agent{testAgentDecl(c)},
+		Store:     store,
+		Push:      push,
+		Log:       &mockLogger{},
+		Mode:      config.PermissionModeAsk,
+		Registrar: &mockRegistrar{},
+		Factories: nil,
+		HasLive:   nil,
+	})
 	svc.Start(context.Background())
 
 	if err := svc.Answer([]services.PermissionAnswer{
@@ -252,10 +264,16 @@ func TestPermissionServiceReAnswerIsIdempotent(t *testing.T) {
 	c := &effectCounter{}
 	store := &mockPermStore{}
 	push := &mockPush{}
-	svc := services.NewPermissionService(
-		[]agent.Agent{testAgentDecl(c)}, store, push, &mockLogger{},
-		config.PermissionModeAsk, &mockRegistrar{}, nil, nil,
-	)
+	svc := services.NewPermissionService(services.PermissionServiceDeps{
+		Agents:    []agent.Agent{testAgentDecl(c)},
+		Store:     store,
+		Push:      push,
+		Log:       &mockLogger{},
+		Mode:      config.PermissionModeAsk,
+		Registrar: &mockRegistrar{},
+		Factories: nil,
+		HasLive:   nil,
+	})
 	svc.Start(context.Background())
 
 	ans := []services.PermissionAnswer{{Agent: "testagent", Permission: "config", Grant: true}}
@@ -279,10 +297,16 @@ func TestPermissionServiceReAnswerIsIdempotent(t *testing.T) {
 
 func TestPermissionServiceUnknownPermissionRejectsWholeBatch(t *testing.T) {
 	c := &effectCounter{}
-	svc := services.NewPermissionService(
-		[]agent.Agent{testAgentDecl(c)}, &mockPermStore{}, &mockPush{}, &mockLogger{},
-		config.PermissionModeAsk, &mockRegistrar{}, nil, nil,
-	)
+	svc := services.NewPermissionService(services.PermissionServiceDeps{
+		Agents:    []agent.Agent{testAgentDecl(c)},
+		Store:     &mockPermStore{},
+		Push:      &mockPush{},
+		Log:       &mockLogger{},
+		Mode:      config.PermissionModeAsk,
+		Registrar: &mockRegistrar{},
+		Factories: nil,
+		HasLive:   nil,
+	})
 	svc.Start(context.Background())
 
 	err := svc.Answer([]services.PermissionAnswer{
@@ -308,10 +332,16 @@ func TestPermissionServiceObserveGrantStartsAndDenyStopsWatchers(t *testing.T) {
 	factories := map[string]services.WatcherFactory{
 		"testagent": func() []inbound.Watcher { return []inbound.Watcher{w} },
 	}
-	svc := services.NewPermissionService(
-		[]agent.Agent{testAgentDecl(c)}, &mockPermStore{}, &mockPush{}, &mockLogger{},
-		config.PermissionModeAsk, reg, factories, nil,
-	)
+	svc := services.NewPermissionService(services.PermissionServiceDeps{
+		Agents:    []agent.Agent{testAgentDecl(c)},
+		Store:     &mockPermStore{},
+		Push:      &mockPush{},
+		Log:       &mockLogger{},
+		Mode:      config.PermissionModeAsk,
+		Registrar: reg,
+		Factories: factories,
+		HasLive:   nil,
+	})
 	svc.Start(context.Background())
 
 	if err := svc.Answer([]services.PermissionAnswer{
@@ -353,10 +383,16 @@ func TestPermissionServiceGrantedStateResumesAtStart(t *testing.T) {
 	factories := map[string]services.WatcherFactory{
 		"testagent": func() []inbound.Watcher { return []inbound.Watcher{w} },
 	}
-	svc := services.NewPermissionService(
-		[]agent.Agent{testAgentDecl(c)}, store, &mockPush{}, &mockLogger{},
-		config.PermissionModeAsk, &mockRegistrar{}, factories, nil,
-	)
+	svc := services.NewPermissionService(services.PermissionServiceDeps{
+		Agents:    []agent.Agent{testAgentDecl(c)},
+		Store:     store,
+		Push:      &mockPush{},
+		Log:       &mockLogger{},
+		Mode:      config.PermissionModeAsk,
+		Registrar: &mockRegistrar{},
+		Factories: factories,
+		HasLive:   nil,
+	})
 	svc.Start(context.Background())
 
 	// Persisted grants are exercised on boot: modify re-applied (hook
@@ -381,10 +417,16 @@ func TestPermissionServiceGrantAllMode(t *testing.T) {
 	factories := map[string]services.WatcherFactory{
 		"testagent": func() []inbound.Watcher { return []inbound.Watcher{w} },
 	}
-	svc := services.NewPermissionService(
-		[]agent.Agent{testAgentDecl(c)}, store, &mockPush{}, &mockLogger{},
-		config.PermissionModeGrantAll, &mockRegistrar{}, factories, nil,
-	)
+	svc := services.NewPermissionService(services.PermissionServiceDeps{
+		Agents:    []agent.Agent{testAgentDecl(c)},
+		Store:     store,
+		Push:      &mockPush{},
+		Log:       &mockLogger{},
+		Mode:      config.PermissionModeGrantAll,
+		Registrar: &mockRegistrar{},
+		Factories: factories,
+		HasLive:   nil,
+	})
 	svc.Start(context.Background())
 
 	if !svc.Granted("testagent", "config") || !svc.Granted("testagent", "transcripts") {
@@ -418,10 +460,16 @@ func TestPermissionServiceDetectionFlagsAndBroadcasts(t *testing.T) {
 		defer mu.Unlock()
 		return live
 	}
-	svc := services.NewPermissionService(
-		[]agent.Agent{testAgentDecl(c)}, &mockPermStore{}, push, &mockLogger{},
-		config.PermissionModeAsk, &mockRegistrar{}, nil, hasLive,
-	)
+	svc := services.NewPermissionService(services.PermissionServiceDeps{
+		Agents:    []agent.Agent{testAgentDecl(c)},
+		Store:     &mockPermStore{},
+		Push:      push,
+		Log:       &mockLogger{},
+		Mode:      config.PermissionModeAsk,
+		Registrar: &mockRegistrar{},
+		Factories: nil,
+		HasLive:   hasLive,
+	})
 	svc.SetDetectionPollIntervalForTest(10 * time.Millisecond)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -448,10 +496,16 @@ func TestPermissionServiceDetectionFlagsAndBroadcasts(t *testing.T) {
 func TestPermissionServiceGrantAllAnswerDoesNotPersist(t *testing.T) {
 	c := &effectCounter{}
 	store := &mockPermStore{}
-	svc := services.NewPermissionService(
-		[]agent.Agent{testAgentDecl(c)}, store, &mockPush{}, &mockLogger{},
-		config.PermissionModeGrantAll, &mockRegistrar{}, nil, nil,
-	)
+	svc := services.NewPermissionService(services.PermissionServiceDeps{
+		Agents:    []agent.Agent{testAgentDecl(c)},
+		Store:     store,
+		Push:      &mockPush{},
+		Log:       &mockLogger{},
+		Mode:      config.PermissionModeGrantAll,
+		Registrar: &mockRegistrar{},
+		Factories: nil,
+		HasLive:   nil,
+	})
 	svc.Start(context.Background())
 
 	// A user answer on a grant-all daemon applies in memory but must not
@@ -472,10 +526,16 @@ func TestPermissionServiceGrantAllAnswerDoesNotPersist(t *testing.T) {
 
 func TestPermissionServiceObserveGranted(t *testing.T) {
 	c := &effectCounter{}
-	svc := services.NewPermissionService(
-		[]agent.Agent{testAgentDecl(c)}, &mockPermStore{}, &mockPush{}, &mockLogger{},
-		config.PermissionModeAsk, &mockRegistrar{}, nil, nil,
-	)
+	svc := services.NewPermissionService(services.PermissionServiceDeps{
+		Agents:    []agent.Agent{testAgentDecl(c)},
+		Store:     &mockPermStore{},
+		Push:      &mockPush{},
+		Log:       &mockLogger{},
+		Mode:      config.PermissionModeAsk,
+		Registrar: &mockRegistrar{},
+		Factories: nil,
+		HasLive:   nil,
+	})
 	svc.Start(context.Background())
 
 	if svc.ObserveGranted("testagent") {
@@ -517,10 +577,16 @@ func TestPermissionServiceDetectionStopsWhenNothingPending(t *testing.T) {
 		calls++
 		return true
 	}
-	svc := services.NewPermissionService(
-		[]agent.Agent{testAgentDecl(c)}, &mockPermStore{set: set}, &mockPush{}, &mockLogger{},
-		config.PermissionModeAsk, &mockRegistrar{}, nil, hasLive,
-	)
+	svc := services.NewPermissionService(services.PermissionServiceDeps{
+		Agents:    []agent.Agent{testAgentDecl(c)},
+		Store:     &mockPermStore{set: set},
+		Push:      &mockPush{},
+		Log:       &mockLogger{},
+		Mode:      config.PermissionModeAsk,
+		Registrar: &mockRegistrar{},
+		Factories: nil,
+		HasLive:   hasLive,
+	})
 	svc.SetDetectionPollIntervalForTest(5 * time.Millisecond)
 	svc.Start(context.Background())
 
@@ -536,11 +602,16 @@ func TestPermissionServiceDetectionStopsWhenNothingPending(t *testing.T) {
 func TestPermissionServiceDetectionProbeOverride(t *testing.T) {
 	c := &effectCounter{}
 	push := &mockPush{}
-	svc := services.NewPermissionService(
-		[]agent.Agent{testAgentDecl(c)}, &mockPermStore{}, push, &mockLogger{},
-		config.PermissionModeAsk, &mockRegistrar{}, nil,
-		func(agent.ProcessMatcher) bool { return false },
-	)
+	svc := services.NewPermissionService(services.PermissionServiceDeps{
+		Agents:    []agent.Agent{testAgentDecl(c)},
+		Store:     &mockPermStore{},
+		Push:      push,
+		Log:       &mockLogger{},
+		Mode:      config.PermissionModeAsk,
+		Registrar: &mockRegistrar{},
+		Factories: nil,
+		HasLive:   func(agent.ProcessMatcher) bool { return false },
+	})
 	svc.SetDetectionProbe("testagent", func() bool { return true })
 	svc.SetDetectionPollIntervalForTest(5 * time.Millisecond)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -563,10 +634,16 @@ func TestPermissionServiceDetectionProbeOverride(t *testing.T) {
 // recorded state.
 func TestPermissionServiceConflictingAnswersConverge(t *testing.T) {
 	c := &effectCounter{}
-	svc := services.NewPermissionService(
-		[]agent.Agent{testAgentDecl(c)}, &mockPermStore{}, &mockPush{}, &mockLogger{},
-		config.PermissionModeAsk, &mockRegistrar{}, nil, nil,
-	)
+	svc := services.NewPermissionService(services.PermissionServiceDeps{
+		Agents:    []agent.Agent{testAgentDecl(c)},
+		Store:     &mockPermStore{},
+		Push:      &mockPush{},
+		Log:       &mockLogger{},
+		Mode:      config.PermissionModeAsk,
+		Registrar: &mockRegistrar{},
+		Factories: nil,
+		HasLive:   nil,
+	})
 	svc.Start(context.Background())
 
 	for i := 0; i < 100; i++ {

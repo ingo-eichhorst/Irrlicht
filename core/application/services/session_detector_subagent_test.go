@@ -624,11 +624,19 @@ func TestSessionDetector_ParentReleasedToReady_WhenChildSweptByLiveness(t *testi
 	// The child-sweep path in PIDManager is gated on readyTTL > 0,
 	// so the default newDetector (readyTTL=0) would skip it entirely.
 	// Use a tiny TTL so the sweep actually runs its child-cleanup loop.
-	det := services.NewSessionDetector(
-		[]inbound.Watcher{tw}, pw, repo,
-		&mockLogger{}, &mockGit{}, &mockMetrics{}, nil,
-		"test", 1*time.Second, nil, nil, nil,
-	)
+	det := services.NewSessionDetector([]inbound.Watcher{tw}, services.SessionDetectorDeps{
+		PW:           pw,
+		Repo:         repo,
+		Log:          &mockLogger{},
+		Git:          &mockGit{},
+		Metrics:      &mockMetrics{},
+		Broadcaster:  nil,
+		Version:      "test",
+		ReadyTTL:     1 * time.Second,
+		PIDDiscovers: nil,
+		ProcessNames: nil,
+		LiveCWDs:     nil,
+	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -1222,11 +1230,19 @@ func TestSessionDetector_ParentBadgeCleared_WhenChildSweptWhileParentWaiting(t *
 	// The child-sweep path in PIDManager is gated on readyTTL > 0; wire a
 	// capturing broadcaster to assert the corrective parent push.
 	bc := &mockBroadcaster{}
-	det := services.NewSessionDetector(
-		[]inbound.Watcher{tw}, pw, repo,
-		&mockLogger{}, &mockGit{}, &mockMetrics{}, bc,
-		"test", 1*time.Second, nil, nil, nil,
-	)
+	det := services.NewSessionDetector([]inbound.Watcher{tw}, services.SessionDetectorDeps{
+		PW:           pw,
+		Repo:         repo,
+		Log:          &mockLogger{},
+		Git:          &mockGit{},
+		Metrics:      &mockMetrics{},
+		Broadcaster:  bc,
+		Version:      "test",
+		ReadyTTL:     1 * time.Second,
+		PIDDiscovers: nil,
+		ProcessNames: nil,
+		LiveCWDs:     nil,
+	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)

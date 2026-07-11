@@ -152,11 +152,19 @@ func TestSessionDetector_NewSession_SkipsNonInteractiveHost(t *testing.T) {
 			return 62540, nil // real, live PID — just not launched by a terminal/IDE
 		},
 	}
-	det := services.NewSessionDetector(
-		[]inbound.Watcher{tw}, pw, repo,
-		&mockLogger{}, &mockGit{}, &mockMetrics{}, nil,
-		"test", 0, discovers, nil, nil,
-	)
+	det := services.NewSessionDetector([]inbound.Watcher{tw}, services.SessionDetectorDeps{
+		PW:           pw,
+		Repo:         repo,
+		Log:          &mockLogger{},
+		Git:          &mockGit{},
+		Metrics:      &mockMetrics{},
+		Broadcaster:  nil,
+		Version:      "test",
+		ReadyTTL:     0,
+		PIDDiscovers: discovers,
+		ProcessNames: nil,
+		LiveCWDs:     nil,
+	})
 	det.SetHostGate(map[string]bool{"antigravity": true}, func(pid int) bool { return false })
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -194,11 +202,19 @@ func TestSessionDetector_NewSession_AdmitsKnownHost(t *testing.T) {
 			return 4242, nil
 		},
 	}
-	det := services.NewSessionDetector(
-		[]inbound.Watcher{tw}, pw, repo,
-		&mockLogger{}, &mockGit{}, &mockMetrics{}, nil,
-		"test", 0, discovers, nil, nil,
-	)
+	det := services.NewSessionDetector([]inbound.Watcher{tw}, services.SessionDetectorDeps{
+		PW:           pw,
+		Repo:         repo,
+		Log:          &mockLogger{},
+		Git:          &mockGit{},
+		Metrics:      &mockMetrics{},
+		Broadcaster:  nil,
+		Version:      "test",
+		ReadyTTL:     0,
+		PIDDiscovers: discovers,
+		ProcessNames: nil,
+		LiveCWDs:     nil,
+	})
 	det.SetHostGate(map[string]bool{"antigravity": true}, func(pid int) bool { return true })
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -245,11 +261,19 @@ func TestSessionDetector_NewSession_HostGateResolvesCWDFromTranscript(t *testing
 			return 62540, nil
 		},
 	}
-	det := services.NewSessionDetector(
-		[]inbound.Watcher{tw}, pw, repo,
-		&mockLogger{}, &cwdGit{cwd: wantCWD}, &mockMetrics{}, nil,
-		"test", 0, discovers, nil, nil,
-	)
+	det := services.NewSessionDetector([]inbound.Watcher{tw}, services.SessionDetectorDeps{
+		PW:           pw,
+		Repo:         repo,
+		Log:          &mockLogger{},
+		Git:          &cwdGit{cwd: wantCWD},
+		Metrics:      &mockMetrics{},
+		Broadcaster:  nil,
+		Version:      "test",
+		ReadyTTL:     0,
+		PIDDiscovers: discovers,
+		ProcessNames: nil,
+		LiveCWDs:     nil,
+	})
 	det.SetHostGate(map[string]bool{"antigravity": true}, func(pid int) bool { return false })
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -297,11 +321,19 @@ func TestSessionDetector_NewSession_HostGateRejectionSurvivesIdentityLessRetry(t
 			return 62540, nil
 		},
 	}
-	det := services.NewSessionDetector(
-		[]inbound.Watcher{tw}, pw, repo,
-		&mockLogger{}, &cwdGit{cwd: "/Users/ghost"}, &mockMetrics{}, nil,
-		"test", 0, discovers, nil, nil,
-	)
+	det := services.NewSessionDetector([]inbound.Watcher{tw}, services.SessionDetectorDeps{
+		PW:           pw,
+		Repo:         repo,
+		Log:          &mockLogger{},
+		Git:          &cwdGit{cwd: "/Users/ghost"},
+		Metrics:      &mockMetrics{},
+		Broadcaster:  nil,
+		Version:      "test",
+		ReadyTTL:     0,
+		PIDDiscovers: discovers,
+		ProcessNames: nil,
+		LiveCWDs:     nil,
+	})
 	det.SetHostGate(map[string]bool{"antigravity": true}, func(pid int) bool { return false })
 
 	ctx, cancel := context.WithCancel(context.Background())

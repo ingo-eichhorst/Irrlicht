@@ -89,22 +89,22 @@ func buildDiagnostics(fsRepo *filesystem.SessionRepository, allAgents []agent.Ag
 	home, _ := os.UserHomeDir()
 	ledgerDir, _ := metrics.LedgerDir()
 	logsDir, _ := logging.LogDir()
-	return services.NewDiagnosticsService(
-		fsRepo,
-		processlifecycle.Observer(),
-		processlifecycle.IsAlive,
-		allAgents,
-		claudecode.AdapterName,
-		cfg,
-		Version,
-		services.DiagnosticsPaths{
+	return services.NewDiagnosticsService(services.DiagnosticsServiceDeps{
+		Repo:           fsRepo,
+		Obs:            processlifecycle.Observer(),
+		IsAlive:        processlifecycle.IsAlive,
+		Agents:         allAgents,
+		DefaultAdapter: claudecode.AdapterName,
+		Cfg:            cfg,
+		Version:        Version,
+		Paths: services.DiagnosticsPaths{
 			Home:            home,
 			InstancesDir:    fsRepo.InstancesDir(),
 			LedgerDir:       ledgerDir,
 			LogsDir:         logsDir,
 			PermissionsFile: filepath.Join(dataDir(home), "permissions.json"),
 		},
-	)
+	})
 }
 
 // runDiagnose writes a diagnostics bundle to the current directory and exits.
