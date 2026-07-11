@@ -31,6 +31,18 @@ var combiningDiacriticMarks = map[rune]map[rune]rune{
 // for the cheap strings.ContainsAny prefilter in foldCombiningDiacritics.
 const combiningDiacriticMarksCutset = "̧̀́̂̃̈"
 
+// composeDiacritic looks up the precomposed rune for a base letter followed
+// by a combining mark, flattening the two-level map lookup into a single
+// ok check for foldCombiningDiacritics.
+func composeDiacritic(base, mark rune) (rune, bool) {
+	marks, ok := combiningDiacriticMarks[mark]
+	if !ok {
+		return 0, false
+	}
+	composed, ok := marks[base]
+	return composed, ok
+}
+
 // foldCombiningDiacritics composes NFD base-letter+combining-mark pairs
 // found in combiningDiacriticMarks into their precomposed rune, leaving
 // everything else (including base+mark combinations not in the table)
@@ -42,17 +54,14 @@ func foldCombiningDiacritics(s string) string {
 	runes := []rune(s)
 	out := make([]rune, 0, len(runes))
 	for i := 0; i < len(runes); i++ {
-		r := runes[i]
 		if i+1 < len(runes) {
-			if marks, ok := combiningDiacriticMarks[runes[i+1]]; ok {
-				if composed, ok := marks[r]; ok {
-					out = append(out, composed)
-					i++
-					continue
-				}
+			if composed, ok := composeDiacritic(runes[i], runes[i+1]); ok {
+				out = append(out, composed)
+				i++
+				continue
 			}
 		}
-		out = append(out, r)
+		out = append(out, runes[i])
 	}
 	return string(out)
 }

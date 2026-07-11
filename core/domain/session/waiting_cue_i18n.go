@@ -171,3 +171,8 @@ var i18nAnswerPrefixes = []string{
 	// Chinese
 	"因为",
 }
+
+// allAnswerPrefixes is the full set looksLikeAnswer scans against — the
+// English set (answerPrefixes, issue #236) plus i18nAnswerPrefixes above
+// (issue #933), merged once so the hot-path check is a single loop.
+var allAnswerPrefixes = append(append([]string{}, answerPrefixes...), i18nAnswerPrefixes...)

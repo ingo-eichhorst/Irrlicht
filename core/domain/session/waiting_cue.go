@@ -233,12 +233,7 @@ func looksLikeAnswer(s string) bool {
 		return false
 	}
 	lower := strings.ToLower(s)
-	for _, p := range answerPrefixes {
-		if strings.HasPrefix(lower, p) {
-			return true
-		}
-	}
-	for _, p := range i18nAnswerPrefixes {
+	for _, p := range allAnswerPrefixes {
 		if strings.HasPrefix(lower, p) {
 			return true
 		}
@@ -267,6 +262,31 @@ func isCJKSentenceTerminator(r rune) bool {
 	return strings.ContainsRune(cjkSentenceTerminators, r)
 }
 
+// isSentenceTerminatorRune reports whether r ends a sentence in any of the
+// scripts splitSentences handles: ASCII `.`/`!`/`?`, Arabic `؟`, the Greek
+// question mark, or a CJK terminator.
+func isSentenceTerminatorRune(r rune) bool {
+	return r == '.' || r == '!' || r == '?' || r == '؟' || r == ';' || isCJKSentenceTerminator(r)
+}
+
+// skipMarkdownWrapper advances j past any run of markdown-wrapper characters
+// (e.g. the `**` in `?**`) starting at j, without crossing whitespace.
+func skipMarkdownWrapper(text string, j int) int {
+	for j < len(text) && strings.IndexByte(markdownWrapper, text[j]) >= 0 {
+		j++
+	}
+	return j
+}
+
+// sentenceEndsAt reports whether a terminator rune r, having consumed any
+// trailing markdown wrapper up to index j, actually ends the sentence there.
+// CJK terminators always do (no inter-sentence spacing convention); Latin/
+// Arabic/Greek terminators only do at end-of-string or before whitespace —
+// otherwise it's an abbreviation (`e.g.`) or URL fragment, not a boundary.
+func sentenceEndsAt(r rune, text string, j int) bool {
+	return isCJKSentenceTerminator(r) || j == len(text) || isSentenceBreak(text[j])
+}
+
 // splitSentences splits text on sentence terminators (`.`, `!`, `?`, and
 // their CJK/Arabic/Greek counterparts) and newlines. A Latin/Arabic/Greek
 // terminator only ends a sentence when followed by whitespace, end-of-string,
@@ -279,18 +299,15 @@ func splitSentences(text string) []string {
 	start := 0
 	for i := 0; i < len(text); {
 		r, size := utf8.DecodeRuneInString(text[i:])
-		switch {
-		case r == '\n':
+		if r == '\n' {
 			sentences = append(sentences, text[start:i])
 			start = i + size
 			i += size
 			continue
-		case r == '.' || r == '!' || r == '?' || isCJKSentenceTerminator(r) || r == '؟' || r == ';':
-			j := i + size
-			for j < len(text) && strings.IndexByte(markdownWrapper, text[j]) >= 0 {
-				j++
-			}
-			if isCJKSentenceTerminator(r) || j == len(text) || isSentenceBreak(text[j]) {
+		}
+		if isSentenceTerminatorRune(r) {
+			j := skipMarkdownWrapper(text, i+size)
+			if sentenceEndsAt(r, text, j) {
 				sentences = append(sentences, text[start:j])
 				start = j
 				i = j

@@ -2,15 +2,36 @@ package session
 
 import "testing"
 
+// boolCueCase is the shared table shape for the four suites in this file
+// that assert a text-to-bool classification; runBoolCueCases is their
+// shared harness, so each suite only declares its case table and the
+// function under test.
+type boolCueCase struct {
+	name string
+	text string
+	want bool
+}
+
+func runBoolCueCases(t *testing.T, cases []boolCueCase, detect func(string) bool) {
+	t.Helper()
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := detect(c.text); got != c.want {
+				t.Errorf("text=%q: got %v, want %v", c.text, got, c.want)
+			}
+		})
+	}
+}
+
+func isWaitingForUserInput(text string) bool {
+	return (&SessionMetrics{LastAssistantText: text}).IsWaitingForUserInput()
+}
+
 func TestIsWaitingForUserInput_TrailingMarkdown(t *testing.T) {
 	// Models routinely wrap questions in markdown; the literal last
 	// byte is often a delimiter, not '?'. Pin that the classifier
 	// strips trailing markdown noise before the check.
-	cases := []struct {
-		name string
-		text string
-		want bool
-	}{
+	cases := []boolCueCase{
 		{"plain", "What now?", true},
 		{"trailing whitespace", "What now?   \n", true},
 		{"bold", "**What now?**", true},
@@ -44,14 +65,7 @@ func TestIsWaitingForUserInput_TrailingMarkdown(t *testing.T) {
 		{"Arabic question mark", "هل تريد أن أتابع؟", true},
 		{"Greek question mark", "Θέλετε να συνεχίσω;", true},
 	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			m := &SessionMetrics{LastAssistantText: c.text}
-			if got := m.IsWaitingForUserInput(); got != c.want {
-				t.Errorf("text=%q: got %v, want %v", c.text, got, c.want)
-			}
-		})
-	}
+	runBoolCueCases(t, cases, isWaitingForUserInput)
 }
 
 func TestExtractQuestionSnippet(t *testing.T) {
@@ -108,11 +122,7 @@ func TestExtractWaitingCue(t *testing.T) {
 	// Issue #381: agents often end a turn with an imperative or implicit
 	// cue rather than a literal `?`. ExtractWaitingCue covers that gap.
 	// Each case mirrors a row in the coverage matrix.
-	cases := []struct {
-		name string
-		text string
-		want bool // true = a cue is detected
-	}{
+	cases := []boolCueCase{
 		// 24 of the 30 matrix rows from issue #381; the remaining 6 are
 		// `?`-bearing and stay the responsibility of ExtractQuestionSnippet
 		// (covered by TestExtractQuestionSnippet).
@@ -201,14 +211,7 @@ func TestExtractWaitingCue(t *testing.T) {
 		{"neg en: 'turn on a dime' does not trigger Spanish dime-cue", "It could turn on a dime.", false},
 		{"neg en: 'I'll revise' does not trigger Portuguese revise-cue", "I'll revise my approach and continue.", false},
 	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			got := ExtractWaitingCue(c.text) != ""
-			if got != c.want {
-				t.Errorf("ExtractWaitingCue(%q) detected=%v, want %v (snippet=%q)", c.text, got, c.want, ExtractWaitingCue(c.text))
-			}
-		})
-	}
+	runBoolCueCases(t, cases, func(text string) bool { return ExtractWaitingCue(text) != "" })
 }
 
 func TestIsWaitingForUserInput_ImperativeCues(t *testing.T) {
@@ -216,11 +219,7 @@ func TestIsWaitingForUserInput_ImperativeCues(t *testing.T) {
 	// detector, turns that end with an imperative gate now register as
 	// waiting. Sample the most representative shapes from issue #381 so a
 	// future regression at either layer surfaces here too.
-	cases := []struct {
-		name string
-		text string
-		want bool
-	}{
+	cases := []boolCueCase{
 		{"take a look + let me know", "Take a look at the icon and let me know if it's right.", true},
 		{"ready for your review", "Pushed PR #379 as draft. Ready for your review.", true},
 		{"your call", "Two options — A) revert, B) re-roll. Your call.", true},
@@ -234,12 +233,5 @@ func TestIsWaitingForUserInput_ImperativeCues(t *testing.T) {
 		{"all green pushed stays ready", "All green. Pushed to main.", false},
 		{"confirmed past tense stays ready", "Confirmed: the migration ran cleanly.", false},
 	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			m := &SessionMetrics{LastAssistantText: c.text}
-			if got := m.IsWaitingForUserInput(); got != c.want {
-				t.Errorf("text=%q: got %v, want %v", c.text, got, c.want)
-			}
-		})
-	}
+	runBoolCueCases(t, cases, isWaitingForUserInput)
 }
