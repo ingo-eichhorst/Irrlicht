@@ -234,7 +234,7 @@ final class QuotaMenuBarRendererTests: XCTestCase {
 
     func testSelectedSnapshotReturnsNilWhenNoSessionCarriesRateLimit() {
         let plain = SessionState(
-            id: "sess_1", state: .working, model: "claude-sonnet", cwd: "/tmp",
+            id: "sess_1", state: .working, model: "claude-sonnet", cwd: "/tmp",  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
             firstSeen: Date(), updatedAt: Date()
         )
         XCTAssertNil(QuotaMenuBarRenderer.selectedSnapshot(sessions: [plain], providerKey: nil))
@@ -299,7 +299,7 @@ final class QuotaMenuBarRendererTests: XCTestCase {
             id: "sess_\(id)",
             state: .working,
             model: "claude-sonnet",
-            cwd: "/tmp",
+            cwd: "/tmp",  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
             firstSeen: Date(),
             updatedAt: Date(),
             metrics: metrics,

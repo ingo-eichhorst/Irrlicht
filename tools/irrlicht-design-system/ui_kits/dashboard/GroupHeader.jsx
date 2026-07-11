@@ -2,9 +2,12 @@
 window.GroupHeader = function GroupHeader({ group, collapsed, onToggle, timeframe, onCycleTimeframe }) {
   const total = group.agents.length + group.agents.reduce((n,a) => n + (a.children?.length || 0), 0);
   const maxCtx = Math.max(0, ...group.agents.map(a => (a.metrics?.context_utilization_percentage) || 0));
-  const dotColor = maxCtx > 90 ? 'var(--pressure-high)' : maxCtx > 75 ? 'var(--pressure-medium)' : maxCtx > 50 ? 'var(--waiting)' : 'var(--ready)';
+  let dotColor = 'var(--ready)';
+  if (maxCtx > 90) dotColor = 'var(--pressure-high)';
+  else if (maxCtx > 75) dotColor = 'var(--pressure-medium)';
+  else if (maxCtx > 50) dotColor = 'var(--waiting)';
   const tfSuffix = {day:'/d', week:'/w', month:'/mo', year:'/yr'}[timeframe] || '/d';
-  const cost = group.costs && group.costs[timeframe];
+  const cost = group.costs?.[timeframe];
   return (
     <div className="group-hdr">
       <button type="button" className="group-toggle" onClick={onToggle} aria-expanded={!collapsed}>

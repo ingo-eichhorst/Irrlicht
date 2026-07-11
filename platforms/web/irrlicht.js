@@ -76,8 +76,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       const onChange = () => {
         if (!storedTheme()) { updateThemeToggleGlyph(); render(); }
       };
-      if (mq.addEventListener) mq.addEventListener('change', onChange);
-      else if (mq.addListener) mq.addListener(onChange);
+      mq.addEventListener('change', onChange);
     }
 
     // --- Display mode (Context / 1 Min / 10 Min / 60 Min) ---
@@ -1258,7 +1257,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
 
     function updateCacheBloatRow(el, agent) {
       const metrics = agent.metrics || {};
-      const badgeText = cacheBloatBadgeText(metrics.cache_bloat_tooltip);
+      const badgeText = cacheBloatBadgeText(metrics.cache_bloat_tooltip, metrics.cache_bloat_percent);
       if (el.dataset.badge !== badgeText) {
         el.dataset.badge = badgeText;
         el.innerHTML = '<span class="row-cache-bloat">' + esc(badgeText) + '</span>';
@@ -1371,14 +1370,9 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       const host = document.getElementById('app-state-icons');
       if (!host) return;
       const list = topLevel || [];
-      let sig;
-      if (list.length === 0) {
-        sig = 'empty';
-      } else if (list.length <= 3) {
-        sig = 'icons:' + list.map(s => s.state || 'ready').join(',');
-      } else {
-        sig = 'count:' + list.length;
-      }
+      let sig = 'count:' + list.length;
+      if (list.length === 0) sig = 'empty';
+      else if (list.length <= 3) sig = 'icons:' + list.map(s => s.state || 'ready').join(',');
       if (host.dataset.sig === sig) return;
       host.dataset.sig = sig;
       if (list.length === 0) {

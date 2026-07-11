@@ -1592,6 +1592,9 @@ async function loadScenario(s, initialArchive, focus) {
     return;
   }
   const recordingPath = `${encodeURIComponent(s.agent)}/${encodeURIComponent(s.subtree)}/${encodeURIComponent(s.id)}`;
+  // Recipe lookup uses recipesByCoverageId (populated once at init from
+  // /api/recipes — see comment above), so no per-recording recipes fetch
+  // is needed here.
   const [data, archives, catalog] = await Promise.all([
     fetch(`/api/scenarios/${recordingPath}`).then(r => r.json()),
     fetch(`/api/scenarios/${recordingPath}/recordings`).then(r => r.ok ? r.json() : []).catch(() => []),

@@ -240,14 +240,9 @@ function subscriptionWindowLine(w, nowMs) {
   let line = label + ': ' + used + '% used';
   if (pace != null) {
     const delta = used - Math.round(pace);
-    let verdict;
-    if (delta > 0) {
-      verdict = delta + 'pt over pace';
-    } else if (delta < 0) {
-      verdict = (-delta) + 'pt under pace';
-    } else {
-      verdict = 'on pace';
-    }
+    let verdict = 'on pace';
+    if (delta > 0) verdict = delta + 'pt over pace';
+    else if (delta < 0) verdict = (-delta) + 'pt under pace';
     line += ' · ' + verdict;
   }
   if (w.resets_at) line += ' · resets in ' + formatTimeUntil(w.resets_at);

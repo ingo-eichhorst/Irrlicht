@@ -84,6 +84,9 @@ func TestCacheBloat_ScenarioA_VersionAttribution(t *testing.T) {
 	if !live.Metrics.CacheBloat {
 		t.Fatal("expected CacheBloat glyph to fire")
 	}
+	if live.Metrics.CacheBloatPercent <= 0 {
+		t.Errorf("expected CacheBloatPercent > 0, got %d", live.Metrics.CacheBloatPercent)
+	}
 	tip := live.Metrics.CacheBloatTooltip
 	if !strings.Contains(tip, "2.0.0") || !strings.Contains(tip, "1.0.0") || !strings.Contains(tip, "claude-code") {
 		t.Errorf("tooltip should name both versions and adapter, got %q", tip)
@@ -129,6 +132,9 @@ func TestCacheBloat_ScenarioB_NoFalseAttribution(t *testing.T) {
 
 	if !live.Metrics.CacheBloat {
 		t.Fatal("expected CacheBloat glyph to fire")
+	}
+	if want := 100; live.Metrics.CacheBloatPercent != want {
+		t.Errorf("CacheBloatPercent = %d, want %d (baseline 5000, median 10000)", live.Metrics.CacheBloatPercent, want)
 	}
 	if live.Metrics.CacheBloatTooltip != "" {
 		t.Errorf("tooltip must be empty (no attribution), got %q", live.Metrics.CacheBloatTooltip)
@@ -255,6 +261,9 @@ func TestCacheBloat_ClearsWhenMedianDropsBack(t *testing.T) {
 	driveTurns(d, live, 1000, 4) // median falls to 1000 → below 5000×1.4
 	if live.Metrics.CacheBloat {
 		t.Error("glyph should clear once median drops back under threshold")
+	}
+	if live.Metrics.CacheBloatPercent != 0 {
+		t.Errorf("percent should clear too, got %d", live.Metrics.CacheBloatPercent)
 	}
 	if live.Metrics.CacheBloatTooltip != "" {
 		t.Errorf("tooltip should clear too, got %q", live.Metrics.CacheBloatTooltip)

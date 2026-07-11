@@ -138,10 +138,12 @@ function renderHistory() {
   // Yield counts completed sessions; agents are reconstructed from opt-in
   // recordings — each gets its own empty caption.
   const emptyEl = document.getElementById('history-chart-empty');
-  if (emptyEl) emptyEl.textContent =
-    isYield ? 'no completed sessions in this range yet'
-      : historyState.chart === 'agents' ? 'no recordings in this range yet'
-        : 'no cost data in this range yet';
+  if (emptyEl) {
+    let emptyText = 'no cost data in this range yet';
+    if (isYield) emptyText = 'no completed sessions in this range yet';
+    else if (historyState.chart === 'agents') emptyText = 'no recordings in this range yet';
+    emptyEl.textContent = emptyText;
+  }
   if (!historyState.data) {
     const wrap = document.getElementById('history-chart-wrap');
     if (wrap) wrap.classList.add('empty');
@@ -317,7 +319,7 @@ function paintHistoryChart() {
   // Grand cumulative total = the stack's right-edge height; it anchors the
   // forecast when cumulative.
   let grandTotal = 0;
-  for (let r = 0; r < matrix.length; r++) grandTotal += matrix[r][B - 1] || 0;
+  for (const row of matrix) grandTotal += row[B - 1] || 0;
   const { H, fcY } = historyForecastSeries(data, cumulative, grandTotal);
 
   // Y scale = the tallest stacked column (sum across bands per bucket), also

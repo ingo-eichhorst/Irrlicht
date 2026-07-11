@@ -105,7 +105,10 @@ struct PermissionWizardView: View {
             .padding(.top, 12)
             .padding(.bottom, 20)
         }
-        .frame(width: 360)
+        // Matches SettingsView's panel width (issue #940) — review mode swaps
+        // this view in as Settings' panel body in the same NSPanel, so a
+        // mismatched width would reintroduce the resize jump that issue fixed.
+        .frame(width: SessionListView.panelWidth)
         .background(Color(NSColor.windowBackgroundColor))
         .toggleStyle(IrrlichtSwitchToggleStyle())
     }

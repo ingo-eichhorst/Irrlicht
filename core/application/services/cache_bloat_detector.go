@@ -3,6 +3,7 @@ package services
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"time"
 
 	"irrlicht/core/domain/lifecycle"
@@ -130,6 +131,7 @@ func (c *CacheBloatDetector) OnActivity(state *session.SessionState) {
 	if currentMedian <= baseline*c.cfg.Threshold {
 		// Below threshold — clear any prior verdict (re-evaluated each turn).
 		state.Metrics.CacheBloat = false
+		state.Metrics.CacheBloatPercent = 0
 		state.Metrics.CacheBloatTooltip = ""
 		state.Metrics.CacheBloatExplanation = ""
 		return
@@ -137,6 +139,7 @@ func (c *CacheBloatDetector) OnActivity(state *session.SessionState) {
 
 	// Regression tripped. Set the glyph and (when possible) name the version.
 	state.Metrics.CacheBloat = true
+	state.Metrics.CacheBloatPercent = int(math.Round((currentMedian/baseline - 1) * 100))
 	tooltip, regressing, prior, deltaTokens := c.attributeVersion(state, currentMedian)
 	state.Metrics.CacheBloatTooltip = tooltip
 	state.Metrics.CacheBloatExplanation = cacheBloatExplanation(tooltip)

@@ -2,6 +2,7 @@ package services_test
 
 import (
 	"context"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/lifecycle"
 	"irrlicht/core/domain/session"
+	"irrlicht/core/ports/inbound"
 )
 
 // readyTransitions counts recorded working/waiting→ready transitions for sid.
@@ -127,6 +129,133 @@ func TestSessionDetector_BackgroundProcess_HoldsWorkingThenReady(t *testing.T) {
 
 	cancel()
 	<-done
+}
+
+// A session already `ready` (e.g. a prior background job just finished and
+// settled it) that then shows a *fresh* background spawn on the very next
+// activity event must be pulled back to working and held there while that new
+// process is alive — not skip the liveness probe because the pass started
+// from `ready`. Reproduces issue #937: a retried `git push -u
+// run_in_background:true` launched right after the session had settled ready
+// was silently invisible to the liveness gate, and the session bounced
+// ready→working→ready in the same pass despite the push still running.
+func TestSessionDetector_BackgroundProcess_FreshSpawnFromReady_HoldsWorking(t *testing.T) {
+	const sid = "bg3"
+	const path = "/home/.claude/projects/-Users-test/bg3.jsonl"
+
+	metrics := &funcMetrics{fn: func(_, _ string) (*session.SessionMetrics, error) {
+		return &session.SessionMetrics{
+			LastEventType:            "turn_done",
+			BackgroundProcessCount:   1,
+			BackgroundProcessOutputs: []string{"/tmp/x/tasks/retry.output"},
+		}, nil
+	}}
+
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+	repo.states[sid] = &session.SessionState{
+		SessionID:      sid,
+		State:          session.StateReady,
+		TranscriptPath: path,
+		FirstSeen:      time.Now().Unix(),
+		UpdatedAt:      time.Now().Unix(),
+	}
+
+	det := newDetectorWithMetrics(tw, pw, repo, metrics)
+	rec := &mockRecorder{}
+	det.SetRecorder(rec)
+
+	var probeLive atomic.Bool
+	probeLive.Store(true)
+	det.SetBackgroundProbeForTest(func(paths []string) bool {
+		return probeLive.Load()
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	tw.ch <- agent.Event{
+		Type:           agent.EventActivity,
+		SessionID:      sid,
+		ProjectDir:     "-Users-test",
+		TranscriptPath: path,
+		Terminal:       false,
+	}
+	time.Sleep(250 * time.Millisecond) // allow the async probe + any self-trigger to settle
+	if n := readyTransitions(rec, sid); n != 0 {
+		t.Fatalf("session flipped to ready %d time(s) while its freshly-spawned background process is alive", n)
+	}
+
+	// Background process exits — probe now reports it gone → session goes ready.
+	probeLive.Store(false)
+	tw.ch <- agent.Event{
+		Type:           agent.EventActivity,
+		SessionID:      sid,
+		ProjectDir:     "-Users-test",
+		TranscriptPath: path,
+		Terminal:       true,
+	}
+	waitForReadyTransition(t, rec, sid)
+
+	cancel()
+	<-done
+}
+
+// The ready→working force-bounce (see forceReadyToWorkingIfActive) must be
+// logged via LogInfo, not just recorded to the lifecycle trace — otherwise it
+// changes session state with zero trace in the daemon's human-readable log.
+// See issue #953.
+func TestSessionDetector_ForceReadyToWorking_LogsTransition(t *testing.T) {
+	const sid = "force-log"
+	const path = "/home/.claude/projects/-Users-test/force-log.jsonl"
+
+	metrics := &funcMetrics{fn: func(_, _ string) (*session.SessionMetrics, error) {
+		return &session.SessionMetrics{LastEventType: "turn_done"}, nil
+	}}
+
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+	repo.states[sid] = &session.SessionState{
+		SessionID:      sid,
+		State:          session.StateReady,
+		TranscriptPath: path,
+		FirstSeen:      time.Now().Unix(),
+		UpdatedAt:      time.Now().Unix(),
+	}
+
+	log := &mockLogger{}
+	det := services.NewSessionDetector(
+		[]inbound.Watcher{tw}, pw, repo,
+		log, &mockGit{}, metrics, nil,
+		"test", 0, nil, nil, nil,
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	tw.ch <- agent.Event{
+		Type:           agent.EventActivity,
+		SessionID:      sid,
+		ProjectDir:     "-Users-test",
+		TranscriptPath: path,
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if slices.Contains(log.infoSnapshot(), services.ForceReadyToWorkingReason) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("session %s: force ready→working bounce was never logged via LogInfo", sid)
 }
 
 // A dead probe verdict must also purge the processes from the tailer's open

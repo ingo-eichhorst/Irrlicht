@@ -52,7 +52,9 @@ type FilesUnderRoot struct {
 	SessionIDFromPath func(path string) string
 }
 
-func (FilesUnderRoot) isSource() {}
+func (FilesUnderRoot) isSource() {
+	// sealing marker — deliberately empty
+}
 
 // RootDirFor returns the directory the runtime should watch for this source
 // on the given OS (pass runtime.GOOS): the DirByOS override when one is set
@@ -82,7 +84,9 @@ type FilesUnderCWD struct {
 	Parser   RawLineParser
 }
 
-func (FilesUnderCWD) isSource() {}
+func (FilesUnderCWD) isSource() {
+	// sealing marker — deliberately empty
+}
 
 // ProcessOwnedStore — session state lives in a structured store (SQLite,
 // typically) whose path is derivable from the process PID or a stable
@@ -95,4 +99,6 @@ type ProcessOwnedStore struct {
 	Reader     MetricsReader
 }
 
-func (ProcessOwnedStore) isSource() {}
+func (ProcessOwnedStore) isSource() {
+	// sealing marker — deliberately empty
+}
