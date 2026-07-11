@@ -123,12 +123,21 @@ func buildTestService(t *testing.T) *DiagnosticsService {
 	}}
 	cfg := config.Config{MaxSessionAge: 5 * 24 * time.Hour, ReadySessionTTL: 30 * time.Minute, PermissionMode: "ask"}
 
-	return NewDiagnosticsService(&diagFakeRepo{sessions}, obs, isAlive, agents, "claude-code", cfg, "9.9.9+test", DiagnosticsPaths{
-		Home:            home,
-		InstancesDir:    instancesDir,
-		LedgerDir:       ledgerDir,
-		LogsDir:         logsDir,
-		PermissionsFile: permFile,
+	return NewDiagnosticsService(DiagnosticsServiceDeps{
+		Repo:           &diagFakeRepo{sessions},
+		Obs:            obs,
+		IsAlive:        isAlive,
+		Agents:         agents,
+		DefaultAdapter: "claude-code",
+		Cfg:            cfg,
+		Version:        "9.9.9+test",
+		Paths: DiagnosticsPaths{
+			Home:            home,
+			InstancesDir:    instancesDir,
+			LedgerDir:       ledgerDir,
+			LogsDir:         logsDir,
+			PermissionsFile: permFile,
+		},
 	})
 }
 

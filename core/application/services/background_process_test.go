@@ -227,11 +227,10 @@ func TestSessionDetector_ForceReadyToWorking_LogsTransition(t *testing.T) {
 	}
 
 	log := &mockLogger{}
-	det := services.NewSessionDetector(
-		[]inbound.Watcher{tw}, pw, repo,
-		log, &mockGit{}, metrics, nil,
-		"test", 0, nil, nil, nil,
-	)
+	deps := defaultSessionDetectorDeps(pw, repo, nil)
+	deps.Log = log
+	deps.Metrics = metrics
+	det := services.NewSessionDetector([]inbound.Watcher{tw}, deps)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)

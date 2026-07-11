@@ -93,7 +93,14 @@ func (c *PublishController) Apply(enabled bool, url, token string) {
 	if c.cancel != nil {
 		c.cancel()
 	}
-	fwd := NewForwarder(url, c.identity, token, c.push, c.snapshot, c.control, c.controlEnabled, c.logger)
+	fwd := NewForwarder(url, c.identity, ForwarderDeps{
+		Token:          token,
+		Push:           c.push,
+		Snapshot:       c.snapshot,
+		Control:        c.control,
+		ControlEnabled: c.controlEnabled,
+		Logger:         c.logger,
+	})
 	ctx, cancel := context.WithCancel(c.parentCtx)
 	c.fwd = fwd
 	c.cancel = cancel

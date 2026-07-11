@@ -20,32 +20,38 @@ final class LauncherHarnessTests: XCTestCase {
 
     // MARK: - Helpers
 
+    /// Bundles makeSession's optional launcher-identity fields, beyond the
+    /// core termProgram/cwd pair every session needs.
+    private struct LauncherOverrides {
+        var itermSessionID: String? = nil
+        var tty: String? = nil
+        var kittyListenOn: String? = nil
+        var kittyWindowID: String? = nil
+        var kittyPID: Int? = nil
+        var tmuxPane: String? = nil
+        var tmuxSocket: String? = nil
+    }
+
     /// Constructs a minimal SessionState whose launcher is wired to the given
     /// termProgram, cwd, and optional extra fields.
     private func makeSession(
         id: String = UUID().uuidString,
         termProgram: String,
         cwd: String,
-        itermSessionID: String? = nil,
-        tty: String? = nil,
-        kittyListenOn: String? = nil,
-        kittyWindowID: String? = nil,
-        kittyPID: Int? = nil,
-        tmuxPane: String? = nil,
-        tmuxSocket: String? = nil
+        launcher overrides: LauncherOverrides = LauncherOverrides()
     ) throws -> SessionState {
         // Build the JSON we'd receive from the daemon so we rely on the actual
         // Codable path rather than synthesising via initializer.
         var launcherFields: [String: Any] = [
             "term_program": termProgram,
         ]
-        if let v = itermSessionID  { launcherFields["iterm_session_id"] = v }
-        if let v = tty             { launcherFields["tty"] = v }
-        if let v = kittyListenOn   { launcherFields["kitty_listen_on"] = v }
-        if let v = kittyWindowID   { launcherFields["kitty_window_id"] = v }
-        if let v = kittyPID        { launcherFields["kitty_pid"] = v }
-        if let v = tmuxPane        { launcherFields["tmux_pane"] = v }
-        if let v = tmuxSocket      { launcherFields["tmux_socket"] = v }
+        if let v = overrides.itermSessionID  { launcherFields["iterm_session_id"] = v }
+        if let v = overrides.tty             { launcherFields["tty"] = v }
+        if let v = overrides.kittyListenOn   { launcherFields["kitty_listen_on"] = v }
+        if let v = overrides.kittyWindowID   { launcherFields["kitty_window_id"] = v }
+        if let v = overrides.kittyPID        { launcherFields["kitty_pid"] = v }
+        if let v = overrides.tmuxPane        { launcherFields["tmux_pane"] = v }
+        if let v = overrides.tmuxSocket      { launcherFields["tmux_socket"] = v }
 
         let sessionDict: [String: Any] = [
             "session_id": id,
@@ -154,9 +160,11 @@ final class LauncherHarnessTests: XCTestCase {
         let session = try makeSession(
             termProgram: "kitty",
             cwd: "/tmp/kitty-decode-test",  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
-            kittyListenOn: "unix:/tmp/kitty-12345",  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
-            kittyWindowID: "2",
-            kittyPID: 12345
+            launcher: LauncherOverrides(
+                kittyListenOn: "unix:/tmp/kitty-12345",  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
+                kittyWindowID: "2",
+                kittyPID: 12345
+            )
         )
         XCTAssertEqual(session.launcher?.kittyPID, 12345)
         XCTAssertEqual(session.launcher?.kittyListenOn, "unix:/tmp/kitty-12345")  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint

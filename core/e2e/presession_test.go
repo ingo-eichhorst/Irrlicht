@@ -48,16 +48,7 @@ func TestPreSession_DetectedBeforeTranscript(t *testing.T) {
 	scanner := processlifecycle.NewScanner(processName, "test", 200*time.Millisecond).WithIdentity(testIdentity)
 	repo := newMemRepo()
 
-	detector := services.NewSessionDetector(
-		[]inbound.Watcher{scanner},
-		nil, // no ProcessWatcher needed
-		repo,
-		&nopLogger{},
-		&stubGit{},
-		&stubMetrics{},
-		nil, // no broadcaster
-		"test", 0, nil, nil, nil,
-	)
+	detector := services.NewSessionDetector([]inbound.Watcher{scanner}, defaultSessionDetectorDeps(repo))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -127,11 +118,7 @@ func TestPreSession_ReplacedByRealSession(t *testing.T) {
 		identity: testIdentity,
 	}
 
-	detector := services.NewSessionDetector(
-		[]inbound.Watcher{scanner, transcriptWatcher},
-		nil, repo, &nopLogger{}, &stubGit{}, &stubMetrics{}, nil,
-		"test", 0, nil, nil, nil,
-	)
+	detector := services.NewSessionDetector([]inbound.Watcher{scanner, transcriptWatcher}, defaultSessionDetectorDeps(repo))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -211,11 +198,7 @@ func TestPreSession_CreatedDespiteHistoricalSession(t *testing.T) {
 	scanner := processlifecycle.NewScanner(fakeProcessName(), "test", 200*time.Millisecond).WithIdentity(testIdentity)
 	scanner.WithSessionChecker(realSessionCheckerFor(repo))
 
-	detector := services.NewSessionDetector(
-		[]inbound.Watcher{scanner},
-		nil, repo, &nopLogger{}, &stubGit{}, &stubMetrics{}, nil,
-		"test", 0, nil, nil, nil,
-	)
+	detector := services.NewSessionDetector([]inbound.Watcher{scanner}, defaultSessionDetectorDeps(repo))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -262,11 +245,7 @@ func TestPreSession_SurvivesNeighbourSessionActivity(t *testing.T) {
 	scanner := processlifecycle.NewScanner(fakeProcessName(), "test", 200*time.Millisecond).WithIdentity(testIdentity)
 	scanner.WithSessionChecker(realSessionCheckerFor(repo))
 
-	detector := services.NewSessionDetector(
-		[]inbound.Watcher{scanner},
-		nil, repo, &nopLogger{}, &stubGit{}, &stubMetrics{}, nil,
-		"test", 0, nil, nil, nil,
-	)
+	detector := services.NewSessionDetector([]inbound.Watcher{scanner}, defaultSessionDetectorDeps(repo))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -312,11 +291,7 @@ func TestPreSession_RemovedOnProcessExit(t *testing.T) {
 	scanner := processlifecycle.NewScanner(processName, "test", 200*time.Millisecond).WithIdentity(testIdentity)
 	repo := newMemRepo()
 
-	detector := services.NewSessionDetector(
-		[]inbound.Watcher{scanner},
-		nil, repo, &nopLogger{}, &stubGit{}, &stubMetrics{}, nil,
-		"test", 0, nil, nil, nil,
-	)
+	detector := services.NewSessionDetector([]inbound.Watcher{scanner}, defaultSessionDetectorDeps(repo))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -397,11 +372,9 @@ func TestPreSession_DoesNotEvictNeighborSessionWithSharedCWD(t *testing.T) {
 	scanner := processlifecycle.NewScanner(fakeProcessName(), "test", 200*time.Millisecond).WithIdentity(testIdentity)
 	scanner.WithSessionChecker(realSessionCheckerFor(repo))
 
-	detector := services.NewSessionDetector(
-		[]inbound.Watcher{scanner},
-		nil, repo, &nopLogger{}, &stubGit{}, &stubMetrics{}, nil,
-		"test", 0, discovers, nil, nil,
-	)
+	deps := defaultSessionDetectorDeps(repo)
+	deps.PIDDiscovers = discovers
+	detector := services.NewSessionDetector([]inbound.Watcher{scanner}, deps)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

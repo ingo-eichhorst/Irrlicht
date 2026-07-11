@@ -136,33 +136,37 @@ func (s *PermissionService) SetDetectionPollIntervalForTest(d time.Duration) {
 	s.detectInterval = d
 }
 
+// PermissionServiceDeps bundles NewPermissionService's dependencies.
+// Factories may be nil (demo mode: no watchers ever start); HasLive may be
+// nil (no detection poller — nothing is ever "detected").
+type PermissionServiceDeps struct {
+	Agents    []agent.Agent
+	Store     outbound.PermissionStore
+	Push      outbound.PushBroadcaster
+	Log       outbound.Logger
+	Mode      string
+	Registrar watcherRegisterer
+	Factories map[string]WatcherFactory
+	HasLive   HasLiveProcessFunc
+}
+
 // NewPermissionService loads the persisted consent state and returns the
-// service. factories may be nil (demo mode: no watchers ever start);
-// hasLive may be nil (no detection poller — nothing is ever "detected").
-func NewPermissionService(
-	agents []agent.Agent,
-	store outbound.PermissionStore,
-	push outbound.PushBroadcaster,
-	log outbound.Logger,
-	mode string,
-	registrar watcherRegisterer,
-	factories map[string]WatcherFactory,
-	hasLive HasLiveProcessFunc,
-) *PermissionService {
-	set, err := store.Load()
+// service.
+func NewPermissionService(deps PermissionServiceDeps) *PermissionService {
+	set, err := deps.Store.Load()
 	if err != nil {
-		log.LogError("permissions", "", fmt.Sprintf("failed to load permission state (treating all as pending): %v", err))
+		deps.Log.LogError("permissions", "", fmt.Sprintf("failed to load permission state (treating all as pending): %v", err))
 		set = permission.Set{}
 	}
 	return &PermissionService{
-		agents:         agents,
-		store:          store,
-		push:           push,
-		log:            log,
-		mode:           mode,
-		registrar:      registrar,
-		factories:      factories,
-		hasLive:        hasLive,
+		agents:         deps.Agents,
+		store:          deps.Store,
+		push:           deps.Push,
+		log:            deps.Log,
+		mode:           deps.Mode,
+		registrar:      deps.Registrar,
+		factories:      deps.Factories,
+		hasLive:        deps.HasLive,
 		detectInterval: detectionPollInterval,
 		probes:         make(map[string]func() bool),
 		set:            set,

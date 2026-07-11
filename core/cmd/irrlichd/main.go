@@ -248,7 +248,16 @@ func runDaemon() {
 	}
 
 	mux := http.NewServeMux()
-	registerCoreRoutes(mux, fsRepo, cachedRepo, historyTracker, push, allAgents, Version, rel.publishController, cfg)
+	registerCoreRoutes(mux, registerCoreRoutesDeps{
+		FSRepo:            fsRepo,
+		CachedRepo:        cachedRepo,
+		HistoryTracker:    historyTracker,
+		Push:              push,
+		AllAgents:         allAgents,
+		Version:           Version,
+		PublishController: rel.publishController,
+		Cfg:               cfg,
+	})
 
 	// Static web UI: served from disk so the dashboard ships as three files
 	// (index.html, irrlicht.css, irrlicht.js) under platforms/web/. API routes
@@ -278,15 +287,57 @@ func runDaemon() {
 	// resolved at request time via rel.inputService (published once
 	// setupBackchannel runs), so a session reports controllable only once
 	// that wiring completes.
-	registerSessionRoutes(mux, cachedRepo, orchMonitor, costTracker, &rel.inputService, sockPath, push, logger)
+	registerSessionRoutes(mux, registerSessionRoutesDeps{
+		CachedRepo:   cachedRepo,
+		OrchMonitor:  orchMonitor,
+		CostTracker:  costTracker,
+		InputService: &rel.inputService,
+		SockPath:     sockPath,
+		Push:         push,
+		Logger:       logger,
+	})
 
 	var watcherFactories map[string]services.WatcherFactory
-	detector, watcherFactories = buildDetector(demoMode, pwPort, cachedRepo, logger, gitResolver, metricsCollector, push, Version, cfg, allAgents, costTracker, historyTracker)
+	detector, watcherFactories = buildDetector(buildDetectorDeps{
+		DemoMode:         demoMode,
+		PWPort:           pwPort,
+		CachedRepo:       cachedRepo,
+		Logger:           logger,
+		GitResolver:      gitResolver,
+		MetricsCollector: metricsCollector,
+		Push:             push,
+		Version:          Version,
+		Cfg:              cfg,
+		AllAgents:        allAgents,
+		CostTracker:      costTracker,
+		HistoryTracker:   historyTracker,
+	})
 
 	home, _ := os.UserHomeDir()
-	permService := setupPermissionService(mux, detector, push, logger, cfg, allAgents, watcherFactories, demoMode, home, startGastown, stopGastown)
+	permService := setupPermissionService(mux, setupPermissionServiceDeps{
+		Detector:         detector,
+		Push:             push,
+		Logger:           logger,
+		Cfg:              cfg,
+		AllAgents:        allAgents,
+		WatcherFactories: watcherFactories,
+		DemoMode:         demoMode,
+		Home:             home,
+		StartGastown:     startGastown,
+		StopGastown:      stopGastown,
+	})
 
-	backchannelEngine, terminalObserver := setupBackchannel(mux, cachedRepo, push, permService, detector, logger, home, &rel.inputService, rel.controlStore, allAgents)
+	backchannelEngine, terminalObserver := setupBackchannel(mux, setupBackchannelDeps{
+		CachedRepo:        cachedRepo,
+		Push:              push,
+		PermService:       permService,
+		Detector:          detector,
+		Logger:            logger,
+		Home:              home,
+		InputService:      &rel.inputService,
+		RelayControlStore: rel.controlStore,
+		AllAgents:         allAgents,
+	})
 
 	registerHookRoutes(mux, detector, metricsCollector, permService, logger)
 
@@ -306,7 +357,17 @@ func runDaemon() {
 
 	sweepZombies(demoMode, detector, logger)
 
-	defer startBackgroundLoops(detector, backchannelEngine, cachedRepo, gitResolver, terminalObserver, permService, cfg, demoMode, logger)()
+	defer startBackgroundLoops(startBackgroundLoopsDeps{
+		Detector:          detector,
+		BackchannelEngine: backchannelEngine,
+		CachedRepo:        cachedRepo,
+		GitResolver:       gitResolver,
+		TerminalObserver:  terminalObserver,
+		PermService:       permService,
+		Cfg:               cfg,
+		DemoMode:          demoMode,
+		Logger:            logger,
+	})()
 
 	logger.LogInfo("startup", "", fmt.Sprintf("irrlichd %s listening on unix:%s and tcp:%s", Version, sockPath, resolvedAddr))
 

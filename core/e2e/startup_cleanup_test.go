@@ -66,11 +66,19 @@ func TestStartupCleanup_DeletesZombieFromPriorDaemonRun(t *testing.T) {
 		t.Fatalf("seed living: %v", err)
 	}
 
-	detector := services.NewSessionDetector(
-		[]inbound.Watcher{},
-		nil, repo, &nopLogger{}, &stubGit{}, &stubMetrics{}, nil,
-		"test", 0, nil, nil, nil,
-	)
+	detector := services.NewSessionDetector([]inbound.Watcher{}, services.SessionDetectorDeps{
+		PW:           nil,
+		Repo:         repo,
+		Log:          &nopLogger{},
+		Git:          &stubGit{},
+		Metrics:      &stubMetrics{},
+		Broadcaster:  nil,
+		Version:      "test",
+		ReadyTTL:     0,
+		PIDDiscovers: nil,
+		ProcessNames: nil,
+		LiveCWDs:     nil,
+	})
 
 	deleted := detector.CleanupZombies()
 	if deleted != 1 {

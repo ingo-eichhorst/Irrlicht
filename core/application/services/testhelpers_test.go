@@ -259,6 +259,23 @@ type cwdGit struct {
 
 func (g *cwdGit) GetCWDFromTranscript(path string) string { return g.cwd }
 
+// defaultSessionDetectorDeps returns the SessionDetectorDeps most detector
+// tests in this file build identically (mockLogger/mockGit/mockMetrics, no
+// broadcaster, "test" version, zero ReadyTTL, no process-name map) — callers
+// set PW/Repo/PIDDiscovers and override Git when the scenario needs a
+// specific cwd.
+func defaultSessionDetectorDeps(pw outbound.ProcessWatcher, repo outbound.SessionRepository, discovers map[string]agent.PIDDiscoverFunc) services.SessionDetectorDeps {
+	return services.SessionDetectorDeps{
+		PW:           pw,
+		Repo:         repo,
+		Log:          &mockLogger{},
+		Git:          &mockGit{},
+		Metrics:      &mockMetrics{},
+		Version:      "test",
+		PIDDiscovers: discovers,
+	}
+}
+
 // mockMetrics records PruneEntry calls. Safe for concurrent use: PruneEntry
 // fires on the detector's Run goroutine while tests poll prunedSnapshot from
 // the test goroutine (issue #606 flaky-sibling fix replaced a fixed sleep with
@@ -492,11 +509,19 @@ func newDetector(
 	pw *mockProcessWatcher,
 	repo *mockRepo,
 ) *services.SessionDetector {
-	return services.NewSessionDetector(
-		[]inbound.Watcher{tw}, pw, repo,
-		&mockLogger{}, &mockGit{}, &mockMetrics{}, nil,
-		"test", 0, nil, nil, nil,
-	)
+	return services.NewSessionDetector([]inbound.Watcher{tw}, services.SessionDetectorDeps{
+		PW:           pw,
+		Repo:         repo,
+		Log:          &mockLogger{},
+		Git:          &mockGit{},
+		Metrics:      &mockMetrics{},
+		Broadcaster:  nil,
+		Version:      "test",
+		ReadyTTL:     0,
+		PIDDiscovers: nil,
+		ProcessNames: nil,
+		LiveCWDs:     nil,
+	})
 }
 
 // newDetectorWithMetrics builds a SessionDetector using a caller-provided
@@ -507,11 +532,19 @@ func newDetectorWithMetrics(
 	repo *mockRepo,
 	metrics *funcMetrics,
 ) *services.SessionDetector {
-	return services.NewSessionDetector(
-		[]inbound.Watcher{tw}, pw, repo,
-		&mockLogger{}, &mockGit{}, metrics, nil,
-		"test", 0, nil, nil, nil,
-	)
+	return services.NewSessionDetector([]inbound.Watcher{tw}, services.SessionDetectorDeps{
+		PW:           pw,
+		Repo:         repo,
+		Log:          &mockLogger{},
+		Git:          &mockGit{},
+		Metrics:      metrics,
+		Broadcaster:  nil,
+		Version:      "test",
+		ReadyTTL:     0,
+		PIDDiscovers: nil,
+		ProcessNames: nil,
+		LiveCWDs:     nil,
+	})
 }
 
 // newDetectorWithLiveCWDs builds a SessionDetector with a process-name map
@@ -529,11 +562,19 @@ func newDetectorWithLiveCWDs(
 	if git == nil {
 		git = &mockGit{}
 	}
-	return services.NewSessionDetector(
-		[]inbound.Watcher{tw}, pw, repo,
-		&mockLogger{}, git, &mockMetrics{}, nil,
-		"test", 0, nil, processNames, liveCWDs,
-	)
+	return services.NewSessionDetector([]inbound.Watcher{tw}, services.SessionDetectorDeps{
+		PW:           pw,
+		Repo:         repo,
+		Log:          &mockLogger{},
+		Git:          git,
+		Metrics:      &mockMetrics{},
+		Broadcaster:  nil,
+		Version:      "test",
+		ReadyTTL:     0,
+		PIDDiscovers: nil,
+		ProcessNames: processNames,
+		LiveCWDs:     liveCWDs,
+	})
 }
 
 // newDetectorWithCWDDiscovery builds a SessionDetector with a mock CWD-based
@@ -549,11 +590,19 @@ func newDetectorWithCWDDiscovery(
 			return cwdFn(cwd, disambiguate)
 		},
 	}
-	return services.NewSessionDetector(
-		[]inbound.Watcher{tw}, pw, repo,
-		&mockLogger{}, &mockGit{}, &mockMetrics{}, nil,
-		"test", 0, discovers, nil, nil,
-	)
+	return services.NewSessionDetector([]inbound.Watcher{tw}, services.SessionDetectorDeps{
+		PW:           pw,
+		Repo:         repo,
+		Log:          &mockLogger{},
+		Git:          &mockGit{},
+		Metrics:      &mockMetrics{},
+		Broadcaster:  nil,
+		Version:      "test",
+		ReadyTTL:     0,
+		PIDDiscovers: discovers,
+		ProcessNames: nil,
+		LiveCWDs:     nil,
+	})
 }
 
 // mockBroadcaster captures every Broadcast for assertions. Safe for
@@ -595,10 +644,18 @@ func newDetectorWithBroadcaster(
 	repo *mockRepo,
 ) (*services.SessionDetector, *mockBroadcaster) {
 	b := &mockBroadcaster{}
-	det := services.NewSessionDetector(
-		[]inbound.Watcher{tw}, pw, repo,
-		&mockLogger{}, &mockGit{}, &mockMetrics{}, b,
-		"test", 0, nil, nil, nil,
-	)
+	det := services.NewSessionDetector([]inbound.Watcher{tw}, services.SessionDetectorDeps{
+		PW:           pw,
+		Repo:         repo,
+		Log:          &mockLogger{},
+		Git:          &mockGit{},
+		Metrics:      &mockMetrics{},
+		Broadcaster:  b,
+		Version:      "test",
+		ReadyTTL:     0,
+		PIDDiscovers: nil,
+		ProcessNames: nil,
+		LiveCWDs:     nil,
+	})
 	return det, b
 }

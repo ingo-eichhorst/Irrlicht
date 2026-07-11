@@ -32,10 +32,17 @@ func TestNewSessionDetector_PanicsOnZeroIdentity(t *testing.T) {
 	tw := newMockAgentWatcher()
 	tw.identity = agent.Identity{} // clear the default
 
-	services.NewSessionDetector(
-		[]inbound.Watcher{tw},
-		newMockProcessWatcher(), newMockRepo(),
-		&mockLogger{}, &mockGit{}, &mockMetrics{}, nil,
-		"test", 0, nil, nil, nil,
-	)
+	services.NewSessionDetector([]inbound.Watcher{tw}, services.SessionDetectorDeps{
+		PW:           newMockProcessWatcher(),
+		Repo:         newMockRepo(),
+		Log:          &mockLogger{},
+		Git:          &mockGit{},
+		Metrics:      &mockMetrics{},
+		Broadcaster:  nil,
+		Version:      "test",
+		ReadyTTL:     0,
+		PIDDiscovers: nil,
+		ProcessNames: nil,
+		LiveCWDs:     nil,
+	})
 }

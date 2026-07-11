@@ -68,11 +68,19 @@ func TestSessionDetector_Removed_PrunesMetricsLedger(t *testing.T) {
 		UpdatedAt:      time.Now().Unix(),
 	}
 
-	det := services.NewSessionDetector(
-		[]inbound.Watcher{tw}, pw, repo,
-		&mockLogger{}, &mockGit{}, mm, nil,
-		"test", 0, nil, nil, nil,
-	)
+	det := services.NewSessionDetector([]inbound.Watcher{tw}, services.SessionDetectorDeps{
+		PW:           pw,
+		Repo:         repo,
+		Log:          &mockLogger{},
+		Git:          &mockGit{},
+		Metrics:      mm,
+		Broadcaster:  nil,
+		Version:      "test",
+		ReadyTTL:     0,
+		PIDDiscovers: nil,
+		ProcessNames: nil,
+		LiveCWDs:     nil,
+	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)

@@ -129,22 +129,33 @@ type Forwarder struct {
 	lastErr string
 }
 
-// NewForwarder builds a Forwarder targeting relayURL. push and snapshot are
-// required; logger may be nil. token is sent in the hello for an auth-enabled
-// relay and may be empty (a no-auth relay ignores it). control + controlEnabled
-// gate inbound remote control (issue #724): a control frame is dispatched only
-// when controlEnabled() reports the relay-control toggle on; both may be nil to
-// disable remote control entirely.
-func NewForwarder(relayURL string, id Identity, token string, push outbound.PushBroadcaster, snapshot SnapshotFunc, control ControlHandler, controlEnabled func() bool, logger outbound.Logger) *Forwarder {
+// ForwarderDeps bundles NewForwarder's dependencies beyond the relay URL and
+// identity. Push and Snapshot are required; Logger may be nil. Token is sent
+// in the hello for an auth-enabled relay and may be empty (a no-auth relay
+// ignores it). Control + ControlEnabled gate inbound remote control (issue
+// #724): a control frame is dispatched only when ControlEnabled() reports
+// the relay-control toggle on; both may be nil to disable remote control
+// entirely.
+type ForwarderDeps struct {
+	Token          string
+	Push           outbound.PushBroadcaster
+	Snapshot       SnapshotFunc
+	Control        ControlHandler
+	ControlEnabled func() bool
+	Logger         outbound.Logger
+}
+
+// NewForwarder builds a Forwarder targeting relayURL.
+func NewForwarder(relayURL string, id Identity, deps ForwarderDeps) *Forwarder {
 	return &Forwarder{
 		url:            normalizeRelayURL(relayURL),
 		identity:       id,
-		token:          token,
-		push:           push,
-		snapshot:       snapshot,
-		control:        control,
-		controlEnabled: controlEnabled,
-		logger:         logger,
+		token:          deps.Token,
+		push:           deps.Push,
+		snapshot:       deps.Snapshot,
+		control:        deps.Control,
+		controlEnabled: deps.ControlEnabled,
+		logger:         deps.Logger,
 		dialer:         websocket.DefaultDialer,
 		minBackoff:     time.Second,
 		maxBackoff:     30 * time.Second,
