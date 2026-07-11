@@ -133,17 +133,19 @@ struct SettingsView: View {
                             InfoIcon(text: "Lights shows session-state dots (today's default). Usage replaces them with 5h/7d subscription quota bars. Combined shows both side by side.")
                             Spacer()
                         }
-                        Picker("", selection: $menuBarStyle) {
-                            ForEach(MenuBarStyle.allCases) { style in
-                                Text(style.label).tag(style.rawValue)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-                        .labelsHidden()
-                        // Tint with the app's accent instead of the system default
-                        // blue, matching every other session-state color in the
-                        // app (issue #940).
-                        .tint(IrrColors.working)
+                        // A real Picker(pickerStyle: .segmented) only centers
+                        // within extra width instead of stretching into it —
+                        // EqualWidthSegmentedControl bridges to NSSegmentedControl
+                        // so the three segments split the full row edge to edge
+                        // (issue #940), tinted with the app's accent instead of
+                        // the system default blue.
+                        EqualWidthSegmentedControl(
+                            labels: MenuBarStyle.allCases.map(\.label),
+                            values: MenuBarStyle.allCases.map(\.rawValue),
+                            selection: $menuBarStyle,
+                            tint: IrrColors.working
+                        )
+                        .frame(maxWidth: .infinity, minHeight: 22)
 
                         if menuBarStyle != MenuBarStyle.lights.rawValue {
                             HStack(spacing: 6) {
