@@ -765,6 +765,7 @@ func (d *SessionDetector) forceReadyToWorkingIfActive(state *session.SessionStat
 	if state.State != session.StateReady || state.Metrics == nil || state.Metrics.LastEventType == "" {
 		return
 	}
+	d.log.LogInfo(logComponentSessionDetector, ev.SessionID, ForceReadyToWorkingReason)
 	d.record(lifecycle.Event{Kind: lifecycle.KindStateTransition, SessionID: ev.SessionID, PrevState: session.StateReady, NewState: session.StateWorking, Reason: ForceReadyToWorkingReason})
 	state.State = session.StateWorking
 }
