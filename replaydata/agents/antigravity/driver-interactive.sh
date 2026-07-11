@@ -110,7 +110,7 @@ SES_MARKER=(); SES_CWD=(); SES_ALIVE=()
 # recipe-lint flags a recipe needing it as a semantic_gap before recording. Set
 # DRIVE_SLASH_REQUIRES_STEP_TYPE=true if antigravity is headless-first (a bare
 # send "/cmd" stores literal text instead of reaching the REPL).
-DRIVE_ELICITS="send slash wait_turn keys sleep exit_clean restart resume sigkill start_session session"
+DRIVE_ELICITS="send slash wait_turn keys sleep interrupt exit_clean restart resume sigkill start_session session"
 DRIVE_SLASH_REQUIRES_STEP_TYPE=false
 RUN_CWD="${IRRLICHT_ONBOARD_CWD:-$STAGING/cwd}"
 mkdir -p "$RUN_CWD"
@@ -350,6 +350,27 @@ step_keys() { # <keys>
   sleep 0.3
 }
 
+# --- AGENT-SPECIFIC SEAM: interrupt — cancel the in-flight turn (Escape) -----
+# agy's TUI binds Escape to cancel the in-flight turn (footer reads
+# "esc to cancel" while generating). Live-verified (#934): sending Escape
+# mid-turn shows "Interrupted · What should Antigravity CLI do instead?" and
+# ends the generation. The cancelled turn DOES land a terminal marker: a
+# MODEL/PLANNER_RESPONSE with status "DONE" and no tool_calls — same shape as
+# a normal completed turn, just with content omitted rather than the model's
+# text (this matches parser.go's own comment: a no-tool-calls PLANNER_RESPONSE
+# is "often empty content" and still settles the session). So turn_count sees
+# it exactly like any other completed turn. No EXPECTED_TURNS bookkeeping is
+# needed here regardless: unlike claudecode/codex/pi (which bump
+# EXPECTED_TURNS at send time and so must decrement it on interrupt), this
+# driver bumps EXPECTED_TURNS inside wait_turn() itself (SEAM 2) — an
+# interrupt that is never followed by its own wait_turn call never touches
+# the counter.
+step_interrupt() {
+  tmux send-keys -t "$SESSION" Escape
+  echo "[driver] interrupt[s$ACTIVE]: sent Escape" >&2
+  sleep 1
+}
+
 # --- AGENT-SPECIFIC SEAM: find the agy PID the daemon binds ------------------
 # Mirror core/adapters/inbound/agents/antigravity/pid.go: a plain process-name
 # (agy) + cwd match, lowest PID — agy is a single native process per
@@ -497,7 +518,7 @@ while IFS= read -r step; do
     send|slash)      send_text "$(jq -r '.text' <<<"$step")" ;;
     wait_turn)       wait_turn || break ;;
     sleep)           sleep "$(jq -r '.seconds // 1' <<<"$step")" ;;
-    interrupt)       not_implemented interrupt || break ;;       # TODO(antigravity): Escape/Ctrl-C the in-flight turn
+    interrupt)       step_interrupt ;;
     keys)            step_keys "$(jq -r '.keys' <<<"$step")" ;;
     reset_session)   not_implemented reset_session || break ;;   # TODO(antigravity): in-REPL /clear|/new → new id, SAME slot; re-resolve SES_TRANSCRIPT[$ACTIVE] (SEAM 3)
     restart)         step_restart ;;
