@@ -860,7 +860,7 @@ async function loadCoverageDetail(scenarioId) {
     if (spec && (spec.description || spec.process || spec.acceptance_criteria)) {
       detail.appendChild(renderSpecPanel(spec));
     }
-  } catch (_) { /* spec unavailable — show recipe-only */ }
+  } catch (e) { console.debug('scenario spec unavailable — showing recipe-only', e); }
 
   // Recipe lookup by coverage_id — used by the per-agent plan panels below.
   // The old scenario-level "Recording recipe" panel was removed: a scenario has
@@ -1694,6 +1694,7 @@ function renderMeta(data) {
   try {
     meta = typeof data.meta === "string" ? JSON.parse(data.meta) : data.meta;
   } catch (e) {
+    console.debug('viewer: failed to parse recording meta', e);
     p.appendChild(text("(could not parse meta)"));
     return p;
   }

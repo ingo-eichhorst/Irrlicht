@@ -14,14 +14,18 @@ function load() {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) return new Set(parsed.filter(s => typeof s === 'string'));
     }
-  } catch (e) {}
+  } catch (e) {
+    console.debug('collapsedGroups: failed to load, starting empty', e);
+  }
   return new Set();
 }
 
 let collapsed = load();
 
 function persist() {
-  try { localStorage.setItem(KEY, JSON.stringify([...collapsed])); } catch (e) {}
+  try { localStorage.setItem(KEY, JSON.stringify([...collapsed])); } catch (e) {
+    console.debug('collapsedGroups: failed to persist', e);
+  }
 }
 
 // isGroupCollapsed reports whether the named group is currently collapsed.

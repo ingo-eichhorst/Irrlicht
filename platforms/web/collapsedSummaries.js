@@ -12,14 +12,18 @@ function load() {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) return new Set(parsed.filter(s => typeof s === 'string'));
     }
-  } catch (e) {}
+  } catch (e) {
+    console.debug('collapsedSummaries: failed to load, starting empty', e);
+  }
   return new Set();
 }
 
 let collapsed = load();
 
 function persist() {
-  try { localStorage.setItem(KEY, JSON.stringify([...collapsed])); } catch (e) {}
+  try { localStorage.setItem(KEY, JSON.stringify([...collapsed])); } catch (e) {
+    console.debug('collapsedSummaries: failed to persist', e);
+  }
 }
 
 // isSummaryCollapsed reports whether the given session's summary block is collapsed.

@@ -26,7 +26,9 @@ export function setShowQuotaForecast(on) {
   // Safari Private mode and storage-disabled contexts throw on
   // setItem — swallow per the project pattern (see persistCollapsedGroups
   // at line ~1099 and the settings save loop).
-  try { localStorage.setItem(QUOTA_FORECAST_KEY, on ? '1' : '0'); } catch (e) {}
+  try { localStorage.setItem(QUOTA_FORECAST_KEY, on ? '1' : '0'); } catch (e) {
+    console.debug('quotaChips: failed to persist showQuotaForecast', e);
+  }
 }
 
 // Provider-icon registry. SVGs are byte-for-byte copies of
@@ -77,7 +79,9 @@ function setProviderModePreference(providerKey, mode) {
   try {
     if (mode === 'auto') localStorage.removeItem(providerModeStorageKey(providerKey));
     else localStorage.setItem(providerModeStorageKey(providerKey), mode);
-  } catch (e) {}
+  } catch (e) {
+    console.debug('quotaChips: failed to persist provider mode preference', e);
+  }
 }
 
 function chipModeFor(snap, providerKey) {
@@ -308,7 +312,7 @@ function adapterIconHTML(adapterKey) {
            || '';
   if (!svg) return '';
   try { return '<img alt="" src="data:image/svg+xml;base64,' + btoa(svg) + '">'; }
-  catch (e) { return ''; }
+  catch (e) { console.debug('quotaChips: failed to encode adapter icon svg', e); return ''; }
 }
 
 function buildQuotaRowDOM(w, compact, nowMs) {
@@ -438,7 +442,7 @@ export function renderHeaderTitle() {
     if (hidden.length > 0) host.appendChild(buildOverflowChipDOM(hidden));
     header.classList.add('has-quota-chips');
   } catch (e) {
-    try { console.error('quota chip render failed:', e); } catch (_) {}
+    console.error('quota chip render failed:', e);
     host.innerHTML = '';
     header.classList.remove('has-quota-chips');
   }
