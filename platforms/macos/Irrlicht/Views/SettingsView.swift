@@ -45,6 +45,13 @@ struct SettingsView: View {
     @AppStorage(MenuBarStyle.storageKey) private var menuBarStyle: String = MenuBarStyle.lights.rawValue
     @AppStorage(MenuBarQuotaProvider.storageKey) private var menuBarQuotaProvider: String = ""
     @AppStorage(QuotaVisualStyle.storageKey) private var menuBarQuotaVisual: String = QuotaVisualStyle.bars.rawValue
+    // Master gate (issue #940): collapses the whole Notifications section
+    // when off, instead of showing three always-visible event rows to users
+    // who don't want any of it. A brand-new key defaults to false, but
+    // `reconcileNotificationsMasterDefault()` flips it true once on first
+    // appearance for anyone upgrading with an event already enabled, so
+    // existing notification setups don't silently vanish.
+    @AppStorage("notificationsEnabled") private var notificationsEnabled: Bool = false
     @AppStorage(NotificationEvent.ready.enabledKey) private var notifyOnReady: Bool = false
     @AppStorage(NotificationEvent.waiting.enabledKey) private var notifyOnWaiting: Bool = false
     @AppStorage(NotificationEvent.contextPressure.enabledKey) private var notifyOnContextPressure: Bool = false
@@ -224,7 +231,7 @@ struct SettingsView: View {
 
                     Divider()
 
-                    VStack(alignment: .leading, spacing: IrrSpacing.sp3) {
+                    VStack(alignment: .leading, spacing: IrrSpacing.sp2) {
                         HStack(spacing: 6) {
                             Text("Notifications")
                                 .font(.subheadline)
@@ -233,55 +240,65 @@ struct SettingsView: View {
                             Spacer()
                         }
 
-                        NotificationEventRow(
-                            event: .ready,
-                            enabled: $notifyOnReady,
-                            sampleText: "Agent ready",
-                            onImportError: { customImportError = $0 }
-                        )
-                        NotificationEventRow(
-                            event: .waiting,
-                            enabled: $notifyOnWaiting,
-                            sampleText: "Agent waiting for input",
-                            onImportError: { customImportError = $0 }
-                        )
-                        NotificationEventRow(
-                            event: .contextPressure,
-                            enabled: $notifyOnContextPressure,
-                            sampleText: "Context pressure: 80% threshold reached",
-                            onImportError: { customImportError = $0 }
-                        )
-                        ContextThresholdRow(enabled: notifyOnContextPressure)
-                            .padding(.leading, IrrSpacing.sp4)
+                        LeadingToggle(isOn: $notificationsEnabled, label: "Enable notifications")
 
-                        if let error = customImportError {
-                            Text(error)
-                                .font(.caption)
-                                .foregroundColor(.orange)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
+                        if notificationsEnabled {
+                            VStack(alignment: .leading, spacing: IrrSpacing.sp2) {
+                                NotificationEventRow(
+                                    event: .ready,
+                                    enabled: $notifyOnReady,
+                                    sampleText: "Agent ready",
+                                    onImportError: { customImportError = $0 }
+                                )
+                                NotificationEventRow(
+                                    event: .waiting,
+                                    enabled: $notifyOnWaiting,
+                                    sampleText: "Agent waiting for input",
+                                    onImportError: { customImportError = $0 }
+                                )
+                                NotificationEventRow(
+                                    event: .contextPressure,
+                                    enabled: $notifyOnContextPressure,
+                                    sampleText: "Context pressure: 80% threshold reached",
+                                    onImportError: { customImportError = $0 }
+                                )
+                                ContextThresholdRow(enabled: notifyOnContextPressure)
+                                    .padding(.leading, IrrSpacing.sp4)
+                            }
 
-                        if notificationsDenied && (notifyOnReady || notifyOnWaiting || notifyOnContextPressure) {
-                            HStack(spacing: 4) {
-                                Image(systemName: "exclamationmark.triangle.fill")
-                                    .foregroundColor(.orange)
-                                    .font(.caption)
-                                    .tooltip("Notifications blocked in System Settings")
-                                Text("Notifications are blocked.")
+                            if let error = customImportError {
+                                Text(error)
                                     .font(.caption)
                                     .foregroundColor(.orange)
-                                Button("Open Settings") {
-                                    if let url = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings") {
-                                        NSWorkspace.shared.open(url)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+
+                            if notificationsDenied && (notifyOnReady || notifyOnWaiting || notifyOnContextPressure) {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "exclamationmark.triangle.fill")
+                                        .foregroundColor(.orange)
+                                        .font(.caption)
+                                        .tooltip("Notifications blocked in System Settings")
+                                    Text("Notifications are blocked.")
+                                        .font(.caption)
+                                        .foregroundColor(.orange)
+                                    Button("Open Settings") {
+                                        if let url = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings") {
+                                            NSWorkspace.shared.open(url)
+                                        }
                                     }
+                                    .font(.caption)
+                                    .buttonStyle(.link)
+                                    .tooltip("Open System Settings → Notifications")
                                 }
-                                .font(.caption)
-                                .buttonStyle(.link)
-                                .tooltip("Open System Settings → Notifications")
                             }
                         }
                     }
-                    .onAppear { checkNotificationAuth() }
+                    .onAppear {
+                        reconcileNotificationsMasterDefault()
+                        checkNotificationAuth()
+                    }
+                    .onChange(of: notificationsEnabled) { _ in checkNotificationAuth() }
                     .onChange(of: notifyOnReady) { _ in checkNotificationAuth() }
                     .onChange(of: notifyOnWaiting) { _ in checkNotificationAuth() }
                     .onChange(of: notifyOnContextPressure) { _ in checkNotificationAuth() }
@@ -666,6 +683,17 @@ struct SettingsView: View {
         }
     }
 
+    /// One-time migration for the new master "Enable notifications" toggle
+    /// (issue #940): a brand-new `@AppStorage` key defaults to `false`, which
+    /// would hide an existing user's already-configured per-event toggles
+    /// behind a collapsed, seemingly-off section. Runs only while the key is
+    /// still absent from `UserDefaults` — once set (by this reconcile or by
+    /// the user), it's never overridden again.
+    private func reconcileNotificationsMasterDefault() {
+        guard UserDefaults.standard.object(forKey: "notificationsEnabled") == nil else { return }
+        notificationsEnabled = notifyOnReady || notifyOnWaiting || notifyOnContextPressure
+    }
+
     private func checkNotificationAuth() {
         guard Bundle.main.bundleIdentifier != nil,
               Bundle.main.bundleURL.pathExtension == "app" else { return }
@@ -865,9 +893,14 @@ private struct NotificationEventRow: View {
     @State private var selection: SoundChoice = .default
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            LeadingToggle(isOn: $enabled, label: event.displayName)
+        // One row (issue #940): toggle + label + sound picker + preview all
+        // share a line — LeadingToggle's trailing Spacer absorbs the gap
+        // between the label and the fixed-width picker/button, so this
+        // stays a single line regardless of how long `event.displayName` is.
+        VStack(alignment: .leading, spacing: IrrSpacing.sp1) {
             HStack(spacing: IrrSpacing.sp2) {
+                LeadingToggle(isOn: $enabled, label: event.displayName)
+
                 Picker("", selection: $selection) {
                     ForEach(SoundChoice.builtIns, id: \.self) { choice in
                         Text(choice.displayName).tag(choice)
@@ -885,7 +918,8 @@ private struct NotificationEventRow: View {
                 }
                 .labelsHidden()
                 .disabled(!enabled)
-                .frame(maxWidth: .infinity)
+                .frame(width: 112)
+                .tooltip(selection.displayName)
                 .onChange(of: selection) { newValue in
                     handle(newValue)
                 }
@@ -894,9 +928,10 @@ private struct NotificationEventRow: View {
                     SoundPlayer.preview(selection, sampleText: sampleText)
                 } label: {
                     Image(systemName: "play.fill")
-                        .frame(width: 14, height: 14)
+                        .frame(width: 10, height: 10)
                 }
                 .buttonStyle(.bordered)
+                .controlSize(.small)
                 .disabled(!enabled || selection == .none)
                 .tooltip("Preview")
             }
@@ -914,7 +949,7 @@ private struct NotificationEventRow: View {
                         Image(systemName: "arrow.down.circle")
                         Text("Manage \(voice.displayName) in System Settings")
                     }
-                    .font(.caption)
+                    .font(.caption2)
                 }
                 .buttonStyle(.link)
                 .tooltip("Open System Settings → Accessibility → Spoken Content")
