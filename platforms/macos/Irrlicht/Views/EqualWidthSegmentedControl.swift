@@ -44,7 +44,7 @@ struct EqualWidthSegmentedControl: NSViewRepresentable {
     // Picker(pickerStyle: .segmented) refuse to stretch. Honoring the
     // proposed width here (paired with `.frame(maxWidth: .infinity)` at the
     // call site) is what actually makes this control fill the row.
-    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSSegmentedControl, context: Context) -> CGSize? {
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSSegmentedControl, context _: Context) -> CGSize? {
         let fitting = nsView.fittingSize
         return CGSize(width: proposal.width ?? fitting.width, height: fitting.height)
     }
