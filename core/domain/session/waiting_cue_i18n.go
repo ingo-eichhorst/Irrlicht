@@ -1,0 +1,178 @@
+package session
+
+import "regexp"
+
+// Non-English waiting-cue patterns, mirroring the same A–E coverage buckets
+// as waitingCuePatterns (issue #381) for the languages LLM responses are
+// most commonly observed in. See issue #933: the cue detector was English-
+// only, so a turn ending on e.g. "Sag mir Bescheid, bevor ich fortfahre"
+// never registered as waiting.
+//
+// No language detection: all buckets are OR'd together regardless of the
+// text's language, same as the English set. The false-positive surface of a
+// foreign-language phrase appearing inside otherwise-English text (or vice
+// versa) is negligible, and recall matters more than precision here (#381).
+//
+// Coverage is intentionally partial — these are the highest-value phrases
+// per language, not an exhaustive translation of every English pattern.
+// Extend per-language buckets as new false negatives are reported.
+var (
+	waitingCuePatternsDE = []*regexp.Regexp{
+		// A. Direct ask
+		regexp.MustCompile(`(?i)\b(?:sag|sagt|sagen sie)\s+(?:mir|uns)\s+bescheid\b`),
+		regexp.MustCompile(`(?i)\blass(?:en sie)?\s+(?:mich|uns)\s+wissen\b`),
+		regexp.MustCompile(`(?i)\b(?:kannst du|könnten sie)\b`),
+		// B. Approval / review framings. "ihr"/"ihre" (her/their/formal-your)
+		// is deliberately excluded — unlike English "its"/"their" it isn't
+		// lexically distinguishable from formal-address "your" here, so
+		// including it would reproduce the false-positive class #897 fixed
+		// for English ("Ich warte auf ihre Fertigstellung" about a
+		// background job would otherwise misregister as waiting-on-user).
+		regexp.MustCompile(`(?i)\bwarte(?:n sie)? auf (?:dein|deine)\b`),
+		regexp.MustCompile(`(?i)\bbereit für (?:dein|deine|ihr|ihre) (?:feedback|freigabe|review)\b`),
+		// C. Action gates. A bare "ich warte" (I'm waiting) catch-all is
+		// deliberately omitted — with no disambiguating object, it would be
+		// as context-free as English's `\bI'?ll wait\b`, which is only safe
+		// there because the exclusion veto (waitingCueExclusions) can
+		// distinguish "its"/"their" from "your"; German has no equivalent
+		// unambiguous non-human pronoun to veto on (see the "ihr"/"ihre"
+		// comment above), so the scoped "warte auf dein/deine" pattern above
+		// is the only supported form.
+		regexp.MustCompile(`(?i)\bbevor ich\b`),
+		regexp.MustCompile(`(?i)\bsobald (?:du|sie)\b`),
+		// D. Curated imperatives
+		regexp.MustCompile(`(?i)\bbitte\s+\w+\b`),
+		regexp.MustCompile(`(?i)\b(?:prüfe|überprüfe|bestätige|teste|schau dir)\s+\w+\b`),
+		// E. Trailing soft asks
+		regexp.MustCompile(`(?i)\bwas denkst du\b`),
+		regexp.MustCompile(`(?i)\bfeedback\b\s*$`),
+	}
+
+	waitingCuePatternsES = []*regexp.Regexp{
+		regexp.MustCompile(`(?i)\b(?:avísame|avíseme)\b`),
+		// "dime" is excluded — it's also the English coin ("costs a dime",
+		// "turn on a dime"), same collision class as the German "da"/French
+		// "car" fix above. "dígame" (formal, no English collision) is kept.
+		regexp.MustCompile(`(?i)\bdígame\b`),
+		regexp.MustCompile(`(?i)¿?\b(?:podrías|podría)\b`),
+		// "su" (his/her/their/formal-your) is excluded — see the German
+		// "ihr"/"ihre" comment above for why the ambiguous form is dropped.
+		regexp.MustCompile(`(?i)\besperando tu\b`),
+		// "su" is excluded from the two patterns below for the same reason
+		// as "esperando su" above.
+		regexp.MustCompile(`(?i)\blisto para tu\b`),
+		regexp.MustCompile(`(?i)\bantes de que (?:yo|nosotros)\b`),
+		regexp.MustCompile(`(?i)\ben cuanto (?:tú|usted)\b`),
+		regexp.MustCompile(`(?i)\bespero tu\b`),
+		regexp.MustCompile(`(?i)\bpor favor\s+\w+\b`),
+		regexp.MustCompile(`(?i)\b(?:confirma|verifica|revisa|comprueba)\s+\w+\b`),
+		regexp.MustCompile(`(?i)\bqué (?:opinas|piensas)\b`),
+	}
+
+	waitingCuePatternsFR = []*regexp.Regexp{
+		regexp.MustCompile(`(?i)\b(?:dis-moi|dites-moi)\b`),
+		regexp.MustCompile(`(?i)\b(?:fais-moi savoir|faites-le-moi savoir)\b`),
+		regexp.MustCompile(`(?i)\b(?:pourrais-tu|pourriez-vous)\b`),
+		regexp.MustCompile(`(?i)\b(?:j'attends ta|j'attends votre)\b`),
+		regexp.MustCompile(`(?i)\bprêt pour (?:ta|votre)\b`),
+		regexp.MustCompile(`(?i)\bavant que je\b`),
+		regexp.MustCompile(`(?i)\bdès que (?:tu|vous)\b`),
+		regexp.MustCompile(`(?i)\bs'il (?:te|vous) plaît\b`),
+		regexp.MustCompile(`(?i)\b(?:confirme|vérifie|teste|relis)\s+\w+\b`),
+		regexp.MustCompile(`(?i)\bqu'en penses-tu\b`),
+	}
+
+	waitingCuePatternsPT = []*regexp.Regexp{
+		regexp.MustCompile(`(?i)\b(?:me avise|avisa-me)\b`),
+		regexp.MustCompile(`(?i)\b(?:me diga|diga-me)\b`),
+		regexp.MustCompile(`(?i)\b(?:poderia você|você poderia)\b`),
+		// "sua"/"seu" (his/her/their/formal-your) is excluded here — same
+		// reasoning as the German/Spanish comments above — but kept in the
+		// pattern below, where the trailing "revisão"/"aprovação" (review/
+		// approval) disambiguates: those are user-facing actions a
+		// background job wouldn't plausibly be described as awaiting.
+		regexp.MustCompile(`(?i)\baguardo (?:teu|tua)\b`),
+		regexp.MustCompile(`(?i)\bpronto para (?:sua|seu|teu|tua) (?:revisão|aprovação)\b`),
+		regexp.MustCompile(`(?i)\bantes de eu\b`),
+		regexp.MustCompile(`(?i)\bassim que você\b`),
+		regexp.MustCompile(`(?i)\bpor favor\s+\w+\b`),
+		// "revise" is excluded — it's an actual English verb with the same
+		// meaning ("I'll revise my approach"), not just a lookalike; same
+		// collision class as "dime"/"da"/"car" above.
+		regexp.MustCompile(`(?i)\b(?:confirme|verifique|teste)\s+\w+\b`),
+		regexp.MustCompile(`(?i)\bo que você acha\b`),
+	}
+
+	// Japanese and Chinese patterns skip the `(?i)` flag (no case folding)
+	// and word boundaries `\b` (CJK scripts have no whitespace-delimited
+	// word boundaries for Go's regexp engine to anchor on).
+	waitingCuePatternsJA = []*regexp.Regexp{
+		regexp.MustCompile(`教えてください`),
+		regexp.MustCompile(`知らせてください|お知らせください`),
+		regexp.MustCompile(`確認してください`),
+		regexp.MustCompile(`確認をお願いします`),
+		regexp.MustCompile(`(?:承認|レビュー)をお願いします`),
+		regexp.MustCompile(`よろしいですか`),
+		regexp.MustCompile(`どう思いますか`),
+	}
+
+	waitingCuePatternsZH = []*regexp.Regexp{
+		regexp.MustCompile(`请告诉我`),
+		regexp.MustCompile(`请(?:确认|检查|核实)`),
+		regexp.MustCompile(`请(?:审核|批准|审阅)`),
+		regexp.MustCompile(`等待(?:您|你)的(?:回复|确认|批准)`),
+		regexp.MustCompile(`你觉得怎么样|您觉得如何`),
+	}
+)
+
+// allWaitingCuePatterns is the full multilingual set ExtractWaitingCue
+// scans against — the English set (waitingCuePatterns, issue #381) plus the
+// per-language buckets above (issue #933).
+var allWaitingCuePatterns = concatWaitingCuePatterns()
+
+func concatWaitingCuePatterns() []*regexp.Regexp {
+	all := make([]*regexp.Regexp, 0,
+		len(waitingCuePatterns)+
+			len(waitingCuePatternsDE)+len(waitingCuePatternsES)+
+			len(waitingCuePatternsFR)+len(waitingCuePatternsPT)+
+			len(waitingCuePatternsJA)+len(waitingCuePatternsZH))
+	all = append(all, waitingCuePatterns...)
+	all = append(all, waitingCuePatternsDE...)
+	all = append(all, waitingCuePatternsES...)
+	all = append(all, waitingCuePatternsFR...)
+	all = append(all, waitingCuePatternsPT...)
+	all = append(all, waitingCuePatternsJA...)
+	all = append(all, waitingCuePatternsZH...)
+	return all
+}
+
+// i18nAnswerPrefixes extend answerPrefixes (the rhetorical-question veto,
+// issue #236) with the top languages' "because/since" equivalents, so a
+// rhetorical Q&A pair in those languages is also correctly skipped rather
+// than misread as a real waiting question.
+//
+// German "da" ("since") and French "car" ("because") are deliberately
+// excluded — both are also common English words/names ("Da Vinci", "Car
+// trouble aside, ..."), and looksLikeAnswer lowercases before the prefix
+// check, so case can't disambiguate them. Unlike the ambiguous possessives
+// in waitingCuePatterns*, there's no unambiguous fallback token that keeps
+// German/French recall for the single-word form, so those two are dropped
+// entirely; "weil"/"parce que" (unambiguous, no English collision) still
+// cover the common case.
+var i18nAnswerPrefixes = []string{
+	// German
+	"weil ", "weil,",
+	// Spanish / Portuguese share "porque"
+	"porque ", "porque,",
+	// French
+	"parce que ",
+	// Japanese
+	"なぜなら",
+	// Chinese
+	"因为",
+}
+
+// allAnswerPrefixes is the full set looksLikeAnswer scans against — the
+// English set (answerPrefixes, issue #236) plus i18nAnswerPrefixes above
+// (issue #933), merged once so the hot-path check is a single loop.
+var allAnswerPrefixes = append(append([]string{}, answerPrefixes...), i18nAnswerPrefixes...)
