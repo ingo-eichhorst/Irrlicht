@@ -17,8 +17,9 @@
 # concurrent multi-slot primitives) are ALSO ported from
 # drive-codex-interactive.sh — kiro's per-slot MARKER + transcript_claimed model
 # is byte-identical to codex's, so two concurrent same-cwd sessions each resolve
-# to a distinct <uuid>.jsonl. The remaining signal primitives (interrupt,
-# reset_session) stay stubbed — `record` ports each when a recipe first needs it.
+# to a distinct <uuid>.jsonl. interrupt is ALSO ported (#934, live-verified):
+# kiro's TUI binds Escape to cancel the in-flight turn. reset_session stays
+# stubbed — `record` ports it when a recipe first needs it.
 #
 # IMPORTANT — how a stubbed arm is caught: every standard arm is PRESENT here
 # (so recipe-lint's GRAMMAR check treats it as handled and will NOT report a
@@ -172,7 +173,7 @@ source "$_DRIVE_LIB/contracts.sh"
 # it is invisible to the daemon and MUST NOT be used for recording (FINDINGS.md
 # §7). slash commands reach the live TUI directly (a bare send "/cmd" is NOT
 # stored as literal text), so DRIVE_SLASH_REQUIRES_STEP_TYPE stays false.
-DRIVE_ELICITS="send slash wait_turn sleep keys restart resume sigkill exit_clean start_session session"
+DRIVE_ELICITS="send slash wait_turn sleep keys interrupt restart resume sigkill exit_clean start_session session"
 DRIVE_SLASH_REQUIRES_STEP_TYPE=false
 
 remaining_seconds() { local now; now=$(date +%s); (( now >= DEADLINE )) && echo 0 || echo $((DEADLINE - now)); }
@@ -375,6 +376,24 @@ send_keys() { # <key-token-list>
   tmux send-keys -t "$SESSION" $keys
   echo "[driver] keys[s$ACTIVE]: $keys (no turn expected)" >&2
   sleep 0.3
+}
+
+# --- AGENT-SPECIFIC SEAM: interrupt — cancel the in-flight turn (Escape) -----
+# kiro-cli's TUI binds Escape to "cancel the in-flight turn" (its footer reads
+# "Thinking... (esc to cancel)" while a turn is running). Live-verified
+# (#934): sending Escape mid-turn — whether still in the pre-stream "Thinking"
+# phase or after tokens have started streaming — always lands a SYNTHETIC
+# text-only AssistantMessage whose content is literally "Response was
+# interrupted by the user", with no toolUse block. turn_count's filter
+# (mirrors kirocli/parser.go's turn_done rule: text-only AssistantMessage)
+# counts this exactly like a normal completed turn. So — unlike
+# claudecode/codex/pi, whose cancelled turn leaves no matching terminal
+# marker — EXPECTED_TURNS is NOT decremented here: the interrupt itself
+# satisfies the turn the preceding send was expecting.
+step_interrupt() {
+  tmux send-keys -t "$SESSION" Escape
+  echo "[driver] interrupt[s$ACTIVE]: sent Escape (still expecting turn $EXPECTED_TURNS)" >&2
+  sleep 1
 }
 
 # --- TEARDOWN SEAM A: exit_clean ---------------------------------------------
@@ -584,7 +603,7 @@ while IFS= read -r step; do
     slash)           send_slash "$(jq -r '.text' <<<"$step")" ;;
     wait_turn)       wait_turn || STEP_OK=false ;;
     sleep)           sleep "$(jq -r '.seconds // 1' <<<"$step")" ;;
-    interrupt)       not_implemented interrupt || STEP_OK=false ;;     # TODO(kiro-cli): Escape/Ctrl-C the in-flight turn
+    interrupt)       step_interrupt ;;
     keys)            send_keys "$(jq -r '.keys' <<<"$step")" ;;
     reset_session)   not_implemented reset_session || STEP_OK=false ;; # TODO(kiro-cli): in-REPL /clear|/new → new session id
     restart)         step_restart ;;
