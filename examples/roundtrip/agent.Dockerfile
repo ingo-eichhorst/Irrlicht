@@ -33,15 +33,15 @@ FROM node:${NODE_VERSION}-bookworm-slim AS runtime
 # swallows "command not found"), so PermissionRequest never reaches the
 # daemon and tool-use permission prompts never surface as `waiting` (#488).
 # Claude Code CLI (the real agent this testbed observes).
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates git tini procps curl \
-    && rm -rf /var/lib/apt/lists/* \
-    && npm install -g @anthropic-ai/claude-code
-
+#
 # Non-root `agent` — avoids claude's run-as-root friction; both claude and
 # irrlichd run as this user.
 # (UID auto-assigned — the node base already uses 1000 for its `node` user.)
-RUN useradd --create-home --shell /bin/bash agent
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates git tini procps curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && npm install -g @anthropic-ai/claude-code \
+    && useradd --create-home --shell /bin/bash agent
 COPY --from=build /out/irrlichd /usr/local/bin/irrlichd
 COPY examples/roundtrip/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh

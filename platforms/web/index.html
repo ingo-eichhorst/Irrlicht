@@ -35,7 +35,7 @@
     </div>
   </header>
 
-  <div class="settings-modal-backdrop" id="settings-backdrop" role="dialog" aria-modal="true" aria-label="Settings">
+  <dialog class="settings-modal-backdrop" id="settings-backdrop" aria-modal="true" aria-label="Settings">
     <div class="settings-modal">
       <h2>Display</h2>
       <label>
@@ -138,9 +138,9 @@
         <button class="settings-modal-close" id="settings-close" type="button">Done</button>
       </div>
     </div>
-  </div>
+  </dialog>
 
-  <div class="settings-modal-backdrop" id="permissions-backdrop" role="dialog" aria-modal="true" aria-label="Agent permissions">
+  <dialog class="settings-modal-backdrop" id="permissions-backdrop" aria-modal="true" aria-label="Agent permissions">
     <div class="settings-modal permissions-modal">
       <h2 id="permissions-title">Agent permissions</h2>
       <p class="permissions-intro" id="permissions-intro"></p>
@@ -150,7 +150,7 @@
         <button class="settings-modal-close" id="permissions-apply" type="button">Apply</button>
       </div>
     </div>
-  </div>
+  </dialog>
 
   <main>
     <div id="connection-banner" role="alert" aria-live="polite"></div>
