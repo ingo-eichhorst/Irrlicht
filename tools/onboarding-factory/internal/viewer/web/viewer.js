@@ -20,6 +20,12 @@ const SPEED_PRESETS = [1, 2, 5, 10, 25, 100];
 // lowercase-alnum-dash-underscore slugs, never containing "/", "?", or "#".
 const RECORDING_SLUG_RE = /^[a-z0-9][a-z0-9_-]*$/;
 
+// pluralSuffix returns "" for a count of exactly 1, "s" otherwise — the
+// English-plural suffix used by every "N recording(s)" label in this file.
+function pluralSuffix(n) {
+  return n === 1 ? "" : "s";
+}
+
 // Strip control characters and cap length before logging a server-provided
 // string (SonarQube jssecurity:S5145 — fetch response fields are tainted
 // regardless of same-origin trust). Uses String(), not `value || ""`, so
@@ -1224,10 +1230,9 @@ function _appendPipelineTailSegments(wrap, blocked, pipe, meas, jump) {
         "Spec — not authored yet"));
   // Recordings count (latest counts as 1; archive_count is additional)
   const totalRecs = (rcs.latest ? 1 : 0) + (rcs.archive_count || 0);
-  const totalRecsSuffix = totalRecs === 1 ? "" : "s";
   wrap.appendChild(totalRecs > 0
     ? _pipeBtn(String(totalRecs), "#d6f0d4", "#1f5a1d", jump("recordings"), false,
-        `${totalRecs} recording${totalRecsSuffix}`)
+        `${totalRecs} recording${pluralSuffix(totalRecs)}`)
     : _pipeBtn("·", "transparent", "#bbb", jump("recordings"), false,
         "No recordings yet"));
   // Validation
@@ -2195,10 +2200,9 @@ function renderRecordingHistory(s, latestData, archives, initialArchive, recipeE
   const intro = document.createElement("div");
   intro.style.cssText = "margin-bottom: 8px; font-size: 12px; color: #555;";
   const recCount = (archives || []).length;
-  const recCountSuffix = recCount === 1 ? "" : "s";
   intro.innerHTML = `Select which recording to inspect — all live under <code>recordings/</code>, newest first. <b>expected.jsonl</b> is the constant benchmark across all of them; picking an older recording re-evaluates the current spec against its events (drift signal).` +
     (recCount > 0
-      ? ` <b>${recCount}</b> recording${recCountSuffix} available.`
+      ? ` <b>${recCount}</b> recording${pluralSuffix(recCount)} available.`
       : ` No recordings yet.`);
   selPanel.appendChild(intro);
 
