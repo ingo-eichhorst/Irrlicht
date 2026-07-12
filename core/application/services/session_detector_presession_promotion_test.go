@@ -97,7 +97,11 @@ func TestSessionDetector_PreSession_GracefulPromotionWhenCWDKnown_Issue906(t *te
 		TranscriptPath: transcriptPath,
 	}
 	waitForCondition(func() bool { s, _ := repo.Load("session_real_1"); return s != nil }, time.Second)
-	time.Sleep(50 * time.Millisecond)
+	// cleanupPreSessionsForProject runs synchronously within the same
+	// finalizeNewSession call that just saved session_real_1, but on a
+	// different goroutine than this poll — wait for its actual effect
+	// (proc-70001 gone) rather than a fixed sleep guessing how long that takes.
+	waitForCondition(func() bool { s, _ := repo.Load("proc-70001"); return s == nil }, time.Second)
 	cancel()
 	<-done
 
