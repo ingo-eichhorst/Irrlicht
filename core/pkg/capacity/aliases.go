@@ -194,4 +194,13 @@ var modelAliases = map[string]string{
 	// on miss until the keys land upstream.
 	"mimo-v2-flash":    "xiaomi/mimo-v2-flash",
 	"kat-coder-pro-v1": "kwaipilot/kat-coder-pro",
+
+	// Mistral Vibe (irrlicht's own adapter, not sourced from codeburn) reports
+	// its sidecar's dot-versioned model name as-is (e.g. "mistral-medium-3.5"
+	// from meta.json's config.active_model). LiteLLM's canonical key for the
+	// same model is hyphen-versioned and provider-prefixed
+	// ("mistral/mistral-medium-3-5") — see remote.go's parseLiteLLMData for
+	// why the "mistral/" prefix survives parsing when most others are
+	// stripped as re-hosted variants.
+	"mistral-medium-3.5": "mistral/mistral-medium-3-5",
 }
