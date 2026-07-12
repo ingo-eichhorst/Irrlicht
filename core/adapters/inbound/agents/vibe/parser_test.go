@@ -115,14 +115,8 @@ func TestParser_TodoTool_TaskDeltas(t *testing.T) {
 	p := &Parser{}
 	// First write: two pending todos → two creates, snapshot of 2.
 	ev1 := p.ParseLine(line(t, `{"role":"assistant","tool_calls":[{"id":"tc1","function":{"name":"todo","arguments":"{\"action\":\"write\",\"todos\":[{\"id\":\"1\",\"content\":\"bump java\",\"status\":\"pending\",\"priority\":\"high\"},{\"id\":\"2\",\"content\":\"upgrade dw\",\"status\":\"pending\",\"priority\":\"high\"}]}"}}],"message_id":"a1"}`))
-	creates := 0
-	for _, d := range ev1.TaskDeltas {
-		if d.Op == tailer.TaskOpCreate {
-			creates++
-		}
-	}
-	if creates != 2 {
-		t.Errorf("first write: got %d creates, want 2 (deltas=%+v)", creates, ev1.TaskDeltas)
+	if got := countTaskDeltaOp(ev1.TaskDeltas, tailer.TaskOpCreate); got != 2 {
+		t.Errorf("first write: got %d creates, want 2 (deltas=%+v)", got, ev1.TaskDeltas)
 	}
 	if ev1.TaskSnapshot == nil || len(*ev1.TaskSnapshot) != 2 {
 		t.Fatalf("first write: snapshot = %v, want 2 entries", ev1.TaskSnapshot)
@@ -130,18 +124,34 @@ func TestParser_TodoTool_TaskDeltas(t *testing.T) {
 
 	// Second write: same list, first now in_progress → an Update, no new creates.
 	ev2 := p.ParseLine(line(t, `{"role":"assistant","tool_calls":[{"id":"tc2","function":{"name":"todo","arguments":"{\"action\":\"write\",\"todos\":[{\"id\":\"1\",\"content\":\"bump java\",\"status\":\"in_progress\",\"priority\":\"high\"},{\"id\":\"2\",\"content\":\"upgrade dw\",\"status\":\"pending\",\"priority\":\"high\"}]}"}}],"message_id":"a2"}`))
-	var gotUpdate bool
-	for _, d := range ev2.TaskDeltas {
-		if d.Op == tailer.TaskOpCreate {
-			t.Errorf("second write should create nothing, got create %+v", d)
-		}
-		if d.Op == tailer.TaskOpUpdate && d.Status == tailer.TaskStatusInProgress {
-			gotUpdate = true
-		}
+	if got := countTaskDeltaOp(ev2.TaskDeltas, tailer.TaskOpCreate); got != 0 {
+		t.Errorf("second write should create nothing, got %d creates (deltas=%+v)", got, ev2.TaskDeltas)
 	}
-	if !gotUpdate {
+	if !hasTaskDeltaStatus(ev2.TaskDeltas, tailer.TaskOpUpdate, tailer.TaskStatusInProgress) {
 		t.Errorf("second write: expected an in_progress Update, deltas=%+v", ev2.TaskDeltas)
 	}
+}
+
+// countTaskDeltaOp counts deltas of the given op, keeping the assertions
+// above to one check per line instead of an inline accumulation loop.
+func countTaskDeltaOp(deltas []tailer.TaskDelta, op string) int {
+	n := 0
+	for _, d := range deltas {
+		if d.Op == op {
+			n++
+		}
+	}
+	return n
+}
+
+// hasTaskDeltaStatus reports whether any delta matches the given op+status pair.
+func hasTaskDeltaStatus(deltas []tailer.TaskDelta, op, status string) bool {
+	for _, d := range deltas {
+		if d.Op == op && d.Status == status {
+			return true
+		}
+	}
+	return false
 }
 
 // A cancelled todo is dropped from the tracked list (vibe excludes it from the plan).
@@ -196,6 +206,23 @@ func TestParser_SidecarEnrichment(t *testing.T) {
 
 	// A mid-turn assistant tool call: cwd + model attached, no tokens/contribution.
 	mid := p.ParseLine(line(t, `{"role":"assistant","tool_calls":[{"id":"a","function":{"name":"bash"}}],"message_id":"m1"}`))
+	assertSidecarMidTurn(t, mid)
+
+	// The terminal assistant message: context tokens + the usage contribution
+	// (the full session cumulative on this first turn_done) land here.
+	done := p.ParseLine(line(t, `{"role":"assistant","content":"done","message_id":"m2"}`))
+	assertSidecarFirstTurnDone(t, done)
+
+	// A SECOND turn_done reading the SAME (unchanged) sidecar must NOT re-emit
+	// the cumulative usage — the dedup that keeps backfill from double-counting.
+	done2 := p.ParseLine(line(t, `{"role":"assistant","content":"again","message_id":"m3"}`))
+	if done2.Contribution != nil {
+		t.Errorf("second turn_done on unchanged sidecar re-emitted usage: %+v", done2.Contribution)
+	}
+}
+
+func assertSidecarMidTurn(t *testing.T, mid *tailer.ParsedEvent) {
+	t.Helper()
 	if mid.CWD != "/Users/x/proj" {
 		t.Errorf("mid CWD = %q, want /Users/x/proj", mid.CWD)
 	}
@@ -205,10 +232,10 @@ func TestParser_SidecarEnrichment(t *testing.T) {
 	if mid.Tokens != nil || mid.Contribution != nil {
 		t.Errorf("mid should carry no tokens/contribution off turn_done, got %+v / %+v", mid.Tokens, mid.Contribution)
 	}
+}
 
-	// The terminal assistant message: context tokens + the usage contribution
-	// (the full session cumulative on this first turn_done) land here.
-	done := p.ParseLine(line(t, `{"role":"assistant","content":"done","message_id":"m2"}`))
+func assertSidecarFirstTurnDone(t *testing.T, done *tailer.ParsedEvent) {
+	t.Helper()
 	if done.EventType != "turn_done" {
 		t.Fatalf("EventType = %q, want turn_done", done.EventType)
 	}
@@ -226,13 +253,6 @@ func TestParser_SidecarEnrichment(t *testing.T) {
 	}
 	if done.Contribution.Model == "" {
 		t.Errorf("Contribution.Model empty, want the model so cost buckets correctly")
-	}
-
-	// A SECOND turn_done reading the SAME (unchanged) sidecar must NOT re-emit
-	// the cumulative usage — the dedup that keeps backfill from double-counting.
-	done2 := p.ParseLine(line(t, `{"role":"assistant","content":"again","message_id":"m3"}`))
-	if done2.Contribution != nil {
-		t.Errorf("second turn_done on unchanged sidecar re-emitted usage: %+v", done2.Contribution)
 	}
 }
 

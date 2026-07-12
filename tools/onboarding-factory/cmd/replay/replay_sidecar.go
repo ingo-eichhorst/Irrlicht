@@ -354,14 +354,27 @@ func (r *sidecarReplayer) runClassifier(domainMetrics *session.SessionMetrics, v
 	if domainMetrics.NoSubstantiveActivity {
 		return
 	}
-	if r.state == session.StateReady && domainMetrics.LastEventType != "" && grew {
+	if shouldForceReadyToWorking(r.state, domainMetrics, grew) {
 		r.emit(transitionFromMetrics(eventIdx, virtTime, cause,
 			r.state, session.StateWorking, services.ForceReadyToWorkingReason, domainMetrics))
 		r.state = session.StateWorking
 	}
 
 	newState, reason := services.ClassifyState(r.state, domainMetrics)
+	r.applyParentHoldAndSynthesizedWaiting(newState, reason, domainMetrics, eventIdx, virtTime, cause)
+}
 
+// shouldForceReadyToWorking mirrors SessionDetector's force-r→w guard (issue
+// #905): a ready session only bounces back to working on real transcript
+// growth or a synthetic hook event, never a content-less touch.
+func shouldForceReadyToWorking(state string, domainMetrics *session.SessionMetrics, grew bool) bool {
+	return state == session.StateReady && domainMetrics.LastEventType != "" && grew
+}
+
+// applyParentHoldAndSynthesizedWaiting applies the parent-child hold and
+// synthesized-waiting adjustments to newState/reason, then commits whichever
+// state change (if any) results.
+func (r *sidecarReplayer) applyParentHoldAndSynthesizedWaiting(newState, reason string, domainMetrics *session.SessionMetrics, eventIdx int, virtTime time.Time, cause transitionCause) {
 	// Parent-child hold: if any child is still working/waiting, keep the
 	// parent in its current state rather than letting it transition to
 	// ready. Matches SessionDetector's behaviour when children are live.

@@ -57,16 +57,24 @@ func TestDeriveVibeParentSessionID(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := deriveVibeParentSessionID(tc.path); got != tc.want {
-				t.Errorf("deriveVibeParentSessionID(%q) = %q, want %q", tc.path, got, tc.want)
-			}
-			// The unified entry point must resolve the same link.
-			if tc.want != "" {
-				if got := deriveParentSession(tc.path); got != tc.want {
-					t.Errorf("deriveParentSession(%q) = %q, want %q", tc.path, got, tc.want)
-				}
-			}
+			assertDeriveVibeParentSessionID(t, tc.path, tc.want)
 		})
+	}
+}
+
+// assertDeriveVibeParentSessionID checks both the vibe-specific rule and,
+// for the cases where it resolves a link, that the unified entry point
+// (deriveParentSession) agrees.
+func assertDeriveVibeParentSessionID(t *testing.T, path, want string) {
+	t.Helper()
+	if got := deriveVibeParentSessionID(path); got != want {
+		t.Errorf("deriveVibeParentSessionID(%q) = %q, want %q", path, got, want)
+	}
+	if want == "" {
+		return
+	}
+	if got := deriveParentSession(path); got != want {
+		t.Errorf("deriveParentSession(%q) = %q, want %q", path, got, want)
 	}
 }
 

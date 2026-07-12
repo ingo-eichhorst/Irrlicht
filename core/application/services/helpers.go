@@ -160,10 +160,16 @@ func deriveVibeParentSessionID(transcriptPath string) string {
 		return ""
 	}
 	parent := filepath.Base(filepath.Dir(agentsDir)) // <parent>
-	if parent == "" || parent == "." || parent == string(filepath.Separator) {
+	if isEmptyOrRootDirName(parent) {
 		return ""
 	}
 	return parent
+}
+
+// isEmptyOrRootDirName reports whether filepath.Base/Dir bottomed out at the
+// filesystem root instead of yielding a real directory name.
+func isEmptyOrRootDirName(name string) bool {
+	return name == "" || name == "." || name == string(filepath.Separator)
 }
 
 // deriveGeminiParentSessionID extracts the parent's registered session ID from a

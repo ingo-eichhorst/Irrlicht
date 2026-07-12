@@ -41,6 +41,12 @@ type sidecarCache struct {
 	state *sidecarState
 }
 
+// matches reports whether the cached state is still fresh for fi — same
+// mtime and size as what was last read.
+func (c *sidecarCache) matches(fi os.FileInfo) bool {
+	return c.state != nil && fi.ModTime().Equal(c.mtime) && fi.Size() == c.size
+}
+
 // sidecarPath is meta.json sitting next to the transcript.
 func sidecarPath(transcriptPath string) string {
 	return filepath.Join(filepath.Dir(transcriptPath), "meta.json")
@@ -56,7 +62,7 @@ func readSidecar(transcriptPath string, cache *sidecarCache) *sidecarState {
 	if err != nil {
 		return cache.state
 	}
-	if cache.state != nil && fi.ModTime().Equal(cache.mtime) && fi.Size() == cache.size {
+	if cache.matches(fi) {
 		return cache.state
 	}
 	data, err := os.ReadFile(path)

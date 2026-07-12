@@ -58,8 +58,14 @@ func sessionIDFromPath(path string) string {
 		return ""
 	}
 	id := filepath.Base(filepath.Dir(path))
-	if id == "" || id == "." || id == string(filepath.Separator) {
+	if isEmptyOrRootDirName(id) {
 		return ""
 	}
 	return id
+}
+
+// isEmptyOrRootDirName reports whether filepath.Base/Dir bottomed out at the
+// filesystem root instead of yielding a real directory name.
+func isEmptyOrRootDirName(name string) bool {
+	return name == "" || name == "." || name == string(filepath.Separator)
 }

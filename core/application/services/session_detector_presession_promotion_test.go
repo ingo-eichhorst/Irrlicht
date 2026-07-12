@@ -109,9 +109,18 @@ func TestSessionDetector_PreSession_GracefulPromotionWhenCWDKnown_Issue906(t *te
 		t.Errorf("presession proc-70001 should have been retired once the real session arrived")
 	}
 
+	assertRetiredViaGracefulPromotion(t, rec, "proc-70001")
+}
+
+// assertRetiredViaGracefulPromotion checks that sessionID was retired via the
+// graceful CWD-matched promotion (KindPreSessionRemoved), not the crude
+// same-PID cleanup path (KindTranscriptRemoved) — the distinction issue #906
+// is about.
+func assertRetiredViaGracefulPromotion(t *testing.T, rec *mockRecorder, sessionID string) {
+	t.Helper()
 	var sawGracefulPromotion, sawCrudeSamePIDCleanup bool
 	for _, ev := range rec.snapshot() {
-		if ev.SessionID != "proc-70001" {
+		if ev.SessionID != sessionID {
 			continue
 		}
 		switch ev.Kind {
@@ -122,9 +131,9 @@ func TestSessionDetector_PreSession_GracefulPromotionWhenCWDKnown_Issue906(t *te
 		}
 	}
 	if !sawGracefulPromotion {
-		t.Errorf("expected proc-70001 to be retired via KindPreSessionRemoved (graceful CWD-matched promotion)")
+		t.Errorf("expected %s to be retired via KindPreSessionRemoved (graceful CWD-matched promotion)", sessionID)
 	}
 	if sawCrudeSamePIDCleanup {
-		t.Errorf("proc-70001 was retired via the crude same-PID cleanup path instead of graceful promotion")
+		t.Errorf("%s was retired via the crude same-PID cleanup path instead of graceful promotion", sessionID)
 	}
 }

@@ -47,7 +47,9 @@ type Parser struct {
 // the transcript path so the parser can locate the sibling meta.json sidecar.
 func (p *Parser) SetTranscriptPath(path string) { p.path = path }
 
-// ParseLine normalizes one Vibe transcript line into a ParsedEvent.
+// ParseLine normalizes one Vibe transcript line into a ParsedEvent. Each role
+// carries its own well-defined shape, so the per-role logic is delegated to a
+// dedicated parseXMessage function instead of growing one large switch body.
 func (p *Parser) ParseLine(raw map[string]any) *tailer.ParsedEvent {
 	role, _ := raw["role"].(string)
 	if role == "" {
@@ -57,58 +59,77 @@ func (p *Parser) ParseLine(raw map[string]any) *tailer.ParsedEvent {
 
 	switch role {
 	case "user":
-		// Vibe writes the result of a `!`-shell escape as an injected:true user
-		// message ("Manual `!` command result from the user. Use this as context
-		// only. …"). It is context for the NEXT real turn, not a user turn of its
-		// own: treating it as activity flips the session to working with no
-		// turn_done to ever close it, so the session sticks in working after the
-		// shell command returns. Skip it — the real prompt that follows
-		// (injected:false) drives the turn. Injected user messages are ALWAYS the
-		// shell-escape wrapper (verified across live 2.19.0 transcripts).
-		if injected, _ := raw["injected"].(bool); injected {
-			ev.Skip = true
-			return ev
-		}
-		ev.EventType = "user_message"
-		ev.ClearToolNames = true
-		if c, _ := raw["content"].(string); c != "" {
-			ev.UserText = strings.TrimSpace(c)
-		}
-
+		parseUserMessage(raw, ev)
 	case "assistant":
-		if content, _ := raw["content"].(string); strings.TrimSpace(content) != "" {
-			ev.AssistantText = tailer.TruncateAssistantText(content)
-			if est := tailer.ScanTaskEstimate(content, ev.Timestamp); est != nil {
-				ev.TaskEstimate = est
-			}
-			if s := tailer.ScanTaskSummary(content, ev.Timestamp); s != nil {
-				ev.TaskSummary = s
-			}
-		}
-		if toolUses := parseToolCalls(raw); len(toolUses) > 0 {
-			// Mid-turn: the model is invoking tools and will produce more
-			// events; keep the session working.
-			ev.EventType = "assistant_message"
-			ev.ToolUses = toolUses
-			p.appendTodoDeltas(raw, ev)
-		} else {
-			// No tool calls — this is the terminal message of the turn.
-			ev.EventType = "turn_done"
-		}
-
+		p.parseAssistantMessage(raw, ev)
 	case "tool":
-		ev.EventType = "tool_result"
-		if id, _ := raw["tool_call_id"].(string); id != "" {
-			ev.ToolResultIDs = []string{id}
-		}
-
+		parseToolResultMessage(raw, ev)
 	default:
 		ev.Skip = true
+		return ev
+	}
+	if ev.Skip {
 		return ev
 	}
 
 	p.applySidecar(ev)
 	return ev
+}
+
+// parseUserMessage handles role:"user" lines.
+//
+// Vibe writes the result of a `!`-shell escape as an injected:true user
+// message ("Manual `!` command result from the user. Use this as context
+// only. …"). It is context for the NEXT real turn, not a user turn of its
+// own: treating it as activity flips the session to working with no
+// turn_done to ever close it, so the session sticks in working after the
+// shell command returns. Skip it — the real prompt that follows
+// (injected:false) drives the turn. Injected user messages are ALWAYS the
+// shell-escape wrapper (verified across live 2.19.0 transcripts).
+func parseUserMessage(raw map[string]any, ev *tailer.ParsedEvent) {
+	if injected, _ := raw["injected"].(bool); injected {
+		ev.Skip = true
+		return
+	}
+	ev.EventType = "user_message"
+	ev.ClearToolNames = true
+	if c, _ := raw["content"].(string); c != "" {
+		ev.UserText = strings.TrimSpace(c)
+	}
+}
+
+// parseAssistantMessage handles role:"assistant" lines: tool_calls[] means
+// the turn continues (working); no tool_calls means this is the turn's
+// terminal message (turn_done).
+func (p *Parser) parseAssistantMessage(raw map[string]any, ev *tailer.ParsedEvent) {
+	if content, _ := raw["content"].(string); strings.TrimSpace(content) != "" {
+		ev.AssistantText = tailer.TruncateAssistantText(content)
+		if est := tailer.ScanTaskEstimate(content, ev.Timestamp); est != nil {
+			ev.TaskEstimate = est
+		}
+		if s := tailer.ScanTaskSummary(content, ev.Timestamp); s != nil {
+			ev.TaskSummary = s
+		}
+	}
+	if toolUses := parseToolCalls(raw); len(toolUses) > 0 {
+		// Mid-turn: the model is invoking tools and will produce more
+		// events; keep the session working.
+		ev.EventType = "assistant_message"
+		ev.ToolUses = toolUses
+		p.appendTodoDeltas(raw, ev)
+	} else {
+		// No tool calls — this is the terminal message of the turn.
+		ev.EventType = "turn_done"
+	}
+}
+
+// parseToolResultMessage handles role:"tool" lines: a tool result linked to
+// its call by tool_call_id.
+func parseToolResultMessage(raw map[string]any, ev *tailer.ParsedEvent) {
+	ev.EventType = "tool_result"
+	if id, _ := raw["tool_call_id"].(string); id != "" {
+		ev.ToolResultIDs = []string{id}
+	}
 }
 
 // applySidecar enriches an event with cwd + model on every event (so cwd lands

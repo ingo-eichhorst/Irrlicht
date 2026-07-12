@@ -131,9 +131,7 @@ func TestParseLiteLLMData_KeepsMistralPrefixed(t *testing.T) {
 	if !ok {
 		t.Fatal("missing mistral/mistral-medium-3-5 — the mistral/ exception should keep it")
 	}
-	if mc.Pricing == nil || mc.Pricing.InputPerMTok != 1.5 || mc.Pricing.OutputPerMTok != 7.5 {
-		t.Errorf("pricing = %+v, want InputPerMTok=1.5 OutputPerMTok=7.5", mc.Pricing)
-	}
+	assertMistralPricing(t, mc.Pricing, 1.5, 7.5)
 
 	// The Bedrock-hosted Mistral entry uses a DOT not a slash ("mistral.xxx"),
 	// so it was never affected by the skip rule either way — kept as before.
@@ -144,6 +142,21 @@ func TestParseLiteLLMData_KeepsMistralPrefixed(t *testing.T) {
 	// Other provider-prefixed re-hostings must still be skipped.
 	if _, ok := config.Models["bedrock/anthropic.claude-sonnet-4-6"]; ok {
 		t.Error("bedrock/anthropic.claude-sonnet-4-6 should still be skipped — the exception is scoped to mistral/ only")
+	}
+}
+
+// assertMistralPricing checks the input/output per-million-token rates as
+// two independent comparisons instead of one compound conditional.
+func assertMistralPricing(t *testing.T, pricing *ModelPricing, wantIn, wantOut float64) {
+	t.Helper()
+	if pricing == nil {
+		t.Fatal("pricing is nil")
+	}
+	if pricing.InputPerMTok != wantIn {
+		t.Errorf("InputPerMTok = %v, want %v", pricing.InputPerMTok, wantIn)
+	}
+	if pricing.OutputPerMTok != wantOut {
+		t.Errorf("OutputPerMTok = %v, want %v", pricing.OutputPerMTok, wantOut)
 	}
 }
 

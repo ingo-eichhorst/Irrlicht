@@ -568,6 +568,14 @@ func (d *SessionDetector) processActivityLocked(id agent.Identity, state *sessio
 	// plus file-based children from the repo). See ComputeSubagentSummary.
 	d.refreshSubagentSummary(state)
 
+	d.finalizeActivityPass(state, ev, transcriptGrew)
+}
+
+// finalizeActivityPass persists this pass's outcome and runs the parent/child
+// follow-ups. Always runs last, so — unlike the rest of processActivityLocked
+// — nothing here is ordering-sensitive relative to the caller's other steps;
+// extracted purely to keep processActivityLocked's own branching down.
+func (d *SessionDetector) finalizeActivityPass(state *session.SessionState, ev agent.Event, transcriptGrew bool) {
 	// Only treat this pass as an activity event when the transcript actually
 	// grew. A bare refresh-tick re-read of a frozen transcript leaves the
 	// activity markers (UpdatedAt / EventCount / LastEvent) alone so the

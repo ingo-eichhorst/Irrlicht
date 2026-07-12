@@ -88,24 +88,23 @@ func TestSessionIDFromPath(t *testing.T) {
 }
 
 func TestProcessCmdRegex(t *testing.T) {
-	matches := []string{
+	assertCmdRegexMatches(t, true, []string{
 		"/Users/x/.local/share/uv/tools/mistral-vibe/bin/python3 /Users/x/.local/bin/vibe --yolo",
 		"/Users/x/.local/bin/vibe",
 		"/usr/bin/vibe --model devstral",
-	}
-	for _, cmd := range matches {
-		if !processCmdRegex.MatchString(cmd) {
-			t.Errorf("expected match for %q", cmd)
-		}
-	}
-	nonMatches := []string{
+	})
+	assertCmdRegexMatches(t, false, []string{
 		"irrlichd --watch /Users/x/.vibe/logs/session", // the watcher must not self-trip
 		"vim /Users/x/notes-about-vibe.md",
 		"grep vibe README.md",
-	}
-	for _, cmd := range nonMatches {
-		if processCmdRegex.MatchString(cmd) {
-			t.Errorf("expected NO match for %q", cmd)
+	})
+}
+
+func assertCmdRegexMatches(t *testing.T, want bool, cmds []string) {
+	t.Helper()
+	for _, cmd := range cmds {
+		if got := processCmdRegex.MatchString(cmd); got != want {
+			t.Errorf("processCmdRegex.MatchString(%q) = %v, want %v", cmd, got, want)
 		}
 	}
 }

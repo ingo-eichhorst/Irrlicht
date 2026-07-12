@@ -299,24 +299,36 @@ func (a *Adapter) GetCWDFromTranscript(transcriptPath string) string {
 		}
 	}
 	if lastCWD == "" {
+		lastCWD = cwdFromFallbackSidecars(transcriptPath)
+	}
+	return lastCWD
+}
+
+// cwdFromFallbackSidecars tries each agent-specific sidecar/index convention
+// in turn, stopping at the first that resolves a cwd. These are the agents
+// whose transcript lines never carry a cwd at all, so GetCWDFromTranscript's
+// main scan above always comes up empty for them.
+func cwdFromFallbackSidecars(transcriptPath string) string {
+	extractors := []func(string) string{
 		// Some agents (Kiro CLI) record the cwd only in a metadata sidecar
 		// next to the transcript, never in the JSONL lines themselves.
-		lastCWD = transcript.ExtractCWDFromSidecar(transcriptPath)
-	}
-	if lastCWD == "" {
+		transcript.ExtractCWDFromSidecar,
 		// Antigravity records only its sandbox scratch dir in the transcript
 		// body; the real workspace lives in the sibling history.jsonl index,
 		// keyed by conversationId (no-op for non-antigravity paths).
-		lastCWD = transcript.ExtractCWDFromAntigravityHistory(transcriptPath)
-	}
-	if lastCWD == "" {
+		transcript.ExtractCWDFromAntigravityHistory,
 		// mistral-vibe never writes cwd into messages.jsonl, and its meta.json
 		// sidecar doesn't follow the generic same-basename convention above
 		// (fixed filename, cwd nested under environment.working_directory) —
 		// see issue #906 (presession promotion can't CWD-match without this).
-		lastCWD = transcript.ExtractCWDFromVibeMetaJSON(transcriptPath)
+		transcript.ExtractCWDFromVibeMetaJSON,
 	}
-	return lastCWD
+	for _, extract := range extractors {
+		if cwd := extract(transcriptPath); cwd != "" {
+			return cwd
+		}
+	}
+	return ""
 }
 
 // GetBranchFromTranscript tries to extract the gitBranch field from the last
