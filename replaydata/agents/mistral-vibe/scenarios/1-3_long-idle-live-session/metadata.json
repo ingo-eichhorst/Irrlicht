@@ -7,7 +7,7 @@
     "agent_cli_version": "2.19.0",
     "daemon_version": "0.5.5+e943e26",
     "confidence": 0.72,
-    "notes": "agent=yes; daemon=bug (session SURVIVES idle past TTL — core claim holds — but a vibe-specific spurious working flicker fires ~2s after each turn_done, breaking the strict no-working-during-idle invariant; issue prepared); driver=ready (wait_turn/sleep ported and drove clean)"
+    "notes": "agent=yes; daemon=bug (session SURVIVES idle past TTL — core claim holds — but a vibe-specific spurious working flicker fires ~2s after each turn_done, breaking the strict no-working-during-idle invariant; see issue #988); driver=ready (wait_turn/sleep ported and drove clean)"
   },
   "details": {
     "assessment": {
@@ -26,7 +26,7 @@
         "tokens_nonzero=true assumes vibe writes a non-zero stats.context_tokens to meta.json by the first turn_done; provisional until record confirms the sidecar is populated early.",
         "Recording exercises a ~15-20s idle window; production sessions idle for hours. duration_at_least_ms is a floor, so longer real idles still pass.",
         "context-WINDOW (max) is not resolved for mistral models (absent from core/pkg/capacity); only the raw context-token count is emitted. The scenario asserts neither, so daemon stays full.",
-        "RECORDING FINDING (2026-07-07-22-13-22): the vibe session is NOT reaped during the 20s idle (turn 2 resumes at +22s, past the 15s TTL) — survival holds. BUT a spurious force ready→working→ready flicker fires ~2s after EACH turn_done (events 22:13:28.530 and 22:13:50.589) with NO transcript_activity of its own, following a debounce_coalesced. Sibling claudecode/codex long-idle recordings hold ready cleanly with NO such flicker, so this is vibe-specific — the multi-file per-turn write (messages.jsonl + meta.json sidecar) trips the debounce/force-first-activity classifier. This breaks the idle_window \"no state_transition to working\" invariant → daemon=bug, known_failing, issue prepared."
+        "RECORDING FINDING (2026-07-07-22-13-22): the vibe session is NOT reaped during the 20s idle (turn 2 resumes at +22s, past the 15s TTL) — survival holds. BUT a spurious force ready→working→ready flicker fires ~2s after EACH turn_done (events 22:13:28.530 and 22:13:50.589) with NO transcript_activity of its own, following a debounce_coalesced. Sibling claudecode/codex long-idle recordings hold ready cleanly with NO such flicker, so this is vibe-specific — the multi-file per-turn write (messages.jsonl + meta.json sidecar) trips the debounce/force-first-activity classifier. This breaks the idle_window \"no state_transition to working\" invariant → daemon=bug, known_failing, see issue #988."
       ],
       "sources": [
         {

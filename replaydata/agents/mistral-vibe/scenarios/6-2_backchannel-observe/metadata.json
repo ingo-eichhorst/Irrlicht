@@ -7,7 +7,7 @@
     "agent_cli_version": "2.19.0",
     "daemon_version": "0.5.5+5e22e47.dirty",
     "confidence": 0.8,
-    "notes": "RE-ASSESS after Control fix (5e22e47c). agent=yes (vibe renders a TUI-only tool-permission dialog); daemon=bug — the read-back CONSENT gate is now open (vibe declares Control+ControlPermission), but DetectUI's trustDialogMarkers remain Claude-Code-only, so vibe's dialog is never recognized and the waiting edge cannot fire. One feasible blocker left (add vibe markers), a documented follow-up. driver=ready (send+sleep). Known-failing."
+    "notes": "RE-ASSESS after Control fix (5e22e47c). agent=yes (vibe renders a TUI-only tool-permission dialog); daemon=bug — the read-back CONSENT gate is now open (vibe declares Control+ControlPermission), but DetectUI's trustDialogMarkers remain Claude-Code-only, so vibe's dialog is never recognized and the waiting edge cannot fire. One feasible blocker left (add vibe markers) — see issue #988. driver=ready (send+sleep). Known-failing."
   },
   "details": {
     "assessment": {
