@@ -58,6 +58,19 @@
         --noise-opacity: 0;
         --grid-color: rgba(60, 100, 200, 0.18);
         --grid-opacity: 0.04;
+        /* State-hue overrides (issue #984) — the dark-palette hues above are
+           reused as-is for the 12%-alpha wash, but as *text* (e.g.
+           .summary-question, .summary-title.no-summary, the history filter
+           badges) they fail WCAG AA against a light surface: --waiting
+           measured ~1.9:1, --ready ~2.0:1, --working ~3.4-3.7:1, all under
+           the 4.5:1 minimum for normal-size text. These are darkened,
+           same-hue re-tunings that clear 4.5:1 against the composited wash. */
+        --working: #6526F3;
+        --working-dim: rgba(101, 38, 243, 0.12);
+        --waiting: #884F00;
+        --waiting-dim: rgba(136, 79, 0, 0.12);
+        --ready: #207936;
+        --ready-dim: rgba(32, 121, 54, 0.12);
       }
     }
     :root[data-theme="light"] {
@@ -75,6 +88,13 @@
       --noise-opacity: 0;
       --grid-color: rgba(60, 100, 200, 0.18);
       --grid-opacity: 0.04;
+      /* See the matching comment in the media-query block above. */
+      --working: #6526F3;
+      --working-dim: rgba(101, 38, 243, 0.12);
+      --waiting: #884F00;
+      --waiting-dim: rgba(136, 79, 0, 0.12);
+      --ready: #207936;
+      --ready-dim: rgba(32, 121, 54, 0.12);
     }
 
     body {

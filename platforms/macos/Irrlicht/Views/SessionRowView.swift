@@ -6,9 +6,17 @@ import SwiftUI
 /// Shared shape for the row's single-line notice pills (user-intent, pending
 /// question, cache-bloat badge): tinted text on a dim background, full-width,
 /// truncating rather than wrapping.
+///
+/// `color` and `wash` are separate (issue #984): `wash` (defaulting to
+/// `color`) tints the 12%-alpha background, kept at the plain brand hue so
+/// dots/glows elsewhere stay visually consistent; `color` draws the text and
+/// can be a different, per-appearance-tuned value where the brand hue itself
+/// doesn't clear WCAG AA against that wash (see `IrrColors.intentPillText`/
+/// `waitingPillText`).
 private struct PillText: ViewModifier {
     let color: Color
-    var font: Font = .system(size: 9)
+    let wash: Color
+    var font: Font = .system(size: 10)
 
     func body(content: Content) -> some View {
         content
@@ -19,14 +27,14 @@ private struct PillText: ViewModifier {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 5)
             .padding(.vertical, 3)
-            .background(color.opacity(0.12))
+            .background(wash.opacity(0.12))
             .cornerRadius(IrrRadius.sm)
     }
 }
 
 extension View {
-    fileprivate func pill(color: Color, font: Font = .system(size: 9)) -> some View {
-        modifier(PillText(color: color, font: font))
+    fileprivate func pill(color: Color, wash: Color? = nil, font: Font = .system(size: 10)) -> some View {
+        modifier(PillText(color: color, wash: wash ?? color, font: font))
     }
 }
 
@@ -145,14 +153,14 @@ struct SessionRowView: View {
                 // User intent (beta): what the user asked for.
                 if showIntent, let s = summaryLine {
                     Text(s)
-                        .pill(color: IrrColors.intent)
+                        .pill(color: IrrColors.intentPillText, wash: IrrColors.intent)
                         .tooltip(summaryFull ?? s)
                 }
 
                 // Pending question: what the agent is asking.
                 if showQuestion, let q = questionLine {
                     Text(q)
-                        .pill(color: IrrColors.waiting)
+                        .pill(color: IrrColors.waitingPillText, wash: IrrColors.waiting)
                         // Surface the full prompt on hover.
                         .tooltip(questionFull ?? q)
                 }

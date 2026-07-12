@@ -207,14 +207,24 @@ final class SessionRowSnapshotTests: XCTestCase {
     }
 
     private func host(_ view: some View, height: CGFloat = 48) -> NSView {
+        host(view, height: height, appearance: .darkAqua)
+    }
+
+    private func hostLight(_ session: SessionState, height: CGFloat = 48) -> NSView {
+        host(SessionRowView(session: session, agentNumber: 1), height: height, appearance: .aqua)
+    }
+
+    private func host(_ view: some View, height: CGFloat = 48, appearance: NSAppearance.Name) -> NSView {
         let wrapped = view
             .environmentObject(sessionManager)
             .frame(width: 350, height: height)
             .background(Color(NSColor.windowBackgroundColor))
         let hosting = NSHostingView(rootView: wrapped)
-        // Pin to dark aqua so snapshots don't depend on the current system
-        // appearance (Color(NSColor.windowBackgroundColor) adapts otherwise).
-        hosting.appearance = NSAppearance(named: .darkAqua)
+        // Pin appearance explicitly so snapshots don't depend on the current
+        // system appearance (Color(NSColor.windowBackgroundColor) adapts
+        // otherwise) — most tests pin dark aqua; the light-mode pill
+        // contrast tests below (issue #984) pin aqua instead.
+        hosting.appearance = NSAppearance(named: appearance)
         hosting.frame = CGRect(x: 0, y: 0, width: 350, height: height)
         hosting.layoutSubtreeIfNeeded()
         return hosting
@@ -280,6 +290,24 @@ final class SessionRowSnapshotTests: XCTestCase {
             )
         )
         let view = host(session, height: 96)
+        assertSnapshot(of: view, as: .image)
+    }
+
+    /// Issue #984 — the intent/question pills' text color used to be a fixed
+    /// hex that measured under WCAG AA (down to 2.03:1) against the light-
+    /// appearance wash. Pinning aqua here (every other test pins dark aqua)
+    /// guards the light-mode leg of that fix, which otherwise has no
+    /// snapshot coverage at all.
+    func testUserIntentAndQuestionPillsReadableInLightMode() {
+        UserDefaults.standard.set(true, forKey: "userIntentDisplay")
+        let session = makeSession(
+            state: .waiting,
+            metrics: makeMetrics(
+                lastText: "Should I run the migration?",
+                summary: "Add OAuth login to the web dashboard"
+            )
+        )
+        let view = hostLight(session, height: 96)
         assertSnapshot(of: view, as: .image)
     }
 

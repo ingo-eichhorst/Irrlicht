@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 // Tokens transcribed from tools/irrlicht-design-system/colors_and_type.css.
@@ -58,6 +59,19 @@ enum IrrColors {
     static let pressureHigh     = Color(hex: IrrHex.pressureHigh)
     static let pressureCritical = Color(hex: IrrHex.pressureCritical)
 
+    // Pill *text* colors for the summary/question boxes (issue #984). Text is
+    // drawn at full opacity on a 12%-alpha wash of `intent`/`waiting`, and
+    // `Color(hex:)` isn't appearance-aware, so the fixed brand hues measured
+    // out at 3.69:1 / 2.03:1 against the composited wash — well under WCAG
+    // AA's 4.5:1 for 9pt text — in one or both appearances. These are
+    // per-appearance re-tunings of the same hue (not new brand colors) sized
+    // to clear 4.5:1 against the actual measured wash color in each mode
+    // (light: #F4EBFA / #FDF3E7, dark: #2E2534 / #372D21); the wash itself
+    // keeps using `intent`/`waiting` unchanged so glows/dots elsewhere are
+    // untouched.
+    static let intentPillText  = Color.adaptive(light: "#8322B4", dark: "#C887E8")
+    static let waitingPillText = Color.adaptive(light: "#8F5300", dark: IrrHex.waiting)
+
     static let wsConnected    = Color(hex: IrrHex.wsConnected)
     static let wsConnecting   = Color(hex: IrrHex.wsConnecting)
     static let wsDisconnected = Color(hex: IrrHex.wsDisconnected)
@@ -114,6 +128,18 @@ enum IrrMotion {
 }
 
 extension Color {
+    /// Resolves to `light` in aqua appearance and `dark` in dark aqua —
+    /// for tokens that need a genuinely different value per appearance
+    /// (not just a fixed color that happens to sit on an adaptive system
+    /// surface). `Color(hex:)` below is a single fixed color; this is the
+    /// per-appearance counterpart.
+    static func adaptive(light: String, dark: String) -> Color {
+        Color(NSColor(name: nil) { appearance in
+            let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            return NSColor(Color(hex: isDark ? dark : light))
+        })
+    }
+
     /// Initialise from a hex string (`#RGB`, `#RRGGBB`, or `#AARRGGBB` — `#`
     /// optional). The token namespaces above are the canonical source; this
     /// initializer exists so they can be expressed as literal hex.
