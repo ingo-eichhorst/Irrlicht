@@ -154,8 +154,8 @@ func deriveVibeParentSessionID(transcriptPath string) string {
 	if filepath.Base(transcriptPath) != "messages.jsonl" {
 		return ""
 	}
-	childDir := filepath.Dir(transcriptPath)  // .../<parent>/agents/<child>
-	agentsDir := filepath.Dir(childDir)       // .../<parent>/agents
+	childDir := filepath.Dir(transcriptPath) // .../<parent>/agents/<child>
+	agentsDir := filepath.Dir(childDir)      // .../<parent>/agents
 	if filepath.Base(agentsDir) != "agents" {
 		return ""
 	}
