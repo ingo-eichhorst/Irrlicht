@@ -292,15 +292,45 @@ type ConcurrencyResult struct {
 	Current       float64              `json:"current"`
 }
 
+// StateSeriesResult is the reconstruction of per-project, per-state agent
+// counts over time, returned by ConcurrencyReader.StateSeries (issue #981,
+// the optional "time-in-state" second half of #751). It parallels
+// ConcurrencyResult: BucketStarts holds each bucket's start (unix seconds).
+// ByState maps each canonical state (session.StateWorking/StateWaiting/
+// StateReady) to a project -> per-bucket slice (each slice has len ==
+// len(BucketStarts)). Working/waiting counts are per-bucket peak concurrency
+// in that specific state — the same semantics as ConcurrencyResult.ByKey,
+// just split by state instead of merged into one "active" count. Ready
+// counts are the number of sessions that transitioned to ready within the
+// bucket: ready is session.go's terminal state, with no duration to be
+// concurrent in, so it's a transition histogram rather than a concurrency
+// count. Peak/Average/Current mirror ConcurrencyResult's working+waiting
+// summary (the "how busy" headline), computed over the same reconstructed
+// intervals.
+type StateSeriesResult struct {
+	Start         int64                           `json:"start"`
+	End           int64                           `json:"end"`
+	BucketSeconds int64                           `json:"bucket_seconds"`
+	BucketStarts  []int64                         `json:"bucket_starts"`
+	ByState       map[string]map[string][]float64 `json:"by_state"`
+	Peak          float64                         `json:"peak"`
+	Average       float64                         `json:"average"`
+	Current       float64                         `json:"current"`
+}
+
 // ConcurrencyReader reconstructs a concurrent-agents time series from the
 // lifecycle recordings irrlichd writes under <dataDir>/recordings when started
 // with --record (issue #751). It is the read-side counterpart to EventRecorder
 // and the recordings analog of CostTracker.CostSeries. Implementations must be
-// safe for concurrent use. AgentsSeries honors SeriesQuery's window, bucket
-// width, and scope filter; the group axis is always project (the only axis
-// recordings carry), so Group is ignored.
+// safe for concurrent use. AgentsSeries/StateSeries honor SeriesQuery's window,
+// bucket width, and scope filter; the group axis is always project (the only
+// axis recordings carry), so Group is ignored.
 type ConcurrencyReader interface {
 	AgentsSeries(q SeriesQuery) (*ConcurrencyResult, error)
+	// StateSeries is AgentsSeries' per-state counterpart (issue #981): where
+	// AgentsSeries merges working+waiting into one "active" count, StateSeries
+	// keeps the three states separate — see StateSeriesResult.
+	StateSeries(q SeriesQuery) (*StateSeriesResult, error)
 }
 
 // CostTracker persists per-session cost/token snapshots so clients can query

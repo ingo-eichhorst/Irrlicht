@@ -160,6 +160,124 @@ func collectScopedIntervals(timelines map[string]*sessionTimeline, q outbound.Se
 	return byProject, all, current
 }
 
+// StateSeries is AgentsSeries' per-state counterpart (issue #981): it keeps
+// working/waiting separate instead of merging them into one "active" count,
+// and adds ready as a per-bucket transition histogram. Same coarsening-by-span
+// and empty-result conventions as AgentsSeries; one additional pass over the
+// already-loaded timelines, no extra file I/O.
+func (t *ConcurrencyTracker) StateSeries(q outbound.SeriesQuery) (*outbound.StateSeriesResult, error) {
+	start, end, bucketSeconds := q.Start, q.End, q.BucketSeconds
+	if bucketSeconds <= 0 || end <= start {
+		return emptyStateSeriesResult(start, end, bucketSeconds), nil
+	}
+	if span := end - start; span/bucketSeconds+1 > maxSeriesBuckets {
+		bucketSeconds = (span + maxSeriesBuckets - 1) / maxSeriesBuckets
+	}
+	n := int((end - start + bucketSeconds - 1) / bucketSeconds)
+	out := &outbound.StateSeriesResult{
+		Start:         start,
+		End:           end,
+		BucketSeconds: bucketSeconds,
+		BucketStarts:  make([]int64, n),
+		ByState: map[string]map[string][]float64{
+			session.StateWorking: {},
+			session.StateWaiting: {},
+			session.StateReady:   {},
+		},
+	}
+	for i := range out.BucketStarts {
+		out.BucketStarts[i] = start + int64(i)*bucketSeconds
+	}
+
+	timelines, err := t.loadTimelines()
+	if err != nil {
+		return nil, err
+	}
+
+	byState, readyByProject, current := collectScopedStateIntervals(timelines, q, start, end)
+	out.Current = current
+
+	var allActive []interval
+	for state, byProject := range byState {
+		for project, ivs := range byProject {
+			dst, _ := bucketPeakSeries(ivs, start, bucketSeconds, n)
+			out.ByState[state][project] = dst
+			allActive = append(allActive, ivs...)
+		}
+	}
+	out.Peak, out.Average = totalPeakAndAverage(allActive, start, end)
+
+	for project, events := range readyByProject {
+		dst := make([]float64, n)
+		for _, ts := range events {
+			idx := int((ts - start) / bucketSeconds)
+			if idx >= 0 && idx < n {
+				dst[idx]++
+			}
+		}
+		out.ByState[session.StateReady][project] = dst
+	}
+
+	return out, nil
+}
+
+// collectScopedStateIntervals is collectScopedIntervals' per-state
+// counterpart: it gathers each in-scope session's working/waiting intervals,
+// clamped to [start, end) and grouped by state then project, plus every ready
+// transition timestamp landing in [start, end), grouped by project. current
+// counts sessions active (in either state) strictly across end, matching
+// collectScopedIntervals' "still active now" semantics exactly.
+func collectScopedStateIntervals(timelines map[string]*sessionTimeline, q outbound.SeriesQuery, start, end int64) (byState map[string]map[string][]interval, readyByProject map[string][]int64, current float64) {
+	byState = map[string]map[string][]interval{
+		session.StateWorking: {},
+		session.StateWaiting: {},
+	}
+	readyByProject = map[string][]int64{}
+	for sid, tl := range timelines {
+		if !concurrencyScopeMatches(q, sid, tl.project) {
+			continue
+		}
+		project := tl.project
+		if project == "" {
+			project = concurrencyUnknownProject
+		}
+		ivs, readyAt := tl.stateReconstruction()
+		for _, iv := range ivs {
+			if iv.enter < end && iv.exit > end {
+				current++ // spans the window end → still active "now"
+			}
+			cl, ok := clampInterval(interval{iv.enter, iv.exit}, start, end)
+			if !ok {
+				continue
+			}
+			byState[iv.state][project] = append(byState[iv.state][project], cl)
+		}
+		for _, ts := range readyAt {
+			if ts < start || ts >= end {
+				continue
+			}
+			readyByProject[project] = append(readyByProject[project], ts)
+		}
+	}
+	return byState, readyByProject, current
+}
+
+// emptyStateSeriesResult returns a valid zero-data result so the dashboard
+// renders a clean empty state instead of erroring.
+func emptyStateSeriesResult(start, end, bucketSeconds int64) *outbound.StateSeriesResult {
+	return &outbound.StateSeriesResult{
+		Start:         start,
+		End:           end,
+		BucketSeconds: bucketSeconds,
+		BucketStarts:  []int64{},
+		ByState: map[string]map[string][]float64{
+			session.StateWorking: {},
+			session.StateWaiting: {},
+			session.StateReady:   {},
+		},
+	}
+}
+
 // clampInterval clips iv to [start, end), reporting ok=false when the
 // clamped span is empty.
 func clampInterval(iv interval, start, end int64) (interval, bool) {
@@ -249,41 +367,70 @@ func concurrencyScopeMatches(q outbound.SeriesQuery, sessionID, project string) 
 	}
 }
 
-// activeIntervals reconstructs a session's [enter, exit) active spans from its
-// state timeline. A session is active while working or waiting and inactive
-// while ready. A session still active at its last recorded event (no terminator)
-// is bounded at that last event — "last known alive" — so a daemon that died
-// mid-session doesn't leave a session counted as alive forever. The bound is
-// needed for the common idle case too: a session waiting for input emits no
-// further events, so without it that session's whole bounded span would drop.
-// (lastEventTS >= last.ts always, since every transition is itself an event.)
-func (tl *sessionTimeline) activeIntervals() []interval {
+// stateInterval is a half-open [enter, exit) span together with the specific
+// working/waiting state active during it — the per-state generalization of
+// interval, which only tracks "active" (working or waiting, merged).
+type stateInterval struct {
+	enter, exit int64
+	state       string // session.StateWorking | session.StateWaiting
+}
+
+// stateReconstruction rebuilds a session's full timeline: working/waiting
+// spans as durations (stateInterval, tagged by which of the two states was
+// active) and every transition into ready as an instantaneous timestamp —
+// ready is session.go's terminal state, with no duration to be concurrent in,
+// so "how many agents went ready in bucket X" (issue #981) is a transition
+// count, not a concurrency count. A session still working/waiting at its last
+// recorded event (no terminator) is bounded at that last event — "last known
+// alive" — so a daemon that died mid-session doesn't leave it counted as alive
+// forever; same rule the merged reconstruction below always used. (lastEventTS
+// >= last.ts always, since every transition is itself an event.) That bound is
+// a synthetic sentinel, not a real transition — it must be read for
+// interval-closing but excluded from readyAt, or every session still active
+// "now" would spuriously count as having gone ready this instant.
+func (tl *sessionTimeline) stateReconstruction() (ivs []stateInterval, readyAt []int64) {
 	if len(tl.transitions) == 0 {
-		return nil
+		return nil, nil
 	}
 	tr := append([]stateChange(nil), tl.transitions...)
 	sort.SliceStable(tr, func(i, j int) bool { return tr[i].ts < tr[j].ts })
+
+	for _, c := range tr {
+		if c.state == session.StateReady {
+			readyAt = append(readyAt, c.ts)
+		}
+	}
+
 	if last := tr[len(tr)-1]; concurrencyActive(last.state) {
 		tr = append(tr, stateChange{tl.lastEventTS, session.StateReady})
 	}
-
-	var ivs []interval
-	activeStart := int64(-1)
-	for _, c := range tr {
-		if concurrencyActive(c.state) {
-			if activeStart < 0 {
-				activeStart = c.ts
-			}
+	for i := 0; i < len(tr)-1; i++ {
+		cur, next := tr[i], tr[i+1]
+		if !concurrencyActive(cur.state) {
 			continue
 		}
-		if activeStart >= 0 {
-			if c.ts > activeStart {
-				ivs = append(ivs, interval{activeStart, c.ts})
-			}
-			activeStart = -1
+		if next.ts > cur.ts {
+			ivs = append(ivs, stateInterval{cur.ts, next.ts, cur.state})
 		}
 	}
-	return ivs
+	return ivs, readyAt
+}
+
+// activeIntervals reports the merged working-or-waiting spans a session was
+// concurrently "active" for — the view AgentsSeries needs, which doesn't
+// distinguish which of the two states was active. Built on
+// stateReconstruction so the merged and per-state views can never drift
+// apart: sweepIntervals already treats abutting intervals (one state's exit
+// landing exactly on the next state's enter) as continuous rather than a gap
+// (see its doc comment), so splitting the merged span into per-state
+// sub-intervals here doesn't change AgentsSeries' peak/average/bucket output.
+func (tl *sessionTimeline) activeIntervals() []interval {
+	ivs, _ := tl.stateReconstruction()
+	out := make([]interval, 0, len(ivs))
+	for _, iv := range ivs {
+		out = append(out, interval{iv.enter, iv.exit})
+	}
+	return out
 }
 
 // sweepIntervals walks a set of half-open intervals in time order and calls fn
