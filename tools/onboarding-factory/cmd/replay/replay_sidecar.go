@@ -343,11 +343,18 @@ func (r *sidecarReplayer) anyChildActive() bool {
 // runClassifier mirrors SessionDetector.processActivity's force/classify/
 // parent-hold/synth-waiting pipeline. Extracted so hook and orphan events
 // can re-run classification against the last-known metrics.
-func (r *sidecarReplayer) runClassifier(domainMetrics *session.SessionMetrics, virtTime time.Time, eventIdx int, cause transitionCause) {
+//
+// grew mirrors the daemon's transcriptGrew||ev.Synthetic gate on the
+// force-bounce (issue #905): callers pass true only when this pass either
+// wrote real new transcript bytes (classifyAt) or is a hook-synthetic
+// re-classification that legitimately precedes the flush (applyHookEvent).
+// A zero-growth fswatcher pass — mistral-vibe's content-less slash-command
+// touch — must not force ready back to working on stale LastEventType.
+func (r *sidecarReplayer) runClassifier(domainMetrics *session.SessionMetrics, virtTime time.Time, eventIdx int, cause transitionCause, grew bool) {
 	if domainMetrics.NoSubstantiveActivity {
 		return
 	}
-	if r.state == session.StateReady && domainMetrics.LastEventType != "" {
+	if r.state == session.StateReady && domainMetrics.LastEventType != "" && grew {
 		r.emit(transitionFromMetrics(eventIdx, virtTime, cause,
 			r.state, session.StateWorking, services.ForceReadyToWorkingReason, domainMetrics))
 		r.state = session.StateWorking
@@ -383,7 +390,8 @@ func (r *sidecarReplayer) runClassifier(domainMetrics *session.SessionMetrics, v
 // ClassifyState pattern. Any emitted transition is added to the report.
 func (r *sidecarReplayer) classifyAt(fileSize int64, virtTime time.Time, eventIdx int, cause transitionCause) error {
 	target := min(fileSize, int64(len(r.srcBytes)))
-	if target > r.lastSize {
+	grew := target > r.lastSize
+	if grew {
 		if _, err := r.tmp.Write(r.srcBytes[r.lastSize:target]); err != nil {
 			return err
 		}
@@ -397,7 +405,7 @@ func (r *sidecarReplayer) classifyAt(fileSize int64, virtTime time.Time, eventId
 	r.lastMetrics = metrics
 	domainMetrics := replayengine.TailerToDomain(metrics)
 	r.overlayPermissionPending(domainMetrics)
-	r.runClassifier(domainMetrics, virtTime, eventIdx, cause)
+	r.runClassifier(domainMetrics, virtTime, eventIdx, cause, grew)
 	return nil
 }
 
@@ -419,7 +427,7 @@ func (r *sidecarReplayer) applyHookEvent(hookEv lifecycle.Event) {
 	}
 	domainMetrics := replayengine.TailerToDomain(r.lastMetrics)
 	r.overlayPermissionPending(domainMetrics)
-	r.runClassifier(domainMetrics, hookEv.Timestamp, -1, causeHook)
+	r.runClassifier(domainMetrics, hookEv.Timestamp, -1, causeHook, true)
 }
 
 // Timeline kinds for the merged event stream in runDebouncedTimeline.
@@ -620,7 +628,9 @@ func (r *sidecarReplayer) applyChildOrphan(orphan orphanTrigger, d *debounceStat
 	}
 	domainMetrics := replayengine.TailerToDomain(r.lastMetrics)
 	r.overlayPermissionPending(domainMetrics)
-	r.runClassifier(domainMetrics, orphan.at, -1, causeEvent)
+	// grew=false: r.state != StateReady is already guaranteed by the check
+	// above, so the force-bounce branch never evaluates this value here.
+	r.runClassifier(domainMetrics, orphan.at, -1, causeEvent, false)
 	return nil
 }
 

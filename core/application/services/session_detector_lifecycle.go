@@ -222,6 +222,12 @@ func (d *SessionDetector) HandlePermissionHook(sessionID, transcriptPath, hookEv
 // without waiting on a transcript flush. Shared by the permission and
 // compaction hook handlers, whose only differences are which pending map they
 // set (done by the caller) and the hook name.
+//
+// The injected event is marked Synthetic so forceReadyToWorkingIfActive still
+// bounces a ready session on it despite the transcript not having grown yet
+// (PreToolUse fires before the write) — while a real fswatcher pass with no
+// transcript growth (e.g. mistral-vibe's content-less slash-command touch)
+// does not force the bounce. See issue #905.
 func (d *SessionDetector) dispatchHookActivity(sessionID, transcriptPath, hookName string) {
 	d.record(lifecycle.Event{
 		Kind:      lifecycle.KindHookReceived,
@@ -234,6 +240,7 @@ func (d *SessionDetector) dispatchHookActivity(sessionID, transcriptPath, hookNa
 		Type:           agent.EventActivity,
 		SessionID:      sessionID,
 		TranscriptPath: transcriptPath,
+		Synthetic:      true,
 	}:
 	default:
 		d.log.LogError("hook-receiver", sessionID,

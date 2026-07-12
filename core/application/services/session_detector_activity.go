@@ -532,7 +532,7 @@ func (d *SessionDetector) processActivityLocked(id agent.Identity, state *sessio
 	// classifyAndTransition below so a no-substantive-activity pass still
 	// can't force the bounce (issue #329).
 	if !skipClassification {
-		d.forceReadyToWorkingIfActive(state, ev)
+		d.forceReadyToWorkingIfActive(state, ev, transcriptGrew)
 	}
 
 	// Probe Bash background-process liveness (run_in_background). Must run
@@ -761,8 +761,19 @@ func (d *SessionDetector) classifyAndTransition(state *session.SessionState, ev 
 // the background-liveness probe (see processActivityLocked's call site)
 // evaluates against this pass's effective state rather than the prior
 // pass's stale `ready`.
-func (d *SessionDetector) forceReadyToWorkingIfActive(state *session.SessionState, ev agent.Event) {
+//
+// Requires either real transcript growth this pass or a hook-synthetic event
+// (ev.Synthetic — dispatchHookActivity's PreToolUse/PermissionRequest/
+// PreCompact injection, which legitimately precedes the transcript flush).
+// Without this guard, an fswatcher pass that fires on a content-less
+// transcript touch — e.g. mistral-vibe writing no new bytes while handling a
+// synchronous slash command — would force-bounce on the stale LastEventType
+// left over from the session's prior turn_done (issue #905).
+func (d *SessionDetector) forceReadyToWorkingIfActive(state *session.SessionState, ev agent.Event, transcriptGrew bool) {
 	if state.State != session.StateReady || state.Metrics == nil || state.Metrics.LastEventType == "" {
+		return
+	}
+	if !transcriptGrew && !ev.Synthetic {
 		return
 	}
 	d.log.LogInfo(logComponentSessionDetector, ev.SessionID, ForceReadyToWorkingReason)
